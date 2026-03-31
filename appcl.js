@@ -3,7 +3,7 @@ const canvas = document.getElementById("overlay");
 const ctx = canvas.getContext("2d");
 
 let drawing = false;
-let drawEnabled = false; // IMPORTANT
+let drawEnabled = false;
 
 function resize() {
   canvas.width = canvas.clientWidth;
@@ -16,14 +16,26 @@ document.getElementById("videoInput").onchange = e => {
   const file = e.target.files[0];
   if (!file) return;
 
-  video.src = URL.createObjectURL(file);
+  const url = URL.createObjectURL(file);
+  video.src = url;
+  video.load();
 
-  video.onloadedmetadata = () => {
-    resize(); // FIX alignment
+  video.onloadeddata = () => {
+    resize();
+    console.log("Video loaded");
   };
 };
 
-/ ENABLE DRAW ONLY WHEN HOLDING CLICK /
+/ ENABLE DRAW MODE WITH KEY D /
+document.addEventListener("keydown", e => {
+  if (e.key === "d") {
+    drawEnabled = !drawEnabled;
+    canvas.style.pointerEvents = drawEnabled ? "auto" : "none";
+    console.log("Draw mode:", drawEnabled);
+  }
+});
+
+/ DRAW */
 canvas.onpointerdown = e => {
   if (!drawEnabled) return;
   drawing = true;
@@ -34,16 +46,9 @@ canvas.onpointerdown = e => {
 canvas.onpointermove = e => {
   if (!drawing) return;
   ctx.lineWidth = 3;
+  ctx.strokeStyle = "#336699";
   ctx.lineTo(e.offsetX, e.offsetY);
   ctx.stroke();
 };
 
 canvas.onpointerup = () => drawing = false;
-
-/ TOGGLE DRAW MODE WITH KEY "D" */
-document.addEventListener("keydown", e => {
-  if (e.key === "d") {
-    drawEnabled = !drawEnabled;
-    console.log("Draw mode:", drawEnabled);
-  }
-});
