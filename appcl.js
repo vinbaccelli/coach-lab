@@ -3,20 +3,33 @@ const canvas = document.getElementById("overlay");
 const ctx = canvas.getContext("2d");
 
 let drawing = false;
+let drawEnabled = false; // IMPORTANT
 
 function resize() {
   canvas.width = canvas.clientWidth;
   canvas.height = canvas.clientHeight;
 }
 window.addEventListener("resize", resize);
-resize();
 
+/* LOAD VIDEO /
 document.getElementById("videoInput").onchange = e => {
-  video.src = URL.createObjectURL(e.target.files[0]);
+  const file = e.target.files[0];
+  if (!file) return;
+
+  video.src = URL.createObjectURL(file);
+
+  video.onloadedmetadata = () => {
+    resize(); // FIX alignment
+  };
 };
 
-canvas.onpointerdown = () => drawing = true;
-canvas.onpointerup = () => drawing = false;
+/ ENABLE DRAW ONLY WHEN HOLDING CLICK /
+canvas.onpointerdown = e => {
+  if (!drawEnabled) return;
+  drawing = true;
+  ctx.beginPath();
+  ctx.moveTo(e.offsetX, e.offsetY);
+};
 
 canvas.onpointermove = e => {
   if (!drawing) return;
@@ -24,3 +37,13 @@ canvas.onpointermove = e => {
   ctx.lineTo(e.offsetX, e.offsetY);
   ctx.stroke();
 };
+
+canvas.onpointerup = () => drawing = false;
+
+/ TOGGLE DRAW MODE WITH KEY "D" */
+document.addEventListener("keydown", e => {
+  if (e.key === "d") {
+    drawEnabled = !drawEnabled;
+    console.log("Draw mode:", drawEnabled);
+  }
+});
