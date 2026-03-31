@@ -1,0 +1,1 @@
+{\n  "name": "coach-lab",\n  "version": "1.0.0",\n  "private": true,\n  "dependencies": {\n    "next": "14.0.0",\n    "react": "18.2.0",\n    "react-dom": "18.2.0",\n    "next-pwa": "^6.5.0"\n  },\n  "scripts": {\n    "dev": "next dev",\n    "build": "next build",\n    "start": "next start"\n  }\n}
