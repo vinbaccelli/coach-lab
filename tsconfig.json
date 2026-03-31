@@ -1,0 +1,1 @@
+{\n  "compilerOptions": {\n    "target": "ES2020",\n    "lib": ["DOM"],\n    "module": "ESNext",\n    "strict": true,\n    "baseUrl": ".",\n    "paths": {\n      "@/*": ["*"]\n    },\n    "isolatedModules": true,\n    "noEmit": true,\n    "jsx": "react-jsx"\n  },\n  "exclude": ["node_modules"]\n}
