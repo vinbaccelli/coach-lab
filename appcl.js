@@ -58,3 +58,10 @@ canvas.onpointermove = e => {
 };
 
 canvas.onpointerup = () => drawing = false;
+video.onclick = () => {
+  if (video.paused) {
+    video.play();
+  } else {
+    video.pause();
+  }
+};
