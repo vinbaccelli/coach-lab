@@ -18,5 +18,5 @@ video, canvas {
 }
 
 canvas {
-  touch-action: none;
+  pointer-events: none; /* VERY IMPORTANT */
 }
