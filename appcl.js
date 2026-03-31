@@ -18,7 +18,13 @@ document.getElementById("videoInput").onchange = e => {
 
   const url = URL.createObjectURL(file);
   video.src = url;
-  video.load();
+video.load();
+
+video.oncanplay = () => {
+  video.play().catch(err => {
+    console.log("Play blocked:", err);
+  });
+};
 
   video.onloadeddata = () => {
     resize();
