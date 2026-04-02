@@ -1,0 +1,1 @@
+{\n  "framework": "nextjs",\n  "env": {\n    "API_URL": "https://api.example.com",\n    "ANOTHER_ENV_VAR": "value"\n  },\n  "build": {\n    "env": {\n      "NODE_ENV": "production"\n    },\n    "outputDirectory": "out"\n  },\n  "routes": [\n    {\n      "src": "/(.*)",\n      "dest": "/$1"\n    }\n  ],\n  "functions": {\n    "api/\*.js": {\n      "maxDuration": 10\n    }\n  }\n}
