@@ -1,0 +1,301 @@
+'use client';
+
+import React, { useCallback, useRef, useState } from 'react';
+import { Camera, Film, X, Download, Loader2 } from 'lucide-react';
+import { downloadDataURL } from '@/lib/drawingTools';
+import { downloadBlob, createBlobURL, getSupportedMimeType } from '@/lib/recordingUtils';
+
+interface ExportModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  /** Returns a canvas with the current video frame + drawings merged */
+  getCompositeCanvas: () => HTMLCanvasElement | null;
+  /** The source video element (for clip recording) */
+  videoRef: React.RefObject<HTMLVideoElement>;
+}
+
+type ExportTab = 'screenshot' | 'clip';
+
+export default function ExportModal({
+  isOpen,
+  onClose,
+  getCompositeCanvas,
+  videoRef,
+}: ExportModalProps) {
+  const [tab, setTab] = useState<ExportTab>('screenshot');
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+
+  // Clip options
+  const [clipDuration, setClipDuration] = useState(3);
+  const [clipSpeed, setClipSpeed] = useState(1);
+  const [isRecordingClip, setIsRecordingClip] = useState(false);
+  const [clipUrl, setClipUrl] = useState<string | null>(null);
+  const [clipBlob, setClipBlob] = useState<Blob | null>(null);
+
+  const stopClipRef = useRef<(() => void) | null>(null);
+
+  const captureScreenshot = useCallback(() => {
+    setIsCapturing(true);
+    try {
+      const canvas = getCompositeCanvas();
+      if (!canvas) return;
+      const dataUrl = canvas.toDataURL('image/png');
+      setScreenshotUrl(dataUrl);
+    } finally {
+      setIsCapturing(false);
+    }
+  }, [getCompositeCanvas]);
+
+  const downloadScreenshot = useCallback(() => {
+    if (!screenshotUrl) return;
+    downloadDataURL(
+      screenshotUrl,
+      `coach-lab-screenshot-${Date.now()}.png`,
+    );
+  }, [screenshotUrl]);
+
+  const recordClip = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = getCompositeCanvas();
+    if (!canvas) return;
+
+    setIsRecordingClip(true);
+    setClipUrl(null);
+    setClipBlob(null);
+
+    const originalSpeed = video.playbackRate;
+    video.playbackRate = clipSpeed;
+
+    // Create a recording canvas that repaints every frame
+    const w = canvas.width || 1280;
+    const h = canvas.height || 720;
+    const recCanvas = document.createElement('canvas');
+    recCanvas.width = w;
+    recCanvas.height = h;
+    const ctx = recCanvas.getContext('2d')!;
+
+    const paintInterval = setInterval(() => {
+      const src = getCompositeCanvas();
+      if (src) ctx.drawImage(src, 0, 0, w, h);
+    }, 1000 / 30);
+
+    const stream: MediaStream = (recCanvas as any).captureStream(30);
+    const mimeType = getSupportedMimeType();
+    const mr = new MediaRecorder(stream, {
+      mimeType: mimeType || undefined,
+      videoBitsPerSecond: 4_000_000,
+    });
+    const chunks: BlobPart[] = [];
+    mr.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    mr.onstop = () => {
+      clearInterval(paintInterval);
+      video.playbackRate = originalSpeed;
+      setIsRecordingClip(false);
+      const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+      setClipBlob(blob);
+      setClipUrl(createBlobURL(blob));
+    };
+    mr.start(100);
+
+    stopClipRef.current = () => {
+      if (mr.state !== 'inactive') mr.stop();
+    };
+
+    // Auto-stop after clipDuration seconds of real-time
+    const realDuration = (clipDuration / clipSpeed) * 1000;
+    video.play();
+    setTimeout(() => {
+      video.pause();
+      stopClipRef.current?.();
+    }, realDuration);
+  }, [getCompositeCanvas, videoRef, clipDuration, clipSpeed]);
+
+  const downloadClip = useCallback(() => {
+    if (clipBlob) {
+      const ext = getSupportedMimeType().includes('mp4') ? 'mp4' : 'webm';
+      downloadBlob(clipBlob, `coach-lab-clip-${Date.now()}.${ext}`);
+    }
+  }, [clipBlob]);
+
+  const handleClose = () => {
+    setScreenshotUrl(null);
+    setClipUrl(null);
+    setClipBlob(null);
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-[500px] max-w-[95vw] max-h-[90vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h2 className="text-base font-semibold text-gray-800">Export</h2>
+          <button onClick={handleClose} className="btn-ghost rounded-lg p-1.5">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-gray-100">
+          <button
+            onClick={() => setTab('screenshot')}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium transition-colors border-b-2 ${
+              tab === 'screenshot'
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Camera size={15} /> Screenshot
+          </button>
+          <button
+            onClick={() => setTab('clip')}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium transition-colors border-b-2 ${
+              tab === 'clip'
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Film size={15} /> Video Clip
+          </button>
+        </div>
+
+        <div className="p-5">
+          {/* Screenshot Tab */}
+          {tab === 'screenshot' && (
+            <div className="flex flex-col gap-4">
+              <p className="text-sm text-gray-500">
+                Capture the current frame with all drawings as a PNG image.
+              </p>
+              {screenshotUrl ? (
+                <div className="flex flex-col gap-3">
+                  <img
+                    src={screenshotUrl}
+                    alt="Screenshot preview"
+                    className="w-full rounded-lg border border-gray-200 object-contain max-h-56"
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={downloadScreenshot} className="btn-primary flex-1 gap-1.5">
+                      <Download size={14} /> Download PNG
+                    </button>
+                    <button
+                      onClick={() => setScreenshotUrl(null)}
+                      className="btn-outline flex-1 gap-1.5"
+                    >
+                      Retake
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={captureScreenshot}
+                  disabled={isCapturing}
+                  className="btn-primary gap-2 py-2.5"
+                >
+                  {isCapturing ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <Camera size={15} />
+                  )}
+                  Capture Screenshot
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Clip Tab */}
+          {tab === 'clip' && (
+            <div className="flex flex-col gap-4">
+              <p className="text-sm text-gray-500">
+                Record a short video clip starting from the current position.
+              </p>
+
+              <div className="flex flex-col gap-3">
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">
+                    Duration: {clipDuration}s
+                  </label>
+                  <input
+                    type="range"
+                    min={1}
+                    max={15}
+                    step={1}
+                    value={clipDuration}
+                    onChange={(e) => setClipDuration(Number(e.target.value))}
+                    disabled={isRecordingClip}
+                    className="w-full"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">
+                    Speed:
+                  </label>
+                  <div className="flex gap-1.5">
+                    {[0.25, 0.5, 1, 1.5, 2].map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setClipSpeed(s)}
+                        disabled={isRecordingClip}
+                        className={`flex-1 py-1 text-xs rounded-md transition-colors ${
+                          clipSpeed === s
+                            ? 'bg-blue-100 text-blue-700 font-semibold'
+                            : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                        }`}
+                      >
+                        {s}×
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {clipUrl ? (
+                <div className="flex flex-col gap-3">
+                  <video
+                    src={clipUrl}
+                    controls
+                    className="w-full rounded-lg border border-gray-200"
+                    style={{ maxHeight: 200 }}
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={downloadClip} className="btn-primary flex-1 gap-1.5">
+                      <Download size={14} /> Download Clip
+                    </button>
+                    <button
+                      onClick={() => { setClipUrl(null); setClipBlob(null); }}
+                      className="btn-outline flex-1"
+                    >
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={recordClip}
+                  disabled={isRecordingClip}
+                  className="btn-primary gap-2 py-2.5"
+                >
+                  {isRecordingClip ? (
+                    <>
+                      <Loader2 size={15} className="animate-spin" />
+                      Recording {clipDuration}s…
+                    </>
+                  ) : (
+                    <>
+                      <Film size={15} />
+                      Record {clipDuration}s Clip
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

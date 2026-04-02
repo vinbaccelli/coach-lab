@@ -1,1 +1,296 @@
-'use client'; import React, { useRef, useState } from 'react'; export function ScreenRecorder() { const mediaRecorderRef = useRef<MediaRecorder | null>(null); const canvasRef = useRef<HTMLCanvasElement>(null); const screenStreamRef = useRef<MediaStream | null>(null); const cameraStreamRef = useRef<MediaStream | null>(null); const [isRecording, setIsRecording] = useState(false); const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]); const [showCamera, setShowCamera] = useState(false); const [cameraPosition, setCameraPosition] = useState<'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'>('bottom-right'); const startRecording = async () => { try { screenStreamRef.current = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' }, audio: true, }); if (showCamera) { cameraStreamRef.current = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false, }); } const canvas = canvasRef.current; if (!canvas) return; const screenVideo = document.createElement('video'); screenVideo.srcObject = screenStreamRef.current; screenVideo.play(); const cameraVideo = showCamera ? document.createElement('video') : null; if (cameraVideo && cameraStreamRef.current) { cameraVideo.srcObject = cameraStreamRef.current; cameraVideo.play(); } canvas.width = 1920; canvas.height = 1080; const ctx = canvas.getContext('2d'); if (!ctx) return; const composite = () => { if (screenVideo.readyState === screenVideo.HAVE_ENOUGH_DATA) { ctx.drawImage(screenVideo, 0, 0, canvas.width, canvas.height); } if (cameraVideo && cameraVideo.readyState === cameraVideo.HAVE_ENOUGH_DATA) { const pipSize = 300; let x = canvas.width - pipSize - 20; let y = canvas.height - pipSize - 20; if (cameraPosition === 'top-left') { x = 20; y = 20; } else if (cameraPosition === 'top-right') { x = canvas.width - pipSize - 20; y = 20; } else if (cameraPosition === 'bottom-left') { x = 20; y = canvas.height - pipSize - 20; } ctx.drawImage(cameraVideo, x, y, pipSize, pipSize); } requestAnimationFrame(composite); }; composite(); const canvasStream = canvas.captureStream(30); if (screenStreamRef.current.getAudioTracks().length > 0) { canvasStream.addTrack(screenStreamRef.current.getAudioTracks()[0]); } mediaRecorderRef.current = new MediaRecorder(canvasStream); const chunks: Blob[] = []; mediaRecorderRef.current.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); }; mediaRecorderRef.current.onstop = () => { const blob = new Blob(chunks, { type: 'video/webm' }); setRecordedChunks([blob]); }; mediaRecorderRef.current.start(); setIsRecording(true); } catch (error) { console.error('Recording error:', error); alert('Error: ' + (error as Error).message); } }; const stopRecording = () => { if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') { mediaRecorderRef.current.stop(); } screenStreamRef.current?.getTracks().forEach((t) => t.stop()); cameraStreamRef.current?.getTracks().forEach((t) => t.stop()); setIsRecording(false); }; const downloadRecording = () => { if (recordedChunks.length === 0) return; const url = URL.createObjectURL(recordedChunks[0]); const a = document.createElement('a'); a.href = url; a.download = `recording-${Date.now()}.webm`; a.click(); URL.revokeObjectURL(url); }; return ( <div className="w-full max-w-2xl mx-auto p-4 bg-white rounded-lg shadow"> <h2 className="text-xl font-bold mb-4">Screen Recorder</h2> <div className="space-y-4"> <div className="flex items-center gap-2"> <input type="checkbox" checked={showCamera} onChange={(e) => setShowCamera(e.target.checked)} disabled={isRecording} id="camera-toggle" /> <label htmlFor="camera-toggle" className="text-sm">Show Camera Overlay</label> </div> {showCamera && ( <div> <label className="text-sm block mb-2">Camera Position</label> <div className="grid grid-cols-4 gap-2"> {(['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const).map((pos) => ( <button key={pos} onClick={() => setCameraPosition(pos)} disabled={isRecording} className={`px-3 py-2 rounded text-sm ${ cameraPosition === pos ? 'bg-blue-500 text-white' : 'bg-gray-200' }`} > {pos} </button> ))} </div> </div> )} <div className="flex gap-2"> {!isRecording ? ( <button onClick={startRecording} className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600" > Start Recording </button> ) : ( <button onClick={stopRecording} className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600" > Stop Recording </button> )} {recordedChunks.length > 0 && ( <button onClick={downloadRecording} className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600" > Download </button> )} </div> {isRecording && <div className="text-red-500 font-bold">● Recording...</div>} </div> <canvas ref={canvasRef} className="hidden" /> </div> ); }
+'use client';
+
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Camera, Video, Square, Pause, Play, Download, X, Mic } from 'lucide-react';
+import {
+  startCanvasRecording,
+  requestWebcamAndMic,
+  requestMic,
+  downloadBlob,
+  createBlobURL,
+  getSupportedMimeType,
+} from '@/lib/recordingUtils';
+
+interface ScreenRecorderProps {
+  compositeCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+}
+
+type RecordingState = 'idle' | 'recording' | 'paused' | 'preview';
+
+export default function ScreenRecorder({ compositeCanvasRef }: ScreenRecorderProps) {
+  const [recState, setRecState] = useState<RecordingState>('idle');
+  const [withWebcam, setWithWebcam] = useState(true);
+  const [withMic, setWithMic] = useState(true);
+  const [elapsed, setElapsed] = useState(0);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const webcamVideoRef = useRef<HTMLVideoElement>(null);
+  const webcamStreamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const stopRecordingRef = useRef<(() => void) | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const compositeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const formatElapsed = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  };
+
+  const startRecording = useCallback(async () => {
+    setError(null);
+    const sourceCanvas = compositeCanvasRef.current;
+    if (!sourceCanvas) {
+      setError('No canvas available. Please load a video first.');
+      return;
+    }
+
+    const w = sourceCanvas.width || 1280;
+    const h = sourceCanvas.height || 720;
+
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = w;
+    outCanvas.height = h;
+
+    let webcamStream: MediaStream | null = null;
+    let micStream: MediaStream | null = null;
+
+    try {
+      if (withWebcam) {
+        webcamStream = await requestWebcamAndMic();
+        webcamStreamRef.current = webcamStream;
+        if (webcamVideoRef.current) {
+          webcamVideoRef.current.srcObject = webcamStream;
+          await webcamVideoRef.current.play().catch(() => {});
+        }
+      } else if (withMic) {
+        micStream = await requestMic();
+        micStreamRef.current = micStream;
+      }
+    } catch (err) {
+      console.error(err);
+      setError('Could not access webcam/microphone. Check browser permissions.');
+      return;
+    }
+
+    // Draw loop: merge source canvas + webcam overlay at 30 fps
+    const ctx = outCanvas.getContext('2d')!;
+    compositeIntervalRef.current = setInterval(() => {
+      const src = compositeCanvasRef.current;
+      if (!src) return;
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(src, 0, 0, w, h);
+
+      const cam = webcamVideoRef.current;
+      if (cam && !cam.paused && withWebcam) {
+        const camW = Math.round(w * 0.2);
+        const camH = Math.round(camW * (9 / 16));
+        const margin = 16;
+        ctx.save();
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(w - camW - margin, margin, camW, camH, 8);
+        } else {
+          ctx.rect(w - camW - margin, margin, camW, camH);
+        }
+        ctx.clip();
+        ctx.drawImage(cam, w - camW - margin, margin, camW, camH);
+        ctx.restore();
+        ctx.strokeStyle = '#D4E8F7';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(w - camW - margin, margin, camW, camH, 8);
+        } else {
+          ctx.rect(w - camW - margin, margin, camW, camH);
+        }
+        ctx.stroke();
+      }
+    }, 1000 / 30);
+
+    const { mediaRecorder, stop } = await startCanvasRecording(
+      { canvasEl: outCanvas, webcamStream, micStream, fps: 30 },
+      (blob) => {
+        const url = createBlobURL(blob);
+        setPreviewUrl(url);
+        setPreviewBlob(blob);
+        setRecState('preview');
+      },
+    );
+
+    mediaRecorderRef.current = mediaRecorder;
+    stopRecordingRef.current = stop;
+    setRecState('recording');
+    setElapsed(0);
+    timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
+  }, [compositeCanvasRef, withWebcam, withMic]);
+
+  const pauseRecording = useCallback(() => {
+    const mr = mediaRecorderRef.current;
+    if (!mr) return;
+    if (mr.state === 'recording') {
+      mr.pause();
+      setRecState('paused');
+      if (timerRef.current) clearInterval(timerRef.current);
+    } else if (mr.state === 'paused') {
+      mr.resume();
+      setRecState('recording');
+      timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (compositeIntervalRef.current) clearInterval(compositeIntervalRef.current);
+    stopRecordingRef.current?.();
+    webcamStreamRef.current?.getTracks().forEach((t) => t.stop());
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    webcamStreamRef.current = null;
+    micStreamRef.current = null;
+  }, []);
+
+  const discardPreview = useCallback(() => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setPreviewBlob(null);
+    setRecState('idle');
+    setElapsed(0);
+  }, [previewUrl]);
+
+  const downloadRecording = useCallback(() => {
+    if (previewBlob) {
+      const ext = getSupportedMimeType().includes('mp4') ? 'mp4' : 'webm';
+      downloadBlob(previewBlob, `coach-lab-recording.${ext}`);
+    }
+  }, [previewBlob]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (compositeIntervalRef.current) clearInterval(compositeIntervalRef.current);
+      webcamStreamRef.current?.getTracks().forEach((t) => t.stop());
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Video size={16} className="text-blue-600" />
+        <span className="text-sm font-semibold text-gray-700">Screen Record</span>
+      </div>
+
+      {error && (
+        <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+          {error}
+        </div>
+      )}
+
+      {recState === 'idle' && (
+        <>
+          <div className="flex flex-col gap-1.5">
+            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={withWebcam}
+                onChange={(e) => setWithWebcam(e.target.checked)}
+                className="rounded"
+              />
+              <Camera size={13} />
+              Webcam overlay
+            </label>
+            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={withMic}
+                onChange={(e) => setWithMic(e.target.checked)}
+                disabled={withWebcam}
+                className="rounded"
+              />
+              <Mic size={13} />
+              Microphone {withWebcam ? '(via webcam)' : ''}
+            </label>
+          </div>
+          <button
+            onClick={startRecording}
+            className="btn-primary rounded-lg gap-2 py-2 w-full text-sm"
+          >
+            <Video size={15} />
+            Start Recording
+          </button>
+        </>
+      )}
+
+      {(recState === 'recording' || recState === 'paused') && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between px-3 py-2 bg-red-50 rounded-lg border border-red-200">
+            <div className="flex items-center gap-2">
+              {recState === 'recording' && (
+                <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+              )}
+              {recState === 'paused' && (
+                <span className="w-2 h-2 bg-yellow-500 rounded-full" />
+              )}
+              <span className="text-xs font-semibold text-red-700 font-mono">
+                {formatElapsed(elapsed)}
+              </span>
+            </div>
+            <span className="text-xs text-red-600">
+              {recState === 'recording' ? 'Recording…' : 'Paused'}
+            </span>
+          </div>
+          <div className="flex gap-1.5">
+            <button
+              onClick={pauseRecording}
+              className="btn-outline flex-1 gap-1 text-xs py-1.5 rounded-lg"
+            >
+              {recState === 'recording' ? (
+                <><Pause size={13} /> Pause</>
+              ) : (
+                <><Play size={13} /> Resume</>
+              )}
+            </button>
+            <button
+              onClick={stopRecording}
+              className="btn-outline flex-1 gap-1 text-xs py-1.5 rounded-lg text-red-600 hover:bg-red-50"
+            >
+              <Square size={13} /> Stop
+            </button>
+          </div>
+        </div>
+      )}
+
+      {recState === 'preview' && previewUrl && (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-gray-600 font-medium">Preview:</p>
+          <video
+            src={previewUrl}
+            controls
+            className="w-full rounded-lg border border-gray-200"
+            style={{ maxHeight: 160 }}
+          />
+          <div className="flex gap-1.5">
+            <button
+              onClick={downloadRecording}
+              className="btn-primary flex-1 gap-1 text-xs py-1.5 rounded-lg"
+            >
+              <Download size={13} /> Save
+            </button>
+            <button
+              onClick={discardPreview}
+              className="btn-outline flex-1 gap-1 text-xs py-1.5 rounded-lg text-red-600 hover:bg-red-50"
+            >
+              <X size={13} /> Discard
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden webcam element */}
+      <video ref={webcamVideoRef} muted playsInline className="hidden" aria-hidden="true" />
+    </div>
+  );
+}
