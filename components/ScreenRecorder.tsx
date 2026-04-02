@@ -78,6 +78,23 @@ export default function ScreenRecorder({ compositeCanvasRef }: ScreenRecorderPro
 
     // Draw loop: merge source canvas + webcam overlay at 30 fps
     const ctx = outCanvas.getContext('2d')!;
+
+    const drawRoundRect = (
+      c: CanvasRenderingContext2D,
+      x: number,
+      y: number,
+      cw: number,
+      ch: number,
+      r: number,
+    ) => {
+      c.beginPath();
+      if (c.roundRect) {
+        c.roundRect(x, y, cw, ch, r);
+      } else {
+        c.rect(x, y, cw, ch);
+      }
+    };
+
     compositeIntervalRef.current = setInterval(() => {
       const src = compositeCanvasRef.current;
       if (!src) return;
@@ -90,23 +107,13 @@ export default function ScreenRecorder({ compositeCanvasRef }: ScreenRecorderPro
         const camH = Math.round(camW * (9 / 16));
         const margin = 16;
         ctx.save();
-        ctx.beginPath();
-        if (ctx.roundRect) {
-          ctx.roundRect(w - camW - margin, margin, camW, camH, 8);
-        } else {
-          ctx.rect(w - camW - margin, margin, camW, camH);
-        }
+        drawRoundRect(ctx, w - camW - margin, margin, camW, camH, 8);
         ctx.clip();
         ctx.drawImage(cam, w - camW - margin, margin, camW, camH);
         ctx.restore();
         ctx.strokeStyle = '#D4E8F7';
         ctx.lineWidth = 3;
-        ctx.beginPath();
-        if (ctx.roundRect) {
-          ctx.roundRect(w - camW - margin, margin, camW, camH, 8);
-        } else {
-          ctx.rect(w - camW - margin, margin, camW, camH);
-        }
+        drawRoundRect(ctx, w - camW - margin, margin, camW, camH, 8);
         ctx.stroke();
       }
     }, 1000 / 30);

@@ -135,8 +135,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         fc?.dispose();
         fabricRef.current = null;
       };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [pushHistory]);
 
     // Resize canvas when container changes
     useEffect(() => {
