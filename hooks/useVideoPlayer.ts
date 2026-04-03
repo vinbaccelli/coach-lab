@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-const useVideoPlayer = (videoSrc) => {
-    const videoRef = useRef(null);
+const useVideoPlayer = (videoSrc: string | null) => {
+    const videoRef = useRef<HTMLVideoElement | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [playbackSpeed, setPlaybackSpeed] = useState(1);
@@ -11,9 +11,8 @@ const useVideoPlayer = (videoSrc) => {
         const video = videoRef.current;
         if (video) {
             video.playbackRate = playbackSpeed;
-            video.currentTime = currentTime;
         }
-    }, [playbackSpeed, currentTime]);
+    }, [playbackSpeed]);
 
     const togglePlay = () => {
         const video = videoRef.current;
@@ -34,7 +33,7 @@ const useVideoPlayer = (videoSrc) => {
         }
     };
 
-    const setLoop = (start, end) => {
+    const setLoop = (start: number, end: number) => {
         setLoopRange({ start, end });
         const video = videoRef.current;
         if (video) {
@@ -47,7 +46,7 @@ const useVideoPlayer = (videoSrc) => {
         }
     };
 
-    const scrubToTime = (time) => {
+    const scrubToTime = (time: number) => {
         const video = videoRef.current;
         if (video) {
             video.currentTime = time;
