@@ -52,6 +52,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const historyRef = useRef<string[]>([]);
     const historyIndexRef = useRef<number>(-1);
     const isModifyingRef = useRef(false);
+    const [fabricReady, setFabricReady] = useState(false);
 
     // Angle tool state (3 clicks: start, vertex, end)
     const angleStateRef = useRef<{
@@ -119,6 +120,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         fabricRef.current = fc;
 
+        // Signal that fabric is ready so tool configuration runs
+        setFabricReady(true);
+
         // Initial history snapshot
         pushHistory();
 
@@ -180,7 +184,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       fc.selection = false;
       fc.forEachObject((obj) => obj.set({ selectable: false, evented: false }));
       fc.renderAll();
-    }, [activeTool, drawingOptions]);
+    }, [activeTool, drawingOptions, fabricReady]);
 
     // Update pen brush when options change
     useEffect(() => {
@@ -486,7 +490,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         fc.off('mouse:move', onMouseMove);
         fc.off('mouse:up', onMouseUp);
       };
-    }, [activeTool, drawingOptions, pushHistory]);
+    }, [activeTool, drawingOptions, pushHistory, fabricReady]);
 
     // Expose imperative handle
     useImperativeHandle(ref, () => ({
