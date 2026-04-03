@@ -88,6 +88,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       tempShape: import('fabric').Object | null;
     }>({ drawing: false, start: null, tempShape: null });
 
+    // Ball shadow state (drag to create shadow ellipse)
+    const ballShadowStateRef = useRef<{
+      drawing: boolean;
+      start: { x: number; y: number } | null;
+      tempShape: import('fabric').Object | null;
+    }>({ drawing: false, start: null, tempShape: null });
+
     // Push current state onto undo stack
     const pushHistory = useCallback(() => {
       const fc = fabricRef.current;
@@ -108,7 +115,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!canvasElRef.current || typeof window === 'undefined') return;
       let fc: import('fabric').Canvas;
 
-      loadFabric().then(({ Canvas }) => {
+      loadFabric().then(({ Canvas, PencilBrush }) => {
         fc = new Canvas(canvasElRef.current!, {
           isDrawingMode: false,
           selection: false,
@@ -119,6 +126,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         });
 
         fabricRef.current = fc;
+
+        // Fabric v7 does not auto-initialize freeDrawingBrush — create it explicitly
+        fc.freeDrawingBrush = new PencilBrush(fc);
 
         // Signal that fabric is ready so tool configuration runs
         setFabricReady(true);
@@ -160,6 +170,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       arrowStateRef.current = { drawing: false, start: null, tempLine: null };
       circleStateRef.current = { drawing: false, start: null, tempShape: null };
       bodyCircleStateRef.current = { drawing: false, start: null, tempShape: null };
+      ballShadowStateRef.current = { drawing: false, start: null, tempShape: null };
 
       if (activeTool === 'select') {
         fc.isDrawingMode = false;
@@ -186,13 +197,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       fc.renderAll();
     }, [activeTool, drawingOptions, fabricReady]);
 
-    // Update pen brush when options change
+    // Update pen brush when options change (also re-runs when fabricReady becomes true)
     useEffect(() => {
       const fc = fabricRef.current;
       if (!fc?.freeDrawingBrush) return;
       fc.freeDrawingBrush.color = drawingOptions.color;
       fc.freeDrawingBrush.width = drawingOptions.lineWidth;
-    }, [drawingOptions]);
+    }, [drawingOptions, fabricReady]);
 
     // Mouse event handlers
     useEffect(() => {
@@ -202,9 +213,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const getPos = (e: any): { x: number; y: number } => {
+        // Fabric v7 provides scenePoint; older versions used pointer
+        if (e.scenePoint) return { x: e.scenePoint.x, y: e.scenePoint.y };
         if (e.pointer) return { x: e.pointer.x, y: e.pointer.y };
         return { x: 0, y: 0 };
       };
+
+      // Helper: create a ball-shadow ellipse from drag start to current pointer
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const makeBallShadow = (Ellipse: any, start: { x: number; y: number }, end: { x: number; y: number }, lineWidth: number) =>
+        new Ellipse({
+          left: Math.min(end.x, start.x),
+          top: Math.min(end.y, start.y + (Math.abs(end.y - start.y) * 3 / 8)),
+          rx: Math.abs(end.x - start.x) / 2,
+          ry: Math.abs(end.y - start.y) / 4,
+          fill: 'rgba(0,0,0,0.25)',
+          stroke: 'rgba(0,0,0,0.4)',
+          strokeWidth: lineWidth,
+          selectable: false,
+          evented: false,
+        });
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const onMouseDown = async (opt: any) => {
@@ -340,6 +368,52 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           fc.renderAll();
           pushHistory();
         }
+
+        if (activeTool === 'ballShadow') {
+          const state = ballShadowStateRef.current;
+          if (!state.drawing) {
+            state.drawing = true;
+            state.start = pos;
+          }
+        }
+
+        if (activeTool === 'skeleton') {
+          // Placeholder: draw a simple stick-figure annotation at the click position
+          const cx = pos.x;
+          const cy = pos.y;
+          const scale = 1;
+          const headR = 10 * scale;
+          const { Circle: FabricCircle, Line: FabricLine } = (await loadFabric());
+          const head = new FabricCircle({
+            left: cx - headR,
+            top: cy - headR * 2 - 20 * scale,
+            radius: headR,
+            fill: 'transparent',
+            stroke: color,
+            strokeWidth: lineWidth,
+            selectable: false,
+            evented: false,
+          });
+          // body
+          const body = new FabricLine([cx, cy - 20 * scale, cx, cy + 20 * scale], {
+            stroke: color, strokeWidth: lineWidth, selectable: false, evented: false,
+          });
+          // arms
+          const arms = new FabricLine([cx - 20 * scale, cy - 5 * scale, cx + 20 * scale, cy - 5 * scale], {
+            stroke: color, strokeWidth: lineWidth, selectable: false, evented: false,
+          });
+          // left leg
+          const legL = new FabricLine([cx, cy + 20 * scale, cx - 15 * scale, cy + 40 * scale], {
+            stroke: color, strokeWidth: lineWidth, selectable: false, evented: false,
+          });
+          // right leg
+          const legR = new FabricLine([cx, cy + 20 * scale, cx + 15 * scale, cy + 40 * scale], {
+            stroke: color, strokeWidth: lineWidth, selectable: false, evented: false,
+          });
+          fc.add(head, body, arms, legL, legR);
+          fc.renderAll();
+          pushHistory();
+        }
       };
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -400,6 +474,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           });
           fc.add(l);
           state.tempLine = l;
+          fc.renderAll();
+        }
+
+        if (activeTool === 'ballShadow') {
+          const state = ballShadowStateRef.current;
+          if (!state.drawing || !state.start) return;
+          if (state.tempShape) fc.remove(state.tempShape);
+          const e = makeBallShadow(Ellipse, state.start, pos, lineWidth);
+          fc.add(e);
+          state.tempShape = e;
           fc.renderAll();
         }
       };
@@ -476,6 +560,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           state.drawing = false;
           state.start = null;
           state.tempLine = null;
+          fc.renderAll();
+          pushHistory();
+        }
+
+        if (activeTool === 'ballShadow') {
+          const state = ballShadowStateRef.current;
+          if (!state.drawing || !state.start) return;
+          if (state.tempShape) fc.remove(state.tempShape);
+          fc.add(makeBallShadow(Ellipse, state.start, pos, lineWidth));
+          state.drawing = false;
+          state.start = null;
+          state.tempShape = null;
           fc.renderAll();
           pushHistory();
         }
