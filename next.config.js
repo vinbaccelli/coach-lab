@@ -1,8 +1,9 @@
-'use strict';
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  swcMinify: true,
+  reactStrictMode: false,
+  experimental: {
+    esmExternals: 'loose',
+  },
 };
 
 module.exports = nextConfig;
