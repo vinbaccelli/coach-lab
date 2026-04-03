@@ -1,18 +1,19 @@
+import type { Metadata } from 'next';
 import './globals.css';
 
-export const metadata = {
-  title: 'Coach Lab',
+export const metadata: Metadata = {
+  title: 'Coach Lab – Video Analysis Tool',
+  description: 'Professional coaching video analysis with frame-by-frame playback, drawing tools, and screen recording.',
 };
 
-export default function RootLayout({ children }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <html>
-      <body>
-        <header className="bg-blue-600 text-white p-4">
-          <h1>🎬 Coach Lab</h1>
-        </header>
-        <main>{children}</main>
-      </body>
+    <html lang="en">
+      <body>{children}</body>
     </html>
   );
 }

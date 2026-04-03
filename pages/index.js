@@ -1,1 +1,0 @@
-export default function Home() { return (<div><h1>Welcome to Coach Lab</h1><p>Your Next.js application is ready!</p></div>) }
