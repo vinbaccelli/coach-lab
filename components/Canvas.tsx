@@ -88,6 +88,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       tempShape: import('fabric').Object | null;
     }>({ drawing: false, start: null, tempShape: null });
 
+    // Ball shadow state
+    const ballShadowStateRef = useRef<{
+      drawing: boolean;
+      start: { x: number; y: number } | null;
+      tempShape: import('fabric').Object | null;
+    }>({ drawing: false, start: null, tempShape: null });
+
     // Push current state onto undo stack
     const pushHistory = useCallback(() => {
       const fc = fabricRef.current;
@@ -108,8 +115,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!canvasElRef.current || typeof window === 'undefined') return;
       let fc: import('fabric').Canvas;
 
-      loadFabric().then(({ Canvas }) => {
-        fc = new Canvas(canvasElRef.current!, {
+      loadFabric().then(({ Canvas, PencilBrush }) => {
+        if (!canvasElRef.current) return;
+        fc = new Canvas(canvasElRef.current, {
           isDrawingMode: false,
           selection: false,
           width: containerWidth || 800,
@@ -118,7 +126,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           enableRetinaScaling: false,
         });
 
+        // Initialize the free drawing brush (required in Fabric.js v7)
+        fc.freeDrawingBrush = new PencilBrush(fc);
+
         fabricRef.current = fc;
+        console.log('[Canvas] Fabric.js initialized successfully', fc);
 
         // Signal that fabric is ready so tool configuration runs
         setFabricReady(true);
@@ -133,6 +145,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         fc.on('object:modified', () => {
           if (!isModifyingRef.current) pushHistory();
         });
+      }).catch((err) => {
+        console.error('[Canvas] Failed to initialize Fabric.js:', err);
       });
 
       return () => {
@@ -160,6 +174,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       arrowStateRef.current = { drawing: false, start: null, tempLine: null };
       circleStateRef.current = { drawing: false, start: null, tempShape: null };
       bodyCircleStateRef.current = { drawing: false, start: null, tempShape: null };
+      ballShadowStateRef.current = { drawing: false, start: null, tempShape: null };
 
       if (activeTool === 'select') {
         fc.isDrawingMode = false;
@@ -202,6 +217,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const getPos = (e: any): { x: number; y: number } => {
+        // Fabric.js v7 uses scenePoint for canvas-space coordinates
+        if (e.scenePoint) return { x: e.scenePoint.x, y: e.scenePoint.y };
         if (e.pointer) return { x: e.pointer.x, y: e.pointer.y };
         return { x: 0, y: 0 };
       };
@@ -340,6 +357,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           fc.renderAll();
           pushHistory();
         }
+
+        if (activeTool === 'ballShadow') {
+          const state = ballShadowStateRef.current;
+          if (!state.drawing) {
+            state.drawing = true;
+            state.start = pos;
+          }
+        }
+
+        if (activeTool === 'skeleton') {
+          // Draw a simple skeleton marker dot at the click position
+          const { Circle: FabricCircle } = (await loadFabric());
+          const dot = new FabricCircle({
+            left: pos.x - 5,
+            top: pos.y - 5,
+            radius: 5,
+            fill: color,
+            stroke: color,
+            strokeWidth: 1,
+            selectable: false,
+            evented: false,
+          });
+          fc.add(dot);
+          fc.renderAll();
+          pushHistory();
+        }
       };
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -400,6 +443,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           });
           fc.add(l);
           state.tempLine = l;
+          fc.renderAll();
+        }
+
+        if (activeTool === 'ballShadow') {
+          const state = ballShadowStateRef.current;
+          if (!state.drawing || !state.start) return;
+          if (state.tempShape) fc.remove(state.tempShape);
+          const rx = Math.abs(pos.x - state.start.x) / 2;
+          const ry = Math.abs(pos.y - state.start.y) / 4;
+          const e = new Ellipse({
+            left: Math.min(pos.x, state.start.x),
+            top: Math.min(pos.y, state.start.y),
+            rx, ry,
+            fill: 'rgba(0,0,0,0.25)',
+            stroke: 'transparent',
+            strokeWidth: 0,
+            selectable: false,
+            evented: false,
+          });
+          fc.add(e);
+          state.tempShape = e;
           fc.renderAll();
         }
       };
@@ -476,6 +540,30 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           state.drawing = false;
           state.start = null;
           state.tempLine = null;
+          fc.renderAll();
+          pushHistory();
+        }
+
+        if (activeTool === 'ballShadow') {
+          const state = ballShadowStateRef.current;
+          if (!state.drawing || !state.start) return;
+          if (state.tempShape) fc.remove(state.tempShape);
+          const rx = Math.abs(pos.x - state.start.x) / 2;
+          const ry = Math.abs(pos.y - state.start.y) / 4;
+          const e = new Ellipse({
+            left: Math.min(pos.x, state.start.x),
+            top: Math.min(pos.y, state.start.y),
+            rx, ry,
+            fill: 'rgba(0,0,0,0.25)',
+            stroke: 'transparent',
+            strokeWidth: 0,
+            selectable: false,
+            evented: false,
+          });
+          fc.add(e);
+          state.drawing = false;
+          state.start = null;
+          state.tempShape = null;
           fc.renderAll();
           pushHistory();
         }

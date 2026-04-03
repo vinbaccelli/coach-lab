@@ -12,6 +12,8 @@ import {
   Undo2,
   Redo2,
   Trash2,
+  PersonStanding,
+  Footprints,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -34,6 +36,8 @@ const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
   { id: 'arrowAngle', icon: <Activity size={18} />, label: 'Angle↗' },
   { id: 'bodyCircle', icon: <Circle size={18} strokeDasharray="4 2" />, label: '3D Circle' },
   { id: 'text', icon: <Type size={18} />, label: 'Text' },
+  { id: 'skeleton', icon: <PersonStanding size={18} />, label: 'Skeleton' },
+  { id: 'ballShadow', icon: <Footprints size={18} />, label: 'Shadow' },
 ];
 
 const PRESET_COLORS = [
