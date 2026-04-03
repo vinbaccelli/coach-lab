@@ -2,11 +2,71 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Add any global styles below */
+/* ── Coach Lab Design System ── */
+:root {
+  --white: #ffffff;
+  --blue-light: #D4E8F7;
+  --blue-mid: #93C5E0;
+  --blue-accent: #2563EB;
+  --gray-dark: #333333;
+  --gray-mid: #666666;
+  --gray-light: #F5F5F5;
+  --border: #E5E7EB;
+}
+
+* {
+  box-sizing: border-box;
+}
 
 body {
-  font-family: 'Inter', sans-serif;
-  line-height: 1.6;
-  background-color: #f9fafb;
-  color: #111827;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  background: var(--white);
+  color: var(--gray-dark);
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--gray-light);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--blue-mid);
+  border-radius: 3px;
+}
+
+/* ── Button base ── */
+.btn {
+  @apply inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors;
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50;
+}
+.btn-ghost {
+  @apply btn px-3 py-2 hover:bg-blue-50 text-gray-700;
+}
+.btn-primary {
+  @apply btn px-4 py-2 bg-blue-600 text-white hover:bg-blue-700;
+}
+.btn-outline {
+  @apply btn px-3 py-2 border border-gray-300 hover:bg-blue-50 text-gray-700;
+}
+
+/* ── Tool Button ── */
+.tool-btn {
+  @apply flex flex-col items-center justify-center gap-0.5 w-12 h-12 rounded-lg text-gray-600
+         hover:bg-blue-50 hover:text-blue-600 transition-colors cursor-pointer border border-transparent;
+}
+.tool-btn.active {
+  @apply bg-blue-100 text-blue-700 border-blue-200;
+}
+.tool-btn span {
+  @apply text-[9px] font-medium leading-none;
+}
+
+/* ── Range Input ── */
+input[type='range'] {
+  @apply w-full accent-blue-500;
 }
