@@ -12,7 +12,9 @@ export type ToolType =
   | 'arrow'
   | 'arrowAngle'
   | 'bodyCircle'
-  | 'text';
+  | 'text'
+  | 'skeleton'
+  | 'ballShadow';
 
 export interface DrawingOptions {
   color: string;
