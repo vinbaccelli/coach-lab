@@ -15,7 +15,7 @@ export function ScreenRecorder() {
   const startRecording = async () => {
     try {
       screenStreamRef.current = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
+        video: { cursor: 'always' } as MediaTrackConstraints,
         audio: true,
       });
 
