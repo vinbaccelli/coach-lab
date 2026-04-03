@@ -111,7 +111,8 @@ export default function AnnotationCanvas({ width, height }: Props) {
         if (isLoadingRef.current) return;
         const tool = activeToolRef.current;
         const s = settingsRef.current;
-        const pointer = canvas.getPointer(opt.e);
+        // Fabric.js v7: pointer is available directly on the event object
+        const pointer = opt.pointer ?? { x: opt.e?.offsetX ?? 0, y: opt.e?.offsetY ?? 0 };
 
         if (tool === 'line') {
           isDrawingRef.current = true;
@@ -161,7 +162,8 @@ export default function AnnotationCanvas({ width, height }: Props) {
         }
 
         if (tool === 'eraser') {
-          const target = canvas.findTarget(opt.e);
+          // Fabric.js v7: target is available directly on the event object
+          const target = opt.target;
           if (target) {
             canvas.remove(target);
           }
@@ -170,7 +172,8 @@ export default function AnnotationCanvas({ width, height }: Props) {
 
       canvas.on('mouse:move', (opt: any) => {
         if (!isDrawingRef.current || activeToolRef.current !== 'line' || !lineRef.current) return;
-        const pointer = canvas.getPointer(opt.e);
+        // Fabric.js v7: pointer is available directly on the event object
+        const pointer = opt.pointer ?? { x: opt.e?.offsetX ?? 0, y: opt.e?.offsetY ?? 0 };
         lineRef.current.set({ x2: pointer.x, y2: pointer.y });
         canvas.renderAll();
       });
