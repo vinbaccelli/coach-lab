@@ -171,28 +171,19 @@ export default function Home() {
               containerRef={containerRef}
               onVideoReady={handleVideoReady}
             />
-            {/* Canvas overlay positioned over the video container */}
+            {/* Canvas overlay positioned exactly over the video container (excludes controls bar) */}
             <div
-              className="absolute inset-0 pointer-events-none"
-              style={{
-                // VideoPlayer renders the video in the top portion;
-                // the controls bar is ~96px
-                bottom: 96,
-              }}
+              className="absolute inset-x-0 top-0 z-10"
+              style={{ height: canvasSize.height }}
             >
-              <div
-                className="relative w-full h-full"
-                style={{ pointerEvents: activeTool !== 'select' ? 'auto' : 'auto' }}
-              >
-                <CanvasOverlay
-                  ref={canvasRef}
-                  videoRef={videoRef}
-                  activeTool={activeTool}
-                  drawingOptions={drawingOptions}
-                  containerWidth={canvasSize.width}
-                  containerHeight={canvasSize.height - 96}
-                />
-              </div>
+              <CanvasOverlay
+                ref={canvasRef}
+                videoRef={videoRef}
+                activeTool={activeTool}
+                drawingOptions={drawingOptions}
+                containerWidth={canvasSize.width}
+                containerHeight={canvasSize.height}
+              />
             </div>
           </div>
 
