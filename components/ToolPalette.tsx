@@ -15,6 +15,8 @@ import {
   PersonStanding,
   Footprints,
   TrendingUp,
+  Eraser,
+  RefreshCw,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -26,6 +28,8 @@ interface ToolPaletteProps {
   onUndo: () => void;
   onRedo: () => void;
   onClear: () => void;
+  onResetSkeleton: () => void;
+  onResetBallTrail: () => void;
 }
 
 const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
@@ -40,6 +44,7 @@ const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
   { id: 'skeleton', icon: <PersonStanding size={18} />, label: 'Skeleton' },
   { id: 'ballShadow', icon: <Footprints size={18} />, label: 'Ball Trail' },
   { id: 'swingPath', icon: <TrendingUp size={18} />, label: 'Swing Path' },
+  { id: 'erase', icon: <Eraser size={18} />, label: 'Erase' },
 ];
 
 const PRESET_COLORS = [
@@ -62,6 +67,8 @@ export default function ToolPalette({
   onUndo,
   onRedo,
   onClear,
+  onResetSkeleton,
+  onResetBallTrail,
 }: ToolPaletteProps) {
   return (
     <div className="flex flex-col gap-1 h-full select-none">
@@ -163,6 +170,51 @@ export default function ToolPalette({
               <span className="font-medium text-gray-600">{drawingOptions.fontSize}px</span>
               <span>72</span>
             </div>
+          </div>
+        </>
+      )}
+
+      {/* Tool-specific helpers */}
+      {activeTool === 'skeleton' && (
+        <>
+          <div className="border-t border-gray-100 mx-2" />
+          <div className="px-2 py-2">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
+              Skeleton
+            </p>
+            <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
+              Pause video &amp; click joints in order (head → ankles).
+            </p>
+            <button
+              onClick={onResetSkeleton}
+              className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
+              title="Clear skeleton joints"
+            >
+              <RefreshCw size={13} />
+              <span>Reset Joints</span>
+            </button>
+          </div>
+        </>
+      )}
+
+      {activeTool === 'ballShadow' && (
+        <>
+          <div className="border-t border-gray-100 mx-2" />
+          <div className="px-2 py-2">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
+              Ball Trail
+            </p>
+            <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
+              Click the ball in each frame to record its path.
+            </p>
+            <button
+              onClick={onResetBallTrail}
+              className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
+              title="Clear ball trail"
+            >
+              <RefreshCw size={13} />
+              <span>Reset Trail</span>
+            </button>
           </div>
         </>
       )}

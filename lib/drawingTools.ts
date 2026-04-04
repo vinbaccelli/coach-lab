@@ -15,7 +15,8 @@ export type ToolType =
   | 'text'
   | 'skeleton'
   | 'ballShadow'
-  | 'swingPath';
+  | 'swingPath'
+  | 'erase';
 
 export interface DrawingOptions {
   color: string;
