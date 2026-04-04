@@ -10,10 +10,10 @@ import React, {
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg, makeArrowHead, serializeCanvas, deserializeCanvas } from '@/lib/drawingTools';
 import {
-  createSkeletonState, enableSkeleton, addJoint, resetSkeleton, drawSkeleton,
+  createSkeletonState, enableSkeleton, disableSkeleton, addJoint, resetSkeleton, drawSkeleton,
 } from '@/lib/skeleton';
 import {
-  createBallTrailState, enableBallTrail, addBallPoint, resetBallTrail, drawBallTrail,
+  createBallTrailState, enableBallTrail, disableBallTrail, addBallPoint, resetBallTrail, drawBallTrail,
 } from '@/lib/ballTrail';
 
 // Dynamic import for fabric (SSR-safe)
@@ -36,6 +36,10 @@ export interface CanvasHandle {
   undo: () => void;
   /** Redo */
   redo: () => void;
+  /** Reset the skeleton joints */
+  resetSkeleton: () => void;
+  /** Reset the ball trail points */
+  resetBallTrail: () => void;
 }
 
 interface CanvasProps {
@@ -200,9 +204,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       ballShadowStateRef.current = { drawing: false, start: null, tempShape: null };
       swingPathStateRef.current = { points: [], dots: [], lines: [] };
 
-      // Enable skeleton / ball-trail overlays when their tools are activated
-      if (activeTool === 'skeleton') enableSkeleton(skeletonStateRef.current);
-      if (activeTool === 'ballShadow') enableBallTrail(ballTrailStateRef.current);
+      // Enable skeleton / ball-trail overlays when their tools are activated;
+      // disable them when any other tool is active so the overlays are hidden.
+      if (activeTool === 'skeleton') {
+        enableSkeleton(skeletonStateRef.current);
+      } else {
+        disableSkeleton(skeletonStateRef.current);
+      }
+      if (activeTool === 'ballShadow') {
+        enableBallTrail(ballTrailStateRef.current);
+      } else {
+        disableBallTrail(ballTrailStateRef.current);
+      }
       // Clear preview when leaving skeleton tool
       if (activeTool !== 'skeleton') mousePreviewRef.current = null;
 
@@ -217,10 +230,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (activeTool === 'pen') {
         fc.isDrawingMode = true;
         fc.selection = false;
-        if (fc.freeDrawingBrush) {
-          fc.freeDrawingBrush.color = drawingOptions.color;
-          fc.freeDrawingBrush.width = drawingOptions.lineWidth;
-        }
+        // Brush properties (color/width) are kept in sync by the dedicated
+        // drawingOptions useEffect below — no need to set them again here.
+        return;
+      }
+
+      if (activeTool === 'erase') {
+        fc.isDrawingMode = false;
+        fc.selection = false;
+        // Make all objects hoverable so the eraser can target them
+        fc.forEachObject((obj) => obj.set({ selectable: false, evented: true }));
+        fc.renderAll();
         return;
       }
 
@@ -229,7 +249,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       fc.selection = false;
       fc.forEachObject((obj) => obj.set({ selectable: false, evented: false }));
       fc.renderAll();
-    }, [activeTool, drawingOptions, fabricReady]);
+    }, [activeTool, fabricReady]);
 
     // Update pen brush when options change (also re-runs when fabricReady becomes true)
     useEffect(() => {
@@ -318,6 +338,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const pos = getPos(opt);
         const { color, lineWidth } = drawingOptions;
         const { Line, Circle, Ellipse, Polygon, IText } = (await loadFabric());
+
+        if (activeTool === 'erase') {
+          // Remove the topmost object at the click position
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const target = (opt as any).target ?? fc.findTarget(opt.e as MouseEvent);
+          if (target) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            fc.remove(target as any);
+            fc.renderAll();
+            pushHistory();
+          }
+          return;
+        }
 
         if (activeTool === 'angle') {
           const state = angleStateRef.current;
@@ -650,8 +683,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             stroke: color,
             strokeWidth: lineWidth + 1,
             strokeDashArray: [8, 4],
-            selectable: false,
-            evented: false,
+            selectable: true,
+            evented: true,
           });
           fc.add(e);
           state.drawing = false;
@@ -762,6 +795,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           historyRef.current[historyIndexRef.current],
         );
         isModifyingRef.current = false;
+      },
+      resetSkeleton: () => {
+        resetSkeleton(skeletonStateRef.current);
+      },
+      resetBallTrail: () => {
+        resetBallTrail(ballTrailStateRef.current);
       },
     }));
 

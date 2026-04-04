@@ -91,19 +91,16 @@ export function drawBallTrail(
 ): void {
   if (!state.enabled || state.points.length === 0) return;
 
-  // Only show points within the trail duration window and not in the future
-  const visible = state.points.filter(
-    (p) => p.time <= currentTime + 0.05 && currentTime - p.time <= state.trailDuration,
-  );
+  // Show ALL recorded points permanently (no time-gate).
+  // Points near the current video time are shown fully opaque; older ones fade
+  // gently but never disappear entirely so the full trajectory stays visible.
+  const visible = state.points;
 
   if (visible.length < 2) {
-    // Still draw a single dot if there is exactly one visible point
     if (visible.length === 1) {
       const p = visible[0];
-      const age = currentTime - p.time;
-      const alpha = Math.max(0, 1 - age / state.trailDuration);
       ctx.save();
-      ctx.fillStyle = `rgba(255, 220, 50, ${alpha * 0.9})`;
+      ctx.fillStyle = 'rgba(255, 220, 50, 0.9)';
       ctx.shadowColor = 'rgba(255, 200, 0, 0.8)';
       ctx.shadowBlur = 8;
       ctx.beginPath();
@@ -118,18 +115,18 @@ export function drawBallTrail(
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  // Draw each trail segment with age-based color and width
+  // Draw each trail segment; recent segments (near currentTime) appear brighter
   for (let i = 1; i < visible.length; i++) {
     const prev = visible[i - 1];
     const curr = visible[i];
 
-    const age = currentTime - curr.time;
-    const alpha = Math.max(0, 1 - age / state.trailDuration);
+    const age = Math.abs(currentTime - curr.time);
+    // Min alpha 0.35 so old points are still clearly visible
+    const alpha = Math.max(0.35, 1 - age / Math.max(state.trailDuration, 5));
 
-    // Yellow (fresh) → orange (older)
     const green = Math.round(220 * alpha + 80 * (1 - alpha));
     ctx.strokeStyle = `rgba(255, ${green}, 0, ${alpha})`;
-    ctx.lineWidth = Math.max(1.5, 5 * alpha);
+    ctx.lineWidth = Math.max(2, 5 * alpha);
     ctx.shadowColor = `rgba(255, ${green}, 0, ${alpha * 0.6})`;
     ctx.shadowBlur = 4 * alpha;
 
@@ -139,16 +136,26 @@ export function drawBallTrail(
     ctx.stroke();
   }
 
-  // Draw glowing ball dot at the most recent point
-  const latest = [...visible].reverse().find((p) => p.time <= currentTime + 0.05);
-  if (latest) {
-    const age = currentTime - latest.time;
-    const alpha = Math.max(0, 1 - age / state.trailDuration);
+  // Draw glowing dot at every point, and a bigger one at the most recent
+  for (const p of visible) {
+    const age = Math.abs(currentTime - p.time);
+    const alpha = Math.max(0.35, 1 - age / Math.max(state.trailDuration, 5));
     ctx.shadowColor = 'rgba(255, 200, 0, 0.9)';
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = `rgba(255, 220, 50, ${alpha * 0.95})`;
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = `rgba(255, 220, 50, ${alpha * 0.85})`;
     ctx.beginPath();
-    ctx.arc(latest.nx * width, latest.ny * height, 7, 0, Math.PI * 2);
+    ctx.arc(p.nx * width, p.ny * height, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Highlight the latest point with a larger glowing dot
+  const latest = visible[visible.length - 1];
+  if (latest) {
+    ctx.shadowColor = 'rgba(255, 200, 0, 0.9)';
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = 'rgba(255, 220, 50, 0.95)';
+    ctx.beginPath();
+    ctx.arc(latest.nx * width, latest.ny * height, 8, 0, Math.PI * 2);
     ctx.fill();
   }
 

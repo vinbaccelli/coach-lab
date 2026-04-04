@@ -13,11 +13,12 @@ import {
 
 interface ScreenRecorderProps {
   compositeCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  onWebcamStreamChange?: (stream: MediaStream | null) => void;
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'preview';
 
-export default function ScreenRecorder({ compositeCanvasRef }: ScreenRecorderProps) {
+export default function ScreenRecorder({ compositeCanvasRef, onWebcamStreamChange }: ScreenRecorderProps) {
   const [recState, setRecState] = useState<RecordingState>('idle');
   const [withWebcam, setWithWebcam] = useState(true);
   const [withMic, setWithMic] = useState(true);
@@ -66,6 +67,7 @@ export default function ScreenRecorder({ compositeCanvasRef }: ScreenRecorderPro
           webcamVideoRef.current.srcObject = webcamStream;
           await webcamVideoRef.current.play().catch(() => {});
         }
+        onWebcamStreamChange?.(webcamStream);
       } else if (withMic) {
         micStream = await requestMic();
         micStreamRef.current = micStream;
@@ -133,7 +135,7 @@ export default function ScreenRecorder({ compositeCanvasRef }: ScreenRecorderPro
     setRecState('recording');
     setElapsed(0);
     timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
-  }, [compositeCanvasRef, withWebcam, withMic]);
+  }, [compositeCanvasRef, withWebcam, withMic, onWebcamStreamChange]);
 
   const pauseRecording = useCallback(() => {
     const mr = mediaRecorderRef.current;
@@ -157,7 +159,8 @@ export default function ScreenRecorder({ compositeCanvasRef }: ScreenRecorderPro
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     webcamStreamRef.current = null;
     micStreamRef.current = null;
-  }, []);
+    onWebcamStreamChange?.(null);
+  }, [onWebcamStreamChange]);
 
   const discardPreview = useCallback(() => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
