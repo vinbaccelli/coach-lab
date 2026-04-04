@@ -183,7 +183,7 @@ export default function ToolPalette({
               Skeleton
             </p>
             <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
-              Pause video &amp; click joints in order (head → ankles).
+              Pause video & click joints in order (head → ankles).
             </p>
             <button
               onClick={onResetSkeleton}
