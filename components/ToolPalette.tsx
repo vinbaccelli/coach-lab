@@ -14,6 +14,7 @@ import {
   Trash2,
   PersonStanding,
   Disc2,
+  TrendingUp,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -38,6 +39,7 @@ const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
   { id: 'text', icon: <Type size={18} />, label: 'Text' },
   { id: 'skeleton', icon: <PersonStanding size={18} />, label: 'Skeleton' },
   { id: 'ballShadow', icon: <Disc2 size={18} />, label: 'Shadow' },
+  { id: 'swingPath', icon: <TrendingUp size={18} />, label: 'Swing Path' },
 ];
 
 const PRESET_COLORS = [

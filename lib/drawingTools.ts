@@ -14,7 +14,8 @@ export type ToolType =
   | 'bodyCircle'
   | 'text'
   | 'skeleton'
-  | 'ballShadow';
+  | 'ballShadow'
+  | 'swingPath';
 
 export interface DrawingOptions {
   color: string;
@@ -73,12 +74,8 @@ export async function deserializeCanvas(
   canvas: FabricCanvas,
   json: string,
 ): Promise<void> {
-  return new Promise((resolve) => {
-    canvas.loadFromJSON(JSON.parse(json), () => {
-      canvas.renderAll();
-      resolve();
-    });
-  });
+  await canvas.loadFromJSON(JSON.parse(json));
+  canvas.renderAll();
 }
 
 /** Take a snapshot of the merged video + canvas as a PNG data URL */

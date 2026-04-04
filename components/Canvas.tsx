@@ -95,6 +95,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       tempShape: import('fabric').Object | null;
     }>({ drawing: false, start: null, tempShape: null });
 
+    // Swing path state (click-by-click motion trail)
+    const swingPathStateRef = useRef<{
+      points: { x: number; y: number }[];
+      dots: import('fabric').Object[];
+      lines: import('fabric').Object[];
+    }>({ points: [], dots: [], lines: [] });
+
     // Push current state onto undo stack
     const pushHistory = useCallback(() => {
       const fc = fabricRef.current;
@@ -171,11 +178,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       circleStateRef.current = { drawing: false, start: null, tempShape: null };
       bodyCircleStateRef.current = { drawing: false, start: null, tempShape: null };
       ballShadowStateRef.current = { drawing: false, start: null, tempShape: null };
+      swingPathStateRef.current = { points: [], dots: [], lines: [] };
 
       if (activeTool === 'select') {
         fc.isDrawingMode = false;
         fc.selection = true;
-        fc.forEachObject((obj) => obj.set({ selectable: true }));
+        fc.forEachObject((obj) => obj.set({ selectable: true, evented: true }));
         fc.renderAll();
         return;
       }
@@ -221,18 +229,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // Helper: create a ball-shadow ellipse from drag start to current pointer
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const makeBallShadow = (Ellipse: any, start: { x: number; y: number }, end: { x: number; y: number }, lineWidth: number) =>
-        new Ellipse({
-          left: Math.min(end.x, start.x),
-          top: Math.min(end.y, start.y + (Math.abs(end.y - start.y) * 3 / 8)),
-          rx: Math.abs(end.x - start.x) / 2,
-          ry: Math.abs(end.y - start.y) / 4,
+      const makeBallShadow = (Ellipse: any, start: { x: number; y: number }, end: { x: number; y: number }, lineWidth: number) => {
+        const rawRx = Math.abs(end.x - start.x) / 2;
+        const rawRy = Math.abs(end.y - start.y) / 4;
+        // Ensure minimum visible size even on a plain click
+        const rx = Math.max(rawRx, 30);
+        const ry = Math.max(rawRy, 10);
+        const cx = (start.x + end.x) / 2;
+        const cy = (start.y + end.y) / 2;
+        return new Ellipse({
+          left: cx - rx,
+          top: cy - ry,
+          rx,
+          ry,
           fill: 'rgba(0,0,0,0.25)',
           stroke: 'rgba(0,0,0,0.4)',
           strokeWidth: lineWidth,
           selectable: false,
           evented: false,
         });
+      };
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const onMouseDown = async (opt: any) => {
@@ -353,7 +369,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         if (activeTool === 'text') {
-          const t = new IText('Type here…', {
+          const t = new IText('', {
             left: pos.x,
             top: pos.y,
             fontSize: drawingOptions.fontSize,
@@ -411,6 +427,66 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             stroke: color, strokeWidth: lineWidth, selectable: false, evented: false,
           });
           fc.add(head, body, arms, legL, legR);
+          fc.renderAll();
+          pushHistory();
+        }
+
+        if (activeTool === 'swingPath') {
+          const state = swingPathStateRef.current;
+          const dotR = Math.max(4, lineWidth + 1);
+          const dot = new Circle({
+            left: pos.x - dotR,
+            top: pos.y - dotR,
+            radius: dotR,
+            fill: color,
+            stroke: color,
+            strokeWidth: 1,
+            selectable: false,
+            evented: false,
+          });
+
+          if (state.points.length > 0) {
+            const prev = state.points[state.points.length - 1];
+            const connLine = new Line([prev.x, prev.y, pos.x, pos.y], {
+              stroke: color,
+              strokeWidth: lineWidth,
+              selectable: false,
+              evented: false,
+            });
+            fc.add(connLine);
+            state.lines.push(connLine);
+
+            // Show distance label between dots
+            const dx = pos.x - prev.x;
+            const dy = pos.y - prev.y;
+            const dist = Math.round(Math.sqrt(dx * dx + dy * dy));
+            const distLabel = new IText(`${dist}px`, {
+              left: (prev.x + pos.x) / 2 + 4,
+              top: (prev.y + pos.y) / 2 - 14,
+              fontSize: Math.max(10, drawingOptions.fontSize - 8),
+              fill: color,
+              fontFamily: 'Inter, sans-serif',
+              selectable: false,
+              evented: false,
+            });
+            fc.add(distLabel);
+            state.dots.push(distLabel);
+          }
+
+          // Dot number label
+          const numLabel = new IText(`${state.points.length + 1}`, {
+            left: pos.x + dotR + 2,
+            top: pos.y - dotR,
+            fontSize: Math.max(10, drawingOptions.fontSize - 8),
+            fill: color,
+            fontFamily: 'Inter, sans-serif',
+            selectable: false,
+            evented: false,
+          });
+
+          fc.add(dot, numLabel);
+          state.dots.push(dot, numLabel);
+          state.points.push(pos);
           fc.renderAll();
           pushHistory();
         }
