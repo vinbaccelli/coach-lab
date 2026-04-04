@@ -27,6 +27,18 @@ const loadFabric = async () => {
   return fabricModule;
 };
 
+// Cache pose detection render helpers at module level to avoid repeated dynamic imports
+// in the animation frame loop. These are populated once when poseDetection is first loaded.
+let cachedGetPoseAtTime: (typeof import('@/lib/poseDetection'))['getPoseAtTime'] | null = null;
+let cachedDrawPoseSkeleton: (typeof import('@/lib/poseDetection'))['drawPoseSkeleton'] | null = null;
+const loadPoseRenderHelpers = () => {
+  if (cachedGetPoseAtTime && cachedDrawPoseSkeleton) return;
+  import('@/lib/poseDetection').then(({ getPoseAtTime, drawPoseSkeleton }) => {
+    cachedGetPoseAtTime = getPoseAtTime;
+    cachedDrawPoseSkeleton = drawPoseSkeleton;
+  }).catch((err) => console.error('[Canvas] Failed to load pose render helpers:', err));
+};
+
 export interface CanvasHandle {
   /** Flat combined canvas element (video frame + drawings) */
   getCompositeCanvas: () => HTMLCanvasElement | null;
@@ -234,6 +246,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // disable them when any other tool is active so the overlays are hidden.
       if (activeTool === 'skeleton') {
         enableSkeleton(skeletonStateRef.current);
+        // Pre-load pose render helpers so they're ready before the first animation frame
+        loadPoseRenderHelpers();
       } else {
         disableSkeleton(skeletonStateRef.current);
       }
@@ -317,15 +331,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (activeTool === 'skeleton' && cachedPosesRef.current.length > 0) {
           const video2 = videoRef.current;
           const time2 = video2?.currentTime ?? 0;
-          // Dynamic import — only executed if cached poses exist (model already loaded)
-          import('@/lib/poseDetection').then(({ getPoseAtTime, drawPoseSkeleton }) => {
-            const poseFrame = getPoseAtTime(cachedPosesRef.current, time2);
+          if (cachedGetPoseAtTime && cachedDrawPoseSkeleton) {
+            const poseFrame = cachedGetPoseAtTime(cachedPosesRef.current, time2);
             if (poseFrame && poseFrame.poses.length > 0) {
               const vw = video2?.videoWidth || w;
               const vh = video2?.videoHeight || h;
-              drawPoseSkeleton(ctx, poseFrame.poses, w, h, w / vw, h / vh, 0.4);
+              cachedDrawPoseSkeleton(ctx, poseFrame.poses, w, h, w / vw, h / vh, 0.4);
             }
-          }).catch(() => {});
+          }
         }
 
         // Draw auto-detected ball trail (when ball trail tool is active)
@@ -1099,7 +1112,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           <div className="absolute inset-x-0 bottom-4 flex justify-center pointer-events-none">
             <div className="bg-black/70 text-cyan-300 text-xs font-semibold rounded-lg px-4 py-2 flex items-center gap-2">
               <span className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse" />
-              Analysing pose… {poseProgress}%
+              Analyzing pose… {poseProgress}%
             </div>
           </div>
         )}

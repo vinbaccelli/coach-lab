@@ -230,7 +230,7 @@ export async function processAllFrames(
   }
 
   video.currentTime = origTime;
-  if (!wasPaused) video.play().catch(() => {});
+  if (!wasPaused) video.play().catch((err) => console.warn('[poseDetection] Could not resume video playback:', err));
 
   return results;
 }

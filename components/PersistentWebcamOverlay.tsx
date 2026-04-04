@@ -32,7 +32,7 @@ export default function PersistentWebcamOverlay() {
     if (!v) return;
     if (webcamStream) {
       v.srcObject = webcamStream;
-      v.play().catch(() => {});
+      v.play().catch((err) => console.warn('[PersistentWebcamOverlay] Video play failed:', err));
     } else {
       v.srcObject = null;
     }

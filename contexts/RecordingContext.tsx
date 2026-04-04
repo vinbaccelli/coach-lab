@@ -96,7 +96,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         const vid = webcamVideoRef.current;
         if (vid) {
           vid.srcObject = ws;
-          await vid.play().catch(() => {});
+          await vid.play().catch((err) => console.warn('[RecordingContext] Webcam video play failed:', err));
         }
       } else if (withMic) {
         ms = await requestMic();

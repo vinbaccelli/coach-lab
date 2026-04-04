@@ -199,7 +199,7 @@ export async function detectBallAllFrames(
 
   // Restore video state
   video.currentTime = origTime;
-  if (!wasPaused) video.play().catch(() => {});
+  if (!wasPaused) video.play().catch((err) => console.warn('[ballDetection] Could not resume video playback:', err));
 
   return results;
 }

@@ -194,7 +194,7 @@ export default function ToolPalette({
               title="Clear skeleton joints and re-process"
             >
               <RefreshCw size={13} />
-              <span>Reset &amp; Re-analyse</span>
+              <span>Reset &amp; Re-analyze</span>
             </button>
           </div>
         </>
