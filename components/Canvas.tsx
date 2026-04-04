@@ -342,7 +342,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (activeTool === 'erase') {
           // Remove the topmost object at the click position
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const target = (opt as any).target ?? fc.findTarget(opt.e as MouseEvent);
+          const target = (opt as any).target;
           if (target) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             fc.remove(target as any);
