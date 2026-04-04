@@ -145,14 +145,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           enableRetinaScaling: false,
         });
 
-        // Initialize the free drawing brush (required in Fabric.js v7)
+        // Fabric v7 does not auto-initialize freeDrawingBrush — create it explicitly
         fc.freeDrawingBrush = new PencilBrush(fc);
 
         fabricRef.current = fc;
-        console.log('[Canvas] Fabric.js initialized successfully', fc);
-
-        // Fabric v7 does not auto-initialize freeDrawingBrush — create it explicitly
-        fc.freeDrawingBrush = new PencilBrush(fc);
 
         // Signal that fabric is ready so tool configuration runs
         setFabricReady(true);
