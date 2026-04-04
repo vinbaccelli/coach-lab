@@ -107,6 +107,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const ballTrailStateRef = useRef(createBallTrailState());
     const mousePreviewRef = useRef<{ x: number; y: number } | null>(null);
 
+    // Swing path state (click-by-click motion trail)
+    const swingPathStateRef = useRef<{
+      points: { x: number; y: number }[];
+      dots: import('fabric').Object[];
+      lines: import('fabric').Object[];
+    }>({ points: [], dots: [], lines: [] });
+
     // Push current state onto undo stack
     const pushHistory = useCallback(() => {
       const fc = fabricRef.current;
@@ -143,6 +150,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         fabricRef.current = fc;
         console.log('[Canvas] Fabric.js initialized successfully', fc);
+
+        // Fabric v7 does not auto-initialize freeDrawingBrush — create it explicitly
+        fc.freeDrawingBrush = new PencilBrush(fc);
 
         // Signal that fabric is ready so tool configuration runs
         setFabricReady(true);
@@ -192,6 +202,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       circleStateRef.current = { drawing: false, start: null, tempShape: null };
       bodyCircleStateRef.current = { drawing: false, start: null, tempShape: null };
       ballShadowStateRef.current = { drawing: false, start: null, tempShape: null };
+      swingPathStateRef.current = { points: [], dots: [], lines: [] };
 
       // Enable skeleton / ball-trail overlays when their tools are activated
       if (activeTool === 'skeleton') enableSkeleton(skeletonStateRef.current);
@@ -202,7 +213,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (activeTool === 'select') {
         fc.isDrawingMode = false;
         fc.selection = true;
-        fc.forEachObject((obj) => obj.set({ selectable: true }));
+        fc.forEachObject((obj) => obj.set({ selectable: true, evented: true }));
         fc.renderAll();
         return;
       }
@@ -224,13 +235,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       fc.renderAll();
     }, [activeTool, drawingOptions, fabricReady]);
 
-    // Update pen brush when options change
+    // Update pen brush when options change (also re-runs when fabricReady becomes true)
     useEffect(() => {
       const fc = fabricRef.current;
       if (!fc?.freeDrawingBrush) return;
       fc.freeDrawingBrush.color = drawingOptions.color;
       fc.freeDrawingBrush.width = drawingOptions.lineWidth;
-    }, [drawingOptions]);
+    }, [drawingOptions, fabricReady]);
 
     // Render loop: draws skeleton and ball trail on the overlay canvas every frame.
     // Uses refs for mutable state so it does not need to restart on every tool change.
@@ -277,10 +288,33 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const getPos = (e: any): { x: number; y: number } => {
-        // Fabric.js v7 uses scenePoint for canvas-space coordinates
+        // Fabric v7 provides scenePoint; older versions used pointer
         if (e.scenePoint) return { x: e.scenePoint.x, y: e.scenePoint.y };
         if (e.pointer) return { x: e.pointer.x, y: e.pointer.y };
         return { x: 0, y: 0 };
+      };
+
+      // Helper: create a ball-shadow ellipse from drag start to current pointer
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const makeBallShadow = (Ellipse: any, start: { x: number; y: number }, end: { x: number; y: number }, lineWidth: number) => {
+        const rawRx = Math.abs(end.x - start.x) / 2;
+        const rawRy = Math.abs(end.y - start.y) / 4;
+        // Ensure minimum visible size even on a plain click
+        const rx = Math.max(rawRx, 30);
+        const ry = Math.max(rawRy, 10);
+        const cx = (start.x + end.x) / 2;
+        const cy = (start.y + end.y) / 2;
+        return new Ellipse({
+          left: cx - rx,
+          top: cy - ry,
+          rx,
+          ry,
+          fill: 'rgba(0,0,0,0.25)',
+          stroke: 'rgba(0,0,0,0.4)',
+          strokeWidth: lineWidth,
+          selectable: false,
+          evented: false,
+        });
       };
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -402,7 +436,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         if (activeTool === 'text') {
-          const t = new IText('Type here…', {
+          const t = new IText('', {
             left: pos.x,
             top: pos.y,
             fontSize: drawingOptions.fontSize,
@@ -435,6 +469,66 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const ny = pos.y / containerHeight;
             addJoint(skeletonStateRef.current, nx, ny);
           }
+        }
+
+        if (activeTool === 'swingPath') {
+          const state = swingPathStateRef.current;
+          const dotR = Math.max(4, lineWidth + 1);
+          const dot = new Circle({
+            left: pos.x - dotR,
+            top: pos.y - dotR,
+            radius: dotR,
+            fill: color,
+            stroke: color,
+            strokeWidth: 1,
+            selectable: false,
+            evented: false,
+          });
+
+          if (state.points.length > 0) {
+            const prev = state.points[state.points.length - 1];
+            const connLine = new Line([prev.x, prev.y, pos.x, pos.y], {
+              stroke: color,
+              strokeWidth: lineWidth,
+              selectable: false,
+              evented: false,
+            });
+            fc.add(connLine);
+            state.lines.push(connLine);
+
+            // Show distance label between dots
+            const dx = pos.x - prev.x;
+            const dy = pos.y - prev.y;
+            const dist = Math.round(Math.sqrt(dx * dx + dy * dy));
+            const distLabel = new IText(`${dist}px`, {
+              left: (prev.x + pos.x) / 2 + 4,
+              top: (prev.y + pos.y) / 2 - 14,
+              fontSize: Math.max(10, drawingOptions.fontSize - 8),
+              fill: color,
+              fontFamily: 'Inter, sans-serif',
+              selectable: false,
+              evented: false,
+            });
+            fc.add(distLabel);
+            state.dots.push(distLabel);
+          }
+
+          // Dot number label
+          const numLabel = new IText(`${state.points.length + 1}`, {
+            left: pos.x + dotR + 2,
+            top: pos.y - dotR,
+            fontSize: Math.max(10, drawingOptions.fontSize - 8),
+            fill: color,
+            fontFamily: 'Inter, sans-serif',
+            selectable: false,
+            evented: false,
+          });
+
+          fc.add(dot, numLabel);
+          state.dots.push(dot, numLabel);
+          state.points.push(pos);
+          fc.renderAll();
+          pushHistory();
         }
       };
 
@@ -502,6 +596,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           });
           fc.add(l);
           state.tempLine = l;
+          fc.renderAll();
+        }
+
+        if (activeTool === 'ballShadow') {
+          const state = ballShadowStateRef.current;
+          if (!state.drawing || !state.start) return;
+          if (state.tempShape) fc.remove(state.tempShape);
+          const e = makeBallShadow(Ellipse, state.start, pos, lineWidth);
+          fc.add(e);
+          state.tempShape = e;
           fc.renderAll();
         }
       };
@@ -578,6 +682,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           state.drawing = false;
           state.start = null;
           state.tempLine = null;
+          fc.renderAll();
+          pushHistory();
+        }
+
+        if (activeTool === 'ballShadow') {
+          const state = ballShadowStateRef.current;
+          if (!state.drawing || !state.start) return;
+          if (state.tempShape) fc.remove(state.tempShape);
+          fc.add(makeBallShadow(Ellipse, state.start, pos, lineWidth));
+          state.drawing = false;
+          state.start = null;
+          state.tempShape = null;
           fc.renderAll();
           pushHistory();
         }

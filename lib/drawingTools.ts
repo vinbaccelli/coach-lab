@@ -14,7 +14,8 @@ export type ToolType =
   | 'bodyCircle'
   | 'text'
   | 'skeleton'
-  | 'ballShadow';
+  | 'ballShadow'
+  | 'swingPath';
 
 export interface DrawingOptions {
   color: string;
