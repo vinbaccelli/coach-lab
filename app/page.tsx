@@ -14,12 +14,14 @@ import ScreenRecorder from '@/components/ScreenRecorder';
 import ExportModal from '@/components/ExportModal';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
+import { useRecording } from '@/contexts/RecordingContext';
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<CanvasHandle>(null);
-  const compositeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const { registerCompositeCanvas } = useRecording();
 
   const [activeTool, setActiveTool] = useState<ToolType>('pen');
   const [drawingOptions, setDrawingOptions] = useState<DrawingOptions>({
@@ -59,60 +61,14 @@ export default function Home() {
     };
   }, []);
 
-  // Webcam PiP overlay
-  const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
-  const webcamPipRef = useRef<HTMLVideoElement>(null);
-  const [pipPos, setPipPos] = useState({ x: 16, y: 16 });
-  const [pipSize, setPipSize] = useState({ w: 240, h: 135 });
-  const pipDragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
-  const pipResizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null);
-
-  useEffect(() => {
-    const v = webcamPipRef.current;
-    if (!v) return;
-    if (webcamStream) {
-      v.srcObject = webcamStream;
-      v.play().catch(() => {});
-    } else {
-      v.srcObject = null;
-    }
-  }, [webcamStream]);
-
-  const onPipDragStart = useCallback((e: React.MouseEvent) => {
-    pipDragRef.current = { startX: e.clientX, startY: e.clientY, origX: pipPos.x, origY: pipPos.y };
-    e.preventDefault();
-  }, [pipPos]);
-
-  const onPipResizeStart = useCallback((e: React.MouseEvent) => {
-    pipResizeRef.current = { startX: e.clientX, startY: e.clientY, origW: pipSize.w, origH: pipSize.h };
-    e.stopPropagation();
-    e.preventDefault();
-  }, [pipSize]);
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (pipDragRef.current) {
-        const dx = e.clientX - pipDragRef.current.startX;
-        const dy = e.clientY - pipDragRef.current.startY;
-        setPipPos({ x: Math.max(0, pipDragRef.current.origX + dx), y: Math.max(0, pipDragRef.current.origY + dy) });
-      }
-      if (pipResizeRef.current) {
-        const dx = e.clientX - pipResizeRef.current.startX;
-        const newW = Math.max(120, pipResizeRef.current.origW + dx);
-        setPipSize({ w: newW, h: Math.round(newW * 9 / 16) });
-      }
-    };
-    const onUp = () => { pipDragRef.current = null; pipResizeRef.current = null; };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  // Register the composite canvas getter with the RecordingContext
+  const getCompositeCanvas = useCallback(() => {
+    return canvasRef.current?.getCompositeCanvas() ?? null;
   }, []);
 
-  // Keep composite canvas up to date for screen recording
-  const refreshComposite = useCallback(() => {
-    const composite = canvasRef.current?.getCompositeCanvas();
-    if (composite) compositeCanvasRef.current = composite;
-  }, []);
+  useEffect(() => {
+    registerCompositeCanvas(getCompositeCanvas);
+  }, [registerCompositeCanvas, getCompositeCanvas]);
 
   // Measure container and update canvas size
   const updateSize = useCallback(() => {
@@ -154,24 +110,12 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const getCompositeCanvas = useCallback(() => {
-    const c = canvasRef.current?.getCompositeCanvas();
-    if (c) compositeCanvasRef.current = c;
-    return c ?? null;
-  }, []);
-
   // Quick screenshot: capture and immediately download
   const handleScreenshot = useCallback(() => {
     const canvas = canvasRef.current?.getCompositeCanvas();
     if (!canvas) return;
     downloadDataURL(canvas.toDataURL('image/png'), `coach-lab-${Date.now()}.png`);
   }, []);
-
-  // Continuously refresh composite for screen recording
-  useEffect(() => {
-    const id = setInterval(refreshComposite, 1000 / 30);
-    return () => clearInterval(id);
-  }, [refreshComposite]);
 
   return (
     <div className="flex flex-col h-screen bg-white overflow-hidden">
@@ -253,14 +197,10 @@ export default function Home() {
             />
           )}
 
-          {sidebarTab === 'record' && (
-            <div className="p-2">
-              <ScreenRecorder
-                compositeCanvasRef={compositeCanvasRef}
-                onWebcamStreamChange={setWebcamStream}
-              />
-            </div>
-          )}
+          {/* ScreenRecorder is always mounted to preserve recording state across tab switches */}
+          <div className={`${sidebarTab === 'record' ? 'block' : 'hidden'} p-2`}>
+            <ScreenRecorder />
+          </div>
 
           {/* Resize handle */}
           <div
@@ -295,36 +235,6 @@ export default function Home() {
                 containerHeight={canvasSize.height}
               />
             </div>
-
-            {/* Webcam PiP overlay — shown while recording with webcam */}
-            {webcamStream && (
-              <div
-                className="absolute z-30 rounded-xl overflow-hidden shadow-2xl border-2 border-blue-400 select-none"
-                style={{ left: pipPos.x, top: pipPos.y, width: pipSize.w, height: pipSize.h, cursor: 'grab' }}
-                onMouseDown={onPipDragStart}
-              >
-                <video
-                  ref={webcamPipRef}
-                  autoPlay
-                  muted
-                  playsInline
-                  className="w-full h-full object-cover"
-                />
-                {/* Resize handle — bottom-right corner */}
-                <div
-                  className="absolute bottom-0 right-0 w-5 h-5 cursor-nwse-resize bg-blue-500/70 rounded-tl-md flex items-center justify-center"
-                  onMouseDown={onPipResizeStart}
-                >
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="white">
-                    <path d="M10 10L10 5L5 10Z" />
-                    <path d="M10 10L10 0L0 10Z" fillOpacity="0.4" />
-                  </svg>
-                </div>
-                <div className="absolute top-1 left-1.5 text-[9px] text-white/80 font-semibold tracking-wide pointer-events-none select-none bg-black/30 rounded px-1">
-                  CAM
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Hint bar */}
@@ -334,8 +244,10 @@ export default function Home() {
             <span>←/→: 5s skip</span>
             <span>Ctrl+Z: undo</span>
             <span>Ctrl+Y: redo</span>
-            <span className="text-cyan-500">Skeleton: pause & click joints</span>
-            <span className="text-yellow-500">Ball Trail: click ball each frame</span>
+            <span className="text-cyan-500">Skeleton: AI auto-detects pose</span>
+            <span className="text-yellow-500">Ball Trail: auto-tracks + click to add</span>
+            <span className="text-purple-400">Swing Path: dbl-click or long-press to end</span>
+            <span className="text-amber-400">Angle: drag 3rd point for live preview</span>
           </div>
         </main>
       </div>
