@@ -4,8 +4,8 @@ import ServiceWorkerRegistration from './ServiceWorkerRegistration';
 import InstallPrompt from '../components/InstallPrompt';
 
 export const metadata: Metadata = {
-  title: 'Coach Lab',
-  description: 'Sports Video Analysis - Frame by frame annotation and pose detection',
+  title: 'Coach Lab – Video Analysis Tool',
+  description: 'Professional coaching video analysis with frame-by-frame playback, drawing tools, and screen recording.',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
@@ -30,10 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <ServiceWorkerRegistration />
-        <header className="bg-blue-600 text-white p-4">
-          <h1>🎬 Coach Lab</h1>
-        </header>
-        <main>{children}</main>
+        {children}
         <InstallPrompt />
       </body>
     </html>

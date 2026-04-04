@@ -4,12 +4,12 @@
 const nextConfig = {
   webpack: (config) => {
     config.resolve.fallback = {
-      canvas: require.resolve('canvas'),
       ...config.resolve.fallback,
+      canvas: false,
+      fs: false,
     };
     return config;
   },
-  swcMinify: true,
 };
 
 module.exports = nextConfig;
