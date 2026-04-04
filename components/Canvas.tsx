@@ -217,10 +217,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (activeTool === 'pen') {
         fc.isDrawingMode = true;
         fc.selection = false;
-        if (fc.freeDrawingBrush) {
-          fc.freeDrawingBrush.color = drawingOptions.color;
-          fc.freeDrawingBrush.width = drawingOptions.lineWidth;
-        }
+        // Brush properties (color/width) are kept in sync by the dedicated
+        // drawingOptions useEffect below — no need to set them again here.
         return;
       }
 
@@ -229,7 +227,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       fc.selection = false;
       fc.forEachObject((obj) => obj.set({ selectable: false, evented: false }));
       fc.renderAll();
-    }, [activeTool, drawingOptions, fabricReady]);
+    }, [activeTool, fabricReady]);
 
     // Update pen brush when options change (also re-runs when fabricReady becomes true)
     useEffect(() => {
