@@ -194,6 +194,8 @@ export default function Home() {
             <span>←/→: 5s skip</span>
             <span>Ctrl+Z: undo</span>
             <span>Ctrl+Y: redo</span>
+            <span className="text-cyan-500">Skeleton: click joints (paused)</span>
+            <span className="text-yellow-500">Ball Trail: click ball position</span>
           </div>
         </main>
       </div>

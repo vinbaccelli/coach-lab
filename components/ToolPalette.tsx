@@ -13,7 +13,7 @@ import {
   Redo2,
   Trash2,
   PersonStanding,
-  Disc2,
+  Footprints,
   TrendingUp,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
@@ -38,7 +38,7 @@ const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
   { id: 'bodyCircle', icon: <Circle size={18} strokeDasharray="4 2" />, label: '3D Circle' },
   { id: 'text', icon: <Type size={18} />, label: 'Text' },
   { id: 'skeleton', icon: <PersonStanding size={18} />, label: 'Skeleton' },
-  { id: 'ballShadow', icon: <Disc2 size={18} />, label: 'Shadow' },
+  { id: 'ballShadow', icon: <Footprints size={18} />, label: 'Ball Trail' },
   { id: 'swingPath', icon: <TrendingUp size={18} />, label: 'Swing Path' },
 ];
 

@@ -9,6 +9,12 @@ import React, {
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg, makeArrowHead, serializeCanvas, deserializeCanvas } from '@/lib/drawingTools';
+import {
+  createSkeletonState, enableSkeleton, addJoint, resetSkeleton, drawSkeleton,
+} from '@/lib/skeleton';
+import {
+  createBallTrailState, enableBallTrail, addBallPoint, resetBallTrail, drawBallTrail,
+} from '@/lib/ballTrail';
 
 // Dynamic import for fabric (SSR-safe)
 let fabricModule: typeof import('fabric') | null = null;
@@ -88,12 +94,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       tempShape: import('fabric').Object | null;
     }>({ drawing: false, start: null, tempShape: null });
 
-    // Ball shadow state (drag to create shadow ellipse)
+    // Ball shadow state (kept for tool-reset compatibility)
     const ballShadowStateRef = useRef<{
       drawing: boolean;
       start: { x: number; y: number } | null;
       tempShape: import('fabric').Object | null;
     }>({ drawing: false, start: null, tempShape: null });
+
+    // Overlay canvas for skeleton + ball trail (rendered independently of Fabric)
+    const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+    const skeletonStateRef = useRef(createSkeletonState());
+    const ballTrailStateRef = useRef(createBallTrailState());
+    const mousePreviewRef = useRef<{ x: number; y: number } | null>(null);
 
     // Swing path state (click-by-click motion trail)
     const swingPathStateRef = useRef<{
@@ -123,7 +135,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       let fc: import('fabric').Canvas;
 
       loadFabric().then(({ Canvas, PencilBrush }) => {
-        fc = new Canvas(canvasElRef.current!, {
+        if (!canvasElRef.current) return;
+        fc = new Canvas(canvasElRef.current, {
           isDrawingMode: false,
           selection: false,
           width: containerWidth || 800,
@@ -132,10 +145,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           enableRetinaScaling: false,
         });
 
-        fabricRef.current = fc;
-
         // Fabric v7 does not auto-initialize freeDrawingBrush — create it explicitly
         fc.freeDrawingBrush = new PencilBrush(fc);
+
+        fabricRef.current = fc;
 
         // Signal that fabric is ready so tool configuration runs
         setFabricReady(true);
@@ -150,6 +163,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         fc.on('object:modified', () => {
           if (!isModifyingRef.current) pushHistory();
         });
+      }).catch((err) => {
+        console.error('[Canvas] Failed to initialize Fabric.js:', err);
       });
 
       return () => {
@@ -164,6 +179,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!fc || !containerWidth || !containerHeight) return;
       fc.setDimensions({ width: containerWidth, height: containerHeight });
       fc.renderAll();
+      const overlay = overlayCanvasRef.current;
+      if (overlay) {
+        overlay.width = containerWidth;
+        overlay.height = containerHeight;
+      }
     }, [containerWidth, containerHeight]);
 
     // Configure fabric for active tool
@@ -179,6 +199,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       bodyCircleStateRef.current = { drawing: false, start: null, tempShape: null };
       ballShadowStateRef.current = { drawing: false, start: null, tempShape: null };
       swingPathStateRef.current = { points: [], dots: [], lines: [] };
+
+      // Enable skeleton / ball-trail overlays when their tools are activated
+      if (activeTool === 'skeleton') enableSkeleton(skeletonStateRef.current);
+      if (activeTool === 'ballShadow') enableBallTrail(ballTrailStateRef.current);
+      // Clear preview when leaving skeleton tool
+      if (activeTool !== 'skeleton') mousePreviewRef.current = null;
 
       if (activeTool === 'select') {
         fc.isDrawingMode = false;
@@ -212,6 +238,43 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       fc.freeDrawingBrush.color = drawingOptions.color;
       fc.freeDrawingBrush.width = drawingOptions.lineWidth;
     }, [drawingOptions, fabricReady]);
+
+    // Render loop: draws skeleton and ball trail on the overlay canvas every frame.
+    // Uses refs for mutable state so it does not need to restart on every tool change.
+    useEffect(() => {
+      const overlayCanvas = overlayCanvasRef.current;
+      if (!overlayCanvas) return;
+
+      let animFrameId: number;
+
+      const render = () => {
+        const ctx = overlayCanvas.getContext('2d');
+        if (!ctx) { animFrameId = requestAnimationFrame(render); return; }
+
+        const w = overlayCanvas.width;
+        const h = overlayCanvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const video = videoRef.current;
+        const currentTime = video?.currentTime ?? 0;
+        const isPaused = video ? video.paused : true;
+
+        // Show ghost preview only while in skeleton tool with video paused
+        const previewPos = (activeTool === 'skeleton' && isPaused)
+          ? mousePreviewRef.current
+          : null;
+
+        drawSkeleton(ctx, skeletonStateRef.current, w, h, previewPos);
+        drawBallTrail(ctx, ballTrailStateRef.current, currentTime, w, h);
+
+        animFrameId = requestAnimationFrame(render);
+      };
+
+      animFrameId = requestAnimationFrame(render);
+      return () => cancelAnimationFrame(animFrameId);
+    // activeTool is included so the preview condition stays current inside the loop;
+    // videoRef is included so the closure captures the ref object (it's stable but listed for clarity)
+    }, [activeTool, videoRef]);
 
     // Mouse event handlers
     useEffect(() => {
@@ -386,49 +449,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         if (activeTool === 'ballShadow') {
-          const state = ballShadowStateRef.current;
-          if (!state.drawing) {
-            state.drawing = true;
-            state.start = pos;
-          }
+          // Record this click as a ball trail point at the current video timestamp
+          const video = videoRef.current;
+          const time = video?.currentTime ?? 0;
+          const nx = pos.x / containerWidth;
+          const ny = pos.y / containerHeight;
+          addBallPoint(ballTrailStateRef.current, nx, ny, time);
         }
 
         if (activeTool === 'skeleton') {
-          // Placeholder: draw a simple stick-figure annotation at the click position
-          const cx = pos.x;
-          const cy = pos.y;
-          const scale = 1;
-          const headR = 10 * scale;
-          const { Circle: FabricCircle, Line: FabricLine } = (await loadFabric());
-          const head = new FabricCircle({
-            left: cx - headR,
-            top: cy - headR * 2 - 20 * scale,
-            radius: headR,
-            fill: 'transparent',
-            stroke: color,
-            strokeWidth: lineWidth,
-            selectable: false,
-            evented: false,
-          });
-          // body
-          const body = new FabricLine([cx, cy - 20 * scale, cx, cy + 20 * scale], {
-            stroke: color, strokeWidth: lineWidth, selectable: false, evented: false,
-          });
-          // arms
-          const arms = new FabricLine([cx - 20 * scale, cy - 5 * scale, cx + 20 * scale, cy - 5 * scale], {
-            stroke: color, strokeWidth: lineWidth, selectable: false, evented: false,
-          });
-          // left leg
-          const legL = new FabricLine([cx, cy + 20 * scale, cx - 15 * scale, cy + 40 * scale], {
-            stroke: color, strokeWidth: lineWidth, selectable: false, evented: false,
-          });
-          // right leg
-          const legR = new FabricLine([cx, cy + 20 * scale, cx + 15 * scale, cy + 40 * scale], {
-            stroke: color, strokeWidth: lineWidth, selectable: false, evented: false,
-          });
-          fc.add(head, body, arms, legL, legR);
-          fc.renderAll();
-          pushHistory();
+          // Only place joints while the video is paused
+          const video = videoRef.current;
+          if (video && video.paused) {
+            const nx = pos.x / containerWidth;
+            const ny = pos.y / containerHeight;
+            addJoint(skeletonStateRef.current, nx, ny);
+          }
         }
 
         if (activeTool === 'swingPath') {
@@ -495,6 +531,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const onMouseMove = async (opt: any) => {
         const pos = getPos(opt);
+
+        // Track mouse position for skeleton joint preview
+        if (activeTool === 'skeleton') {
+          mousePreviewRef.current = pos;
+        }
+
         const { color, lineWidth } = drawingOptions;
         const { Line, Ellipse } = (await loadFabric());
 
@@ -653,16 +695,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       };
 
+      // Clear skeleton preview when pointer leaves the canvas
+      const onMouseOut = () => { mousePreviewRef.current = null; };
+
       fc.on('mouse:down', onMouseDown);
       fc.on('mouse:move', onMouseMove);
       fc.on('mouse:up', onMouseUp);
+      fc.on('mouse:out', onMouseOut);
 
       return () => {
         fc.off('mouse:down', onMouseDown);
         fc.off('mouse:move', onMouseMove);
         fc.off('mouse:up', onMouseUp);
+        fc.off('mouse:out', onMouseOut);
       };
-    }, [activeTool, drawingOptions, pushHistory, fabricReady]);
+    }, [activeTool, drawingOptions, pushHistory, fabricReady, containerWidth, containerHeight]);
 
     // Expose imperative handle
     useImperativeHandle(ref, () => ({
@@ -679,6 +726,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const ctx = tmp.getContext('2d')!;
         ctx.drawImage(video, 0, 0, w, h);
         ctx.drawImage(fc.getElement(), 0, 0, w, h);
+        // Include skeleton and ball-trail overlay in exported/recorded frame
+        const overlay = overlayCanvasRef.current;
+        if (overlay) ctx.drawImage(overlay, 0, 0, w, h);
         return tmp;
       },
       getFabricCanvas: () => fabricRef.current?.getElement() ?? null,
@@ -688,6 +738,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         fc.clear();
         fc.backgroundColor = 'transparent';
         fc.renderAll();
+        // Also clear skeleton and ball trail state
+        resetSkeleton(skeletonStateRef.current);
+        resetBallTrail(ballTrailStateRef.current);
         pushHistory();
       },
       undo: async () => {
@@ -713,11 +766,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     }));
 
     return (
-      <canvas
-        ref={canvasElRef}
-        className="absolute inset-0 w-full h-full"
-        style={{ touchAction: 'none' }}
-      />
+      <>
+        {/* Fabric canvas — annotation drawing tools */}
+        <canvas
+          ref={canvasElRef}
+          className="absolute inset-0 w-full h-full"
+          style={{ touchAction: 'none' }}
+        />
+        {/* Overlay canvas — skeleton and ball trail (pointer-events: none so clicks pass through) */}
+        <canvas
+          ref={overlayCanvasRef}
+          className="absolute inset-0 w-full h-full"
+          style={{ pointerEvents: 'none' }}
+        />
+      </>
     );
   },
 );
