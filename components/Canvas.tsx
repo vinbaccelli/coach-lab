@@ -265,7 +265,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       animFrameId = requestAnimationFrame(render);
       return () => cancelAnimationFrame(animFrameId);
-    // activeTool is included so the preview condition stays current inside the loop
+    // activeTool is included so the preview condition stays current inside the loop;
+    // videoRef is included so the closure captures the ref object (it's stable but listed for clarity)
     }, [activeTool, videoRef]);
 
     // Mouse event handlers
