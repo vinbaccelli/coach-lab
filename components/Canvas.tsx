@@ -15,6 +15,8 @@ import {
 import {
   createBallTrailState, enableBallTrail, disableBallTrail, addBallPoint, resetBallTrail, drawBallTrail,
 } from '@/lib/ballTrail';
+import type { CachedPoseFrame } from '@/lib/poseDetection';
+import type { BallPosition } from '@/lib/ballDetection';
 
 // Dynamic import for fabric (SSR-safe)
 let fabricModule: typeof import('fabric') | null = null;
@@ -23,6 +25,18 @@ const loadFabric = async () => {
     fabricModule = await import('fabric');
   }
   return fabricModule;
+};
+
+// Cache pose detection render helpers at module level to avoid repeated dynamic imports
+// in the animation frame loop. These are populated once when poseDetection is first loaded.
+let cachedGetPoseAtTime: (typeof import('@/lib/poseDetection'))['getPoseAtTime'] | null = null;
+let cachedDrawPoseSkeleton: (typeof import('@/lib/poseDetection'))['drawPoseSkeleton'] | null = null;
+const loadPoseRenderHelpers = () => {
+  if (cachedGetPoseAtTime && cachedDrawPoseSkeleton) return;
+  import('@/lib/poseDetection').then(({ getPoseAtTime, drawPoseSkeleton }) => {
+    cachedGetPoseAtTime = getPoseAtTime;
+    cachedDrawPoseSkeleton = drawPoseSkeleton;
+  }).catch((err) => console.error('[Canvas] Failed to load pose render helpers:', err));
 };
 
 export interface CanvasHandle {
@@ -116,7 +130,30 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       points: { x: number; y: number }[];
       dots: import('fabric').Object[];
       lines: import('fabric').Object[];
-    }>({ points: [], dots: [], lines: [] });
+      isDrawing: boolean;
+    }>({ points: [], dots: [], lines: [], isDrawing: false });
+
+    // Long-press timer ref for touch-based swing path termination
+    const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const longPressFiredRef = useRef(false);
+
+    // Angle tool live preview state (drawn on overlay canvas)
+    const angleLivePreviewRef = useRef<{
+      phase2Active: boolean;
+      p0: { x: number; y: number } | null;
+      p1: { x: number; y: number } | null;
+      cursor: { x: number; y: number } | null;
+    }>({ phase2Active: false, p0: null, p1: null, cursor: null });
+
+    // AI pose detection cache
+    const cachedPosesRef = useRef<CachedPoseFrame[]>([]);
+    const poseProcessingRef = useRef(false);
+    const [poseProgress, setPoseProgress] = useState<number | null>(null);
+
+    // Auto ball detection cache
+    const cachedBallRef = useRef<BallPosition[]>([]);
+    const ballProcessingRef = useRef(false);
+    const [ballProgress, setBallProgress] = useState<number | null>(null);
 
     // Push current state onto undo stack
     const pushHistory = useCallback(() => {
@@ -202,12 +239,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       circleStateRef.current = { drawing: false, start: null, tempShape: null };
       bodyCircleStateRef.current = { drawing: false, start: null, tempShape: null };
       ballShadowStateRef.current = { drawing: false, start: null, tempShape: null };
-      swingPathStateRef.current = { points: [], dots: [], lines: [] };
+      swingPathStateRef.current = { points: [], dots: [], lines: [], isDrawing: false };
+      angleLivePreviewRef.current = { phase2Active: false, p0: null, p1: null, cursor: null };
 
       // Enable skeleton / ball-trail overlays when their tools are activated;
       // disable them when any other tool is active so the overlays are hidden.
       if (activeTool === 'skeleton') {
         enableSkeleton(skeletonStateRef.current);
+        // Pre-load pose render helpers so they're ready before the first animation frame
+        loadPoseRenderHelpers();
       } else {
         disableSkeleton(skeletonStateRef.current);
       }
@@ -287,6 +327,114 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         drawSkeleton(ctx, skeletonStateRef.current, w, h, previewPos);
         drawBallTrail(ctx, ballTrailStateRef.current, currentTime, w, h);
 
+        // Draw AI-detected skeleton overlay (when skeleton tool is active and we have cached poses)
+        if (activeTool === 'skeleton' && cachedPosesRef.current.length > 0) {
+          const video2 = videoRef.current;
+          const time2 = video2?.currentTime ?? 0;
+          if (cachedGetPoseAtTime && cachedDrawPoseSkeleton) {
+            const poseFrame = cachedGetPoseAtTime(cachedPosesRef.current, time2);
+            if (poseFrame && poseFrame.poses.length > 0) {
+              const vw = video2?.videoWidth || w;
+              const vh = video2?.videoHeight || h;
+              cachedDrawPoseSkeleton(ctx, poseFrame.poses, w, h, w / vw, h / vh, 0.4);
+            }
+          }
+        }
+
+        // Draw auto-detected ball trail (when ball trail tool is active)
+        if (activeTool === 'ballShadow' && cachedBallRef.current.length > 0) {
+          const video2 = videoRef.current;
+          const time2 = video2?.currentTime ?? 0;
+          const fps = 30;
+          const targetFrame = Math.round(time2 * fps);
+          // Show short tail: last 15 frames before current
+          const tailFrames = 15;
+          const visible = cachedBallRef.current.filter(
+            (p) => p.frameIndex >= targetFrame - tailFrames && p.frameIndex <= targetFrame,
+          );
+          if (visible.length > 0) {
+            ctx.save();
+            ctx.lineCap = 'round';
+            for (let i = 1; i < visible.length; i++) {
+              const prev = visible[i - 1];
+              const curr = visible[i];
+              const alpha = (i / visible.length) * 0.9;
+              ctx.strokeStyle = `rgba(255, 220, 50, ${alpha})`;
+              ctx.lineWidth = Math.max(2, 5 * alpha);
+              ctx.beginPath();
+              ctx.moveTo(prev.nx * w, prev.ny * h);
+              ctx.lineTo(curr.nx * w, curr.ny * h);
+              ctx.stroke();
+            }
+            if (visible.length > 0) {
+              const latest = visible[visible.length - 1];
+              ctx.shadowColor = 'rgba(255, 200, 0, 0.9)';
+              ctx.shadowBlur = 12;
+              ctx.fillStyle = 'rgba(255, 220, 50, 0.95)';
+              ctx.beginPath();
+              ctx.arc(latest.nx * w, latest.ny * h, 8, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.restore();
+          }
+        }
+
+        // Draw live angle preview (arc + floating label) while dragging 3rd point
+        const aPreview = angleLivePreviewRef.current;
+        if (aPreview.phase2Active && aPreview.p0 && aPreview.p1 && aPreview.cursor) {
+          const { p0, p1, cursor } = aPreview;
+          // Angle at vertex p1 between ray p1→p0 and ray p1→cursor
+          const ray1Angle = Math.atan2(p0.y - p1.y, p0.x - p1.x);
+          const ray2Angle = Math.atan2(cursor.y - p1.y, cursor.x - p1.x);
+          let angleDeg = Math.abs((ray2Angle - ray1Angle) * 180 / Math.PI);
+          if (angleDeg > 180) angleDeg = 360 - angleDeg;
+          const arcR = Math.min(40, Math.hypot(p0.x - p1.x, p0.y - p1.y) * 0.4);
+
+          ctx.save();
+          // Arc fill
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.arc(p1.x, p1.y, arcR, Math.min(ray1Angle, ray2Angle), Math.max(ray1Angle, ray2Angle));
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(252, 211, 77, 0.25)';
+          ctx.fill();
+          // Arc stroke
+          ctx.beginPath();
+          ctx.arc(p1.x, p1.y, arcR, Math.min(ray1Angle, ray2Angle), Math.max(ray1Angle, ray2Angle));
+          ctx.strokeStyle = '#FCD34D';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          // Preview lines
+          ctx.strokeStyle = 'rgba(252, 211, 77, 0.6)';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(cursor.x, cursor.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          // Floating label
+          const label = `${Math.round(angleDeg)}°`;
+          const lx = cursor.x + 10;
+          const ly = cursor.y - 10;
+          ctx.font = 'bold 14px Inter, sans-serif';
+          const metrics = ctx.measureText(label);
+          const pad = 5;
+          const lw = metrics.width + pad * 2;
+          const lh = 22;
+          // Keep label within canvas bounds
+          const clampX = Math.min(lx, w - lw - 4);
+          const clampY = Math.max(ly - lh + 4, 4);
+          ctx.fillStyle = 'rgba(20,20,20,0.8)';
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(clampX, clampY, lw, lh, 4);
+          else ctx.rect(clampX, clampY, lw, lh);
+          ctx.fill();
+          ctx.fillStyle = '#FCD34D';
+          ctx.fillText(label, clampX + pad, clampY + lh - 6);
+          ctx.restore();
+        }
+
         animFrameId = requestAnimationFrame(render);
       };
 
@@ -294,6 +442,65 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return () => cancelAnimationFrame(animFrameId);
     // activeTool is included so the preview condition stays current inside the loop;
     // videoRef is included so the closure captures the ref object (it's stable but listed for clarity)
+    }, [activeTool, videoRef]);
+
+    // AI Skeleton: auto-process video when skeleton tool is selected and video is loaded
+    useEffect(() => {
+      if (activeTool !== 'skeleton') return;
+      const video = videoRef.current;
+      if (!video || !video.duration || !isFinite(video.duration)) return;
+      if (cachedPosesRef.current.length > 0 || poseProcessingRef.current) return;
+
+      poseProcessingRef.current = true;
+      setPoseProgress(0);
+
+      import('@/lib/poseDetection').then(async ({ processAllFrames }) => {
+        try {
+          const frames = await processAllFrames(
+            video,
+            30,
+            (p) => setPoseProgress(Math.round(p * 100)),
+          );
+          cachedPosesRef.current = frames;
+        } catch (err) {
+          console.error('[Canvas] Pose detection failed:', err);
+        } finally {
+          poseProcessingRef.current = false;
+          setPoseProgress(null);
+        }
+      }).catch(() => {
+        poseProcessingRef.current = false;
+        setPoseProgress(null);
+      });
+    }, [activeTool, videoRef]);
+
+    // Ball Detection: auto-process video when ball trail tool is selected and video is loaded
+    useEffect(() => {
+      if (activeTool !== 'ballShadow') return;
+      const video = videoRef.current;
+      if (!video || !video.duration || !isFinite(video.duration)) return;
+      if (cachedBallRef.current.length > 0 || ballProcessingRef.current) return;
+
+      ballProcessingRef.current = true;
+      setBallProgress(0);
+
+      import('@/lib/ballDetection').then(async ({ detectBallAllFrames }) => {
+        try {
+          const positions = await detectBallAllFrames(
+            video,
+            (p) => setBallProgress(Math.round(p * 100)),
+          );
+          cachedBallRef.current = positions;
+        } catch (err) {
+          console.error('[Canvas] Ball detection failed:', err);
+        } finally {
+          ballProcessingRef.current = false;
+          setBallProgress(null);
+        }
+      }).catch(() => {
+        ballProcessingRef.current = false;
+        setBallProgress(null);
+      });
     }, [activeTool, videoRef]);
 
     // Mouse event handlers
@@ -368,6 +575,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             state.tempLines.push(line);
             state.phase = 2;
           } else if (state.phase === 2) {
+            // Clear live preview
+            angleLivePreviewRef.current.phase2Active = false;
             // Remove temp lines, draw final angle + label
             state.tempLines.forEach((l) => fc.remove(l));
             state.tempLines = [];
@@ -502,6 +711,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         if (activeTool === 'swingPath') {
           const state = swingPathStateRef.current;
+          if (!state.isDrawing) return; // terminated via dblclick or long-press
           const dotR = Math.max(4, lineWidth + 1);
           const dot = new Circle({
             left: pos.x - dotR,
@@ -556,6 +766,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           fc.add(dot, numLabel);
           state.dots.push(dot, numLabel);
           state.points.push(pos);
+          state.isDrawing = true; // mark that we've started drawing
           fc.renderAll();
           pushHistory();
         }
@@ -568,6 +779,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // Track mouse position for skeleton joint preview
         if (activeTool === 'skeleton') {
           mousePreviewRef.current = pos;
+        }
+
+        // Track cursor for live angle arc preview (phase 2 = waiting for 3rd point)
+        if (activeTool === 'angle') {
+          const aState = angleStateRef.current;
+          if (aState.phase === 2 && aState.points.length >= 2) {
+            angleLivePreviewRef.current.phase2Active = true;
+            angleLivePreviewRef.current.p0 = aState.points[0];
+            angleLivePreviewRef.current.p1 = aState.points[1];
+            angleLivePreviewRef.current.cursor = pos;
+          }
+        } else {
+          angleLivePreviewRef.current.phase2Active = false;
         }
 
         const { color, lineWidth } = drawingOptions;
@@ -731,16 +955,77 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // Clear skeleton preview when pointer leaves the canvas
       const onMouseOut = () => { mousePreviewRef.current = null; };
 
+      // Double-click to finalize swing path (desktop)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const onDblClick = (_opt: any) => {
+        if (activeTool === 'swingPath') {
+          const state = swingPathStateRef.current;
+          if (state.isDrawing) {
+            state.isDrawing = false;
+            // Reset for next path (keep drawn objects on canvas)
+            state.points = [];
+            state.dots = [];
+            state.lines = [];
+          }
+        }
+      };
+
+      // Long-press (500ms) to finalize swing path on touch
+      const finalizeSwingPath = () => {
+        const state = swingPathStateRef.current;
+        if (state.isDrawing) {
+          state.isDrawing = false;
+          state.points = [];
+          state.dots = [];
+          state.lines = [];
+          longPressFiredRef.current = true;
+        }
+      };
+
+      const canvasEl = fc.getElement();
+
+      const onTouchStart = () => {
+        if (activeTool !== 'swingPath') return;
+        longPressFiredRef.current = false;
+        longPressTimerRef.current = setTimeout(finalizeSwingPath, 500);
+      };
+
+      const onTouchEnd = () => {
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+      };
+
+      const onTouchMove = () => {
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+      };
+
       fc.on('mouse:down', onMouseDown);
       fc.on('mouse:move', onMouseMove);
       fc.on('mouse:up', onMouseUp);
       fc.on('mouse:out', onMouseOut);
+      fc.on('mouse:dblclick', onDblClick);
+      canvasEl.addEventListener('touchstart', onTouchStart, { passive: true });
+      canvasEl.addEventListener('touchend', onTouchEnd, { passive: true });
+      canvasEl.addEventListener('touchmove', onTouchMove, { passive: true });
 
       return () => {
         fc.off('mouse:down', onMouseDown);
         fc.off('mouse:move', onMouseMove);
         fc.off('mouse:up', onMouseUp);
         fc.off('mouse:out', onMouseOut);
+        fc.off('mouse:dblclick', onDblClick);
+        canvasEl.removeEventListener('touchstart', onTouchStart);
+        canvasEl.removeEventListener('touchend', onTouchEnd);
+        canvasEl.removeEventListener('touchmove', onTouchMove);
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
       };
     }, [activeTool, drawingOptions, pushHistory, fabricReady, containerWidth, containerHeight]);
 
@@ -798,9 +1083,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       },
       resetSkeleton: () => {
         resetSkeleton(skeletonStateRef.current);
+        // Also clear AI cached poses so next activation re-processes
+        cachedPosesRef.current = [];
       },
       resetBallTrail: () => {
         resetBallTrail(ballTrailStateRef.current);
+        // Also clear auto-detected ball cache
+        cachedBallRef.current = [];
       },
     }));
 
@@ -812,12 +1101,30 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           className="absolute inset-0 w-full h-full"
           style={{ touchAction: 'none' }}
         />
-        {/* Overlay canvas — skeleton and ball trail (pointer-events: none so clicks pass through) */}
+        {/* Overlay canvas — skeleton, ball trail, angle preview (pointer-events: none so clicks pass through) */}
         <canvas
           ref={overlayCanvasRef}
           className="absolute inset-0 w-full h-full"
           style={{ pointerEvents: 'none' }}
         />
+        {/* AI Skeleton progress overlay */}
+        {poseProgress !== null && (
+          <div className="absolute inset-x-0 bottom-4 flex justify-center pointer-events-none">
+            <div className="bg-black/70 text-cyan-300 text-xs font-semibold rounded-lg px-4 py-2 flex items-center gap-2">
+              <span className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse" />
+              Analyzing pose… {poseProgress}%
+            </div>
+          </div>
+        )}
+        {/* Ball Detection progress overlay */}
+        {ballProgress !== null && (
+          <div className="absolute inset-x-0 bottom-4 flex justify-center pointer-events-none">
+            <div className="bg-black/70 text-yellow-300 text-xs font-semibold rounded-lg px-4 py-2 flex items-center gap-2">
+              <span className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
+              Detecting ball… {ballProgress}%
+            </div>
+          </div>
+        )}
       </>
     );
   },

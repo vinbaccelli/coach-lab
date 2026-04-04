@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import ServiceWorkerRegistration from './ServiceWorkerRegistration';
 import InstallPrompt from '../components/InstallPrompt';
+import { RecordingProvider } from '../contexts/RecordingContext';
+import PersistentWebcamOverlay from '../components/PersistentWebcamOverlay';
 
 export const metadata: Metadata = {
   title: 'Coach Lab – Video Analysis Tool',
@@ -30,7 +32,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <ServiceWorkerRegistration />
-        {children}
+        <RecordingProvider>
+          {children}
+          <PersistentWebcamOverlay />
+        </RecordingProvider>
         <InstallPrompt />
       </body>
     </html>

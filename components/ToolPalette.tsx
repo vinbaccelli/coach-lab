@@ -182,16 +182,19 @@ export default function ToolPalette({
             <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
               Skeleton
             </p>
+            <p className="text-[9px] text-cyan-600 px-1 mb-1.5 leading-tight font-medium">
+              AI auto-detects pose from video.
+            </p>
             <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
-              Pause video & click joints in order (head → ankles).
+              Also click joints manually while paused to fine-tune.
             </p>
             <button
               onClick={onResetSkeleton}
               className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
-              title="Clear skeleton joints"
+              title="Clear skeleton joints and re-process"
             >
               <RefreshCw size={13} />
-              <span>Reset Joints</span>
+              <span>Reset &amp; Re-analyze</span>
             </button>
           </div>
         </>
@@ -204,8 +207,11 @@ export default function ToolPalette({
             <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
               Ball Trail
             </p>
+            <p className="text-[9px] text-yellow-600 px-1 mb-1.5 leading-tight font-medium">
+              Auto-detects tennis ball from video.
+            </p>
             <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
-              Click the ball in each frame to record its path.
+              Click the ball manually in any frame to add extra points.
             </p>
             <button
               onClick={onResetBallTrail}
@@ -219,7 +225,36 @@ export default function ToolPalette({
         </>
       )}
 
-      <div className="flex-1" />
+      {activeTool === 'swingPath' && (
+        <>
+          <div className="border-t border-gray-100 mx-2" />
+          <div className="px-2 py-2">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
+              Swing Path
+            </p>
+            <p className="text-[9px] text-purple-500 px-1 mb-0.5 leading-tight font-medium">
+              Click to add points along the path.
+            </p>
+            <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
+              Desktop: double-click to end. Mobile: long-press (0.5s) to end.
+            </p>
+          </div>
+        </>
+      )}
+
+      {activeTool === 'angle' && (
+        <>
+          <div className="border-t border-gray-100 mx-2" />
+          <div className="px-2 py-2">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
+              Angle Measure
+            </p>
+            <p className="text-[9px] text-amber-500 px-1 leading-tight font-medium">
+              Click 3 points. Drag 3rd for live angle preview.
+            </p>
+          </div>
+        </>
+      )}
 
       <div className="border-t border-gray-100 mx-2" />
 
