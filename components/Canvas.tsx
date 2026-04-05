@@ -56,19 +56,22 @@ export interface CanvasHandle {
   resetBallTrail: () => void;
 }
 
+import type { BallTrailMode } from '@/components/ToolPalette';
+
 interface CanvasProps {
   videoRef: React.RefObject<HTMLVideoElement>;
   activeTool: ToolType;
   drawingOptions: DrawingOptions;
   containerWidth: number;
   containerHeight: number;
+  ballTrailMode?: BallTrailMode;
 }
 
 const MAX_HISTORY = 50;
 
 const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
   function CanvasOverlay(
-    { videoRef, activeTool, drawingOptions, containerWidth, containerHeight },
+    { videoRef, activeTool, drawingOptions, containerWidth, containerHeight, ballTrailMode = 'short-tail' },
     ref,
   ) {
     const canvasElRef = useRef<HTMLCanvasElement>(null);
@@ -347,26 +350,59 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const time2 = video2?.currentTime ?? 0;
           const fps = 30;
           const targetFrame = Math.round(time2 * fps);
-          // Show short tail: last 15 frames before current
-          const tailFrames = 15;
-          const visible = cachedBallRef.current.filter(
-            (p) => p.frameIndex >= targetFrame - tailFrames && p.frameIndex <= targetFrame,
-          );
-          if (visible.length > 0) {
-            ctx.save();
-            ctx.lineCap = 'round';
-            for (let i = 1; i < visible.length; i++) {
-              const prev = visible[i - 1];
-              const curr = visible[i];
-              const alpha = (i / visible.length) * 0.9;
-              ctx.strokeStyle = `rgba(255, 220, 50, ${alpha})`;
-              ctx.lineWidth = Math.max(2, 5 * alpha);
+
+          if (ballTrailMode === 'full-trajectory') {
+            // Full trajectory: draw entire path as a continuous line up to the current frame
+            const allPoints = cachedBallRef.current.filter((p) => p.frameIndex <= targetFrame);
+            if (allPoints.length > 0) {
+              ctx.save();
+              ctx.lineCap = 'round';
+              ctx.lineJoin = 'round';
+              // Draw the full trajectory line
+              ctx.strokeStyle = 'rgba(255, 220, 50, 0.75)';
+              ctx.lineWidth = 3;
               ctx.beginPath();
-              ctx.moveTo(prev.nx * w, prev.ny * h);
-              ctx.lineTo(curr.nx * w, curr.ny * h);
+              let started = false;
+              for (const pos of allPoints) {
+                if (!started) {
+                  ctx.moveTo(pos.nx * w, pos.ny * h);
+                  started = true;
+                } else {
+                  ctx.lineTo(pos.nx * w, pos.ny * h);
+                }
+              }
               ctx.stroke();
+              // Draw dots at each detection point
+              for (const pos of allPoints) {
+                const age = targetFrame - pos.frameIndex;
+                const isCurrent = age <= 2;
+                ctx.fillStyle = isCurrent ? 'rgba(255, 220, 50, 0.95)' : 'rgba(255, 180, 30, 0.5)';
+                ctx.beginPath();
+                ctx.arc(pos.nx * w, pos.ny * h, isCurrent ? 8 : 4, 0, Math.PI * 2);
+                ctx.fill();
+              }
+              ctx.restore();
             }
+          } else {
+            // Short tail: last 15 frames before current
+            const tailFrames = 15;
+            const visible = cachedBallRef.current.filter(
+              (p) => p.frameIndex >= targetFrame - tailFrames && p.frameIndex <= targetFrame,
+            );
             if (visible.length > 0) {
+              ctx.save();
+              ctx.lineCap = 'round';
+              for (let i = 1; i < visible.length; i++) {
+                const prev = visible[i - 1];
+                const curr = visible[i];
+                const alpha = (i / visible.length) * 0.9;
+                ctx.strokeStyle = `rgba(255, 220, 50, ${alpha})`;
+                ctx.lineWidth = Math.max(2, 5 * alpha);
+                ctx.beginPath();
+                ctx.moveTo(prev.nx * w, prev.ny * h);
+                ctx.lineTo(curr.nx * w, curr.ny * h);
+                ctx.stroke();
+              }
               const latest = visible[visible.length - 1];
               ctx.shadowColor = 'rgba(255, 200, 0, 0.9)';
               ctx.shadowBlur = 12;
@@ -374,8 +410,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               ctx.beginPath();
               ctx.arc(latest.nx * w, latest.ny * h, 8, 0, Math.PI * 2);
               ctx.fill();
+              ctx.restore();
             }
-            ctx.restore();
           }
         }
 
@@ -441,8 +477,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       animFrameId = requestAnimationFrame(render);
       return () => cancelAnimationFrame(animFrameId);
     // activeTool is included so the preview condition stays current inside the loop;
+    // ballTrailMode is included so the rendering mode is current;
     // videoRef is included so the closure captures the ref object (it's stable but listed for clarity)
-    }, [activeTool, videoRef]);
+    }, [activeTool, ballTrailMode, videoRef]);
 
     // AI Skeleton: auto-process video when skeleton tool is selected and video is loaded
     useEffect(() => {
