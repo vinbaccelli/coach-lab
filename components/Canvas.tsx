@@ -759,7 +759,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const fi = Math.round(video.currentTime * 30);
               cachedBallRef.current = [
                 ...cachedBallRef.current.filter(p => p.frameIndex !== fi),
-                { frameIndex: fi, nx, ny, radius: 10, confidence: 1 },
+                { frameIndex: fi, timeSeconds: video.currentTime, nx, ny, radius: 10, confidence: 1 },
               ].sort((a, b) => a.frameIndex - b.frameIndex);
             }
           }
