@@ -12,6 +12,20 @@ import type { CachedPoseFrame } from '@/lib/poseDetection';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
+import { detectSwingSegments } from '@/lib/swingDetection';
+
+// ── Constants ──────────────────────────────────────────────────────────────
+
+/** Throttle interval for real-time skeleton pose detection (~30fps) */
+const POSE_DETECTION_INTERVAL = 1 / 30;
+/** Throttle interval for real-time ball detection (~20fps) */
+const BALL_DETECTION_INTERVAL = 1 / 20;
+/** Maximum skeleton frames to keep in memory (~10s at 30fps) */
+const MAX_SKELETON_FRAMES = 300;
+/** Maximum ball positions to keep in memory */
+const MAX_BALL_DETECTIONS = 200;
+/** Window (seconds) for matching a skeleton frame to current video time */
+const SKELETON_TIME_TOLERANCE = 0.15;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -555,8 +569,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       getDetectedSwings: () => {
         const frames = skeletonFramesRef.current;
         if (frames.length === 0) return [];
-        // Synchronously detect swings from accumulated skeleton frames
-        const { detectSwingSegments } = require('@/lib/swingDetection') as typeof import('@/lib/swingDetection');
         return detectSwingSegments(frames);
       },
       drawSwingFromSegment: (segment: SwingSegment, color: string) => {
@@ -662,7 +674,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // ── Real-time skeleton detection ────────────────────────────────
           if (skeletonEnabledRef.current && !video.paused && !isPoseRunningRef.current) {
             const now = video.currentTime;
-            if (now - lastPoseTimeRef.current > 0.033) { // ~30fps throttle
+            if (now - lastPoseTimeRef.current > POSE_DETECTION_INTERVAL) {
               lastPoseTimeRef.current = now;
               isPoseRunningRef.current = true;
 
@@ -673,9 +685,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                       timeSeconds: now,
                       keypoints,
                     });
-                    // Keep only last 300 frames (~10s at 30fps)
-                    if (skeletonFramesRef.current.length > 300) {
-                      skeletonFramesRef.current = skeletonFramesRef.current.slice(-300);
+                    // Keep only the most recent frames to bound memory usage
+                    if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+                      skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
                     }
                     onProcessingStatus?.(null);
                   }
@@ -689,7 +701,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // ── Real-time ball detection ────────────────────────────────────
           if (ballTrailEnabledRef.current && !video.paused && !isBallRunningRef.current) {
             const now = video.currentTime;
-            if (now - lastBallDetectRef.current > 0.05) { // ~20fps
+            if (now - lastBallDetectRef.current > BALL_DETECTION_INTERVAL) {
               lastBallDetectRef.current = now;
               const dc = ballDetectCanvasRef.current;
               const dCtx = ballDetectCtxRef.current;
@@ -706,9 +718,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                       x: pos.x * (vW / dc.width),
                       y: pos.y * (vH / dc.height),
                     });
-                    // Keep last 200 detections
-                    if (ballTrackRef.current.length > 200) {
-                      ballTrackRef.current = ballTrackRef.current.slice(-200);
+                    if (ballTrackRef.current.length > MAX_BALL_DETECTIONS) {
+                      ballTrackRef.current = ballTrackRef.current.slice(-MAX_BALL_DETECTIONS);
                     }
                     onProcessingStatus?.(null);
                   }
@@ -725,13 +736,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // ── Skeleton overlay ─────────────────────────────────────────────
         if (skeletonEnabledRef.current && video) {
           const currentTime = video.currentTime;
-          const TOLERANCE = 0.15; // 150ms
 
           // Find most recent frame within tolerance
           let bestFrame: typeof skeletonFramesRef.current[0] | null = null;
           for (let i = skeletonFramesRef.current.length - 1; i >= 0; i--) {
             const f = skeletonFramesRef.current[i];
-            if (Math.abs(f.timeSeconds - currentTime) <= TOLERANCE) {
+            if (Math.abs(f.timeSeconds - currentTime) <= SKELETON_TIME_TOLERANCE) {
               bestFrame = f;
               break;
             }
@@ -905,13 +915,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
 
-      // Check if clicking near a circle center to start dragging it
+      // Check if clicking near an existing circle/ellipse to start dragging it
       if (tool === 'circle' || tool === 'bodyCircle') {
         const DRAG_THRESHOLD = 20;
         const idx = strokesRef.current.findIndex((s) => {
           if (s.tool !== 'circle' && s.tool !== 'bodyCircle') return false;
           const el = s as StrokeEllipse;
-          return Math.hypot(el.cx - pos.x, el.cy - pos.y) < Math.max(el.rx, el.ry) + DRAG_THRESHOLD;
+          // Use proper ellipse point-containment: ((x-cx)²/rx²) + ((y-cy)²/ry²) <= 1
+          // Add DRAG_THRESHOLD tolerance by scaling the ellipse slightly
+          const rx = Math.max(el.rx, 1) + DRAG_THRESHOLD;
+          const ry = Math.max(el.ry, 1) + DRAG_THRESHOLD;
+          const dx2 = pos.x - el.cx;
+          const dy2 = pos.y - el.cy;
+          return (dx2 * dx2) / (rx * rx) + (dy2 * dy2) / (ry * ry) <= 1;
         });
         if (idx >= 0) {
           const el = strokesRef.current[idx] as StrokeEllipse;
