@@ -34,8 +34,16 @@ export async function loadPoseModel(modelType: 'lite' | 'full' = 'lite'): Promis
 
   detectorLoading = true;
   detectorLoadPromise = (async () => {
-    // Dynamic imports so TF.js is only bundled when this function is called
-    const tf = await import('@tensorflow/tfjs');
+    // Server-side guard — TF.js WebGL backend cannot run during SSR
+    if (typeof window === 'undefined') {
+      throw new Error('TensorFlow.js cannot run on server');
+    }
+
+    // Dynamic imports so TF.js is only bundled when this function is called.
+    // Import core + WebGL backend separately instead of the full tfjs bundle
+    // to avoid initialising backends that are unused (CPU, WebGPU, etc.).
+    const tf = await import('@tensorflow/tfjs-core');
+    await import('@tensorflow/tfjs-backend-webgl');
     await tf.ready();
 
     const poseDetection = await import('@tensorflow-models/pose-detection');
@@ -67,6 +75,14 @@ export async function estimatePoses(
 const POSE_COLOR = '#00E5FF';
 const JOINT_RADIUS = 5;
 const BONE_WIDTH = 2.5;
+const RAD_TO_DEG = 180 / Math.PI;
+// Pixel offset for angle labels relative to the joint dot
+const LABEL_OFFSET_X = 8;
+const LABEL_OFFSET_Y = -8;
+// Background rectangle padding/height for angle labels
+const LABEL_PAD_X = 2;
+const LABEL_PAD_Y = 13;
+const LABEL_LINE_HEIGHT = 16;
 
 /** Map keypoint name → index in the poses[0].keypoints array */
 const KEYPOINT_NAMES = [
@@ -179,6 +195,47 @@ export function drawPoseSkeleton(
     ctx.fill();
   }
 
+  // Draw joint angle labels for key joints
+  const angleJoints = [
+    { center: 'left_elbow',  ref1: 'left_shoulder',  ref2: 'left_wrist' },
+    { center: 'right_elbow', ref1: 'right_shoulder', ref2: 'right_wrist' },
+    { center: 'left_knee',   ref1: 'left_hip',       ref2: 'left_ankle' },
+    { center: 'right_knee',  ref1: 'right_hip',      ref2: 'right_ankle' },
+  ];
+
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 12px Inter, sans-serif';
+
+  for (const joint of angleJoints) {
+    const kpC = findKeypoint(kps, joint.center);
+    const kpA = findKeypoint(kps, joint.ref1);
+    const kpB = findKeypoint(kps, joint.ref2);
+    if (!kpC || !kpA || !kpB) continue;
+    const c = getCoords(kpC);
+    const a = getCoords(kpA);
+    const b = getCoords(kpB);
+    if (!c || !a || !b) continue;
+
+    // Compute angle at vertex c between vectors c→a and c→b
+    const v1 = { x: a.x - c.x, y: a.y - c.y };
+    const v2 = { x: b.x - c.x, y: b.y - c.y };
+    const dot = v1.x * v2.x + v1.y * v2.y;
+    const mag = Math.sqrt(v1.x ** 2 + v1.y ** 2) * Math.sqrt(v2.x ** 2 + v2.y ** 2);
+    if (mag === 0) continue;
+    const angleDeg = Math.round(Math.acos(Math.min(1, Math.max(-1, dot / mag))) * RAD_TO_DEG);
+
+    const label = `${angleDeg}°`;
+    const lx = c.x + LABEL_OFFSET_X;
+    const ly = c.y + LABEL_OFFSET_Y;
+    // Dark background for readability
+    const metrics = ctx.measureText(label);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(lx - LABEL_PAD_X, ly - LABEL_PAD_Y, metrics.width + LABEL_PAD_X * 2, LABEL_LINE_HEIGHT);
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText(label, lx, ly);
+  }
+
   ctx.restore();
 }
 
@@ -203,7 +260,16 @@ export async function processAllFrames(
 
   const seekTo = (t: number): Promise<void> =>
     new Promise((resolve) => {
-      const onSeeked = () => { video.removeEventListener('seeked', onSeeked); resolve(); };
+      const onSeeked = () => {
+        video.removeEventListener('seeked', onSeeked);
+        clearTimeout(timer);
+        resolve();
+      };
+      // Fallback: resolve after 1 s in case 'seeked' never fires
+      const timer = setTimeout(() => {
+        video.removeEventListener('seeked', onSeeked);
+        resolve();
+      }, 1000);
       video.addEventListener('seeked', onSeeked);
       video.currentTime = t;
     });
