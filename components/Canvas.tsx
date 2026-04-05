@@ -26,6 +26,8 @@ const MAX_SKELETON_FRAMES = 300;
 const MAX_BALL_DETECTIONS = 200;
 /** Window (seconds) for matching a skeleton frame to current video time */
 const SKELETON_TIME_TOLERANCE = 0.15;
+/** Time window (seconds) used to skip duplicate ball detections at the same video position */
+const BALL_DETECT_TIME_TOLERANCE = 0.08;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -98,6 +100,136 @@ function ensurePoseRender(): void {
       drawSkeletonFrame: mod.drawSkeletonFrame,
     };
   }).catch((err) => console.error('[Canvas] poseRender load error:', err));
+}
+
+// ── Standalone skeleton renderer ───────────────────────────────────────────
+
+function drawSkeletonOverlay(
+  ctx: CanvasRenderingContext2D,
+  keypoints: Array<{ x: number; y: number; score: number; name: string }>,
+  nativeW: number,
+  nativeH: number,
+  canvasW: number,
+  canvasH: number,
+): void {
+  const sx = canvasW / nativeW;
+  const sy = canvasH / nativeH;
+
+  const BONES: [number, number][] = [
+    [0, 1], [0, 2], [1, 3], [2, 4],
+    [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
+    [5, 11], [6, 12], [11, 12],
+    [11, 13], [13, 15], [12, 14], [14, 16],
+  ];
+
+  ctx.save();
+  ctx.strokeStyle = '#35679A';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  for (const [a, b] of BONES) {
+    const ka = keypoints[a];
+    const kb = keypoints[b];
+    if (!ka || !kb || ka.score < 0.3 || kb.score < 0.3) continue;
+    ctx.beginPath();
+    ctx.moveTo(ka.x * sx, ka.y * sy);
+    ctx.lineTo(kb.x * sx, kb.y * sy);
+    ctx.stroke();
+  }
+
+  for (const kp of keypoints) {
+    if (kp.score < 0.3) continue;
+    ctx.beginPath();
+    ctx.arc(kp.x * sx, kp.y * sy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#F8F8F8';
+    ctx.fill();
+    ctx.strokeStyle = '#35679A';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  const ANGLES: [number, number, number][] = [
+    [7, 5, 9], [8, 6, 10], [13, 11, 15], [14, 12, 16],
+  ];
+
+  ctx.font = 'bold 13px -apple-system, sans-serif';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 3;
+
+  for (const [vi, ai, bi] of ANGLES) {
+    const v = keypoints[vi];
+    const a = keypoints[ai];
+    const b = keypoints[bi];
+    if (!v || !a || !b || v.score < 0.3 || a.score < 0.3 || b.score < 0.3) continue;
+
+    const vx = v.x * sx, vy = v.y * sy;
+    const ax = a.x * sx, ay = a.y * sy;
+    const bx = b.x * sx, by = b.y * sy;
+
+    const v1 = { x: ax - vx, y: ay - vy };
+    const v2 = { x: bx - vx, y: by - vy };
+    const dot = v1.x * v2.x + v1.y * v2.y;
+    const mag = Math.sqrt(v1.x ** 2 + v1.y ** 2) * Math.sqrt(v2.x ** 2 + v2.y ** 2);
+    if (mag < 1) continue;
+
+    const deg = Math.round(Math.acos(Math.min(1, Math.max(-1, dot / mag))) * 180 / Math.PI);
+    const label = `${deg}°`;
+    const m = ctx.measureText(label);
+    const lx = vx + 8, ly = vy - 8;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(lx - 2, ly - 13, m.width + 4, 16);
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText(label, lx, ly);
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+// ── Standalone ball detector ────────────────────────────────────────────────
+
+function findBallInImageData(
+  imageData: ImageData,
+  width: number,
+  height: number,
+): { x: number; y: number } | null {
+  const data = imageData.data;
+  const mask = new Uint8Array(width * height);
+  let count = 0;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i] / 255;
+    const g = data[i + 1] / 255;
+    const b = data[i + 2] / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    if (max === min) continue;
+    const d = max - min;
+    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    let h = 0;
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+
+    if (h * 360 >= 50 && h * 360 <= 82 && s >= 0.40 && l >= 0.35 && l <= 0.75) {
+      mask[i >> 2] = 1;
+      count++;
+    }
+  }
+
+  if (count < 8) return null;
+
+  let sumX = 0, sumY = 0, n = 0;
+  for (let idx = 0; idx < mask.length; idx++) {
+    if (!mask[idx]) continue;
+    sumX += idx % width;
+    sumY += Math.floor(idx / width);
+    n++;
+  }
+
+  if (n < 8) return null;
+  return { x: Math.round(sumX / n), y: Math.round(sumY / n) };
 }
 
 // ── Drawing helpers ────────────────────────────────────────────────────────
@@ -473,16 +605,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const dragCircleOffRef = useRef<Pt>({ x: 0, y: 0 });
 
     // Real-time skeleton detection
-    const isPoseRunningRef    = useRef(false);
+    const detectorRef         = useRef<any>(null);
+    const latestKeypointsRef  = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
+    const poseLoopActiveRef   = useRef(false);
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
-    const lastPoseTimeRef     = useRef(0);
 
     // Real-time ball detection
-    const isBallRunningRef    = useRef(false);
+    const isBallDetectingRef  = useRef(false);
     const ballTrackRef        = useRef<Array<{ timeSeconds: number; x: number; y: number }>>([]);
-    const ballDetectCanvasRef = useRef<HTMLCanvasElement | null>(null);
-    const ballDetectCtxRef    = useRef<CanvasRenderingContext2D | null>(null);
-    const lastBallDetectRef   = useRef(0);
+    const ballDetectRef       = useRef<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
 
     // Legacy AI detection caches (for manual ball shadow tool)
     const cachedPosesRef    = useRef<CachedPoseFrame[]>([]);
@@ -534,14 +665,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         cachedPosesRef.current = [];
         poseProcessingRef.current = false;
         skeletonFramesRef.current = [];
-        isPoseRunningRef.current = false;
+        latestKeypointsRef.current = null;
         onProcessingStatus?.(null);
       },
       resetBallTrail: () => {
         cachedBallRef.current = [];
         ballProcessingRef.current = false;
         ballTrackRef.current = [];
-        isBallRunningRef.current = false;
+        isBallDetectingRef.current = false;
         onProcessingStatus?.(null);
       },
       getCanvas: () => canvasRef.current,
@@ -601,36 +732,117 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Skeleton detector loader ───────────────────────────────────────────
 
     useEffect(() => {
-      if (!skeletonEnabled) return;
+      if (!skeletonEnabled) {
+        poseLoopActiveRef.current = false;
+        latestKeypointsRef.current = null;
+        return;
+      }
       ensurePoseRender();
+      if (typeof window === 'undefined') return;
 
-      import('@/lib/poseDetection').then(({ getPoseDetector }) => {
-        getPoseDetector().then((det) => {
-          if (det) {
-            onProcessingStatus?.('Skeleton ready — play video');
-          } else {
-            onProcessingStatus?.('Skeleton model failed to load');
-          }
-        });
-      }).catch((err) => {
-        console.error('[Canvas] Skeleton load error:', err);
-        onProcessingStatus?.('Skeleton model failed to load');
-      });
+      let cancelled = false;
+
+      (async () => {
+        onProcessingStatus?.('Loading pose model…');
+        try {
+          const tf = await import('@tensorflow/tfjs-core');
+          await import('@tensorflow/tfjs-backend-webgl');
+          await import('@tensorflow/tfjs-converter');
+          await tf.setBackend('webgl');
+          await tf.ready();
+          const pd = await import('@tensorflow-models/pose-detection');
+          if (cancelled) return;
+          const det = await pd.createDetector(
+            pd.SupportedModels.MoveNet,
+            { modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING },
+          );
+          if (cancelled) return;
+          detectorRef.current = det;
+          onProcessingStatus?.('Skeleton ready — press play');
+        } catch (e: any) {
+          if (!cancelled) onProcessingStatus?.(`Skeleton load failed: ${e.message}`);
+        }
+      })();
+
+      return () => { cancelled = true; };
     }, [skeletonEnabled, onProcessingStatus]);
+
+    // ── Pose detection loop — separate from the drawing rAF ───────────────
+
+    useEffect(() => {
+      if (!skeletonEnabled) return;
+      const video = videoRef.current;
+      if (!video) return;
+
+      let rafId: number;
+      poseLoopActiveRef.current = true;
+
+      const poseLoop = async () => {
+        if (!poseLoopActiveRef.current) return;
+
+        const det = detectorRef.current;
+        if (det && video.readyState >= 4 && video.videoWidth > 0) {
+          try {
+            const poses = await det.estimatePoses(video, { flipHorizontal: false });
+            if (poses && poses.length > 0 && poses[0].keypoints) {
+              const keypoints = poses[0].keypoints;
+              latestKeypointsRef.current = keypoints;
+              // Also maintain skeletonFramesRef for swing detection
+              const now = video.currentTime;
+              skeletonFramesRef.current.push({ timeSeconds: now, keypoints });
+              if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+                skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+              }
+            }
+          } catch (e) {
+            // Silent fail — video may not be ready
+          }
+        }
+
+        rafId = requestAnimationFrame(poseLoop);
+      };
+
+      rafId = requestAnimationFrame(poseLoop);
+      return () => {
+        poseLoopActiveRef.current = false;
+        cancelAnimationFrame(rafId);
+      };
+    }, [skeletonEnabled, videoRef]);
 
     // ── Ball detection canvas initialization ──────────────────────────────
 
     useEffect(() => {
-      if (!ballTrailEnabled) return;
-      if (!ballDetectCanvasRef.current) {
+      if (!ballTrailEnabled) {
+        ballTrackRef.current = [];
+        ballDetectRef.current = null;
+        return;
+      }
+      const video = videoRef.current;
+      if (!video) return;
+
+      const setup = () => {
+        if (video.videoWidth === 0) return;
         const c = document.createElement('canvas');
         c.width = 320;
         c.height = 180;
-        ballDetectCanvasRef.current = c;
-        ballDetectCtxRef.current = c.getContext('2d', { willReadFrequently: true });
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        if (ctx) {
+          ballDetectRef.current = { canvas: c, ctx };
+          onProcessingStatus?.('Ball detection ready — press play');
+        }
+      };
+
+      if (video.readyState >= 1 && video.videoWidth > 0) {
+        setup();
+      } else {
+        video.addEventListener('loadedmetadata', setup, { once: true });
       }
-      onProcessingStatus?.('Ball detection ready — play video');
-    }, [ballTrailEnabled, onProcessingStatus]);
+
+      return () => {
+        ballTrackRef.current = [];
+        ballDetectRef.current = null;
+      };
+    }, [ballTrailEnabled, videoRef, onProcessingStatus]);
 
     // ── Canvas size ────────────────────────────────────────────────────────
 
@@ -671,60 +883,43 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           dy = (H - dh) / 2;
           ctx.drawImage(video, dx, dy, dw, dh);
 
-          // ── Real-time skeleton detection ────────────────────────────────
-          if (skeletonEnabledRef.current && !video.paused && !isPoseRunningRef.current) {
-            const now = video.currentTime;
-            if (now - lastPoseTimeRef.current > POSE_DETECTION_INTERVAL) {
-              lastPoseTimeRef.current = now;
-              isPoseRunningRef.current = true;
+          // ── Real-time ball detection (runs when playing or scrubbing) ──────
+          if (ballTrailEnabledRef.current && !isBallDetectingRef.current) {
+            const det = ballDetectRef.current;
+            if (det && video.readyState >= 2 && video.videoWidth > 0) {
+              const currentTime = video.currentTime;
+              const hasRecent = ballTrackRef.current.some(p => Math.abs(p.timeSeconds - currentTime) < BALL_DETECT_TIME_TOLERANCE);
 
-              import('@/lib/poseDetection').then(({ detectPoseOnCurrentFrame }) => {
-                detectPoseOnCurrentFrame(video).then((keypoints) => {
-                  if (keypoints) {
-                    skeletonFramesRef.current.push({
-                      timeSeconds: now,
-                      keypoints,
-                    });
-                    // Keep only the most recent frames to bound memory usage
-                    if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
-                      skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
-                    }
-                    onProcessingStatus?.(null);
-                  }
-                }).finally(() => {
-                  isPoseRunningRef.current = false;
-                });
-              }).catch(() => { isPoseRunningRef.current = false; });
-            }
-          }
+              if (!hasRecent) {
+                isBallDetectingRef.current = true;
+                det.ctx.drawImage(video, 0, 0, det.canvas.width, det.canvas.height);
 
-          // ── Real-time ball detection ────────────────────────────────────
-          if (ballTrailEnabledRef.current && !video.paused && !isBallRunningRef.current) {
-            const now = video.currentTime;
-            if (now - lastBallDetectRef.current > BALL_DETECTION_INTERVAL) {
-              lastBallDetectRef.current = now;
-              const dc = ballDetectCanvasRef.current;
-              const dCtx = ballDetectCtxRef.current;
-              if (dc && dCtx && video.readyState >= 4) {
-                isBallRunningRef.current = true;
-                dCtx.drawImage(video, 0, 0, dc.width, dc.height);
-                const imageData = dCtx.getImageData(0, 0, dc.width, dc.height);
-                import('@/lib/ballDetection').then(({ detectBallInImageData }) => {
-                  const pos = detectBallInImageData(imageData, dc.width, dc.height);
+                let imageData: ImageData | null = null;
+                try {
+                  imageData = det.ctx.getImageData(0, 0, det.canvas.width, det.canvas.height);
+                } catch (e) {
+                  // SecurityError: canvas tainted by cross-origin data — skip detection
+                  onProcessingStatus?.('Ball detection unavailable: cross-origin video');
+                  isBallDetectingRef.current = false;
+                }
+
+                if (imageData) {
+                  const pos = findBallInImageData(imageData, det.canvas.width, det.canvas.height);
                   if (pos) {
-                    // Scale back to video native resolution
+                    const scaleX = vW / det.canvas.width;
+                    const scaleY = vH / det.canvas.height;
                     ballTrackRef.current.push({
-                      timeSeconds: now,
-                      x: pos.x * (vW / dc.width),
-                      y: pos.y * (vH / dc.height),
+                      timeSeconds: currentTime,
+                      x: pos.x * scaleX,
+                      y: pos.y * scaleY,
                     });
                     if (ballTrackRef.current.length > MAX_BALL_DETECTIONS) {
                       ballTrackRef.current = ballTrackRef.current.slice(-MAX_BALL_DETECTIONS);
                     }
                     onProcessingStatus?.(null);
                   }
-                  isBallRunningRef.current = false;
-                }).catch(() => { isBallRunningRef.current = false; });
+                  isBallDetectingRef.current = false;
+                }
               }
             }
           }
@@ -735,24 +930,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         // ── Skeleton overlay ─────────────────────────────────────────────
         if (skeletonEnabledRef.current && video) {
-          const currentTime = video.currentTime;
-
-          // Find most recent frame within tolerance
-          let bestFrame: typeof skeletonFramesRef.current[0] | null = null;
-          for (let i = skeletonFramesRef.current.length - 1; i >= 0; i--) {
-            const f = skeletonFramesRef.current[i];
-            if (Math.abs(f.timeSeconds - currentTime) <= SKELETON_TIME_TOLERANCE) {
-              bestFrame = f;
-              break;
-            }
-          }
-
-          if (bestFrame && poseRenderFns) {
-            const scaleX = dw / vW;
-            const scaleY = dh / vH;
+          if (latestKeypointsRef.current && latestKeypointsRef.current.length > 0 && video.videoWidth > 0) {
             ctx.save();
             ctx.translate(dx, dy);
-            poseRenderFns.drawSkeletonFrame(ctx, bestFrame.keypoints, scaleX, scaleY);
+            drawSkeletonOverlay(ctx, latestKeypointsRef.current, vW, vH, dw, dh);
             ctx.restore();
           } else if (cachedPosesRef.current.length > 0 && poseRenderFns) {
             // Fallback to legacy cached poses
