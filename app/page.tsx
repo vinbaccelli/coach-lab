@@ -17,9 +17,13 @@ import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useRecording } from '@/contexts/RecordingContext';
 import { useCoachingStore } from '@/stores/coachingStore';
-import { useStroMotion, StroMotionConfig } from '@/hooks/useStroMotion';
+import { useStroMotion, type StroMotionConfig } from '@/hooks/useStroMotion';
+import { drawStroMotion } from '@/lib/stroMotion';
 import VoiceOverTool from '@/components/VoiceOverTool';
 import { VoiceNote } from '@/lib/voiceRecorder';
+
+/** Maximum frame number selectable in StroMotion sliders. */
+const MAX_STRO_FRAME = 300;
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -40,7 +44,6 @@ export default function Home() {
   const [showExport, setShowExport] = useState(false);
   const [ballTrailMode, setBallTrailMode] = useState<BallTrailMode>('short-tail');
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
-
   const [stroMotionConfig, setStroMotionConfig] = useState<StroMotionConfig>({
     enabled: false,
     startFrame: 0,
@@ -48,7 +51,26 @@ export default function Home() {
     ghostCount: 5,
     opacity: 0.5,
   });
-  const { isProcessing: stroProcessing, progress: stroProgress } = useStroMotion(videoRef, stroMotionConfig);
+
+  const { ghostFrames, isProcessing: stroProcessing, progress: stroProgress } = useStroMotion(
+    videoRef,
+    stroMotionConfig
+  );
+
+  // StroMotion canvas ref — rendered between video and drawing overlay
+  const stroCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Redraw ghost frames whenever they change
+  useEffect(() => {
+    const canvas = stroCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (ghostFrames.length > 0) {
+      drawStroMotion(ctx, ghostFrames, stroMotionConfig.opacity);
+    }
+  }, [ghostFrames, stroMotionConfig.opacity]);
 
   const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
 
@@ -285,9 +307,11 @@ export default function Home() {
                 <input
                   type="checkbox"
                   checked={stroMotionConfig.enabled}
-                  onChange={(e) => setStroMotionConfig({ ...stroMotionConfig, enabled: e.target.checked })}
+                  onChange={(e) =>
+                    setStroMotionConfig({ ...stroMotionConfig, enabled: e.target.checked })
+                  }
                 />
-                <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}>Enable StroMotion</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}>Enable</span>
               </label>
 
               {stroMotionConfig.enabled && (
@@ -299,9 +323,14 @@ export default function Home() {
                     <input
                       type="range"
                       min="0"
-                      max="300"
+                      max={MAX_STRO_FRAME}
                       value={stroMotionConfig.startFrame}
-                      onChange={(e) => setStroMotionConfig({ ...stroMotionConfig, startFrame: parseInt(e.target.value) })}
+                      onChange={(e) =>
+                        setStroMotionConfig({
+                          ...stroMotionConfig,
+                          startFrame: parseInt(e.target.value),
+                        })
+                      }
                       style={{ width: '100%' }}
                     />
                   </div>
@@ -312,9 +341,14 @@ export default function Home() {
                     <input
                       type="range"
                       min="0"
-                      max="300"
+                      max={MAX_STRO_FRAME}
                       value={stroMotionConfig.endFrame}
-                      onChange={(e) => setStroMotionConfig({ ...stroMotionConfig, endFrame: parseInt(e.target.value) })}
+                      onChange={(e) =>
+                        setStroMotionConfig({
+                          ...stroMotionConfig,
+                          endFrame: parseInt(e.target.value),
+                        })
+                      }
                       style={{ width: '100%' }}
                     />
                   </div>
@@ -327,11 +361,39 @@ export default function Home() {
                       min="2"
                       max="12"
                       value={stroMotionConfig.ghostCount}
-                      onChange={(e) => setStroMotionConfig({ ...stroMotionConfig, ghostCount: parseInt(e.target.value) })}
+                      onChange={(e) =>
+                        setStroMotionConfig({
+                          ...stroMotionConfig,
+                          ghostCount: parseInt(e.target.value),
+                        })
+                      }
                       style={{ width: '100%' }}
                     />
                   </div>
-                  {stroProcessing && <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Processing {stroProgress}%</div>}
+                  <div>
+                    <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: 'var(--text-secondary)' }}>
+                      Opacity: {stroMotionConfig.opacity.toFixed(1)}
+                    </label>
+                    <input
+                      type="range"
+                      min="0.1"
+                      max="1"
+                      step="0.1"
+                      value={stroMotionConfig.opacity}
+                      onChange={(e) =>
+                        setStroMotionConfig({
+                          ...stroMotionConfig,
+                          opacity: parseFloat(e.target.value),
+                        })
+                      }
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  {stroProcessing && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      Processing {stroProgress}%
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -419,6 +481,21 @@ export default function Home() {
               <div
                 style={{ position: 'absolute', top: 0, left: 0, right: 0, height: canvasSize.height, zIndex: 10 }}
               >
+                {/* StroMotion ghost-frame canvas */}
+                <canvas
+                  ref={stroCanvasRef}
+                  width={canvasSize.width}
+                  height={canvasSize.height}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    pointerEvents: 'none',
+                    zIndex: 1,
+                  }}
+                />
                 <CanvasOverlay
                   ref={canvasRef}
                   videoRef={videoRef}
