@@ -20,6 +20,9 @@ import { useCoachingStore } from '@/stores/coachingStore';
 import { useStroMotion, type StroMotionConfig } from '@/hooks/useStroMotion';
 import { drawStroMotion } from '@/lib/stroMotion';
 
+/** Maximum frame number selectable in StroMotion sliders. */
+const MAX_STRO_FRAME = 300;
+
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -316,7 +319,7 @@ export default function Home() {
                     <input
                       type="range"
                       min="0"
-                      max="300"
+                      max={MAX_STRO_FRAME}
                       value={stroMotionConfig.startFrame}
                       onChange={(e) =>
                         setStroMotionConfig({
@@ -334,7 +337,7 @@ export default function Home() {
                     <input
                       type="range"
                       min="0"
-                      max="300"
+                      max={MAX_STRO_FRAME}
                       value={stroMotionConfig.endFrame}
                       onChange={(e) =>
                         setStroMotionConfig({

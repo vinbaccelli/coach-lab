@@ -8,6 +8,9 @@ export type { StroMotionConfig };
 /** Assumed frame rate used to convert frame numbers to seek timestamps. */
 const FPS = 30;
 
+/** Fallback timeout (ms) for when the 'seeked' event does not fire. */
+const SEEK_TIMEOUT_MS = 500;
+
 export function useStroMotion(
   videoRef: React.RefObject<HTMLVideoElement>,
   config: StroMotionConfig
@@ -26,6 +29,8 @@ export function useStroMotion(
 
   useEffect(() => {
     if (!enabled || !videoRef.current || ghostCount < 2) return;
+    // Ensure a valid range before processing.
+    if (startFrame >= endFrame) return;
 
     let cancelled = false;
 
@@ -54,7 +59,7 @@ export function useStroMotion(
             resolve();
           };
 
-          const timer = setTimeout(settle, 500);
+          const timer = setTimeout(settle, SEEK_TIMEOUT_MS);
 
           video.addEventListener(
             'seeked',
@@ -77,9 +82,16 @@ export function useStroMotion(
       }
 
       if (!cancelled) {
-        setGhostFrames(frames);
+        // Release previous bitmaps before replacing.
+        setGhostFrames((prev) => {
+          prev.forEach((bm) => bm.close());
+          return frames;
+        });
         setIsProcessing(false);
         video.currentTime = 0;
+      } else {
+        // Cancelled mid-run — release any frames already collected.
+        frames.forEach((bm) => bm.close());
       }
     };
 
@@ -91,5 +103,5 @@ export function useStroMotion(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, startFrame, endFrame, ghostCount, videoRef]);
 
-  return { ghostFrames, isProcessing, progress, opacity: opacityRef.current };
+  return { ghostFrames, isProcessing, progress };
 }

@@ -14,7 +14,12 @@ export function drawStroMotion(
   opacity: number
 ): void {
   for (let i = 0; i < ghostFrames.length; i++) {
-    ctx.globalAlpha = (i / Math.max(1, ghostFrames.length - 1)) * opacity;
+    // When there is only one frame use opacity directly; otherwise fade from 0 → opacity.
+    const alpha =
+      ghostFrames.length === 1
+        ? opacity
+        : (i / (ghostFrames.length - 1)) * opacity;
+    ctx.globalAlpha = alpha;
     ctx.drawImage(ghostFrames[i], 0, 0);
   }
   ctx.globalAlpha = 1.0;
