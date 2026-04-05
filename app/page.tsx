@@ -10,7 +10,6 @@ import dynamic from 'next/dynamic';
 import { Camera, Upload, GripVertical } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode } from '@/components/ToolPalette';
-import ScreenRecorder from '@/components/ScreenRecorder';
 import ExportModal from '@/components/ExportModal';
 import PlaybackControls from '@/components/PlaybackControls';
 import { SidebarSection } from '@/components/SidebarSection';
@@ -224,7 +223,7 @@ export default function Home() {
             </span>
           )}
 
-          <ScreenRecorderWrapper
+          <ScreenRecorderWithTracking
             getCanvas={getCanvas}
             getWebcamStream={getWebcamStream}
             onRecordingChange={handleRecordingChange}
@@ -406,31 +405,7 @@ const btnStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-// ── ScreenRecorder wrapper that tracks isRecording state ──────────────────
-
-function ScreenRecorderWrapper({
-  getCanvas,
-  getWebcamStream,
-  onRecordingChange,
-}: {
-  getCanvas: () => HTMLCanvasElement | null;
-  getWebcamStream: () => MediaStream | null;
-  onRecordingChange: (v: boolean) => void;
-}) {
-  // Wrap ScreenRecorder to intercept recording state changes.
-  // We use a proxy for getCanvas that also fires onRecordingChange.
-  const wrappedGetCanvas = useCallback(() => {
-    return getCanvas();
-  }, [getCanvas]);
-
-  return (
-    <ScreenRecorderWithTracking
-      getCanvas={wrappedGetCanvas}
-      getWebcamStream={getWebcamStream}
-      onRecordingChange={onRecordingChange}
-    />
-  );
-}
+// ── ScreenRecorder that tracks isRecording state for Canvas PiP ───────────
 
 function ScreenRecorderWithTracking({
   getCanvas,
@@ -470,7 +445,7 @@ function ScreenRecorderWithTracking({
     if (wcStream) wcStream.getAudioTracks().forEach(t => tracks.push(t));
 
     const combined  = new MediaStream(tracks);
-    const mimeType  = getBestMimeType2();
+    const mimeType  = getBestMimeType();
     mimeTypeRef.current = mimeType;
 
     let recorder: MediaRecorder;
@@ -557,7 +532,7 @@ function ScreenRecorderWithTracking({
   );
 }
 
-function getBestMimeType2(): string {
+function getBestMimeType(): string {
   const c = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
   for (const t of c) {
     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) return t;

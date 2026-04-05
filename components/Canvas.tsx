@@ -97,11 +97,10 @@ function labelPill(ctx: CanvasRenderingContext2D, text: string, x: number, y: nu
   ctx.restore();
 }
 
-function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, tick: number): void {
+function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  void tick; // reserved for animated strokes
 
   if (s.tool === 'pen' || s.tool === 'swingPath') {
     const { pts, color, lw } = s;
@@ -323,7 +322,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { drawingOptsRef.current      = drawingOptions; },  [drawingOptions]);
     useEffect(() => { activeToolRef.current        = activeTool; },      [activeTool]);
     useEffect(() => { skeletonEnabledRef.current   = skeletonEnabled; }, [skeletonEnabled]);
-    useEffect(() => { ballTrailEnabledRef.current  = ballTrailEnabled; },[ballTrailEnabled]);
+    useEffect(() => { ballTrailEnabledRef.current  = ballTrailEnabled; }, [ballTrailEnabled]);
     useEffect(() => { ballTrailModeRef.current     = ballTrailMode; },   [ballTrailMode]);
     useEffect(() => { isRecordingRef.current       = isRecording; },     [isRecording]);
 
@@ -475,7 +474,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const render = () => {
         rafRef.current = requestAnimationFrame(render);
         animTickRef.current++;
-        const tick = animTickRef.current;
 
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -548,10 +546,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         // Completed strokes
-        for (const s of strokesRef.current) drawStroke(ctx, s, tick);
+        for (const s of strokesRef.current) drawStroke(ctx, s);
 
         // Active (in-progress) stroke
-        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, tick);
+        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current);
 
         // Swing path being drawn (clicks so far)
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
@@ -606,7 +604,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer helpers ────────────────────────────────────────────────────
 
     const getPos = (e: React.PointerEvent<HTMLCanvasElement>): Pt => {
-      const canvas = canvasRef.current!;
+      const canvas = canvasRef.current;
+      if (!canvas) return { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
       return {
         x: (e.clientX - rect.left) * (canvas.width / rect.width),
@@ -800,7 +799,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       } else if (active.tool === 'arrow' || active.tool === 'arrowAngle') {
         (active as StrokeArrow).p2 = pos;
       } else if (active.tool === 'circle' || active.tool === 'bodyCircle') {
-        const start = dragStartRef.current!;
+        const start = dragStartRef.current;
+        if (!start) return;
         const el = active as StrokeEllipse;
         el.cx = (start.x + pos.x) / 2;
         el.cy = (start.y + pos.y) / 2;
