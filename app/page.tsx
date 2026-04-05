@@ -6,8 +6,9 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { Camera, Download, GripVertical, Upload } from 'lucide-react';
-import CanvasOverlay, { type CanvasHandle } from '@/components/Canvas';
+import dynamic from 'next/dynamic';
+import { Camera, Upload, GripVertical } from 'lucide-react';
+import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode } from '@/components/ToolPalette';
 import ScreenRecorder from '@/components/ScreenRecorder';
 import ExportModal from '@/components/ExportModal';
@@ -15,106 +16,43 @@ import PlaybackControls from '@/components/PlaybackControls';
 import { SidebarSection } from '@/components/SidebarSection';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
-import { useRecording } from '@/contexts/RecordingContext';
-import { useCoachingStore } from '@/stores/coachingStore';
-import { useStroMotion, type StroMotionConfig } from '@/hooks/useStroMotion';
-import { drawStroMotion } from '@/lib/stroMotion';
-import VoiceOverTool from '@/components/VoiceOverTool';
-import { VoiceNote } from '@/lib/voiceRecorder';
 
-/** Maximum frame number selectable in StroMotion sliders. */
-const MAX_STRO_FRAME = 300;
+// Dynamic import prevents TensorFlow / Fabric from loading server-side
+const CanvasOverlay = dynamic(() => import('@/components/Canvas'), { ssr: false });
 
 export default function Home() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<CanvasHandle>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // ── Refs that must never unmount ─────────────────────────────────────────
+  const videoRef      = useRef<HTMLVideoElement>(null);
+  const webcamVideoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef     = useRef<CanvasHandle>(null);
+  const fileInputRef  = useRef<HTMLInputElement>(null);
+  const containerRef  = useRef<HTMLDivElement>(null);
 
-  const { registerCompositeCanvas } = useRecording();
-  const isRecording = useCoachingStore((s) => s.isRecording);
+  // Webcam stream held here so ScreenRecorder can get audio
+  const webcamStreamRef = useRef<MediaStream | null>(null);
 
-  const [activeTool, setActiveTool] = useState<ToolType>('pen');
+  // ── State ─────────────────────────────────────────────────────────────────
+  const [activeTool, setActiveTool]       = useState<ToolType>('pen');
   const [drawingOptions, setDrawingOptions] = useState<DrawingOptions>({
-    color: '#1E40AF',
+    color: '#F8F8F8',
     lineWidth: 3,
     fontSize: 24,
   });
-  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 450 });
-  const [showExport, setShowExport] = useState(false);
-  const [ballTrailMode, setBallTrailMode] = useState<BallTrailMode>('short-tail');
-  const [videoSrc, setVideoSrc] = useState<string | null>(null);
-  const [stroMotionConfig, setStroMotionConfig] = useState<StroMotionConfig>({
-    enabled: false,
-    startFrame: 0,
-    endFrame: 30,
-    ghostCount: 5,
-    opacity: 0.5,
-  });
+  const [canvasSize, setCanvasSize]       = useState({ width: 800, height: 450 });
+  const [videoSrc, setVideoSrc]           = useState<string | null>(null);
+  const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('short-tail');
+  const [processingStatus, setProcessingStatus] = useState<string | null>(null);
+  const [showExport, setShowExport]       = useState(false);
+  const [sidebarWidth, setSidebarWidth]   = useState(240);
+  const [isResizing, setIsResizing]       = useState(false);
+  const [webcamActive, setWebcamActive]   = useState(false);
+  const [isRecording, setIsRecording]     = useState(false);
 
-  const { ghostFrames, isProcessing: stroProcessing, progress: stroProgress } = useStroMotion(
-    videoRef,
-    stroMotionConfig
-  );
+  // Derived: skeleton / ball trail enabled when their tool is active
+  const skeletonEnabled  = activeTool === 'skeleton';
+  const ballTrailEnabled = activeTool === 'ballShadow';
 
-  // StroMotion canvas ref — rendered between video and drawing overlay
-  const stroCanvasRef = useRef<HTMLCanvasElement>(null);
-
-  // Redraw ghost frames whenever they change
-  useEffect(() => {
-    const canvas = stroCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (ghostFrames.length > 0) {
-      drawStroMotion(ctx, ghostFrames, stroMotionConfig.opacity);
-    }
-  }, [ghostFrames, stroMotionConfig.opacity]);
-
-  const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
-
-  // Resizable sidebar
-  const [sidebarWidth, setSidebarWidth] = useState(240);
-  const [isResizing, setIsResizing] = useState(false);
-  const resizeStartXRef = useRef(0);
-  const resizeStartWRef = useRef(240);
-
-  const onSidebarMouseDown = useCallback((e: React.MouseEvent) => {
-    setIsResizing(true);
-    resizeStartXRef.current = e.clientX;
-    resizeStartWRef.current = sidebarWidth;
-    e.preventDefault();
-  }, [sidebarWidth]);
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing) return;
-      const delta = e.clientX - resizeStartXRef.current;
-      setSidebarWidth(Math.max(180, Math.min(360, resizeStartWRef.current + delta)));
-    };
-    const handleMouseUp = () => setIsResizing(false);
-
-    if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      return () => {
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-      };
-    }
-  }, [isResizing]);
-
-  // Register the composite canvas getter with the RecordingContext
-  const getCompositeCanvas = useCallback(() => {
-    return canvasRef.current?.getCompositeCanvas() ?? null;
-  }, []);
-
-  useEffect(() => {
-    registerCompositeCanvas(getCompositeCanvas);
-  }, [registerCompositeCanvas, getCompositeCanvas]);
-
-  // Measure container and update canvas size
+  // ── Container size measurement ────────────────────────────────────────────
   const updateSize = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -128,20 +66,38 @@ export default function Home() {
     return () => ro.disconnect();
   }, [updateSize]);
 
-  const handleOptionsChange = useCallback((opts: Partial<DrawingOptions>) => {
-    setDrawingOptions((prev) => ({ ...prev, ...opts }));
-  }, []);
+  // ── Sidebar resize ────────────────────────────────────────────────────────
+  const resizeStartX = useRef(0);
+  const resizeStartW = useRef(240);
 
-  // Undo / redo keyboard shortcuts
+  const onResizePointerDown = useCallback((e: React.PointerEvent) => {
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setIsResizing(true);
+    resizeStartX.current = e.clientX;
+    resizeStartW.current = sidebarWidth;
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!isResizing) return;
+      const delta = e.clientX - resizeStartX.current;
+      setSidebarWidth(Math.max(160, Math.min(360, resizeStartW.current + delta)));
+    };
+    const onUp = () => setIsResizing(false);
+    if (isResizing) {
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      return () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+    }
+  }, [isResizing]);
+
+  // ── Keyboard shortcuts (undo / redo) ──────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         canvasRef.current?.undo();
-      } else if (
-        (e.ctrlKey || e.metaKey) &&
-        (e.key === 'y' || (e.shiftKey && e.key === 'z'))
-      ) {
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
         e.preventDefault();
         canvasRef.current?.redo();
       }
@@ -150,27 +106,74 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Quick screenshot: capture and immediately download
+  // ── Video upload ──────────────────────────────────────────────────────────
+  const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setVideoSrc(url);
+    if (videoRef.current) {
+      videoRef.current.src = url;
+      videoRef.current.load();
+    }
+    // Reset AI caches for new video
+    setProcessingStatus(null);
+    canvasRef.current?.resetSkeleton();
+    canvasRef.current?.resetBallTrail();
+  }, []);
+
+  // ── Webcam ────────────────────────────────────────────────────────────────
+  const startWebcam = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      webcamStreamRef.current = stream;
+      if (webcamVideoRef.current) {
+        webcamVideoRef.current.srcObject = stream;
+        await webcamVideoRef.current.play().catch(() => {});
+      }
+      setWebcamActive(true);
+    } catch (err) {
+      console.error('[page] Webcam access denied:', err);
+      alert('Could not access webcam. Please check browser permissions.');
+    }
+  }, []);
+
+  // ── Screenshot ────────────────────────────────────────────────────────────
   const handleScreenshot = useCallback(() => {
-    const canvas = canvasRef.current?.getCompositeCanvas();
+    const canvas = canvasRef.current?.getCanvas();
     if (!canvas) return;
     downloadDataURL(canvas.toDataURL('image/png'), `coach-lab-${Date.now()}.png`);
   }, []);
 
-  // Video upload handler
-  const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const url = URL.createObjectURL(file);
-      setVideoSrc(url);
-      if (videoRef.current) {
-        videoRef.current.src = url;
-      }
-    }
+  // ── getCanvas / getWebcamStream for ScreenRecorder ────────────────────────
+  const getCanvas        = useCallback(() => canvasRef.current?.getCanvas() ?? null, []);
+  const getWebcamStream  = useCallback(() => webcamStreamRef.current, []);
+
+  // Keep ScreenRecorder informed when recording state changes so Canvas draws PiP
+  const handleRecordingChange = useCallback((recording: boolean) => {
+    setIsRecording(recording);
+  }, []);
+
+  const handleOptionsChange = useCallback((opts: Partial<DrawingOptions>) => {
+    setDrawingOptions(prev => ({ ...prev, ...opts }));
   }, []);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#F8F8F8', color: '#1D1D1F' }}>
+
+      {/* ── Two hidden video elements at root — never unmount ── */}
+      <video
+        ref={videoRef}
+        playsInline
+        style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
+      />
+      <video
+        ref={webcamVideoRef}
+        playsInline
+        muted
+        style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
+      />
+
       {/* ── Header ── */}
       <header style={{
         display: 'flex',
@@ -178,88 +181,63 @@ export default function Home() {
         justifyContent: 'space-between',
         padding: '0 20px',
         height: '48px',
-        borderBottom: 'var(--border)',
-        background: 'var(--bg-primary)',
+        borderBottom: '1px solid #E8E8ED',
+        background: '#F8F8F8',
         flexShrink: 0,
         zIndex: 10,
+        gap: '12px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        {/* Logo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
           <div style={{
-            width: '28px',
-            height: '28px',
-            borderRadius: 'var(--radius-sm)',
-            background: 'var(--accent)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            width: '28px', height: '28px', borderRadius: '6px',
+            background: '#35679A', display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             <Camera size={14} color="#fff" />
           </div>
-          <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+          <span style={{ fontSize: '15px', fontWeight: 700, color: '#1D1D1F', letterSpacing: '-0.02em' }}>
             Coach Lab
-          </span>
-          <span style={{ fontSize: '12px', color: 'var(--text-tertiary)', fontWeight: 500 }} className="hidden sm:block">
-            Video Analysis Tool
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* Actions */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <button
             onClick={() => fileInputRef.current?.click()}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 12px',
-              borderRadius: 'var(--radius-sm)',
-              border: 'var(--border)',
-              background: 'var(--bg-secondary)',
-              cursor: 'pointer',
-              fontSize: '13px',
-              color: 'var(--text-primary)',
-              transition: 'var(--transition)',
-            }}
+            style={btnStyle}
           >
             <Upload size={14} />
             {videoSrc ? 'Replace Video' : 'Upload Video'}
           </button>
-          <button
-            onClick={handleScreenshot}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 12px',
-              borderRadius: 'var(--radius-sm)',
-              border: 'var(--border)',
-              background: 'var(--bg-secondary)',
-              cursor: 'pointer',
-              fontSize: '13px',
-              color: 'var(--text-primary)',
-              transition: 'var(--transition)',
-            }}
-            title="Save screenshot of current frame with drawings"
-          >
-            <Camera size={14} />
-            Screenshot
+
+          {!webcamActive ? (
+            <button onClick={startWebcam} style={btnStyle} title="Enable webcam overlay">
+              <span>&#128247;</span> Webcam
+            </button>
+          ) : (
+            <span style={{ fontSize: '12px', color: '#35679A', fontWeight: 500 }}>&#9679; Webcam on</span>
+          )}
+
+          {processingStatus && (
+            <span style={{ fontSize: '11px', color: '#35679A', fontStyle: 'italic', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {processingStatus}
+            </span>
+          )}
+
+          <ScreenRecorderWrapper
+            getCanvas={getCanvas}
+            getWebcamStream={getWebcamStream}
+            onRecordingChange={handleRecordingChange}
+          />
+
+          <button onClick={handleScreenshot} style={btnStyle} title="Save screenshot">
+            <Camera size={14} /> Screenshot
           </button>
+
           <button
             onClick={() => setShowExport(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 12px',
-              borderRadius: 'var(--radius-sm)',
-              border: 'none',
-              background: 'var(--accent)',
-              cursor: 'pointer',
-              fontSize: '13px',
-              color: '#fff',
-              transition: 'var(--transition)',
-            }}
+            style={{ ...btnStyle, background: '#35679A', color: '#fff', border: 'none' }}
           >
-            <Download size={14} />
             Export
           </button>
         </div>
@@ -267,19 +245,18 @@ export default function Home() {
 
       {/* ── Main layout ── */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+
         {/* Left sidebar */}
-        <aside
-          style={{
-            width: sidebarWidth,
-            flexShrink: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            borderRight: 'var(--border)',
-            background: 'var(--bg-secondary)',
-            overflowY: 'auto',
-            position: 'relative',
-          }}
-        >
+        <aside style={{
+          width: sidebarWidth,
+          flexShrink: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          borderRight: '1px solid #E8E8ED',
+          background: '#fff',
+          overflowY: 'auto',
+          position: 'relative',
+        }}>
           <SidebarSection title="Tools">
             <ToolPalette
               activeTool={activeTool}
@@ -296,217 +273,78 @@ export default function Home() {
             />
           </SidebarSection>
 
-          <SidebarSection title="Record" defaultOpen={false}>
-            {/* ScreenRecorder is always mounted to preserve recording state */}
-            <ScreenRecorder />
-          </SidebarSection>
-
-          <SidebarSection title="StroMotion" defaultOpen={false}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={stroMotionConfig.enabled}
-                  onChange={(e) =>
-                    setStroMotionConfig({ ...stroMotionConfig, enabled: e.target.checked })
-                  }
-                />
-                <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}>Enable</span>
-              </label>
-
-              {stroMotionConfig.enabled && (
-                <>
-                  <div>
-                    <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: 'var(--text-secondary)' }}>
-                      Start: {stroMotionConfig.startFrame}
-                    </label>
-                    <input
-                      type="range"
-                      min="0"
-                      max={MAX_STRO_FRAME}
-                      value={stroMotionConfig.startFrame}
-                      onChange={(e) =>
-                        setStroMotionConfig({
-                          ...stroMotionConfig,
-                          startFrame: parseInt(e.target.value),
-                        })
-                      }
-                      style={{ width: '100%' }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: 'var(--text-secondary)' }}>
-                      End: {stroMotionConfig.endFrame}
-                    </label>
-                    <input
-                      type="range"
-                      min="0"
-                      max={MAX_STRO_FRAME}
-                      value={stroMotionConfig.endFrame}
-                      onChange={(e) =>
-                        setStroMotionConfig({
-                          ...stroMotionConfig,
-                          endFrame: parseInt(e.target.value),
-                        })
-                      }
-                      style={{ width: '100%' }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: 'var(--text-secondary)' }}>
-                      Ghosts: {stroMotionConfig.ghostCount}
-                    </label>
-                    <input
-                      type="range"
-                      min="2"
-                      max="12"
-                      value={stroMotionConfig.ghostCount}
-                      onChange={(e) =>
-                        setStroMotionConfig({
-                          ...stroMotionConfig,
-                          ghostCount: parseInt(e.target.value),
-                        })
-                      }
-                      style={{ width: '100%' }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: 'var(--text-secondary)' }}>
-                      Opacity: {stroMotionConfig.opacity.toFixed(1)}
-                    </label>
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="1"
-                      step="0.1"
-                      value={stroMotionConfig.opacity}
-                      onChange={(e) =>
-                        setStroMotionConfig({
-                          ...stroMotionConfig,
-                          opacity: parseFloat(e.target.value),
-                        })
-                      }
-                      style={{ width: '100%' }}
-                    />
-                  </div>
-                  {stroProcessing && (
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                      Processing {stroProgress}%
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </SidebarSection>
-
-          <SidebarSection title="Voice-Over" defaultOpen={true}>
-            <VoiceOverTool
-              videoRef={videoRef}
-              voiceNotes={voiceNotes}
-              onVoiceNote={(note) => setVoiceNotes([...voiceNotes, note])}
-              onDeleteVoiceNote={(id) => setVoiceNotes(voiceNotes.filter(n => n.id !== id))}
-            />
-          </SidebarSection>
-
           {/* Resize handle */}
           <div
             style={{
               position: 'absolute',
-              top: 0,
-              right: 0,
+              top: 0, right: 0,
               height: '100%',
-              width: '8px',
+              width: '4px',
               cursor: 'col-resize',
+              background: isResizing ? '#35679A22' : 'transparent',
+              zIndex: 20,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              zIndex: 20,
             }}
-            onMouseDown={onSidebarMouseDown}
-            title="Drag to resize panel"
+            onPointerDown={onResizePointerDown}
+            title="Drag to resize"
           >
-            <GripVertical size={12} style={{ color: 'var(--text-tertiary)' }} />
+            <GripVertical size={12} style={{ color: '#9ca3af', pointerEvents: 'none' }} />
           </div>
         </aside>
 
-        {/* Centre: video + canvas overlay + controls */}
+        {/* Canvas area */}
         <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-          {/* Video + canvas area */}
           <div style={{ flex: 1, position: 'relative', minHeight: 0, background: '#000' }}>
             <div
               ref={containerRef}
-              style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              style={{ width: '100%', height: '100%', position: 'relative' }}
             >
               {!videoSrc ? (
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: '12px',
-                    color: '#9ca3af',
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <div style={{
-                    width: '80px',
-                    height: '80px',
-                    borderRadius: '50%',
-                    background: '#1f2937',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}>
-                    <Upload size={36} color="#9ca3af" />
-                  </div>
-                  <span style={{ fontSize: '14px', fontWeight: 500 }}>Click to upload video</span>
-                  <span style={{ fontSize: '12px', color: '#6b7280' }}>MP4, WebM, MOV supported</span>
-                </button>
+                /* Upload prompt */
+                <div style={{
+                  position: 'absolute', inset: 0,
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center',
+                  gap: '12px', color: '#9ca3af',
+                }}>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    style={{
+                      display: 'flex', flexDirection: 'column', alignItems: 'center',
+                      gap: '12px', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af',
+                    }}
+                  >
+                    <div style={{
+                      width: '80px', height: '80px', borderRadius: '50%',
+                      background: '#1f2937',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <Upload size={36} color="#9ca3af" />
+                    </div>
+                    <span style={{ fontSize: '14px', fontWeight: 500 }}>Click to upload video</span>
+                    <span style={{ fontSize: '12px', color: '#6b7280' }}>MP4, WebM, MOV supported</span>
+                  </button>
+                </div>
               ) : (
-                <video
-                  ref={videoRef}
-                  src={videoSrc}
-                  onLoadedMetadata={updateSize}
-                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }}
-                  playsInline
-                />
-              )}
-            </div>
-
-            {/* Canvas overlay */}
-            {videoSrc && (
-              <div
-                style={{ position: 'absolute', top: 0, left: 0, right: 0, height: canvasSize.height, zIndex: 10 }}
-              >
-                {/* StroMotion ghost-frame canvas */}
-                <canvas
-                  ref={stroCanvasRef}
-                  width={canvasSize.width}
-                  height={canvasSize.height}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    pointerEvents: 'none',
-                    zIndex: 1,
-                  }}
-                />
+                /* Canvas overlay (renders video + drawings) */
                 <CanvasOverlay
                   ref={canvasRef}
                   videoRef={videoRef}
+                  webcamVideoRef={webcamVideoRef}
                   activeTool={activeTool}
                   drawingOptions={drawingOptions}
                   containerWidth={canvasSize.width}
                   containerHeight={canvasSize.height}
                   ballTrailMode={ballTrailMode}
+                  skeletonEnabled={skeletonEnabled}
+                  ballTrailEnabled={ballTrailEnabled}
+                  onProcessingStatus={setProcessingStatus}
+                  isRecording={isRecording}
                 />
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {/* Playback controls */}
@@ -514,26 +352,19 @@ export default function Home() {
 
           {/* Hint bar */}
           <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '16px',
-            padding: '4px 16px',
-            fontSize: '10px',
-            color: 'var(--text-tertiary)',
-            background: 'var(--bg-secondary)',
-            borderTop: 'var(--border)',
-            flexWrap: 'wrap',
-            flexShrink: 0,
+            display: 'flex', alignItems: 'center', gap: '16px',
+            padding: '4px 16px', fontSize: '10px', color: '#6b7280',
+            background: '#F8F8F8', borderTop: '1px solid #E8E8ED',
+            flexWrap: 'wrap', flexShrink: 0,
           }}>
             <span>Space: play/pause</span>
             <span>J/K/L: 0.5×/1×/2×</span>
-            <span>←/→: frame step</span>
+            <span>&#x2190;/&#x2192;: frame step</span>
             <span>Ctrl+Z: undo</span>
             <span>Ctrl+Y: redo</span>
-            <span style={{ color: '#06b6d4' }}>Skeleton: AI auto-detects pose</span>
-            <span style={{ color: '#eab308' }}>Ball Trail: auto-tracks + click to add</span>
-            <span style={{ color: '#a855f7' }}>Swing Path: dbl-click or long-press to end</span>
-            <span style={{ color: '#f59e0b' }}>Angle: drag 3rd point for live preview</span>
+            <span style={{ color: '#35679A' }}>Skeleton: auto-detects pose</span>
+            <span style={{ color: '#CCFF00', textShadow: '0 0 4px #0008' }}>Ball Trail: auto-tracks ball</span>
+            <span style={{ color: '#FFD700' }}>Angle: 3-click with live preview</span>
           </div>
         </main>
       </div>
@@ -551,9 +382,185 @@ export default function Home() {
       <ExportModal
         isOpen={showExport}
         onClose={() => setShowExport(false)}
-        getCompositeCanvas={getCompositeCanvas}
+        getCompositeCanvas={() => canvasRef.current?.getCanvas() ?? null}
         videoRef={videoRef}
       />
     </div>
   );
+}
+
+// ── Button style constant ──────────────────────────────────────────────────
+
+const btnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '6px',
+  padding: '6px 12px',
+  borderRadius: '6px',
+  border: '1px solid #E8E8ED',
+  background: '#fff',
+  cursor: 'pointer',
+  fontSize: '13px',
+  color: '#1D1D1F',
+  fontWeight: 500,
+  whiteSpace: 'nowrap',
+};
+
+// ── ScreenRecorder wrapper that tracks isRecording state ──────────────────
+
+function ScreenRecorderWrapper({
+  getCanvas,
+  getWebcamStream,
+  onRecordingChange,
+}: {
+  getCanvas: () => HTMLCanvasElement | null;
+  getWebcamStream: () => MediaStream | null;
+  onRecordingChange: (v: boolean) => void;
+}) {
+  // Wrap ScreenRecorder to intercept recording state changes.
+  // We use a proxy for getCanvas that also fires onRecordingChange.
+  const wrappedGetCanvas = useCallback(() => {
+    return getCanvas();
+  }, [getCanvas]);
+
+  return (
+    <ScreenRecorderWithTracking
+      getCanvas={wrappedGetCanvas}
+      getWebcamStream={getWebcamStream}
+      onRecordingChange={onRecordingChange}
+    />
+  );
+}
+
+function ScreenRecorderWithTracking({
+  getCanvas,
+  getWebcamStream,
+  onRecordingChange,
+}: {
+  getCanvas: () => HTMLCanvasElement | null;
+  getWebcamStream: () => MediaStream | null;
+  onRecordingChange: (v: boolean) => void;
+}) {
+  const [recState, setRecState] = useState<'idle' | 'recording' | 'stopped'>('idle');
+  const [elapsed, setElapsed] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const streamRef    = useRef<MediaStream | null>(null);
+  const recorderRef  = useRef<MediaRecorder | null>(null);
+  const chunksRef    = useRef<BlobPart[]>([]);
+  const startTimeRef = useRef<number>(0);
+  const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mimeTypeRef  = useRef('video/webm');
+
+  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+
+  const startRecording = useCallback(async () => {
+    setError(null);
+    setElapsed(0);
+
+    const canvas = getCanvas();
+    if (!canvas) { setError('Load a video first.'); return; }
+
+    if (!streamRef.current) {
+      streamRef.current = (canvas as unknown as { captureStream(f: number): MediaStream }).captureStream(30);
+    }
+
+    const tracks: MediaStreamTrack[] = [...streamRef.current.getTracks()];
+    const wcStream = getWebcamStream();
+    if (wcStream) wcStream.getAudioTracks().forEach(t => tracks.push(t));
+
+    const combined  = new MediaStream(tracks);
+    const mimeType  = getBestMimeType2();
+    mimeTypeRef.current = mimeType;
+
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(combined, { mimeType: mimeType || undefined, videoBitsPerSecond: 5_000_000 });
+    } catch (err) {
+      setError('MediaRecorder not supported.');
+      console.error(err);
+      return;
+    }
+
+    chunksRef.current = [];
+    recorder.ondataavailable = (e) => { if (e.data?.size > 0) chunksRef.current.push(e.data); };
+
+    recorder.onstop = async () => {
+      const duration = Date.now() - startTimeRef.current;
+      const rawBlob  = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
+
+      let finalBlob: Blob;
+      try {
+        const { webmFixDuration } = await import('webm-fix-duration');
+        finalBlob = await webmFixDuration(rawBlob, duration, mimeTypeRef.current || 'video/webm');
+      } catch {
+        finalBlob = rawBlob;
+      }
+
+      const ts  = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const url = URL.createObjectURL(finalBlob);
+      const a   = document.createElement('a');
+      a.href = url; a.download = `coach-lab-${ts}.webm`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+
+      setRecState('idle');
+      onRecordingChange(false);
+    };
+
+    recorder.start(1000);
+    recorderRef.current  = recorder;
+    startTimeRef.current = Date.now();
+    setRecState('recording');
+    onRecordingChange(true);
+
+    timerRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
+    }, 1000);
+  }, [getCanvas, getWebcamStream, onRecordingChange]);
+
+  const stopRecording = useCallback(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    const rec = recorderRef.current;
+    if (rec && rec.state !== 'inactive') { rec.stop(); setRecState('stopped'); }
+  }, []);
+
+  const fmt = (s: number) => [Math.floor(s/3600), Math.floor((s%3600)/60), s%60]
+    .map(v => String(v).padStart(2,'0')).join(':');
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      {recState === 'idle' && (
+        <button onClick={startRecording} style={btnStyle} title="Start screen recording">
+          <span style={{ color: '#FF3B30' }}>&#9210;</span> Record
+        </button>
+      )}
+      {recState === 'recording' && (
+        <>
+          <span style={{
+            width: '9px', height: '9px', borderRadius: '50%', background: '#FF3B30',
+            animation: 'recPulse 1.2s ease-in-out infinite', flexShrink: 0,
+          }} />
+          <span style={{ fontFamily: 'monospace', fontSize: '13px', color: '#FF3B30', fontWeight: 700 }}>
+            {fmt(elapsed)}
+          </span>
+          <button onClick={stopRecording} style={{ ...btnStyle, background: '#FF3B30', color: '#fff', border: 'none' }}>
+            &#9632; Stop
+          </button>
+        </>
+      )}
+      {recState === 'stopped' && (
+        <span style={{ fontSize: '12px', color: '#35679A' }}>Saving\u2026</span>
+      )}
+      {error && <span style={{ fontSize: '11px', color: '#FF3B30' }}>{error}</span>}
+      <style>{`@keyframes recPulse{0%,100%{opacity:1}50%{opacity:.35}}`}</style>
+    </div>
+  );
+}
+
+function getBestMimeType2(): string {
+  const c = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+  for (const t of c) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return 'video/webm';
 }
