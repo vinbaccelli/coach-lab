@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
+export type BallTrailMode = 'short-tail' | 'full-trajectory';
+
 interface ToolPaletteProps {
   activeTool: ToolType;
   onToolChange: (tool: ToolType) => void;
@@ -30,6 +32,8 @@ interface ToolPaletteProps {
   onClear: () => void;
   onResetSkeleton: () => void;
   onResetBallTrail: () => void;
+  ballTrailMode: BallTrailMode;
+  onBallTrailModeChange: (mode: BallTrailMode) => void;
 }
 
 const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
@@ -69,6 +73,8 @@ export default function ToolPalette({
   onClear,
   onResetSkeleton,
   onResetBallTrail,
+  ballTrailMode,
+  onBallTrailModeChange,
 }: ToolPaletteProps) {
   return (
     <div className="flex flex-col gap-1 h-full select-none">
@@ -210,9 +216,36 @@ export default function ToolPalette({
             <p className="text-[9px] text-yellow-600 px-1 mb-1.5 leading-tight font-medium">
               Auto-detects tennis ball from video.
             </p>
-            <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
+            <p className="text-[9px] text-gray-400 px-1 mb-1 leading-tight">
               Click the ball manually in any frame to add extra points.
             </p>
+            <div className="flex flex-col gap-0.5 mb-2 px-1">
+              <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-wider mb-0.5">
+                Trail Mode
+              </p>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="ballTrailMode"
+                  value="short-tail"
+                  checked={ballTrailMode === 'short-tail'}
+                  onChange={() => onBallTrailModeChange('short-tail')}
+                  className="accent-yellow-500"
+                />
+                <span className="text-[9px] text-gray-600">Short Tail</span>
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="ballTrailMode"
+                  value="full-trajectory"
+                  checked={ballTrailMode === 'full-trajectory'}
+                  onChange={() => onBallTrailModeChange('full-trajectory')}
+                  className="accent-yellow-500"
+                />
+                <span className="text-[9px] text-gray-600">Full Trajectory</span>
+              </label>
+            </div>
             <button
               onClick={onResetBallTrail}
               className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"

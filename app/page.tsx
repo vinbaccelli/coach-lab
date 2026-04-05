@@ -9,7 +9,7 @@ import React, {
 import { Camera, Download, GripVertical } from 'lucide-react';
 import VideoPlayer from '@/components/VideoPlayer';
 import CanvasOverlay, { type CanvasHandle } from '@/components/Canvas';
-import ToolPalette from '@/components/ToolPalette';
+import ToolPalette, { type BallTrailMode } from '@/components/ToolPalette';
 import ScreenRecorder from '@/components/ScreenRecorder';
 import ExportModal from '@/components/ExportModal';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
@@ -32,6 +32,7 @@ export default function Home() {
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 450 });
   const [showExport, setShowExport] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<'tools' | 'record'>('tools');
+  const [ballTrailMode, setBallTrailMode] = useState<BallTrailMode>('short-tail');
 
   // Resizable sidebar
   const [sidebarWidth, setSidebarWidth] = useState(160);
@@ -194,6 +195,8 @@ export default function Home() {
               onClear={() => canvasRef.current?.clearAll()}
               onResetSkeleton={() => canvasRef.current?.resetSkeleton()}
               onResetBallTrail={() => canvasRef.current?.resetBallTrail()}
+              ballTrailMode={ballTrailMode}
+              onBallTrailModeChange={setBallTrailMode}
             />
           )}
 
@@ -233,6 +236,7 @@ export default function Home() {
                 drawingOptions={drawingOptions}
                 containerWidth={canvasSize.width}
                 containerHeight={canvasSize.height}
+                ballTrailMode={ballTrailMode}
               />
             </div>
           </div>
