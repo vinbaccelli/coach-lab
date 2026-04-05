@@ -555,8 +555,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       getDetectedSwings: () => {
         const frames = skeletonFramesRef.current;
         if (frames.length === 0) return [];
-        // Lazy import to avoid circular deps
-        return (globalThis as { __swingSegments?: import('@/lib/swingDetection').SwingSegment[] }).__swingSegments ?? [];
+        // Synchronously detect swings from accumulated skeleton frames
+        const { detectSwingSegments } = require('@/lib/swingDetection') as typeof import('@/lib/swingDetection');
+        return detectSwingSegments(frames);
       },
       drawSwingFromSegment: (segment: SwingSegment, color: string) => {
         const video = videoRef.current;
