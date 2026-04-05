@@ -1,10 +1,10 @@
+'use client';
+
 /**
  * Ball Detection module for Coach Lab.
  *
- * Uses canvas-based HSV color analysis to locate a tennis ball (bright yellow)
- * in each video frame. Results are cached in memory keyed by frame index.
- *
- * No external ML models needed — fast CPU-side detection via ImageData pixel iteration.
+ * Real-time approach: detect ball on live video frames during playback.
+ * Uses HSL color analysis to locate a tennis ball (bright yellow-green).
  */
 
 export interface BallPosition {
@@ -20,26 +20,98 @@ export interface BallPosition {
   confidence: number;
 }
 
-// HSV range for a tennis ball (bright yellow-green)
-// Hue: 50–80° covers standard optic-yellow tennis ball color
+/** Convert RGB to HSL (h: 0–360, s: 0–100, l: 0–100) */
+export function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l * 100];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h: number;
+  switch (max) {
+    case rn: h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6; break;
+    case gn: h = ((bn - rn) / d + 2) / 6; break;
+    default: h = ((rn - gn) / d + 4) / 6;
+  }
+  return [h * 360, s * 100, l * 100];
+}
+
+/**
+ * Detect tennis ball in an ImageData using HSL color analysis + blob detection.
+ */
+export function detectBallInImageData(
+  imageData: ImageData,
+  width: number,
+  height: number,
+): { x: number; y: number } | null {
+  const data = imageData.data;
+  const mask = new Uint8Array(width * height);
+  let matchCount = 0;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const [h, s, lv] = rgbToHsl(r, g, b);
+    if (h >= 45 && h <= 82 && s >= 40 && lv >= 35 && lv <= 78) {
+      mask[i >> 2] = 1;
+      matchCount++;
+    }
+  }
+
+  if (matchCount < 12) return null;
+
+  const visited = new Uint8Array(width * height);
+  let bestCx = 0, bestCy = 0, bestSize = 0;
+
+  for (let startIdx = 0; startIdx < width * height; startIdx++) {
+    if (!mask[startIdx] || visited[startIdx]) continue;
+
+    const queue = [startIdx];
+    visited[startIdx] = 1;
+    let sumX = 0, sumY = 0, size = 0;
+    let head = 0;
+
+    while (head < queue.length) {
+      const idx = queue[head++];
+      const px = idx % width;
+      const py = Math.floor(idx / width);
+      sumX += px; sumY += py; size++;
+
+      const neighbors: [number, number][] = [[0,1],[0,-1],[1,0],[-1,0]];
+      for (const [dx, dy] of neighbors) {
+        const nx = px + dx, ny = py + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        const nIdx = ny * width + nx;
+        if (mask[nIdx] && !visited[nIdx]) {
+          visited[nIdx] = 1;
+          queue.push(nIdx);
+        }
+      }
+    }
+
+    if (size >= 10 && size <= 1500 && size > bestSize) {
+      bestSize = size;
+      bestCx = Math.round(sumX / size);
+      bestCy = Math.round(sumY / size);
+    }
+  }
+
+  if (bestSize < 10) return null;
+  return { x: bestCx, y: bestCy };
+}
+
+// ── Legacy HSV-based detection (kept for backward compat) ─────────────────
+
 const HSV_RANGE = {
-  hMin: 50,   // yellow-green hue start
-  hMax: 80,   // yellow hue end
-  sMin: 80,   // high saturation (0–255 scale)
-  sMax: 255,
-  vMin: 100,  // bright (0–255 scale)
-  vMax: 255,
+  hMin: 50, hMax: 80, sMin: 80, sMax: 255, vMin: 100, vMax: 255,
 };
 
-/** Convert a single RGB triplet to approximate HSV (h: 0–360, s: 0–255, v: 0–255) */
 function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
-  const rn = r / 255;
-  const gn = g / 255;
-  const bn = b / 255;
+  const rn = r / 255, gn = g / 255, bn = b / 255;
   const max = Math.max(rn, gn, bn);
   const min = Math.min(rn, gn, bn);
   const delta = max - min;
-
   let h = 0;
   if (delta !== 0) {
     if (max === rn) h = 60 * (((gn - bn) / delta) % 6);
@@ -47,73 +119,47 @@ function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
     else h = 60 * ((rn - gn) / delta + 4);
   }
   if (h < 0) h += 360;
-
   const s = max === 0 ? 0 : (delta / max) * 255;
   const v = max * 255;
   return [h, s, v];
 }
 
-/** Returns true if the given RGB pixel is within the tennis ball HSV range */
 function isBallPixel(r: number, g: number, b: number): boolean {
   const [h, s, v] = rgbToHsv(r, g, b);
   return (
-    h >= HSV_RANGE.hMin &&
-    h <= HSV_RANGE.hMax &&
-    s >= HSV_RANGE.sMin &&
-    s <= HSV_RANGE.sMax &&
-    v >= HSV_RANGE.vMin &&
-    v <= HSV_RANGE.vMax
+    h >= HSV_RANGE.hMin && h <= HSV_RANGE.hMax &&
+    s >= HSV_RANGE.sMin && s <= HSV_RANGE.sMax &&
+    v >= HSV_RANGE.vMin && v <= HSV_RANGE.vMax
   );
 }
 
-/**
- * Detect the tennis ball in a single video frame.
- *
- * @param imageData Raw RGBA pixel data at the native video resolution.
- * @param width  Width of the frame.
- * @param height Height of the frame.
- * @returns Ball position in normalized coordinates, or null if not found.
- */
 export function detectBallInFrame(
   imageData: Uint8ClampedArray,
   width: number,
   height: number,
 ): { nx: number; ny: number; radius: number; confidence: number } | null {
-  let sumX = 0;
-  let sumY = 0;
-  let count = 0;
-  let minX = width;
-  let maxX = 0;
-  let minY = height;
-  let maxY = 0;
+  let sumX = 0, sumY = 0, count = 0;
+  let minX = width, maxX = 0, minY = height, maxY = 0;
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
-      const r = imageData[i];
-      const g = imageData[i + 1];
-      const b = imageData[i + 2];
+      const r = imageData[i], g = imageData[i + 1], b = imageData[i + 2];
       if (isBallPixel(r, g, b)) {
-        sumX += x;
-        sumY += y;
-        count++;
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
+        sumX += x; sumY += y; count++;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
       }
     }
   }
 
-  if (count < 50) return null; // Too few pixels — probably noise
+  if (count < 50) return null;
 
   const cx = sumX / count;
   const cy = sumY / count;
   const bw = maxX - minX;
   const bh = maxY - minY;
-  const radius = (bw + bh) / 4; // rough estimate
-
-  // Confidence: higher if bounding box is roughly circular and count is significant
+  const radius = (bw + bh) / 4;
   const aspect = bw > 0 && bh > 0 ? Math.min(bw, bh) / Math.max(bw, bh) : 0;
   const sizeScore = Math.min(1, count / (Math.PI * radius * radius + 1));
   const confidence = aspect * sizeScore;
@@ -128,13 +174,6 @@ export function detectBallInFrame(
   };
 }
 
-/**
- * Process an entire video to detect ball positions in every frame.
- *
- * @param video    The HTMLVideoElement (must be loaded).
- * @param onProgress Called with progress 0–1 after each frame.
- * @returns Array of BallPosition records (only frames with detections).
- */
 export async function detectBallAllFrames(
   video: HTMLVideoElement,
   onProgress?: (progress: number) => void,
@@ -146,7 +185,6 @@ export async function detectBallAllFrames(
   const totalFrames = Math.floor(duration * fps);
   const results: BallPosition[] = [];
 
-  // Use a small offscreen canvas for performance (max 480px wide)
   const scale = Math.min(1, 480 / (video.videoWidth || 480));
   const w = Math.round((video.videoWidth || 640) * scale);
   const h = Math.round((video.videoHeight || 480) * scale);
@@ -156,7 +194,6 @@ export async function detectBallAllFrames(
   offscreen.height = h;
   const ctx = offscreen.getContext('2d', { willReadFrequently: true })!;
 
-  // Seek through the video frame by frame
   const seekTo = (t: number): Promise<void> =>
     new Promise((resolve) => {
       const onSeeked = () => {
@@ -164,7 +201,6 @@ export async function detectBallAllFrames(
         clearTimeout(timer);
         resolve();
       };
-      // Fallback: resolve after 1 s in case 'seeked' never fires (e.g. broken codec)
       const timer = setTimeout(() => {
         video.removeEventListener('seeked', onSeeked);
         resolve();
@@ -173,7 +209,6 @@ export async function detectBallAllFrames(
       video.currentTime = t;
     });
 
-  // Store original time and pause
   const origTime = video.currentTime;
   const wasPaused = video.paused;
   if (!wasPaused) video.pause();
@@ -193,30 +228,21 @@ export async function detectBallAllFrames(
         timeSeconds: t,
         nx: det.nx,
         ny: det.ny,
-        radius: det.radius / scale, // scale back to original resolution
+        radius: det.radius / scale,
         confidence: det.confidence,
       });
     }
 
     if (onProgress) onProgress((f + 1) / totalFrames);
-
-    // Yield to the browser every 10 frames to avoid blocking UI
-    if (f % 10 === 0) {
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    if (f % 10 === 0) await new Promise((r) => setTimeout(r, 0));
   }
 
-  // Restore video state
   video.currentTime = origTime;
   if (!wasPaused) video.play().catch((err) => console.warn('[ballDetection] Could not resume video playback:', err));
 
   return results;
 }
 
-/**
- * Given cached ball positions, find the one closest to a given video time.
- * Returns null if no cached data or nothing within 1 frame.
- */
 export function getBallAtTime(
   positions: BallPosition[],
   currentTime: number,
@@ -224,9 +250,7 @@ export function getBallAtTime(
 ): BallPosition | null {
   if (positions.length === 0) return null;
   const targetFrame = Math.round(currentTime * fps);
-  // Binary search for closest frame
-  let lo = 0;
-  let hi = positions.length - 1;
+  let lo = 0, hi = positions.length - 1;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
     if (positions[mid].frameIndex < targetFrame) lo = mid + 1;

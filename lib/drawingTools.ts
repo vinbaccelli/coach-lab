@@ -22,6 +22,7 @@ export interface DrawingOptions {
   color: string;
   lineWidth: number;
   fontSize: number;
+  dashed: boolean;
 }
 
 /** Calculate the angle (in degrees) between three points: vertex at b */

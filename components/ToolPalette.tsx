@@ -34,6 +34,7 @@ interface ToolPaletteProps {
   onResetBallTrail: () => void;
   ballTrailMode: BallTrailMode;
   onBallTrailModeChange: (mode: BallTrailMode) => void;
+  onAutoSwing?: () => void;
 }
 
 const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
@@ -75,6 +76,7 @@ export default function ToolPalette({
   onResetBallTrail,
   ballTrailMode,
   onBallTrailModeChange,
+  onAutoSwing,
 }: ToolPaletteProps) {
   return (
     <div className="flex flex-col gap-1 h-full select-none">
@@ -151,6 +153,33 @@ export default function ToolPalette({
           <span>1px</span>
           <span className="font-medium text-gray-600">{drawingOptions.lineWidth}px</span>
           <span>12px</span>
+        </div>
+      </div>
+
+      <div className="border-t border-gray-100 mx-2" />
+
+      {/* Line style */}
+      <div className="px-3 py-2">
+        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
+          Line Style
+        </p>
+        <div className="flex gap-1">
+          <button
+            onClick={() => onOptionsChange({ dashed: false })}
+            className={`tool-btn flex-1 flex-row gap-1 ${!(drawingOptions.dashed) ? 'active' : ''}`}
+            title="Solid line"
+          >
+            <span style={{ fontSize: '14px' }}>—</span>
+            <span>Solid</span>
+          </button>
+          <button
+            onClick={() => onOptionsChange({ dashed: true })}
+            className={`tool-btn flex-1 flex-row gap-1 ${drawingOptions.dashed ? 'active' : ''}`}
+            title="Dashed line"
+          >
+            <span style={{ fontSize: '14px' }}>╌</span>
+            <span>Dashed</span>
+          </button>
         </div>
       </div>
 
@@ -271,6 +300,16 @@ export default function ToolPalette({
             <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
               Desktop: double-click to end. Mobile: long-press (0.5s) to end.
             </p>
+            {onAutoSwing && (
+              <button
+                onClick={onAutoSwing}
+                className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
+                title="Auto-detect swing from skeleton wrist velocity"
+              >
+                <TrendingUp size={13} />
+                <span>Auto Swing</span>
+              </button>
+            )}
           </div>
         </>
       )}

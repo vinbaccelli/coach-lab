@@ -22,10 +22,14 @@ const CanvasOverlay = dynamic(() => import('@/components/Canvas'), { ssr: false 
 export default function Home() {
   // ── Refs that must never unmount ─────────────────────────────────────────
   const videoRef      = useRef<HTMLVideoElement>(null);
+  const videoRefB     = useRef<HTMLVideoElement>(null);
   const webcamVideoRef = useRef<HTMLVideoElement>(null);
   const canvasRef     = useRef<CanvasHandle>(null);
+  const canvasRefB    = useRef<CanvasHandle>(null);
   const fileInputRef  = useRef<HTMLInputElement>(null);
+  const fileInputRefB = useRef<HTMLInputElement>(null);
   const containerRef  = useRef<HTMLDivElement>(null);
+  const containerRefB = useRef<HTMLDivElement>(null);
 
   // Webcam stream held here so ScreenRecorder can get audio
   const webcamStreamRef = useRef<MediaStream | null>(null);
@@ -36,9 +40,12 @@ export default function Home() {
     color: '#F8F8F8',
     lineWidth: 3,
     fontSize: 24,
+    dashed: false,
   });
   const [canvasSize, setCanvasSize]       = useState({ width: 800, height: 450 });
   const [videoSrc, setVideoSrc]           = useState<string | null>(null);
+  const [videoSrcB, setVideoSrcB]         = useState<string | null>(null);
+  const [canvasSizeB, setCanvasSizeB]     = useState({ width: 800, height: 450 });
   const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('short-tail');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [showExport, setShowExport]       = useState(false);
@@ -58,12 +65,25 @@ export default function Home() {
     setCanvasSize({ width: el.clientWidth, height: el.clientHeight });
   }, []);
 
+  const updateSizeB = useCallback(() => {
+    const el = containerRefB.current;
+    if (!el) return;
+    setCanvasSizeB({ width: el.clientWidth, height: el.clientHeight });
+  }, []);
+
   useEffect(() => {
     updateSize();
     const ro = new ResizeObserver(updateSize);
     if (containerRef.current) ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, [updateSize]);
+
+  useEffect(() => {
+    updateSizeB();
+    const ro = new ResizeObserver(updateSizeB);
+    if (containerRefB.current) ro.observe(containerRefB.current);
+    return () => ro.disconnect();
+  }, [updateSizeB, videoSrcB]);
 
   // ── Sidebar resize ────────────────────────────────────────────────────────
   const resizeStartX = useRef(0);
@@ -121,6 +141,19 @@ export default function Home() {
     canvasRef.current?.resetBallTrail();
   }, []);
 
+  const handleVideoUploadB = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setVideoSrcB(url);
+    if (videoRefB.current) {
+      videoRefB.current.src = url;
+      videoRefB.current.load();
+    }
+    canvasRefB.current?.resetSkeleton();
+    canvasRefB.current?.resetBallTrail();
+  }, []);
+
   // ── Webcam ────────────────────────────────────────────────────────────────
   const startWebcam = useCallback(async () => {
     try {
@@ -157,12 +190,34 @@ export default function Home() {
     setDrawingOptions(prev => ({ ...prev, ...opts }));
   }, []);
 
+  // ── Auto Swing Detection ──────────────────────────────────────────────────
+  const handleAutoSwing = useCallback(async () => {
+    const swings = canvasRef.current?.getDetectedSwings() ?? [];
+    if (swings.length === 0) {
+      alert('No swings detected yet. Enable Skeleton tool and play the video first.');
+      return;
+    }
+    const items = swings.map((s, i) =>
+      `${i + 1}. ${s.startTime.toFixed(2)}s – ${s.endTime.toFixed(2)}s`
+    ).join('\n');
+    const choice = window.prompt(`Detected ${swings.length} swing(s):\n${items}\n\nEnter swing number to draw (1–${swings.length}):`);
+    if (!choice) return;
+    const idx = parseInt(choice, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= swings.length) return;
+    canvasRef.current?.drawSwingFromSegment(swings[idx], '#FF8C00');
+  }, []);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#F8F8F8', color: '#1D1D1F' }}>
 
       {/* ── Two hidden video elements at root — never unmount ── */}
       <video
         ref={videoRef}
+        playsInline
+        style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
+      />
+      <video
+        ref={videoRefB}
         playsInline
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
       />
@@ -206,7 +261,15 @@ export default function Home() {
             style={btnStyle}
           >
             <Upload size={14} />
-            {videoSrc ? 'Replace Video' : 'Upload Video'}
+            {videoSrc ? 'Replace A' : 'Upload Video A'}
+          </button>
+
+          <button
+            onClick={() => fileInputRefB.current?.click()}
+            style={btnStyle}
+          >
+            <Upload size={14} />
+            {videoSrcB ? 'Replace B' : 'Upload Video B'}
           </button>
 
           {!webcamActive ? (
@@ -269,6 +332,7 @@ export default function Home() {
               onResetBallTrail={() => canvasRef.current?.resetBallTrail()}
               ballTrailMode={ballTrailMode}
               onBallTrailModeChange={setBallTrailMode}
+              onAutoSwing={handleAutoSwing}
             />
           </SidebarSection>
 
@@ -295,59 +359,99 @@ export default function Home() {
 
         {/* Canvas area */}
         <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-          <div style={{ flex: 1, position: 'relative', minHeight: 0, background: '#000' }}>
-            <div
-              ref={containerRef}
-              style={{ width: '100%', height: '100%', position: 'relative' }}
-            >
-              {!videoSrc ? (
-                /* Upload prompt */
-                <div style={{
-                  position: 'absolute', inset: 0,
-                  display: 'flex', flexDirection: 'column',
-                  alignItems: 'center', justifyContent: 'center',
-                  gap: '12px', color: '#9ca3af',
-                }}>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    style={{
-                      display: 'flex', flexDirection: 'column', alignItems: 'center',
-                      gap: '12px', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af',
-                    }}
-                  >
-                    <div style={{
-                      width: '80px', height: '80px', borderRadius: '50%',
-                      background: '#1f2937',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}>
-                      <Upload size={36} color="#9ca3af" />
-                    </div>
-                    <span style={{ fontSize: '14px', fontWeight: 500 }}>Click to upload video</span>
-                    <span style={{ fontSize: '12px', color: '#6b7280' }}>MP4, WebM, MOV supported</span>
-                  </button>
-                </div>
-              ) : (
-                /* Canvas overlay (renders video + drawings) */
-                <CanvasOverlay
-                  ref={canvasRef}
-                  videoRef={videoRef}
-                  webcamVideoRef={webcamVideoRef}
-                  activeTool={activeTool}
-                  drawingOptions={drawingOptions}
-                  containerWidth={canvasSize.width}
-                  containerHeight={canvasSize.height}
-                  ballTrailMode={ballTrailMode}
-                  skeletonEnabled={skeletonEnabled}
-                  ballTrailEnabled={ballTrailEnabled}
-                  onProcessingStatus={setProcessingStatus}
-                  isRecording={isRecording}
-                />
-              )}
+          <div style={{ flex: 1, position: 'relative', minHeight: 0, background: '#000', display: 'flex' }}>
+            {/* Video A */}
+            <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+              <div
+                ref={containerRef}
+                style={{ width: '100%', height: '100%', position: 'relative' }}
+              >
+                {!videoSrc ? (
+                  <div style={{
+                    position: 'absolute', inset: 0,
+                    display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    gap: '12px', color: '#9ca3af',
+                  }}>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'center',
+                        gap: '12px', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af',
+                      }}
+                    >
+                      <div style={{
+                        width: '80px', height: '80px', borderRadius: '50%',
+                        background: '#1f2937',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        <Upload size={36} color="#9ca3af" />
+                      </div>
+                      <span style={{ fontSize: '14px', fontWeight: 500 }}>Upload Video A</span>
+                      <span style={{ fontSize: '12px', color: '#6b7280' }}>MP4, WebM, MOV supported</span>
+                    </button>
+                  </div>
+                ) : (
+                  <CanvasOverlay
+                    ref={canvasRef}
+                    videoRef={videoRef}
+                    webcamVideoRef={webcamVideoRef}
+                    activeTool={activeTool}
+                    drawingOptions={drawingOptions}
+                    containerWidth={canvasSize.width}
+                    containerHeight={canvasSize.height}
+                    ballTrailMode={ballTrailMode}
+                    skeletonEnabled={skeletonEnabled}
+                    ballTrailEnabled={ballTrailEnabled}
+                    onProcessingStatus={setProcessingStatus}
+                    isRecording={isRecording}
+                  />
+                )}
+                {videoSrcB && (
+                  <div style={{
+                    position: 'absolute', top: 4, left: 8,
+                    fontSize: '11px', fontWeight: 700, color: '#fff',
+                    background: 'rgba(0,0,0,0.5)', padding: '1px 6px', borderRadius: '4px',
+                  }}>A</div>
+                )}
+              </div>
             </div>
+
+            {/* Video B (only shown when videoSrcB is set) */}
+            {videoSrcB && (
+              <>
+                <div style={{ width: '1px', background: '#333', flexShrink: 0 }} />
+                <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+                  <div
+                    ref={containerRefB}
+                    style={{ width: '100%', height: '100%', position: 'relative' }}
+                  >
+                    <CanvasOverlay
+                      ref={canvasRefB}
+                      videoRef={videoRefB}
+                      activeTool={activeTool}
+                      drawingOptions={drawingOptions}
+                      containerWidth={canvasSizeB.width}
+                      containerHeight={canvasSizeB.height}
+                      ballTrailMode={ballTrailMode}
+                      skeletonEnabled={skeletonEnabled}
+                      ballTrailEnabled={ballTrailEnabled}
+                      onProcessingStatus={setProcessingStatus}
+                      isRecording={isRecording}
+                    />
+                    <div style={{
+                      position: 'absolute', top: 4, left: 8,
+                      fontSize: '11px', fontWeight: 700, color: '#fff',
+                      background: 'rgba(0,0,0,0.5)', padding: '1px 6px', borderRadius: '4px',
+                    }}>B</div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Playback controls */}
-          <PlaybackControls videoRef={videoRef} />
+          <PlaybackControls videoRef={videoRef} videoRefB={videoSrcB ? videoRefB : undefined} />
 
           {/* Hint bar */}
           <div style={{
@@ -368,13 +472,20 @@ export default function Home() {
         </main>
       </div>
 
-      {/* Hidden file input */}
+      {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
         type="file"
         accept="video/mp4,video/webm,video/quicktime,video/*"
         style={{ display: 'none' }}
         onChange={handleVideoUpload}
+      />
+      <input
+        ref={fileInputRefB}
+        type="file"
+        accept="video/mp4,video/webm,video/quicktime,video/*"
+        style={{ display: 'none' }}
+        onChange={handleVideoUploadB}
       />
 
       {/* Export modal */}
