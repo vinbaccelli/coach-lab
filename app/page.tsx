@@ -17,6 +17,9 @@ import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useRecording } from '@/contexts/RecordingContext';
 import { useCoachingStore } from '@/stores/coachingStore';
+import { useStroMotion, StroMotionConfig } from '@/hooks/useStroMotion';
+import VoiceOverTool from '@/components/VoiceOverTool';
+import { VoiceNote } from '@/lib/voiceRecorder';
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -37,6 +40,17 @@ export default function Home() {
   const [showExport, setShowExport] = useState(false);
   const [ballTrailMode, setBallTrailMode] = useState<BallTrailMode>('short-tail');
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
+
+  const [stroMotionConfig, setStroMotionConfig] = useState<StroMotionConfig>({
+    enabled: false,
+    startFrame: 0,
+    endFrame: 30,
+    ghostCount: 5,
+    opacity: 0.5,
+  });
+  const { isProcessing: stroProcessing, progress: stroProgress } = useStroMotion(videoRef, stroMotionConfig);
+
+  const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
 
   // Resizable sidebar
   const [sidebarWidth, setSidebarWidth] = useState(240);
@@ -263,6 +277,73 @@ export default function Home() {
           <SidebarSection title="Record" defaultOpen={false}>
             {/* ScreenRecorder is always mounted to preserve recording state */}
             <ScreenRecorder />
+          </SidebarSection>
+
+          <SidebarSection title="StroMotion" defaultOpen={false}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={stroMotionConfig.enabled}
+                  onChange={(e) => setStroMotionConfig({ ...stroMotionConfig, enabled: e.target.checked })}
+                />
+                <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}>Enable StroMotion</span>
+              </label>
+
+              {stroMotionConfig.enabled && (
+                <>
+                  <div>
+                    <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: 'var(--text-secondary)' }}>
+                      Start: {stroMotionConfig.startFrame}
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="300"
+                      value={stroMotionConfig.startFrame}
+                      onChange={(e) => setStroMotionConfig({ ...stroMotionConfig, startFrame: parseInt(e.target.value) })}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: 'var(--text-secondary)' }}>
+                      End: {stroMotionConfig.endFrame}
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="300"
+                      value={stroMotionConfig.endFrame}
+                      onChange={(e) => setStroMotionConfig({ ...stroMotionConfig, endFrame: parseInt(e.target.value) })}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: 'var(--text-secondary)' }}>
+                      Ghosts: {stroMotionConfig.ghostCount}
+                    </label>
+                    <input
+                      type="range"
+                      min="2"
+                      max="12"
+                      value={stroMotionConfig.ghostCount}
+                      onChange={(e) => setStroMotionConfig({ ...stroMotionConfig, ghostCount: parseInt(e.target.value) })}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  {stroProcessing && <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Processing {stroProgress}%</div>}
+                </>
+              )}
+            </div>
+          </SidebarSection>
+
+          <SidebarSection title="Voice-Over" defaultOpen={true}>
+            <VoiceOverTool
+              videoRef={videoRef}
+              voiceNotes={voiceNotes}
+              onVoiceNote={(note) => setVoiceNotes([...voiceNotes, note])}
+              onDeleteVoiceNote={(id) => setVoiceNotes(voiceNotes.filter(n => n.id !== id))}
+            />
           </SidebarSection>
 
           {/* Resize handle */}
