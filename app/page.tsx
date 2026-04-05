@@ -53,6 +53,9 @@ export default function Home() {
   const [isResizing, setIsResizing]       = useState(false);
   const [webcamActive, setWebcamActive]   = useState(false);
   const [isRecording, setIsRecording]     = useState(false);
+  const [videoBLoaded, setVideoBLoaded]   = useState(false);
+  const [videoBOffset, setVideoBOffset]   = useState(0);
+  const [videoBDuration, setVideoBDuration] = useState(0);
 
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
@@ -150,9 +153,40 @@ export default function Home() {
       videoRefB.current.src = url;
       videoRefB.current.load();
     }
+    setVideoBLoaded(false);
     canvasRefB.current?.resetSkeleton();
     canvasRefB.current?.resetBallTrail();
   }, []);
+
+  // ── Video B sync loop (keeps B in sync with A + offset) ───────────────────
+  useEffect(() => {
+    const vA = videoRef.current;
+    const vB = videoRefB.current;
+    if (!vA || !vB || !videoBLoaded) return;
+
+    let rafId: number;
+    const syncLoop = () => {
+      if (!vA.paused) {
+        const targetBTime = vA.currentTime - videoBOffset;
+        if (targetBTime >= 0 && targetBTime <= videoBDuration) {
+          const drift = Math.abs(vB.currentTime - targetBTime);
+          if (drift > 0.1) {
+            vB.currentTime = targetBTime;
+          }
+          if (vB.paused) {
+            vB.play().catch(() => {});
+          }
+        } else if (targetBTime < 0) {
+          if (!vB.paused) vB.pause();
+          vB.currentTime = 0;
+        }
+      }
+      rafId = requestAnimationFrame(syncLoop);
+    };
+
+    rafId = requestAnimationFrame(syncLoop);
+    return () => cancelAnimationFrame(rafId);
+  }, [videoBLoaded, videoBOffset, videoBDuration]);
 
   // ── Webcam ────────────────────────────────────────────────────────────────
   const startWebcam = useCallback(async () => {
@@ -219,7 +253,15 @@ export default function Home() {
       <video
         ref={videoRefB}
         playsInline
+        muted
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
+        onLoadedMetadata={() => {
+          const v = videoRefB.current;
+          if (v) {
+            setVideoBDuration(v.duration);
+            setVideoBLoaded(true);
+          }
+        }}
       />
       <video
         ref={webcamVideoRef}
@@ -452,6 +494,30 @@ export default function Home() {
 
           {/* Playback controls */}
           <PlaybackControls videoRef={videoRef} videoRefB={videoSrcB ? videoRefB : undefined} />
+
+          {/* Video B offset control */}
+          {videoSrcB && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '8px',
+              padding: '4px 16px', fontSize: '11px', color: '#6b7280',
+              background: '#F8F8F8', borderTop: '1px solid #E8E8ED',
+              flexShrink: 0,
+            }}>
+              <span style={{ fontWeight: 600, color: '#1D1D1F' }}>B offset:</span>
+              <input
+                type="number"
+                step="0.1"
+                value={videoBOffset}
+                onChange={e => setVideoBOffset(parseFloat(e.target.value) || 0)}
+                style={{
+                  width: '70px', padding: '2px 6px', borderRadius: '4px',
+                  border: '1px solid #E8E8ED', fontSize: '11px',
+                }}
+                title="Shift Video B start time relative to Video A (seconds)"
+              />
+              <span style={{ color: '#9ca3af' }}>sec (positive = B starts later)</span>
+            </div>
+          )}
 
           {/* Hint bar */}
           <div style={{
