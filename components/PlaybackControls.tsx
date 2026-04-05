@@ -110,11 +110,11 @@ export default function PlaybackControls({ videoRef }: Props) {
           { icon: SkipForward, label: '+1s', onClick: () => { if (videoRef.current) videoRef.current.currentTime += 1; } },
           { icon: SkipForward, label: 'End', onClick: () => { if (videoRef.current) videoRef.current.currentTime = videoRef.current.duration; } },
         ].map((btn, i) => (
-          <button key={i} onClick={btn.onClick} style={{
+          <button key={i} onClick={btn.onClick} aria-label={btn.label} style={{
             width: '36px',
             height: '36px',
             borderRadius: 'var(--radius-sm)',
-            border: '1px solid var(--border)',
+            border: 'var(--border)',
             background: 'var(--bg-primary)',
             cursor: 'pointer',
             display: 'flex',
@@ -130,6 +130,7 @@ export default function PlaybackControls({ videoRef }: Props) {
       {/* Scrub bar */}
       <input
         type="range"
+        aria-label="Video scrubber"
         min="0"
         max={duration || 0}
         value={currentTime}

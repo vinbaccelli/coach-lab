@@ -130,10 +130,8 @@ export default function Home() {
       if (videoRef.current) {
         videoRef.current.src = url;
       }
-      // Reset canvas size after video loads
-      setTimeout(updateSize, 100);
     }
-  }, [updateSize]);
+  }, []);
 
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
