@@ -6,22 +6,26 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { Camera, Download, GripVertical } from 'lucide-react';
-import VideoPlayer from '@/components/VideoPlayer';
+import { Camera, Download, GripVertical, Upload } from 'lucide-react';
 import CanvasOverlay, { type CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode } from '@/components/ToolPalette';
 import ScreenRecorder from '@/components/ScreenRecorder';
 import ExportModal from '@/components/ExportModal';
+import PlaybackControls from '@/components/PlaybackControls';
+import { SidebarSection } from '@/components/SidebarSection';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useRecording } from '@/contexts/RecordingContext';
+import { useCoachingStore } from '@/stores/coachingStore';
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<CanvasHandle>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { registerCompositeCanvas } = useRecording();
+  const isRecording = useCoachingStore((s) => s.isRecording);
 
   const [activeTool, setActiveTool] = useState<ToolType>('pen');
   const [drawingOptions, setDrawingOptions] = useState<DrawingOptions>({
@@ -31,36 +35,39 @@ export default function Home() {
   });
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 450 });
   const [showExport, setShowExport] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'tools' | 'record'>('tools');
   const [ballTrailMode, setBallTrailMode] = useState<BallTrailMode>('short-tail');
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
 
   // Resizable sidebar
-  const [sidebarWidth, setSidebarWidth] = useState(160);
-  const sidebarResizingRef = useRef(false);
-  const sidebarResizeStartXRef = useRef(0);
-  const sidebarResizeStartWRef = useRef(160);
+  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartXRef = useRef(0);
+  const resizeStartWRef = useRef(240);
 
   const onSidebarMouseDown = useCallback((e: React.MouseEvent) => {
-    sidebarResizingRef.current = true;
-    sidebarResizeStartXRef.current = e.clientX;
-    sidebarResizeStartWRef.current = sidebarWidth;
+    setIsResizing(true);
+    resizeStartXRef.current = e.clientX;
+    resizeStartWRef.current = sidebarWidth;
     e.preventDefault();
   }, [sidebarWidth]);
 
   useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!sidebarResizingRef.current) return;
-      const delta = e.clientX - sidebarResizeStartXRef.current;
-      setSidebarWidth(Math.max(120, Math.min(320, sidebarResizeStartWRef.current + delta)));
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const delta = e.clientX - resizeStartXRef.current;
+      setSidebarWidth(Math.max(180, Math.min(360, resizeStartWRef.current + delta)));
     };
-    const onMouseUp = () => { sidebarResizingRef.current = false; };
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-  }, []);
+    const handleMouseUp = () => setIsResizing(false);
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isResizing]);
 
   // Register the composite canvas getter with the RecordingContext
   const getCompositeCanvas = useCallback(() => {
@@ -83,10 +90,6 @@ export default function Home() {
     const ro = new ResizeObserver(updateSize);
     if (containerRef.current) ro.observe(containerRef.current);
     return () => ro.disconnect();
-  }, [updateSize]);
-
-  const handleVideoReady = useCallback(() => {
-    updateSize();
   }, [updateSize]);
 
   const handleOptionsChange = useCallback((opts: Partial<DrawingOptions>) => {
@@ -118,26 +121,87 @@ export default function Home() {
     downloadDataURL(canvas.toDataURL('image/png'), `coach-lab-${Date.now()}.png`);
   }, []);
 
+  // Video upload handler
+  const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setVideoSrc(url);
+      if (videoRef.current) {
+        videoRef.current.src = url;
+      }
+    }
+  }, []);
+
   return (
-    <div className="flex flex-col h-screen bg-white overflow-hidden">
+    <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
       {/* ── Header ── */}
-      <header className="flex items-center justify-between px-5 py-2.5 border-b border-gray-100 bg-white z-10 shrink-0">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center">
-            <Camera size={14} className="text-white" />
+      <header style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '0 20px',
+        height: '48px',
+        borderBottom: 'var(--border)',
+        background: 'var(--bg-primary)',
+        flexShrink: 0,
+        zIndex: 10,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--accent)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            <Camera size={14} color="#fff" />
           </div>
-          <span className="text-base font-bold text-gray-800 tracking-tight">
+          <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
             Coach Lab
           </span>
-          <span className="text-xs text-gray-400 font-medium hidden sm:block">
+          <span style={{ fontSize: '12px', color: 'var(--text-tertiary)', fontWeight: 500 }} className="hidden sm:block">
             Video Analysis Tool
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: 'var(--border)',
+              background: 'var(--bg-secondary)',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: 'var(--text-primary)',
+              transition: 'var(--transition)',
+            }}
+          >
+            <Upload size={14} />
+            {videoSrc ? 'Replace Video' : 'Upload Video'}
+          </button>
           <button
             onClick={handleScreenshot}
-            className="btn-outline gap-1.5 text-sm"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: 'var(--border)',
+              background: 'var(--bg-secondary)',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: 'var(--text-primary)',
+              transition: 'var(--transition)',
+            }}
             title="Save screenshot of current frame with drawings"
           >
             <Camera size={14} />
@@ -145,7 +209,19 @@ export default function Home() {
           </button>
           <button
             onClick={() => setShowExport(true)}
-            className="btn-outline gap-1.5 text-sm"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: 'none',
+              background: 'var(--accent)',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: '#fff',
+              transition: 'var(--transition)',
+            }}
           >
             <Download size={14} />
             Export
@@ -154,37 +230,21 @@ export default function Home() {
       </header>
 
       {/* ── Main layout ── */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar: tools / record */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Left sidebar */}
         <aside
-          className="shrink-0 flex flex-col border-r border-gray-100 bg-gray-50 overflow-y-auto relative"
-          style={{ width: sidebarWidth }}
+          style={{
+            width: sidebarWidth,
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            borderRight: 'var(--border)',
+            background: 'var(--bg-secondary)',
+            overflowY: 'auto',
+            position: 'relative',
+          }}
         >
-          {/* Tab switcher */}
-          <div className="flex border-b border-gray-100">
-            <button
-              onClick={() => setSidebarTab('tools')}
-              className={`flex-1 py-2 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
-                sidebarTab === 'tools'
-                  ? 'bg-white text-blue-600 border-b-2 border-blue-500'
-                  : 'text-gray-400 hover:text-gray-600'
-              }`}
-            >
-              Tools
-            </button>
-            <button
-              onClick={() => setSidebarTab('record')}
-              className={`flex-1 py-2 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
-                sidebarTab === 'record'
-                  ? 'bg-white text-blue-600 border-b-2 border-blue-500'
-                  : 'text-gray-400 hover:text-gray-600'
-              }`}
-            >
-              Rec
-            </button>
-          </div>
-
-          {sidebarTab === 'tools' && (
+          <SidebarSection title="Tools">
             <ToolPalette
               activeTool={activeTool}
               onToolChange={setActiveTool}
@@ -198,63 +258,136 @@ export default function Home() {
               ballTrailMode={ballTrailMode}
               onBallTrailModeChange={setBallTrailMode}
             />
-          )}
+          </SidebarSection>
 
-          {/* ScreenRecorder is always mounted to preserve recording state across tab switches */}
-          <div className={`${sidebarTab === 'record' ? 'block' : 'hidden'} p-2`}>
+          <SidebarSection title="Record" defaultOpen={false}>
+            {/* ScreenRecorder is always mounted to preserve recording state */}
             <ScreenRecorder />
-          </div>
+          </SidebarSection>
 
           {/* Resize handle */}
           <div
-            className="absolute top-0 right-0 h-full w-2 cursor-col-resize flex items-center justify-center hover:bg-blue-100/60 z-20 group"
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              height: '100%',
+              width: '8px',
+              cursor: 'col-resize',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 20,
+            }}
             onMouseDown={onSidebarMouseDown}
             title="Drag to resize panel"
           >
-            <GripVertical size={12} className="text-gray-300 group-hover:text-blue-400" />
+            <GripVertical size={12} style={{ color: 'var(--text-tertiary)' }} />
           </div>
         </aside>
 
-        {/* Centre: video + canvas overlay */}
-        <main className="flex-1 flex flex-col overflow-hidden p-3 gap-2 min-w-0">
-          {/* Canvas area */}
-          <div className="flex-1 relative min-h-0">
-            <VideoPlayer
-              videoRef={videoRef}
-              containerRef={containerRef}
-              onVideoReady={handleVideoReady}
-            />
-            {/* Canvas overlay positioned exactly over the video container (excludes controls bar) */}
+        {/* Centre: video + canvas overlay + controls */}
+        <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+          {/* Video + canvas area */}
+          <div style={{ flex: 1, position: 'relative', minHeight: 0, background: '#000' }}>
             <div
-              className="absolute inset-x-0 top-0 z-10"
-              style={{ height: canvasSize.height }}
+              ref={containerRef}
+              style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             >
-              <CanvasOverlay
-                ref={canvasRef}
-                videoRef={videoRef}
-                activeTool={activeTool}
-                drawingOptions={drawingOptions}
-                containerWidth={canvasSize.width}
-                containerHeight={canvasSize.height}
-                ballTrailMode={ballTrailMode}
-              />
+              {!videoSrc ? (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '12px',
+                    color: '#9ca3af',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{
+                    width: '80px',
+                    height: '80px',
+                    borderRadius: '50%',
+                    background: '#1f2937',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}>
+                    <Upload size={36} color="#9ca3af" />
+                  </div>
+                  <span style={{ fontSize: '14px', fontWeight: 500 }}>Click to upload video</span>
+                  <span style={{ fontSize: '12px', color: '#6b7280' }}>MP4, WebM, MOV supported</span>
+                </button>
+              ) : (
+                <video
+                  ref={videoRef}
+                  src={videoSrc}
+                  onLoadedMetadata={updateSize}
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }}
+                  playsInline
+                />
+              )}
             </div>
+
+            {/* Canvas overlay */}
+            {videoSrc && (
+              <div
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, height: canvasSize.height, zIndex: 10 }}
+              >
+                <CanvasOverlay
+                  ref={canvasRef}
+                  videoRef={videoRef}
+                  activeTool={activeTool}
+                  drawingOptions={drawingOptions}
+                  containerWidth={canvasSize.width}
+                  containerHeight={canvasSize.height}
+                  ballTrailMode={ballTrailMode}
+                />
+              </div>
+            )}
           </div>
 
+          {/* Playback controls */}
+          <PlaybackControls videoRef={videoRef} />
+
           {/* Hint bar */}
-          <div className="shrink-0 flex items-center gap-4 text-[10px] text-gray-400 px-1 flex-wrap">
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '16px',
+            padding: '4px 16px',
+            fontSize: '10px',
+            color: 'var(--text-tertiary)',
+            background: 'var(--bg-secondary)',
+            borderTop: 'var(--border)',
+            flexWrap: 'wrap',
+            flexShrink: 0,
+          }}>
             <span>Space: play/pause</span>
-            <span>Shift+←/→: frame step</span>
-            <span>←/→: 5s skip</span>
+            <span>J/K/L: 0.5×/1×/2×</span>
+            <span>←/→: frame step</span>
             <span>Ctrl+Z: undo</span>
             <span>Ctrl+Y: redo</span>
-            <span className="text-cyan-500">Skeleton: AI auto-detects pose</span>
-            <span className="text-yellow-500">Ball Trail: auto-tracks + click to add</span>
-            <span className="text-purple-400">Swing Path: dbl-click or long-press to end</span>
-            <span className="text-amber-400">Angle: drag 3rd point for live preview</span>
+            <span style={{ color: '#06b6d4' }}>Skeleton: AI auto-detects pose</span>
+            <span style={{ color: '#eab308' }}>Ball Trail: auto-tracks + click to add</span>
+            <span style={{ color: '#a855f7' }}>Swing Path: dbl-click or long-press to end</span>
+            <span style={{ color: '#f59e0b' }}>Angle: drag 3rd point for live preview</span>
           </div>
         </main>
       </div>
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="video/mp4,video/webm,video/quicktime,video/*"
+        style={{ display: 'none' }}
+        onChange={handleVideoUpload}
+      />
 
       {/* Export modal */}
       <ExportModal
