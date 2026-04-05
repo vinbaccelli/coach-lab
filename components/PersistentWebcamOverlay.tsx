@@ -26,13 +26,16 @@ export default function PersistentWebcamOverlay() {
     return () => registerWebcamVideo(null);
   }, [registerWebcamVideo]);
 
-  // Connect stream to video element
+  // Connect stream to video element; only update srcObject when the stream actually changes
+  // to avoid clearing the video element mid-playback on unrelated re-renders.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
     if (webcamStream) {
-      v.srcObject = webcamStream;
-      v.play().catch((err) => console.warn('[PersistentWebcamOverlay] Video play failed:', err));
+      if (v.srcObject !== webcamStream) {
+        v.srcObject = webcamStream;
+        v.play().catch((err) => console.warn('[PersistentWebcamOverlay] Video play failed:', err));
+      }
     } else {
       v.srcObject = null;
     }

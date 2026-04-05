@@ -159,8 +159,14 @@ export async function detectBallAllFrames(
     new Promise((resolve) => {
       const onSeeked = () => {
         video.removeEventListener('seeked', onSeeked);
+        clearTimeout(timer);
         resolve();
       };
+      // Fallback: resolve after 1 s in case 'seeked' never fires (e.g. broken codec)
+      const timer = setTimeout(() => {
+        video.removeEventListener('seeked', onSeeked);
+        resolve();
+      }, 1000);
       video.addEventListener('seeked', onSeeked);
       video.currentTime = t;
     });
