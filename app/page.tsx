@@ -19,6 +19,8 @@ import { useRecording } from '@/contexts/RecordingContext';
 import { useCoachingStore } from '@/stores/coachingStore';
 import { useStroMotion, type StroMotionConfig } from '@/hooks/useStroMotion';
 import { drawStroMotion } from '@/lib/stroMotion';
+import VoiceOverTool from '@/components/VoiceOverTool';
+import { VoiceNote } from '@/lib/voiceRecorder';
 
 /** Maximum frame number selectable in StroMotion sliders. */
 const MAX_STRO_FRAME = 300;
@@ -69,6 +71,8 @@ export default function Home() {
       drawStroMotion(ctx, ghostFrames, stroMotionConfig.opacity);
     }
   }, [ghostFrames, stroMotionConfig.opacity]);
+
+  const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
 
   // Resizable sidebar
   const [sidebarWidth, setSidebarWidth] = useState(240);
@@ -393,6 +397,15 @@ export default function Home() {
                 </>
               )}
             </div>
+          </SidebarSection>
+
+          <SidebarSection title="Voice-Over" defaultOpen={true}>
+            <VoiceOverTool
+              videoRef={videoRef}
+              voiceNotes={voiceNotes}
+              onVoiceNote={(note) => setVoiceNotes([...voiceNotes, note])}
+              onDeleteVoiceNote={(id) => setVoiceNotes(voiceNotes.filter(n => n.id !== id))}
+            />
           </SidebarSection>
 
           {/* Resize handle */}
