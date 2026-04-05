@@ -159,6 +159,10 @@ export default function Home() {
   }, []);
 
   // ── Video B sync loop (keeps B in sync with A + offset) ───────────────────
+
+  /** Acceptable drift (seconds) before Video B is hard-seeked to catch up */
+  const VIDEO_B_SYNC_DRIFT_THRESHOLD = 0.1;
+
   useEffect(() => {
     const vA = videoRef.current;
     const vB = videoRefB.current;
@@ -170,11 +174,13 @@ export default function Home() {
         const targetBTime = vA.currentTime - videoBOffset;
         if (targetBTime >= 0 && targetBTime <= videoBDuration) {
           const drift = Math.abs(vB.currentTime - targetBTime);
-          if (drift > 0.1) {
+          if (drift > VIDEO_B_SYNC_DRIFT_THRESHOLD) {
             vB.currentTime = targetBTime;
           }
           if (vB.paused) {
-            vB.play().catch(() => {});
+            vB.play().catch((err) => {
+              console.warn('[VideoB sync] play() rejected:', err);
+            });
           }
         } else if (targetBTime < 0) {
           if (!vB.paused) vB.pause();
@@ -186,6 +192,7 @@ export default function Home() {
 
     rafId = requestAnimationFrame(syncLoop);
     return () => cancelAnimationFrame(rafId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoBLoaded, videoBOffset, videoBDuration]);
 
   // ── Webcam ────────────────────────────────────────────────────────────────

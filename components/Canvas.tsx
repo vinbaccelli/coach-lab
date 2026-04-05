@@ -26,6 +26,8 @@ const MAX_SKELETON_FRAMES = 300;
 const MAX_BALL_DETECTIONS = 200;
 /** Window (seconds) for matching a skeleton frame to current video time */
 const SKELETON_TIME_TOLERANCE = 0.15;
+/** Time window (seconds) used to skip duplicate ball detections at the same video position */
+const BALL_DETECT_TIME_TOLERANCE = 0.08;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -886,7 +888,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const det = ballDetectRef.current;
             if (det && video.readyState >= 2 && video.videoWidth > 0) {
               const currentTime = video.currentTime;
-              const hasRecent = ballTrackRef.current.some(p => Math.abs(p.timeSeconds - currentTime) < 0.08);
+              const hasRecent = ballTrackRef.current.some(p => Math.abs(p.timeSeconds - currentTime) < BALL_DETECT_TIME_TOLERANCE);
 
               if (!hasRecent) {
                 isBallDetectingRef.current = true;
@@ -897,6 +899,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                   imageData = det.ctx.getImageData(0, 0, det.canvas.width, det.canvas.height);
                 } catch (e) {
                   // SecurityError: canvas tainted by cross-origin data — skip detection
+                  onProcessingStatus?.('Ball detection unavailable: cross-origin video');
                   isBallDetectingRef.current = false;
                 }
 
