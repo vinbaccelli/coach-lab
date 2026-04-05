@@ -1,11 +1,11 @@
 /**
  * Pose Detection module for Coach Lab.
  *
- * Uses Google MediaPipe BlazePose via @tensorflow-models/pose-detection.
+ * Uses MoveNet SINGLEPOSE_LIGHTNING via @tensorflow-models/pose-detection.
  * Loads lazily to avoid including the large TensorFlow.js bundle in the initial page load.
  *
  * Key exports:
- *   loadPoseModel()       — Loads and caches the BlazePose model.
+ *   loadPoseModel()       — Loads and caches the MoveNet model.
  *   estimatePoses()       — Runs inference on a video/canvas element.
  *   drawPoseSkeleton()    — Renders keypoints + bone connections on a canvas.
  *   processAllFrames()    — Pre-processes all video frames and caches results.
@@ -19,20 +19,19 @@ type Keypoint = import('@tensorflow-models/pose-detection').Keypoint;
 
 export interface CachedPoseFrame {
   frameIndex: number;
+  timeSeconds: number;
   poses: Pose[];
 }
 
 // Singleton detector
 let detector: PoseDetector | null = null;
-let detectorLoading = false;
 let detectorLoadPromise: Promise<PoseDetector> | null = null;
 
-/** Load the BlazePose detector (singleton). Resolves quickly on subsequent calls. */
-export async function loadPoseModel(modelType: 'lite' | 'full' = 'lite'): Promise<PoseDetector> {
+/** Load the MoveNet SINGLEPOSE_LIGHTNING detector (singleton). Resolves quickly on subsequent calls. */
+export async function loadPoseModel(): Promise<PoseDetector> {
   if (detector) return detector;
   if (detectorLoadPromise) return detectorLoadPromise;
 
-  detectorLoading = true;
   detectorLoadPromise = (async () => {
     // Server-side guard — TF.js WebGL backend cannot run during SSR
     if (typeof window === 'undefined') {
@@ -40,22 +39,19 @@ export async function loadPoseModel(modelType: 'lite' | 'full' = 'lite'): Promis
     }
 
     // Dynamic imports so TF.js is only bundled when this function is called.
-    // Import core + WebGL backend separately instead of the full tfjs bundle
-    // to avoid initialising backends that are unused (CPU, WebGPU, etc.).
     const tf = await import('@tensorflow/tfjs-core');
     await import('@tensorflow/tfjs-backend-webgl');
     await tf.ready();
 
     const poseDetection = await import('@tensorflow-models/pose-detection');
 
-    const model = poseDetection.SupportedModels.BlazePose;
+    // MoveNet SINGLEPOSE_LIGHTNING: ~15–20 ms/frame, 17 COCO keypoints
+    const model = poseDetection.SupportedModels.MoveNet;
     const det = await poseDetection.createDetector(model, {
-      runtime: 'tfjs',
-      modelType,
+      modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
     });
 
     detector = det;
-    detectorLoading = false;
     return det;
   })();
 
@@ -84,45 +80,41 @@ const LABEL_PAD_X = 2;
 const LABEL_PAD_Y = 13;
 const LABEL_LINE_HEIGHT = 16;
 
-/** Map keypoint name → index in the poses[0].keypoints array */
+/** MoveNet SINGLEPOSE_LIGHTNING — 17 COCO keypoint names (index order) */
 const KEYPOINT_NAMES = [
-  'nose', 'left_eye_inner', 'left_eye', 'left_eye_outer',
-  'right_eye_inner', 'right_eye', 'right_eye_outer',
+  'nose',
+  'left_eye', 'right_eye',
   'left_ear', 'right_ear',
-  'mouth_left', 'mouth_right',
   'left_shoulder', 'right_shoulder',
   'left_elbow', 'right_elbow',
   'left_wrist', 'right_wrist',
-  'left_pinky', 'right_pinky',
-  'left_index', 'right_index',
-  'left_thumb', 'right_thumb',
   'left_hip', 'right_hip',
   'left_knee', 'right_knee',
   'left_ankle', 'right_ankle',
-  'left_heel', 'right_heel',
-  'left_foot_index', 'right_foot_index',
 ];
 
-/** BlazePose bone connections (keypoint name pairs) */
+/** MoveNet bone connections (keypoint name pairs) */
 const BONE_CONNECTIONS: [string, string][] = [
+  // Head
+  ['nose', 'left_eye'],
+  ['nose', 'right_eye'],
+  ['left_eye', 'left_ear'],
+  ['right_eye', 'right_ear'],
+  // Upper body
   ['left_shoulder', 'right_shoulder'],
   ['left_shoulder', 'left_elbow'],
   ['left_elbow', 'left_wrist'],
   ['right_shoulder', 'right_elbow'],
   ['right_elbow', 'right_wrist'],
+  // Torso
   ['left_shoulder', 'left_hip'],
   ['right_shoulder', 'right_hip'],
   ['left_hip', 'right_hip'],
+  // Legs
   ['left_hip', 'left_knee'],
   ['left_knee', 'left_ankle'],
   ['right_hip', 'right_knee'],
   ['right_knee', 'right_ankle'],
-  ['left_ankle', 'left_heel'],
-  ['left_heel', 'left_foot_index'],
-  ['right_ankle', 'right_heel'],
-  ['right_heel', 'right_foot_index'],
-  ['nose', 'left_shoulder'],
-  ['nose', 'right_shoulder'],
 ];
 
 function findKeypoint(kps: Keypoint[], name: string): Keypoint | undefined {
@@ -130,14 +122,14 @@ function findKeypoint(kps: Keypoint[], name: string): Keypoint | undefined {
 }
 
 /**
- * Draw a BlazePose skeleton on a 2D canvas context.
+ * Draw a MoveNet skeleton on a 2D canvas context.
  *
  * @param ctx      2D rendering context.
  * @param poses    Array of poses from estimatePoses().
  * @param w        Canvas pixel width.
  * @param h        Canvas pixel height.
- * @param scaleX   Horizontal scale: canvas.width / video.videoWidth
- * @param scaleY   Vertical scale: canvas.height / video.videoHeight
+ * @param scaleX   Horizontal scale: displayWidth / video.videoWidth
+ * @param scaleY   Vertical scale: displayHeight / video.videoHeight
  * @param minScore Minimum confidence to render a keypoint (0–1).
  * @param userAdjustments Optional map of keypoint name → {x,y} pixel overrides.
  */
@@ -242,6 +234,10 @@ export function drawPoseSkeleton(
 /**
  * Pre-process all frames in a video, caching poses keyed by frame index.
  *
+ * Draws each video frame to an offscreen canvas before inference so that the
+ * GPU texture is synchronously available (avoids the lag where a seeked video
+ * element's WebGL texture still shows the previous frame).
+ *
  * @param video       HTMLVideoElement (must have duration).
  * @param fps         Frame rate to sample at (default 30).
  * @param onProgress  Called with 0–1 progress.
@@ -251,12 +247,30 @@ export async function processAllFrames(
   fps = 30,
   onProgress?: (p: number) => void,
 ): Promise<CachedPoseFrame[]> {
-  const det = await loadPoseModel('full');
+  const det = await loadPoseModel();
   const duration = video.duration;
   if (!isFinite(duration) || duration <= 0) return [];
 
   const totalFrames = Math.floor(duration * fps);
   const results: CachedPoseFrame[] = [];
+
+  // Use a downsampled offscreen canvas for speed (max 640 px wide).
+  // Keypoints returned by MoveNet are in the offscreen canvas coordinate
+  // system; we scale them back to native video resolution before storing so
+  // that the existing Canvas.tsx rendering logic (scaleXY = dw / vW) works
+  // unchanged.
+  const DEFAULT_INFER_W = 640;
+  const DEFAULT_INFER_H = 480;
+  const inferScale = Math.min(1, DEFAULT_INFER_W / (video.videoWidth || DEFAULT_INFER_W));
+  const inferW = Math.round((video.videoWidth  || DEFAULT_INFER_W) * inferScale);
+  const inferH = Math.round((video.videoHeight || DEFAULT_INFER_H) * inferScale);
+  const toVideoX = (video.videoWidth  || inferW) / inferW;
+  const toVideoY = (video.videoHeight || inferH) / inferH;
+
+  const offscreen = document.createElement('canvas');
+  offscreen.width  = inferW;
+  offscreen.height = inferH;
+  const offCtx = offscreen.getContext('2d')!;
 
   const seekTo = (t: number): Promise<void> =>
     new Promise((resolve) => {
@@ -282,16 +296,30 @@ export async function processAllFrames(
     const t = f / fps;
     if (t >= duration) break;
     await seekTo(t);
+
+    // Draw the current video frame to the offscreen canvas so the pixel data
+    // is immediately available to WebGL — avoids texture lag after seeking.
+    offCtx.drawImage(video, 0, 0, inferW, inferH);
+
     try {
-      const poses = await det.estimatePoses(video, { flipHorizontal: false });
+      const poses = await det.estimatePoses(offscreen, { flipHorizontal: false });
       if (poses.length > 0) {
-        results.push({ frameIndex: f, poses });
+        // Scale keypoints from inference resolution to video native resolution
+        const scaledPoses: Pose[] = poses.map((pose) => ({
+          ...pose,
+          keypoints: pose.keypoints.map((kp) => ({
+            ...kp,
+            x: kp.x * toVideoX,
+            y: kp.y * toVideoY,
+          })),
+        }));
+        results.push({ frameIndex: f, timeSeconds: t, poses: scaledPoses });
       }
     } catch {
       // Ignore inference errors on individual frames
     }
     if (onProgress) onProgress((f + 1) / totalFrames);
-    // Yield every 5 frames
+    // Yield every 5 frames to keep the UI responsive
     if (f % 5 === 0) await new Promise((r) => setTimeout(r, 0));
   }
 

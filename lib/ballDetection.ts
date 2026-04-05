@@ -9,6 +9,7 @@
 
 export interface BallPosition {
   frameIndex: number;
+  timeSeconds: number;
   /** Normalized x position (0–1) */
   nx: number;
   /** Normalized y position (0–1) */
@@ -20,12 +21,13 @@ export interface BallPosition {
 }
 
 // HSV range for a tennis ball (bright yellow-green)
+// Hue: 50–80° covers standard optic-yellow tennis ball color
 const HSV_RANGE = {
-  hMin: 30,   // green-yellow hue start (degrees / 2 for OpenCV 0-180 scale)
-  hMax: 70,   // yellow hue end
-  sMin: 80,   // high saturation
+  hMin: 50,   // yellow-green hue start
+  hMax: 80,   // yellow hue end
+  sMin: 80,   // high saturation (0–255 scale)
   sMax: 255,
-  vMin: 100,  // bright
+  vMin: 100,  // bright (0–255 scale)
   vMax: 255,
 };
 
@@ -103,7 +105,7 @@ export function detectBallInFrame(
     }
   }
 
-  if (count < 20) return null; // Too few pixels — probably noise
+  if (count < 50) return null; // Too few pixels — probably noise
 
   const cx = sumX / count;
   const cy = sumY / count;
@@ -188,6 +190,7 @@ export async function detectBallAllFrames(
     if (det) {
       results.push({
         frameIndex: f,
+        timeSeconds: t,
         nx: det.nx,
         ny: det.ny,
         radius: det.radius / scale, // scale back to original resolution
