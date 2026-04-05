@@ -1,15 +1,11 @@
+'use client';
+
 /**
  * Pose Detection module for Coach Lab.
  *
- * Uses MoveNet SINGLEPOSE_LIGHTNING via @tensorflow-models/pose-detection.
- * Loads lazily to avoid including the large TensorFlow.js bundle in the initial page load.
- *
- * Key exports:
- *   loadPoseModel()       — Loads and caches the MoveNet model.
- *   estimatePoses()       — Runs inference on a video/canvas element.
- *   drawPoseSkeleton()    — Renders keypoints + bone connections on a canvas.
- *   processAllFrames()    — Pre-processes all video frames and caches results.
- *   getPoseAtTime()       — O(1) lookup of cached pose for the current time.
+ * Real-time approach: run estimatePoses on the live video element during
+ * normal playback, not pre-processing. This avoids frame-by-frame seeking
+ * which is unreliable in browsers.
  */
 
 // Deferred type imports to avoid loading TF.js at module parse time
@@ -23,39 +19,82 @@ export interface CachedPoseFrame {
   poses: Pose[];
 }
 
+export interface SkeletonFrame {
+  timeSeconds: number;
+  keypoints: Array<{ x: number; y: number; score: number; name: string }>;
+}
+
 // Singleton detector
 let detector: PoseDetector | null = null;
-let detectorLoadPromise: Promise<PoseDetector> | null = null;
+let loading = false;
+let loadPromise: Promise<PoseDetector | null> | null = null;
 
-/** Load the MoveNet SINGLEPOSE_LIGHTNING detector (singleton). Resolves quickly on subsequent calls. */
-export async function loadPoseModel(): Promise<PoseDetector> {
+/** Load the MoveNet SINGLEPOSE_LIGHTNING detector (singleton, lazy). */
+export async function getPoseDetector(): Promise<PoseDetector | null> {
   if (detector) return detector;
-  if (detectorLoadPromise) return detectorLoadPromise;
+  if (loading && loadPromise) return loadPromise;
+  if (typeof window === 'undefined') return null;
 
-  detectorLoadPromise = (async () => {
-    // Server-side guard — TF.js WebGL backend cannot run during SSR
-    if (typeof window === 'undefined') {
-      throw new Error('TensorFlow.js cannot run on server');
+  loading = true;
+  loadPromise = (async () => {
+    try {
+      const tf = await import('@tensorflow/tfjs-core');
+      await import('@tensorflow/tfjs-backend-webgl');
+      await import('@tensorflow/tfjs-converter');
+      await tf.setBackend('webgl');
+      await tf.ready();
+
+      const pd = await import('@tensorflow-models/pose-detection');
+      detector = await pd.createDetector(
+        pd.SupportedModels.MoveNet,
+        { modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING },
+      );
+      console.log('[PoseDetection] MoveNet Lightning loaded');
+      return detector;
+    } catch (err) {
+      console.error('[PoseDetection] Load failed:', err);
+      loading = false;
+      loadPromise = null;
+      return null;
     }
-
-    // Dynamic imports so TF.js is only bundled when this function is called.
-    const tf = await import('@tensorflow/tfjs-core');
-    await import('@tensorflow/tfjs-backend-webgl');
-    await tf.ready();
-
-    const poseDetection = await import('@tensorflow-models/pose-detection');
-
-    // MoveNet SINGLEPOSE_LIGHTNING: ~15–20 ms/frame, 17 COCO keypoints
-    const model = poseDetection.SupportedModels.MoveNet;
-    const det = await poseDetection.createDetector(model, {
-      modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
-    });
-
-    detector = det;
-    return det;
   })();
 
-  return detectorLoadPromise;
+  return loadPromise;
+}
+
+/** Backward-compat alias */
+export async function loadPoseModel(): Promise<PoseDetector> {
+  const det = await getPoseDetector();
+  if (!det) throw new Error('Pose model failed to load');
+  return det;
+}
+
+/**
+ * Detect pose on the current video frame (real-time, no seeking).
+ * Returns keypoints or null if not ready.
+ */
+export async function detectPoseOnCurrentFrame(
+  video: HTMLVideoElement,
+): Promise<Array<{ x: number; y: number; score: number; name: string }> | null> {
+  if (!detector) return null;
+  if (video.readyState < 4) return null;
+  if (video.videoWidth === 0) return null;
+
+  try {
+    const poses = await detector.estimatePoses(video, { flipHorizontal: false });
+    if (poses && poses.length > 0 && poses[0].keypoints) {
+      return poses[0].keypoints.map((kp) => ({
+        x: kp.x,
+        y: kp.y,
+        score: kp.score ?? 0,
+        name: kp.name ?? '',
+      }));
+    }
+    return null;
+  } catch (e) {
+    console.warn('[PoseDetection] estimatePoses error:', e);
+    return null;
+  }
 }
 
 /** Run pose inference on a video element or image source. */
@@ -72,16 +111,14 @@ const POSE_COLOR = '#00E5FF';
 const JOINT_RADIUS = 5;
 const BONE_WIDTH = 2.5;
 const RAD_TO_DEG = 180 / Math.PI;
-// Pixel offset for angle labels relative to the joint dot
 const LABEL_OFFSET_X = 8;
 const LABEL_OFFSET_Y = -8;
-// Background rectangle padding/height for angle labels
 const LABEL_PAD_X = 2;
 const LABEL_PAD_Y = 13;
 const LABEL_LINE_HEIGHT = 16;
 
 /** MoveNet SINGLEPOSE_LIGHTNING — 17 COCO keypoint names (index order) */
-const KEYPOINT_NAMES = [
+export const KEYPOINT_NAMES = [
   'nose',
   'left_eye', 'right_eye',
   'left_ear', 'right_ear',
@@ -95,26 +132,15 @@ const KEYPOINT_NAMES = [
 
 /** MoveNet bone connections (keypoint name pairs) */
 const BONE_CONNECTIONS: [string, string][] = [
-  // Head
-  ['nose', 'left_eye'],
-  ['nose', 'right_eye'],
-  ['left_eye', 'left_ear'],
-  ['right_eye', 'right_ear'],
-  // Upper body
+  ['nose', 'left_eye'], ['nose', 'right_eye'],
+  ['left_eye', 'left_ear'], ['right_eye', 'right_ear'],
   ['left_shoulder', 'right_shoulder'],
-  ['left_shoulder', 'left_elbow'],
-  ['left_elbow', 'left_wrist'],
-  ['right_shoulder', 'right_elbow'],
-  ['right_elbow', 'right_wrist'],
-  // Torso
-  ['left_shoulder', 'left_hip'],
-  ['right_shoulder', 'right_hip'],
+  ['left_shoulder', 'left_elbow'], ['left_elbow', 'left_wrist'],
+  ['right_shoulder', 'right_elbow'], ['right_elbow', 'right_wrist'],
+  ['left_shoulder', 'left_hip'], ['right_shoulder', 'right_hip'],
   ['left_hip', 'right_hip'],
-  // Legs
-  ['left_hip', 'left_knee'],
-  ['left_knee', 'left_ankle'],
-  ['right_hip', 'right_knee'],
-  ['right_knee', 'right_ankle'],
+  ['left_hip', 'left_knee'], ['left_knee', 'left_ankle'],
+  ['right_hip', 'right_knee'], ['right_knee', 'right_ankle'],
 ];
 
 function findKeypoint(kps: Keypoint[], name: string): Keypoint | undefined {
@@ -123,15 +149,6 @@ function findKeypoint(kps: Keypoint[], name: string): Keypoint | undefined {
 
 /**
  * Draw a MoveNet skeleton on a 2D canvas context.
- *
- * @param ctx      2D rendering context.
- * @param poses    Array of poses from estimatePoses().
- * @param w        Canvas pixel width.
- * @param h        Canvas pixel height.
- * @param scaleX   Horizontal scale: displayWidth / video.videoWidth
- * @param scaleY   Vertical scale: displayHeight / video.videoHeight
- * @param minScore Minimum confidence to render a keypoint (0–1).
- * @param userAdjustments Optional map of keypoint name → {x,y} pixel overrides.
  */
 export function drawPoseSkeleton(
   ctx: CanvasRenderingContext2D,
@@ -155,7 +172,6 @@ export function drawPoseSkeleton(
   ctx.lineWidth = BONE_WIDTH;
   ctx.lineCap = 'round';
 
-  // Helper: get pixel coords for a keypoint (with optional user override)
   const getCoords = (kp: Keypoint): { x: number; y: number } | null => {
     if (!kp || (kp.score ?? 0) < minScore) return null;
     const override = userAdjustments?.get(kp.name ?? '');
@@ -163,7 +179,6 @@ export function drawPoseSkeleton(
     return { x: kp.x * scaleX, y: kp.y * scaleY };
   };
 
-  // Draw bones
   for (const [nameA, nameB] of BONE_CONNECTIONS) {
     const kpA = findKeypoint(kps, nameA);
     const kpB = findKeypoint(kps, nameB);
@@ -177,7 +192,6 @@ export function drawPoseSkeleton(
     ctx.stroke();
   }
 
-  // Draw joints
   ctx.fillStyle = POSE_COLOR;
   for (const kp of kps) {
     const coords = getCoords(kp);
@@ -187,7 +201,6 @@ export function drawPoseSkeleton(
     ctx.fill();
   }
 
-  // Draw joint angle labels for key joints
   const angleJoints = [
     { center: 'left_elbow',  ref1: 'left_shoulder',  ref2: 'left_wrist' },
     { center: 'right_elbow', ref1: 'right_shoulder', ref2: 'right_wrist' },
@@ -209,7 +222,6 @@ export function drawPoseSkeleton(
     const b = getCoords(kpB);
     if (!c || !a || !b) continue;
 
-    // Compute angle at vertex c between vectors c→a and c→b
     const v1 = { x: a.x - c.x, y: a.y - c.y };
     const v2 = { x: b.x - c.x, y: b.y - c.y };
     const dot = v1.x * v2.x + v1.y * v2.y;
@@ -220,7 +232,6 @@ export function drawPoseSkeleton(
     const label = `${angleDeg}°`;
     const lx = c.x + LABEL_OFFSET_X;
     const ly = c.y + LABEL_OFFSET_Y;
-    // Dark background for readability
     const metrics = ctx.measureText(label);
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(lx - LABEL_PAD_X, ly - LABEL_PAD_Y, metrics.width + LABEL_PAD_X * 2, LABEL_LINE_HEIGHT);
@@ -232,15 +243,57 @@ export function drawPoseSkeleton(
 }
 
 /**
+ * Draw skeleton from a SkeletonFrame (real-time keypoints) on a canvas.
+ * Scales keypoints from video native resolution to canvas display size.
+ */
+export function drawSkeletonFrame(
+  ctx: CanvasRenderingContext2D,
+  keypoints: Array<{ x: number; y: number; score: number; name: string }>,
+  scaleX: number,
+  scaleY: number,
+  minScore = 0.4,
+): void {
+  if (!keypoints || keypoints.length === 0) return;
+
+  ctx.save();
+  ctx.shadowColor = POSE_COLOR;
+  ctx.shadowBlur = 6;
+  ctx.strokeStyle = POSE_COLOR;
+  ctx.lineWidth = BONE_WIDTH;
+  ctx.lineCap = 'round';
+
+  const kpMap = new Map(keypoints.map((kp) => [kp.name, kp]));
+
+  const getCoords = (name: string): { x: number; y: number } | null => {
+    const kp = kpMap.get(name);
+    if (!kp || kp.score < minScore) return null;
+    return { x: kp.x * scaleX, y: kp.y * scaleY };
+  };
+
+  for (const [nameA, nameB] of BONE_CONNECTIONS) {
+    const a = getCoords(nameA);
+    const b = getCoords(nameB);
+    if (!a || !b) continue;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = POSE_COLOR;
+  for (const kp of keypoints) {
+    if (kp.score < minScore) continue;
+    ctx.beginPath();
+    ctx.arc(kp.x * scaleX, kp.y * scaleY, JOINT_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+/**
  * Pre-process all frames in a video, caching poses keyed by frame index.
- *
- * Draws each video frame to an offscreen canvas before inference so that the
- * GPU texture is synchronously available (avoids the lag where a seeked video
- * element's WebGL texture still shows the previous frame).
- *
- * @param video       HTMLVideoElement (must have duration).
- * @param fps         Frame rate to sample at (default 30).
- * @param onProgress  Called with 0–1 progress.
+ * Kept for backward compatibility.
  */
 export async function processAllFrames(
   video: HTMLVideoElement,
@@ -254,11 +307,6 @@ export async function processAllFrames(
   const totalFrames = Math.floor(duration * fps);
   const results: CachedPoseFrame[] = [];
 
-  // Use a downsampled offscreen canvas for speed (max 640 px wide).
-  // Keypoints returned by MoveNet are in the offscreen canvas coordinate
-  // system; we scale them back to native video resolution before storing so
-  // that the existing Canvas.tsx rendering logic (scaleXY = dw / vW) works
-  // unchanged.
   const DEFAULT_INFER_W = 640;
   const DEFAULT_INFER_H = 480;
   const inferScale = Math.min(1, DEFAULT_INFER_W / (video.videoWidth || DEFAULT_INFER_W));
@@ -279,7 +327,6 @@ export async function processAllFrames(
         clearTimeout(timer);
         resolve();
       };
-      // Fallback: resolve after 1 s in case 'seeked' never fires
       const timer = setTimeout(() => {
         video.removeEventListener('seeked', onSeeked);
         resolve();
@@ -297,15 +344,13 @@ export async function processAllFrames(
     if (t >= duration) break;
     await seekTo(t);
 
-    // Draw the current video frame to the offscreen canvas so the pixel data
-    // is immediately available to WebGL — avoids texture lag after seeking.
     offCtx.drawImage(video, 0, 0, inferW, inferH);
 
     try {
       const poses = await det.estimatePoses(offscreen, { flipHorizontal: false });
       if (poses.length > 0) {
-        // Scale keypoints from inference resolution to video native resolution
-        const scaledPoses: Pose[] = poses.map((pose) => ({
+        type PoseType = typeof poses[0];
+        const scaledPoses: PoseType[] = poses.map((pose) => ({
           ...pose,
           keypoints: pose.keypoints.map((kp) => ({
             ...kp,
@@ -319,7 +364,6 @@ export async function processAllFrames(
       // Ignore inference errors on individual frames
     }
     if (onProgress) onProgress((f + 1) / totalFrames);
-    // Yield every 5 frames to keep the UI responsive
     if (f % 5 === 0) await new Promise((r) => setTimeout(r, 0));
   }
 
@@ -347,9 +391,6 @@ export function getPoseAtTime(
     else hi = mid;
   }
   const candidate = frames[lo];
-  // Only return if within 2 frames
   if (Math.abs(candidate.frameIndex - targetFrame) <= 2) return candidate;
   return null;
 }
-
-export { KEYPOINT_NAMES };

@@ -11,15 +11,37 @@ import { calcAngleDeg } from '@/lib/drawingTools';
 import type { CachedPoseFrame } from '@/lib/poseDetection';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode } from '@/components/ToolPalette';
+import type { SwingSegment } from '@/lib/swingDetection';
+import { detectSwingSegments } from '@/lib/swingDetection';
+
+// ── Constants ──────────────────────────────────────────────────────────────
+
+/** Throttle interval for real-time skeleton pose detection (~30fps) */
+const POSE_DETECTION_INTERVAL = 1 / 30;
+/** Throttle interval for real-time ball detection (~20fps) */
+const BALL_DETECTION_INTERVAL = 1 / 20;
+/** Maximum skeleton frames to keep in memory (~10s at 30fps) */
+const MAX_SKELETON_FRAMES = 300;
+/** Maximum ball positions to keep in memory */
+const MAX_BALL_DETECTIONS = 200;
+/** Window (seconds) for matching a skeleton frame to current video time */
+const SKELETON_TIME_TOLERANCE = 0.15;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type Pt = { x: number; y: number };
 
-interface StrokePen     { tool: 'pen';                              pts: Pt[]; color: string; lw: number }
-interface StrokeArrow   { tool: 'arrow' | 'arrowAngle';             p1: Pt; p2: Pt; color: string; lw: number }
-interface StrokeEllipse { tool: 'circle' | 'bodyCircle'; cx: number; cy: number; rx: number; ry: number; color: string; lw: number }
-interface StrokeSwing   { tool: 'swingPath';                        pts: Pt[]; color: string; lw: number }
+interface StrokePen     { tool: 'pen';                              pts: Pt[]; color: string; lw: number; dashed?: boolean }
+interface StrokeArrow   { tool: 'arrow' | 'arrowAngle';             p1: Pt; p2: Pt; color: string; lw: number; dashed?: boolean }
+interface StrokeEllipse {
+  tool: 'circle' | 'bodyCircle';
+  cx: number; cy: number; rx: number; ry: number;
+  color: string; lw: number; dashed?: boolean;
+  spinning?: boolean;
+  gapStart?: number;  // angle in radians
+  gapEnd?: number;    // angle in radians
+}
+interface StrokeSwing   { tool: 'swingPath';                        pts: Pt[]; color: string; lw: number; dashed?: boolean }
 interface StrokeText    { tool: 'text';                             pos: Pt; text: string; color: string; fontSize: number }
 
 type Stroke = StrokePen | StrokeArrow | StrokeEllipse | StrokeSwing | StrokeText;
@@ -39,6 +61,8 @@ export interface CanvasHandle {
   captureStream: (fps?: number) => MediaStream | null;
   undo: () => void;
   redo: () => void;
+  getDetectedSwings: () => SwingSegment[];
+  drawSwingFromSegment: (segment: SwingSegment, color: string) => void;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -62,6 +86,7 @@ export interface CanvasProps {
 let poseRenderFns: {
   getPoseAtTime: (typeof import('@/lib/poseDetection'))['getPoseAtTime'];
   drawPoseSkeleton: (typeof import('@/lib/poseDetection'))['drawPoseSkeleton'];
+  drawSkeletonFrame: (typeof import('@/lib/poseDetection'))['drawSkeletonFrame'];
 } | null = null;
 
 function ensurePoseRender(): void {
@@ -70,6 +95,7 @@ function ensurePoseRender(): void {
     poseRenderFns = {
       getPoseAtTime: mod.getPoseAtTime,
       drawPoseSkeleton: mod.drawPoseSkeleton,
+      drawSkeletonFrame: mod.drawSkeletonFrame,
     };
   }).catch((err) => console.error('[Canvas] poseRender load error:', err));
 }
@@ -97,14 +123,97 @@ function labelPill(ctx: CanvasRenderingContext2D, text: string, x: number, y: nu
   ctx.restore();
 }
 
-function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
+function drawSmoothPath(
+  ctx: CanvasRenderingContext2D,
+  points: Pt[],
+  color: string,
+  width: number,
+  opacity: number,
+  dashed: boolean,
+): void {
+  if (points.length < 2) return;
+
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  if (dashed) ctx.setLineDash([8, 6]);
+
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const xMid = (points[i].x + points[i + 1].x) / 2;
+    const yMid = (points[i].y + points[i + 1].y) / 2;
+    ctx.quadraticCurveTo(points[i].x, points[i].y, xMid, yMid);
+  }
+  const last = points[points.length - 1];
+  ctx.lineTo(last.x, last.y);
+  ctx.stroke();
+
+  // Draw arrowhead at end
+  if (points.length >= 2) {
+    const p1 = points[points.length - 2];
+    const p2 = points[points.length - 1];
+    const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+    const headLen = Math.max(12, width * 3);
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(p2.x, p2.y);
+    ctx.lineTo(p2.x - headLen * Math.cos(angle - Math.PI / 7), p2.y - headLen * Math.sin(angle - Math.PI / 7));
+    ctx.moveTo(p2.x, p2.y);
+    ctx.lineTo(p2.x - headLen * Math.cos(angle + Math.PI / 7), p2.y - headLen * Math.sin(angle + Math.PI / 7));
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawCircleStroke(
+  ctx: CanvasRenderingContext2D,
+  s: StrokeEllipse,
+  animFrame: number,
+): void {
+  ctx.save();
+  ctx.strokeStyle = s.color;
+  ctx.lineWidth = s.lw;
+  if (s.dashed) ctx.setLineDash([8, 6]);
+
+  const isCircle = s.rx === s.ry;
+
+  if (isCircle && (s.gapStart !== undefined || s.spinning)) {
+    let startAngle = s.gapEnd ?? 0;
+    let endAngle = s.gapStart ?? Math.PI * 2;
+
+    if (s.spinning) {
+      const offset = (animFrame * 0.03) % (Math.PI * 2);
+      startAngle += offset;
+      endAngle += offset;
+    }
+
+    ctx.beginPath();
+    ctx.arc(s.cx, s.cy, Math.max(1, s.rx), startAngle, endAngle);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.ellipse(s.cx, s.cy, Math.max(1, s.rx), Math.max(1, s.ry), 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): void {
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  if (s.tool === 'pen' || s.tool === 'swingPath') {
-    const { pts, color, lw } = s;
+  if (s.tool === 'pen') {
+    const { pts, color, lw, dashed } = s;
     if (pts.length === 0) { ctx.restore(); return; }
+    if (dashed) ctx.setLineDash([8, 6]);
     if (pts.length === 1) {
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -118,23 +227,22 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
       ctx.stroke();
     }
-    if (s.tool === 'swingPath') {
-      ctx.fillStyle = color;
-      for (const p of pts) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, lw + 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
+
+  } else if (s.tool === 'swingPath') {
+    drawSmoothPath(ctx, s.pts, s.color, s.lw, 1, s.dashed ?? false);
+    ctx.restore();
+    return;
 
   } else if (s.tool === 'arrow' || s.tool === 'arrowAngle') {
-    const { p1, p2, color, lw } = s;
+    const { p1, p2, color, lw, dashed } = s;
     ctx.strokeStyle = color;
     ctx.lineWidth = lw;
+    if (dashed) ctx.setLineDash([8, 6]);
     ctx.beginPath();
     ctx.moveTo(p1.x, p1.y);
     ctx.lineTo(p2.x, p2.y);
     ctx.stroke();
+    ctx.setLineDash([]);
     ctx.fillStyle = color;
     drawArrowHead(ctx, p1, p2);
     if (s.tool === 'arrowAngle') {
@@ -145,12 +253,9 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
     }
 
   } else if (s.tool === 'circle' || s.tool === 'bodyCircle') {
-    const { cx, cy, rx, ry, color, lw } = s;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lw;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, Math.max(1, rx), Math.max(1, ry), 0, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.restore();
+    drawCircleStroke(ctx, s as StrokeEllipse, animFrame);
+    return;
 
   } else if (s.tool === 'text') {
     const { pos, text, color, fontSize } = s;
@@ -265,6 +370,64 @@ function drawBallTrailOnCanvas(
   ctx.restore();
 }
 
+// Draw real-time ball positions (stored as absolute coords in video resolution)
+function drawRealtimeBallTrail(
+  ctx: CanvasRenderingContext2D,
+  track: Array<{ timeSeconds: number; x: number; y: number }>,
+  currentTime: number,
+  mode: BallTrailMode,
+  dx: number, dy: number, dw: number, dh: number,
+  vW: number, vH: number,
+): void {
+  if (track.length === 0) return;
+  const TAIL_SECONDS = 0.6;
+  const visible = mode === 'short-tail'
+    ? track.filter(p => currentTime - p.timeSeconds <= TAIL_SECONDS && p.timeSeconds <= currentTime + 0.1)
+    : track;
+  if (visible.length === 0) return;
+
+  const toCanvasX = (x: number) => dx + (x / vW) * dw;
+  const toCanvasY = (y: number) => dy + (y / vH) * dh;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+
+  if (visible.length >= 2) {
+    ctx.beginPath();
+    ctx.moveTo(toCanvasX(visible[0].x), toCanvasY(visible[0].y));
+    for (let i = 1; i < visible.length; i++) {
+      ctx.lineTo(toCanvasX(visible[i].x), toCanvasY(visible[i].y));
+    }
+    ctx.strokeStyle = 'rgba(204,255,0,0.45)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  for (const p of visible) {
+    const age = currentTime - p.timeSeconds;
+    const alpha = mode === 'short-tail' ? Math.max(0.2, 1 - age / TAIL_SECONDS) : 0.7;
+    const r = mode === 'short-tail' ? Math.max(3, 8 * (1 - age / TAIL_SECONDS)) : 5;
+    ctx.shadowColor = '#CCFF00';
+    ctx.shadowBlur = 8 * alpha;
+    ctx.fillStyle = `rgba(204,255,0,${alpha})`;
+    ctx.beginPath();
+    ctx.arc(toCanvasX(p.x), toCanvasY(p.y), r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const cur = visible[visible.length - 1];
+  if (cur && currentTime - cur.timeSeconds < 0.1) {
+    ctx.shadowColor = '#CCFF00';
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = '#CCFF00';
+    ctx.beginPath();
+    ctx.arc(toCanvasX(cur.x), toCanvasY(cur.y), 10, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
@@ -287,7 +450,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
 
-    // Drawing state refs — mutated directly to avoid extra re-renders
+    // Drawing state refs
     const strokesRef      = useRef<Stroke[]>([]);
     const historyRef      = useRef<Stroke[][]>([[]]);
     const historyIdxRef   = useRef<number>(0);
@@ -305,13 +468,29 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const animTickRef     = useRef<number>(0);
     const longPressRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // AI detection caches
+    // Dragging circle
+    const dragCircleIdxRef = useRef<number>(-1);
+    const dragCircleOffRef = useRef<Pt>({ x: 0, y: 0 });
+
+    // Real-time skeleton detection
+    const isPoseRunningRef    = useRef(false);
+    const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
+    const lastPoseTimeRef     = useRef(0);
+
+    // Real-time ball detection
+    const isBallRunningRef    = useRef(false);
+    const ballTrackRef        = useRef<Array<{ timeSeconds: number; x: number; y: number }>>([]);
+    const ballDetectCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const ballDetectCtxRef    = useRef<CanvasRenderingContext2D | null>(null);
+    const lastBallDetectRef   = useRef(0);
+
+    // Legacy AI detection caches (for manual ball shadow tool)
     const cachedPosesRef    = useRef<CachedPoseFrame[]>([]);
     const poseProcessingRef = useRef(false);
     const cachedBallRef     = useRef<BallPosition[]>([]);
     const ballProcessingRef = useRef(false);
 
-    // Prop mirrors as refs so rAF loop never has to restart on prop change
+    // Prop mirrors as refs
     const drawingOptsRef      = useRef(drawingOptions);
     const activeToolRef       = useRef(activeTool);
     const skeletonEnabledRef  = useRef(skeletonEnabled);
@@ -354,11 +533,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       resetSkeleton: () => {
         cachedPosesRef.current = [];
         poseProcessingRef.current = false;
+        skeletonFramesRef.current = [];
+        isPoseRunningRef.current = false;
         onProcessingStatus?.(null);
       },
       resetBallTrail: () => {
         cachedBallRef.current = [];
         ballProcessingRef.current = false;
+        ballTrackRef.current = [];
+        isBallRunningRef.current = false;
         onProcessingStatus?.(null);
       },
       getCanvas: () => canvasRef.current,
@@ -383,81 +566,71 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           strokesRef.current = [...historyRef.current[historyIdxRef.current]];
         }
       },
-    }), [onProcessingStatus, pushHistory]);
+      getDetectedSwings: () => {
+        const frames = skeletonFramesRef.current;
+        if (frames.length === 0) return [];
+        return detectSwingSegments(frames);
+      },
+      drawSwingFromSegment: (segment: SwingSegment, color: string) => {
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        if (!video || !canvas) return;
 
-    // ── Skeleton auto-processing ───────────────────────────────────────────
+        const vW2 = video.videoWidth || canvas.width;
+        const vH2 = video.videoHeight || canvas.height;
+        const sc = Math.min(canvas.width / vW2, canvas.height / vH2);
+        const dw2 = vW2 * sc;
+        const dh2 = vH2 * sc;
+
+        const points = segment.wristPositions.map((p) => ({
+          x: p.x * (dw2 / vW2),
+          y: p.y * (dh2 / vH2),
+        }));
+
+        strokesRef.current.push({
+          tool: 'swingPath',
+          pts: points,
+          color,
+          lw: 4,
+          dashed: false,
+        });
+        pushHistory();
+      },
+    }), [onProcessingStatus, pushHistory, videoRef]);
+
+    // ── Skeleton detector loader ───────────────────────────────────────────
 
     useEffect(() => {
       if (!skeletonEnabled) return;
-      const video = videoRef.current;
-      if (!video) return;
-
       ensurePoseRender();
 
-      const tryProcess = () => {
-        if (poseProcessingRef.current || cachedPosesRef.current.length > 0) return;
-        if (!video.videoWidth || !isFinite(video.duration) || video.duration <= 0) return;
-
-        poseProcessingRef.current = true;
-        const total = Math.floor(video.duration * 30);
-        onProcessingStatus?.('Loading pose model\u2026');
-
-        import('@/lib/poseDetection').then(async ({ processAllFrames }) => {
-          try {
-            const frames = await processAllFrames(video, 30, (p) => {
-              onProcessingStatus?.(`Detecting skeleton\u2026 frame ${Math.round(p * total)}/${total}`);
-            });
-            cachedPosesRef.current = frames;
-            onProcessingStatus?.(frames.length > 0 ? null : 'No pose detected in video');
-          } catch (err) {
-            console.error('[Canvas] Skeleton detection failed:', err);
-            onProcessingStatus?.('Skeleton detection failed');
-          } finally {
-            poseProcessingRef.current = false;
+      import('@/lib/poseDetection').then(({ getPoseDetector }) => {
+        getPoseDetector().then((det) => {
+          if (det) {
+            onProcessingStatus?.('Skeleton ready — play video');
+          } else {
+            onProcessingStatus?.('Skeleton model failed to load');
           }
         });
-      };
+      }).catch((err) => {
+        console.error('[Canvas] Skeleton load error:', err);
+        onProcessingStatus?.('Skeleton model failed to load');
+      });
+    }, [skeletonEnabled, onProcessingStatus]);
 
-      tryProcess();
-      video.addEventListener('loadedmetadata', tryProcess);
-      return () => video.removeEventListener('loadedmetadata', tryProcess);
-    }, [skeletonEnabled, videoRef, onProcessingStatus]);
-
-    // ── Ball auto-detection ────────────────────────────────────────────────
+    // ── Ball detection canvas initialization ──────────────────────────────
 
     useEffect(() => {
       if (!ballTrailEnabled) return;
-      const video = videoRef.current;
-      if (!video) return;
-
-      const tryProcess = () => {
-        if (ballProcessingRef.current || cachedBallRef.current.length > 0) return;
-        if (!video.videoWidth || !isFinite(video.duration) || video.duration <= 0) return;
-
-        ballProcessingRef.current = true;
-        const total = Math.floor(video.duration * 30);
-        onProcessingStatus?.('Loading ball detector\u2026');
-
-        import('@/lib/ballDetection').then(async ({ detectBallAllFrames }) => {
-          try {
-            const positions = await detectBallAllFrames(video, (p) => {
-              onProcessingStatus?.(`Detecting ball\u2026 frame ${Math.round(p * total)}/${total}`);
-            });
-            cachedBallRef.current = positions;
-            onProcessingStatus?.(positions.length > 0 ? null : 'No ball detected in video');
-          } catch (err) {
-            console.error('[Canvas] Ball detection failed:', err);
-            onProcessingStatus?.('Ball detection failed');
-          } finally {
-            ballProcessingRef.current = false;
-          }
-        });
-      };
-
-      tryProcess();
-      video.addEventListener('loadedmetadata', tryProcess);
-      return () => video.removeEventListener('loadedmetadata', tryProcess);
-    }, [ballTrailEnabled, videoRef, onProcessingStatus]);
+      if (!ballDetectCanvasRef.current) {
+        const c = document.createElement('canvas');
+        c.width = 320;
+        c.height = 180;
+        ballDetectCanvasRef.current = c;
+        ballDetectCtxRef.current = c.getContext('2d', { willReadFrequently: true });
+      }
+      onProcessingStatus?.('Ball detection ready — play video');
+    }, [ballTrailEnabled, onProcessingStatus]);
 
     // ── Canvas size ────────────────────────────────────────────────────────
 
@@ -468,7 +641,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       canvas.height = containerHeight;
     }, [containerWidth, containerHeight]);
 
-    // ── Render loop — runs once; all mutable state via refs ───────────────
+    // ── Render loop ────────────────────────────────────────────────────────
 
     useEffect(() => {
       const render = () => {
@@ -497,27 +670,118 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           dx = (W - dw) / 2;
           dy = (H - dh) / 2;
           ctx.drawImage(video, dx, dy, dw, dh);
+
+          // ── Real-time skeleton detection ────────────────────────────────
+          if (skeletonEnabledRef.current && !video.paused && !isPoseRunningRef.current) {
+            const now = video.currentTime;
+            if (now - lastPoseTimeRef.current > POSE_DETECTION_INTERVAL) {
+              lastPoseTimeRef.current = now;
+              isPoseRunningRef.current = true;
+
+              import('@/lib/poseDetection').then(({ detectPoseOnCurrentFrame }) => {
+                detectPoseOnCurrentFrame(video).then((keypoints) => {
+                  if (keypoints) {
+                    skeletonFramesRef.current.push({
+                      timeSeconds: now,
+                      keypoints,
+                    });
+                    // Keep only the most recent frames to bound memory usage
+                    if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+                      skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+                    }
+                    onProcessingStatus?.(null);
+                  }
+                }).finally(() => {
+                  isPoseRunningRef.current = false;
+                });
+              }).catch(() => { isPoseRunningRef.current = false; });
+            }
+          }
+
+          // ── Real-time ball detection ────────────────────────────────────
+          if (ballTrailEnabledRef.current && !video.paused && !isBallRunningRef.current) {
+            const now = video.currentTime;
+            if (now - lastBallDetectRef.current > BALL_DETECTION_INTERVAL) {
+              lastBallDetectRef.current = now;
+              const dc = ballDetectCanvasRef.current;
+              const dCtx = ballDetectCtxRef.current;
+              if (dc && dCtx && video.readyState >= 4) {
+                isBallRunningRef.current = true;
+                dCtx.drawImage(video, 0, 0, dc.width, dc.height);
+                const imageData = dCtx.getImageData(0, 0, dc.width, dc.height);
+                import('@/lib/ballDetection').then(({ detectBallInImageData }) => {
+                  const pos = detectBallInImageData(imageData, dc.width, dc.height);
+                  if (pos) {
+                    // Scale back to video native resolution
+                    ballTrackRef.current.push({
+                      timeSeconds: now,
+                      x: pos.x * (vW / dc.width),
+                      y: pos.y * (vH / dc.height),
+                    });
+                    if (ballTrackRef.current.length > MAX_BALL_DETECTIONS) {
+                      ballTrackRef.current = ballTrackRef.current.slice(-MAX_BALL_DETECTIONS);
+                    }
+                    onProcessingStatus?.(null);
+                  }
+                  isBallRunningRef.current = false;
+                }).catch(() => { isBallRunningRef.current = false; });
+              }
+            }
+          }
         } else {
           ctx.fillStyle = '#111';
           ctx.fillRect(0, 0, W, H);
         }
 
-        // Skeleton overlay
-        if (skeletonEnabledRef.current && cachedPosesRef.current.length > 0 && poseRenderFns && video) {
-          const pf = poseRenderFns.getPoseAtTime(cachedPosesRef.current, video.currentTime);
-          if (pf && pf.poses.length > 0) {
-            const scaleXY = dw / vW;
+        // ── Skeleton overlay ─────────────────────────────────────────────
+        if (skeletonEnabledRef.current && video) {
+          const currentTime = video.currentTime;
+
+          // Find most recent frame within tolerance
+          let bestFrame: typeof skeletonFramesRef.current[0] | null = null;
+          for (let i = skeletonFramesRef.current.length - 1; i >= 0; i--) {
+            const f = skeletonFramesRef.current[i];
+            if (Math.abs(f.timeSeconds - currentTime) <= SKELETON_TIME_TOLERANCE) {
+              bestFrame = f;
+              break;
+            }
+          }
+
+          if (bestFrame && poseRenderFns) {
+            const scaleX = dw / vW;
+            const scaleY = dh / vH;
             ctx.save();
             ctx.translate(dx, dy);
-            poseRenderFns.drawPoseSkeleton(ctx, pf.poses, dw, dh, scaleXY, scaleXY);
+            poseRenderFns.drawSkeletonFrame(ctx, bestFrame.keypoints, scaleX, scaleY);
             ctx.restore();
+          } else if (cachedPosesRef.current.length > 0 && poseRenderFns) {
+            // Fallback to legacy cached poses
+            const pf = poseRenderFns.getPoseAtTime(cachedPosesRef.current, video.currentTime);
+            if (pf && pf.poses.length > 0) {
+              const scaleXY = dw / vW;
+              ctx.save();
+              ctx.translate(dx, dy);
+              poseRenderFns.drawPoseSkeleton(ctx, pf.poses, dw, dh, scaleXY, scaleXY);
+              ctx.restore();
+            }
           }
         }
 
-        // Ball trail
-        if (ballTrailEnabledRef.current && cachedBallRef.current.length > 0 && video) {
-          const curFrame = Math.round(video.currentTime * 30);
-          drawBallTrailOnCanvas(ctx, cachedBallRef.current, curFrame, ballTrailModeRef.current, dx, dy, dw, dh);
+        // ── Ball trail overlay ───────────────────────────────────────────
+        if (ballTrailEnabledRef.current && video) {
+          if (ballTrackRef.current.length > 0) {
+            drawRealtimeBallTrail(
+              ctx,
+              ballTrackRef.current,
+              video.currentTime,
+              ballTrailModeRef.current,
+              dx, dy, dw, dh,
+              vW, vH,
+            );
+          } else if (cachedBallRef.current.length > 0) {
+            const curFrame = Math.round(video.currentTime * 30);
+            drawBallTrailOnCanvas(ctx, cachedBallRef.current, curFrame, ballTrailModeRef.current, dx, dy, dw, dh);
+          }
         }
 
         // Webcam PiP — bottom-right corner when recording
@@ -546,31 +810,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         // Completed strokes
-        for (const s of strokesRef.current) drawStroke(ctx, s);
+        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current);
 
         // Active (in-progress) stroke
-        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current);
+        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current);
 
-        // Swing path being drawn (clicks so far)
+        // Swing path being drawn
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
           const pts = swingPtsRef.current;
           const opts = drawingOptsRef.current;
-          ctx.save();
-          ctx.strokeStyle = opts.color;
-          ctx.lineWidth = opts.lineWidth;
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          ctx.beginPath();
-          ctx.moveTo(pts[0].x, pts[0].y);
-          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-          ctx.stroke();
-          ctx.fillStyle = opts.color;
-          for (const p of pts) {
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, opts.lineWidth + 2, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          ctx.restore();
+          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false);
         }
 
         // Locked angle measurements
@@ -582,7 +831,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (live.phase === 2) {
             drawLiveAnglePrev(ctx, live);
           } else {
-            // Phase 1: dotted line from vertex to cursor showing first arm
             ctx.save();
             ctx.setLineDash([4, 4]);
             ctx.strokeStyle = 'rgba(255,215,0,0.85)';
@@ -629,7 +877,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const opts = drawingOptsRef.current;
         strokesRef.current = [
           ...strokesRef.current,
-          { tool: 'swingPath', pts: [...pts], color: opts.color, lw: opts.lineWidth },
+          { tool: 'swingPath', pts: [...pts], color: opts.color, lw: opts.lineWidth, dashed: opts.dashed ?? false },
         ];
         pushHistory();
       }
@@ -667,16 +915,39 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
 
+      // Check if clicking near an existing circle/ellipse to start dragging it
+      if (tool === 'circle' || tool === 'bodyCircle') {
+        const DRAG_THRESHOLD = 20;
+        const idx = strokesRef.current.findIndex((s) => {
+          if (s.tool !== 'circle' && s.tool !== 'bodyCircle') return false;
+          const el = s as StrokeEllipse;
+          // Use proper ellipse point-containment: ((x-cx)²/rx²) + ((y-cy)²/ry²) <= 1
+          // Add DRAG_THRESHOLD tolerance by scaling the ellipse slightly
+          const rx = Math.max(el.rx, 1) + DRAG_THRESHOLD;
+          const ry = Math.max(el.ry, 1) + DRAG_THRESHOLD;
+          const dx2 = pos.x - el.cx;
+          const dy2 = pos.y - el.cy;
+          return (dx2 * dx2) / (rx * rx) + (dy2 * dy2) / (ry * ry) <= 1;
+        });
+        if (idx >= 0) {
+          const el = strokesRef.current[idx] as StrokeEllipse;
+          dragCircleIdxRef.current = idx;
+          dragCircleOffRef.current = { x: pos.x - el.cx, y: pos.y - el.cy };
+          isDraggingRef.current = true;
+          return;
+        }
+      }
+
       switch (tool) {
         case 'pen':
-          activeStrokeRef.current = { tool: 'pen', pts: [pos], color: opts.color, lw };
+          activeStrokeRef.current = { tool: 'pen', pts: [pos], color: opts.color, lw, dashed: opts.dashed ?? false };
           isDraggingRef.current = true;
           break;
 
         case 'arrow':
         case 'arrowAngle':
           dragStartRef.current = pos;
-          activeStrokeRef.current = { tool, p1: pos, p2: pos, color: opts.color, lw };
+          activeStrokeRef.current = { tool, p1: pos, p2: pos, color: opts.color, lw, dashed: opts.dashed ?? false };
           isDraggingRef.current = true;
           break;
 
@@ -685,7 +956,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           dragStartRef.current = pos;
           activeStrokeRef.current = {
             tool: tool as 'circle' | 'bodyCircle',
-            cx: pos.x, cy: pos.y, rx: 0, ry: 0, color: opts.color, lw,
+            cx: pos.x, cy: pos.y, rx: 0, ry: 0,
+            color: opts.color, lw,
+            dashed: opts.dashed ?? false,
           };
           isDraggingRef.current = true;
           break;
@@ -778,7 +1051,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const pos  = getPos(e);
       const tool = activeToolRef.current;
 
-      // Angle live preview follows cursor even without button held
+      // Circle dragging
+      if (dragCircleIdxRef.current >= 0 && isDraggingRef.current) {
+        const idx = dragCircleIdxRef.current;
+        const s = strokesRef.current[idx] as StrokeEllipse;
+        if (s) {
+          const off = dragCircleOffRef.current;
+          const updated = { ...s, cx: pos.x - off.x, cy: pos.y - off.y };
+          strokesRef.current = [
+            ...strokesRef.current.slice(0, idx),
+            updated,
+            ...strokesRef.current.slice(idx + 1),
+          ];
+        }
+        return;
+      }
+
+      // Angle live preview
       if (tool === 'angle' && liveAngleRef.current) {
         if (anglePhaseRef.current === 1) {
           liveAngleRef.current = { ...liveAngleRef.current, p1: pos };
@@ -813,6 +1102,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer up ─────────────────────────────────────────────────────────
 
     const onPointerUp = useCallback((_e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (dragCircleIdxRef.current >= 0) {
+        dragCircleIdxRef.current = -1;
+        isDraggingRef.current = false;
+        pushHistory();
+        return;
+      }
       isDraggingRef.current = false;
       const active = activeStrokeRef.current;
       activeStrokeRef.current = null;
