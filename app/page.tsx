@@ -9,7 +9,7 @@ import React, {
 import dynamic from 'next/dynamic';
 import { Camera, Upload, GripVertical } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
-import ToolPalette, { type BallTrailMode } from '@/components/ToolPalette';
+import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import ExportModal from '@/components/ExportModal';
 import PlaybackControls from '@/components/PlaybackControls';
 import { SidebarSection } from '@/components/SidebarSection';
@@ -46,7 +46,7 @@ export default function Home() {
   const [videoSrc, setVideoSrc]           = useState<string | null>(null);
   const [videoSrcB, setVideoSrcB]         = useState<string | null>(null);
   const [canvasSizeB, setCanvasSizeB]     = useState({ width: 800, height: 450 });
-  const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('short-tail');
+  const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('comet');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [showExport, setShowExport]       = useState(false);
   const [sidebarWidth, setSidebarWidth]   = useState(240);
@@ -58,6 +58,10 @@ export default function Home() {
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [circleSpinning, setCircleSpinning] = useState(false);
   const [circleGapMode, setCircleGapMode]   = useState(false);
+  const [webcamPipMode, setWebcamPipMode]   = useState<WebcamPipMode>('rectangle');
+  const [webcamOpacity, setWebcamOpacity]   = useState(1);
+  const [urlInput, setUrlInput]             = useState('');
+  const [embedUrl, setEmbedUrl]             = useState<{ type: 'youtube' | 'instagram' | 'mp4'; url: string } | null>(null);
 
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
@@ -284,6 +288,31 @@ export default function Home() {
     canvasRef.current?.setRacketTrail(trail);
   }, []);
 
+  // ── URL Input handler ────────────────────────────────────────────────────
+  const handleUrlSubmit = useCallback(() => {
+    const raw = urlInput.trim();
+    if (!raw) return;
+
+    const ytMatch = raw.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+    if (ytMatch) {
+      setEmbedUrl({ type: 'youtube', url: `https://www.youtube.com/embed/${ytMatch[1]}` });
+      return;
+    }
+    if (raw.includes('instagram.com')) {
+      const igMatch = raw.match(/instagram\.com\/(p|reel)\/([A-Za-z0-9_-]+)/);
+      if (igMatch) {
+        setEmbedUrl({ type: 'instagram', url: `https://www.instagram.com/${igMatch[1]}/${igMatch[2]}/embed` });
+        return;
+      }
+    }
+    if (raw.match(/\.(mp4|webm|mov)(\?.*)?$/i) || raw.startsWith('blob:')) {
+      setVideoSrc(raw);
+      if (videoRef.current) { videoRef.current.src = raw; videoRef.current.load(); }
+      return;
+    }
+    alert('Supported: YouTube URL, or direct .mp4/.webm link.\nInstagram embeds are view-only (sandboxed).');
+  }, [urlInput, videoRef]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#F8F8F8', color: '#1D1D1F' }}>
 
@@ -341,6 +370,34 @@ export default function Home() {
 
         {/* Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        {/* URL Input */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+            <input
+              type="text"
+              placeholder="YouTube / MP4 URL…"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
+              style={{
+                height: '30px',
+                padding: '0 8px',
+                borderRadius: '6px',
+                border: '1px solid #E8E8ED',
+                fontSize: '12px',
+                width: '200px',
+                outline: 'none',
+              }}
+            />
+            <button onClick={handleUrlSubmit} style={{ ...btnStyle, height: '30px', padding: '0 10px', width: 'auto', fontSize: '12px' }}>
+              Load
+            </button>
+            {embedUrl && (
+              <button onClick={() => setEmbedUrl(null)} style={{ ...btnStyle, height: '30px', width: '30px', fontSize: '12px', color: '#EF4444' }}>
+                ✕
+              </button>
+            )}
+          </div>
+
           <button
             onClick={() => fileInputRef.current?.click()}
             style={btnStyle}
@@ -423,6 +480,11 @@ export default function Home() {
               onCircleSpinningChange={setCircleSpinning}
               circleGapMode={circleGapMode}
               onCircleGapModeChange={setCircleGapMode}
+              webcamPipMode={webcamPipMode}
+              onWebcamPipModeChange={setWebcamPipMode}
+              webcamOpacity={webcamOpacity}
+              onWebcamOpacityChange={setWebcamOpacity}
+              webcamActive={webcamActive}
             />
           </SidebarSection>
 
@@ -497,6 +559,8 @@ export default function Home() {
                     isRecording={isRecording}
                     circleSpinning={circleSpinning}
                     circleGapMode={circleGapMode}
+                    webcamPipMode={webcamPipMode}
+                    webcamOpacity={webcamOpacity}
                   />
                 )}
                 {videoSrcB && (
@@ -541,6 +605,50 @@ export default function Home() {
               </>
             )}
           </div>
+
+          {/* URL Embed iframe (bottom-right overlay) */}
+          {embedUrl && (
+            <div style={{
+              position: 'absolute',
+              bottom: 80, right: 16,
+              width: '360px', height: '220px',
+              zIndex: 30,
+              borderRadius: '10px',
+              overflow: 'hidden',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+              border: '2px solid #35679A',
+              background: '#000',
+              resize: 'both',
+            }}>
+              {embedUrl.type === 'youtube' && (
+                <iframe
+                  src={embedUrl.url}
+                  width="100%"
+                  height="100%"
+                  frameBorder="0"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  title="YouTube embed"
+                />
+              )}
+              {embedUrl.type === 'instagram' && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', padding: '8px', textAlign: 'center' }}>
+                  <iframe
+                    src={embedUrl.url}
+                    width="100%"
+                    height="100%"
+                    frameBorder="0"
+                    scrolling="no"
+                    title="Instagram embed"
+                    sandbox="allow-scripts allow-same-origin allow-popups"
+                  />
+                  <p style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px' }}>
+                    Instagram is view-only. To annotate: ··· → Save Video → upload here.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Playback controls */}
           <PlaybackControls videoRef={videoRef} videoRefB={videoSrcB ? videoRefB : undefined} />

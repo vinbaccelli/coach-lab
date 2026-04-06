@@ -7,8 +7,11 @@ import type { Canvas as FabricCanvas, Object as FabricObject } from 'fabric';
 export type ToolType =
   | 'select'
   | 'pen'
+  | 'line'
   | 'angle'
   | 'circle'
+  | 'rect'
+  | 'triangle'
   | 'arrow'
   | 'arrowAngle'
   | 'bodyCircle'
@@ -16,6 +19,7 @@ export type ToolType =
   | 'skeleton'
   | 'ballShadow'
   | 'swingPath'
+  | 'manualSwing'
   | 'erase';
 
 export interface DrawingOptions {

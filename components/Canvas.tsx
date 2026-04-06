@@ -10,7 +10,7 @@ import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg } from '@/lib/drawingTools';
 import type { CachedPoseFrame } from '@/lib/poseDetection';
 import type { BallPosition } from '@/lib/ballDetection';
-import type { BallTrailMode } from '@/components/ToolPalette';
+import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
 import { detectSwingSegments } from '@/lib/swingDetection';
 import type { RacketTrail } from '@/lib/racketMultiplier';
@@ -41,6 +41,7 @@ const RACKET_TRAIL_MAX_ALPHA = 0.65;
 type Pt = { x: number; y: number };
 
 interface StrokePen     { tool: 'pen';                              pts: Pt[]; color: string; lw: number; dashed?: boolean }
+interface StrokeLine    { tool: 'line';                             p1: Pt; p2: Pt; color: string; lw: number; dashed?: boolean }
 interface StrokeArrow   { tool: 'arrow' | 'arrowAngle';             p1: Pt; p2: Pt; color: string; lw: number; dashed?: boolean }
 interface StrokeEllipse {
   tool: 'circle' | 'bodyCircle';
@@ -51,10 +52,22 @@ interface StrokeEllipse {
   gapStart?: number;  // angle in radians
   gapEnd?: number;    // angle in radians
 }
-interface StrokeSwing   { tool: 'swingPath';                        pts: Pt[]; color: string; lw: number; dashed?: boolean }
+interface StrokeRect {
+  tool: 'rect';
+  cx: number; cy: number; rx: number; ry: number;
+  color: string; lw: number; dashed?: boolean;
+  spinning?: boolean;
+}
+interface StrokeTriangle {
+  tool: 'triangle';
+  cx: number; cy: number; rx: number; ry: number;
+  color: string; lw: number; dashed?: boolean;
+  spinning?: boolean;
+}
+interface StrokeSwing   { tool: 'swingPath' | 'manualSwing';        pts: Pt[]; color: string; lw: number; dashed?: boolean }
 interface StrokeText    { tool: 'text';                             pos: Pt; text: string; color: string; fontSize: number }
 
-type Stroke = StrokePen | StrokeArrow | StrokeEllipse | StrokeSwing | StrokeText;
+type Stroke = StrokePen | StrokeLine | StrokeArrow | StrokeEllipse | StrokeRect | StrokeTriangle | StrokeSwing | StrokeText;
 
 interface AngleMeas { v: Pt; p1: Pt; p2: Pt; deg: number }
 interface LiveAngle { phase: 1 | 2; v: Pt; p1: Pt; cursor: Pt }
@@ -93,6 +106,8 @@ export interface CanvasProps {
   isRecording?: boolean;
   circleSpinning?: boolean;
   circleGapMode?: boolean;
+  webcamPipMode?: WebcamPipMode;
+  webcamOpacity?: number;
 }
 
 // ── Module-level pose render cache ─────────────────────────────────────────
@@ -328,16 +343,13 @@ function drawCircleStroke(
   const isCircle = s.rx === s.ry;
 
   if (isCircle && (s.gapStart !== undefined || s.spinning)) {
-    // Compute rotation offset from spinSpeed (deg/sec) or fallback to fixed rate
     let offset = 0;
     if (s.spinning) {
       const degPerFrame = (s.spinSpeed ?? 100) / 60;
       offset = (animFrame * degPerFrame * Math.PI / 180) % (Math.PI * 2);
     }
-
-    let startAngle = (s.gapEnd ?? 0) + offset;
-    let endAngle = (s.gapStart ?? Math.PI * 2) + offset;
-
+    const startAngle = (s.gapEnd ?? 0) + offset;
+    const endAngle = (s.gapStart ?? Math.PI * 2) + offset;
     ctx.beginPath();
     ctx.arc(s.cx, s.cy, Math.max(1, s.rx), startAngle, endAngle);
     ctx.stroke();
@@ -347,6 +359,49 @@ function drawCircleStroke(
     ctx.stroke();
   }
 
+  ctx.restore();
+}
+
+function drawRectStroke(
+  ctx: CanvasRenderingContext2D,
+  s: StrokeRect,
+  animFrame: number,
+): void {
+  ctx.save();
+  ctx.strokeStyle = s.color;
+  ctx.lineWidth = s.lw;
+  if (s.dashed) ctx.setLineDash([8, 6]);
+
+  if (s.spinning) {
+    const offset = animFrame * 0.025;
+    ctx.translate(s.cx, s.cy);
+    ctx.rotate(offset);
+    ctx.strokeRect(-s.rx, -s.ry, s.rx * 2, s.ry * 2);
+  } else {
+    ctx.strokeRect(s.cx - s.rx, s.cy - s.ry, s.rx * 2, s.ry * 2);
+  }
+  ctx.restore();
+}
+
+function drawTriangleStroke(
+  ctx: CanvasRenderingContext2D,
+  s: StrokeTriangle,
+  animFrame: number,
+): void {
+  ctx.save();
+  ctx.strokeStyle = s.color;
+  ctx.lineWidth = s.lw;
+  if (s.dashed) ctx.setLineDash([8, 6]);
+
+  const offset = s.spinning ? animFrame * 0.025 : 0;
+  ctx.translate(s.cx, s.cy);
+  ctx.rotate(offset);
+  ctx.beginPath();
+  ctx.moveTo(0, -s.ry);
+  ctx.lineTo( s.rx,  s.ry);
+  ctx.lineTo(-s.rx,  s.ry);
+  ctx.closePath();
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -373,7 +428,17 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
       ctx.stroke();
     }
 
-  } else if (s.tool === 'swingPath') {
+  } else if (s.tool === 'line') {
+    const { p1, p2, color, lw, dashed } = s;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lw;
+    if (dashed) ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+
+  } else if (s.tool === 'swingPath' || s.tool === 'manualSwing') {
     drawSmoothPath(ctx, s.pts, s.color, s.lw, 1, s.dashed ?? false);
     ctx.restore();
     return;
@@ -400,6 +465,16 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
   } else if (s.tool === 'circle' || s.tool === 'bodyCircle') {
     ctx.restore();
     drawCircleStroke(ctx, s as StrokeEllipse, animFrame);
+    return;
+
+  } else if (s.tool === 'rect') {
+    ctx.restore();
+    drawRectStroke(ctx, s as StrokeRect, animFrame);
+    return;
+
+  } else if (s.tool === 'triangle') {
+    ctx.restore();
+    drawTriangleStroke(ctx, s as StrokeTriangle, animFrame);
     return;
 
   } else if (s.tool === 'text') {
@@ -471,45 +546,91 @@ function drawBallTrailOnCanvas(
 ): void {
   if (track.length === 0) return;
   const SHORT_TAIL = 18;
-  const visible = mode === 'short-tail'
-    ? track.filter(p => Math.abs(p.frameIndex - currentFrameIdx) <= SHORT_TAIL)
-    : track;
-  if (visible.length === 0) return;
 
   ctx.save();
   ctx.lineCap = 'round';
 
-  if (visible.length >= 2) {
-    ctx.beginPath();
-    ctx.moveTo(dx + visible[0].nx * dw, dy + visible[0].ny * dh);
-    for (let i = 1; i < visible.length; i++) {
-      ctx.lineTo(dx + visible[i].nx * dw, dy + visible[i].ny * dh);
+  if (mode === 'comet') {
+    const visible = track.filter(p => Math.abs(p.frameIndex - currentFrameIdx) <= SHORT_TAIL);
+    if (visible.length >= 2) {
+      for (let i = 1; i < visible.length; i++) {
+        const alpha = (i / visible.length) * 0.7;
+        ctx.strokeStyle = `rgba(204,255,0,${alpha})`;
+        ctx.lineWidth = Math.max(2, 6 * (i / visible.length));
+        ctx.beginPath();
+        ctx.moveTo(dx + visible[i-1].nx * dw, dy + visible[i-1].ny * dh);
+        ctx.lineTo(dx + visible[i].nx * dw, dy + visible[i].ny * dh);
+        ctx.stroke();
+      }
     }
-    ctx.strokeStyle = 'rgba(204,255,0,0.45)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  }
-
-  for (const p of visible) {
-    const dist = Math.abs(p.frameIndex - currentFrameIdx);
-    const alpha = mode === 'short-tail' ? Math.max(0.2, 1 - dist / SHORT_TAIL) : 0.7;
-    const r = mode === 'short-tail' ? Math.max(3, 8 * (1 - dist / SHORT_TAIL)) : 5;
-    ctx.shadowColor = '#CCFF00';
-    ctx.shadowBlur = 8 * alpha;
-    ctx.fillStyle = `rgba(204,255,0,${alpha})`;
-    ctx.beginPath();
-    ctx.arc(dx + p.nx * dw, dy + p.ny * dh, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  const cur = track.find(p => Math.abs(p.frameIndex - currentFrameIdx) <= 1);
-  if (cur) {
-    ctx.shadowColor = '#CCFF00';
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = '#CCFF00';
-    ctx.beginPath();
-    ctx.arc(dx + cur.nx * dw, dy + cur.ny * dh, 10, 0, Math.PI * 2);
-    ctx.fill();
+    const cur = track.find(p => Math.abs(p.frameIndex - currentFrameIdx) <= 1);
+    if (cur) {
+      ctx.shadowColor = '#CCFF00';
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = '#CCFF00';
+      ctx.beginPath();
+      ctx.arc(dx + cur.nx * dw, dy + cur.ny * dh, 10, 0, Math.PI * 2);
+      ctx.fill();
+      // highlight dot
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(dx + cur.nx * dw - 3, dy + cur.ny * dh - 3, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (mode === 'arc') {
+    // past positions: solid line
+    const past = track.filter(p => p.frameIndex <= currentFrameIdx);
+    const future = track.filter(p => p.frameIndex > currentFrameIdx);
+    if (past.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(dx + past[0].nx * dw, dy + past[0].ny * dh);
+      for (let i = 1; i < past.length; i++)
+        ctx.lineTo(dx + past[i].nx * dw, dy + past[i].ny * dh);
+      ctx.strokeStyle = 'rgba(204,255,0,0.9)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+      ctx.stroke();
+    }
+    if (future.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(dx + future[0].nx * dw, dy + future[0].ny * dh);
+      for (let i = 1; i < future.length; i++)
+        ctx.lineTo(dx + future[i].nx * dw, dy + future[i].ny * dh);
+      ctx.strokeStyle = 'rgba(204,255,0,0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const p of track) {
+      ctx.fillStyle = 'rgba(204,255,0,0.6)';
+      ctx.beginPath();
+      ctx.arc(dx + p.nx * dw, dy + p.ny * dh, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const cur = track.find(p => Math.abs(p.frameIndex - currentFrameIdx) <= 1);
+    if (cur) {
+      ctx.shadowColor = '#CCFF00'; ctx.shadowBlur = 16;
+      ctx.fillStyle = '#CCFF00';
+      ctx.beginPath();
+      ctx.arc(dx + cur.nx * dw, dy + cur.ny * dh, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  } else if (mode === 'strobe') {
+    // Ghost balls every Nth position
+    const step = Math.max(1, Math.floor(track.length / 8));
+    for (let i = 0; i < track.length; i += step) {
+      const p = track[i];
+      const alpha = 0.55;
+      ctx.shadowColor = '#CCFF00'; ctx.shadowBlur = 8;
+      ctx.fillStyle = `rgba(204,255,0,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(dx + p.nx * dw, dy + p.ny * dh, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
   }
 
   ctx.restore();
@@ -525,11 +646,6 @@ function drawRealtimeBallTrail(
   vW: number, vH: number,
 ): void {
   if (track.length === 0) return;
-  const TAIL_SECONDS = 0.6;
-  const visible = mode === 'short-tail'
-    ? track.filter(p => currentTime - p.timeSeconds <= TAIL_SECONDS && p.timeSeconds <= currentTime + 0.1)
-    : track;
-  if (visible.length === 0) return;
 
   const toCanvasX = (x: number) => dx + (x / vW) * dw;
   const toCanvasY = (y: number) => dy + (y / vH) * dh;
@@ -537,37 +653,85 @@ function drawRealtimeBallTrail(
   ctx.save();
   ctx.lineCap = 'round';
 
-  if (visible.length >= 2) {
-    ctx.beginPath();
-    ctx.moveTo(toCanvasX(visible[0].x), toCanvasY(visible[0].y));
-    for (let i = 1; i < visible.length; i++) {
-      ctx.lineTo(toCanvasX(visible[i].x), toCanvasY(visible[i].y));
+  if (mode === 'comet') {
+    const TAIL = 0.8;
+    const visible = track.filter(p => currentTime - p.timeSeconds <= TAIL && p.timeSeconds <= currentTime + 0.05);
+    if (visible.length >= 2) {
+      for (let i = 1; i < visible.length; i++) {
+        const t = i / visible.length;
+        ctx.strokeStyle = `rgba(204,255,0,${t * 0.85})`;
+        ctx.lineWidth = Math.max(2, 7 * t);
+        ctx.beginPath();
+        ctx.moveTo(toCanvasX(visible[i-1].x), toCanvasY(visible[i-1].y));
+        ctx.lineTo(toCanvasX(visible[i].x), toCanvasY(visible[i].y));
+        ctx.stroke();
+      }
     }
-    ctx.strokeStyle = 'rgba(204,255,0,0.45)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  }
-
-  for (const p of visible) {
-    const age = currentTime - p.timeSeconds;
-    const alpha = mode === 'short-tail' ? Math.max(0.2, 1 - age / TAIL_SECONDS) : 0.7;
-    const r = mode === 'short-tail' ? Math.max(3, 8 * (1 - age / TAIL_SECONDS)) : 5;
-    ctx.shadowColor = '#CCFF00';
-    ctx.shadowBlur = 8 * alpha;
-    ctx.fillStyle = `rgba(204,255,0,${alpha})`;
-    ctx.beginPath();
-    ctx.arc(toCanvasX(p.x), toCanvasY(p.y), r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  const cur = visible[visible.length - 1];
-  if (cur && currentTime - cur.timeSeconds < 0.1) {
-    ctx.shadowColor = '#CCFF00';
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = '#CCFF00';
-    ctx.beginPath();
-    ctx.arc(toCanvasX(cur.x), toCanvasY(cur.y), 10, 0, Math.PI * 2);
-    ctx.fill();
+    const cur = visible[visible.length - 1];
+    if (cur && currentTime - cur.timeSeconds < 0.08) {
+      ctx.shadowColor = '#CCFF00'; ctx.shadowBlur = 18;
+      ctx.fillStyle = '#CCFF00';
+      ctx.beginPath();
+      ctx.arc(toCanvasX(cur.x), toCanvasY(cur.y), 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(toCanvasX(cur.x) - 3, toCanvasY(cur.y) - 3, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (mode === 'arc') {
+    const past   = track.filter(p => p.timeSeconds <= currentTime);
+    const future = track.filter(p => p.timeSeconds >  currentTime);
+    if (past.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(toCanvasX(past[0].x), toCanvasY(past[0].y));
+      for (let i = 1; i < past.length; i++)
+        ctx.lineTo(toCanvasX(past[i].x), toCanvasY(past[i].y));
+      ctx.strokeStyle = 'rgba(204,255,0,0.9)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+      ctx.stroke();
+    }
+    if (future.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(toCanvasX(future[0].x), toCanvasY(future[0].y));
+      for (let i = 1; i < future.length; i++)
+        ctx.lineTo(toCanvasX(future[i].x), toCanvasY(future[i].y));
+      ctx.strokeStyle = 'rgba(204,255,0,0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const p of track) {
+      ctx.fillStyle = 'rgba(204,255,0,0.6)';
+      ctx.beginPath();
+      ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const cur = track.reduce((a, b) =>
+      Math.abs(a.timeSeconds - currentTime) < Math.abs(b.timeSeconds - currentTime) ? a : b,
+      track[0]);
+    if (cur) {
+      ctx.shadowColor = '#CCFF00'; ctx.shadowBlur = 16;
+      ctx.fillStyle = '#CCFF00';
+      ctx.beginPath();
+      ctx.arc(toCanvasX(cur.x), toCanvasY(cur.y), 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  } else if (mode === 'strobe') {
+    const step = Math.max(1, Math.floor(track.length / 8));
+    for (let i = 0; i < track.length; i += step) {
+      const p = track[i];
+      ctx.shadowColor = '#CCFF00'; ctx.shadowBlur = 8;
+      ctx.fillStyle = 'rgba(204,255,0,0.55)';
+      ctx.beginPath();
+      ctx.arc(toCanvasX(p.x), toCanvasY(p.y), 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
   }
 
   ctx.restore();
@@ -623,13 +787,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       drawingOptions,
       containerWidth,
       containerHeight,
-      ballTrailMode = 'short-tail',
+      ballTrailMode = 'comet',
       skeletonEnabled = false,
       ballTrailEnabled = false,
       onProcessingStatus,
       isRecording = false,
       circleSpinning = false,
       circleGapMode = false,
+      webcamPipMode = 'rectangle',
+      webcamOpacity = 1,
     },
     ref,
   ) {
@@ -690,6 +856,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const isRecordingRef      = useRef(isRecording);
     const circleSpinningRef   = useRef(circleSpinning);
     const circleGapModeRef    = useRef(circleGapMode);
+    const webcamPipModeRef    = useRef(webcamPipMode);
+    const webcamOpacityRef    = useRef(webcamOpacity);
+
+    // Manual swing state
+    const manualSwingPtsRef     = useRef<Pt[]>([]);
+    const manualSwingActiveRef  = useRef(false);
+    const lastClickTimeRef      = useRef(0);
+    const lastClickPosRef       = useRef<Pt | null>(null);
 
     useEffect(() => { drawingOptsRef.current      = drawingOptions; },  [drawingOptions]);
     useEffect(() => { activeToolRef.current        = activeTool; },      [activeTool]);
@@ -699,6 +873,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { isRecordingRef.current       = isRecording; },     [isRecording]);
     useEffect(() => { circleSpinningRef.current    = circleSpinning; },  [circleSpinning]);
     useEffect(() => { circleGapModeRef.current     = circleGapMode; },   [circleGapMode]);
+    useEffect(() => { webcamPipModeRef.current     = webcamPipMode; },   [webcamPipMode]);
+    useEffect(() => { webcamOpacityRef.current     = webcamOpacity; },   [webcamOpacity]);
 
     // ── History ────────────────────────────────────────────────────────────
 
@@ -719,6 +895,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         activeStrokeRef.current = null;
         swingPtsRef.current = [];
         swingDrawingRef.current = false;
+        manualSwingPtsRef.current = [];
+        manualSwingActiveRef.current = false;
         liveAngleRef.current = null;
         anglePhaseRef.current = 0;
         angleVRef.current = null;
@@ -1043,26 +1221,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         // Webcam PiP — bottom-right corner when recording
         const webcam = webcamVideoRef?.current;
-        if (isRecordingRef.current && webcam && webcam.readyState >= 2) {
+        if (isRecordingRef.current && webcam && webcam.readyState >= 2 && webcamPipModeRef.current !== 'hidden') {
           const camW = Math.round(W * 0.22);
           const camH = Math.round(camW * (9 / 16));
           const margin = 16;
           const cx2 = W - camW - margin;
           const cy2 = H - camH - margin;
           ctx.save();
-          ctx.beginPath();
-          if (ctx.roundRect) ctx.roundRect(cx2, cy2, camW, camH, 10);
-          else ctx.rect(cx2, cy2, camW, camH);
-          ctx.clip();
-          ctx.drawImage(webcam, cx2, cy2, camW, camH);
-          ctx.restore();
-          ctx.save();
-          ctx.strokeStyle = '#FF3B30';
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          if (ctx.roundRect) ctx.roundRect(cx2, cy2, camW, camH, 10);
-          else ctx.rect(cx2, cy2, camW, camH);
-          ctx.stroke();
+          ctx.globalAlpha = webcamOpacityRef.current;
+          if (webcamPipModeRef.current === 'circle') {
+            const r = Math.min(camW, camH) / 2;
+            const centerX = cx2 + camW / 2;
+            const centerY = cy2 + camH / 2;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, r, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.drawImage(webcam, cx2, cy2, camW, camH);
+          } else {
+            // rectangle mode
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(cx2, cy2, camW, camH, 10);
+            else ctx.rect(cx2, cy2, camW, camH);
+            ctx.clip();
+            ctx.drawImage(webcam, cx2, cy2, camW, camH);
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = '#35679A';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(cx2, cy2, camW, camH, 10);
+            else ctx.rect(cx2, cy2, camW, camH);
+            ctx.stroke();
+          }
           ctx.restore();
         }
 
@@ -1075,6 +1264,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // Swing path being drawn
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
           const pts = swingPtsRef.current;
+          const opts = drawingOptsRef.current;
+          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false);
+        }
+
+        // Manual swing path being drawn
+        if (manualSwingActiveRef.current && manualSwingPtsRef.current.length > 0) {
+          const pts = manualSwingPtsRef.current;
           const opts = drawingOptsRef.current;
           drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false);
         }
@@ -1142,17 +1338,33 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       swingDrawingRef.current = false;
     }, [pushHistory]);
 
+    const finishManualSwingPath = useCallback(() => {
+      const pts = manualSwingPtsRef.current;
+      if (pts.length > 0) {
+        const opts = drawingOptsRef.current;
+        strokesRef.current = [
+          ...strokesRef.current,
+          { tool: 'manualSwing', pts: [...pts], color: opts.color, lw: opts.lineWidth, dashed: opts.dashed ?? false },
+        ];
+        pushHistory();
+      }
+      manualSwingPtsRef.current = [];
+      manualSwingActiveRef.current = false;
+      lastClickTimeRef.current = 0;
+      lastClickPosRef.current = null;
+    }, [pushHistory]);
+
     // ── Erase near a point ─────────────────────────────────────────────────
 
     const eraseAt = useCallback((pos: Pt) => {
       const T = 22;
       strokesRef.current = strokesRef.current.filter((s) => {
-        if (s.tool === 'pen' || s.tool === 'swingPath')
+        if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing')
           return !s.pts.some(p => Math.hypot(p.x - pos.x, p.y - pos.y) < T);
-        if (s.tool === 'arrow' || s.tool === 'arrowAngle')
+        if (s.tool === 'line' || s.tool === 'arrow' || s.tool === 'arrowAngle')
           return Math.hypot(s.p1.x - pos.x, s.p1.y - pos.y) > T
               && Math.hypot(s.p2.x - pos.x, s.p2.y - pos.y) > T;
-        if (s.tool === 'circle' || s.tool === 'bodyCircle')
+        if (s.tool === 'circle' || s.tool === 'bodyCircle' || s.tool === 'rect' || s.tool === 'triangle')
           return Math.hypot(s.cx - pos.x, s.cy - pos.y) > T;
         if (s.tool === 'text')
           return Math.hypot(s.pos.x - pos.x, s.pos.y - pos.y) > T;
@@ -1172,13 +1384,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
 
-      // Check if clicking near an existing circle/ellipse to start dragging it or setting a gap
-      if (tool === 'circle' || tool === 'bodyCircle') {
+      // Check if clicking near an existing draggable shape
+      if (tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle') {
         const idx = strokesRef.current.findIndex((s) => {
-          if (s.tool !== 'circle' && s.tool !== 'bodyCircle') return false;
+          if (s.tool !== 'circle' && s.tool !== 'bodyCircle' && s.tool !== 'rect' && s.tool !== 'triangle') return false;
           const el = s as StrokeEllipse;
-          // Use proper ellipse point-containment: ((x-cx)²/rx²) + ((y-cy)²/ry²) <= 1
-          // Add CIRCLE_DRAG_THRESHOLD tolerance by scaling the ellipse slightly
           const rx = Math.max(el.rx, 1) + CIRCLE_DRAG_THRESHOLD;
           const ry = Math.max(el.ry, 1) + CIRCLE_DRAG_THRESHOLD;
           const dx2 = pos.x - el.cx;
@@ -1186,18 +1396,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           return (dx2 * dx2) / (rx * rx) + (dy2 * dy2) / (ry * ry) <= 1;
         });
 
-        if (idx >= 0 && circleGapModeRef.current) {
-          // Gap mode: set gap start or gap end angle
+        if (idx >= 0 && circleGapModeRef.current && (tool === 'circle' || tool === 'bodyCircle')) {
           const el = strokesRef.current[idx] as StrokeEllipse;
           const angle = Math.atan2(pos.y - el.cy, pos.x - el.cx);
           const updated = { ...el };
           if (gapCircleIdxRef.current !== idx || el.gapStart === undefined) {
-            // First click on this circle: set gap start
             updated.gapStart = angle;
             updated.gapEnd = undefined;
             gapCircleIdxRef.current = idx;
           } else {
-            // Second click: set gap end
             updated.gapEnd = el.gapStart;
             updated.gapStart = angle;
             gapCircleIdxRef.current = -1;
@@ -1212,7 +1419,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         if (idx >= 0) {
-          const el = strokesRef.current[idx] as StrokeEllipse;
+          const el = strokesRef.current[idx] as { cx: number; cy: number };
           dragCircleIdxRef.current = idx;
           dragCircleOffRef.current = { x: pos.x - el.cx, y: pos.y - el.cy };
           isDraggingRef.current = true;
@@ -1223,6 +1430,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       switch (tool) {
         case 'pen':
           activeStrokeRef.current = { tool: 'pen', pts: [pos], color: opts.color, lw, dashed: opts.dashed ?? false };
+          isDraggingRef.current = true;
+          break;
+
+        case 'line':
+          dragStartRef.current = pos;
+          activeStrokeRef.current = { tool: 'line', p1: pos, p2: pos, color: opts.color, lw, dashed: opts.dashed ?? false };
           isDraggingRef.current = true;
           break;
 
@@ -1238,6 +1451,30 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           dragStartRef.current = pos;
           activeStrokeRef.current = {
             tool: tool as 'circle' | 'bodyCircle',
+            cx: pos.x, cy: pos.y, rx: 0, ry: 0,
+            color: opts.color, lw,
+            dashed: opts.dashed ?? false,
+            spinning: circleSpinningRef.current || undefined,
+          };
+          isDraggingRef.current = true;
+          break;
+
+        case 'rect':
+          dragStartRef.current = pos;
+          activeStrokeRef.current = {
+            tool: 'rect',
+            cx: pos.x, cy: pos.y, rx: 0, ry: 0,
+            color: opts.color, lw,
+            dashed: opts.dashed ?? false,
+            spinning: circleSpinningRef.current || undefined,
+          };
+          isDraggingRef.current = true;
+          break;
+
+        case 'triangle':
+          dragStartRef.current = pos;
+          activeStrokeRef.current = {
+            tool: 'triangle',
             cx: pos.x, cy: pos.y, rx: 0, ry: 0,
             color: opts.color, lw,
             dashed: opts.dashed ?? false,
@@ -1280,6 +1517,28 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (longPressRef.current) clearTimeout(longPressRef.current);
           longPressRef.current = setTimeout(finishSwingPath, 500);
           break;
+
+        case 'manualSwing': {
+          const now = Date.now();
+          const last = lastClickPosRef.current;
+          const timeSinceLast = now - lastClickTimeRef.current;
+          const distSinceLast = last ? Math.hypot(pos.x - last.x, pos.y - last.y) : Infinity;
+          const isDoubleClick = timeSinceLast < 400 || distSinceLast < 8;
+
+          if (isDoubleClick && manualSwingActiveRef.current) {
+            finishManualSwingPath();
+          } else {
+            if (!manualSwingActiveRef.current) {
+              manualSwingActiveRef.current = true;
+              manualSwingPtsRef.current = [pos];
+            } else {
+              manualSwingPtsRef.current = [...manualSwingPtsRef.current, pos];
+            }
+          }
+          lastClickTimeRef.current = now;
+          lastClickPosRef.current = pos;
+          break;
+        }
 
         case 'text': {
           if (typeof window === 'undefined') break;
@@ -1326,7 +1585,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           break;
       }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pushHistory, finishSwingPath, eraseAt, videoRef]);
+    }, [pushHistory, finishSwingPath, finishManualSwingPath, eraseAt, videoRef]);
 
     // ── Pointer move ───────────────────────────────────────────────────────
 
@@ -1334,11 +1593,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const pos  = getPos(e);
       const tool = activeToolRef.current;
 
-      // Circle dragging
+      // Shape dragging
       if (dragCircleIdxRef.current >= 0 && isDraggingRef.current) {
         const idx = dragCircleIdxRef.current;
-        const s = strokesRef.current[idx] as StrokeEllipse;
-        if (s) {
+        const s = strokesRef.current[idx] as { cx: number; cy: number } & Stroke;
+        if (s && 'cx' in s) {
           const off = dragCircleOffRef.current;
           const updated = { ...s, cx: pos.x - off.x, cy: pos.y - off.y };
           strokesRef.current = [
@@ -1368,9 +1627,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       if (active.tool === 'pen') {
         (active as StrokePen).pts = [...(active as StrokePen).pts, pos];
-      } else if (active.tool === 'arrow' || active.tool === 'arrowAngle') {
-        (active as StrokeArrow).p2 = pos;
-      } else if (active.tool === 'circle' || active.tool === 'bodyCircle') {
+      } else if (active.tool === 'line' || active.tool === 'arrow' || active.tool === 'arrowAngle') {
+        (active as StrokeLine).p2 = pos;
+      } else if (active.tool === 'circle' || active.tool === 'bodyCircle' || active.tool === 'rect' || active.tool === 'triangle') {
         const start = dragStartRef.current;
         if (!start) return;
         const el = active as StrokeEllipse;
@@ -1396,6 +1655,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       activeStrokeRef.current = null;
       if (!active) return;
       if (active.tool === 'pen' && (active as StrokePen).pts.length < 2) return;
+      // Don't commit zero-size shapes
+      if ((active.tool === 'rect' || active.tool === 'triangle' || active.tool === 'circle' || active.tool === 'bodyCircle') && (active as StrokeEllipse).rx < 2) return;
       strokesRef.current = [...strokesRef.current, active];
       pushHistory();
     }, [pushHistory]);
@@ -1405,11 +1666,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (activeToolRef.current === 'swingPath' && swingDrawingRef.current) {
         finishSwingPath();
       }
-    }, [finishSwingPath]);
+      if (activeToolRef.current === 'manualSwing' && manualSwingActiveRef.current) {
+        finishManualSwingPath();
+      }
+    }, [finishSwingPath, finishManualSwingPath]);
 
     const cursorFor: Partial<Record<ToolType, string>> = {
-      pen: 'crosshair', erase: 'cell', text: 'text',
-      angle: 'crosshair', swingPath: 'crosshair', ballShadow: 'crosshair',
+      pen: 'crosshair', erase: 'cell', text: 'text', line: 'crosshair',
+      angle: 'crosshair', swingPath: 'crosshair', manualSwing: 'crosshair', ballShadow: 'crosshair',
     };
 
     return (
