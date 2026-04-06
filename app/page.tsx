@@ -15,6 +15,7 @@ import PlaybackControls from '@/components/PlaybackControls';
 import { SidebarSection } from '@/components/SidebarSection';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
+import { useStroMotion } from '@/hooks/useStroMotion';
 
 // Dynamic import prevents TensorFlow / Fabric from loading server-side
 const CanvasOverlay = dynamic(() => import('@/components/Canvas'), { ssr: false });
@@ -63,9 +64,26 @@ export default function Home() {
   const [urlInput, setUrlInput]             = useState('');
   const [embedUrl, setEmbedUrl]             = useState<{ type: 'youtube' | 'instagram' | 'mp4'; url: string } | null>(null);
 
+  // StroMotion state
+  const [stroMotionEnabled, setStroMotionEnabled] = useState(false);
+  const [stroMotionStart, setStroMotionStart]     = useState(0);
+  const [stroMotionEnd, setStroMotionEnd]         = useState(3);
+  const [stroMotionCount, setStroMotionCount]     = useState(6);
+  const [stroMotionOpacity, setStroMotionOpacity] = useState(0.3);
+
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
   const ballTrailEnabled = activeTool === 'ballShadow';
+
+  // StroMotion hook
+  const stroMotionConfig = {
+    enabled: stroMotionEnabled,
+    startFrame: Math.round(stroMotionStart * 30),
+    endFrame: Math.round(stroMotionEnd * 30),
+    ghostCount: stroMotionCount,
+    opacity: stroMotionOpacity,
+  };
+  const { ghostFrames, isProcessing: stroMotionProcessing, progress: stroMotionProgress } = useStroMotion(videoRef, stroMotionConfig);
 
   // ── Container size measurement ────────────────────────────────────────────
   const updateSize = useCallback(() => {
@@ -486,6 +504,57 @@ export default function Home() {
               onWebcamOpacityChange={setWebcamOpacity}
               webcamActive={webcamActive}
             />
+          </SidebarSection>
+
+          {/* StroMotion section */}
+          <SidebarSection title="StroMotion">
+            <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <p style={{ fontSize: '9px', color: '#6b7280', lineHeight: 1.4 }}>
+                Capture ghost frames from a time range for stroboscopic effect.
+              </p>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <label style={{ fontSize: '10px', color: '#374151', minWidth: '40px' }}>Start:</label>
+                <input type="number" step="0.1" min="0" value={stroMotionStart}
+                  onChange={e => setStroMotionStart(parseFloat(e.target.value) || 0)}
+                  style={{ width: '60px', padding: '2px 4px', fontSize: '10px', border: '1px solid #E8E8ED', borderRadius: '4px' }} />
+                <label style={{ fontSize: '10px', color: '#374151', minWidth: '25px' }}>End:</label>
+                <input type="number" step="0.1" min="0" value={stroMotionEnd}
+                  onChange={e => setStroMotionEnd(parseFloat(e.target.value) || 0)}
+                  style={{ width: '60px', padding: '2px 4px', fontSize: '10px', border: '1px solid #E8E8ED', borderRadius: '4px' }} />
+              </div>
+              <div>
+                <p style={{ fontSize: '10px', color: '#374151', marginBottom: '2px' }}>Ghosts: {stroMotionCount}</p>
+                <input type="range" min="3" max="12" step="1" value={stroMotionCount}
+                  onChange={e => setStroMotionCount(Number(e.target.value))} style={{ width: '100%' }} />
+              </div>
+              <div>
+                <p style={{ fontSize: '10px', color: '#374151', marginBottom: '2px' }}>Opacity: {Math.round(stroMotionOpacity * 100)}%</p>
+                <input type="range" min="15" max="50" step="5" value={Math.round(stroMotionOpacity * 100)}
+                  onChange={e => setStroMotionOpacity(Number(e.target.value) / 100)} style={{ width: '100%' }} />
+              </div>
+              <button
+                onClick={() => setStroMotionEnabled(true)}
+                disabled={stroMotionProcessing}
+                style={{
+                  padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                  background: stroMotionProcessing ? '#E5E7EB' : '#35679A', color: stroMotionProcessing ? '#9ca3af' : '#fff',
+                  border: 'none', cursor: stroMotionProcessing ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {stroMotionProcessing ? `Capturing… ${stroMotionProgress}%` : '▶ Capture Ghosts'}
+              </button>
+              {ghostFrames.length > 0 && (
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <span style={{ fontSize: '10px', color: '#16A34A', fontWeight: 600 }}>✓ {ghostFrames.length} ghosts captured</span>
+                  <button
+                    onClick={() => setStroMotionEnabled(false)}
+                    style={{ marginLeft: 'auto', fontSize: '10px', color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer' }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
           </SidebarSection>
 
           {/* Resize handle */}
