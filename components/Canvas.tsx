@@ -37,8 +37,6 @@ const RACKET_TRAIL_CIRCLE_RADIUS = 8;
 const RACKET_TRAIL_MAX_ALPHA = 0.65;
 /** Radians per animFrame for spinning shapes */
 const SHAPE_SPIN_SPEED = 0.025;
-/** Minimum alpha applied to any StroMotion ghost frame */
-const MIN_GHOST_OPACITY = 0.02;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -112,8 +110,6 @@ export interface CanvasProps {
   circleGapMode?: boolean;
   webcamPipMode?: WebcamPipMode;
   webcamOpacity?: number;
-  stroMotionGhosts?: ImageBitmap[];
-  stroMotionOpacity?: number;
 }
 
 // ── Module-level pose render cache ─────────────────────────────────────────
@@ -802,8 +798,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       circleGapMode = false,
       webcamPipMode = 'rectangle',
       webcamOpacity = 1,
-      stroMotionGhosts,
-      stroMotionOpacity = 0.3,
     },
     ref,
   ) {
@@ -866,8 +860,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const circleGapModeRef    = useRef(circleGapMode);
     const webcamPipModeRef    = useRef(webcamPipMode);
     const webcamOpacityRef    = useRef(webcamOpacity);
-    const stroMotionGhostsRef = useRef<ImageBitmap[]>(stroMotionGhosts ?? []);
-    const stroMotionOpacityRef = useRef(stroMotionOpacity);
 
     // Manual swing state
     const manualSwingPtsRef     = useRef<Pt[]>([]);
@@ -885,8 +877,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { circleGapModeRef.current     = circleGapMode; },   [circleGapMode]);
     useEffect(() => { webcamPipModeRef.current     = webcamPipMode; },   [webcamPipMode]);
     useEffect(() => { webcamOpacityRef.current     = webcamOpacity; },   [webcamOpacity]);
-    useEffect(() => { stroMotionGhostsRef.current  = stroMotionGhosts ?? []; }, [stroMotionGhosts]);
-    useEffect(() => { stroMotionOpacityRef.current = stroMotionOpacity; },      [stroMotionOpacity]);
 
     // ── History ────────────────────────────────────────────────────────────
 
@@ -1184,19 +1174,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         } else {
           ctx.fillStyle = '#111';
           ctx.fillRect(0, 0, W, H);
-        }
-
-        // ── StroMotion ghost frames ───────────────────────────────────────
-        const stroGhosts = stroMotionGhostsRef.current;
-        if (stroGhosts.length > 0 && dw > 0 && dh > 0) {
-          ctx.save();
-          const baseOpacity = stroMotionOpacityRef.current;
-          for (let i = 0; i < stroGhosts.length; i++) {
-            const alpha = ((i + 1) / stroGhosts.length) * baseOpacity;
-            ctx.globalAlpha = Math.max(MIN_GHOST_OPACITY, alpha);
-            ctx.drawImage(stroGhosts[i], dx, dy, dw, dh);
-          }
-          ctx.restore();
         }
 
         // ── Skeleton overlay ─────────────────────────────────────────────
