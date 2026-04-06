@@ -20,6 +20,8 @@ const ASPECT_CONFIGS: Record<AspectRatioMode, { label: string; w: number; h: num
   instagram: { label: 'Reels 9:16 (1080×1920)',  w: 1080, h: 1920 },
 };
 
+const FFMPEG_CORE_VERSION = '0.12.6';
+
 export default function ExportModal({
   isOpen,
   onClose,
@@ -123,7 +125,7 @@ export default function ExportModal({
         const { toBlobURL, fetchFile } = await import('@ffmpeg/util');
         const ffmpeg = new FFmpeg();
         ffmpeg.on('log', ({ message }) => setMp4Progress(message.slice(0, 80)));
-        const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+        const baseURL = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
         await ffmpeg.load({
           coreURL:   await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
           wasmURL:   await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),

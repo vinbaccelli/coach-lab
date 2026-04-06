@@ -35,6 +35,8 @@ const CIRCLE_DRAG_THRESHOLD = 20;
 const RACKET_TRAIL_CIRCLE_RADIUS = 8;
 /** Maximum alpha for the most-recent racket trail position */
 const RACKET_TRAIL_MAX_ALPHA = 0.65;
+/** Radians per animFrame for spinning shapes */
+const SHAPE_SPIN_SPEED = 0.025;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -373,7 +375,7 @@ function drawRectStroke(
   if (s.dashed) ctx.setLineDash([8, 6]);
 
   if (s.spinning) {
-    const offset = animFrame * 0.025;
+    const offset = animFrame * SHAPE_SPIN_SPEED;
     ctx.translate(s.cx, s.cy);
     ctx.rotate(offset);
     ctx.strokeRect(-s.rx, -s.ry, s.rx * 2, s.ry * 2);
@@ -393,7 +395,7 @@ function drawTriangleStroke(
   ctx.lineWidth = s.lw;
   if (s.dashed) ctx.setLineDash([8, 6]);
 
-  const offset = s.spinning ? animFrame * 0.025 : 0;
+  const offset = s.spinning ? animFrame * SHAPE_SPIN_SPEED : 0;
   ctx.translate(s.cx, s.cy);
   ctx.rotate(offset);
   ctx.beginPath();
@@ -1655,8 +1657,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       activeStrokeRef.current = null;
       if (!active) return;
       if (active.tool === 'pen' && (active as StrokePen).pts.length < 2) return;
-      // Don't commit zero-size shapes
-      if ((active.tool === 'rect' || active.tool === 'triangle' || active.tool === 'circle' || active.tool === 'bodyCircle') && (active as StrokeEllipse).rx < 2) return;
+      // Don't commit zero-size shapes — check rx property via type narrowing
+      if (active.tool === 'circle' || active.tool === 'bodyCircle') {
+        if ((active as StrokeEllipse).rx < 2) return;
+      } else if (active.tool === 'rect') {
+        if ((active as StrokeRect).rx < 2) return;
+      } else if (active.tool === 'triangle') {
+        if ((active as StrokeTriangle).rx < 2) return;
+      }
       strokesRef.current = [...strokesRef.current, active];
       pushHistory();
     }, [pushHistory]);

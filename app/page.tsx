@@ -316,19 +316,28 @@ export default function Home() {
       setEmbedUrl({ type: 'youtube', url: `https://www.youtube.com/embed/${ytMatch[1]}` });
       return;
     }
-    if (raw.includes('instagram.com')) {
-      const igMatch = raw.match(/instagram\.com\/(p|reel)\/([A-Za-z0-9_-]+)/);
-      if (igMatch) {
-        setEmbedUrl({ type: 'instagram', url: `https://www.instagram.com/${igMatch[1]}/${igMatch[2]}/embed` });
-        return;
+    // Use URL parsing to ensure the hostname is exactly instagram.com
+    try {
+      const parsed = new URL(raw);
+      const host = parsed.hostname.replace(/^www\./, '');
+      if (host === 'instagram.com') {
+        const igMatch = parsed.pathname.match(/^\/(p|reel)\/([A-Za-z0-9_-]+)/);
+        if (igMatch) {
+          setEmbedUrl({ type: 'instagram', url: `https://www.instagram.com/${igMatch[1]}/${igMatch[2]}/embed` });
+          return;
+        }
       }
+    } catch {
+      // Not a valid URL — continue to other checks below
     }
-    if (raw.match(/\.(mp4|webm|mov)(\?.*)?$/i) || raw.startsWith('blob:')) {
+    // Only allow safe video URLs (http/https or blob)
+    if ((raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('blob:'))
+        && raw.match(/\.(mp4|webm|mov)(\?.*)?$/i)) {
       setVideoSrc(raw);
       if (videoRef.current) { videoRef.current.src = raw; videoRef.current.load(); }
       return;
     }
-    alert('Supported: YouTube URL, or direct .mp4/.webm link.\nInstagram embeds are view-only (sandboxed).');
+    alert('Supported: YouTube URL, direct .mp4/.webm link, or Instagram (view-only embed).');
   }, [urlInput, videoRef]);
 
   return (
