@@ -56,6 +56,8 @@ export default function Home() {
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBOffset, setVideoBOffset]   = useState(0);
   const [videoBDuration, setVideoBDuration] = useState(0);
+  const [circleSpinning, setCircleSpinning] = useState(false);
+  const [circleGapMode, setCircleGapMode]   = useState(false);
 
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
@@ -248,6 +250,40 @@ export default function Home() {
     canvasRef.current?.drawSwingFromSegment(swings[idx], '#FF8C00');
   }, []);
 
+  // ── Racket Multiplier ─────────────────────────────────────────────────────
+  const handleRacketMultiplier = useCallback(async () => {
+    const swings = canvasRef.current?.getDetectedSwings() ?? [];
+    if (swings.length === 0) {
+      alert('No swings detected yet. Enable Skeleton tool and play the video first.');
+      return;
+    }
+    const items = swings.map((s, i) =>
+      `${i + 1}. ${s.startTime.toFixed(2)}s – ${s.endTime.toFixed(2)}s`
+    ).join('\n');
+    const choice = window.prompt(`Detected ${swings.length} swing(s):\n${items}\n\nEnter swing number to show racket trail (1–${swings.length}), or 0 to clear:`);
+    if (!choice) return;
+    const idx = parseInt(choice, 10);
+    if (idx === 0) {
+      canvasRef.current?.setRacketTrail(null);
+      return;
+    }
+    const swingIdx = idx - 1;
+    if (isNaN(swingIdx) || swingIdx < 0 || swingIdx >= swings.length) return;
+    const frames = canvasRef.current?.getSkeletonFrames() ?? [];
+    if (frames.length === 0) {
+      alert('No skeleton frames available. Play the video with Skeleton tool enabled first.');
+      return;
+    }
+    const { extractRacketTrail } = await import('@/lib/racketMultiplier');
+    const swing = swings[swingIdx];
+    const trail = extractRacketTrail(frames, swing.startTime, swing.endTime);
+    if (trail.positions.length === 0) {
+      alert('No wrist positions found in this swing segment.');
+      return;
+    }
+    canvasRef.current?.setRacketTrail(trail);
+  }, []);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#F8F8F8', color: '#1D1D1F' }}>
 
@@ -382,6 +418,11 @@ export default function Home() {
               ballTrailMode={ballTrailMode}
               onBallTrailModeChange={setBallTrailMode}
               onAutoSwing={handleAutoSwing}
+              onRacketMultiplier={handleRacketMultiplier}
+              circleSpinning={circleSpinning}
+              onCircleSpinningChange={setCircleSpinning}
+              circleGapMode={circleGapMode}
+              onCircleGapModeChange={setCircleGapMode}
             />
           </SidebarSection>
 
@@ -454,6 +495,8 @@ export default function Home() {
                     ballTrailEnabled={ballTrailEnabled}
                     onProcessingStatus={setProcessingStatus}
                     isRecording={isRecording}
+                    circleSpinning={circleSpinning}
+                    circleGapMode={circleGapMode}
                   />
                 )}
                 {videoSrcB && (

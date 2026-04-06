@@ -35,6 +35,11 @@ interface ToolPaletteProps {
   ballTrailMode: BallTrailMode;
   onBallTrailModeChange: (mode: BallTrailMode) => void;
   onAutoSwing?: () => void;
+  onRacketMultiplier?: () => void;
+  circleSpinning?: boolean;
+  onCircleSpinningChange?: (spinning: boolean) => void;
+  circleGapMode?: boolean;
+  onCircleGapModeChange?: (mode: boolean) => void;
 }
 
 const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
@@ -77,6 +82,11 @@ export default function ToolPalette({
   ballTrailMode,
   onBallTrailModeChange,
   onAutoSwing,
+  onRacketMultiplier,
+  circleSpinning,
+  onCircleSpinningChange,
+  circleGapMode,
+  onCircleGapModeChange,
 }: ToolPaletteProps) {
   return (
     <div className="flex flex-col gap-1 h-full select-none">
@@ -225,12 +235,22 @@ export default function ToolPalette({
             </p>
             <button
               onClick={onResetSkeleton}
-              className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
+              className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600 mb-1"
               title="Clear skeleton joints and re-process"
             >
               <RefreshCw size={13} />
               <span>Reset &amp; Re-analyze</span>
             </button>
+            {onRacketMultiplier && (
+              <button
+                onClick={onRacketMultiplier}
+                className="tool-btn w-full flex-row gap-1 text-purple-600 hover:bg-purple-50 hover:text-purple-700"
+                title="Show racket motion trail for a swing segment"
+              >
+                <Activity size={13} />
+                <span>Racket Multiplier</span>
+              </button>
+            )}
           </div>
         </>
       )}
@@ -324,6 +344,43 @@ export default function ToolPalette({
             <p className="text-[9px] text-amber-500 px-1 leading-tight font-medium">
               Click 3 points. Drag 3rd for live angle preview.
             </p>
+          </div>
+        </>
+      )}
+
+      {(activeTool === 'circle' || activeTool === 'bodyCircle') && (
+        <>
+          <div className="border-t border-gray-100 mx-2" />
+          <div className="px-2 py-2">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
+              Circle Options
+            </p>
+            {onCircleSpinningChange && (
+              <label className="flex items-center gap-2 cursor-pointer px-1 mb-2">
+                <input
+                  type="checkbox"
+                  checked={!!circleSpinning}
+                  onChange={(e) => onCircleSpinningChange(e.target.checked)}
+                  className="accent-blue-500"
+                />
+                <span className="text-[9px] text-gray-600 font-medium">Spinning animation</span>
+              </label>
+            )}
+            {onCircleGapModeChange && (
+              <button
+                onClick={() => onCircleGapModeChange(!circleGapMode)}
+                className={`tool-btn w-full flex-row gap-1 ${circleGapMode ? 'active text-blue-600' : 'text-gray-500'}`}
+                title="Click on circle edge twice to create an arc gap"
+              >
+                <span className="text-[13px]">✂</span>
+                <span>{circleGapMode ? 'Gap Mode ON' : 'Add Gap'}</span>
+              </button>
+            )}
+            {circleGapMode && (
+              <p className="text-[9px] text-blue-500 px-1 mt-1 leading-tight">
+                Click circle edge to set gap start, then again for end.
+              </p>
+            )}
           </div>
         </>
       )}

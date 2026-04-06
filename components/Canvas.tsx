@@ -13,6 +13,7 @@ import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
 import { detectSwingSegments } from '@/lib/swingDetection';
+import type { RacketTrail } from '@/lib/racketMultiplier';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -22,12 +23,18 @@ const POSE_DETECTION_INTERVAL = 1 / 30;
 const BALL_DETECTION_INTERVAL = 1 / 20;
 /** Maximum skeleton frames to keep in memory (~10s at 30fps) */
 const MAX_SKELETON_FRAMES = 300;
-/** Maximum ball positions to keep in memory */
-const MAX_BALL_DETECTIONS = 200;
 /** Window (seconds) for matching a skeleton frame to current video time */
 const SKELETON_TIME_TOLERANCE = 0.15;
 /** Time window (seconds) used to skip duplicate ball detections at the same video position */
 const BALL_DETECT_TIME_TOLERANCE = 0.08;
+/** How many seconds of ball positions to keep in the real-time trail */
+const BALL_TRAIL_WINDOW_SECONDS = 1.5;
+/** Threshold (pixels) for detecting a pointer-down near an existing circle */
+const CIRCLE_DRAG_THRESHOLD = 20;
+/** Radius (pixels) of each racket trail dot */
+const RACKET_TRAIL_CIRCLE_RADIUS = 8;
+/** Maximum alpha for the most-recent racket trail position */
+const RACKET_TRAIL_MAX_ALPHA = 0.65;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +47,7 @@ interface StrokeEllipse {
   cx: number; cy: number; rx: number; ry: number;
   color: string; lw: number; dashed?: boolean;
   spinning?: boolean;
+  spinSpeed?: number;  // degrees per second; defaults to ~100 deg/sec if spinning
   gapStart?: number;  // angle in radians
   gapEnd?: number;    // angle in radians
 }
@@ -65,6 +73,8 @@ export interface CanvasHandle {
   redo: () => void;
   getDetectedSwings: () => SwingSegment[];
   drawSwingFromSegment: (segment: SwingSegment, color: string) => void;
+  setRacketTrail: (trail: RacketTrail | null) => void;
+  getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -81,6 +91,8 @@ export interface CanvasProps {
   ballTrailEnabled?: boolean;
   onProcessingStatus?: (msg: string | null) => void;
   isRecording?: boolean;
+  circleSpinning?: boolean;
+  circleGapMode?: boolean;
 }
 
 // ── Module-level pose render cache ─────────────────────────────────────────
@@ -316,14 +328,15 @@ function drawCircleStroke(
   const isCircle = s.rx === s.ry;
 
   if (isCircle && (s.gapStart !== undefined || s.spinning)) {
-    let startAngle = s.gapEnd ?? 0;
-    let endAngle = s.gapStart ?? Math.PI * 2;
-
+    // Compute rotation offset from spinSpeed (deg/sec) or fallback to fixed rate
+    let offset = 0;
     if (s.spinning) {
-      const offset = (animFrame * 0.03) % (Math.PI * 2);
-      startAngle += offset;
-      endAngle += offset;
+      const degPerFrame = (s.spinSpeed ?? 100) / 60;
+      offset = (animFrame * degPerFrame * Math.PI / 180) % (Math.PI * 2);
     }
+
+    let startAngle = (s.gapEnd ?? 0) + offset;
+    let endAngle = (s.gapStart ?? Math.PI * 2) + offset;
 
     ctx.beginPath();
     ctx.arc(s.cx, s.cy, Math.max(1, s.rx), startAngle, endAngle);
@@ -560,6 +573,45 @@ function drawRealtimeBallTrail(
   ctx.restore();
 }
 
+// Draw racket motion trail (wrist positions over a swing segment)
+function drawRacketMultiplier(
+  ctx: CanvasRenderingContext2D,
+  trail: RacketTrail,
+  videoNativeW: number,
+  videoNativeH: number,
+  canvasW: number,
+  canvasH: number,
+): void {
+  if (trail.positions.length === 0) return;
+
+  const sx = canvasW / videoNativeW;
+  const sy = canvasH / videoNativeH;
+
+  ctx.save();
+
+  for (let i = 0; i < trail.positions.length; i++) {
+    const pos = trail.positions[i];
+    const alpha = ((i + 1) / trail.positions.length) * RACKET_TRAIL_MAX_ALPHA;
+
+    ctx.fillStyle = `rgba(255, 165, 0, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(pos.wristX * sx, pos.wristY * sy, RACKET_TRAIL_CIRCLE_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (i > 0) {
+      const prev = trail.positions[i - 1];
+      ctx.strokeStyle = `rgba(255, 165, 0, ${alpha * 0.5})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(prev.wristX * sx, prev.wristY * sy);
+      ctx.lineTo(pos.wristX * sx, pos.wristY * sy);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
@@ -576,6 +628,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       ballTrailEnabled = false,
       onProcessingStatus,
       isRecording = false,
+      circleSpinning = false,
+      circleGapMode = false,
     },
     ref,
   ) {
@@ -604,6 +658,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const dragCircleIdxRef = useRef<number>(-1);
     const dragCircleOffRef = useRef<Pt>({ x: 0, y: 0 });
 
+    // Circle gap mode: tracks which circle is being given a gap and which click phase
+    const gapCircleIdxRef  = useRef<number>(-1);
+
+    // Racket multiplier trail
+    const racketTrailRef   = useRef<RacketTrail | null>(null);
+
     // Real-time skeleton detection
     const detectorRef         = useRef<any>(null);
     const latestKeypointsRef  = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
@@ -628,6 +688,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const ballTrailEnabledRef = useRef(ballTrailEnabled);
     const ballTrailModeRef    = useRef(ballTrailMode);
     const isRecordingRef      = useRef(isRecording);
+    const circleSpinningRef   = useRef(circleSpinning);
+    const circleGapModeRef    = useRef(circleGapMode);
 
     useEffect(() => { drawingOptsRef.current      = drawingOptions; },  [drawingOptions]);
     useEffect(() => { activeToolRef.current        = activeTool; },      [activeTool]);
@@ -635,6 +697,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { ballTrailEnabledRef.current  = ballTrailEnabled; }, [ballTrailEnabled]);
     useEffect(() => { ballTrailModeRef.current     = ballTrailMode; },   [ballTrailMode]);
     useEffect(() => { isRecordingRef.current       = isRecording; },     [isRecording]);
+    useEffect(() => { circleSpinningRef.current    = circleSpinning; },  [circleSpinning]);
+    useEffect(() => { circleGapModeRef.current     = circleGapMode; },   [circleGapMode]);
 
     // ── History ────────────────────────────────────────────────────────────
 
@@ -727,6 +791,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         });
         pushHistory();
       },
+      setRacketTrail: (trail: RacketTrail | null) => {
+        racketTrailRef.current = trail;
+      },
+      getSkeletonFrames: () => skeletonFramesRef.current,
     }), [onProcessingStatus, pushHistory, videoRef]);
 
     // ── Skeleton detector loader ───────────────────────────────────────────
@@ -913,9 +981,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                       x: pos.x * scaleX,
                       y: pos.y * scaleY,
                     });
-                    if (ballTrackRef.current.length > MAX_BALL_DETECTIONS) {
-                      ballTrackRef.current = ballTrackRef.current.slice(-MAX_BALL_DETECTIONS);
-                    }
+                    // Keep last BALL_TRAIL_WINDOW_SECONDS of detections
+                    const cutoff = currentTime - BALL_TRAIL_WINDOW_SECONDS;
+                    ballTrackRef.current = ballTrackRef.current.filter(p => p.timeSeconds >= cutoff);
                     onProcessingStatus?.(null);
                   }
                   isBallDetectingRef.current = false;
@@ -963,6 +1031,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const curFrame = Math.round(video.currentTime * 30);
             drawBallTrailOnCanvas(ctx, cachedBallRef.current, curFrame, ballTrailModeRef.current, dx, dy, dw, dh);
           }
+        }
+
+        // ── Racket multiplier overlay ─────────────────────────────────────
+        if (racketTrailRef.current && video && vW > 0) {
+          ctx.save();
+          ctx.translate(dx, dy);
+          drawRacketMultiplier(ctx, racketTrailRef.current, vW, vH, dw, dh);
+          ctx.restore();
         }
 
         // Webcam PiP — bottom-right corner when recording
@@ -1096,20 +1172,45 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
 
-      // Check if clicking near an existing circle/ellipse to start dragging it
+      // Check if clicking near an existing circle/ellipse to start dragging it or setting a gap
       if (tool === 'circle' || tool === 'bodyCircle') {
-        const DRAG_THRESHOLD = 20;
         const idx = strokesRef.current.findIndex((s) => {
           if (s.tool !== 'circle' && s.tool !== 'bodyCircle') return false;
           const el = s as StrokeEllipse;
           // Use proper ellipse point-containment: ((x-cx)²/rx²) + ((y-cy)²/ry²) <= 1
-          // Add DRAG_THRESHOLD tolerance by scaling the ellipse slightly
-          const rx = Math.max(el.rx, 1) + DRAG_THRESHOLD;
-          const ry = Math.max(el.ry, 1) + DRAG_THRESHOLD;
+          // Add CIRCLE_DRAG_THRESHOLD tolerance by scaling the ellipse slightly
+          const rx = Math.max(el.rx, 1) + CIRCLE_DRAG_THRESHOLD;
+          const ry = Math.max(el.ry, 1) + CIRCLE_DRAG_THRESHOLD;
           const dx2 = pos.x - el.cx;
           const dy2 = pos.y - el.cy;
           return (dx2 * dx2) / (rx * rx) + (dy2 * dy2) / (ry * ry) <= 1;
         });
+
+        if (idx >= 0 && circleGapModeRef.current) {
+          // Gap mode: set gap start or gap end angle
+          const el = strokesRef.current[idx] as StrokeEllipse;
+          const angle = Math.atan2(pos.y - el.cy, pos.x - el.cx);
+          const updated = { ...el };
+          if (gapCircleIdxRef.current !== idx || el.gapStart === undefined) {
+            // First click on this circle: set gap start
+            updated.gapStart = angle;
+            updated.gapEnd = undefined;
+            gapCircleIdxRef.current = idx;
+          } else {
+            // Second click: set gap end
+            updated.gapEnd = el.gapStart;
+            updated.gapStart = angle;
+            gapCircleIdxRef.current = -1;
+            pushHistory();
+          }
+          strokesRef.current = [
+            ...strokesRef.current.slice(0, idx),
+            updated,
+            ...strokesRef.current.slice(idx + 1),
+          ];
+          return;
+        }
+
         if (idx >= 0) {
           const el = strokesRef.current[idx] as StrokeEllipse;
           dragCircleIdxRef.current = idx;
@@ -1140,6 +1241,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             cx: pos.x, cy: pos.y, rx: 0, ry: 0,
             color: opts.color, lw,
             dashed: opts.dashed ?? false,
+            spinning: circleSpinningRef.current || undefined,
           };
           isDraggingRef.current = true;
           break;
