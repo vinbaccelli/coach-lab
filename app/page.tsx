@@ -639,6 +639,8 @@ export default function Home() {
                     circleGapMode={circleGapMode}
                     webcamPipMode={webcamPipMode}
                     webcamOpacity={webcamOpacity}
+                    stroMotionGhosts={ghostFrames}
+                    stroMotionOpacity={stroMotionOpacity}
                   />
                 )}
                 {videoSrcB && (
