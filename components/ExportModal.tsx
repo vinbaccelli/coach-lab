@@ -8,13 +8,19 @@ import { downloadBlob, createBlobURL, getSupportedMimeType } from '@/lib/recordi
 interface ExportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Returns a canvas with the current video frame + drawings merged */
   getCompositeCanvas: () => HTMLCanvasElement | null;
-  /** The source video element (for clip recording) */
   videoRef: React.RefObject<HTMLVideoElement>;
 }
 
 type ExportTab = 'screenshot' | 'clip';
+type AspectRatioMode = 'youtube' | 'instagram';
+
+const ASPECT_CONFIGS: Record<AspectRatioMode, { label: string; w: number; h: number }> = {
+  youtube:   { label: 'YouTube 16:9 (1920×1080)', w: 1920, h: 1080 },
+  instagram: { label: 'Reels 9:16 (1080×1920)',  w: 1080, h: 1920 },
+};
+
+const FFMPEG_CORE_VERSION = '0.12.6';
 
 export default function ExportModal({
   isOpen,
@@ -29,9 +35,11 @@ export default function ExportModal({
   // Clip options
   const [clipDuration, setClipDuration] = useState(3);
   const [clipSpeed, setClipSpeed] = useState(1);
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioMode>('youtube');
   const [isRecordingClip, setIsRecordingClip] = useState(false);
   const [clipUrl, setClipUrl] = useState<string | null>(null);
   const [clipBlob, setClipBlob] = useState<Blob | null>(null);
+  const [mp4Progress, setMp4Progress] = useState<string | null>(null);
 
   const stopClipRef = useRef<(() => void) | null>(null);
 
@@ -49,10 +57,7 @@ export default function ExportModal({
 
   const downloadScreenshot = useCallback(() => {
     if (!screenshotUrl) return;
-    downloadDataURL(
-      screenshotUrl,
-      `coach-lab-screenshot-${Date.now()}.png`,
-    );
+    downloadDataURL(screenshotUrl, `coach-lab-screenshot-${Date.now()}.png`);
   }, [screenshotUrl]);
 
   const recordClip = useCallback(async () => {
@@ -64,13 +69,15 @@ export default function ExportModal({
     setIsRecordingClip(true);
     setClipUrl(null);
     setClipBlob(null);
+    setMp4Progress(null);
 
     const originalSpeed = video.playbackRate;
     video.playbackRate = clipSpeed;
 
-    // Create a recording canvas that repaints every frame
-    const w = canvas.width || 1280;
-    const h = canvas.height || 720;
+    const cfg = ASPECT_CONFIGS[aspectRatio];
+    const w = cfg.w;
+    const h = cfg.h;
+
     const recCanvas = document.createElement('canvas');
     recCanvas.width = w;
     recCanvas.height = h;
@@ -78,43 +85,86 @@ export default function ExportModal({
 
     const paintInterval = setInterval(() => {
       const src = getCompositeCanvas();
-      if (src) ctx.drawImage(src, 0, 0, w, h);
+      if (!src) return;
+      // Letterbox/pillarbox to maintain aspect ratio
+      const srcAR = src.width / src.height;
+      const dstAR = w / h;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+      let sx = 0, sy = 0, sw = w, sh = h;
+      if (srcAR > dstAR) {
+        sh = w / srcAR;
+        sy = (h - sh) / 2;
+      } else {
+        sw = h * srcAR;
+        sx = (w - sw) / 2;
+      }
+      ctx.drawImage(src, sx, sy, sw, sh);
     }, 1000 / 30);
 
     const stream: MediaStream = (recCanvas as any).captureStream(30);
     const mimeType = getSupportedMimeType();
     const mr = new MediaRecorder(stream, {
       mimeType: mimeType || undefined,
-      videoBitsPerSecond: 4_000_000,
+      videoBitsPerSecond: 5_000_000,
     });
     const chunks: BlobPart[] = [];
     mr.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-    mr.onstop = () => {
+
+    mr.onstop = async () => {
       clearInterval(paintInterval);
       video.playbackRate = originalSpeed;
       setIsRecordingClip(false);
-      const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
-      setClipBlob(blob);
-      setClipUrl(createBlobURL(blob));
+
+      const webmBlob = new Blob(chunks, { type: mimeType || 'video/webm' });
+
+      // Attempt MP4 conversion via FFmpeg.wasm
+      try {
+        setMp4Progress('Loading FFmpeg…');
+        const { FFmpeg } = await import('@ffmpeg/ffmpeg');
+        const { toBlobURL, fetchFile } = await import('@ffmpeg/util');
+        const ffmpeg = new FFmpeg();
+        ffmpeg.on('log', ({ message }) => setMp4Progress(message.slice(0, 80)));
+        const baseURL = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
+        await ffmpeg.load({
+          coreURL:   await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
+          wasmURL:   await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        });
+        setMp4Progress('Converting to MP4…');
+        await ffmpeg.writeFile('input.webm', await fetchFile(webmBlob));
+        await ffmpeg.exec([
+          '-i', 'input.webm',
+          '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+          '-c:a', 'aac', '-movflags', '+faststart',
+          'output.mp4',
+        ]);
+        const mp4Data = await ffmpeg.readFile('output.mp4');
+        const mp4Blob = new Blob([(mp4Data as Uint8Array).buffer as ArrayBuffer], { type: 'video/mp4' });
+        setMp4Progress(null);
+        setClipBlob(mp4Blob);
+        setClipUrl(createBlobURL(mp4Blob));
+      } catch (err: any) {
+        console.warn('[ExportModal] FFmpeg MP4 conversion failed, falling back to WebM:', err);
+        setMp4Progress(null);
+        setClipBlob(webmBlob);
+        setClipUrl(createBlobURL(webmBlob));
+      }
     };
+
     mr.start(100);
+    stopClipRef.current = () => { if (mr.state !== 'inactive') mr.stop(); };
 
-    stopClipRef.current = () => {
-      if (mr.state !== 'inactive') mr.stop();
-    };
-
-    // Auto-stop after clipDuration seconds of real-time
     const realDuration = (clipDuration / clipSpeed) * 1000;
     video.play();
     setTimeout(() => {
       video.pause();
       stopClipRef.current?.();
     }, realDuration);
-  }, [getCompositeCanvas, videoRef, clipDuration, clipSpeed]);
+  }, [getCompositeCanvas, videoRef, clipDuration, clipSpeed, aspectRatio]);
 
   const downloadClip = useCallback(() => {
     if (clipBlob) {
-      const ext = getSupportedMimeType().includes('mp4') ? 'mp4' : 'webm';
+      const ext = clipBlob.type.includes('mp4') ? 'mp4' : 'webm';
       downloadBlob(clipBlob, `coach-lab-clip-${Date.now()}.${ext}`);
     }
   }, [clipBlob]);
@@ -123,6 +173,7 @@ export default function ExportModal({
     setScreenshotUrl(null);
     setClipUrl(null);
     setClipBlob(null);
+    setMp4Progress(null);
     onClose();
   };
 
@@ -141,65 +192,43 @@ export default function ExportModal({
 
         {/* Tabs */}
         <div className="flex border-b border-gray-100">
-          <button
-            onClick={() => setTab('screenshot')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium transition-colors border-b-2 ${
-              tab === 'screenshot'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <Camera size={15} /> Screenshot
-          </button>
-          <button
-            onClick={() => setTab('clip')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium transition-colors border-b-2 ${
-              tab === 'clip'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <Film size={15} /> Video Clip
-          </button>
+          {(['screenshot', 'clip'] as ExportTab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium transition-colors border-b-2 ${
+                tab === t
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {t === 'screenshot' ? <Camera size={15} /> : <Film size={15} />}
+              {t === 'screenshot' ? 'Screenshot' : 'Video Clip'}
+            </button>
+          ))}
         </div>
 
         <div className="p-5">
           {/* Screenshot Tab */}
           {tab === 'screenshot' && (
             <div className="flex flex-col gap-4">
-              <p className="text-sm text-gray-500">
-                Capture the current frame with all drawings as a PNG image.
-              </p>
+              <p className="text-sm text-gray-500">Capture the current frame with all drawings as a PNG image.</p>
               {screenshotUrl ? (
                 <div className="flex flex-col gap-3">
-                  <img
-                    src={screenshotUrl}
-                    alt="Screenshot preview"
-                    className="w-full rounded-lg border border-gray-200 object-contain max-h-56"
-                  />
+                  <img src={screenshotUrl} alt="Screenshot preview"
+                    className="w-full rounded-lg border border-gray-200 object-contain max-h-56" />
                   <div className="flex gap-2">
                     <button onClick={downloadScreenshot} className="btn-primary flex-1 gap-1.5">
                       <Download size={14} /> Download PNG
                     </button>
-                    <button
-                      onClick={() => setScreenshotUrl(null)}
-                      className="btn-outline flex-1 gap-1.5"
-                    >
+                    <button onClick={() => setScreenshotUrl(null)} className="btn-outline flex-1 gap-1.5">
                       Retake
                     </button>
                   </div>
                 </div>
               ) : (
-                <button
-                  onClick={captureScreenshot}
-                  disabled={isCapturing}
-                  className="btn-primary gap-2 py-2.5"
-                >
-                  {isCapturing ? (
-                    <Loader2 size={15} className="animate-spin" />
-                  ) : (
-                    <Camera size={15} />
-                  )}
+                <button onClick={captureScreenshot} disabled={isCapturing} className="btn-primary gap-2 py-2.5">
+                  {isCapturing ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}
                   Capture Screenshot
                 </button>
               )}
@@ -210,19 +239,35 @@ export default function ExportModal({
           {tab === 'clip' && (
             <div className="flex flex-col gap-4">
               <p className="text-sm text-gray-500">
-                Record a short video clip starting from the current position.
+                Record a short video clip. Output will be converted to MP4 when possible.
               </p>
 
               <div className="flex flex-col gap-3">
+                {/* Aspect ratio */}
                 <div>
-                  <label className="text-xs font-medium text-gray-600 mb-1 block">
-                    Duration: {clipDuration}s
-                  </label>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Format:</label>
+                  <div className="flex gap-2">
+                    {(Object.entries(ASPECT_CONFIGS) as [AspectRatioMode, typeof ASPECT_CONFIGS[AspectRatioMode]][]).map(([key, cfg]) => (
+                      <button
+                        key={key}
+                        onClick={() => setAspectRatio(key)}
+                        disabled={isRecordingClip}
+                        className={`flex-1 py-1.5 text-xs rounded-md transition-colors border ${
+                          aspectRatio === key
+                            ? 'bg-blue-100 text-blue-700 font-semibold border-blue-300'
+                            : 'bg-gray-50 hover:bg-gray-100 text-gray-600 border-gray-200'
+                        }`}
+                      >
+                        {cfg.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Duration: {clipDuration}s</label>
                   <input
-                    type="range"
-                    min={1}
-                    max={15}
-                    step={1}
+                    type="range" min={1} max={15} step={1}
                     value={clipDuration}
                     onChange={(e) => setClipDuration(Number(e.target.value))}
                     disabled={isRecordingClip}
@@ -231,9 +276,7 @@ export default function ExportModal({
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-gray-600 mb-1 block">
-                    Speed:
-                  </label>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Speed:</label>
                   <div className="flex gap-1.5">
                     {[0.25, 0.5, 1, 1.5, 2].map((s) => (
                       <button
@@ -253,42 +296,32 @@ export default function ExportModal({
                 </div>
               </div>
 
+              {mp4Progress && (
+                <div className="text-xs text-blue-600 bg-blue-50 rounded-md p-2 font-mono truncate">
+                  {mp4Progress}
+                </div>
+              )}
+
               {clipUrl ? (
                 <div className="flex flex-col gap-3">
-                  <video
-                    src={clipUrl}
-                    controls
-                    className="w-full rounded-lg border border-gray-200"
-                    style={{ maxHeight: 200 }}
-                  />
+                  <video src={clipUrl} controls className="w-full rounded-lg border border-gray-200" style={{ maxHeight: 200 }} />
                   <div className="flex gap-2">
                     <button onClick={downloadClip} className="btn-primary flex-1 gap-1.5">
-                      <Download size={14} /> Download Clip
+                      <Download size={14} /> Download {clipBlob?.type.includes('mp4') ? 'MP4' : 'WebM'}
                     </button>
-                    <button
-                      onClick={() => { setClipUrl(null); setClipBlob(null); }}
-                      className="btn-outline flex-1"
-                    >
+                    <button onClick={() => { setClipUrl(null); setClipBlob(null); }} className="btn-outline flex-1">
                       Discard
                     </button>
                   </div>
                 </div>
               ) : (
-                <button
-                  onClick={recordClip}
-                  disabled={isRecordingClip}
-                  className="btn-primary gap-2 py-2.5"
-                >
+                <button onClick={recordClip} disabled={isRecordingClip || !!mp4Progress} className="btn-primary gap-2 py-2.5">
                   {isRecordingClip ? (
-                    <>
-                      <Loader2 size={15} className="animate-spin" />
-                      Recording {clipDuration}s…
-                    </>
+                    <><Loader2 size={15} className="animate-spin" />Recording {clipDuration}s…</>
+                  ) : mp4Progress ? (
+                    <><Loader2 size={15} className="animate-spin" />Converting…</>
                   ) : (
-                    <>
-                      <Film size={15} />
-                      Record {clipDuration}s Clip
-                    </>
+                    <><Film size={15} />Record {clipDuration}s Clip</>
                   )}
                 </button>
               )}

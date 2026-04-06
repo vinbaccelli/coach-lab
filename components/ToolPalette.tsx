@@ -17,10 +17,14 @@ import {
   TrendingUp,
   Eraser,
   RefreshCw,
+  Minus,
+  Square,
+  Zap,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
-export type BallTrailMode = 'short-tail' | 'full-trajectory';
+export type BallTrailMode = 'comet' | 'arc' | 'strobe';
+export type WebcamPipMode = 'rectangle' | 'circle' | 'hidden';
 
 interface ToolPaletteProps {
   activeTool: ToolType;
@@ -40,34 +44,48 @@ interface ToolPaletteProps {
   onCircleSpinningChange?: (spinning: boolean) => void;
   circleGapMode?: boolean;
   onCircleGapModeChange?: (mode: boolean) => void;
+  webcamPipMode?: WebcamPipMode;
+  onWebcamPipModeChange?: (mode: WebcamPipMode) => void;
+  webcamOpacity?: number;
+  onWebcamOpacityChange?: (v: number) => void;
+  webcamActive?: boolean;
 }
 
 const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
-  { id: 'select', icon: <MousePointer2 size={18} />, label: 'Select' },
-  { id: 'pen', icon: <Pen size={18} />, label: 'Draw' },
-  { id: 'angle', icon: <Triangle size={18} />, label: 'Angle' },
-  { id: 'circle', icon: <Circle size={18} />, label: 'Circle' },
-  { id: 'arrow', icon: <ArrowRight size={18} />, label: 'Arrow' },
-  { id: 'arrowAngle', icon: <Activity size={18} />, label: 'Angle↗' },
-  { id: 'bodyCircle', icon: <Circle size={18} strokeDasharray="4 2" />, label: '3D Circle' },
-  { id: 'text', icon: <Type size={18} />, label: 'Text' },
-  { id: 'skeleton', icon: <PersonStanding size={18} />, label: 'Skeleton' },
-  { id: 'ballShadow', icon: <Footprints size={18} />, label: 'Ball Trail' },
-  { id: 'swingPath', icon: <TrendingUp size={18} />, label: 'Swing Path' },
-  { id: 'erase', icon: <Eraser size={18} />, label: 'Erase' },
+  { id: 'select',      icon: <MousePointer2 size={18} />,                                 label: 'Select' },
+  { id: 'pen',         icon: <Pen size={18} />,                                           label: 'Draw' },
+  { id: 'line',        icon: <Minus size={18} />,                                         label: 'Line' },
+  { id: 'angle',       icon: <Triangle size={18} />,                                      label: 'Angle' },
+  { id: 'circle',      icon: <Circle size={18} />,                                        label: 'Circle' },
+  { id: 'rect',        icon: <Square size={18} />,                                        label: 'Rect' },
+  { id: 'triangle',    icon: <Triangle size={18} strokeDasharray="4 2" />,                label: 'Triangle' },
+  { id: 'arrow',       icon: <ArrowRight size={18} />,                                    label: 'Arrow' },
+  { id: 'arrowAngle',  icon: <Activity size={18} />,                                      label: 'Angle↗' },
+  { id: 'bodyCircle',  icon: <Circle size={18} strokeDasharray="4 2" />,                  label: '3D Circle' },
+  { id: 'text',        icon: <Type size={18} />,                                          label: 'Text' },
+  { id: 'skeleton',    icon: <PersonStanding size={18} />,                                label: 'Skeleton' },
+  { id: 'ballShadow',  icon: <Footprints size={18} />,                                    label: 'Ball Trail' },
+  { id: 'swingPath',   icon: <TrendingUp size={18} />,                                    label: 'Swing' },
+  { id: 'manualSwing', icon: <Zap size={18} />,                                           label: 'ManualSwing' },
+  { id: 'erase',       icon: <Eraser size={18} />,                                        label: 'Erase' },
 ];
 
 const PRESET_COLORS = [
-  '#1E40AF', // dark blue
-  '#DC2626', // red
-  '#16A34A', // green
-  '#D97706', // amber
-  '#7C3AED', // purple
-  '#0891B2', // cyan
-  '#EC4899', // pink
-  '#111827', // near-black
-  '#FFFFFF', // white
+  '#1E40AF', '#DC2626', '#16A34A', '#D97706', '#7C3AED',
+  '#0891B2', '#EC4899', '#111827', '#FFFFFF',
 ];
+
+const pillBtn = (active: boolean): React.CSSProperties => ({
+  padding: '3px 10px',
+  borderRadius: '12px',
+  border: `1px solid ${active ? '#35679A' : '#E8E8ED'}`,
+  background: active ? '#35679A' : '#fff',
+  color: active ? '#fff' : '#1D1D1F',
+  cursor: 'pointer',
+  fontSize: '10px',
+  fontWeight: 600,
+  whiteSpace: 'nowrap' as const,
+});
 
 export default function ToolPalette({
   activeTool,
@@ -87,7 +105,15 @@ export default function ToolPalette({
   onCircleSpinningChange,
   circleGapMode,
   onCircleGapModeChange,
+  webcamPipMode,
+  onWebcamPipModeChange,
+  webcamOpacity = 1,
+  onWebcamOpacityChange,
+  webcamActive,
 }: ToolPaletteProps) {
+  const isShapeTool = activeTool === 'circle' || activeTool === 'bodyCircle'
+    || activeTool === 'rect' || activeTool === 'triangle';
+
   return (
     <div className="flex flex-col gap-1 h-full select-none">
       {/* Drawing Tools */}
@@ -124,9 +150,7 @@ export default function ToolPalette({
               onClick={() => onOptionsChange({ color: c })}
               title={c}
               className={`w-7 h-7 rounded-md border-2 transition-transform hover:scale-110 ${
-                drawingOptions.color === c
-                  ? 'border-blue-500 scale-110'
-                  : 'border-gray-200'
+                drawingOptions.color === c ? 'border-blue-500 scale-110' : 'border-gray-200'
               }`}
               style={{ background: c }}
             />
@@ -151,10 +175,7 @@ export default function ToolPalette({
           Thickness
         </p>
         <input
-          type="range"
-          min={1}
-          max={12}
-          step={1}
+          type="range" min={1} max={12} step={1}
           value={drawingOptions.lineWidth}
           onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })}
           className="w-full"
@@ -176,7 +197,7 @@ export default function ToolPalette({
         <div className="flex gap-1">
           <button
             onClick={() => onOptionsChange({ dashed: false })}
-            className={`tool-btn flex-1 flex-row gap-1 ${!(drawingOptions.dashed) ? 'active' : ''}`}
+            className={`tool-btn flex-1 flex-row gap-1 ${!drawingOptions.dashed ? 'active' : ''}`}
             title="Solid line"
           >
             <span style={{ fontSize: '14px' }}>—</span>
@@ -202,10 +223,7 @@ export default function ToolPalette({
               Font Size
             </p>
             <input
-              type="range"
-              min={10}
-              max={72}
-              step={2}
+              type="range" min={10} max={72} step={2}
               value={drawingOptions.fontSize}
               onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
               className="w-full"
@@ -219,7 +237,7 @@ export default function ToolPalette({
         </>
       )}
 
-      {/* Tool-specific helpers */}
+      {/* Skeleton tool */}
       {activeTool === 'skeleton' && (
         <>
           <div className="border-t border-gray-100 mx-2" />
@@ -230,13 +248,9 @@ export default function ToolPalette({
             <p className="text-[9px] text-cyan-600 px-1 mb-1.5 leading-tight font-medium">
               AI auto-detects pose from video.
             </p>
-            <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
-              Also click joints manually while paused to fine-tune.
-            </p>
             <button
               onClick={onResetSkeleton}
               className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600 mb-1"
-              title="Clear skeleton joints and re-process"
             >
               <RefreshCw size={13} />
               <span>Reset &amp; Re-analyze</span>
@@ -245,7 +259,6 @@ export default function ToolPalette({
               <button
                 onClick={onRacketMultiplier}
                 className="tool-btn w-full flex-row gap-1 text-purple-600 hover:bg-purple-50 hover:text-purple-700"
-                title="Show racket motion trail for a swing segment"
               >
                 <Activity size={13} />
                 <span>Racket Multiplier</span>
@@ -255,6 +268,7 @@ export default function ToolPalette({
         </>
       )}
 
+      {/* Ball Trail tool */}
       {activeTool === 'ballShadow' && (
         <>
           <div className="border-t border-gray-100 mx-2" />
@@ -265,40 +279,20 @@ export default function ToolPalette({
             <p className="text-[9px] text-yellow-600 px-1 mb-1.5 leading-tight font-medium">
               Auto-detects tennis ball from video.
             </p>
-            <p className="text-[9px] text-gray-400 px-1 mb-1 leading-tight">
-              Click the ball manually in any frame to add extra points.
-            </p>
-            <div className="flex flex-col gap-0.5 mb-2 px-1">
-              <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-wider mb-0.5">
-                Trail Mode
-              </p>
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input
-                  type="radio"
-                  name="ballTrailMode"
-                  value="short-tail"
-                  checked={ballTrailMode === 'short-tail'}
-                  onChange={() => onBallTrailModeChange('short-tail')}
-                  className="accent-yellow-500"
-                />
-                <span className="text-[9px] text-gray-600">Short Tail</span>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input
-                  type="radio"
-                  name="ballTrailMode"
-                  value="full-trajectory"
-                  checked={ballTrailMode === 'full-trajectory'}
-                  onChange={() => onBallTrailModeChange('full-trajectory')}
-                  className="accent-yellow-500"
-                />
-                <span className="text-[9px] text-gray-600">Full Trajectory</span>
-              </label>
+            <div className="flex gap-1 mb-2 flex-wrap">
+              {(['comet', 'arc', 'strobe'] as BallTrailMode[]).map((m) => (
+                <button
+                  key={m}
+                  style={pillBtn(ballTrailMode === m)}
+                  onClick={() => onBallTrailModeChange(m)}
+                >
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                </button>
+              ))}
             </div>
             <button
               onClick={onResetBallTrail}
               className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
-              title="Clear ball trail"
             >
               <RefreshCw size={13} />
               <span>Reset Trail</span>
@@ -307,6 +301,7 @@ export default function ToolPalette({
         </>
       )}
 
+      {/* Swing path tool */}
       {activeTool === 'swingPath' && (
         <>
           <div className="border-t border-gray-100 mx-2" />
@@ -315,16 +310,12 @@ export default function ToolPalette({
               Swing Path
             </p>
             <p className="text-[9px] text-purple-500 px-1 mb-0.5 leading-tight font-medium">
-              Click to add points along the path.
-            </p>
-            <p className="text-[9px] text-gray-400 px-1 mb-1.5 leading-tight">
-              Desktop: double-click to end. Mobile: long-press (0.5s) to end.
+              Click to add points. Double-click to end.
             </p>
             {onAutoSwing && (
               <button
                 onClick={onAutoSwing}
                 className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
-                title="Auto-detect swing from skeleton wrist velocity"
               >
                 <TrendingUp size={13} />
                 <span>Auto Swing</span>
@@ -334,6 +325,22 @@ export default function ToolPalette({
         </>
       )}
 
+      {/* Manual swing tool */}
+      {activeTool === 'manualSwing' && (
+        <>
+          <div className="border-t border-gray-100 mx-2" />
+          <div className="px-2 py-2">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
+              Manual Swing
+            </p>
+            <p className="text-[9px] text-blue-500 px-1 mb-0.5 leading-tight font-medium">
+              Click to add waypoints. Double-click or click same spot to finalize.
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* Angle tool */}
       {activeTool === 'angle' && (
         <>
           <div className="border-t border-gray-100 mx-2" />
@@ -348,13 +355,26 @@ export default function ToolPalette({
         </>
       )}
 
-      {(activeTool === 'circle' || activeTool === 'bodyCircle') && (
+      {/* Shape tools (circle/bodyCircle/rect/triangle) */}
+      {isShapeTool && (
         <>
           <div className="border-t border-gray-100 mx-2" />
           <div className="px-2 py-2">
             <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Circle Options
+              Shape Options
             </p>
+            {/* Shape selector */}
+            <div className="flex gap-1 mb-2">
+              {(['circle', 'rect', 'triangle'] as ToolType[]).map((s) => (
+                <button
+                  key={s}
+                  style={pillBtn(activeTool === s || (s === 'circle' && activeTool === 'bodyCircle'))}
+                  onClick={() => onToolChange(s)}
+                >
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+            </div>
             {onCircleSpinningChange && (
               <label className="flex items-center gap-2 cursor-pointer px-1 mb-2">
                 <input
@@ -366,20 +386,50 @@ export default function ToolPalette({
                 <span className="text-[9px] text-gray-600 font-medium">Spinning animation</span>
               </label>
             )}
-            {onCircleGapModeChange && (
+            {onCircleGapModeChange && (activeTool === 'circle' || activeTool === 'bodyCircle') && (
               <button
                 onClick={() => onCircleGapModeChange(!circleGapMode)}
                 className={`tool-btn w-full flex-row gap-1 ${circleGapMode ? 'active text-blue-600' : 'text-gray-500'}`}
-                title="Click on circle edge twice to create an arc gap"
               >
                 <span className="text-[13px]">✂</span>
                 <span>{circleGapMode ? 'Gap Mode ON' : 'Add Gap'}</span>
               </button>
             )}
-            {circleGapMode && (
-              <p className="text-[9px] text-blue-500 px-1 mt-1 leading-tight">
-                Click circle edge to set gap start, then again for end.
-              </p>
+          </div>
+        </>
+      )}
+
+      {/* Webcam PiP section */}
+      {webcamActive && onWebcamPipModeChange && (
+        <>
+          <div className="border-t border-gray-100 mx-2" />
+          <div className="px-2 py-2">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
+              Webcam PiP
+            </p>
+            <div className="flex gap-1 mb-2 flex-wrap">
+              {(['rectangle', 'circle', 'hidden'] as WebcamPipMode[]).map((m) => (
+                <button
+                  key={m}
+                  style={pillBtn(webcamPipMode === m)}
+                  onClick={() => onWebcamPipModeChange(m)}
+                >
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                </button>
+              ))}
+            </div>
+            {onWebcamOpacityChange && (
+              <div>
+                <p className="text-[9px] text-gray-500 px-1 mb-1">
+                  Opacity: {Math.round(webcamOpacity * 100)}%
+                </p>
+                <input
+                  type="range" min={30} max={100} step={5}
+                  value={Math.round(webcamOpacity * 100)}
+                  onChange={(e) => onWebcamOpacityChange(Number(e.target.value) / 100)}
+                  className="w-full"
+                />
+              </div>
             )}
           </div>
         </>
@@ -393,19 +443,11 @@ export default function ToolPalette({
           Actions
         </p>
         <div className="flex gap-1">
-          <button
-            onClick={onUndo}
-            className="tool-btn flex-1 flex-row gap-1"
-            title="Undo (Ctrl+Z)"
-          >
+          <button onClick={onUndo} className="tool-btn flex-1 flex-row gap-1" title="Undo (Ctrl+Z)">
             <Undo2 size={15} />
             <span>Undo</span>
           </button>
-          <button
-            onClick={onRedo}
-            className="tool-btn flex-1 flex-row gap-1"
-            title="Redo (Ctrl+Y)"
-          >
+          <button onClick={onRedo} className="tool-btn flex-1 flex-row gap-1" title="Redo (Ctrl+Y)">
             <Redo2 size={15} />
             <span>Redo</span>
           </button>

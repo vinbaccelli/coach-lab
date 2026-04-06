@@ -9,12 +9,13 @@ import React, {
 import dynamic from 'next/dynamic';
 import { Camera, Upload, GripVertical } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
-import ToolPalette, { type BallTrailMode } from '@/components/ToolPalette';
+import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import ExportModal from '@/components/ExportModal';
 import PlaybackControls from '@/components/PlaybackControls';
 import { SidebarSection } from '@/components/SidebarSection';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
+import { useStroMotion } from '@/hooks/useStroMotion';
 
 // Dynamic import prevents TensorFlow / Fabric from loading server-side
 const CanvasOverlay = dynamic(() => import('@/components/Canvas'), { ssr: false });
@@ -46,7 +47,7 @@ export default function Home() {
   const [videoSrc, setVideoSrc]           = useState<string | null>(null);
   const [videoSrcB, setVideoSrcB]         = useState<string | null>(null);
   const [canvasSizeB, setCanvasSizeB]     = useState({ width: 800, height: 450 });
-  const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('short-tail');
+  const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('comet');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [showExport, setShowExport]       = useState(false);
   const [sidebarWidth, setSidebarWidth]   = useState(240);
@@ -58,10 +59,31 @@ export default function Home() {
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [circleSpinning, setCircleSpinning] = useState(false);
   const [circleGapMode, setCircleGapMode]   = useState(false);
+  const [webcamPipMode, setWebcamPipMode]   = useState<WebcamPipMode>('rectangle');
+  const [webcamOpacity, setWebcamOpacity]   = useState(1);
+  const [urlInput, setUrlInput]             = useState('');
+  const [embedUrl, setEmbedUrl]             = useState<{ type: 'youtube' | 'instagram' | 'mp4'; url: string } | null>(null);
+
+  // StroMotion state
+  const [stroMotionEnabled, setStroMotionEnabled] = useState(false);
+  const [stroMotionStart, setStroMotionStart]     = useState(0);
+  const [stroMotionEnd, setStroMotionEnd]         = useState(3);
+  const [stroMotionCount, setStroMotionCount]     = useState(6);
+  const [stroMotionOpacity, setStroMotionOpacity] = useState(0.3);
 
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
   const ballTrailEnabled = activeTool === 'ballShadow';
+
+  // StroMotion hook
+  const stroMotionConfig = {
+    enabled: stroMotionEnabled,
+    startFrame: Math.round(stroMotionStart * 30),
+    endFrame: Math.round(stroMotionEnd * 30),
+    ghostCount: stroMotionCount,
+    opacity: stroMotionOpacity,
+  };
+  const { ghostFrames, isProcessing: stroMotionProcessing, progress: stroMotionProgress } = useStroMotion(videoRef, stroMotionConfig);
 
   // ── Container size measurement ────────────────────────────────────────────
   const updateSize = useCallback(() => {
@@ -284,6 +306,40 @@ export default function Home() {
     canvasRef.current?.setRacketTrail(trail);
   }, []);
 
+  // ── URL Input handler ────────────────────────────────────────────────────
+  const handleUrlSubmit = useCallback(() => {
+    const raw = urlInput.trim();
+    if (!raw) return;
+
+    const ytMatch = raw.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+    if (ytMatch) {
+      setEmbedUrl({ type: 'youtube', url: `https://www.youtube.com/embed/${ytMatch[1]}` });
+      return;
+    }
+    // Use URL parsing to ensure the hostname is exactly instagram.com
+    try {
+      const parsed = new URL(raw);
+      const host = parsed.hostname.replace(/^www\./, '');
+      if (host === 'instagram.com') {
+        const igMatch = parsed.pathname.match(/^\/(p|reel)\/([A-Za-z0-9_-]+)/);
+        if (igMatch) {
+          setEmbedUrl({ type: 'instagram', url: `https://www.instagram.com/${igMatch[1]}/${igMatch[2]}/embed` });
+          return;
+        }
+      }
+    } catch {
+      // Not a valid URL — continue to other checks below
+    }
+    // Only allow safe video URLs (http/https or blob)
+    if ((raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('blob:'))
+        && raw.match(/\.(mp4|webm|mov)(\?.*)?$/i)) {
+      setVideoSrc(raw);
+      if (videoRef.current) { videoRef.current.src = raw; videoRef.current.load(); }
+      return;
+    }
+    alert('Supported: YouTube URL, direct .mp4/.webm link, or Instagram (view-only embed).');
+  }, [urlInput, videoRef]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#F8F8F8', color: '#1D1D1F' }}>
 
@@ -341,6 +397,34 @@ export default function Home() {
 
         {/* Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        {/* URL Input */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+            <input
+              type="text"
+              placeholder="YouTube / MP4 URL…"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
+              style={{
+                height: '30px',
+                padding: '0 8px',
+                borderRadius: '6px',
+                border: '1px solid #E8E8ED',
+                fontSize: '12px',
+                width: '200px',
+                outline: 'none',
+              }}
+            />
+            <button onClick={handleUrlSubmit} style={{ ...btnStyle, height: '30px', padding: '0 10px', width: 'auto', fontSize: '12px' }}>
+              Load
+            </button>
+            {embedUrl && (
+              <button onClick={() => setEmbedUrl(null)} style={{ ...btnStyle, height: '30px', width: '30px', fontSize: '12px', color: '#EF4444' }}>
+                ✕
+              </button>
+            )}
+          </div>
+
           <button
             onClick={() => fileInputRef.current?.click()}
             style={btnStyle}
@@ -423,7 +507,63 @@ export default function Home() {
               onCircleSpinningChange={setCircleSpinning}
               circleGapMode={circleGapMode}
               onCircleGapModeChange={setCircleGapMode}
+              webcamPipMode={webcamPipMode}
+              onWebcamPipModeChange={setWebcamPipMode}
+              webcamOpacity={webcamOpacity}
+              onWebcamOpacityChange={setWebcamOpacity}
+              webcamActive={webcamActive}
             />
+          </SidebarSection>
+
+          {/* StroMotion section */}
+          <SidebarSection title="StroMotion">
+            <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <p style={{ fontSize: '9px', color: '#6b7280', lineHeight: 1.4 }}>
+                Capture ghost frames from a time range for stroboscopic effect.
+              </p>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <label style={{ fontSize: '10px', color: '#374151', minWidth: '40px' }}>Start:</label>
+                <input type="number" step="0.1" min="0" value={stroMotionStart}
+                  onChange={e => setStroMotionStart(parseFloat(e.target.value) || 0)}
+                  style={{ width: '60px', padding: '2px 4px', fontSize: '10px', border: '1px solid #E8E8ED', borderRadius: '4px' }} />
+                <label style={{ fontSize: '10px', color: '#374151', minWidth: '25px' }}>End:</label>
+                <input type="number" step="0.1" min="0" value={stroMotionEnd}
+                  onChange={e => setStroMotionEnd(parseFloat(e.target.value) || 0)}
+                  style={{ width: '60px', padding: '2px 4px', fontSize: '10px', border: '1px solid #E8E8ED', borderRadius: '4px' }} />
+              </div>
+              <div>
+                <p style={{ fontSize: '10px', color: '#374151', marginBottom: '2px' }}>Ghosts: {stroMotionCount}</p>
+                <input type="range" min="3" max="12" step="1" value={stroMotionCount}
+                  onChange={e => setStroMotionCount(Number(e.target.value))} style={{ width: '100%' }} />
+              </div>
+              <div>
+                <p style={{ fontSize: '10px', color: '#374151', marginBottom: '2px' }}>Opacity: {Math.round(stroMotionOpacity * 100)}%</p>
+                <input type="range" min="15" max="50" step="5" value={Math.round(stroMotionOpacity * 100)}
+                  onChange={e => setStroMotionOpacity(Number(e.target.value) / 100)} style={{ width: '100%' }} />
+              </div>
+              <button
+                onClick={() => setStroMotionEnabled(true)}
+                disabled={stroMotionProcessing}
+                style={{
+                  padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                  background: stroMotionProcessing ? '#E5E7EB' : '#35679A', color: stroMotionProcessing ? '#9ca3af' : '#fff',
+                  border: 'none', cursor: stroMotionProcessing ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {stroMotionProcessing ? `Capturing… ${stroMotionProgress}%` : '▶ Capture Ghosts'}
+              </button>
+              {ghostFrames.length > 0 && (
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <span style={{ fontSize: '10px', color: '#16A34A', fontWeight: 600 }}>✓ {ghostFrames.length} ghosts captured</span>
+                  <button
+                    onClick={() => setStroMotionEnabled(false)}
+                    style={{ marginLeft: 'auto', fontSize: '10px', color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer' }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
           </SidebarSection>
 
           {/* Resize handle */}
@@ -497,6 +637,8 @@ export default function Home() {
                     isRecording={isRecording}
                     circleSpinning={circleSpinning}
                     circleGapMode={circleGapMode}
+                    webcamPipMode={webcamPipMode}
+                    webcamOpacity={webcamOpacity}
                   />
                 )}
                 {videoSrcB && (
@@ -541,6 +683,50 @@ export default function Home() {
               </>
             )}
           </div>
+
+          {/* URL Embed iframe (bottom-right overlay) */}
+          {embedUrl && (
+            <div style={{
+              position: 'absolute',
+              bottom: 80, right: 16,
+              width: '360px', height: '220px',
+              zIndex: 30,
+              borderRadius: '10px',
+              overflow: 'hidden',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+              border: '2px solid #35679A',
+              background: '#000',
+              resize: 'both',
+            }}>
+              {embedUrl.type === 'youtube' && (
+                <iframe
+                  src={embedUrl.url}
+                  width="100%"
+                  height="100%"
+                  frameBorder="0"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  title="YouTube embed"
+                />
+              )}
+              {embedUrl.type === 'instagram' && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', padding: '8px', textAlign: 'center' }}>
+                  <iframe
+                    src={embedUrl.url}
+                    width="100%"
+                    height="100%"
+                    frameBorder="0"
+                    scrolling="no"
+                    title="Instagram embed"
+                    sandbox="allow-scripts allow-same-origin allow-popups"
+                  />
+                  <p style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px' }}>
+                    Instagram is view-only. To annotate: ··· → Save Video → upload here.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Playback controls */}
           <PlaybackControls videoRef={videoRef} videoRefB={videoSrcB ? videoRefB : undefined} />
