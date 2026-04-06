@@ -3,6 +3,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { SkipBack, SkipForward, Play, Pause } from 'lucide-react';
 
+const PLAYBACK_SPEEDS = [0.05, 0.1, 0.25, 0.5, 1, 1.5, 2] as const;
+
+function formatSpeed(s: number): string {
+  if (s === 0.05) return '1/20×';
+  if (s === 0.1) return '1/10×';
+  return `${s}×`;
+}
+
 interface Props {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   videoRefB?: React.RefObject<HTMLVideoElement | null>;
@@ -12,6 +20,9 @@ export default function PlaybackControls({ videoRef, videoRefB }: Props) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [currentTimeB, setCurrentTimeB] = useState(0);
+  const [durationB, setDurationB] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
   const isSynced = !!videoRefB;
 
   // Keyboard shortcuts
@@ -33,18 +44,21 @@ export default function PlaybackControls({ videoRef, videoRefB }: Props) {
           break;
         case 'j':
           e.preventDefault();
-          video.playbackRate = 0.5;
+          if (videoRef.current) videoRef.current.playbackRate = 0.5;
           if (isSynced && videoRefB?.current) videoRefB.current.playbackRate = 0.5;
+          setPlaybackRate(0.5);
           break;
         case 'k':
           e.preventDefault();
-          video.playbackRate = 1.0;
+          if (videoRef.current) videoRef.current.playbackRate = 1.0;
           if (isSynced && videoRefB?.current) videoRefB.current.playbackRate = 1.0;
+          setPlaybackRate(1.0);
           break;
         case 'l':
           e.preventDefault();
-          video.playbackRate = 2.0;
+          if (videoRef.current) videoRef.current.playbackRate = 2.0;
           if (isSynced && videoRefB?.current) videoRefB.current.playbackRate = 2.0;
+          setPlaybackRate(2.0);
           break;
         case 'arrowleft':
           e.preventDefault();
@@ -85,6 +99,25 @@ export default function PlaybackControls({ videoRef, videoRefB }: Props) {
       video.removeEventListener('pause', handlePause);
     };
   }, [videoRef]);
+
+  // Track Video B time independently
+  useEffect(() => {
+    const videoB = videoRefB?.current;
+    if (!videoB) return;
+
+    const handleTimeUpdate = () => setCurrentTimeB(videoB.currentTime);
+    const handleLoadedMetadata = () => setDurationB(videoB.duration);
+
+    videoB.addEventListener('timeupdate', handleTimeUpdate);
+    videoB.addEventListener('loadedmetadata', handleLoadedMetadata);
+
+    if (videoB.duration) setDurationB(videoB.duration);
+
+    return () => {
+      videoB.removeEventListener('timeupdate', handleTimeUpdate);
+      videoB.removeEventListener('loadedmetadata', handleLoadedMetadata);
+    };
+  }, [videoRefB]);
 
   // Sync seeking: when video A seeks, sync video B
   const isSeeking = useRef(false);
@@ -177,14 +210,14 @@ export default function PlaybackControls({ videoRef, videoRefB }: Props) {
 
   return (
     <div style={{
-      height: isSynced ? '68px' : '56px',
       display: 'flex',
       flexDirection: 'column',
       justifyContent: 'center',
       gap: '4px',
-      padding: '0 16px',
+      padding: '6px 16px',
       borderTop: '1px solid #E8E8ED',
       background: '#F8F8F8',
+      flexShrink: 0,
     }}>
       {/* Dual video controls */}
       {isSynced && (
@@ -232,27 +265,92 @@ export default function PlaybackControls({ videoRef, videoRefB }: Props) {
           ))}
         </div>
 
-        {/* Scrub bar */}
-        <input
-          type="range"
-          aria-label="Video scrubber"
-          min="0"
-          max={duration || 0}
-          value={currentTime}
-          onChange={(e) => {
-            if (videoRef.current) {
-              const t = parseFloat(e.target.value);
-              videoRef.current.currentTime = t;
-              if (isSynced && videoRefB?.current) videoRefB.current.currentTime = t;
-            }
-          }}
-          style={{ flex: 1, height: '4px', borderRadius: '2px', cursor: 'pointer' }}
-        />
+        {/* Video A scrubber */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+          {isSynced && (
+            <span style={{ fontSize: '9px', color: '#9ca3af', fontWeight: 600, lineHeight: 1 }}>A</span>
+          )}
+          <input
+            type="range"
+            aria-label="Video A scrubber"
+            min="0"
+            max={duration || 0}
+            step={1 / 30}
+            value={currentTime}
+            onChange={(e) => {
+              if (videoRef.current) {
+                const t = parseFloat(e.target.value);
+                videoRef.current.currentTime = t;
+              }
+            }}
+            style={{ width: '100%', height: '4px', borderRadius: '2px', cursor: 'pointer' }}
+          />
+        </div>
+
+        {/* Video B scrubber (independent) */}
+        {isSynced && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+            <span style={{ fontSize: '9px', color: '#9ca3af', fontWeight: 600, lineHeight: 1 }}>B</span>
+            <input
+              type="range"
+              aria-label="Video B scrubber"
+              min="0"
+              max={durationB || 0}
+              step={1 / 30}
+              value={currentTimeB}
+              onChange={(e) => {
+                if (videoRefB?.current) {
+                  const t = parseFloat(e.target.value);
+                  videoRefB.current.currentTime = t;
+                }
+              }}
+              style={{ width: '100%', height: '4px', borderRadius: '2px', cursor: 'pointer' }}
+            />
+          </div>
+        )}
 
         {/* Time display */}
-        <div style={{ fontSize: '12px', color: '#6b7280', minWidth: '80px', textAlign: 'right' }}>
-          {formatTime(currentTime)} / {formatTime(duration)}
+        <div style={{ fontSize: '12px', color: '#6b7280', minWidth: isSynced ? '120px' : '80px', textAlign: 'right' }}>
+          {isSynced ? (
+            <>
+              <span>A: {formatTime(currentTime)}</span>
+              <br />
+              <span>B: {formatTime(currentTimeB)}</span>
+            </>
+          ) : (
+            <span>{formatTime(currentTime)} / {formatTime(duration)}</span>
+          )}
         </div>
+      </div>
+
+      {/* Speed buttons */}
+      <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '10px', color: '#9ca3af', marginRight: '2px' }}>Speed:</span>
+        {PLAYBACK_SPEEDS.map((s) => (
+          <button
+            key={s}
+            onClick={() => {
+              if (videoRef.current) videoRef.current.playbackRate = s;
+              if (isSynced && videoRefB?.current) videoRefB.current.playbackRate = s;
+              setPlaybackRate(s);
+            }}
+            style={{
+              height: '22px',
+              padding: '0 7px',
+              borderRadius: '5px',
+              fontSize: '10px',
+              fontWeight: 600,
+              border: '1px solid',
+              borderColor: playbackRate === s ? '#35679A' : '#E8E8ED',
+              background: playbackRate === s ? '#35679A' : '#fff',
+              color: playbackRate === s ? '#fff' : '#1D1D1F',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {formatSpeed(s)}
+          </button>
+        ))}
       </div>
     </div>
   );
