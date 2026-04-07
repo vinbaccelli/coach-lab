@@ -340,27 +340,30 @@ function drawSmoothPath(
 function drawCircleStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeEllipse,
-  animFrame: number,
+  _animFrame: number,
 ): void {
   ctx.save();
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
   if (s.dashed) ctx.setLineDash([8, 6]);
 
-  if (s.gapStart !== undefined || s.spinning) {
-    // Use average radius so slightly non-circular shapes still work
-    const r = Math.max(1, (s.rx + s.ry) / 2);
-    let offset = 0;
+  if (s.spinning || s.gapStart !== undefined) {
+    // Use time-based rotation for smooth, drift-free animation
+    ctx.translate(s.cx, s.cy);
     if (s.spinning) {
-      const degPerFrame = (s.spinSpeed ?? 100) / 60;
-      offset = (animFrame * degPerFrame * Math.PI / 180) % (Math.PI * 2);
+      const spinAngle = ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2);
+      ctx.rotate(spinAngle);
     }
-    // Draw the major (visible) arc from gapStart → gapEnd.
-    // The gap is the minor arc going the other way between those two angles.
-    const startAngle = (s.gapStart ?? 0) + offset;
-    const endAngle   = (s.gapEnd   ?? Math.PI * 2) + offset;
+    const startAngle = s.gapStart ?? 0;
+    const endAngle   = s.gapEnd   ?? Math.PI * 2;
+    const rx = Math.max(1, s.rx);
+    const ry = Math.max(1, s.ry);
     ctx.beginPath();
-    ctx.arc(s.cx, s.cy, r, startAngle, endAngle);
+    if (Math.abs(rx - ry) < 1) {
+      ctx.arc(0, 0, rx, startAngle, endAngle);
+    } else {
+      ctx.ellipse(0, 0, rx, ry, 0, startAngle, endAngle);
+    }
     ctx.stroke();
   } else {
     ctx.beginPath();
@@ -374,7 +377,7 @@ function drawCircleStroke(
 function drawRectStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeRect,
-  animFrame: number,
+  _animFrame: number,
 ): void {
   ctx.save();
   ctx.strokeStyle = s.color;
@@ -382,9 +385,9 @@ function drawRectStroke(
   if (s.dashed) ctx.setLineDash([8, 6]);
 
   if (s.spinning) {
-    const offset = animFrame * SHAPE_SPIN_SPEED;
+    const spinAngle = ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2);
     ctx.translate(s.cx, s.cy);
-    ctx.rotate(offset);
+    ctx.rotate(spinAngle);
     ctx.strokeRect(-s.rx, -s.ry, s.rx * 2, s.ry * 2);
   } else {
     ctx.strokeRect(s.cx - s.rx, s.cy - s.ry, s.rx * 2, s.ry * 2);
@@ -395,16 +398,18 @@ function drawRectStroke(
 function drawTriangleStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeTriangle,
-  animFrame: number,
+  _animFrame: number,
 ): void {
   ctx.save();
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
   if (s.dashed) ctx.setLineDash([8, 6]);
 
-  const offset = s.spinning ? animFrame * SHAPE_SPIN_SPEED : 0;
+  const spinAngle = s.spinning
+    ? ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2)
+    : 0;
   ctx.translate(s.cx, s.cy);
-  ctx.rotate(offset);
+  ctx.rotate(spinAngle);
   ctx.beginPath();
   ctx.moveTo(0, -s.ry);
   ctx.lineTo( s.rx,  s.ry);
@@ -956,8 +961,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       },
       getDetectedSwings: () => {
         const frames = skeletonFramesRef.current;
-        if (frames.length === 0) return [];
-        return detectSwingSegments(frames);
+        const video = videoRef.current;
+        if (frames.length === 0 || !video) return [];
+        return detectSwingSegments(frames, video.videoWidth, video.videoHeight);
       },
       drawSwingFromSegment: (segment: SwingSegment, color: string) => {
         const video = videoRef.current;
@@ -1202,10 +1208,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.save();
           const baseOpacity = stroMotionOpacityRef.current;
           for (let i = 0; i < stroGhosts.length; i++) {
-            const alpha = ((i + 1) / stroGhosts.length) * baseOpacity;
+            const alpha = Math.min(baseOpacity, ((i + 1) / stroGhosts.length) * baseOpacity);
             ctx.globalAlpha = Math.max(MIN_GHOST_OPACITY, alpha);
             ctx.drawImage(stroGhosts[i], dx, dy, dw, dh);
           }
+          ctx.globalAlpha = 1.0;
           ctx.restore();
         }
 
@@ -1490,6 +1497,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             color: opts.color, lw,
             dashed: opts.dashed ?? false,
             spinning: circleSpinningRef.current || undefined,
+            // Apply a default 90° open gap when gap mode is on
+            ...(circleGapModeRef.current
+              ? { gapStart: Math.PI * 0.25, gapEnd: Math.PI * 1.75 }
+              : {}),
           };
           isDraggingRef.current = true;
           break;

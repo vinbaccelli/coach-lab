@@ -58,3 +58,13 @@ export const SPEED_OPTIONS: { label: string; value: number }[] = [
   { label: '1.5×', value: 1.5 },
   { label: '2×', value: 2 },
 ];
+
+/** Skip amount options for the skip forward/back buttons.
+ *  Values are in seconds, based on a 60 FPS reference (1 frame = 1/60s).
+ *  Actual frame boundaries depend on the video's encoded frame rate.
+ */
+export const SKIP_OPTIONS: { label: string; value: number }[] = [
+  { label: '1f', value: 1 / 60 },
+  { label: '10f', value: 10 / 60 },
+  { label: '20f', value: 20 / 60 },
+];
