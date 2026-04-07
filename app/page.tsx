@@ -642,7 +642,36 @@ export default function Home() {
                 ref={containerRef}
                 style={{ width: '100%', height: '100%', position: 'relative' }}
               >
-                {!videoSrc ? (
+                {embedUrl ? (
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#000' }}>
+                    {embedUrl.type === 'youtube' && (
+                      <iframe
+                        src={embedUrl.url}
+                        style={{ flex: 1, border: 'none', display: 'block' }}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                        title="YouTube embed"
+                      />
+                    )}
+                    {embedUrl.type === 'instagram' && (
+                      <iframe
+                        src={embedUrl.url}
+                        style={{ flex: 1, border: 'none', display: 'block' }}
+                        scrolling="no"
+                        title="Instagram embed"
+                        sandbox="allow-scripts allow-same-origin allow-popups"
+                      />
+                    )}
+                    <p style={{
+                      margin: 0, padding: '4px 10px',
+                      fontSize: '10px', color: '#9ca3af',
+                      background: 'rgba(0,0,0,0.85)',
+                      textAlign: 'center',
+                    }}>
+                      Annotation unavailable for embedded videos. To annotate: download the video and upload it here.
+                    </p>
+                  </div>
+                ) : !videoSrc ? (
                   <div style={{
                     position: 'absolute', inset: 0,
                     display: 'flex', flexDirection: 'column',
@@ -732,50 +761,6 @@ export default function Home() {
               </>
             )}
           </div>
-
-          {/* URL Embed iframe (bottom-right overlay) */}
-          {embedUrl && (
-            <div style={{
-              position: 'absolute',
-              bottom: 80, right: 16,
-              width: '360px', height: '220px',
-              zIndex: 30,
-              borderRadius: '10px',
-              overflow: 'hidden',
-              boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-              border: '2px solid #35679A',
-              background: '#000',
-              resize: 'both',
-            }}>
-              {embedUrl.type === 'youtube' && (
-                <iframe
-                  src={embedUrl.url}
-                  width="100%"
-                  height="100%"
-                  frameBorder="0"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                  title="YouTube embed"
-                />
-              )}
-              {embedUrl.type === 'instagram' && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', padding: '8px', textAlign: 'center' }}>
-                  <iframe
-                    src={embedUrl.url}
-                    width="100%"
-                    height="100%"
-                    frameBorder="0"
-                    scrolling="no"
-                    title="Instagram embed"
-                    sandbox="allow-scripts allow-same-origin allow-popups"
-                  />
-                  <p style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px' }}>
-                    Instagram is view-only. To annotate: ··· → Save Video → upload here.
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Playback controls */}
           <PlaybackControls
