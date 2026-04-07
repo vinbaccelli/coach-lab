@@ -1,11 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, Square } from 'lucide-react';
 
 const PLAYBACK_SPEEDS = [0.05, 0.1, 0.25, 0.5, 1, 1.5, 2] as const;
 const FRAME_MODES = [10, 30, 60] as const;
-type FrameMode = typeof FRAME_MODES[number];
 
 function formatSpeed(s: number): string {
   if (s === 0.05) return '1/20×';
@@ -34,100 +32,112 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
   const [currentTimeB, setCurrentTimeB] = useState(0);
   const [durationB, setDurationB] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
-  const [frameMode, setFrameMode] = useState<FrameMode>(60);
+  const [frameMode, setFrameMode] = useState(60);
 
-  const frameModeRef = useRef<FrameMode>(60);
-  useEffect(() => { frameModeRef.current = frameMode; }, [frameMode]);
+  const frameModeRef = useRef(60);
+  useEffect(() => {
+    frameModeRef.current = frameMode;
+  }, [frameMode]);
 
   const isSynced = !!videoRefB;
 
-  // ── Keyboard: Frame step with arrow keys ──────────────────────────────────
+  // ── Arrow Keys: Frame stepping ──────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const video = videoRef.current;
-      if (!video || video.duration === 0) return;
+      if (!video) return;
 
-      // Don't capture if typing in input
-      if (document.activeElement?.tagName === 'INPUT') return;
+      // Ignore if typing in an input
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        return;
+      }
 
-      const fps = frameModeRef.current;
-      const frameTime = 1 / fps;
+      const isArrowRight = e.key === 'ArrowRight';
+      const isArrowLeft = e.key === 'ArrowLeft';
 
-      if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        video.pause();
-        const newTime = Math.min(video.duration, video.currentTime + frameTime);
-        video.currentTime = newTime;
-        setCurrentTimeA(newTime);
-        // Also step video B if synced
-        if (isSynced && videoRefB?.current) {
-          videoRefB.current.currentTime = newTime;
-        }
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        video.pause();
-        const newTime = Math.max(0, video.currentTime - frameTime);
-        video.currentTime = newTime;
-        setCurrentTimeA(newTime);
-        // Also step video B if synced
-        if (isSynced && videoRefB?.current) {
-          videoRefB.current.currentTime = newTime;
-        }
+      if (!isArrowRight && !isArrowLeft) return;
+
+      e.preventDefault();
+      video.pause();
+      if (isSynced && videoRefB?.current) videoRefB.current.pause();
+
+      const frameSize = 1 / frameModeRef.current;
+      let newTime = video.currentTime;
+
+      if (isArrowRight) {
+        newTime = Math.min(video.duration || 0, newTime + frameSize);
+      } else if (isArrowLeft) {
+        newTime = Math.max(0, newTime - frameSize);
+      }
+
+      video.currentTime = newTime;
+      setCurrentTimeA(newTime);
+
+      if (isSynced && videoRefB?.current) {
+        videoRefB.current.currentTime = newTime;
+        setCurrentTimeB(newTime);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isSynced, videoRefB, videoRef]);
+  }, [isSynced, videoRef, videoRefB]);
 
-  // ── Space: Play/Pause both ────────────────────────────────────────────────
+  // ── Space: Play/Pause both ────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT') return;
+      if (e.key !== ' ') return;
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+      e.preventDefault();
 
-      if (e.key === ' ') {
-        e.preventDefault();
-        const vA = videoRef.current;
-        const vB = videoRefB?.current;
-        if (!vA) return;
+      const vA = videoRef.current;
+      const vB = videoRefB?.current;
+      if (!vA) return;
 
-        if (vA.paused) {
-          vA.play().catch(() => {});
-          if (isSynced && vB) vB.play().catch(() => {});
-          setIsPlayingA(true);
-          if (isSynced) setIsPlayingB(true);
-        } else {
-          vA.pause();
-          if (isSynced && vB) vB.pause();
-          setIsPlayingA(false);
-          if (isSynced) setIsPlayingB(false);
-        }
+      if (vA.paused) {
+        vA.play().catch(() => {});
+        if (isSynced && vB) vB.play().catch(() => {});
+      } else {
+        vA.pause();
+        if (isSynced && vB) vB.pause();
       }
+    };
 
-      // J/K/L for speed
-      if (e.key.toLowerCase() === 'j') {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isSynced, videoRef, videoRefB]);
+
+  // ── J/K/L: Speed control ────────────────────────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+      const vA = videoRef.current;
+      const vB = videoRefB?.current;
+      const key = e.key.toLowerCase();
+
+      if (key === 'j') {
         e.preventDefault();
-        if (videoRef.current) videoRef.current.playbackRate = 0.5;
-        if (videoRefB?.current) videoRefB.current.playbackRate = 0.5;
+        if (vA) vA.playbackRate = 0.5;
+        if (isSynced && vB) vB.playbackRate = 0.5;
         setPlaybackRate(0.5);
-      } else if (e.key.toLowerCase() === 'k') {
+      } else if (key === 'k') {
         e.preventDefault();
-        if (videoRef.current) videoRef.current.playbackRate = 1.0;
-        if (videoRefB?.current) videoRefB.current.playbackRate = 1.0;
+        if (vA) vA.playbackRate = 1.0;
+        if (isSynced && vB) vB.playbackRate = 1.0;
         setPlaybackRate(1.0);
-      } else if (e.key.toLowerCase() === 'l') {
+      } else if (key === 'l') {
         e.preventDefault();
-        if (videoRef.current) videoRef.current.playbackRate = 2.0;
-        if (videoRefB?.current) videoRefB.current.playbackRate = 2.0;
+        if (vA) vA.playbackRate = 2.0;
+        if (isSynced && vB) vB.playbackRate = 2.0;
         setPlaybackRate(2.0);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isSynced, videoRefB, videoRef]);
+  }, [isSynced, videoRef, videoRefB]);
 
-  // ── Video A state sync ────────────────────────────────────────────────────
+  // ── Video A state sync ──────────────────────────────────────────────────
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -150,7 +160,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
     };
   }, [videoRef]);
 
-  // ── Video B state sync (independent) ──────────────────────────────────────
+  // ── Video B state sync (independent) ────────────────────────────────────
   useEffect(() => {
     const videoB = videoRefB?.current;
     if (!videoB) return;
@@ -174,6 +184,19 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
   }, [videoRefB]);
 
   const frameSizeMs = (1000 / frameMode).toFixed(2);
+
+  const btnStyle: React.CSSProperties = {
+    border: 'none',
+    borderRadius: 6,
+    cursor: 'pointer',
+    fontSize: 14,
+    fontWeight: 600,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 32,
+    width: 32,
+  };
 
   return (
     <div style={{
@@ -208,21 +231,13 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
             }
           }}
           style={{
-            width: 32,
-            height: 32,
-            border: 'none',
-            borderRadius: 6,
+            ...btnStyle,
             background: isPlayingA ? '#35679A' : '#E8E8ED',
             color: isPlayingA ? '#fff' : '#1D1D1F',
-            fontSize: 14,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
           }}
           title="Play/Pause (Space)"
         >
-          {isPlayingA ? <Pause size={16} /> : <Play size={16} />}
+          {isPlayingA ? '⏸' : '▶'}
         </button>
 
         {/* Stop */}
@@ -237,21 +252,13 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
             }
           }}
           style={{
-            width: 32,
-            height: 32,
-            border: 'none',
-            borderRadius: 6,
+            ...btnStyle,
             background: '#E8E8ED',
             color: '#1D1D1F',
-            fontSize: 14,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
           }}
           title="Stop"
         >
-          <Square size={14} fill="#1D1D1F" />
+          ⏹
         </button>
 
         {/* Timeline with time markers */}
@@ -312,21 +319,13 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
               }
             }}
             style={{
-              width: 32,
-              height: 32,
-              border: 'none',
-              borderRadius: 6,
+              ...btnStyle,
               background: isPlayingB ? '#FF9500' : '#E8E8ED',
               color: isPlayingB ? '#fff' : '#1D1D1F',
-              fontSize: 14,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
             }}
             title="Play/Pause Video B"
           >
-            {isPlayingB ? <Pause size={16} /> : <Play size={16} />}
+            {isPlayingB ? '⏸' : '▶'}
           </button>
 
           {/* Stop */}
@@ -341,36 +340,23 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
               }
             }}
             style={{
-              width: 32,
-              height: 32,
-              border: 'none',
-              borderRadius: 6,
+              ...btnStyle,
               background: '#E8E8ED',
               color: '#1D1D1F',
-              fontSize: 14,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
             }}
             title="Stop Video B"
           >
-            <Square size={14} fill="#1D1D1F" />
+            ⏹
           </button>
 
           {/* Remove B button */}
           <button
             onClick={onRemoveVideoB}
             style={{
-              width: 32,
-              height: 32,
-              border: 'none',
-              borderRadius: 6,
+              ...btnStyle,
               background: '#FFE5E5',
               color: '#EF4444',
               fontSize: 16,
-              cursor: 'pointer',
-              fontWeight: 600,
             }}
             title="Remove Video B"
           >
@@ -453,7 +439,9 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
         {FRAME_MODES.map((fm) => (
           <button
             key={fm}
-            onClick={() => setFrameMode(fm)}
+            onClick={() => {
+              setFrameMode(fm);
+            }}
             title={`← → steps by ${(1000 / fm).toFixed(2)}ms per frame`}
             style={{
               height: 24,
