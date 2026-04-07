@@ -12,7 +12,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import { stepForward, stepBackward, formatTime, SPEED_OPTIONS } from '@/lib/videoUtils';
+import { stepForward, stepBackward, formatTime, SPEED_OPTIONS, SKIP_OPTIONS } from '@/lib/videoUtils';
 
 interface VideoPlayerProps {
   onVideoReady: (video: HTMLVideoElement) => void;
@@ -31,6 +31,7 @@ export default function VideoPlayer({
   const [duration, setDuration] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
+  const [skipAmount, setSkipAmount] = useState(SKIP_OPTIONS[0].value);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const srcUrlRef = useRef<string | null>(null);
 
@@ -120,16 +121,16 @@ export default function VideoPlayer({
   const handleSkipBack = useCallback(() => {
     const v = videoRef.current;
     if (v) {
-      v.currentTime = Math.max(0, v.currentTime - 5);
+      v.currentTime = Math.max(0, v.currentTime - skipAmount);
     }
-  }, [videoRef]);
+  }, [videoRef, skipAmount]);
 
   const handleSkipForward = useCallback(() => {
     const v = videoRef.current;
     if (v) {
-      v.currentTime = Math.min(v.duration, v.currentTime + 5);
+      v.currentTime = Math.min(v.duration, v.currentTime + skipAmount);
     }
-  }, [videoRef]);
+  }, [videoRef, skipAmount]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -205,7 +206,7 @@ export default function VideoPlayer({
               onClick={handleSkipBack}
               disabled={!videoSrc}
               className="btn-ghost rounded-lg"
-              title="Back 5s"
+              title={`Skip back (←)`}
             >
               <SkipBack size={16} />
             </button>
@@ -237,7 +238,7 @@ export default function VideoPlayer({
               onClick={handleSkipForward}
               disabled={!videoSrc}
               className="btn-ghost rounded-lg"
-              title="Forward 5s"
+              title={`Skip forward (→)`}
             >
               <SkipForward size={16} />
             </button>
@@ -268,6 +269,26 @@ export default function VideoPlayer({
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Skip amount selector */}
+        <div className="flex items-center gap-1 text-xs text-gray-500">
+          <span className="mr-1">Skip:</span>
+          {SKIP_OPTIONS.map((opt) => (
+            <button
+              key={opt.label}
+              onClick={() => setSkipAmount(opt.value)}
+              disabled={!videoSrc}
+              className={`px-2 py-0.5 rounded-md transition-colors ${
+                skipAmount === opt.value
+                  ? 'bg-blue-100 text-blue-700 font-semibold'
+                  : 'hover:bg-gray-100 text-gray-600'
+              }`}
+              title={`Skip ${opt.label} (~${(opt.value * 1000).toFixed(1)}ms at 60fps)`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
 
         {/* Upload button */}
