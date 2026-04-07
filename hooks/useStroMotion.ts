@@ -25,7 +25,7 @@ export function useStroMotion(
     opacityRef.current = config.opacity;
   }, [config.opacity]);
 
-  const { enabled, startFrame, endFrame, ghostCount } = config;
+  const { enabled, startFrame, endFrame, ghostCount, region } = config;
 
   useEffect(() => {
     if (!enabled || !videoRef.current || ghostCount < 2) return;
@@ -80,7 +80,16 @@ export function useStroMotion(
         if (cancelled) break;
 
         ctx.drawImage(video, 0, 0);
-        const bitmap = await createImageBitmap(canvas);
+        let bitmap: ImageBitmap;
+        if (region) {
+          const px = Math.round(region.x * canvas.width);
+          const py = Math.round(region.y * canvas.height);
+          const pw = Math.max(1, Math.round(region.w * canvas.width));
+          const ph = Math.max(1, Math.round(region.h * canvas.height));
+          bitmap = await createImageBitmap(canvas, px, py, pw, ph);
+        } else {
+          bitmap = await createImageBitmap(canvas);
+        }
         frames.push(bitmap);
         setProgress(Math.floor(((i + 1) / ghostCount) * 100));
       }
@@ -106,7 +115,7 @@ export function useStroMotion(
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, startFrame, endFrame, ghostCount, videoRef]);
+  }, [enabled, startFrame, endFrame, ghostCount, region, videoRef]);
 
   /** Clear all captured ghost frames and release their GPU memory. */
   const clearGhosts = useCallback(() => {

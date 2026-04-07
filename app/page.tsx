@@ -70,6 +70,7 @@ export default function Home() {
   const [stroMotionEnd, setStroMotionEnd]         = useState(3);
   const [stroMotionCount, setStroMotionCount]     = useState(6);
   const [stroMotionOpacity, setStroMotionOpacity] = useState(0.3);
+  const [stroMotionRegion, setStroMotionRegion]   = useState<{ x: number; y: number; w: number; h: number } | undefined>(undefined);
 
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
@@ -82,6 +83,7 @@ export default function Home() {
     endFrame: Math.round(stroMotionEnd * 30),
     ghostCount: stroMotionCount,
     opacity: stroMotionOpacity,
+    region: stroMotionRegion,
   };
   const { ghostFrames, isProcessing: stroMotionProcessing, progress: stroMotionProgress, clearGhosts } = useStroMotion(videoRef, stroMotionConfig);
 
@@ -257,9 +259,30 @@ export default function Home() {
 
   // ── Auto Swing Detection ──────────────────────────────────────────────────
   const handleAutoSwing = useCallback(async () => {
-    const swings = canvasRef.current?.getDetectedSwings() ?? [];
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) {
+      alert('No video loaded. Upload a video first.');
+      return;
+    }
+
+    setProcessingStatus('Analyzing motion…');
+    let swings: Array<{ startTime: number; endTime: number; wristPositions: Array<{ time: number; x: number; y: number }> }> = [];
+    try {
+      const { detectSwingsFromVideo } = await import('@/lib/swingDetection');
+      swings = await detectSwingsFromVideo(video);
+    } catch {
+      swings = [];
+    } finally {
+      setProcessingStatus(null);
+    }
+
+    // Fall back to skeleton-based detection if motion detection found nothing
     if (swings.length === 0) {
-      alert('No swings detected yet. Enable Skeleton tool and play the video first.');
+      swings = canvasRef.current?.getDetectedSwings() ?? [];
+    }
+
+    if (swings.length === 0) {
+      alert('No swings detected. Play the video first, or enable Skeleton tool for AI-based detection.');
       return;
     }
     const items = swings.map((s, i) =>
@@ -270,7 +293,7 @@ export default function Home() {
     const idx = parseInt(choice, 10) - 1;
     if (isNaN(idx) || idx < 0 || idx >= swings.length) return;
     canvasRef.current?.drawSwingFromSegment(swings[idx], '#FF8C00');
-  }, []);
+  }, [videoRef]);
 
   // ── Racket Multiplier ─────────────────────────────────────────────────────
   const handleRacketMultiplier = useCallback(async () => {
@@ -552,6 +575,29 @@ export default function Home() {
               >
                 {stroMotionProcessing ? `Capturing… ${stroMotionProgress}%` : '▶ Capture Ghosts'}
               </button>
+              <button
+                onClick={() => {
+                  canvasRef.current?.startStroMotionRegionSelect((region) => {
+                    setStroMotionRegion(region);
+                  });
+                }}
+                style={{
+                  padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                  background: stroMotionRegion ? '#16A34A' : '#6b7280', color: '#fff',
+                  border: 'none', cursor: 'pointer',
+                }}
+                title="Drag on the canvas to select a region for StroMotion"
+              >
+                {stroMotionRegion ? '✓ Region set — Click to change' : '⬚ Select Region'}
+              </button>
+              {stroMotionRegion && (
+                <button
+                  onClick={() => setStroMotionRegion(undefined)}
+                  style={{ fontSize: '10px', color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer' }}
+                >
+                  Clear region
+                </button>
+              )}
               {ghostFrames.length > 0 && (
                 <div style={{ display: 'flex', gap: '4px' }}>
                   <span style={{ fontSize: '10px', color: '#16A34A', fontWeight: 600 }}>✓ {ghostFrames.length} ghosts captured</span>
@@ -641,6 +687,7 @@ export default function Home() {
                     webcamOpacity={webcamOpacity}
                     stroMotionGhosts={ghostFrames}
                     stroMotionOpacity={stroMotionOpacity}
+                    stroMotionRegion={stroMotionRegion}
                   />
                 )}
                 {videoSrcB && (
