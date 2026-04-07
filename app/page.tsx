@@ -731,7 +731,17 @@ export default function Home() {
           )}
 
           {/* Playback controls */}
-          <PlaybackControls videoRef={videoRef} videoRefB={videoSrcB ? videoRefB : undefined} />
+          <PlaybackControls
+            videoRef={videoRef}
+            videoRefB={videoBLoaded ? videoRefB : undefined}
+            onRemoveVideoB={() => {
+              setVideoSrcB(null);
+              setVideoBLoaded(false);
+              if (videoRefB.current) {
+                videoRefB.current.src = '';
+              }
+            }}
+          />
 
           {/* Video B offset control */}
           {videoSrcB && (
