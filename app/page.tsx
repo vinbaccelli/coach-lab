@@ -83,7 +83,7 @@ export default function Home() {
     ghostCount: stroMotionCount,
     opacity: stroMotionOpacity,
   };
-  const { ghostFrames, isProcessing: stroMotionProcessing, progress: stroMotionProgress } = useStroMotion(videoRef, stroMotionConfig);
+  const { ghostFrames, isProcessing: stroMotionProcessing, progress: stroMotionProgress, clearGhosts } = useStroMotion(videoRef, stroMotionConfig);
 
   // ── Container size measurement ────────────────────────────────────────────
   const updateSize = useCallback(() => {
@@ -556,7 +556,7 @@ export default function Home() {
                 <div style={{ display: 'flex', gap: '4px' }}>
                   <span style={{ fontSize: '10px', color: '#16A34A', fontWeight: 600 }}>✓ {ghostFrames.length} ghosts captured</span>
                   <button
-                    onClick={() => setStroMotionEnabled(false)}
+                    onClick={() => { setStroMotionEnabled(false); clearGhosts(); }}
                     style={{ marginLeft: 'auto', fontSize: '10px', color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer' }}
                   >
                     Clear

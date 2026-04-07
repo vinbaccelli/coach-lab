@@ -251,7 +251,8 @@ function findBallInImageData(
     }
   }
 
-  if (count < 8) return null;
+  // Too few pixels → no ball; too many → probably a large green surface (grass court, banner)
+  if (count < 8 || count > 5000) return null;
 
   let sumX = 0, sumY = 0, n = 0;
   for (let idx = 0; idx < mask.length; idx++) {
@@ -1053,11 +1054,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             if (poses && poses.length > 0 && poses[0].keypoints) {
               const keypoints = poses[0].keypoints;
               latestKeypointsRef.current = keypoints;
-              // Also maintain skeletonFramesRef for swing detection
+              // Maintain skeletonFramesRef for swing detection.
+              // Only push when the video has advanced to a new timestamp to avoid
+              // flooding the buffer with identical zero-velocity frames while paused.
               const now = video.currentTime;
-              skeletonFramesRef.current.push({ timeSeconds: now, keypoints });
-              if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
-                skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+              const lastFrame = skeletonFramesRef.current.at(-1);
+              if (!video.paused && (!lastFrame || now !== lastFrame.timeSeconds)) {
+                skeletonFramesRef.current.push({ timeSeconds: now, keypoints });
+                if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+                  skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+                }
               }
             }
           } catch (e) {
@@ -1089,8 +1095,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const setup = () => {
         if (video.videoWidth === 0) return;
         const c = document.createElement('canvas');
-        c.width = 320;
-        c.height = 180;
+        const MAX_DETECT_W = 320;
+        const scale = Math.min(1, MAX_DETECT_W / video.videoWidth);
+        c.width  = Math.round(video.videoWidth  * scale);
+        c.height = Math.round(video.videoHeight * scale);
         const ctx = c.getContext('2d', { willReadFrequently: true });
         if (ctx) {
           ballDetectRef.current = { canvas: c, ctx };

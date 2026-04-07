@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { StroMotionConfig } from '@/lib/stroMotion';
 
 export type { StroMotionConfig };
@@ -37,6 +37,10 @@ export function useStroMotion(
     const processGhosts = async () => {
       setIsProcessing(true);
       const video = videoRef.current!;
+
+      // Save the current playback position so we can restore it afterwards.
+      const origTime = video.currentTime;
+
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
@@ -88,7 +92,8 @@ export function useStroMotion(
           return frames;
         });
         setIsProcessing(false);
-        video.currentTime = 0;
+        // Restore the original playback position instead of jumping to 0.
+        video.currentTime = origTime;
       } else {
         // Cancelled mid-run — release any frames already collected.
         frames.forEach((bm) => bm.close());
@@ -103,5 +108,13 @@ export function useStroMotion(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, startFrame, endFrame, ghostCount, videoRef]);
 
-  return { ghostFrames, isProcessing, progress };
+  /** Clear all captured ghost frames and release their GPU memory. */
+  const clearGhosts = useCallback(() => {
+    setGhostFrames((prev) => {
+      prev.forEach((bm) => bm.close());
+      return [];
+    });
+  }, []);
+
+  return { ghostFrames, isProcessing, progress, clearGhosts };
 }
