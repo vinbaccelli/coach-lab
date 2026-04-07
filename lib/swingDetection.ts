@@ -11,6 +11,8 @@ export function detectSwingSegments(
     timeSeconds: number;
     keypoints: Array<{ x: number; y: number; score: number; name: string }>;
   }>,
+  videoWidth: number = 640,
+  videoHeight: number = 480,
 ): SwingSegment[] {
   if (skeletonFrames.length < 5) return [];
 
@@ -41,7 +43,8 @@ export function detectSwingSegments(
     return (velocities[i - 1] + v + velocities[i + 1]) / 3;
   });
 
-  const SWING_VELOCITY_THRESHOLD = 80;
+  const avgDim = (videoWidth + videoHeight) / 2;
+  const SWING_VELOCITY_THRESHOLD = (avgDim / 640) * 80;
   const MIN_SWING_DURATION = 0.15;
 
   const segments: SwingSegment[] = [];

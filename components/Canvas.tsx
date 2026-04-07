@@ -349,16 +349,19 @@ function drawCircleStroke(
   const isCircle = s.rx === s.ry;
 
   if (isCircle && (s.gapStart !== undefined || s.spinning)) {
-    let offset = 0;
+    ctx.save();
+    ctx.translate(s.cx, s.cy);
     if (s.spinning) {
       const degPerFrame = (s.spinSpeed ?? 100) / 60;
-      offset = (animFrame * degPerFrame * Math.PI / 180) % (Math.PI * 2);
+      const rotationOffset = (animFrame * degPerFrame * Math.PI / 180) % (Math.PI * 2);
+      ctx.rotate(rotationOffset);
     }
-    const startAngle = (s.gapEnd ?? 0) + offset;
-    const endAngle = (s.gapStart ?? Math.PI * 2) + offset;
+    const startAngle = s.gapStart ?? 0;
+    const endAngle = s.gapEnd ?? Math.PI * 2;
     ctx.beginPath();
-    ctx.arc(s.cx, s.cy, Math.max(1, s.rx), startAngle, endAngle);
+    ctx.arc(0, 0, Math.max(1, s.rx), startAngle, endAngle);
     ctx.stroke();
+    ctx.restore();
   } else {
     ctx.beginPath();
     ctx.ellipse(s.cx, s.cy, Math.max(1, s.rx), Math.max(1, s.ry), 0, 0, Math.PI * 2);
@@ -953,8 +956,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       },
       getDetectedSwings: () => {
         const frames = skeletonFramesRef.current;
-        if (frames.length === 0) return [];
-        return detectSwingSegments(frames);
+        const video = videoRef.current;
+        if (frames.length === 0 || !video) return [];
+        return detectSwingSegments(frames, video.videoWidth, video.videoHeight);
       },
       drawSwingFromSegment: (segment: SwingSegment, color: string) => {
         const video = videoRef.current;
@@ -1196,6 +1200,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.globalAlpha = Math.max(MIN_GHOST_OPACITY, alpha);
             ctx.drawImage(stroGhosts[i], dx, dy, dw, dh);
           }
+          ctx.globalAlpha = 1.0;
           ctx.restore();
         }
 
