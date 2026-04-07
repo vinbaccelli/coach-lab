@@ -1196,7 +1196,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.save();
           const baseOpacity = stroMotionOpacityRef.current;
           for (let i = 0; i < stroGhosts.length; i++) {
-            const alpha = ((i + 1) / stroGhosts.length) * baseOpacity;
+            const alpha = Math.min(baseOpacity, ((i + 1) / stroGhosts.length) * baseOpacity);
             ctx.globalAlpha = Math.max(MIN_GHOST_OPACITY, alpha);
             ctx.drawImage(stroGhosts[i], dx, dy, dw, dh);
           }
