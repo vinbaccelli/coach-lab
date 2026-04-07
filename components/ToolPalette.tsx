@@ -20,6 +20,7 @@ import {
   Minus,
   Square,
   Zap,
+  ZoomIn,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -68,6 +69,7 @@ const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
   { id: 'swingPath',   icon: <TrendingUp size={18} />,                                    label: 'Swing' },
   { id: 'manualSwing', icon: <Zap size={18} />,                                           label: 'ManualSwing' },
   { id: 'erase',       icon: <Eraser size={18} />,                                        label: 'Erase' },
+  { id: 'zoom',        icon: <ZoomIn size={18} />,                                        label: 'Zoom' },
 ];
 
 const PRESET_COLORS = [
@@ -395,6 +397,21 @@ export default function ToolPalette({
                 <span>{circleGapMode ? 'Gap Mode ON' : 'Add Gap'}</span>
               </button>
             )}
+          </div>
+        </>
+      )}
+
+      {/* Zoom tool */}
+      {activeTool === 'zoom' && (
+        <>
+          <div className="border-t border-gray-100 mx-2" />
+          <div className="px-2 py-2">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
+              Zoom / Pan
+            </p>
+            <p className="text-[9px] text-blue-500 px-1 leading-tight font-medium">
+              Wheel: zoom · Space+drag: pan · Double-click: reset
+            </p>
           </div>
         </>
       )}

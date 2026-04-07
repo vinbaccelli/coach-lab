@@ -92,6 +92,8 @@ export interface CanvasHandle {
   drawSwingFromSegment: (segment: SwingSegment, color: string) => void;
   setRacketTrail: (trail: RacketTrail | null) => void;
   getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
+  /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords */
+  startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number }) => void) => void;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -114,6 +116,8 @@ export interface CanvasProps {
   webcamOpacity?: number;
   stroMotionGhosts?: ImageBitmap[];
   stroMotionOpacity?: number;
+  /** Region (video-normalized 0..1) to display stro-motion ghosts in */
+  stroMotionRegion?: { x: number; y: number; w: number; h: number };
 }
 
 // ── Module-level pose render cache ─────────────────────────────────────────
@@ -812,6 +816,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamOpacity = 1,
       stroMotionGhosts,
       stroMotionOpacity = 0.3,
+      stroMotionRegion,
     },
     ref,
   ) {
@@ -876,6 +881,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const webcamOpacityRef    = useRef(webcamOpacity);
     const stroMotionGhostsRef = useRef<ImageBitmap[]>(stroMotionGhosts ?? []);
     const stroMotionOpacityRef = useRef(stroMotionOpacity);
+    const stroMotionRegionRef = useRef(stroMotionRegion);
+
+    // Zoom / pan state
+    const zoomRef    = useRef(1.0);
+    const panXRef    = useRef(0);
+    const panYRef    = useRef(0);
+    const isPanningRef  = useRef(false);
+    const panStartRef   = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+    const spaceHeldRef  = useRef(false);
+    /** Letterbox bounds of video in logical canvas space — updated each rAF */
+    const videoBoundsRef = useRef({ dx: 0, dy: 0, dw: 1, dh: 1 });
+
+    // StroMotion rubber-band region selection
+    const isSelectingStroRegionRef   = useRef(false);
+    const stroRegionCallbackRef      = useRef<((r: { x: number; y: number; w: number; h: number }) => void) | null>(null);
+    const stroRegionStartRef         = useRef<Pt | null>(null);
+    const stroRegionCurrentRef       = useRef<Pt | null>(null);
 
     // Manual swing state
     const manualSwingPtsRef     = useRef<Pt[]>([]);
@@ -895,6 +917,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { webcamOpacityRef.current     = webcamOpacity; },   [webcamOpacity]);
     useEffect(() => { stroMotionGhostsRef.current  = stroMotionGhosts ?? []; }, [stroMotionGhosts]);
     useEffect(() => { stroMotionOpacityRef.current = stroMotionOpacity; },      [stroMotionOpacity]);
+    useEffect(() => { stroMotionRegionRef.current  = stroMotionRegion; },        [stroMotionRegion]);
 
     // ── History ────────────────────────────────────────────────────────────
 
@@ -994,6 +1017,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         racketTrailRef.current = trail;
       },
       getSkeletonFrames: () => skeletonFramesRef.current,
+      startStroMotionRegionSelect: (cb) => {
+        isSelectingStroRegionRef.current = true;
+        stroRegionCallbackRef.current = cb;
+        stroRegionStartRef.current = null;
+        stroRegionCurrentRef.current = null;
+      },
     }), [onProcessingStatus, pushHistory, videoRef]);
 
     // ── Skeleton detector loader ───────────────────────────────────────────
@@ -1127,6 +1156,41 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       canvas.height = containerHeight;
     }, [containerWidth, containerHeight]);
 
+    // ── Wheel zoom ─────────────────────────────────────────────────────────
+
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const onWheel = (e: WheelEvent) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.1 : 0.9;
+        zoomRef.current = Math.max(0.25, Math.min(8, zoomRef.current * factor));
+      };
+      canvas.addEventListener('wheel', onWheel, { passive: false });
+      return () => canvas.removeEventListener('wheel', onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // ── Space key for pan mode ──────────────────────────────────────────────
+
+    useEffect(() => {
+      const onKeyDown = (e: KeyboardEvent) => { if (e.code === 'Space') spaceHeldRef.current = true; };
+      const onKeyUp   = (e: KeyboardEvent) => {
+        if (e.code === 'Space') {
+          spaceHeldRef.current = false;
+          isPanningRef.current = false;
+          panStartRef.current = null;
+        }
+      };
+      window.addEventListener('keydown', onKeyDown);
+      window.addEventListener('keyup',   onKeyUp);
+      return () => {
+        window.removeEventListener('keydown', onKeyDown);
+        window.removeEventListener('keyup',   onKeyUp);
+      };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // ── Render loop ────────────────────────────────────────────────────────
 
     useEffect(() => {
@@ -1143,6 +1207,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const H = canvas.height;
         ctx.clearRect(0, 0, W, H);
 
+        // ── Apply zoom/pan transform ──────────────────────────────────────
+        ctx.save();
+        ctx.translate(W / 2 + panXRef.current, H / 2 + panYRef.current);
+        ctx.scale(zoomRef.current, zoomRef.current);
+        ctx.translate(-W / 2, -H / 2);
+
         // Video frame (letterboxed to preserve aspect ratio)
         const video = videoRef.current;
         let dx = 0, dy = 0, dw = W, dh = H, vW = W, vH = H;
@@ -1155,6 +1225,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           dh = vH * scale;
           dx = (W - dw) / 2;
           dy = (H - dh) / 2;
+          // Store for rubber-band region selection coordinate mapping
+          videoBoundsRef.current = { dx, dy, dw, dh };
           ctx.drawImage(video, dx, dy, dw, dh);
 
           // ── Real-time ball detection (runs when playing or scrubbing) ──────
@@ -1207,10 +1279,29 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (stroGhosts.length > 0 && dw > 0 && dh > 0) {
           ctx.save();
           const baseOpacity = stroMotionOpacityRef.current;
+          const region = stroMotionRegionRef.current;
           for (let i = 0; i < stroGhosts.length; i++) {
             const alpha = Math.min(baseOpacity, ((i + 1) / stroGhosts.length) * baseOpacity);
             ctx.globalAlpha = Math.max(MIN_GHOST_OPACITY, alpha);
-            ctx.drawImage(stroGhosts[i], dx, dy, dw, dh);
+            if (region) {
+              // Draw only in the selected video region
+              const rx = dx + region.x * dw;
+              const ry = dy + region.y * dh;
+              const rw = region.w * dw;
+              const rh = region.h * dh;
+              ctx.drawImage(stroGhosts[i], rx, ry, rw, rh);
+              // Draw faint outline around region on first (most-opaque) ghost
+              if (i === stroGhosts.length - 1) {
+                ctx.globalAlpha = 0.5;
+                ctx.strokeStyle = '#35679A';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([4, 4]);
+                ctx.strokeRect(rx, ry, rw, rh);
+                ctx.setLineDash([]);
+              }
+            } else {
+              ctx.drawImage(stroGhosts[i], dx, dy, dw, dh);
+            }
           }
           ctx.globalAlpha = 1.0;
           ctx.restore();
@@ -1337,6 +1428,39 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.restore();
           }
         }
+
+        // ── StroMotion rubber-band region selection ───────────────────────
+        if (isSelectingStroRegionRef.current && stroRegionStartRef.current && stroRegionCurrentRef.current) {
+          const p1 = stroRegionStartRef.current;
+          const p2 = stroRegionCurrentRef.current;
+          const rx = Math.min(p1.x, p2.x), ry = Math.min(p1.y, p2.y);
+          const rw = Math.abs(p2.x - p1.x), rh = Math.abs(p2.y - p1.y);
+          ctx.save();
+          ctx.strokeStyle = '#35679A';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]);
+          ctx.strokeRect(rx, ry, rw, rh);
+          ctx.fillStyle = 'rgba(53,103,154,0.12)';
+          ctx.fillRect(rx, ry, rw, rh);
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
+
+        // ── Undo zoom/pan transform ───────────────────────────────────────
+        ctx.restore();
+
+        // Draw zoom level indicator (outside transform, fixed in corner)
+        if (zoomRef.current !== 1.0 || panXRef.current !== 0 || panYRef.current !== 0) {
+          const label = `${Math.round(zoomRef.current * 100)}%`;
+          ctx.save();
+          ctx.font = 'bold 12px -apple-system, sans-serif';
+          const m = ctx.measureText(label);
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(8, 8, m.width + 12, 22);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(label, 14, 24);
+          ctx.restore();
+        }
       };
 
       rafRef.current = requestAnimationFrame(render);
@@ -1350,9 +1474,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const canvas = canvasRef.current;
       if (!canvas) return { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
+      const sx = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const sy = (e.clientY - rect.top)  * (canvas.height / rect.height);
+      const W = canvas.width;
+      const H = canvas.height;
+      // Inverse zoom/pan transform so returned coords are in logical canvas space
       return {
-        x: (e.clientX - rect.left) * (canvas.width / rect.width),
-        y: (e.clientY - rect.top)  * (canvas.height / rect.height),
+        x: (sx - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
+        y: (sy - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
       };
     };
 
@@ -1425,6 +1554,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const lw   = pressureWidth(e);
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
+
+      // ── StroMotion rubber-band region selection ──────────────────────────
+      if (isSelectingStroRegionRef.current) {
+        stroRegionStartRef.current = pos;
+        stroRegionCurrentRef.current = pos;
+        isDraggingRef.current = true;
+        return;
+      }
+
+      // ── Pan: middle-click or Space+drag ─────────────────────────────────
+      if (e.button === 1 || spaceHeldRef.current) {
+        isPanningRef.current = true;
+        panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
+        e.preventDefault();
+        return;
+      }
 
       // Check if clicking near an existing draggable shape
       if (tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle') {
@@ -1639,6 +1784,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const pos  = getPos(e);
       const tool = activeToolRef.current;
 
+      // ── Pan drag ────────────────────────────────────────────────────────
+      if (isPanningRef.current && panStartRef.current) {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const scaleX = canvas.width  / rect.width;
+          const scaleY = canvas.height / rect.height;
+          panXRef.current = panStartRef.current.px + (e.clientX - panStartRef.current.x) * scaleX;
+          panYRef.current = panStartRef.current.py + (e.clientY - panStartRef.current.y) * scaleY;
+        }
+        return;
+      }
+
+      // ── StroMotion rubber-band drag ──────────────────────────────────────
+      if (isSelectingStroRegionRef.current && isDraggingRef.current && stroRegionStartRef.current) {
+        stroRegionCurrentRef.current = pos;
+        return;
+      }
+
       // Shape dragging
       if (dragCircleIdxRef.current >= 0 && isDraggingRef.current) {
         const idx = dragCircleIdxRef.current;
@@ -1690,6 +1854,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer up ─────────────────────────────────────────────────────────
 
     const onPointerUp = useCallback((_e: React.PointerEvent<HTMLCanvasElement>) => {
+      // ── End pan ────────────────────────────────────────────────────────
+      if (isPanningRef.current) {
+        isPanningRef.current = false;
+        panStartRef.current = null;
+        return;
+      }
+
+      // ── Finalize StroMotion region selection ───────────────────────────
+      if (isSelectingStroRegionRef.current) {
+        const p1 = stroRegionStartRef.current;
+        const p2 = stroRegionCurrentRef.current;
+        if (p1 && p2) {
+          const { dx, dy, dw, dh } = videoBoundsRef.current;
+          if (dw > 0 && dh > 0) {
+            const x = Math.max(0, Math.min(1, (Math.min(p1.x, p2.x) - dx) / dw));
+            const y = Math.max(0, Math.min(1, (Math.min(p1.y, p2.y) - dy) / dh));
+            const w = Math.max(0, Math.min(1 - x, Math.abs(p2.x - p1.x) / dw));
+            const h = Math.max(0, Math.min(1 - y, Math.abs(p2.y - p1.y) / dh));
+            if (w > 0.01 && h > 0.01) {
+              stroRegionCallbackRef.current?.({ x, y, w, h });
+            }
+          }
+        }
+        isSelectingStroRegionRef.current = false;
+        stroRegionCallbackRef.current = null;
+        stroRegionStartRef.current = null;
+        stroRegionCurrentRef.current = null;
+        isDraggingRef.current = false;
+        return;
+      }
+
       if (dragCircleIdxRef.current >= 0) {
         dragCircleIdxRef.current = -1;
         isDraggingRef.current = false;
@@ -1721,11 +1916,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (activeToolRef.current === 'manualSwing' && manualSwingActiveRef.current) {
         finishManualSwingPath();
       }
+      if (activeToolRef.current === 'zoom') {
+        zoomRef.current = 1.0;
+        panXRef.current = 0;
+        panYRef.current = 0;
+      }
     }, [finishSwingPath, finishManualSwingPath]);
 
     const cursorFor: Partial<Record<ToolType, string>> = {
       pen: 'crosshair', erase: 'cell', text: 'text', line: 'crosshair',
       angle: 'crosshair', swingPath: 'crosshair', manualSwing: 'crosshair', ballShadow: 'crosshair',
+      zoom: isPanningRef.current
+        ? 'grabbing'
+        : spaceHeldRef.current
+          ? 'grab'
+          : zoomRef.current > 1.0 ? 'zoom-out' : 'zoom-in',
     };
 
     return (

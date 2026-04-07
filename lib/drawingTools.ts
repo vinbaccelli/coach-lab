@@ -20,7 +20,8 @@ export type ToolType =
   | 'ballShadow'
   | 'swingPath'
   | 'manualSwing'
-  | 'erase';
+  | 'erase'
+  | 'zoom';
 
 export interface DrawingOptions {
   color: string;

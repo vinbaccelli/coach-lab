@@ -6,6 +6,8 @@ export interface StroMotionConfig {
   endFrame: number;
   ghostCount: number;
   opacity: number;
+  /** Optional region in video-normalized 0..1 coords to capture/display */
+  region?: { x: number; y: number; w: number; h: number };
 }
 
 export function drawStroMotion(

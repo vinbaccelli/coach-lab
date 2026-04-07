@@ -65,7 +65,8 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
       let newTime = video.currentTime;
 
       if (isArrowRight) {
-        newTime = Math.min(video.duration || 0, newTime + frameSize);
+        const maxTime = Number.isFinite(video.duration) ? video.duration : Infinity;
+        newTime = Math.min(maxTime, newTime + frameSize);
       } else if (isArrowLeft) {
         newTime = Math.max(0, newTime - frameSize);
       }
