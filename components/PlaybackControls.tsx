@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { SkipBack, SkipForward, Play, Pause, Square } from 'lucide-react';
 
 const PLAYBACK_SPEEDS = [0.05, 0.1, 0.25, 0.5, 1, 1.5, 2] as const;
-const FRAME_MODES = [60, 120, 240, 960] as const;
+const FRAME_MODES = [30, 60, 120, 240, 960] as const;
 type FrameMode = typeof FRAME_MODES[number];
 
 function formatSpeed(s: number): string {
@@ -69,6 +69,8 @@ export default function PlaybackControls({ videoRef, videoRefB }: Props) {
         case 'arrowleft':
           e.preventDefault();
           {
+            video.pause();
+            if (isSynced) videoRefB?.current?.pause();
             const frameSize = 1 / frameModeRef.current;
             video.currentTime = Math.max(0, video.currentTime - frameSize);
             if (isSynced && videoRefB?.current) videoRefB.current.currentTime = video.currentTime;
@@ -77,6 +79,8 @@ export default function PlaybackControls({ videoRef, videoRefB }: Props) {
         case 'arrowright':
           e.preventDefault();
           {
+            video.pause();
+            if (isSynced) videoRefB?.current?.pause();
             const frameSize = 1 / frameModeRef.current;
             video.currentTime = Math.min(video.duration, video.currentTime + frameSize);
             if (isSynced && videoRefB?.current) videoRefB.current.currentTime = video.currentTime;

@@ -339,29 +339,31 @@ function drawSmoothPath(
 function drawCircleStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeEllipse,
-  animFrame: number,
+  _animFrame: number,
 ): void {
   ctx.save();
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
   if (s.dashed) ctx.setLineDash([8, 6]);
 
-  const isCircle = s.rx === s.ry;
-
-  if (isCircle && (s.gapStart !== undefined || s.spinning)) {
-    ctx.save();
+  if (s.spinning || s.gapStart !== undefined) {
+    // Use time-based rotation for smooth, drift-free animation
     ctx.translate(s.cx, s.cy);
     if (s.spinning) {
-      const degPerFrame = (s.spinSpeed ?? 100) / 60;
-      const rotationOffset = (animFrame * degPerFrame * Math.PI / 180) % (Math.PI * 2);
-      ctx.rotate(rotationOffset);
+      const spinAngle = ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2);
+      ctx.rotate(spinAngle);
     }
     const startAngle = s.gapStart ?? 0;
-    const endAngle = s.gapEnd ?? Math.PI * 2;
+    const endAngle   = s.gapEnd   ?? Math.PI * 2;
+    const rx = Math.max(1, s.rx);
+    const ry = Math.max(1, s.ry);
     ctx.beginPath();
-    ctx.arc(0, 0, Math.max(1, s.rx), startAngle, endAngle);
+    if (Math.abs(rx - ry) < 1) {
+      ctx.arc(0, 0, rx, startAngle, endAngle);
+    } else {
+      ctx.ellipse(0, 0, rx, ry, 0, startAngle, endAngle);
+    }
     ctx.stroke();
-    ctx.restore();
   } else {
     ctx.beginPath();
     ctx.ellipse(s.cx, s.cy, Math.max(1, s.rx), Math.max(1, s.ry), 0, 0, Math.PI * 2);
@@ -374,7 +376,7 @@ function drawCircleStroke(
 function drawRectStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeRect,
-  animFrame: number,
+  _animFrame: number,
 ): void {
   ctx.save();
   ctx.strokeStyle = s.color;
@@ -382,9 +384,9 @@ function drawRectStroke(
   if (s.dashed) ctx.setLineDash([8, 6]);
 
   if (s.spinning) {
-    const offset = animFrame * SHAPE_SPIN_SPEED;
+    const spinAngle = ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2);
     ctx.translate(s.cx, s.cy);
-    ctx.rotate(offset);
+    ctx.rotate(spinAngle);
     ctx.strokeRect(-s.rx, -s.ry, s.rx * 2, s.ry * 2);
   } else {
     ctx.strokeRect(s.cx - s.rx, s.cy - s.ry, s.rx * 2, s.ry * 2);
@@ -395,16 +397,18 @@ function drawRectStroke(
 function drawTriangleStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeTriangle,
-  animFrame: number,
+  _animFrame: number,
 ): void {
   ctx.save();
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
   if (s.dashed) ctx.setLineDash([8, 6]);
 
-  const offset = s.spinning ? animFrame * SHAPE_SPIN_SPEED : 0;
+  const spinAngle = s.spinning
+    ? ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2)
+    : 0;
   ctx.translate(s.cx, s.cy);
-  ctx.rotate(offset);
+  ctx.rotate(spinAngle);
   ctx.beginPath();
   ctx.moveTo(0, -s.ry);
   ctx.lineTo( s.rx,  s.ry);
@@ -1485,6 +1489,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             color: opts.color, lw,
             dashed: opts.dashed ?? false,
             spinning: circleSpinningRef.current || undefined,
+            // Apply a default 90° open gap when gap mode is on
+            ...(circleGapModeRef.current
+              ? { gapStart: Math.PI * 0.25, gapEnd: Math.PI * 1.75 }
+              : {}),
           };
           isDraggingRef.current = true;
           break;
