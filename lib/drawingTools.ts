@@ -21,7 +21,8 @@ export type ToolType =
   | 'swingPath'
   | 'manualSwing'
   | 'erase'
-  | 'zoom';
+  | 'zoom'
+  | 'cropSelect';
 
 export interface DrawingOptions {
   color: string;
