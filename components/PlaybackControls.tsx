@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const PLAYBACK_SPEEDS = [0.05, 0.1, 0.25, 0.5, 1, 1.5, 2] as const;
 const FRAME_MODES = [10, 30, 60] as const;
@@ -41,48 +41,42 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
 
   const isSynced = !!videoRefB;
 
+  // ── Frame stepping helper ────────────────────────────────────────────────
+  const stepVideo = useCallback((video: HTMLVideoElement, dir: 1 | -1, setTime: (t: number) => void) => {
+    video.pause();
+    const frameSize = 1 / frameModeRef.current;
+    const maxTime = Number.isFinite(video.duration) ? video.duration : video.currentTime;
+    const newTime = Math.max(0, Math.min(maxTime, video.currentTime + dir * frameSize));
+    video.currentTime = newTime;
+    setTime(newTime);
+  }, []);
+
+  const handleFrameStep = useCallback((dir: 1 | -1) => {
+    const video = videoRef.current;
+    if (!video) return;
+    stepVideo(video, dir, setCurrentTimeA);
+    if (isSynced && videoRefB?.current) {
+      stepVideo(videoRefB.current, dir, setCurrentTimeB);
+    }
+  }, [isSynced, stepVideo, videoRef, videoRefB]);
+
   // ── Arrow Keys: Frame stepping ──────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const video = videoRef.current;
-      if (!video) return;
+      if (!videoRef.current) return;
 
       // Ignore if typing in an input
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
         return;
       }
 
-      const isArrowRight = e.key === 'ArrowRight';
-      const isArrowLeft = e.key === 'ArrowLeft';
-
-      if (!isArrowRight && !isArrowLeft) return;
-
-      e.preventDefault();
-      video.pause();
-      if (isSynced && videoRefB?.current) videoRefB.current.pause();
-
-      const frameSize = 1 / frameModeRef.current;
-      let newTime = video.currentTime;
-
-      if (isArrowRight) {
-        const maxTime = Number.isFinite(video.duration) ? video.duration : Infinity;
-        newTime = Math.min(maxTime, newTime + frameSize);
-      } else if (isArrowLeft) {
-        newTime = Math.max(0, newTime - frameSize);
-      }
-
-      video.currentTime = newTime;
-      setCurrentTimeA(newTime);
-
-      if (isSynced && videoRefB?.current) {
-        videoRefB.current.currentTime = newTime;
-        setCurrentTimeB(newTime);
-      }
+      if (e.key === 'ArrowRight') { e.preventDefault(); handleFrameStep(1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); handleFrameStep(-1); }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isSynced, videoRef, videoRefB]);
+  }, [handleFrameStep, videoRef]);
 
   // ── Space: Play/Pause both ────────────────────────────────────────────
   useEffect(() => {
@@ -262,6 +256,24 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
           ⏹
         </button>
 
+        {/* Step back */}
+        <button
+          onClick={() => handleFrameStep(-1)}
+          style={{ ...btnStyle, background: '#E8E8ED', color: '#1D1D1F', fontSize: 12 }}
+          title="Step back 1 frame (←)"
+        >
+          ◀
+        </button>
+
+        {/* Step forward */}
+        <button
+          onClick={() => handleFrameStep(1)}
+          style={{ ...btnStyle, background: '#E8E8ED', color: '#1D1D1F', fontSize: 12 }}
+          title="Step forward 1 frame (→)"
+        >
+          ▶
+        </button>
+
         {/* Timeline with time markers */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <input
@@ -348,6 +360,30 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
             title="Stop Video B"
           >
             ⏹
+          </button>
+
+          {/* Step back B */}
+          <button
+            onClick={() => {
+              const v = videoRefB?.current;
+              if (v) stepVideo(v, -1, setCurrentTimeB);
+            }}
+            style={{ ...btnStyle, background: '#E8E8ED', color: '#1D1D1F', fontSize: 12 }}
+            title="Step back 1 frame (←)"
+          >
+            ◀
+          </button>
+
+          {/* Step forward B */}
+          <button
+            onClick={() => {
+              const v = videoRefB?.current;
+              if (v) stepVideo(v, 1, setCurrentTimeB);
+            }}
+            style={{ ...btnStyle, background: '#E8E8ED', color: '#1D1D1F', fontSize: 12 }}
+            title="Step forward 1 frame (→)"
+          >
+            ▶
           </button>
 
           {/* Remove B button */}
