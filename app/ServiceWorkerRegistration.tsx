@@ -1,15 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
-
 export default function ServiceWorkerRegistration() {
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {
-        // Service worker registration failed silently
-      });
-    }
-  }, []);
-
+  // Service worker registration is disabled to prevent Safari from caching
+  // stale Next.js chunks that cause hydration failures.
   return null;
 }
