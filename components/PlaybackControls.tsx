@@ -22,9 +22,11 @@ interface Props {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   videoRefB?: React.RefObject<HTMLVideoElement | null>;
   onRemoveVideoB?: () => void;
+  /** Called when video.play() is rejected (e.g. Safari autoplay block) */
+  onPlayBlocked?: () => void;
 }
 
-export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }: Props) {
+export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, onPlayBlocked }: Props) {
   const [isPlayingA, setIsPlayingA] = useState(false);
   const [isPlayingB, setIsPlayingB] = useState(false);
   const [currentTimeA, setCurrentTimeA] = useState(0);
@@ -93,7 +95,11 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
       if (!vA) return;
 
       if (vA.paused) {
-        vA.play().catch(() => {});
+        vA.play().catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === 'NotAllowedError') {
+            onPlayBlocked?.();
+          }
+        });
         if (isSynced && vB) vB.play().catch(() => {});
       } else {
         vA.pause();
@@ -103,7 +109,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isSynced, videoRef, videoRefB]);
+  }, [isSynced, onPlayBlocked, videoRef, videoRefB]);
 
   // ── J/K/L: Speed control ────────────────────────────────────────────────
   useEffect(() => {
@@ -221,7 +227,11 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
             const v = videoRef.current;
             if (!v) return;
             if (v.paused) {
-              v.play().catch(() => {});
+              v.play().catch((err: unknown) => {
+                if (err instanceof DOMException && err.name === 'NotAllowedError') {
+                  onPlayBlocked?.();
+                }
+              });
               setIsPlayingA(true);
             } else {
               v.pause();
