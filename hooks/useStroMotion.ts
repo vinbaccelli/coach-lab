@@ -37,6 +37,10 @@ export function useStroMotion(
     const processGhosts = async () => {
       setIsProcessing(true);
       const video = videoRef.current!;
+      if (video.videoWidth === 0 || video.videoHeight === 0) {
+        setIsProcessing(false);
+        return;
+      }
 
       // Save the current playback position so we can restore it afterwards.
       const origTime = video.currentTime;

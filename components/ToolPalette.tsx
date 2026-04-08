@@ -50,6 +50,15 @@ interface ToolPaletteProps {
   webcamOpacity?: number;
   onWebcamOpacityChange?: (v: number) => void;
   webcamActive?: boolean;
+  skeletonShowAngles?: boolean;
+  onSkeletonShowAnglesChange?: (v: boolean) => void;
+  skeletonShowHeadLine?: boolean;
+  onSkeletonShowHeadLineChange?: (v: boolean) => void;
+  skeletonClassicColors?: boolean;
+  onSkeletonClassicColorsChange?: (v: boolean) => void;
+  ballSampleMode?: boolean;
+  onBallSampleModeChange?: (v: boolean) => void;
+  onResetCropZoom?: () => void;
 }
 
 const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
@@ -112,6 +121,15 @@ export default function ToolPalette({
   webcamOpacity = 1,
   onWebcamOpacityChange,
   webcamActive,
+  skeletonShowAngles,
+  onSkeletonShowAnglesChange,
+  skeletonShowHeadLine,
+  onSkeletonShowHeadLineChange,
+  skeletonClassicColors,
+  onSkeletonClassicColorsChange,
+  ballSampleMode,
+  onBallSampleModeChange,
+  onResetCropZoom,
 }: ToolPaletteProps) {
   const isShapeTool = activeTool === 'circle' || activeTool === 'bodyCircle'
     || activeTool === 'rect' || activeTool === 'triangle';
@@ -260,11 +278,32 @@ export default function ToolPalette({
             {onRacketMultiplier && (
               <button
                 onClick={onRacketMultiplier}
-                className="tool-btn w-full flex-row gap-1 text-purple-600 hover:bg-purple-50 hover:text-purple-700"
+                className="tool-btn w-full flex-row gap-1 text-purple-600 hover:bg-purple-50 hover:text-purple-700 mb-1"
               >
                 <Activity size={13} />
                 <span>Racket Multiplier</span>
               </button>
+            )}
+            {onSkeletonShowAnglesChange !== undefined && (
+              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
+                <input type="checkbox" checked={skeletonShowAngles ?? true}
+                  onChange={e => onSkeletonShowAnglesChange(e.target.checked)} className="accent-blue-500" />
+                <span className="text-[9px] text-gray-600 font-medium">Show angles</span>
+              </label>
+            )}
+            {onSkeletonShowHeadLineChange !== undefined && (
+              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
+                <input type="checkbox" checked={skeletonShowHeadLine ?? true}
+                  onChange={e => onSkeletonShowHeadLineChange(e.target.checked)} className="accent-blue-500" />
+                <span className="text-[9px] text-gray-600 font-medium">Show neck line</span>
+              </label>
+            )}
+            {onSkeletonClassicColorsChange !== undefined && (
+              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
+                <input type="checkbox" checked={skeletonClassicColors ?? false}
+                  onChange={e => onSkeletonClassicColorsChange(e.target.checked)} className="accent-blue-500" />
+                <span className="text-[9px] text-gray-600 font-medium">Classic neon mode</span>
+              </label>
             )}
           </div>
         </>
@@ -292,6 +331,15 @@ export default function ToolPalette({
                 </button>
               ))}
             </div>
+            {onBallSampleModeChange && (
+              <button
+                onClick={() => onBallSampleModeChange(!ballSampleMode)}
+                className={`tool-btn w-full flex-row gap-1 mb-1 ${ballSampleMode ? 'active text-blue-600' : 'text-gray-500'}`}
+              >
+                <span className="text-[13px]">🎯</span>
+                <span>{ballSampleMode ? 'Click ball to sample…' : 'Sample ball color'}</span>
+              </button>
+            )}
             <button
               onClick={onResetBallTrail}
               className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
@@ -402,16 +450,43 @@ export default function ToolPalette({
       )}
 
       {/* Zoom tool */}
-      {activeTool === 'zoom' && (
+      {(activeTool === 'zoom' || activeTool === 'cropSelect') && (
         <>
           <div className="border-t border-gray-100 mx-2" />
           <div className="px-2 py-2">
             <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
               Zoom / Pan
             </p>
-            <p className="text-[9px] text-blue-500 px-1 leading-tight font-medium">
-              Wheel: zoom · Space+drag: pan · Double-click: reset
+            <div className="flex gap-1 mb-2">
+              <button
+                style={pillBtn(activeTool === 'zoom')}
+                onClick={() => onToolChange('zoom')}
+                title="Scroll wheel to zoom, space+drag to pan"
+              >
+                Zoom/Pan
+              </button>
+              <button
+                style={pillBtn(activeTool === 'cropSelect')}
+                onClick={() => onToolChange('cropSelect')}
+                title="Drag a rectangle to crop/zoom into that region"
+              >
+                Select
+              </button>
+            </div>
+            <p className="text-[9px] text-blue-500 px-1 leading-tight font-medium mb-1">
+              {activeTool === 'cropSelect'
+                ? 'Drag to zoom into a region'
+                : 'Wheel: zoom · Space+drag: pan · Pinch on touch'}
             </p>
+            {onResetCropZoom && (
+              <button
+                onClick={onResetCropZoom}
+                className="tool-btn w-full flex-row gap-1 text-gray-500 hover:bg-gray-50"
+              >
+                <RefreshCw size={13} />
+                <span>Reset Zoom</span>
+              </button>
+            )}
           </div>
         </>
       )}

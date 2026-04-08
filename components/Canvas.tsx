@@ -94,6 +94,7 @@ export interface CanvasHandle {
   getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number }) => void) => void;
+  resetCropZoom: () => void;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -118,6 +119,10 @@ export interface CanvasProps {
   stroMotionOpacity?: number;
   /** Region (video-normalized 0..1) to display stro-motion ghosts in */
   stroMotionRegion?: { x: number; y: number; w: number; h: number };
+  skeletonShowAngles?: boolean;
+  skeletonShowHeadLine?: boolean;
+  skeletonClassicColors?: boolean;
+  ballSampleMode?: boolean;
 }
 
 // ── Module-level pose render cache ─────────────────────────────────────────
@@ -148,9 +153,20 @@ function drawSkeletonOverlay(
   nativeH: number,
   canvasW: number,
   canvasH: number,
+  opts?: {
+    showAngles?: boolean;
+    showHeadLine?: boolean;
+    classicColors?: boolean;
+    showFootLine?: boolean;
+  },
 ): void {
   const sx = canvasW / nativeW;
   const sy = canvasH / nativeH;
+
+  const showAngles   = opts?.showAngles   !== false;
+  const showHeadLine = opts?.showHeadLine !== false;
+  const classicColors = opts?.classicColors === true;
+  const showFootLine = opts?.showFootLine !== false;
 
   const BONES: [number, number][] = [
     [0, 1], [0, 2], [1, 3], [2, 4],
@@ -160,8 +176,8 @@ function drawSkeletonOverlay(
   ];
 
   ctx.save();
-  ctx.strokeStyle = '#35679A';
-  ctx.lineWidth = 3;
+  ctx.strokeStyle = classicColors ? '#39FF14' : '#35679A';
+  ctx.lineWidth = classicColors ? 4 : 3;
   ctx.lineCap = 'round';
   for (const [a, b] of BONES) {
     const ka = keypoints[a];
@@ -173,53 +189,108 @@ function drawSkeletonOverlay(
     ctx.stroke();
   }
 
-  for (const kp of keypoints) {
-    if (kp.score < 0.3) continue;
+  // Head / neck line from shoulder midpoint to nose
+  if (showHeadLine) {
+    const nose = keypoints[0];
+    const ls   = keypoints[5];
+    const rs   = keypoints[6];
+    if (nose && ls && rs && nose.score >= 0.3 && ls.score >= 0.3 && rs.score >= 0.3) {
+      const midX = (ls.x + rs.x) / 2 * sx;
+      const midY = (ls.y + rs.y) / 2 * sy;
+      ctx.save();
+      ctx.strokeStyle = classicColors ? '#39FF14' : '#35679A';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(midX, midY);
+      ctx.lineTo(nose.x * sx, nose.y * sy);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Foot direction lines
+  if (showFootLine) {
+    for (const [kneeIdx, ankleIdx] of [[13, 15], [14, 16]] as [number, number][]) {
+      const knee  = keypoints[kneeIdx];
+      const ankle = keypoints[ankleIdx];
+      if (!knee || !ankle || knee.score < 0.3 || ankle.score < 0.3) continue;
+      const kx = knee.x  * sx, ky = knee.y  * sy;
+      const ax = ankle.x * sx, ay = ankle.y * sy;
+      const dist = Math.hypot(ax - kx, ay - ky);
+      if (dist < 1) continue;
+      const dx2 = (ax - kx) / dist;
+      const dy2 = (ay - ky) / dist;
+      const ext = dist * 0.4;
+      ctx.save();
+      ctx.strokeStyle = classicColors ? '#39FF14' : '#35679A';
+      ctx.lineWidth = classicColors ? 4 : 3;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(ax + dx2 * ext, ay + dy2 * ext);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
+
+  // Draw joint dots — skip head keypoints (indices 0-4)
+  for (let i = 5; i < keypoints.length; i++) {
+    const kp = keypoints[i];
+    if (!kp || kp.score < 0.3) continue;
     ctx.beginPath();
     ctx.arc(kp.x * sx, kp.y * sy, 5, 0, Math.PI * 2);
-    ctx.fillStyle = '#F8F8F8';
+    if (classicColors) {
+      // odd indices = left side (red), even = right side (blue)
+      ctx.fillStyle = i % 2 === 1 ? '#FF4444' : '#4488FF';
+    } else {
+      ctx.fillStyle = '#F8F8F8';
+    }
     ctx.fill();
-    ctx.strokeStyle = '#35679A';
+    ctx.strokeStyle = classicColors ? (i % 2 === 1 ? '#FF4444' : '#4488FF') : '#35679A';
     ctx.lineWidth = 2;
     ctx.stroke();
   }
 
-  const ANGLES: [number, number, number][] = [
-    [7, 5, 9], [8, 6, 10], [13, 11, 15], [14, 12, 16],
-  ];
+  if (showAngles) {
+    const ANGLES: [number, number, number][] = [
+      [7, 5, 9], [8, 6, 10], [13, 11, 15], [14, 12, 16],
+    ];
 
-  ctx.font = 'bold 13px -apple-system, sans-serif';
-  ctx.shadowColor = 'rgba(0,0,0,0.9)';
-  ctx.shadowBlur = 3;
+    ctx.font = 'bold 13px -apple-system, sans-serif';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)';
+    ctx.shadowBlur = 3;
 
-  for (const [vi, ai, bi] of ANGLES) {
-    const v = keypoints[vi];
-    const a = keypoints[ai];
-    const b = keypoints[bi];
-    if (!v || !a || !b || v.score < 0.3 || a.score < 0.3 || b.score < 0.3) continue;
+    for (const [vi, ai, bi] of ANGLES) {
+      const v = keypoints[vi];
+      const a = keypoints[ai];
+      const b = keypoints[bi];
+      if (!v || !a || !b || v.score < 0.3 || a.score < 0.3 || b.score < 0.3) continue;
 
-    const vx = v.x * sx, vy = v.y * sy;
-    const ax = a.x * sx, ay = a.y * sy;
-    const bx = b.x * sx, by = b.y * sy;
+      const vx = v.x * sx, vy = v.y * sy;
+      const ax = a.x * sx, ay = a.y * sy;
+      const bx = b.x * sx, by = b.y * sy;
 
-    const v1 = { x: ax - vx, y: ay - vy };
-    const v2 = { x: bx - vx, y: by - vy };
-    const dot = v1.x * v2.x + v1.y * v2.y;
-    const mag = Math.sqrt(v1.x ** 2 + v1.y ** 2) * Math.sqrt(v2.x ** 2 + v2.y ** 2);
-    if (mag < 1) continue;
+      const v1 = { x: ax - vx, y: ay - vy };
+      const v2 = { x: bx - vx, y: by - vy };
+      const dot = v1.x * v2.x + v1.y * v2.y;
+      const mag = Math.sqrt(v1.x ** 2 + v1.y ** 2) * Math.sqrt(v2.x ** 2 + v2.y ** 2);
+      if (mag < 1) continue;
 
-    const deg = Math.round(Math.acos(Math.min(1, Math.max(-1, dot / mag))) * 180 / Math.PI);
-    const label = `${deg}°`;
-    const m = ctx.measureText(label);
-    const lx = vx + 8, ly = vy - 8;
+      const deg = Math.round(Math.acos(Math.min(1, Math.max(-1, dot / mag))) * 180 / Math.PI);
+      const label = `${deg}°`;
+      const m = ctx.measureText(label);
+      const lx = vx + 8, ly = vy - 8;
 
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(lx - 2, ly - 13, m.width + 4, 16);
-    ctx.fillStyle = '#FFD700';
-    ctx.fillText(label, lx, ly);
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(lx - 2, ly - 13, m.width + 4, 16);
+      ctx.fillStyle = '#FFD700';
+      ctx.fillText(label, lx, ly);
+    }
+
+    ctx.shadowBlur = 0;
   }
 
-  ctx.shadowBlur = 0;
   ctx.restore();
 }
 
@@ -229,6 +300,7 @@ function findBallInImageData(
   imageData: ImageData,
   width: number,
   height: number,
+  targetHue?: { hMin: number; hMax: number } | null,
 ): { x: number; y: number } | null {
   const data = imageData.data;
   const mask = new Uint8Array(width * height);
@@ -249,7 +321,7 @@ function findBallInImageData(
     else if (max === g) h = ((b - r) / d + 2) / 6;
     else h = ((r - g) / d + 4) / 6;
 
-    if (h * 360 >= 50 && h * 360 <= 82 && s >= 0.40 && l >= 0.35 && l <= 0.75) {
+    if (h * 360 >= (targetHue?.hMin ?? 50) && h * 360 <= (targetHue?.hMax ?? 82) && s >= 0.40 && l >= 0.35 && l <= 0.75) {
       mask[i >> 2] = 1;
       count++;
     }
@@ -817,6 +889,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionGhosts,
       stroMotionOpacity = 0.3,
       stroMotionRegion,
+      skeletonShowAngles = true,
+      skeletonShowHeadLine = true,
+      skeletonClassicColors = false,
+      ballSampleMode = false,
     },
     ref,
   ) {
@@ -861,6 +937,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const isBallDetectingRef  = useRef(false);
     const ballTrackRef        = useRef<Array<{ timeSeconds: number; x: number; y: number }>>([]);
     const ballDetectRef       = useRef<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
+    const ballColorRef = useRef<{ hMin: number; hMax: number } | null>(null);
 
     // Legacy AI detection caches (for manual ball shadow tool)
     const cachedPosesRef    = useRef<CachedPoseFrame[]>([]);
@@ -882,6 +959,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const stroMotionGhostsRef = useRef<ImageBitmap[]>(stroMotionGhosts ?? []);
     const stroMotionOpacityRef = useRef(stroMotionOpacity);
     const stroMotionRegionRef = useRef(stroMotionRegion);
+    const skeletonShowAnglesRef   = useRef(skeletonShowAngles);
+    const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
+    const skeletonClassicColorsRef = useRef(skeletonClassicColors);
+    const ballSampleModeRef = useRef(ballSampleMode);
 
     // Zoom / pan state
     const zoomRef    = useRef(1.0);
@@ -898,6 +979,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const stroRegionCallbackRef      = useRef<((r: { x: number; y: number; w: number; h: number }) => void) | null>(null);
     const stroRegionStartRef         = useRef<Pt | null>(null);
     const stroRegionCurrentRef       = useRef<Pt | null>(null);
+
+    const isCropSelectingRef    = useRef(false);
+    const cropSelectStartRef    = useRef<Pt | null>(null);
+    const cropSelectCurrentRef  = useRef<Pt | null>(null);
 
     // Manual swing state
     const manualSwingPtsRef     = useRef<Pt[]>([]);
@@ -918,6 +1003,49 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { stroMotionGhostsRef.current  = stroMotionGhosts ?? []; }, [stroMotionGhosts]);
     useEffect(() => { stroMotionOpacityRef.current = stroMotionOpacity; },      [stroMotionOpacity]);
     useEffect(() => { stroMotionRegionRef.current  = stroMotionRegion; },        [stroMotionRegion]);
+    useEffect(() => { skeletonShowAnglesRef.current   = skeletonShowAngles; },   [skeletonShowAngles]);
+    useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; },  [skeletonShowHeadLine]);
+    useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; }, [skeletonClassicColors]);
+    useEffect(() => { ballSampleModeRef.current = ballSampleMode; }, [ballSampleMode]);
+
+    // ── Touch pinch zoom ────────────────────────────────────────────────────
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      let lastDist = 0;
+
+      const onTouchStart = (e: TouchEvent) => {
+        if (e.touches.length === 2) {
+          const t1 = e.touches[0], t2 = e.touches[1];
+          lastDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+          e.preventDefault();
+        }
+      };
+      const onTouchMove = (e: TouchEvent) => {
+        if (e.touches.length === 2) {
+          const t1 = e.touches[0], t2 = e.touches[1];
+          const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+          if (lastDist > 0) {
+            const factor = dist / lastDist;
+            zoomRef.current = Math.max(0.25, Math.min(8, zoomRef.current * factor));
+          }
+          lastDist = dist;
+          e.preventDefault();
+        } else if (e.touches.length === 1 && zoomRef.current > 1) {
+          e.preventDefault();
+        }
+      };
+      const onTouchEnd = () => { lastDist = 0; };
+
+      canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+      canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+      canvas.addEventListener('touchend', onTouchEnd);
+      return () => {
+        canvas.removeEventListener('touchstart', onTouchStart);
+        canvas.removeEventListener('touchmove', onTouchMove);
+        canvas.removeEventListener('touchend', onTouchEnd);
+      };
+    }, []);
 
     // ── History ────────────────────────────────────────────────────────────
 
@@ -998,10 +1126,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const sc = Math.min(canvas.width / vW2, canvas.height / vH2);
         const dw2 = vW2 * sc;
         const dh2 = vH2 * sc;
+        const dx2 = (canvas.width - dw2) / 2;
+        const dy2 = (canvas.height - dh2) / 2;
 
         const points = segment.wristPositions.map((p) => ({
-          x: p.x * (dw2 / vW2),
-          y: p.y * (dh2 / vH2),
+          x: dx2 + p.x * (dw2 / vW2),
+          y: dy2 + p.y * (dh2 / vH2),
         }));
 
         strokesRef.current.push({
@@ -1022,6 +1152,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         stroRegionCallbackRef.current = cb;
         stroRegionStartRef.current = null;
         stroRegionCurrentRef.current = null;
+      },
+      resetCropZoom: () => {
+        zoomRef.current = 1.0;
+        panXRef.current = 0;
+        panYRef.current = 0;
       },
     }), [onProcessingStatus, pushHistory, videoRef]);
 
@@ -1250,19 +1385,35 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 }
 
                 if (imageData) {
-                  const pos = findBallInImageData(imageData, det.canvas.width, det.canvas.height);
+                  const pos = findBallInImageData(imageData, det.canvas.width, det.canvas.height, ballColorRef.current);
                   if (pos) {
                     const scaleX = vW / det.canvas.width;
                     const scaleY = vH / det.canvas.height;
-                    ballTrackRef.current.push({
-                      timeSeconds: currentTime,
-                      x: pos.x * scaleX,
-                      y: pos.y * scaleY,
-                    });
-                    // Keep last BALL_TRAIL_WINDOW_SECONDS of detections
-                    const cutoff = currentTime - BALL_TRAIL_WINDOW_SECONDS;
-                    ballTrackRef.current = ballTrackRef.current.filter(p => p.timeSeconds >= cutoff);
-                    onProcessingStatus?.(null);
+                    const newX = pos.x * scaleX;
+                    const newY = pos.y * scaleY;
+
+                    // Velocity gating: reject jumps that are unrealistically large
+                    const last = ballTrackRef.current.at(-1);
+                    const MAX_JUMP_FRACTION = 0.25;
+                    const maxJump = Math.min(vW, vH) * MAX_JUMP_FRACTION;
+                    const jumped = last
+                      ? Math.hypot(newX - last.x, newY - last.y) > maxJump
+                      : false;
+
+                    if (!jumped) {
+                      // EMA smoothing
+                      const ALPHA = 0.6;
+                      const smoothX = last ? ALPHA * newX + (1 - ALPHA) * last.x : newX;
+                      const smoothY = last ? ALPHA * newY + (1 - ALPHA) * last.y : newY;
+                      ballTrackRef.current.push({
+                        timeSeconds: currentTime,
+                        x: smoothX,
+                        y: smoothY,
+                      });
+                      const cutoff = currentTime - BALL_TRAIL_WINDOW_SECONDS;
+                      ballTrackRef.current = ballTrackRef.current.filter(p => p.timeSeconds >= cutoff);
+                      onProcessingStatus?.(null);
+                    }
                   }
                   isBallDetectingRef.current = false;
                 }
@@ -1312,7 +1463,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (latestKeypointsRef.current && latestKeypointsRef.current.length > 0 && video.videoWidth > 0) {
             ctx.save();
             ctx.translate(dx, dy);
-            drawSkeletonOverlay(ctx, latestKeypointsRef.current, vW, vH, dw, dh);
+            drawSkeletonOverlay(ctx, latestKeypointsRef.current, vW, vH, dw, dh, {
+              showAngles: skeletonShowAnglesRef.current,
+              showHeadLine: skeletonShowHeadLineRef.current,
+              classicColors: skeletonClassicColorsRef.current,
+            });
             ctx.restore();
           } else if (cachedPosesRef.current.length > 0 && poseRenderFns) {
             // Fallback to legacy cached poses
@@ -1446,6 +1601,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
+        // ── CropSelect rectangle ──────────────────────────────────────────────
+        if (isCropSelectingRef.current && cropSelectStartRef.current && cropSelectCurrentRef.current) {
+          const p1 = cropSelectStartRef.current;
+          const p2 = cropSelectCurrentRef.current;
+          const rx = Math.min(p1.x, p2.x), ry = Math.min(p1.y, p2.y);
+          const rw = Math.abs(p2.x - p1.x), rh = Math.abs(p2.y - p1.y);
+          ctx.save();
+          ctx.strokeStyle = '#FF8C00';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]);
+          ctx.strokeRect(rx, ry, rw, rh);
+          ctx.fillStyle = 'rgba(255, 140, 0, 0.1)';
+          ctx.fillRect(rx, ry, rw, rh);
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
+
         // ── Undo zoom/pan transform ───────────────────────────────────────
         ctx.restore();
 
@@ -1554,6 +1726,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const lw   = pressureWidth(e);
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
+
+      // ── CropSelect rubber-band ────────────────────────────────────────────
+      if (activeToolRef.current === 'cropSelect') {
+        isCropSelectingRef.current = true;
+        cropSelectStartRef.current = pos;
+        cropSelectCurrentRef.current = pos;
+        isDraggingRef.current = true;
+        return;
+      }
 
       // ── StroMotion rubber-band region selection ──────────────────────────
       if (isSelectingStroRegionRef.current) {
@@ -1761,7 +1942,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const dy2 = (canvas.height - dh2) / 2;
             const nx  = (pos.x - dx2) / dw2;
             const ny  = (pos.y - dy2) / dh2;
-            if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
+
+            if (ballSampleModeRef.current && nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
+              const det = ballDetectRef.current;
+              if (det) {
+                det.ctx.drawImage(video, 0, 0, det.canvas.width, det.canvas.height);
+                try {
+                  const px = Math.round(nx * det.canvas.width);
+                  const py = Math.round(ny * det.canvas.height);
+                  const px2 = Math.max(0, Math.min(det.canvas.width - 2, px));
+                  const py2 = Math.max(0, Math.min(det.canvas.height - 2, py));
+                  const d = det.ctx.getImageData(px2, py2, 3, 3).data;
+                  let rSum = 0, gSum = 0, bSum = 0;
+                  for (let k = 0; k < d.length; k += 4) { rSum += d[k]; gSum += d[k+1]; bSum += d[k+2]; }
+                  const n9 = d.length / 4;
+                  const r = rSum/n9, g = gSum/n9, b = bSum/n9;
+                  const rn = r/255, gn = g/255, bn = b/255;
+                  const max = Math.max(rn,gn,bn), min = Math.min(rn,gn,bn);
+                  let h = 0;
+                  if (max !== min) {
+                    const d2 = max - min;
+                    if (max === rn) h = ((gn-bn)/d2 + (gn < bn ? 6 : 0)) * 60;
+                    else if (max === gn) h = ((bn-rn)/d2 + 2) * 60;
+                    else h = ((rn-gn)/d2 + 4) * 60;
+                  }
+                  ballColorRef.current = { hMin: Math.max(0, h - 20), hMax: Math.min(360, h + 20) };
+                  onProcessingStatus?.(`Ball color sampled: hue ${Math.round(h)}°`);
+                } catch {
+                  // cross-origin — ignore
+                }
+              }
+            } else if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
               const fi = Math.round(video.currentTime * 30);
               cachedBallRef.current = [
                 ...cachedBallRef.current.filter(p => p.frameIndex !== fi),
@@ -1800,6 +2011,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // ── StroMotion rubber-band drag ──────────────────────────────────────
       if (isSelectingStroRegionRef.current && isDraggingRef.current && stroRegionStartRef.current) {
         stroRegionCurrentRef.current = pos;
+        return;
+      }
+
+      if (isCropSelectingRef.current && isDraggingRef.current) {
+        cropSelectCurrentRef.current = pos;
         return;
       }
 
@@ -1858,6 +2074,38 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (isPanningRef.current) {
         isPanningRef.current = false;
         panStartRef.current = null;
+        return;
+      }
+
+      // ── Finalize CropSelect ────────────────────────────────────────────────
+      if (isCropSelectingRef.current) {
+        const p1 = cropSelectStartRef.current;
+        const p2 = cropSelectCurrentRef.current;
+        if (p1 && p2) {
+          const rw = Math.abs(p2.x - p1.x);
+          const rh = Math.abs(p2.y - p1.y);
+          if (rw > 10 && rh > 10) {
+            const canvas = canvasRef.current;
+            if (canvas) {
+              const W = canvas.width;
+              const H = canvas.height;
+              const rx = Math.min(p1.x, p2.x);
+              const ry = Math.min(p1.y, p2.y);
+              const newZoom = Math.min(W / rw, H / rh) * 0.95;
+              const regionCX = rx + rw / 2;
+              const regionCY = ry + rh / 2;
+              const canvasCX = W / 2;
+              const canvasCY = H / 2;
+              zoomRef.current = Math.min(8, newZoom);
+              panXRef.current = (canvasCX - regionCX) * zoomRef.current;
+              panYRef.current = (canvasCY - regionCY) * zoomRef.current;
+            }
+          }
+        }
+        isCropSelectingRef.current = false;
+        cropSelectStartRef.current = null;
+        cropSelectCurrentRef.current = null;
+        isDraggingRef.current = false;
         return;
       }
 
@@ -1926,6 +2174,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const cursorFor: Partial<Record<ToolType, string>> = {
       pen: 'crosshair', erase: 'cell', text: 'text', line: 'crosshair',
       angle: 'crosshair', swingPath: 'crosshair', manualSwing: 'crosshair', ballShadow: 'crosshair',
+      cropSelect: 'crosshair',
       zoom: isPanningRef.current
         ? 'grabbing'
         : spaceHeldRef.current

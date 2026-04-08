@@ -34,6 +34,9 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
   const [playbackRate, setPlaybackRate] = useState(1);
   const [frameMode, setFrameMode] = useState(60);
 
+  const [customSpeed, setCustomSpeed] = useState(1);
+  const [customFps, setCustomFps] = useState(60);
+
   const frameModeRef = useRef(60);
   useEffect(() => {
     frameModeRef.current = frameMode;
@@ -444,59 +447,72 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB }
         paddingTop: '6px',
       }}>
         <span style={{ fontSize: 10, color: '#9ca3af', fontWeight: 600 }}>Speed:</span>
-        {PLAYBACK_SPEEDS.map((s) => (
-          <button
-            key={s}
-            onClick={() => {
+        <select
+          value={[0.05, 0.1, 0.25, 0.5, 1, 1.5, 2].includes(playbackRate) ? String(playbackRate) : 'custom'}
+          onChange={(e) => {
+            if (e.target.value === 'custom') return;
+            const s = Number(e.target.value);
+            if (videoRef.current) videoRef.current.playbackRate = s;
+            if (isSynced && videoRefB?.current) videoRefB.current.playbackRate = s;
+            setPlaybackRate(s);
+          }}
+          style={{ height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, fontWeight: 600, border: '1px solid #E8E8ED', background: '#fff', cursor: 'pointer' }}
+        >
+          <option value="0.05">1/20×</option>
+          <option value="0.1">1/10×</option>
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1">1×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2×</option>
+          <option value="custom">Custom…</option>
+        </select>
+        {![0.05, 0.1, 0.25, 0.5, 1, 1.5, 2].includes(playbackRate) && (
+          <input
+            type="number" min={0.05} max={4} step={0.05}
+            value={customSpeed}
+            onChange={(e) => {
+              const s = Math.max(0.05, Math.min(4, Number(e.target.value)));
+              setCustomSpeed(s);
               if (videoRef.current) videoRef.current.playbackRate = s;
               if (isSynced && videoRefB?.current) videoRefB.current.playbackRate = s;
               setPlaybackRate(s);
             }}
-            style={{
-              height: 24,
-              padding: '0 7px',
-              borderRadius: 5,
-              fontSize: 10,
-              fontWeight: 600,
-              border: '1px solid',
-              borderColor: playbackRate === s ? '#35679A' : '#E8E8ED',
-              background: playbackRate === s ? '#35679A' : '#fff',
-              color: playbackRate === s ? '#fff' : '#1D1D1F',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {formatSpeed(s)}
-          </button>
-        ))}
+            style={{ width: 60, height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, border: '1px solid #35679A' }}
+          />
+        )}
 
         <span style={{ fontSize: 10, color: '#9ca3af', fontWeight: 600, marginLeft: '8px' }}>
           Frame:
         </span>
-        {FRAME_MODES.map((fm) => (
-          <button
-            key={fm}
-            onClick={() => {
+        <select
+          value={[10, 30, 60, 120].includes(frameMode) ? String(frameMode) : 'custom'}
+          onChange={(e) => {
+            if (e.target.value === 'custom') return;
+            const fm = Number(e.target.value);
+            setFrameMode(fm);
+          }}
+          title={`← → steps by ${frameSizeMs}ms per frame`}
+          style={{ height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, fontWeight: 600, border: '1px solid #E8E8ED', background: '#fff', cursor: 'pointer' }}
+        >
+          <option value="10">10fps</option>
+          <option value="30">30fps</option>
+          <option value="60">60fps</option>
+          <option value="120">120fps</option>
+          <option value="custom">Custom…</option>
+        </select>
+        {![10, 30, 60, 120].includes(frameMode) && (
+          <input
+            type="number" min={1} max={240} step={1}
+            value={customFps}
+            onChange={(e) => {
+              const fm = Math.max(1, Math.min(240, Number(e.target.value)));
+              setCustomFps(fm);
               setFrameMode(fm);
             }}
-            title={`← → steps by ${(1000 / fm).toFixed(2)}ms per frame`}
-            style={{
-              height: 24,
-              padding: '0 7px',
-              borderRadius: 5,
-              fontSize: 10,
-              fontWeight: 600,
-              border: '1px solid',
-              borderColor: frameMode === fm ? '#7C3AED' : '#E8E8ED',
-              background: frameMode === fm ? '#7C3AED' : '#fff',
-              color: frameMode === fm ? '#fff' : '#1D1D1F',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {fm}fps
-          </button>
-        ))}
+            style={{ width: 60, height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, border: '1px solid #7C3AED' }}
+          />
+        )}
         <span style={{ fontSize: 10, color: '#7C3AED', fontWeight: 600 }}>
           {frameSizeMs}ms/frame
         </span>

@@ -59,6 +59,10 @@ export default function Home() {
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [circleSpinning, setCircleSpinning] = useState(false);
   const [circleGapMode, setCircleGapMode]   = useState(false);
+  const [skeletonShowAngles, setSkeletonShowAngles] = useState(true);
+  const [skeletonShowHeadLine, setSkeletonShowHeadLine] = useState(true);
+  const [skeletonClassicColors, setSkeletonClassicColors] = useState(false);
+  const [ballSampleMode, setBallSampleMode] = useState(false);
   const [webcamPipMode, setWebcamPipMode]   = useState<WebcamPipMode>('rectangle');
   const [webcamOpacity, setWebcamOpacity]   = useState(1);
   const [urlInput, setUrlInput]             = useState('');
@@ -535,6 +539,15 @@ export default function Home() {
               webcamOpacity={webcamOpacity}
               onWebcamOpacityChange={setWebcamOpacity}
               webcamActive={webcamActive}
+              skeletonShowAngles={skeletonShowAngles}
+              onSkeletonShowAnglesChange={setSkeletonShowAngles}
+              skeletonShowHeadLine={skeletonShowHeadLine}
+              onSkeletonShowHeadLineChange={setSkeletonShowHeadLine}
+              skeletonClassicColors={skeletonClassicColors}
+              onSkeletonClassicColorsChange={setSkeletonClassicColors}
+              ballSampleMode={ballSampleMode}
+              onBallSampleModeChange={setBallSampleMode}
+              onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
             />
           </SidebarSection>
 
@@ -717,6 +730,10 @@ export default function Home() {
                     stroMotionGhosts={ghostFrames}
                     stroMotionOpacity={stroMotionOpacity}
                     stroMotionRegion={stroMotionRegion}
+                    skeletonShowAngles={skeletonShowAngles}
+                    skeletonShowHeadLine={skeletonShowHeadLine}
+                    skeletonClassicColors={skeletonClassicColors}
+                    ballSampleMode={ballSampleMode}
                   />
                 )}
                 {videoSrcB && (
