@@ -67,6 +67,8 @@ export default function Home() {
   const [webcamOpacity, setWebcamOpacity]   = useState(1);
   const [urlInput, setUrlInput]             = useState('');
   const [embedUrl, setEmbedUrl]             = useState<{ type: 'youtube' | 'instagram' | 'mp4'; url: string } | null>(null);
+  /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
+  const [showTapToPlay, setShowTapToPlay]   = useState(false);
 
   // StroMotion state
   const [stroMotionEnabled, setStroMotionEnabled] = useState(false);
@@ -158,12 +160,29 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // ── Safari autoplay: dismiss "Tap to Play" overlay once video actually plays ──
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onPlay = () => setShowTapToPlay(false);
+    video.addEventListener('play', onPlay);
+    return () => video.removeEventListener('play', onPlay);
+  // videoRef is stable (never reassigned), but listing it satisfies the linter
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoRef]);
+
+  /** Called by PlaybackControls when play() is rejected (e.g. Safari NotAllowedError) */
+  const handlePlayBlocked = useCallback(() => {
+    setShowTapToPlay(true);
+  }, []);
+
   // ── Video upload ──────────────────────────────────────────────────────────
   const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
     setVideoSrc(url);
+    setShowTapToPlay(false);
     if (videoRef.current) {
       videoRef.current.src = url;
       videoRef.current.load();
@@ -736,6 +755,43 @@ export default function Home() {
                     ballSampleMode={ballSampleMode}
                   />
                 )}
+                {/* ── Safari "Tap to Play" overlay ─────────────────────────────── */}
+                {showTapToPlay && videoSrc && !embedUrl && (
+                  <div
+                    role="button"
+                    aria-label="Tap to play video"
+                    style={{
+                      position: 'absolute', inset: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: 'rgba(0,0,0,0.55)',
+                      zIndex: 10,
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => {
+                      const v = videoRef.current;
+                      if (!v) return;
+                      // Direct user-gesture call — Safari will allow this
+                      v.play().catch((err: unknown) => {
+                        console.warn('[CoachLab] Tap-to-Play failed:', err);
+                      });
+                      setShowTapToPlay(false);
+                    }}
+                  >
+                    <div style={{
+                      background: 'rgba(255,255,255,0.92)',
+                      borderRadius: '14px',
+                      padding: '14px 28px',
+                      fontSize: '17px',
+                      fontWeight: 700,
+                      color: '#1D1D1F',
+                      display: 'flex', alignItems: 'center', gap: '10px',
+                      boxShadow: '0 4px 24px rgba(0,0,0,0.25)',
+                      pointerEvents: 'none',
+                    }}>
+                      ▶ Tap to Play
+                    </div>
+                  </div>
+                )}
                 {videoSrcB && (
                   <div style={{
                     position: 'absolute', top: 4, left: 8,
@@ -783,6 +839,7 @@ export default function Home() {
           <PlaybackControls
             videoRef={videoRef}
             videoRefB={videoBLoaded ? videoRefB : undefined}
+            onPlayBlocked={handlePlayBlocked}
             onRemoveVideoB={() => {
               setVideoSrcB(null);
               setVideoBLoaded(false);
