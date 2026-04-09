@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   MousePointer2,
   Pen,
@@ -21,6 +21,7 @@ import {
   Square,
   Zap,
   ZoomIn,
+  Shapes,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -66,12 +67,8 @@ const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
   { id: 'pen',         icon: <Pen size={18} />,                                           label: 'Draw' },
   { id: 'line',        icon: <Minus size={18} />,                                         label: 'Line' },
   { id: 'angle',       icon: <Triangle size={18} />,                                      label: 'Angle' },
-  { id: 'circle',      icon: <Circle size={18} />,                                        label: 'Circle' },
-  { id: 'rect',        icon: <Square size={18} />,                                        label: 'Rect' },
-  { id: 'triangle',    icon: <Triangle size={18} strokeDasharray="4 2" />,                label: 'Triangle' },
   { id: 'arrow',       icon: <ArrowRight size={18} />,                                    label: 'Arrow' },
   { id: 'arrowAngle',  icon: <Activity size={18} />,                                      label: 'Angle↗' },
-  { id: 'bodyCircle',  icon: <Circle size={18} strokeDasharray="4 2" />,                  label: '3D Circle' },
   { id: 'text',        icon: <Type size={18} />,                                          label: 'Text' },
   { id: 'skeleton',    icon: <PersonStanding size={18} />,                                label: 'Skeleton' },
   { id: 'ballShadow',  icon: <Footprints size={18} />,                                    label: 'Ball Trail' },
@@ -79,6 +76,13 @@ const TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
   { id: 'manualSwing', icon: <Zap size={18} />,                                           label: 'ManualSwing' },
   { id: 'erase',       icon: <Eraser size={18} />,                                        label: 'Erase' },
   { id: 'zoom',        icon: <ZoomIn size={18} />,                                        label: 'Zoom' },
+];
+
+const SHAPE_TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
+  { id: 'circle',     icon: <Circle size={16} />,                          label: 'Circle' },
+  { id: 'rect',       icon: <Square size={16} />,                          label: 'Rect' },
+  { id: 'triangle',   icon: <Triangle size={16} strokeDasharray="4 2" />,  label: 'Triangle' },
+  { id: 'bodyCircle', icon: <Circle size={16} strokeDasharray="4 2" />,    label: '3D Circle' },
 ];
 
 const PRESET_COLORS = [
