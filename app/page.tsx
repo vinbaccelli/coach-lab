@@ -69,6 +69,9 @@ export default function Home() {
   const [embedUrl, setEmbedUrl]             = useState<{ type: 'youtube' | 'instagram' | 'mp4'; url: string } | null>(null);
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
+  /** Drag-over state for the two video panels */
+  const [isDragOverA, setIsDragOverA]       = useState(false);
+  const [isDragOverB, setIsDragOverB]       = useState(false);
 
   // StroMotion state
   const [stroMotionEnabled, setStroMotionEnabled] = useState(false);
@@ -206,6 +209,50 @@ export default function Home() {
     canvasRefB.current?.resetSkeleton();
     canvasRefB.current?.resetBallTrail();
   }, []);
+
+  // ── Drag-and-drop handlers ─────────────────────────────────────────────────
+  const handleDragOverA = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (e.dataTransfer.types.includes('Files')) setIsDragOverA(true);
+  }, []);
+  const handleDragLeaveA = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragOverA(false);
+  }, []);
+  const handleDropA = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragOverA(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file || !file.type.startsWith('video/')) return;
+    const url = URL.createObjectURL(file);
+    setVideoSrc(url);
+    setShowTapToPlay(false);
+    if (videoRef.current) { videoRef.current.src = url; videoRef.current.load(); }
+    setProcessingStatus(null);
+    canvasRef.current?.resetSkeleton();
+    canvasRef.current?.resetBallTrail();
+  }, [videoRef]);
+
+  const handleDragOverB = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (e.dataTransfer.types.includes('Files')) setIsDragOverB(true);
+  }, []);
+  const handleDragLeaveB = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragOverB(false);
+  }, []);
+  const handleDropB = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragOverB(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file || !file.type.startsWith('video/')) return;
+    const url = URL.createObjectURL(file);
+    setVideoSrcB(url);
+    if (videoRefB.current) { videoRefB.current.src = url; videoRefB.current.load(); }
+    setVideoBLoaded(false);
+    canvasRefB.current?.resetSkeleton();
+    canvasRefB.current?.resetBallTrail();
+  }, [videoRefB]);
 
   // ── Video B sync loop (keeps B in sync with A + offset) ───────────────────
 
@@ -367,9 +414,9 @@ export default function Home() {
       const parsed = new URL(raw);
       const host = parsed.hostname.replace(/^www\./, '');
       if (host === 'instagram.com') {
-        const igMatch = parsed.pathname.match(/^\/(p|reel)\/([A-Za-z0-9_-]+)/);
+        const igMatch = parsed.pathname.match(/\/(?:p|reel)\/([A-Za-z0-9_-]+)/);
         if (igMatch) {
-          setEmbedUrl({ type: 'instagram', url: `https://www.instagram.com/${igMatch[1]}/${igMatch[2]}/embed` });
+          setEmbedUrl({ type: 'instagram', url: `https://www.instagram.com/p/${igMatch[1]}/embed` });
           return;
         }
       }
@@ -673,6 +720,9 @@ export default function Home() {
               <div
                 ref={containerRef}
                 style={{ width: '100%', height: '100%', position: 'relative' }}
+                onDragOver={handleDragOverA}
+                onDragLeave={handleDragLeaveA}
+                onDrop={handleDropA}
               >
                 {embedUrl ? (
                   <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#000' }}>
@@ -727,6 +777,7 @@ export default function Home() {
                       <span style={{ fontSize: '14px', fontWeight: 500 }}>Upload Video A</span>
                       <span style={{ fontSize: '12px', color: '#6b7280' }}>MP4, WebM, MOV supported</span>
                     </button>
+                    <span style={{ fontSize: '11px', color: '#4b5563' }}>or drag &amp; drop a video here</span>
                   </div>
                 ) : (
                   <CanvasOverlay
@@ -754,6 +805,20 @@ export default function Home() {
                     skeletonClassicColors={skeletonClassicColors}
                     ballSampleMode={ballSampleMode}
                   />
+                )}
+                {/* Drag-over overlay for Video A */}
+                {isDragOverA && (
+                  <div style={{
+                    position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none',
+                    background: 'rgba(53,103,154,0.35)',
+                    border: '3px dashed #35679A',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    borderRadius: '4px',
+                  }}>
+                    <span style={{ color: '#fff', fontSize: '18px', fontWeight: 700, textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
+                      Drop Video A here
+                    </span>
+                  </div>
                 )}
                 {/* ── Safari "Tap to Play" overlay ─────────────────────────────── */}
                 {showTapToPlay && videoSrc && !embedUrl && (
@@ -802,14 +867,17 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Video B (only shown when videoSrcB is set) */}
-            {videoSrcB && (
+            {/* Video B (shown when loaded, or as a drop zone strip when not loaded) */}
+            {videoSrcB ? (
               <>
                 <div style={{ width: '1px', background: '#333', flexShrink: 0 }} />
                 <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
                   <div
                     ref={containerRefB}
                     style={{ width: '100%', height: '100%', position: 'relative' }}
+                    onDragOver={handleDragOverB}
+                    onDragLeave={handleDragLeaveB}
+                    onDrop={handleDropB}
                   >
                     <CanvasOverlay
                       ref={canvasRefB}
@@ -829,9 +897,54 @@ export default function Home() {
                       fontSize: '11px', fontWeight: 700, color: '#fff',
                       background: 'rgba(0,0,0,0.5)', padding: '1px 6px', borderRadius: '4px',
                     }}>B</div>
+                    {/* Drag-over overlay for Video B */}
+                    {isDragOverB && (
+                      <div style={{
+                        position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none',
+                        background: 'rgba(53,103,154,0.35)',
+                        border: '3px dashed #35679A',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        borderRadius: '4px',
+                      }}>
+                        <span style={{ color: '#fff', fontSize: '18px', fontWeight: 700, textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
+                          Drop Video B here
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </>
+            ) : (
+              /* Drop zone strip for Video B when not yet loaded */
+              <div
+                onDragOver={handleDragOverB}
+                onDragLeave={handleDragLeaveB}
+                onDrop={handleDropB}
+                style={{
+                  width: isDragOverB ? '45%' : '52px',
+                  minWidth: isDragOverB ? '180px' : '52px',
+                  transition: 'width 0.18s ease, min-width 0.18s ease',
+                  flexShrink: 0,
+                  borderLeft: '1px solid #222',
+                  background: isDragOverB ? 'rgba(53,103,154,0.2)' : '#0d0d0d',
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center',
+                  gap: '6px',
+                  cursor: 'default',
+                  overflow: 'hidden',
+                }}
+              >
+                {isDragOverB ? (
+                  <span style={{ color: '#fff', fontSize: '16px', fontWeight: 700, whiteSpace: 'nowrap', textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
+                    Drop Video B here
+                  </span>
+                ) : (
+                  <>
+                    <Upload size={16} color="#444" />
+                    <span style={{ fontSize: '10px', fontWeight: 700, color: '#555', letterSpacing: '0.05em' }}>B</span>
+                  </>
+                )}
+              </div>
             )}
           </div>
 
