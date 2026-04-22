@@ -98,8 +98,8 @@ export default function Home() {
   const skeletonEnabled  = activeTool === 'skeleton';
   const ballTrailEnabled = activeTool === 'ballShadow';
   const ytVideoId = embedUrl?.type === 'youtube'
-    ? (embedUrl.url.match(/embed\\/([A-Za-z0-9_-]{11})/)?.[1] ?? null)
-    : null;
+  ? (embedUrl.url.match(/embed\/([A-Za-z0-9_-]{11})/)?.[1] ?? null)
+  : null;
 
   const handleToolChange = useCallback((t: ToolType) => {
     if (embedUrl?.type === 'youtube' && (t === 'skeleton' || t === 'ballShadow')) {
