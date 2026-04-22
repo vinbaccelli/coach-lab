@@ -61,12 +61,14 @@ interface StrokeRect {
   cx: number; cy: number; rx: number; ry: number;
   color: string; lw: number; dashed?: boolean;
   spinning?: boolean;
+  is3d?: boolean;
 }
 interface StrokeTriangle {
   tool: 'triangle';
   cx: number; cy: number; rx: number; ry: number;
   color: string; lw: number; dashed?: boolean;
   spinning?: boolean;
+  is3d?: boolean;
 }
 interface StrokeSwing   { tool: 'swingPath' | 'manualSwing';        pts: Pt[]; color: string; lw: number; dashed?: boolean }
 interface StrokeText    { tool: 'text';                             pos: Pt; text: string; color: string; fontSize: number }
@@ -75,6 +77,11 @@ type Stroke = StrokePen | StrokeLine | StrokeArrow | StrokeEllipse | StrokeRect 
 
 interface AngleMeas { v: Pt; p1: Pt; p2: Pt; deg: number }
 interface LiveAngle { phase: 1 | 2; v: Pt; p1: Pt; cursor: Pt }
+
+type Selection =
+  | { kind: 'stroke'; idx: number; start: Pt; orig: Stroke }
+  | { kind: 'angle'; idx: number; start: Pt; orig: AngleMeas }
+  | null;
 
 // ── Public handle ──────────────────────────────────────────────────────────
 
@@ -95,6 +102,9 @@ export interface CanvasHandle {
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number }) => void) => void;
   resetCropZoom: () => void;
+  /** Crop region (canvas-normalized 0..1) for export/recording */
+  getCropRegion: () => { x: number; y: number; w: number; h: number } | null;
+  clearCropRegion: () => void;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -123,6 +133,10 @@ export interface CanvasProps {
   skeletonShowHeadLine?: boolean;
   skeletonClassicColors?: boolean;
   ballSampleMode?: boolean;
+  rect3d?: boolean;
+  triangle3d?: boolean;
+  /** When videoRef has no playable video (e.g. YouTube embed), keep canvas transparent */
+  transparentWhenNoVideo?: boolean;
 }
 
 // ── Module-level pose render cache ─────────────────────────────────────────
@@ -167,6 +181,7 @@ function drawSkeletonOverlay(
   const showHeadLine = opts?.showHeadLine !== false;
   const classicColors = opts?.classicColors === true;
   const showFootLine = opts?.showFootLine !== false;
+  const jointRadius = Math.max(2, Math.min(7, Math.round(Math.min(canvasW, canvasH) / 180)));
 
   const BONES: [number, number][] = [
     [0, 1], [0, 2], [1, 3], [2, 4],
@@ -189,21 +204,24 @@ function drawSkeletonOverlay(
     ctx.stroke();
   }
 
-  // Head / neck line from shoulder midpoint to nose
+  // Headline: horizontal line at head height (helps keep face visible in recordings)
   if (showHeadLine) {
-    const nose = keypoints[0];
-    const ls   = keypoints[5];
-    const rs   = keypoints[6];
-    if (nose && ls && rs && nose.score >= 0.3 && ls.score >= 0.3 && rs.score >= 0.3) {
-      const midX = (ls.x + rs.x) / 2 * sx;
-      const midY = (ls.y + rs.y) / 2 * sy;
+    const headIdxs = [0, 1, 2, 3, 4];
+    const ys = headIdxs
+      .map((i) => keypoints[i])
+      .filter((kp) => kp && kp.score >= 0.3)
+      .map((kp) => kp.y * sy);
+    if (ys.length > 0) {
+      const headY = Math.min(...ys);
       ctx.save();
       ctx.strokeStyle = classicColors ? '#39FF14' : '#35679A';
       ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
       ctx.beginPath();
-      ctx.moveTo(midX, midY);
-      ctx.lineTo(nose.x * sx, nose.y * sy);
+      ctx.moveTo(0, headY);
+      ctx.lineTo(canvasW, headY);
       ctx.stroke();
+      ctx.setLineDash([]);
       ctx.restore();
     }
   }
@@ -239,15 +257,15 @@ function drawSkeletonOverlay(
     const kp = keypoints[i];
     if (!kp || kp.score < 0.3) continue;
     ctx.beginPath();
-    ctx.arc(kp.x * sx, kp.y * sy, 5, 0, Math.PI * 2);
+    ctx.arc(kp.x * sx, kp.y * sy, jointRadius, 0, Math.PI * 2);
     if (classicColors) {
-      // odd indices = left side (red), even = right side (blue)
-      ctx.fillStyle = i % 2 === 1 ? '#FF4444' : '#4488FF';
+      // even indices = right side (red), odd = left side (blue)
+      ctx.fillStyle = i % 2 === 0 ? '#FF4444' : '#4488FF';
     } else {
       ctx.fillStyle = '#F8F8F8';
     }
     ctx.fill();
-    ctx.strokeStyle = classicColors ? (i % 2 === 1 ? '#FF4444' : '#4488FF') : '#35679A';
+    ctx.strokeStyle = classicColors ? (i % 2 === 0 ? '#FF4444' : '#4488FF') : '#35679A';
     ctx.lineWidth = 2;
     ctx.stroke();
   }
@@ -460,13 +478,34 @@ function drawRectStroke(
   ctx.lineWidth = s.lw;
   if (s.dashed) ctx.setLineDash([8, 6]);
 
+  const drawRectAt = (cx: number, cy: number) => {
+    ctx.strokeRect(cx - s.rx, cy - s.ry, s.rx * 2, s.ry * 2);
+  };
+
   if (s.spinning) {
     const spinAngle = ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2);
     ctx.translate(s.cx, s.cy);
     ctx.rotate(spinAngle);
     ctx.strokeRect(-s.rx, -s.ry, s.rx * 2, s.ry * 2);
   } else {
-    ctx.strokeRect(s.cx - s.rx, s.cy - s.ry, s.rx * 2, s.ry * 2);
+    drawRectAt(s.cx, s.cy);
+  }
+
+  if (s.is3d && !s.spinning) {
+    const off = Math.max(8, s.lw * 2);
+    ctx.globalAlpha = 0.65;
+    drawRectAt(s.cx + off, s.cy - off);
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.moveTo(s.cx - s.rx, s.cy - s.ry);
+    ctx.lineTo(s.cx - s.rx + off, s.cy - s.ry - off);
+    ctx.moveTo(s.cx + s.rx, s.cy - s.ry);
+    ctx.lineTo(s.cx + s.rx + off, s.cy - s.ry - off);
+    ctx.moveTo(s.cx - s.rx, s.cy + s.ry);
+    ctx.lineTo(s.cx - s.rx + off, s.cy + s.ry - off);
+    ctx.moveTo(s.cx + s.rx, s.cy + s.ry);
+    ctx.lineTo(s.cx + s.rx + off, s.cy + s.ry - off);
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -486,12 +525,31 @@ function drawTriangleStroke(
     : 0;
   ctx.translate(s.cx, s.cy);
   ctx.rotate(spinAngle);
-  ctx.beginPath();
-  ctx.moveTo(0, -s.ry);
-  ctx.lineTo( s.rx,  s.ry);
-  ctx.lineTo(-s.rx,  s.ry);
-  ctx.closePath();
-  ctx.stroke();
+  const drawTri = (ox: number, oy: number) => {
+    ctx.beginPath();
+    ctx.moveTo(ox, oy - s.ry);
+    ctx.lineTo(ox + s.rx, oy + s.ry);
+    ctx.lineTo(ox - s.rx, oy + s.ry);
+    ctx.closePath();
+    ctx.stroke();
+  };
+
+  drawTri(0, 0);
+
+  if (s.is3d && !s.spinning) {
+    const off = Math.max(8, s.lw * 2);
+    ctx.globalAlpha = 0.65;
+    drawTri(off, -off);
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, -s.ry);
+    ctx.lineTo(off, -off - s.ry);
+    ctx.moveTo(s.rx, s.ry);
+    ctx.lineTo(off + s.rx, -off + s.ry);
+    ctx.moveTo(-s.rx, s.ry);
+    ctx.lineTo(off - s.rx, -off + s.ry);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -893,6 +951,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       skeletonShowHeadLine = true,
       skeletonClassicColors = false,
       ballSampleMode = false,
+      rect3d = false,
+      triangle3d = false,
+      transparentWhenNoVideo = false,
     },
     ref,
   ) {
@@ -920,6 +981,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // Dragging circle
     const dragCircleIdxRef = useRef<number>(-1);
     const dragCircleOffRef = useRef<Pt>({ x: 0, y: 0 });
+    const selectionRef     = useRef<Selection>(null);
 
     // Circle gap mode: tracks which circle is being given a gap and which click phase
     const gapCircleIdxRef  = useRef<number>(-1);
@@ -963,6 +1025,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
     const ballSampleModeRef = useRef(ballSampleMode);
+    const rect3dRef = useRef(rect3d);
+    const triangle3dRef = useRef(triangle3d);
+    const transparentWhenNoVideoRef = useRef(transparentWhenNoVideo);
 
     // Zoom / pan state
     const zoomRef    = useRef(1.0);
@@ -983,6 +1048,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const isCropSelectingRef    = useRef(false);
     const cropSelectStartRef    = useRef<Pt | null>(null);
     const cropSelectCurrentRef  = useRef<Pt | null>(null);
+    const cropRegionRef         = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
     // Manual swing state
     const manualSwingPtsRef     = useRef<Pt[]>([]);
@@ -1007,6 +1073,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; },  [skeletonShowHeadLine]);
     useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; }, [skeletonClassicColors]);
     useEffect(() => { ballSampleModeRef.current = ballSampleMode; }, [ballSampleMode]);
+    useEffect(() => { rect3dRef.current = rect3d; }, [rect3d]);
+    useEffect(() => { triangle3dRef.current = triangle3d; }, [triangle3d]);
+    useEffect(() => { transparentWhenNoVideoRef.current = transparentWhenNoVideo; }, [transparentWhenNoVideo]);
 
     // ── Touch pinch zoom ────────────────────────────────────────────────────
     useEffect(() => {
@@ -1072,6 +1141,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         anglePhaseRef.current = 0;
         angleVRef.current = null;
         angleP1Ref.current = null;
+        // ClearAll should remove *everything* including AI overlays.
+        cachedPosesRef.current = [];
+        poseProcessingRef.current = false;
+        skeletonFramesRef.current = [];
+        latestKeypointsRef.current = null;
+        cachedBallRef.current = [];
+        ballProcessingRef.current = false;
+        ballTrackRef.current = [];
+        isBallDetectingRef.current = false;
+        cropRegionRef.current = null;
+        onProcessingStatus?.(null);
         pushHistory();
       },
       resetSkeleton: () => {
@@ -1158,6 +1238,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         panXRef.current = 0;
         panYRef.current = 0;
       },
+      getCropRegion: () => cropRegionRef.current,
+      clearCropRegion: () => { cropRegionRef.current = null; },
     }), [onProcessingStatus, pushHistory, videoRef]);
 
     // ── Skeleton detector loader ───────────────────────────────────────────
@@ -1421,8 +1503,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }
           }
         } else {
-          ctx.fillStyle = '#111';
-          ctx.fillRect(0, 0, W, H);
+          if (transparentWhenNoVideoRef.current) {
+            ctx.clearRect(0, 0, W, H);
+          } else {
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, W, H);
+          }
         }
 
         // ── StroMotion ghost frames ───────────────────────────────────────
@@ -1584,6 +1670,57 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
+        // ── Select tool highlight ────────────────────────────────────────
+        const sel = selectionRef.current;
+        if (sel) {
+          let x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+          if (sel.kind === 'stroke') {
+            const s = strokesRef.current[sel.idx];
+            if (s) {
+              if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
+                const pts = (s as StrokePen | StrokeSwing).pts;
+                if (pts.length > 0) {
+                  x0 = Math.min(...pts.map(p => p.x)); y0 = Math.min(...pts.map(p => p.y));
+                  x1 = Math.max(...pts.map(p => p.x)); y1 = Math.max(...pts.map(p => p.y));
+                }
+              } else if (s.tool === 'line' || s.tool === 'arrow' || s.tool === 'arrowAngle') {
+                const l = s as StrokeLine | StrokeArrow;
+                x0 = Math.min(l.p1.x, l.p2.x); y0 = Math.min(l.p1.y, l.p2.y);
+                x1 = Math.max(l.p1.x, l.p2.x); y1 = Math.max(l.p1.y, l.p2.y);
+              } else if (s.tool === 'circle' || s.tool === 'bodyCircle') {
+                const el = s as StrokeEllipse;
+                x0 = el.cx - el.rx; y0 = el.cy - el.ry;
+                x1 = el.cx + el.rx; y1 = el.cy + el.ry;
+              } else if (s.tool === 'rect' || s.tool === 'triangle') {
+                const sh = s as StrokeRect | StrokeTriangle;
+                x0 = sh.cx - sh.rx; y0 = sh.cy - sh.ry;
+                x1 = sh.cx + sh.rx; y1 = sh.cy + sh.ry;
+              } else if (s.tool === 'text') {
+                const tx = s as StrokeText;
+                x0 = tx.pos.x - 20; y0 = tx.pos.y - 24;
+                x1 = tx.pos.x + 140; y1 = tx.pos.y + 10;
+              }
+            }
+          } else if (sel.kind === 'angle') {
+            const m = angleMeasRef.current[sel.idx];
+            if (m) {
+              x0 = Math.min(m.v.x, m.p1.x, m.p2.x);
+              y0 = Math.min(m.v.y, m.p1.y, m.p2.y);
+              x1 = Math.max(m.v.x, m.p1.x, m.p2.x);
+              y1 = Math.max(m.v.y, m.p1.y, m.p2.y);
+            }
+          }
+          if (x1 > x0 || y1 > y0) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255,215,0,0.95)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 4]);
+            ctx.strokeRect(x0 - 6, y0 - 6, (x1 - x0) + 12, (y1 - y0) + 12);
+            ctx.setLineDash([]);
+            ctx.restore();
+          }
+        }
+
         // ── StroMotion rubber-band region selection ───────────────────────
         if (isSelectingStroRegionRef.current && stroRegionStartRef.current && stroRegionCurrentRef.current) {
           const p1 = stroRegionStartRef.current;
@@ -1615,6 +1752,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.fillStyle = 'rgba(255, 140, 0, 0.1)';
           ctx.fillRect(rx, ry, rw, rh);
           ctx.setLineDash([]);
+          ctx.restore();
+        }
+
+        // ── Active crop region (for export/recording) ─────────────────────
+        if (cropRegionRef.current && !isCropSelectingRef.current) {
+          const cr = cropRegionRef.current;
+          const rx = cr.x * W;
+          const ry = cr.y * H;
+          const rw = cr.w * W;
+          const rh = cr.h * H;
+          ctx.save();
+          ctx.strokeStyle = 'rgba(255, 140, 0, 0.95)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(rx, ry, rw, rh);
+          ctx.fillStyle = 'rgba(255, 140, 0, 0.06)';
+          ctx.fillRect(rx, ry, rw, rh);
           ctx.restore();
         }
 
@@ -1697,6 +1850,91 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       lastClickPosRef.current = null;
     }, [pushHistory]);
 
+    // ── Select tool: hit-test + drag any object ────────────────────────────
+
+    const distToSegment = (p: Pt, a: Pt, b: Pt): number => {
+      const abx = b.x - a.x;
+      const aby = b.y - a.y;
+      const apx = p.x - a.x;
+      const apy = p.y - a.y;
+      const denom = abx * abx + aby * aby;
+      const t = denom > 0 ? Math.max(0, Math.min(1, (apx * abx + apy * aby) / denom)) : 0;
+      const cx = a.x + t * abx;
+      const cy = a.y + t * aby;
+      return Math.hypot(p.x - cx, p.y - cy);
+    };
+
+    const hitTestStroke = (s: Stroke, pos: Pt): number => {
+      if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
+        const pts = (s as StrokePen | StrokeSwing).pts;
+        if (pts.length === 0) return Infinity;
+        let best = Infinity;
+        for (let i = 0; i < pts.length - 1; i++) best = Math.min(best, distToSegment(pos, pts[i], pts[i + 1]));
+        best = Math.min(best, Math.hypot(pos.x - pts[0].x, pos.y - pts[0].y));
+        return best;
+      }
+      if (s.tool === 'line' || s.tool === 'arrow' || s.tool === 'arrowAngle') {
+        const l = s as StrokeLine | StrokeArrow;
+        return distToSegment(pos, l.p1, l.p2);
+      }
+      if (s.tool === 'circle' || s.tool === 'bodyCircle') {
+        const el = s as StrokeEllipse;
+        const rx = Math.max(1, el.rx);
+        const ry = Math.max(1, el.ry);
+        const nx = (pos.x - el.cx) / rx;
+        const ny = (pos.y - el.cy) / ry;
+        const d = Math.abs(Math.hypot(nx, ny) - 1);
+        return d * Math.max(rx, ry);
+      }
+      if (s.tool === 'rect') {
+        const r = s as StrokeRect;
+        const x0 = r.cx - r.rx, x1 = r.cx + r.rx;
+        const y0 = r.cy - r.ry, y1 = r.cy + r.ry;
+        const cx = Math.max(x0, Math.min(x1, pos.x));
+        const cy = Math.max(y0, Math.min(y1, pos.y));
+        const outside = (pos.x < x0 || pos.x > x1 || pos.y < y0 || pos.y > y1);
+        return outside ? Math.hypot(pos.x - cx, pos.y - cy) : Math.min(
+          Math.abs(pos.x - x0),
+          Math.abs(pos.x - x1),
+          Math.abs(pos.y - y0),
+          Math.abs(pos.y - y1),
+        );
+      }
+      if (s.tool === 'triangle') {
+        const t = s as StrokeTriangle;
+        // Approx: treat as bounding box of the triangle.
+        const x0 = t.cx - t.rx, x1 = t.cx + t.rx;
+        const y0 = t.cy - t.ry, y1 = t.cy + t.ry;
+        const cx = Math.max(x0, Math.min(x1, pos.x));
+        const cy = Math.max(y0, Math.min(y1, pos.y));
+        return Math.hypot(pos.x - cx, pos.y - cy);
+      }
+      if (s.tool === 'text') {
+        const tx = s as StrokeText;
+        return Math.hypot(pos.x - tx.pos.x, pos.y - tx.pos.y);
+      }
+      return Infinity;
+    };
+
+    const translateStroke = (s: Stroke, dx: number, dy: number): Stroke => {
+      if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
+        return { ...s, pts: (s as StrokePen | StrokeSwing).pts.map((p) => ({ x: p.x + dx, y: p.y + dy })) } as Stroke;
+      }
+      if (s.tool === 'line' || s.tool === 'arrow' || s.tool === 'arrowAngle') {
+        const l = s as StrokeLine | StrokeArrow;
+        return { ...s, p1: { x: l.p1.x + dx, y: l.p1.y + dy }, p2: { x: l.p2.x + dx, y: l.p2.y + dy } } as Stroke;
+      }
+      if (s.tool === 'circle' || s.tool === 'bodyCircle' || s.tool === 'rect' || s.tool === 'triangle') {
+        const anyS = s as any;
+        return { ...s, cx: anyS.cx + dx, cy: anyS.cy + dy } as Stroke;
+      }
+      if (s.tool === 'text') {
+        const tx = s as StrokeText;
+        return { ...s, pos: { x: tx.pos.x + dx, y: tx.pos.y + dy } } as Stroke;
+      }
+      return s;
+    };
+
     // ── Erase near a point ─────────────────────────────────────────────────
 
     const eraseAt = useCallback((pos: Pt) => {
@@ -1749,6 +1987,44 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         isPanningRef.current = true;
         panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
         e.preventDefault();
+        return;
+      }
+
+      // ── Select tool: pick nearest object and drag it ────────────────────
+      if (tool === 'select') {
+        const HIT_T = 28;
+        let best: Selection = null;
+        let bestDist = Infinity;
+
+        for (let i = 0; i < strokesRef.current.length; i++) {
+          const d = hitTestStroke(strokesRef.current[i], pos);
+          if (d < bestDist) {
+            bestDist = d;
+            best = { kind: 'stroke', idx: i, start: pos, orig: strokesRef.current[i] };
+          }
+        }
+
+        for (let i = 0; i < angleMeasRef.current.length; i++) {
+          const m = angleMeasRef.current[i];
+          const d = Math.min(
+            Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
+            distToSegment(pos, m.v, m.p1),
+            distToSegment(pos, m.v, m.p2),
+          );
+          if (d < bestDist) {
+            bestDist = d;
+            best = { kind: 'angle', idx: i, start: pos, orig: m };
+          }
+        }
+
+        if (best && bestDist <= HIT_T) {
+          selectionRef.current = best;
+          isDraggingRef.current = true;
+          return;
+        }
+
+        selectionRef.current = null;
+        isDraggingRef.current = false;
         return;
       }
 
@@ -1839,6 +2115,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             color: opts.color, lw,
             dashed: opts.dashed ?? false,
             spinning: circleSpinningRef.current || undefined,
+            is3d: rect3dRef.current || undefined,
           };
           isDraggingRef.current = true;
           break;
@@ -1851,6 +2128,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             color: opts.color, lw,
             dashed: opts.dashed ?? false,
             spinning: circleSpinningRef.current || undefined,
+            is3d: triangle3dRef.current || undefined,
           };
           isDraggingRef.current = true;
           break;
@@ -2019,6 +2297,35 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // Select dragging
+      if (tool === 'select' && isDraggingRef.current && selectionRef.current) {
+        const sel = selectionRef.current;
+        const dx = pos.x - sel.start.x;
+        const dy = pos.y - sel.start.y;
+        if (sel.kind === 'stroke') {
+          const updated = translateStroke(sel.orig, dx, dy);
+          strokesRef.current = [
+            ...strokesRef.current.slice(0, sel.idx),
+            updated,
+            ...strokesRef.current.slice(sel.idx + 1),
+          ];
+        } else if (sel.kind === 'angle') {
+          const m = sel.orig;
+          const updated: AngleMeas = {
+            ...m,
+            v: { x: m.v.x + dx, y: m.v.y + dy },
+            p1: { x: m.p1.x + dx, y: m.p1.y + dy },
+            p2: { x: m.p2.x + dx, y: m.p2.y + dy },
+          };
+          angleMeasRef.current = [
+            ...angleMeasRef.current.slice(0, sel.idx),
+            updated,
+            ...angleMeasRef.current.slice(sel.idx + 1),
+          ];
+        }
+        return;
+      }
+
       // Shape dragging
       if (dragCircleIdxRef.current >= 0 && isDraggingRef.current) {
         const idx = dragCircleIdxRef.current;
@@ -2077,6 +2384,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // ── Finalize Select drag ───────────────────────────────────────────
+      if (selectionRef.current) {
+        selectionRef.current = null;
+        isDraggingRef.current = false;
+        pushHistory();
+        return;
+      }
+
       // ── Finalize CropSelect ────────────────────────────────────────────────
       if (isCropSelectingRef.current) {
         const p1 = cropSelectStartRef.current;
@@ -2091,14 +2406,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const H = canvas.height;
               const rx = Math.min(p1.x, p2.x);
               const ry = Math.min(p1.y, p2.y);
-              const newZoom = Math.min(W / rw, H / rh) * 0.95;
-              const regionCX = rx + rw / 2;
-              const regionCY = ry + rh / 2;
-              const canvasCX = W / 2;
-              const canvasCY = H / 2;
-              zoomRef.current = Math.min(8, newZoom);
-              panXRef.current = (canvasCX - regionCX) * zoomRef.current;
-              panYRef.current = (canvasCY - regionCY) * zoomRef.current;
+              cropRegionRef.current = {
+                x: Math.max(0, Math.min(1, rx / W)),
+                y: Math.max(0, Math.min(1, ry / H)),
+                w: Math.max(0, Math.min(1, rw / W)),
+                h: Math.max(0, Math.min(1, rh / H)),
+              };
             }
           }
         }

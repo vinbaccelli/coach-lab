@@ -42,10 +42,14 @@ export function createBallTrailState(): BallTrailState {
 }
 
 export function enableBallTrail(state: BallTrailState): void {
+  // V2 feature: Ball trail
+  // TODO: Re-enable this feature in V2
   state.enabled = true;
 }
 
 export function disableBallTrail(state: BallTrailState): void {
+  // V2 feature: Ball trail
+  // TODO: Re-enable this feature in V2
   state.enabled = false;
 }
 

@@ -9,7 +9,9 @@ interface ExportModalProps {
   isOpen: boolean;
   onClose: () => void;
   getCompositeCanvas: () => HTMLCanvasElement | null;
+  getCropRegion?: () => { x: number; y: number; w: number; h: number } | null;
   videoRef: React.RefObject<HTMLVideoElement>;
+  defaultAspectRatio?: AspectRatioMode;
 }
 
 type ExportTab = 'screenshot' | 'clip';
@@ -26,7 +28,9 @@ export default function ExportModal({
   isOpen,
   onClose,
   getCompositeCanvas,
+  getCropRegion,
   videoRef,
+  defaultAspectRatio,
 }: ExportModalProps) {
   const [tab, setTab] = useState<ExportTab>('screenshot');
   const [isCapturing, setIsCapturing] = useState(false);
@@ -35,13 +39,19 @@ export default function ExportModal({
   // Clip options
   const [clipDuration, setClipDuration] = useState(3);
   const [clipSpeed, setClipSpeed] = useState(1);
-  const [aspectRatio, setAspectRatio] = useState<AspectRatioMode>('youtube');
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioMode>(defaultAspectRatio ?? 'youtube');
   const [isRecordingClip, setIsRecordingClip] = useState(false);
   const [clipUrl, setClipUrl] = useState<string | null>(null);
   const [clipBlob, setClipBlob] = useState<Blob | null>(null);
   const [mp4Progress, setMp4Progress] = useState<string | null>(null);
 
   const stopClipRef = useRef<(() => void) | null>(null);
+
+  // Keep export aspect in sync with the app's current layout mode.
+  React.useEffect(() => {
+    if (!isOpen) return;
+    if (defaultAspectRatio) setAspectRatio(defaultAspectRatio);
+  }, [defaultAspectRatio, isOpen]);
 
   const captureScreenshot = useCallback(() => {
     setIsCapturing(true);
@@ -86,8 +96,13 @@ export default function ExportModal({
     const paintInterval = setInterval(() => {
       const src = getCompositeCanvas();
       if (!src) return;
+      const crop = getCropRegion?.();
+      const sx0 = crop ? crop.x * src.width : 0;
+      const sy0 = crop ? crop.y * src.height : 0;
+      const sw0 = crop ? crop.w * src.width : src.width;
+      const sh0 = crop ? crop.h * src.height : src.height;
       // Letterbox/pillarbox to maintain aspect ratio
-      const srcAR = src.width / src.height;
+      const srcAR = sw0 / sh0;
       const dstAR = w / h;
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, w, h);
@@ -99,7 +114,7 @@ export default function ExportModal({
         sw = h * srcAR;
         sx = (w - sw) / 2;
       }
-      ctx.drawImage(src, sx, sy, sw, sh);
+      ctx.drawImage(src, sx0, sy0, sw0, sh0, sx, sy, sw, sh);
     }, 1000 / 30);
 
     const stream: MediaStream = (recCanvas as any).captureStream(30);
@@ -160,7 +175,7 @@ export default function ExportModal({
       video.pause();
       stopClipRef.current?.();
     }, realDuration);
-  }, [getCompositeCanvas, videoRef, clipDuration, clipSpeed, aspectRatio]);
+  }, [getCompositeCanvas, getCropRegion, videoRef, clipDuration, clipSpeed, aspectRatio]);
 
   const downloadClip = useCallback(() => {
     if (clipBlob) {
@@ -265,14 +280,40 @@ export default function ExportModal({
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-gray-600 mb-1 block">Duration: {clipDuration}s</label>
-                  <input
-                    type="range" min={1} max={15} step={1}
-                    value={clipDuration}
-                    onChange={(e) => setClipDuration(Number(e.target.value))}
-                    disabled={isRecordingClip}
-                    className="w-full"
-                  />
+                  {(() => {
+                    const dur = videoRef.current?.duration;
+                    const maxDur = Number.isFinite(dur) && (dur as number) > 0 ? Math.ceil(dur as number) : 600;
+                    return (
+                      <>
+                        <label className="text-xs font-medium text-gray-600 mb-1 block">Duration (seconds)</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            max={maxDur}
+                            step={1}
+                            value={clipDuration}
+                            onChange={(e) => setClipDuration(Math.max(1, Number(e.target.value) || 1))}
+                            disabled={isRecordingClip}
+                            className="w-24 rounded-md border border-gray-200 px-2 py-1 text-sm"
+                          />
+                          <input
+                            type="range"
+                            min={1}
+                            max={maxDur}
+                            step={1}
+                            value={Math.min(clipDuration, maxDur)}
+                            onChange={(e) => setClipDuration(Number(e.target.value))}
+                            disabled={isRecordingClip}
+                            className="w-full"
+                          />
+                        </div>
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          Max: {maxDur}s {Number.isFinite(dur) ? '(video duration)' : '(cap)'}
+                        </p>
+                      </>
+                    );
+                  })()}
                 </div>
 
                 <div>

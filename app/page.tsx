@@ -13,6 +13,10 @@ import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/component
 import ExportModal from '@/components/ExportModal';
 import PlaybackControls from '@/components/PlaybackControls';
 import { SidebarSection } from '@/components/SidebarSection';
+import ScreenRecorder from '@/components/ScreenRecorder';
+import MobileToolStrip from '@/components/MobileToolStrip';
+import YouTubeEmbed from '@/components/YouTubeEmbed';
+import YouTubeControls from '@/components/YouTubeControls';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
@@ -34,6 +38,10 @@ export default function Home() {
 
   // Webcam stream held here so ScreenRecorder can get audio
   const webcamStreamRef = useRef<MediaStream | null>(null);
+  const micStreamRef    = useRef<MediaStream | null>(null);
+  const ytPlayerRef     = useRef<any | null>(null);
+  const lastBlobUrlARef = useRef<string | null>(null);
+  const lastBlobUrlBRef = useRef<string | null>(null);
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeTool, setActiveTool]       = useState<ToolType>('pen');
@@ -50,15 +58,19 @@ export default function Home() {
   const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('comet');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [showExport, setShowExport]       = useState(false);
+  const [layoutMode, setLayoutMode]       = useState<'youtube' | 'reels'>('youtube');
   const [sidebarWidth, setSidebarWidth]   = useState(240);
   const [isResizing, setIsResizing]       = useState(false);
   const [webcamActive, setWebcamActive]   = useState(false);
+  const [micActive, setMicActive]         = useState(false);
   const [isRecording, setIsRecording]     = useState(false);
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBOffset, setVideoBOffset]   = useState(0);
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [circleSpinning, setCircleSpinning] = useState(false);
   const [circleGapMode, setCircleGapMode]   = useState(false);
+  const [rect3d, setRect3d]                 = useState(false);
+  const [triangle3d, setTriangle3d]         = useState(false);
   const [skeletonShowAngles, setSkeletonShowAngles] = useState(true);
   const [skeletonShowHeadLine, setSkeletonShowHeadLine] = useState(true);
   const [skeletonClassicColors, setSkeletonClassicColors] = useState(false);
@@ -72,6 +84,7 @@ export default function Home() {
   /** Drag-over state for the two video panels */
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
+  const [isMobile, setIsMobile]             = useState(false);
 
   // StroMotion state
   const [stroMotionEnabled, setStroMotionEnabled] = useState(false);
@@ -84,6 +97,17 @@ export default function Home() {
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
   const ballTrailEnabled = activeTool === 'ballShadow';
+  const ytVideoId = embedUrl?.type === 'youtube'
+    ? (embedUrl.url.match(/embed\\/([A-Za-z0-9_-]{11})/)?.[1] ?? null)
+    : null;
+
+  const handleToolChange = useCallback((t: ToolType) => {
+    if (embedUrl?.type === 'youtube' && (t === 'skeleton' || t === 'ballShadow')) {
+      alert('Skeleton and Ball Trail require an uploaded video file (YouTube embeds do not allow frame access in-browser).');
+      return;
+    }
+    setActiveTool(t);
+  }, [embedUrl]);
 
   // StroMotion hook
   const stroMotionConfig = {
@@ -115,6 +139,14 @@ export default function Home() {
     if (containerRef.current) ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, [updateSize]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const onChange = () => setIsMobile(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   useEffect(() => {
     updateSizeB();
@@ -179,36 +211,92 @@ export default function Home() {
     setShowTapToPlay(true);
   }, []);
 
+  const setYouTubePlayer = useCallback((p: any | null) => {
+    ytPlayerRef.current = p;
+  }, []);
+
+  const cleanupVideoEl = useCallback((v: HTMLVideoElement | null) => {
+    if (!v) return;
+    try { v.pause(); } catch {}
+    try { v.removeAttribute('src'); } catch {}
+    try { (v as any).srcObject = null; } catch {}
+    try { v.load(); } catch {}
+  }, []);
+
+  const revokeBlobUrl = useCallback((url: string | null) => {
+    if (!url) return;
+    if (!url.startsWith('blob:')) return;
+    try { URL.revokeObjectURL(url); } catch {}
+  }, []);
+
+  const resetSession = useCallback(() => {
+    revokeBlobUrl(lastBlobUrlARef.current);
+    revokeBlobUrl(lastBlobUrlBRef.current);
+    lastBlobUrlARef.current = null;
+    lastBlobUrlBRef.current = null;
+    setVideoSrc(null);
+    setVideoSrcB(null);
+    setEmbedUrl(null);
+    setYouTubePlayer(null);
+    setShowTapToPlay(false);
+    setProcessingStatus(null);
+    setVideoBLoaded(false);
+    setStroMotionEnabled(false);
+    setStroMotionRegion(undefined);
+    clearGhosts();
+    webcamStreamRef.current?.getTracks().forEach((t) => t.stop());
+    webcamStreamRef.current = null;
+    setWebcamActive(false);
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    micStreamRef.current = null;
+    setMicActive(false);
+    cleanupVideoEl(videoRef.current);
+    cleanupVideoEl(videoRefB.current);
+    canvasRef.current?.clearAll();
+    canvasRefB.current?.clearAll();
+  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, setYouTubePlayer]);
+
   // ── Video upload ──────────────────────────────────────────────────────────
   const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    revokeBlobUrl(lastBlobUrlARef.current);
     const url = URL.createObjectURL(file);
+    lastBlobUrlARef.current = url;
     setVideoSrc(url);
+    setEmbedUrl(null);
     setShowTapToPlay(false);
     if (videoRef.current) {
+      cleanupVideoEl(videoRef.current);
       videoRef.current.src = url;
       videoRef.current.load();
     }
     // Reset AI caches for new video
     setProcessingStatus(null);
-    canvasRef.current?.resetSkeleton();
-    canvasRef.current?.resetBallTrail();
-  }, []);
+    setStroMotionEnabled(false);
+    setStroMotionRegion(undefined);
+    clearGhosts();
+    canvasRef.current?.clearAll();
+    // Allow uploading the same file again without needing a page refresh.
+    e.target.value = '';
+  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl]);
 
   const handleVideoUploadB = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    revokeBlobUrl(lastBlobUrlBRef.current);
     const url = URL.createObjectURL(file);
+    lastBlobUrlBRef.current = url;
     setVideoSrcB(url);
     if (videoRefB.current) {
+      cleanupVideoEl(videoRefB.current);
       videoRefB.current.src = url;
       videoRefB.current.load();
     }
     setVideoBLoaded(false);
-    canvasRefB.current?.resetSkeleton();
-    canvasRefB.current?.resetBallTrail();
-  }, []);
+    canvasRefB.current?.clearAll();
+    e.target.value = '';
+  }, [cleanupVideoEl, revokeBlobUrl]);
 
   // ── Drag-and-drop handlers ─────────────────────────────────────────────────
   const handleDragOverA = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -224,14 +312,19 @@ export default function Home() {
     setIsDragOverA(false);
     const file = e.dataTransfer.files?.[0];
     if (!file || !file.type.startsWith('video/')) return;
+    revokeBlobUrl(lastBlobUrlARef.current);
     const url = URL.createObjectURL(file);
+    lastBlobUrlARef.current = url;
     setVideoSrc(url);
+    setEmbedUrl(null);
     setShowTapToPlay(false);
-    if (videoRef.current) { videoRef.current.src = url; videoRef.current.load(); }
+    if (videoRef.current) { cleanupVideoEl(videoRef.current); videoRef.current.src = url; videoRef.current.load(); }
     setProcessingStatus(null);
-    canvasRef.current?.resetSkeleton();
-    canvasRef.current?.resetBallTrail();
-  }, [videoRef]);
+    setStroMotionEnabled(false);
+    setStroMotionRegion(undefined);
+    clearGhosts();
+    canvasRef.current?.clearAll();
+  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl]);
 
   const handleDragOverB = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -246,13 +339,14 @@ export default function Home() {
     setIsDragOverB(false);
     const file = e.dataTransfer.files?.[0];
     if (!file || !file.type.startsWith('video/')) return;
+    revokeBlobUrl(lastBlobUrlBRef.current);
     const url = URL.createObjectURL(file);
+    lastBlobUrlBRef.current = url;
     setVideoSrcB(url);
-    if (videoRefB.current) { videoRefB.current.src = url; videoRefB.current.load(); }
+    if (videoRefB.current) { cleanupVideoEl(videoRefB.current); videoRefB.current.src = url; videoRefB.current.load(); }
     setVideoBLoaded(false);
-    canvasRefB.current?.resetSkeleton();
-    canvasRefB.current?.resetBallTrail();
-  }, [videoRefB]);
+    canvasRefB.current?.clearAll();
+  }, [cleanupVideoEl, revokeBlobUrl]);
 
   // ── Video B sync loop (keeps B in sync with A + offset) ───────────────────
 
@@ -307,6 +401,23 @@ export default function Home() {
     }
   }, []);
 
+  const startMic = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
+      setMicActive(true);
+    } catch (err) {
+      console.error('[page] Mic access denied:', err);
+      alert('Could not access microphone. Please check browser permissions.');
+    }
+  }, []);
+
+  const stopMic = useCallback(() => {
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    micStreamRef.current = null;
+    setMicActive(false);
+  }, []);
+
   // ── Screenshot ────────────────────────────────────────────────────────────
   const handleScreenshot = useCallback(() => {
     const canvas = canvasRef.current?.getCanvas();
@@ -317,6 +428,8 @@ export default function Home() {
   // ── getCanvas / getWebcamStream for ScreenRecorder ────────────────────────
   const getCanvas        = useCallback(() => canvasRef.current?.getCanvas() ?? null, []);
   const getWebcamStream  = useCallback(() => webcamStreamRef.current, []);
+  const getMicStream     = useCallback(() => micStreamRef.current, []);
+  const getCropRegion    = useCallback(() => canvasRef.current?.getCropRegion() ?? null, []);
 
   // Keep ScreenRecorder informed when recording state changes so Canvas draws PiP
   const handleRecordingChange = useCallback((recording: boolean) => {
@@ -406,6 +519,17 @@ export default function Home() {
 
     const ytMatch = raw.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
     if (ytMatch) {
+      // Release any previously loaded local video to avoid Safari memory leaks.
+      revokeBlobUrl(lastBlobUrlARef.current);
+      lastBlobUrlARef.current = null;
+      setVideoSrc(null);
+      if (videoRef.current) cleanupVideoEl(videoRef.current);
+      setShowTapToPlay(false);
+      setProcessingStatus(null);
+      setStroMotionEnabled(false);
+      setStroMotionRegion(undefined);
+      clearGhosts();
+      canvasRef.current?.clearAll();
       setEmbedUrl({ type: 'youtube', url: `https://www.youtube.com/embed/${ytMatch[1]}` });
       return;
     }
@@ -416,6 +540,16 @@ export default function Home() {
       if (host === 'instagram.com') {
         const igMatch = parsed.pathname.match(/\/(?:p|reel)\/([A-Za-z0-9_-]+)/);
         if (igMatch) {
+          revokeBlobUrl(lastBlobUrlARef.current);
+          lastBlobUrlARef.current = null;
+          setVideoSrc(null);
+          if (videoRef.current) cleanupVideoEl(videoRef.current);
+          setShowTapToPlay(false);
+          setProcessingStatus(null);
+          setStroMotionEnabled(false);
+          setStroMotionRegion(undefined);
+          clearGhosts();
+          canvasRef.current?.clearAll();
           setEmbedUrl({ type: 'instagram', url: `https://www.instagram.com/p/${igMatch[1]}/embed` });
           return;
         }
@@ -426,12 +560,21 @@ export default function Home() {
     // Only allow safe video URLs (http/https or blob)
     if ((raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('blob:'))
         && raw.match(/\.(mp4|webm|mov)(\?.*)?$/i)) {
+      revokeBlobUrl(lastBlobUrlARef.current);
+      lastBlobUrlARef.current = raw.startsWith('blob:') ? raw : null;
       setVideoSrc(raw);
-      if (videoRef.current) { videoRef.current.src = raw; videoRef.current.load(); }
+      setEmbedUrl(null);
+      setShowTapToPlay(false);
+      setProcessingStatus(null);
+      setStroMotionEnabled(false);
+      setStroMotionRegion(undefined);
+      clearGhosts();
+      canvasRef.current?.clearAll();
+      if (videoRef.current) { cleanupVideoEl(videoRef.current); videoRef.current.src = raw; videoRef.current.load(); }
       return;
     }
     alert('Supported: YouTube URL, direct .mp4/.webm link, or Instagram (view-only embed).');
-  }, [urlInput, videoRef]);
+  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, videoRef]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#F8F8F8', color: '#1D1D1F' }}>
@@ -512,7 +655,15 @@ export default function Home() {
               Load
             </button>
             {embedUrl && (
-              <button onClick={() => setEmbedUrl(null)} style={{ ...btnStyle, height: '30px', width: '30px', fontSize: '12px', color: '#EF4444' }}>
+              <button
+                onClick={() => {
+                  setEmbedUrl(null);
+                  setYouTubePlayer(null);
+                  setProcessingStatus(null);
+                  canvasRef.current?.clearAll();
+                }}
+                style={{ ...btnStyle, height: '30px', width: '30px', fontSize: '12px', color: '#EF4444' }}
+              >
                 ✕
               </button>
             )}
@@ -542,20 +693,70 @@ export default function Home() {
             <span style={{ fontSize: '12px', color: '#35679A', fontWeight: 500 }}>&#9679; Webcam on</span>
           )}
 
+          {!micActive ? (
+            <button onClick={startMic} style={btnStyle} title="Enable microphone (audio in recordings)">
+              <span>&#127908;</span> Mic
+            </button>
+          ) : (
+            <button onClick={stopMic} style={{ ...btnStyle, color: '#EF4444' }} title="Disable microphone">
+              <span>&#127908;</span> Mic on
+            </button>
+          )}
+
           {processingStatus && (
             <span style={{ fontSize: '11px', color: '#35679A', fontStyle: 'italic', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {processingStatus}
             </span>
           )}
 
-          <ScreenRecorderWithTracking
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Recording / export format">
+            <button
+              onClick={() => setLayoutMode('youtube')}
+              style={{
+                ...btnStyle,
+                height: '30px',
+                padding: '0 10px',
+                width: 'auto',
+                fontSize: '12px',
+                background: layoutMode === 'youtube' ? '#35679A' : '#fff',
+                color: layoutMode === 'youtube' ? '#fff' : '#1D1D1F',
+                border: layoutMode === 'youtube' ? '1px solid #35679A' : '1px solid #E8E8ED',
+              }}
+            >
+              YouTube
+            </button>
+            <button
+              onClick={() => setLayoutMode('reels')}
+              style={{
+                ...btnStyle,
+                height: '30px',
+                padding: '0 10px',
+                width: 'auto',
+                fontSize: '12px',
+                background: layoutMode === 'reels' ? '#35679A' : '#fff',
+                color: layoutMode === 'reels' ? '#fff' : '#1D1D1F',
+                border: layoutMode === 'reels' ? '1px solid #35679A' : '1px solid #E8E8ED',
+              }}
+            >
+              Reels
+            </button>
+          </div>
+
+          <ScreenRecorder
             getCanvas={getCanvas}
             getWebcamStream={getWebcamStream}
+            getMicStream={getMicStream}
+            getCropRegion={getCropRegion}
+            layoutMode={layoutMode === 'reels' ? 'reels' : 'youtube'}
             onRecordingChange={handleRecordingChange}
           />
 
           <button onClick={handleScreenshot} style={btnStyle} title="Save screenshot">
             <Camera size={14} /> Screenshot
+          </button>
+
+          <button onClick={resetSession} style={btnStyle} title="Clear state and load a new video">
+            New
           </button>
 
           <button
@@ -570,7 +771,8 @@ export default function Home() {
       {/* ── Main layout ── */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
 
-        {/* Left sidebar */}
+        {/* Left sidebar (desktop only) */}
+        {!isMobile && (
         <aside style={{
           width: sidebarWidth,
           flexShrink: 0,
@@ -584,7 +786,7 @@ export default function Home() {
           <SidebarSection title="Tools">
             <ToolPalette
               activeTool={activeTool}
-              onToolChange={setActiveTool}
+              onToolChange={handleToolChange}
               drawingOptions={drawingOptions}
               onOptionsChange={handleOptionsChange}
               onUndo={() => canvasRef.current?.undo()}
@@ -600,6 +802,10 @@ export default function Home() {
               onCircleSpinningChange={setCircleSpinning}
               circleGapMode={circleGapMode}
               onCircleGapModeChange={setCircleGapMode}
+              rect3d={rect3d}
+              onRect3dChange={setRect3d}
+              triangle3d={triangle3d}
+              onTriangle3dChange={setTriangle3d}
               webcamPipMode={webcamPipMode}
               onWebcamPipModeChange={setWebcamPipMode}
               webcamOpacity={webcamOpacity}
@@ -614,6 +820,7 @@ export default function Home() {
               ballSampleMode={ballSampleMode}
               onBallSampleModeChange={setBallSampleMode}
               onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
+              onClearCrop={() => canvasRef.current?.clearCropRegion()}
             />
           </SidebarSection>
 
@@ -711,10 +918,35 @@ export default function Home() {
             <GripVertical size={12} style={{ color: '#9ca3af', pointerEvents: 'none' }} />
           </div>
         </aside>
+        )}
 
         {/* Canvas area */}
         <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
           <div style={{ flex: 1, position: 'relative', minHeight: 0, background: '#000', display: 'flex' }}>
+            {isMobile && (
+              <div style={{ position: 'absolute', left: 8, top: 8, zIndex: 60 }}>
+                <MobileToolStrip
+                  activeTool={activeTool}
+                  onToolChange={handleToolChange}
+                  drawingOptions={drawingOptions}
+                  onOptionsChange={handleOptionsChange}
+                  onUndo={() => canvasRef.current?.undo()}
+                  onRedo={() => canvasRef.current?.redo()}
+                  onClear={() => canvasRef.current?.clearAll()}
+                  ballTrailMode={ballTrailMode}
+                  onBallTrailModeChange={setBallTrailMode}
+                  circleSpinning={circleSpinning}
+                  onCircleSpinningChange={setCircleSpinning}
+                  circleGapMode={circleGapMode}
+                  onCircleGapModeChange={setCircleGapMode}
+                  rect3d={rect3d}
+                  onRect3dChange={setRect3d}
+                  triangle3d={triangle3d}
+                  onTriangle3dChange={setTriangle3d}
+                  onClearCrop={() => canvasRef.current?.clearCropRegion()}
+                />
+              </div>
+            )}
             {/* Video A */}
             <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
               <div
@@ -725,33 +957,65 @@ export default function Home() {
                 onDrop={handleDropA}
               >
                 {embedUrl ? (
-                  <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#000' }}>
-                    {embedUrl.type === 'youtube' && (
-                      <iframe
-                        src={embedUrl.url}
-                        style={{ flex: 1, border: 'none', display: 'block' }}
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                        title="YouTube embed"
-                      />
+                  <div style={{ position: 'absolute', inset: 0, background: '#000' }}>
+                    {embedUrl.type === 'youtube' && ytVideoId && (
+                      <YouTubeEmbed videoId={ytVideoId} onPlayer={setYouTubePlayer} />
                     )}
                     {embedUrl.type === 'instagram' && (
                       <iframe
                         src={embedUrl.url}
-                        style={{ flex: 1, border: 'none', display: 'block' }}
+                        style={{ position: 'absolute', inset: 0, border: 'none', display: 'block' }}
                         scrolling="no"
                         title="Instagram embed"
                         sandbox="allow-scripts allow-same-origin allow-popups"
                       />
                     )}
-                    <p style={{
-                      margin: 0, padding: '4px 10px',
-                      fontSize: '10px', color: '#9ca3af',
-                      background: 'rgba(0,0,0,0.85)',
-                      textAlign: 'center',
-                    }}>
-                      Annotation unavailable for embedded videos. To annotate: download the video and upload it here.
-                    </p>
+
+                    {/* YouTube: allow all overlay tools (drawing/angles/etc) on a transparent canvas */}
+                    {embedUrl.type === 'youtube' && (
+                      <CanvasOverlay
+                        ref={canvasRef}
+                        videoRef={videoRef}
+                        webcamVideoRef={webcamVideoRef}
+                        activeTool={activeTool}
+                        drawingOptions={drawingOptions}
+                        containerWidth={canvasSize.width}
+                        containerHeight={canvasSize.height}
+                        ballTrailMode={ballTrailMode}
+                        skeletonEnabled={false}
+                        ballTrailEnabled={false}
+                        onProcessingStatus={setProcessingStatus}
+                        isRecording={isRecording}
+                        circleSpinning={circleSpinning}
+                        circleGapMode={circleGapMode}
+                        webcamPipMode={webcamPipMode}
+                        webcamOpacity={webcamOpacity}
+                        skeletonShowAngles={false}
+                        skeletonShowHeadLine={false}
+                        skeletonClassicColors={false}
+                        ballSampleMode={false}
+                        rect3d={rect3d}
+                        triangle3d={triangle3d}
+                        transparentWhenNoVideo
+                      />
+                    )}
+
+                    {embedUrl.type !== 'youtube' && (
+                      <p style={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        margin: 0,
+                        padding: '4px 10px',
+                        fontSize: '10px',
+                        color: '#9ca3af',
+                        background: 'rgba(0,0,0,0.85)',
+                        textAlign: 'center',
+                      }}>
+                        Instagram embeds are view-only. For overlays: download the video and upload it here.
+                      </p>
+                    )}
                   </div>
                 ) : !videoSrc ? (
                   <div style={{
@@ -804,6 +1068,8 @@ export default function Home() {
                     skeletonShowHeadLine={skeletonShowHeadLine}
                     skeletonClassicColors={skeletonClassicColors}
                     ballSampleMode={ballSampleMode}
+                    rect3d={rect3d}
+                    triangle3d={triangle3d}
                   />
                 )}
                 {/* Drag-over overlay for Video A */}
@@ -891,6 +1157,13 @@ export default function Home() {
                       ballTrailEnabled={ballTrailEnabled}
                       onProcessingStatus={setProcessingStatus}
                       isRecording={isRecording}
+                      circleSpinning={circleSpinning}
+                      circleGapMode={circleGapMode}
+                      skeletonShowAngles={skeletonShowAngles}
+                      skeletonShowHeadLine={skeletonShowHeadLine}
+                      skeletonClassicColors={skeletonClassicColors}
+                      rect3d={rect3d}
+                      triangle3d={triangle3d}
                     />
                     <div style={{
                       position: 'absolute', top: 4, left: 8,
@@ -949,18 +1222,22 @@ export default function Home() {
           </div>
 
           {/* Playback controls */}
-          <PlaybackControls
-            videoRef={videoRef}
-            videoRefB={videoBLoaded ? videoRefB : undefined}
-            onPlayBlocked={handlePlayBlocked}
-            onRemoveVideoB={() => {
-              setVideoSrcB(null);
-              setVideoBLoaded(false);
-              if (videoRefB.current) {
-                videoRefB.current.src = '';
-              }
-            }}
-          />
+          {embedUrl?.type === 'youtube' ? (
+            <YouTubeControls playerRef={ytPlayerRef} />
+          ) : (
+            <PlaybackControls
+              videoRef={videoRef}
+              videoRefB={videoBLoaded ? videoRefB : undefined}
+              onPlayBlocked={handlePlayBlocked}
+              onRemoveVideoB={() => {
+                revokeBlobUrl(lastBlobUrlBRef.current);
+                lastBlobUrlBRef.current = null;
+                setVideoSrcB(null);
+                setVideoBLoaded(false);
+                if (videoRefB.current) cleanupVideoEl(videoRefB.current);
+              }}
+            />
+          )}
 
           {/* Video B offset control */}
           {videoSrcB && (
@@ -1026,7 +1303,9 @@ export default function Home() {
         isOpen={showExport}
         onClose={() => setShowExport(false)}
         getCompositeCanvas={() => canvasRef.current?.getCanvas() ?? null}
+        getCropRegion={getCropRegion}
         videoRef={videoRef}
+        defaultAspectRatio={layoutMode === 'reels' ? 'instagram' : 'youtube'}
       />
     </div>
   );
@@ -1048,138 +1327,3 @@ const btnStyle: React.CSSProperties = {
   fontWeight: 500,
   whiteSpace: 'nowrap',
 };
-
-// ── ScreenRecorder that tracks isRecording state for Canvas PiP ───────────
-
-function ScreenRecorderWithTracking({
-  getCanvas,
-  getWebcamStream,
-  onRecordingChange,
-}: {
-  getCanvas: () => HTMLCanvasElement | null;
-  getWebcamStream: () => MediaStream | null;
-  onRecordingChange: (v: boolean) => void;
-}) {
-  const [recState, setRecState] = useState<'idle' | 'recording' | 'stopped'>('idle');
-  const [elapsed, setElapsed] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-
-  const streamRef    = useRef<MediaStream | null>(null);
-  const recorderRef  = useRef<MediaRecorder | null>(null);
-  const chunksRef    = useRef<BlobPart[]>([]);
-  const startTimeRef = useRef<number>(0);
-  const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
-  const mimeTypeRef  = useRef('video/webm');
-
-  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
-
-  const startRecording = useCallback(async () => {
-    setError(null);
-    setElapsed(0);
-
-    const canvas = getCanvas();
-    if (!canvas) { setError('Load a video first.'); return; }
-
-    if (!streamRef.current) {
-      streamRef.current = (canvas as unknown as { captureStream(f: number): MediaStream }).captureStream(30);
-    }
-
-    const tracks: MediaStreamTrack[] = [...streamRef.current.getTracks()];
-    const wcStream = getWebcamStream();
-    if (wcStream) wcStream.getAudioTracks().forEach(t => tracks.push(t));
-
-    const combined  = new MediaStream(tracks);
-    const mimeType  = getBestMimeType();
-    mimeTypeRef.current = mimeType;
-
-    let recorder: MediaRecorder;
-    try {
-      recorder = new MediaRecorder(combined, { mimeType: mimeType || undefined, videoBitsPerSecond: 5_000_000 });
-    } catch (err) {
-      setError('MediaRecorder not supported.');
-      console.error(err);
-      return;
-    }
-
-    chunksRef.current = [];
-    recorder.ondataavailable = (e) => { if (e.data?.size > 0) chunksRef.current.push(e.data); };
-
-    recorder.onstop = async () => {
-      const duration = Date.now() - startTimeRef.current;
-      const rawBlob  = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
-
-      let finalBlob: Blob;
-      try {
-        const { webmFixDuration } = await import('webm-fix-duration');
-        finalBlob = await webmFixDuration(rawBlob, duration, mimeTypeRef.current || 'video/webm');
-      } catch {
-        finalBlob = rawBlob;
-      }
-
-      const ts  = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const url = URL.createObjectURL(finalBlob);
-      const a   = document.createElement('a');
-      a.href = url; a.download = `coach-lab-${ts}.webm`; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
-
-      setRecState('idle');
-      onRecordingChange(false);
-    };
-
-    recorder.start(1000);
-    recorderRef.current  = recorder;
-    startTimeRef.current = Date.now();
-    setRecState('recording');
-    onRecordingChange(true);
-
-    timerRef.current = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
-    }, 1000);
-  }, [getCanvas, getWebcamStream, onRecordingChange]);
-
-  const stopRecording = useCallback(() => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    const rec = recorderRef.current;
-    if (rec && rec.state !== 'inactive') { rec.stop(); setRecState('stopped'); }
-  }, []);
-
-  const fmt = (s: number) => [Math.floor(s/3600), Math.floor((s%3600)/60), s%60]
-    .map(v => String(v).padStart(2,'0')).join(':');
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-      {recState === 'idle' && (
-        <button onClick={startRecording} style={btnStyle} title="Start screen recording">
-          <span style={{ color: '#FF3B30' }}>&#9210;</span> Record
-        </button>
-      )}
-      {recState === 'recording' && (
-        <>
-          <span style={{
-            width: '9px', height: '9px', borderRadius: '50%', background: '#FF3B30',
-            animation: 'recPulse 1.2s ease-in-out infinite', flexShrink: 0,
-          }} />
-          <span style={{ fontFamily: 'monospace', fontSize: '13px', color: '#FF3B30', fontWeight: 700 }}>
-            {fmt(elapsed)}
-          </span>
-          <button onClick={stopRecording} style={{ ...btnStyle, background: '#FF3B30', color: '#fff', border: 'none' }}>
-            &#9632; Stop
-          </button>
-        </>
-      )}
-      {recState === 'stopped' && (
-        <span style={{ fontSize: '12px', color: '#35679A' }}>Saving\u2026</span>
-      )}
-      {error && <span style={{ fontSize: '11px', color: '#FF3B30' }}>{error}</span>}
-      <style>{`@keyframes recPulse{0%,100%{opacity:1}50%{opacity:.35}}`}</style>
-    </div>
-  );
-}
-
-function getBestMimeType(): string {
-  const c = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
-  for (const t of c) {
-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) return t;
-  }
-  return 'video/webm';
-}
