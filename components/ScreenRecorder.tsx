@@ -57,6 +57,8 @@ export default function ScreenRecorder({
   const timerRef        = useRef<ReturnType<typeof setInterval> | null>(null);
   const mimeTypeRef     = useRef('video/webm');
   const saveHandleRef   = useRef<any | null>(null);
+  const recStateRef     = useRef<RecState>('idle');
+  useEffect(() => { recStateRef.current = recState; }, [recState]);
 
   // Clean up timer on unmount
   useEffect(() => () => {
@@ -191,14 +193,21 @@ export default function ScreenRecorder({
             wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
           });
           setProgress('Converting to MP4…');
-          await ffmpeg.writeFile('input.webm', await fetchFile(outBlob));
-          await ffmpeg.exec([
-            '-i', 'input.webm',
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-            '-c:a', 'aac', '-movflags', '+faststart',
-            'output.mp4',
+          // Guard against hanging conversions in the browser (network/COEP issues).
+          const convert = async () => {
+            await ffmpeg.writeFile('input.webm', await fetchFile(outBlob));
+            await ffmpeg.exec([
+              '-i', 'input.webm',
+              '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+              '-c:a', 'aac', '-movflags', '+faststart',
+              'output.mp4',
+            ]);
+            return await ffmpeg.readFile('output.mp4');
+          };
+          const mp4Data = await Promise.race([
+            convert(),
+            new Promise<Uint8Array>((_, reject) => setTimeout(() => reject(new Error('FFmpeg conversion timeout')), 20_000)),
           ]);
-          const mp4Data = await ffmpeg.readFile('output.mp4');
           outBlob = new Blob([(mp4Data as Uint8Array).buffer as ArrayBuffer], { type: 'video/mp4' });
           outExt = 'mp4';
           setProgress(null);
@@ -286,6 +295,27 @@ export default function ScreenRecorder({
       try { recorder.requestData(); } catch {}
       recorder.stop();
       setRecState('stopped');
+
+      // Failsafe: if onstop never fires, force a download of what we have.
+      window.setTimeout(() => {
+        if (recStateRef.current !== 'stopped') return;
+        const rawBlob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
+        if (rawBlob.size === 0) {
+          setError('Recording produced an empty file.');
+          setRecState('idle');
+          onRecordingChange?.(false);
+          return;
+        }
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const url = URL.createObjectURL(rawBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `coach-lab-${ts}.webm`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        setRecState('idle');
+        onRecordingChange?.(false);
+      }, 8_000);
     }
   }, []);
 
@@ -353,7 +383,7 @@ export default function ScreenRecorder({
       )}
 
       {recState === 'stopped' && (
-        <span style={{ fontSize: '12px', color: '#35679A' }}>Saving recording\u2026</span>
+        <span style={{ fontSize: '12px', color: '#35679A' }}>Saving recording…</span>
       )}
 
       {progress && (

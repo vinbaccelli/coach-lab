@@ -624,12 +624,12 @@ export default function ToolPalette({
         <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5 px-1">
           Actions
         </p>
-        <div className="flex gap-1">
-          <button onClick={onUndo} className="tool-btn flex-1 flex-row gap-1" title="Undo (Ctrl+Z)">
+        <div className="flex flex-col gap-1">
+          <button onClick={onUndo} className="tool-btn w-full flex-row gap-1" title="Undo (Ctrl+Z)">
             <Undo2 size={15} />
             <span>Undo</span>
           </button>
-          <button onClick={onRedo} className="tool-btn flex-1 flex-row gap-1" title="Redo (Ctrl+Y)">
+          <button onClick={onRedo} className="tool-btn w-full flex-row gap-1" title="Redo (Ctrl+Y)">
             <Redo2 size={15} />
             <span>Redo</span>
           </button>

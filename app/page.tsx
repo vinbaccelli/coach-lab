@@ -901,79 +901,8 @@ export default function Home() {
             />
           </SidebarSection>
 
-          {/* StroMotion section */}
-          <SidebarSection title="StroMotion">
-            <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <p style={{ fontSize: '9px', color: '#6b7280', lineHeight: 1.4 }}>
-                Capture ghost frames from a time range for stroboscopic effect.
-              </p>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                <label style={{ fontSize: '10px', color: '#374151', minWidth: '40px' }}>Start:</label>
-                <input type="number" step="0.1" min="0" value={stroMotionStart}
-                  onChange={e => setStroMotionStart(parseFloat(e.target.value) || 0)}
-                  style={{ width: '60px', padding: '2px 4px', fontSize: '10px', border: '1px solid #E8E8ED', borderRadius: '4px' }} />
-                <label style={{ fontSize: '10px', color: '#374151', minWidth: '25px' }}>End:</label>
-                <input type="number" step="0.1" min="0" value={stroMotionEnd}
-                  onChange={e => setStroMotionEnd(parseFloat(e.target.value) || 0)}
-                  style={{ width: '60px', padding: '2px 4px', fontSize: '10px', border: '1px solid #E8E8ED', borderRadius: '4px' }} />
-              </div>
-              <div>
-                <p style={{ fontSize: '10px', color: '#374151', marginBottom: '2px' }}>Ghosts: {stroMotionCount}</p>
-                <input type="range" min="3" max="12" step="1" value={stroMotionCount}
-                  onChange={e => setStroMotionCount(Number(e.target.value))} style={{ width: '100%' }} />
-              </div>
-              <div>
-                <p style={{ fontSize: '10px', color: '#374151', marginBottom: '2px' }}>Opacity: {Math.round(stroMotionOpacity * 100)}%</p>
-                <input type="range" min="15" max="50" step="5" value={Math.round(stroMotionOpacity * 100)}
-                  onChange={e => setStroMotionOpacity(Number(e.target.value) / 100)} style={{ width: '100%' }} />
-              </div>
-              <button
-                onClick={() => setStroMotionEnabled(true)}
-                disabled={stroMotionProcessing}
-                style={{
-                  padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
-                  background: stroMotionProcessing ? '#E5E7EB' : '#35679A', color: stroMotionProcessing ? '#9ca3af' : '#fff',
-                  border: 'none', cursor: stroMotionProcessing ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {stroMotionProcessing ? `Capturing… ${stroMotionProgress}%` : '▶ Capture Ghosts'}
-              </button>
-              <button
-                onClick={() => {
-                  canvasRef.current?.startStroMotionRegionSelect((region) => {
-                    setStroMotionRegion(region);
-                  });
-                }}
-                style={{
-                  padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
-                  background: stroMotionRegion ? '#16A34A' : '#6b7280', color: '#fff',
-                  border: 'none', cursor: 'pointer',
-                }}
-                title="Drag on the canvas to select a region for StroMotion"
-              >
-                {stroMotionRegion ? '✓ Region set — Click to change' : '⬚ Select Region'}
-              </button>
-              {stroMotionRegion && (
-                <button
-                  onClick={() => setStroMotionRegion(undefined)}
-                  style={{ fontSize: '10px', color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer' }}
-                >
-                  Clear region
-                </button>
-              )}
-              {ghostFrames.length > 0 && (
-                <div style={{ display: 'flex', gap: '4px' }}>
-                  <span style={{ fontSize: '10px', color: '#16A34A', fontWeight: 600 }}>✓ {ghostFrames.length} ghosts captured</span>
-                  <button
-                    onClick={() => { setStroMotionEnabled(false); clearGhosts(); }}
-                    style={{ marginLeft: 'auto', fontSize: '10px', color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer' }}
-                  >
-                    Clear
-                  </button>
-                </div>
-              )}
-            </div>
-          </SidebarSection>
+          {/* V2 feature: StroMotion UI is intentionally hidden for now. */}
+          {false && <SidebarSection title="StroMotion"><div /></SidebarSection>}
 
           {/* Resize handle */}
           <div

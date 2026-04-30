@@ -127,6 +127,10 @@ export default function PreciseTimeline({
   const [isPlaying, setIsPlaying] = useState(false);
   const [t, setT] = useState(0);
   const [d, setD] = useState(0);
+  const tRef = useRef(0);
+  useEffect(() => { tRef.current = t; }, [t]);
+  const playbackRateRef = useRef(1);
+  const [playbackRate, setPlaybackRate] = useState(1);
 
   const readState = useCallback(() => {
     if (source.kind === 'html') {
@@ -198,6 +202,15 @@ export default function PreciseTimeline({
     setT(nextClamped);
   }, [d, source]);
 
+  const setRate = useCallback((r: number) => {
+    playbackRateRef.current = r;
+    setPlaybackRate(r);
+    if (source.kind === 'html') {
+      const v = source.videoRef.current;
+      if (v) v.playbackRate = r;
+    }
+  }, [source]);
+
   const togglePlay = useCallback(() => {
     if (source.kind === 'html') {
       const v = source.videoRef.current;
@@ -220,8 +233,12 @@ export default function PreciseTimeline({
     } else {
       source.playerRef.current?.pauseVideo?.();
     }
-    seekTo(t + dir * frameStepRef.current * mult);
-  }, [seekTo, source, t]);
+    // Use a ref so rapid clicks remain responsive without waiting for re-render.
+    const next = tRef.current + dir * frameStepRef.current * mult;
+    tRef.current = next;
+    setT(next);
+    seekTo(next);
+  }, [seekTo, source]);
 
   // Keyboard: frame-accurate stepping + play/pause
   useEffect(() => {
@@ -277,6 +294,25 @@ export default function PreciseTimeline({
       <div style={{ minWidth: 140, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
         <div style={{ lineHeight: 1.1 }}>{formatTime(t)}</div>
         <div style={{ lineHeight: 1.1, opacity: 0.75 }}>{formatTime(d)}</div>
+      </div>
+
+      {/* Speed */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>Speed</span>
+        {[0.25, 0.5, 1].map((r) => (
+          <button
+            key={r}
+            onClick={() => setRate(r)}
+            style={{
+              ...btnStyle,
+              width: 46,
+              background: playbackRate === r ? accent : 'rgba(255,255,255,0.08)',
+            }}
+            title={`Set speed to ${r}×`}
+          >
+            {r}×
+          </button>
+        ))}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
