@@ -439,15 +439,17 @@ function drawCircleStroke(
   ctx.save();
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
-  if (s.dashed) ctx.setLineDash([8, 6]);
+  // "spinning" no longer rotates the shape (V1). Instead it animates the outline travel (V2).
+  // The shape stays static; the stroke pattern moves along the path.
+  if (s.spinning) {
+    ctx.setLineDash([2, 8]); // dotted travel
+    ctx.lineDashOffset = -((Date.now() / 20) % 1000);
+  } else if (s.dashed) {
+    ctx.setLineDash([8, 6]);
+  }
 
-  if (s.spinning || s.gapStart !== undefined) {
-    // Use time-based rotation for smooth, drift-free animation
+  if (s.gapStart !== undefined) {
     ctx.translate(s.cx, s.cy);
-    if (s.spinning) {
-      const spinAngle = ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2);
-      ctx.rotate(spinAngle);
-    }
     const startAngle = s.gapStart ?? 0;
     const endAngle   = s.gapEnd   ?? Math.PI * 2;
     const rx = Math.max(1, s.rx);
@@ -476,20 +478,18 @@ function drawRectStroke(
   ctx.save();
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
-  if (s.dashed) ctx.setLineDash([8, 6]);
+  if (s.spinning) {
+    ctx.setLineDash([2, 10]);
+    ctx.lineDashOffset = -((Date.now() / 18) % 1000);
+  } else if (s.dashed) {
+    ctx.setLineDash([8, 6]);
+  }
 
   const drawRectAt = (cx: number, cy: number) => {
     ctx.strokeRect(cx - s.rx, cy - s.ry, s.rx * 2, s.ry * 2);
   };
 
-  if (s.spinning) {
-    const spinAngle = ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2);
-    ctx.translate(s.cx, s.cy);
-    ctx.rotate(spinAngle);
-    ctx.strokeRect(-s.rx, -s.ry, s.rx * 2, s.ry * 2);
-  } else {
-    drawRectAt(s.cx, s.cy);
-  }
+  drawRectAt(s.cx, s.cy);
 
   if (s.is3d && !s.spinning) {
     const off = Math.max(8, s.lw * 2);
@@ -518,13 +518,14 @@ function drawTriangleStroke(
   ctx.save();
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
-  if (s.dashed) ctx.setLineDash([8, 6]);
+  if (s.spinning) {
+    ctx.setLineDash([2, 10]);
+    ctx.lineDashOffset = -((Date.now() / 18) % 1000);
+  } else if (s.dashed) {
+    ctx.setLineDash([8, 6]);
+  }
 
-  const spinAngle = s.spinning
-    ? ((Date.now() / 3000) * Math.PI * 2) % (Math.PI * 2)
-    : 0;
   ctx.translate(s.cx, s.cy);
-  ctx.rotate(spinAngle);
   const drawTri = (ox: number, oy: number) => {
     ctx.beginPath();
     ctx.moveTo(ox, oy - s.ry);
@@ -994,6 +995,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const latestKeypointsRef  = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
     const poseLoopActiveRef   = useRef(false);
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
+    // When true, skeleton overlay + detection is temporarily suppressed (e.g. after Clear All / Undo).
+    // This prevents the pose loop from immediately repopulating the overlay right after clearing.
+    const skeletonSuppressedRef = useRef(false);
 
     // Real-time ball detection
     const isBallDetectingRef  = useRef(false);
@@ -1142,6 +1146,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         angleVRef.current = null;
         angleP1Ref.current = null;
         // ClearAll should remove *everything* including AI overlays.
+        skeletonSuppressedRef.current = true;
         cachedPosesRef.current = [];
         poseProcessingRef.current = false;
         skeletonFramesRef.current = [];
@@ -1155,6 +1160,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         pushHistory();
       },
       resetSkeleton: () => {
+        skeletonSuppressedRef.current = false;
         cachedPosesRef.current = [];
         poseProcessingRef.current = false;
         skeletonFramesRef.current = [];
@@ -1179,6 +1185,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return streamRef.current;
       },
       undo: () => {
+        // Undo should also clear any active AI overlays (skeleton/ball) so the user truly "undoes everything".
+        skeletonSuppressedRef.current = true;
+        cachedPosesRef.current = [];
+        poseProcessingRef.current = false;
+        skeletonFramesRef.current = [];
+        latestKeypointsRef.current = null;
+        cachedBallRef.current = [];
+        ballProcessingRef.current = false;
+        ballTrackRef.current = [];
+        isBallDetectingRef.current = false;
+        onProcessingStatus?.(null);
+
         if (historyIdxRef.current > 0) {
           historyIdxRef.current--;
           strokesRef.current = [...historyRef.current[historyIdxRef.current]];
@@ -1239,7 +1257,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         panYRef.current = 0;
       },
       getCropRegion: () => cropRegionRef.current,
-      clearCropRegion: () => { cropRegionRef.current = null; },
+      clearCropRegion: () => {
+        cropRegionRef.current = null;
+        // Reset the view back to the full frame when clearing crop.
+        zoomRef.current = 1.0;
+        panXRef.current = 0;
+        panYRef.current = 0;
+      },
     }), [onProcessingStatus, pushHistory, videoRef]);
 
     // ── Skeleton detector loader ───────────────────────────────────────────
@@ -1247,6 +1271,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => {
       if (!skeletonEnabled) {
         poseLoopActiveRef.current = false;
+        skeletonSuppressedRef.current = false;
         latestKeypointsRef.current = null;
         return;
       }
@@ -1292,6 +1317,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       const poseLoop = async () => {
         if (!poseLoopActiveRef.current) return;
+        if (skeletonSuppressedRef.current) {
+          latestKeypointsRef.current = null;
+          rafId = requestAnimationFrame(poseLoop);
+          return;
+        }
 
         const det = detectorRef.current;
         if (det && video.readyState >= 4 && video.videoWidth > 0) {
@@ -1545,7 +1575,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         // ── Skeleton overlay ─────────────────────────────────────────────
-        if (skeletonEnabledRef.current && video) {
+        if (skeletonEnabledRef.current && !skeletonSuppressedRef.current && video) {
           if (latestKeypointsRef.current && latestKeypointsRef.current.length > 0 && video.videoWidth > 0) {
             ctx.save();
             ctx.translate(dx, dy);
@@ -2406,12 +2436,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const H = canvas.height;
               const rx = Math.min(p1.x, p2.x);
               const ry = Math.min(p1.y, p2.y);
-              cropRegionRef.current = {
+              const cr = {
                 x: Math.max(0, Math.min(1, rx / W)),
                 y: Math.max(0, Math.min(1, ry / H)),
                 w: Math.max(0, Math.min(1, rw / W)),
                 h: Math.max(0, Math.min(1, rh / H)),
               };
+              cropRegionRef.current = cr;
+
+              // Zoom the view into the selected crop region.
+              // We use the existing zoom/pan transform so the crop affects the displayed video
+              // (and overlays) immediately and can be repeated without refresh.
+              const cropPxW = cr.w * W;
+              const cropPxH = cr.h * H;
+              if (cropPxW > 0 && cropPxH > 0) {
+                // Fill the screen as much as possible with a uniform scale.
+                // Using "max" makes the crop fill the canvas; if aspect ratios differ, a small
+                // amount of the selected crop may extend beyond one axis.
+                const z = Math.max(W / cropPxW, H / cropPxH);
+                zoomRef.current = Math.max(0.25, Math.min(8, z));
+
+                const cropCx = (cr.x + cr.w / 2) * W;
+                const cropCy = (cr.y + cr.h / 2) * H;
+                panXRef.current = -((cropCx - W / 2) * zoomRef.current);
+                panYRef.current = -((cropCy - H / 2) * zoomRef.current);
+              }
             }
           }
         }

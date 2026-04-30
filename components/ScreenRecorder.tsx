@@ -48,6 +48,7 @@ export default function ScreenRecorder({
   const [progress, setProgress] = useState<string | null>(null);
 
   const paintTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const rafPaintRef     = useRef<number | null>(null);
   const recCanvasRef    = useRef<HTMLCanvasElement | null>(null);
   const streamRef       = useRef<MediaStream | null>(null);
   const recorderRef     = useRef<MediaRecorder | null>(null);
@@ -55,11 +56,13 @@ export default function ScreenRecorder({
   const startTimeRef    = useRef<number>(0);
   const timerRef        = useRef<ReturnType<typeof setInterval> | null>(null);
   const mimeTypeRef     = useRef('video/webm');
+  const saveHandleRef   = useRef<any | null>(null);
 
   // Clean up timer on unmount
   useEffect(() => () => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (paintTimerRef.current) clearInterval(paintTimerRef.current);
+    if (rafPaintRef.current) cancelAnimationFrame(rafPaintRef.current);
   }, []);
 
   const startRecording = useCallback(async () => {
@@ -83,8 +86,10 @@ export default function ScreenRecorder({
     const ctx = recCanvas.getContext('2d')!;
 
     // Paint loop: letterbox/pillarbox the source canvas into the output canvas.
-    if (paintTimerRef.current) clearInterval(paintTimerRef.current);
-    paintTimerRef.current = setInterval(() => {
+    if (paintTimerRef.current) { clearInterval(paintTimerRef.current); paintTimerRef.current = null; }
+    if (rafPaintRef.current) { cancelAnimationFrame(rafPaintRef.current); rafPaintRef.current = null; }
+
+    const paintOnce = () => {
       const src = getCanvas();
       if (!src) return;
       const crop = getCropRegion?.();
@@ -106,7 +111,14 @@ export default function ScreenRecorder({
         dx = (outW - dw) / 2;
       }
       ctx.drawImage(src, sx0, sy0, sw0, sh0, dx, dy, dw, dh);
-    }, 1000 / 30);
+    };
+
+    const paintLoop = () => {
+      paintOnce();
+      rafPaintRef.current = requestAnimationFrame(paintLoop);
+    };
+    paintOnce();
+    rafPaintRef.current = requestAnimationFrame(paintLoop);
 
     // Capture a fresh stream per recording (important for memory cleanup and layout changes).
     streamRef.current = (recCanvas as unknown as { captureStream(fps: number): MediaStream }).captureStream(30);
@@ -145,8 +157,15 @@ export default function ScreenRecorder({
 
     recorder.onstop = async () => {
       if (paintTimerRef.current) { clearInterval(paintTimerRef.current); paintTimerRef.current = null; }
+      if (rafPaintRef.current) { cancelAnimationFrame(rafPaintRef.current); rafPaintRef.current = null; }
       const duration = Date.now() - startTimeRef.current;
       const rawBlob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
+      if (rawBlob.size === 0) {
+        setError('Recording produced an empty file. Try again (and ensure the video/canvas is playing).');
+        setRecState('idle');
+        onRecordingChange?.(false);
+        return;
+      }
 
       let finalBlob: Blob;
       try {
@@ -192,12 +211,33 @@ export default function ScreenRecorder({
       }
 
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const url = URL.createObjectURL(outBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `coach-lab-${ts}.${outExt}`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      const suggestedName = `coach-lab-${ts}.${outExt}`;
+
+      // Prefer writing via File System Access API (survives async FFmpeg conversion without being blocked as a download).
+      const handle = saveHandleRef.current;
+      if (handle && typeof handle.createWritable === 'function') {
+        try {
+          const writable = await handle.createWritable();
+          await writable.write(outBlob);
+          await writable.close();
+        } catch (err) {
+          console.warn('[ScreenRecorder] Failed writing via file picker; falling back to download:', err);
+          const url = URL.createObjectURL(outBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = suggestedName;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        }
+      } else {
+        const url = URL.createObjectURL(outBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = suggestedName;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      }
+      saveHandleRef.current = null;
 
       // Release stream tracks to help Safari (and others) GC sooner.
       try {
@@ -210,7 +250,7 @@ export default function ScreenRecorder({
       onRecordingChange?.(false);
     };
 
-    recorder.start(1000); // timeslice = 1 s chunks
+    recorder.start(250); // smaller timeslice helps ensure we get non-empty data for short recordings
     recorderRef.current = recorder;
     startTimeRef.current = Date.now();
     setRecState('recording');
@@ -225,6 +265,25 @@ export default function ScreenRecorder({
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== 'inactive') {
+      // If available, ask the user where to save *before* async work begins.
+      // This avoids browsers blocking a download after FFmpeg finishes.
+      try {
+        const supportsPicker = typeof (window as any).showSaveFilePicker === 'function';
+        if (supportsPicker) {
+          const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          // We prefer MP4. If conversion fails we may still write WebM, but naming MP4 is ok—fallback download uses correct ext.
+          (window as any).showSaveFilePicker({
+            suggestedName: `coach-lab-${ts}.mp4`,
+            types: [
+              { description: 'MP4 Video', accept: { 'video/mp4': ['.mp4'] } },
+              { description: 'WebM Video', accept: { 'video/webm': ['.webm'] } },
+            ],
+          }).then((handle: any) => { saveHandleRef.current = handle; }).catch(() => { /* user cancelled */ });
+        }
+      } catch {}
+
+      // Flush the last chunk before stopping to avoid 0B/0kB output.
+      try { recorder.requestData(); } catch {}
       recorder.stop();
       setRecState('stopped');
     }

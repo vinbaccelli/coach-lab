@@ -137,9 +137,10 @@ export default function MobileToolStrip(props: Props) {
         <IconBtn active={activeTool === 'skeleton'} title="Skeleton" onClick={() => { setPanel(null); onToolChange('skeleton'); }}>
           <PersonStanding size={18} />
         </IconBtn>
-        <IconBtn active={activeTool === 'ballShadow'} title="Ball Trail" onClick={() => { setPanel(null); onToolChange('ballShadow'); }}>
+        {/* V2 feature: Ball Trail is intentionally hidden from UI for now. */}
+        {/* <IconBtn active={activeTool === 'ballShadow'} title="Ball Trail" onClick={() => { setPanel(null); onToolChange('ballShadow'); }}>
           <Footprints size={18} />
-        </IconBtn>
+        </IconBtn> */}
         <IconBtn active={panel === 'swing'} title="Swing" onClick={() => setPanel(panel === 'swing' ? null : 'swing')}>
           <TrendingUp size={18} />
         </IconBtn>

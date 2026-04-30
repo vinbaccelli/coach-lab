@@ -67,7 +67,7 @@ interface ToolPaletteProps {
   onClearCrop?: () => void;
 }
 
-type Panel = null | 'draw' | 'angle' | 'style' | 'swing' | 'shapes';
+type Panel = null | 'draw' | 'angle' | 'style' | 'swing';
 
 const PRESET_COLORS = [
   '#1E40AF', '#DC2626', '#16A34A', '#D97706', '#7C3AED',
@@ -145,24 +145,24 @@ export default function ToolPalette({
         </p>
 
         <div className="flex flex-col gap-1">
-          <div className="flex gap-1">
-            <button
-              onClick={() => setTool('select')}
-              className={`tool-btn flex-1 flex-row gap-1 ${activeTool === 'select' ? 'active' : ''}`}
-              title="Select"
-            >
-              <MousePointer2 size={15} />
-              <span>Select</span>
-            </button>
-            <button
-              onClick={() => togglePanel('style')}
-              className={`tool-btn flex-1 flex-row gap-1 ${openPanel === 'style' ? 'active' : ''}`}
-              title="Style"
-            >
-              <Shapes size={15} />
-              <span>Style</span>
-            </button>
-          </div>
+          {/* Single-column desktop toolbar (matches mobile's clarity) */}
+          <button
+            onClick={() => setTool('select')}
+            className={`tool-btn w-full flex-row gap-1 ${activeTool === 'select' ? 'active' : ''}`}
+            title="Select"
+          >
+            <MousePointer2 size={15} />
+            <span>Select</span>
+          </button>
+
+          <button
+            onClick={() => togglePanel('style')}
+            className={`tool-btn w-full flex-row gap-1 ${openPanel === 'style' ? 'active' : ''}`}
+            title="Style"
+          >
+            <Shapes size={15} />
+            <span>Style</span>
+          </button>
 
           <button
             onClick={() => togglePanel('draw')}
@@ -197,6 +197,74 @@ export default function ToolPalette({
                   <Triangle size={14} /><span>Triangle</span>
                 </button>
               </div>
+
+              {/* Shape options live inside Draw to keep the toolbar clean */}
+              {(activeTool === 'circle' || activeTool === 'bodyCircle' || activeTool === 'rect' || activeTool === 'triangle') && (
+                <div className="mt-2 border-t border-gray-200 pt-2 px-1">
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                    Shape Options
+                  </p>
+
+                  {/* 3D effect toggles */}
+                  {(activeTool === 'circle' || activeTool === 'bodyCircle') && (
+                    <label className="flex items-center gap-2 text-[10px] text-gray-600 cursor-pointer mb-1">
+                      <input
+                        type="checkbox"
+                        checked={activeTool === 'bodyCircle'}
+                        onChange={(e) => onToolChange(e.target.checked ? 'bodyCircle' : 'circle')}
+                        className="accent-blue-500"
+                      />
+                      3D cut (use as “eraser” on shape)
+                    </label>
+                  )}
+                  {activeTool === 'rect' && onRect3dChange && (
+                    <label className="flex items-center gap-2 text-[10px] text-gray-600 cursor-pointer mb-1">
+                      <input
+                        type="checkbox"
+                        checked={!!rect3d}
+                        onChange={(e) => onRect3dChange(e.target.checked)}
+                        className="accent-blue-500"
+                      />
+                      3D cut (use as “eraser” on shape)
+                    </label>
+                  )}
+                  {activeTool === 'triangle' && onTriangle3dChange && (
+                    <label className="flex items-center gap-2 text-[10px] text-gray-600 cursor-pointer mb-1">
+                      <input
+                        type="checkbox"
+                        checked={!!triangle3d}
+                        onChange={(e) => onTriangle3dChange(e.target.checked)}
+                        className="accent-blue-500"
+                      />
+                      3D cut (use as “eraser” on shape)
+                    </label>
+                  )}
+
+                  {/* Animation toggle (outline travel) */}
+                  {onCircleSpinningChange && (
+                    <label className="flex items-center gap-2 text-[10px] text-gray-600 cursor-pointer mb-1">
+                      <input
+                        type="checkbox"
+                        checked={!!circleSpinning}
+                        onChange={(e) => onCircleSpinningChange(e.target.checked)}
+                        className="accent-blue-500"
+                      />
+                      Animation (travelling outline)
+                    </label>
+                  )}
+
+                  {/* Circle-only gap mode */}
+                  {onCircleGapModeChange && (activeTool === 'circle' || activeTool === 'bodyCircle') && (
+                    <button
+                      onClick={() => onCircleGapModeChange(!circleGapMode)}
+                      className={`tool-btn w-full flex-row gap-1 ${circleGapMode ? 'active text-blue-600' : 'text-gray-500'}`}
+                    >
+                      <span className="text-[13px]">✂</span>
+                      <span>{circleGapMode ? 'Gap Mode ON' : 'Add Gap'}</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -221,23 +289,18 @@ export default function ToolPalette({
             </div>
           )}
 
-          <div className="flex gap-1">
-            <button onClick={() => setTool('text')} className={`tool-btn flex-1 flex-row gap-1 ${activeTool === 'text' ? 'active' : ''}`} title="Text">
-              <Type size={15} /><span>Text</span>
-            </button>
-            <button onClick={() => togglePanel('shapes')} className={`tool-btn flex-1 flex-row gap-1 ${openPanel === 'shapes' ? 'active' : ''}`} title="Shapes">
-              <Shapes size={15} /><span>Shapes</span>
-            </button>
-          </div>
+          <button onClick={() => setTool('text')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'text' ? 'active' : ''}`} title="Text">
+            <Type size={15} /><span>Text</span>
+          </button>
 
-          <div className="flex gap-1">
-            <button onClick={() => setTool('skeleton')} className={`tool-btn flex-1 flex-row gap-1 ${activeTool === 'skeleton' ? 'active' : ''}`} title="Skeleton">
-              <PersonStanding size={15} /><span>Skeleton</span>
-            </button>
-            <button onClick={() => setTool('ballShadow')} className={`tool-btn flex-1 flex-row gap-1 ${activeTool === 'ballShadow' ? 'active' : ''}`} title="Ball Trail">
-              <Footprints size={15} /><span>Ball</span>
-            </button>
-          </div>
+          <button onClick={() => setTool('skeleton')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'skeleton' ? 'active' : ''}`} title="Skeleton">
+            <PersonStanding size={15} /><span>Skeleton</span>
+          </button>
+
+          {/* V2 feature: Ball Trail is intentionally hidden from UI for now. */}
+          {/* <button onClick={() => setTool('ballShadow')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'ballShadow' ? 'active' : ''}`} title="Ball Trail">
+            <Footprints size={15} /><span>Ball Trail</span>
+          </button> */}
 
           <button onClick={() => togglePanel('swing')} className={`tool-btn w-full flex-row gap-1 ${openPanel === 'swing' ? 'active' : ''}`} title="Swing">
             <TrendingUp size={15} /><span>Swing</span>
@@ -336,125 +399,6 @@ export default function ToolPalette({
         </>
       )}
 
-      {openPanel === 'shapes' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-2 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Shapes
-            </p>
-            <div className="flex flex-col gap-1">
-              <div className="tool-btn w-full flex-row gap-2 justify-between">
-                <button
-                  onClick={() => setTool(isCircle3d ? 'bodyCircle' : 'circle')}
-                  className={`flex items-center gap-1 ${(activeTool === 'circle' || activeTool === 'bodyCircle') ? 'text-blue-600 font-semibold' : ''}`}
-                >
-                  <Circle size={14} /> Circle
-                </button>
-                <div className="flex items-center gap-2">
-                  <label className="flex items-center gap-1 text-[10px] text-gray-600 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={isCircle3d}
-                      onChange={(e) => onToolChange(e.target.checked ? 'bodyCircle' : 'circle')}
-                      className="accent-blue-500"
-                    />
-                    3D
-                  </label>
-                  {onCircleSpinningChange && (
-                    <label className="flex items-center gap-1 text-[10px] text-gray-600 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={!!circleSpinning}
-                        onChange={(e) => onCircleSpinningChange(e.target.checked)}
-                        className="accent-blue-500"
-                      />
-                      Anim
-                    </label>
-                  )}
-                </div>
-              </div>
-
-              <div className="tool-btn w-full flex-row gap-2 justify-between">
-                <button
-                  onClick={() => setTool('rect')}
-                  className={`flex items-center gap-1 ${activeTool === 'rect' ? 'text-blue-600 font-semibold' : ''}`}
-                >
-                  <Square size={14} /> Rectangle
-                </button>
-                <div className="flex items-center gap-2">
-                  {onRect3dChange && (
-                    <label className="flex items-center gap-1 text-[10px] text-gray-600 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={!!rect3d}
-                        onChange={(e) => onRect3dChange(e.target.checked)}
-                        className="accent-blue-500"
-                      />
-                      3D
-                    </label>
-                  )}
-                  {onCircleSpinningChange && (
-                    <label className="flex items-center gap-1 text-[10px] text-gray-600 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={!!circleSpinning}
-                        onChange={(e) => onCircleSpinningChange(e.target.checked)}
-                        className="accent-blue-500"
-                      />
-                      Anim
-                    </label>
-                  )}
-                </div>
-              </div>
-
-              <div className="tool-btn w-full flex-row gap-2 justify-between">
-                <button
-                  onClick={() => setTool('triangle')}
-                  className={`flex items-center gap-1 ${activeTool === 'triangle' ? 'text-blue-600 font-semibold' : ''}`}
-                >
-                  <Triangle size={14} /> Triangle
-                </button>
-                <div className="flex items-center gap-2">
-                  {onTriangle3dChange && (
-                    <label className="flex items-center gap-1 text-[10px] text-gray-600 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={!!triangle3d}
-                        onChange={(e) => onTriangle3dChange(e.target.checked)}
-                        className="accent-blue-500"
-                      />
-                      3D
-                    </label>
-                  )}
-                  {onCircleSpinningChange && (
-                    <label className="flex items-center gap-1 text-[10px] text-gray-600 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={!!circleSpinning}
-                        onChange={(e) => onCircleSpinningChange(e.target.checked)}
-                        className="accent-blue-500"
-                      />
-                      Anim
-                    </label>
-                  )}
-                </div>
-              </div>
-
-              {onCircleGapModeChange && (activeTool === 'circle' || activeTool === 'bodyCircle') && (
-                <button
-                  onClick={() => onCircleGapModeChange(!circleGapMode)}
-                  className={`tool-btn w-full flex-row gap-1 ${circleGapMode ? 'active text-blue-600' : 'text-gray-500'}`}
-                >
-                  <span className="text-[13px]">✂</span>
-                  <span>{circleGapMode ? 'Gap Mode ON' : 'Add Gap'}</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </>
-      )}
-
       {/* Font size (text tool) */}
       {activeTool === 'text' && (
         <>
@@ -530,46 +474,9 @@ export default function ToolPalette({
         </>
       )}
 
-      {/* Ball Trail tool */}
-      {activeTool === 'ballShadow' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-2 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Ball Trail
-            </p>
-            <p className="text-[9px] text-yellow-600 px-1 mb-1.5 leading-tight font-medium">
-              Auto-detects tennis ball from video.
-            </p>
-            <div className="flex gap-1 mb-2 flex-wrap">
-              {(['comet', 'arc', 'strobe'] as BallTrailMode[]).map((m) => (
-                <button
-                  key={m}
-                  style={pillBtn(ballTrailMode === m)}
-                  onClick={() => onBallTrailModeChange(m)}
-                >
-                  {m.charAt(0).toUpperCase() + m.slice(1)}
-                </button>
-              ))}
-            </div>
-            {onBallSampleModeChange && (
-              <button
-                onClick={() => onBallSampleModeChange(!ballSampleMode)}
-                className={`tool-btn w-full flex-row gap-1 mb-1 ${ballSampleMode ? 'active text-blue-600' : 'text-gray-500'}`}
-              >
-                <span className="text-[13px]">🎯</span>
-                <span>{ballSampleMode ? 'Click ball to sample…' : 'Sample ball color'}</span>
-              </button>
-            )}
-            <button
-              onClick={onResetBallTrail}
-              className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
-            >
-              <RefreshCw size={13} />
-              <span>Reset Trail</span>
-            </button>
-          </div>
-        </>
+      {/* V2 feature: Ball Trail controls intentionally hidden from UI for now. */}
+      {false && activeTool === 'ballShadow' && (
+        <div />
       )}
 
       {/* Swing path tool */}
@@ -635,7 +542,7 @@ export default function ToolPalette({
               Crop
             </p>
             <p className="text-[9px] text-orange-500 px-1 leading-tight font-medium mb-1">
-              Drag a rectangle to set a crop region for recording/export.
+              Drag a rectangle to zoom the view into that region.
             </p>
             {onClearCrop && (
               <button
@@ -643,7 +550,7 @@ export default function ToolPalette({
                 className="tool-btn w-full flex-row gap-1 text-gray-500 hover:bg-gray-50"
               >
                 <RefreshCw size={13} />
-                <span>Clear Crop</span>
+                <span>Reset Crop</span>
               </button>
             )}
           </div>

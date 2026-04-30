@@ -10,13 +10,13 @@ import dynamic from 'next/dynamic';
 import { Camera, Upload, GripVertical } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
-import ExportModal from '@/components/ExportModal';
-import PlaybackControls from '@/components/PlaybackControls';
+import PreciseTimeline from '@/components/PreciseTimeline';
 import { SidebarSection } from '@/components/SidebarSection';
 import ScreenRecorder from '@/components/ScreenRecorder';
 import MobileToolStrip from '@/components/MobileToolStrip';
-import YouTubeEmbed from '@/components/YouTubeEmbed';
-import YouTubeControls from '@/components/YouTubeControls';
+// URL-loaded sources are resolved into same-origin video streams (see /api/video/*),
+// so we no longer need iframe embeds for editing workflows.
+// YouTube timeline is handled by PreciseTimeline (player-backed)
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
@@ -39,7 +39,7 @@ export default function Home() {
   // Webcam stream held here so ScreenRecorder can get audio
   const webcamStreamRef = useRef<MediaStream | null>(null);
   const micStreamRef    = useRef<MediaStream | null>(null);
-  const ytPlayerRef     = useRef<any | null>(null);
+  // Legacy YouTube iframe player ref removed — URL workflow uses <video>.
   const lastBlobUrlARef = useRef<string | null>(null);
   const lastBlobUrlBRef = useRef<string | null>(null);
 
@@ -57,7 +57,6 @@ export default function Home() {
   const [canvasSizeB, setCanvasSizeB]     = useState({ width: 800, height: 450 });
   const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('comet');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
-  const [showExport, setShowExport]       = useState(false);
   const [layoutMode, setLayoutMode]       = useState<'youtube' | 'reels'>('youtube');
   const [sidebarWidth, setSidebarWidth]   = useState(240);
   const [isResizing, setIsResizing]       = useState(false);
@@ -78,7 +77,8 @@ export default function Home() {
   const [webcamPipMode, setWebcamPipMode]   = useState<WebcamPipMode>('rectangle');
   const [webcamOpacity, setWebcamOpacity]   = useState(1);
   const [urlInput, setUrlInput]             = useState('');
-  const [embedUrl, setEmbedUrl]             = useState<{ type: 'youtube' | 'instagram' | 'mp4'; url: string } | null>(null);
+  // Legacy embed state (kept null) — URL workflow uses <video>.
+  const [embedUrl, setEmbedUrl]             = useState<null>(null);
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
   /** Drag-over state for the two video panels */
@@ -97,15 +97,10 @@ export default function Home() {
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
   const ballTrailEnabled = activeTool === 'ballShadow';
-  const ytVideoId = embedUrl?.type === 'youtube'
-  ? (embedUrl.url.match(/embed\/([A-Za-z0-9_-]{11})/)?.[1] ?? null)
-  : null;
+  const ytVideoId = null;
 
   const handleToolChange = useCallback((t: ToolType) => {
-    if (embedUrl?.type === 'youtube' && (t === 'skeleton' || t === 'ballShadow')) {
-      alert('Skeleton and Ball Trail require an uploaded video file (YouTube embeds do not allow frame access in-browser).');
-      return;
-    }
+    // URL sources are resolved into a real <video> stream, so all tools can work consistently.
     setActiveTool(t);
   }, [embedUrl]);
 
@@ -211,9 +206,7 @@ export default function Home() {
     setShowTapToPlay(true);
   }, []);
 
-  const setYouTubePlayer = useCallback((p: any | null) => {
-    ytPlayerRef.current = p;
-  }, []);
+  const setYouTubePlayer = useCallback((_p: any | null) => {}, []);
 
   const cleanupVideoEl = useCallback((v: HTMLVideoElement | null) => {
     if (!v) return;
@@ -512,72 +505,129 @@ export default function Home() {
     canvasRef.current?.setRacketTrail(trail);
   }, []);
 
+  const getYouTubeAccessToken = useCallback(async (): Promise<string> => {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      alert('Missing NEXT_PUBLIC_GOOGLE_CLIENT_ID. Configure Google OAuth client ID to enable URL imports.');
+      throw new Error('Missing Google client ID');
+    }
+
+    // Load Google Identity Services if needed
+    if (!(window as any).google?.accounts?.oauth2) {
+      await new Promise<void>((resolve, reject) => {
+        const existing = document.querySelector('script[data-google-identity]');
+        if (existing) return resolve();
+        const s = document.createElement('script');
+        s.src = 'https://accounts.google.com/gsi/client';
+        s.async = true;
+        s.defer = true;
+        s.dataset.googleIdentity = '1';
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error('Failed to load Google Identity script'));
+        document.head.appendChild(s);
+      });
+    }
+
+    return await new Promise<string>((resolve, reject) => {
+      try {
+        const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly',
+          callback: (resp: any) => {
+            if (resp?.access_token) resolve(resp.access_token);
+            else reject(new Error(resp?.error ?? 'No access token'));
+          },
+        });
+        tokenClient.requestAccessToken({ prompt: '' });
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }, []);
+
   // ── URL Input handler ────────────────────────────────────────────────────
-  const handleUrlSubmit = useCallback(() => {
+  const handleUrlSubmit = useCallback(async () => {
     const raw = urlInput.trim();
     if (!raw) return;
 
-    const ytMatch = raw.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
-    if (ytMatch) {
-      // Release any previously loaded local video to avoid Safari memory leaks.
-      revokeBlobUrl(lastBlobUrlARef.current);
-      lastBlobUrlARef.current = null;
-      setVideoSrc(null);
-      if (videoRef.current) cleanupVideoEl(videoRef.current);
-      setShowTapToPlay(false);
+    // Reset current session state before loading a new URL source.
+    revokeBlobUrl(lastBlobUrlARef.current);
+    lastBlobUrlARef.current = null;
+    setVideoSrc(null);
+    setEmbedUrl(null);
+    if (videoRef.current) cleanupVideoEl(videoRef.current);
+    setShowTapToPlay(false);
+    setProcessingStatus('Resolving video URL…');
+    setStroMotionEnabled(false);
+    setStroMotionRegion(undefined);
+    clearGhosts();
+    canvasRef.current?.clearAll();
+
+    // If already a direct video file URL, load it immediately.
+    if (raw.match(/\.(mp4|webm|mov)(\?.*)?$/i)) {
+      const streamUrl = `/api/video/stream?url=${encodeURIComponent(raw)}`;
       setProcessingStatus(null);
-      setStroMotionEnabled(false);
-      setStroMotionRegion(undefined);
-      clearGhosts();
-      canvasRef.current?.clearAll();
-      setEmbedUrl({ type: 'youtube', url: `https://www.youtube.com/embed/${ytMatch[1]}` });
-      return;
-    }
-    // Use URL parsing to ensure the hostname is exactly instagram.com
-    try {
-      const parsed = new URL(raw);
-      const host = parsed.hostname.replace(/^www\./, '');
-      if (host === 'instagram.com') {
-        const igMatch = parsed.pathname.match(/\/(?:p|reel)\/([A-Za-z0-9_-]+)/);
-        if (igMatch) {
-          revokeBlobUrl(lastBlobUrlARef.current);
-          lastBlobUrlARef.current = null;
-          setVideoSrc(null);
-          if (videoRef.current) cleanupVideoEl(videoRef.current);
-          setShowTapToPlay(false);
-          setProcessingStatus(null);
-          setStroMotionEnabled(false);
-          setStroMotionRegion(undefined);
-          clearGhosts();
-          canvasRef.current?.clearAll();
-          setEmbedUrl({ type: 'instagram', url: `https://www.instagram.com/p/${igMatch[1]}/embed` });
-          return;
-        }
+      setVideoSrc(streamUrl);
+      if (videoRef.current) {
+        cleanupVideoEl(videoRef.current);
+        videoRef.current.src = streamUrl;
+        videoRef.current.load();
       }
-    } catch {
-      // Not a valid URL — continue to other checks below
-    }
-    // Only allow safe video URLs (http/https or blob)
-    if ((raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('blob:'))
-        && raw.match(/\.(mp4|webm|mov)(\?.*)?$/i)) {
-      revokeBlobUrl(lastBlobUrlARef.current);
-      lastBlobUrlARef.current = raw.startsWith('blob:') ? raw : null;
-      setVideoSrc(raw);
-      setEmbedUrl(null);
-      setShowTapToPlay(false);
-      setProcessingStatus(null);
-      setStroMotionEnabled(false);
-      setStroMotionRegion(undefined);
-      clearGhosts();
-      canvasRef.current?.clearAll();
-      if (videoRef.current) { cleanupVideoEl(videoRef.current); videoRef.current.src = raw; videoRef.current.load(); }
       return;
     }
-    alert('Supported: YouTube URL, direct .mp4/.webm link, or Instagram (view-only embed).');
+
+    // Otherwise, normalize: import into the coach's YouTube as Unlisted, then load that.
+    try {
+      setProcessingStatus('Importing to YouTube (unlisted)…');
+      const accessToken = await getYouTubeAccessToken();
+      const impRes = await fetch('/api/youtube/import', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ url: raw }),
+      });
+      const imp = await impRes.json();
+      if (!impRes.ok || !imp?.ok || !imp?.watchUrl) {
+        throw new Error(imp?.error || 'Import failed');
+      }
+
+      setProcessingStatus('Preparing video…');
+      const res = await fetch(`/api/video/resolve?url=${encodeURIComponent(imp.watchUrl)}`);
+      const data = await res.json();
+      if (!res.ok || !data?.ok || !data?.streamPath) {
+        throw new Error(data?.error || 'Could not resolve uploaded YouTube video');
+      }
+
+      const streamUrl = data.streamPath as string;
+      setProcessingStatus(null);
+      setVideoSrc(streamUrl);
+
+      if (videoRef.current) {
+        cleanupVideoEl(videoRef.current);
+        videoRef.current.src = streamUrl;
+        videoRef.current.load();
+      }
+      return;
+    } catch (e: any) {
+      console.warn('[CoachLab] URL import failed:', e);
+      setProcessingStatus(null);
+      alert(`Could not import this URL to YouTube.\n\n${e?.message ?? ''}`.trim());
+    }
   }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, videoRef]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#F8F8F8', color: '#1D1D1F' }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        overflow: 'hidden',
+        background: layoutMode === 'reels' ? '#0b0b0c' : '#F8F8F8',
+        color: '#1D1D1F',
+      }}
+    >
 
       {/* ── Two hidden video elements at root — never unmount ── */}
       <video
@@ -607,17 +657,34 @@ export default function Home() {
 
       {/* ── Header ── */}
       <header style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 0,
+        zIndex: 90,
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '0 20px',
-        height: '48px',
-        borderBottom: '1px solid #E8E8ED',
-        background: '#F8F8F8',
-        flexShrink: 0,
-        zIndex: 10,
-        gap: '12px',
+        justifyContent: 'center',
+        padding: `calc(env(safe-area-inset-top, 0px) + 10px) 12px 10px`,
+        pointerEvents: 'none',
       }}>
+        <div
+          style={{
+            width: '100%',
+            maxWidth: layoutMode === 'reels' ? 'min(520px, 100%)' : '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            pointerEvents: 'auto',
+            padding: '10px 12px',
+            borderRadius: 16,
+            background: 'rgba(15, 15, 18, 0.55)',
+            border: '1px solid rgba(255,255,255,0.12)',
+            backdropFilter: 'blur(10px)',
+            WebkitBackdropFilter: 'blur(10px)',
+          }}
+        >
         {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
           <div style={{
@@ -626,13 +693,13 @@ export default function Home() {
           }}>
             <Camera size={14} color="#fff" />
           </div>
-          <span style={{ fontSize: '15px', fontWeight: 700, color: '#1D1D1F', letterSpacing: '-0.02em' }}>
+          <span style={{ fontSize: '15px', fontWeight: 700, color: layoutMode === 'reels' ? '#fff' : '#1D1D1F', letterSpacing: '-0.02em' }}>
             Coach Lab
           </span>
         </div>
 
         {/* Actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap', overflowX: 'auto' }}>
         {/* URL Input */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
             <input
@@ -758,30 +825,40 @@ export default function Home() {
           <button onClick={resetSession} style={btnStyle} title="Clear state and load a new video">
             New
           </button>
-
-          <button
-            onClick={() => setShowExport(true)}
-            style={{ ...btnStyle, background: '#35679A', color: '#fff', border: 'none' }}
-          >
-            Export
-          </button>
+        </div>
         </div>
       </header>
 
       {/* ── Main layout ── */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+      <div
+        style={{
+          display: 'flex',
+          flex: 1,
+          overflow: 'hidden',
+          justifyContent: layoutMode === 'reels' ? 'center' : undefined,
+          background: layoutMode === 'reels' ? '#0b0b0c' : undefined,
+          position: 'relative',
+        }}
+      >
 
         {/* Left sidebar (desktop only) */}
-        {!isMobile && (
+        {!isMobile && layoutMode !== 'reels' && (
         <aside style={{
           width: sidebarWidth,
-          flexShrink: 0,
           display: 'flex',
           flexDirection: 'column',
-          borderRight: '1px solid #E8E8ED',
-          background: '#fff',
+          background: 'rgba(255,255,255,0.92)',
           overflowY: 'auto',
-          position: 'relative',
+          position: 'absolute',
+          left: 12,
+          top: 12,
+          bottom: 12,
+          zIndex: 80,
+          borderRadius: 14,
+          boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
+          border: '1px solid rgba(0,0,0,0.08)',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
         }}>
           <SidebarSection title="Tools">
             <ToolPalette
@@ -921,9 +998,29 @@ export default function Home() {
         )}
 
         {/* Canvas area */}
-        <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-          <div style={{ flex: 1, position: 'relative', minHeight: 0, background: '#000', display: 'flex' }}>
-            {isMobile && (
+        <main
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            minWidth: 0,
+            alignItems: layoutMode === 'reels' ? 'center' : undefined,
+          }}
+        >
+          <div
+            style={{
+              flex: 1,
+              position: 'relative',
+              minHeight: 0,
+              background: '#000',
+              display: 'flex',
+              justifyContent: layoutMode === 'reels' ? 'center' : undefined,
+              alignItems: layoutMode === 'reels' ? 'center' : undefined,
+              padding: layoutMode === 'reels' ? '12px' : undefined,
+            }}
+          >
+            {(isMobile || layoutMode === 'reels') && (
               <div style={{ position: 'absolute', left: 8, top: 8, zIndex: 60 }}>
                 <MobileToolStrip
                   activeTool={activeTool}
@@ -948,7 +1045,24 @@ export default function Home() {
               </div>
             )}
             {/* Video A */}
-            <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+            <div
+              style={{
+                flex: layoutMode === 'reels' ? '0 0 auto' : 1,
+                position: 'relative',
+                minWidth: 0,
+                ...(layoutMode === 'reels'
+                  ? {
+                      width: 'min(520px, 100%)',
+                      height: '100%',
+                      maxHeight: '100%',
+                      aspectRatio: '9 / 16',
+                      borderRadius: 18,
+                      overflow: 'hidden',
+                      boxShadow: '0 18px 60px rgba(0,0,0,0.55)',
+                    }
+                  : {}),
+              }}
+            >
               <div
                 ref={containerRef}
                 style={{ width: '100%', height: '100%', position: 'relative' }}
@@ -956,68 +1070,7 @@ export default function Home() {
                 onDragLeave={handleDragLeaveA}
                 onDrop={handleDropA}
               >
-                {embedUrl ? (
-                  <div style={{ position: 'absolute', inset: 0, background: '#000' }}>
-                    {embedUrl.type === 'youtube' && ytVideoId && (
-                      <YouTubeEmbed videoId={ytVideoId} onPlayer={setYouTubePlayer} />
-                    )}
-                    {embedUrl.type === 'instagram' && (
-                      <iframe
-                        src={embedUrl.url}
-                        style={{ position: 'absolute', inset: 0, border: 'none', display: 'block' }}
-                        scrolling="no"
-                        title="Instagram embed"
-                        sandbox="allow-scripts allow-same-origin allow-popups"
-                      />
-                    )}
-
-                    {/* YouTube: allow all overlay tools (drawing/angles/etc) on a transparent canvas */}
-                    {embedUrl.type === 'youtube' && (
-                      <CanvasOverlay
-                        ref={canvasRef}
-                        videoRef={videoRef}
-                        webcamVideoRef={webcamVideoRef}
-                        activeTool={activeTool}
-                        drawingOptions={drawingOptions}
-                        containerWidth={canvasSize.width}
-                        containerHeight={canvasSize.height}
-                        ballTrailMode={ballTrailMode}
-                        skeletonEnabled={false}
-                        ballTrailEnabled={false}
-                        onProcessingStatus={setProcessingStatus}
-                        isRecording={isRecording}
-                        circleSpinning={circleSpinning}
-                        circleGapMode={circleGapMode}
-                        webcamPipMode={webcamPipMode}
-                        webcamOpacity={webcamOpacity}
-                        skeletonShowAngles={false}
-                        skeletonShowHeadLine={false}
-                        skeletonClassicColors={false}
-                        ballSampleMode={false}
-                        rect3d={rect3d}
-                        triangle3d={triangle3d}
-                        transparentWhenNoVideo
-                      />
-                    )}
-
-                    {embedUrl.type !== 'youtube' && (
-                      <p style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        margin: 0,
-                        padding: '4px 10px',
-                        fontSize: '10px',
-                        color: '#9ca3af',
-                        background: 'rgba(0,0,0,0.85)',
-                        textAlign: 'center',
-                      }}>
-                        Instagram embeds are view-only. For overlays: download the video and upload it here.
-                      </p>
-                    )}
-                  </div>
-                ) : !videoSrc ? (
+                {!videoSrc ? (
                   <div style={{
                     position: 'absolute', inset: 0,
                     display: 'flex', flexDirection: 'column',
@@ -1087,7 +1140,7 @@ export default function Home() {
                   </div>
                 )}
                 {/* ── Safari "Tap to Play" overlay ─────────────────────────────── */}
-                {showTapToPlay && videoSrc && !embedUrl && (
+                {showTapToPlay && videoSrc && (
                   <div
                     role="button"
                     aria-label="Tap to play video"
@@ -1133,8 +1186,8 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Video B (shown when loaded, or as a drop zone strip when not loaded) */}
-            {videoSrcB ? (
+            {/* Video B is not shown in Reels (portrait) mode */}
+            {layoutMode !== 'reels' && (videoSrcB ? (
               <>
                 <div style={{ width: '1px', background: '#333', flexShrink: 0 }} />
                 <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
@@ -1218,67 +1271,77 @@ export default function Home() {
                   </>
                 )}
               </div>
-            )}
+            ))}
           </div>
 
-          {/* Playback controls */}
-          {embedUrl?.type === 'youtube' ? (
-            <YouTubeControls playerRef={ytPlayerRef} />
-          ) : (
-            <PlaybackControls
-              videoRef={videoRef}
-              videoRefB={videoBLoaded ? videoRefB : undefined}
-              onPlayBlocked={handlePlayBlocked}
-              onRemoveVideoB={() => {
-                revokeBlobUrl(lastBlobUrlBRef.current);
-                lastBlobUrlBRef.current = null;
-                setVideoSrcB(null);
-                setVideoBLoaded(false);
-                if (videoRefB.current) cleanupVideoEl(videoRefB.current);
-              }}
+          {/* Timeline (floating overlay; never shrinks video) */}
+          <div
+            style={{
+              position: 'absolute',
+              left: '50%',
+              bottom: 12,
+              transform: 'translateX(-50%)',
+              width: layoutMode === 'reels' ? 'min(520px, calc(100% - 24px))' : 'min(980px, calc(100% - 24px))',
+              zIndex: 70,
+              pointerEvents: 'none',
+              display: 'flex',
+              justifyContent: 'center',
+            }}
+          >
+            <PreciseTimeline
+              source={{ kind: 'html', videoRef }}
+              defaultFps={30}
+              accent={layoutMode === 'reels' ? '#FF3B30' : '#35679A'}
             />
-          )}
+          </div>
 
           {/* Video B offset control */}
-          {videoSrcB && (
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: '8px',
-              padding: '4px 16px', fontSize: '11px', color: '#6b7280',
-              background: '#F8F8F8', borderTop: '1px solid #E8E8ED',
-              flexShrink: 0,
-            }}>
-              <span style={{ fontWeight: 600, color: '#1D1D1F' }}>B offset:</span>
+          {layoutMode !== 'reels' && videoSrcB && (
+            <div
+              style={{
+                position: 'absolute',
+                right: 12,
+                bottom: 84,
+                zIndex: 80,
+                pointerEvents: 'auto',
+                padding: '8px 10px',
+                borderRadius: 12,
+                background: 'rgba(15, 15, 18, 0.55)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                color: '#fff',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 12,
+              }}
+              title="Shift Video B start time relative to Video A (seconds)"
+            >
+              <span style={{ fontWeight: 800, opacity: 0.9 }}>B offset</span>
               <input
                 type="number"
                 step="0.1"
                 value={videoBOffset}
                 onChange={e => setVideoBOffset(parseFloat(e.target.value) || 0)}
                 style={{
-                  width: '70px', padding: '2px 6px', borderRadius: '4px',
-                  border: '1px solid #E8E8ED', fontSize: '11px',
+                  width: 76,
+                  height: 30,
+                  padding: '0 8px',
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: '#fff',
+                  outline: 'none',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                 }}
-                title="Shift Video B start time relative to Video A (seconds)"
               />
-              <span style={{ color: '#9ca3af' }}>sec (positive = B starts later)</span>
+              <span style={{ opacity: 0.65 }}>sec</span>
             </div>
           )}
 
           {/* Hint bar */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '16px',
-            padding: '4px 16px', fontSize: '10px', color: '#6b7280',
-            background: '#F8F8F8', borderTop: '1px solid #E8E8ED',
-            flexWrap: 'wrap', flexShrink: 0,
-          }}>
-            <span>Space: play/pause</span>
-            <span>J/K/L: 0.5×/1×/2×</span>
-            <span>&#x2190;/&#x2192;: frame step</span>
-            <span>Ctrl+Z: undo</span>
-            <span>Ctrl+Y: redo</span>
-            <span style={{ color: '#35679A' }}>Skeleton: auto-detects pose</span>
-            <span style={{ color: '#CCFF00', textShadow: '0 0 4px #0008' }}>Ball Trail: auto-tracks ball</span>
-            <span style={{ color: '#FFD700' }}>Angle: 3-click with live preview</span>
-          </div>
+          {false && <div />}
         </main>
       </div>
 
@@ -1296,16 +1359,6 @@ export default function Home() {
         accept="video/mp4,video/webm,video/quicktime,video/*"
         style={{ display: 'none' }}
         onChange={handleVideoUploadB}
-      />
-
-      {/* Export modal */}
-      <ExportModal
-        isOpen={showExport}
-        onClose={() => setShowExport(false)}
-        getCompositeCanvas={() => canvasRef.current?.getCanvas() ?? null}
-        getCropRegion={getCropRegion}
-        videoRef={videoRef}
-        defaultAspectRatio={layoutMode === 'reels' ? 'instagram' : 'youtube'}
       />
     </div>
   );
