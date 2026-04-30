@@ -23,7 +23,7 @@
     "@supabase/ssr": "^0.7.0",
     "@supabase/supabase-js": "^2.49.1",
     "webm-fix-duration": "^1.0.1",
-    "yt-dlp-exec": "^1.1.9",
+    "yt-dlp-exec": "^1.0.2",
     "googleapis": "^140.0.1"
   },
   "devDependencies": {
