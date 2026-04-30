@@ -1,11 +1,11 @@
-import { Suspense } from 'react';
 import LoginClient from './LoginClient';
 
-export default function LoginPage() {
-  return (
-    <Suspense fallback={<LoginClient />}>
-      <LoginClient />
-    </Suspense>
-  );
+export default function LoginPage({
+  searchParams,
+}: {
+  searchParams?: { redirect?: string };
+}) {
+  const redirect = searchParams?.redirect || '/dashboard';
+  return <LoginClient redirect={redirect} />;
 }
 

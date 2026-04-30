@@ -1,12 +1,9 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
-export default function LoginClient() {
-  const sp = useSearchParams();
-  const redirect = sp.get('redirect') || '/dashboard';
+export default function LoginClient({ redirect }: { redirect: string }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
