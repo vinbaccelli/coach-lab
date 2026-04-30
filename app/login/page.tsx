@@ -1,11 +1,13 @@
 import LoginClient from './LoginClient';
 
-export default function LoginPage({
+export default async function LoginPage({
   searchParams,
 }: {
-  searchParams?: { redirect?: string };
+  // Next.js 15 types searchParams as a Promise in PageProps.
+  searchParams?: Promise<{ redirect?: string }>;
 }) {
-  const redirect = searchParams?.redirect || '/dashboard';
+  const sp = (await searchParams) ?? {};
+  const redirect = sp.redirect || '/dashboard';
   return <LoginClient redirect={redirect} />;
 }
 
