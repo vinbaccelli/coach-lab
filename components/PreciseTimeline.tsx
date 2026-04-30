@@ -1,36 +1,36 @@
-\'use client\';
+'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from \'react\';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
 
 function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds)) return \'00:00\';
+  if (!Number.isFinite(seconds)) return '00:00';
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   const ms = Math.floor((seconds - Math.floor(seconds)) * 1000);
-  return `${mins.toString().padStart(2, \'0\')}:${secs.toString().padStart(2, \'0\')}.${ms.toString().padStart(3, \'0\')}`;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
 }
 
 type Source =
-  | { kind: \'html\'; videoRef: React.RefObject<HTMLVideoElement | null> }
-  | { kind: \'youtube\'; playerRef: React.MutableRefObject<any | null> };
+  | { kind: 'html'; videoRef: React.RefObject<HTMLVideoElement | null> }
+  | { kind: 'youtube'; playerRef: React.MutableRefObject<any | null> };
 
 export default function PreciseTimeline({
   source,
   defaultFps = 30,
-  accent = \'#35679A\',
+  accent = '#35679A',
 }: {
   source: Source;
   defaultFps?: number;
   accent?: string;
 }) {
-  const STORAGE_MODE_KEY = \'coachlab.timeline.fpsMode\';
-  const STORAGE_CUSTOM_KEY = \'coachlab.timeline.customFps\';
+  const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
+  const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
 
-  const [fpsMode, setFpsMode] = useState<\'auto\' | \'30\' | \'60\' | \'120\' | \'custom\'>(\'30\');
+  const [fpsMode, setFpsMode] = useState<'auto' | '30' | '60' | '120' | 'custom'>('30');
   const [customFps, setCustomFps] = useState(defaultFps);
   const [autoFps, setAutoFps] = useState<number | null>(null);
 
@@ -41,12 +41,12 @@ export default function PreciseTimeline({
       const savedCustom = window.localStorage.getItem(STORAGE_CUSTOM_KEY);
       const parsedCustom = savedCustom ? Number(savedCustom) : NaN;
 
-      if (savedMode === \'auto\' || savedMode === \'30\' || savedMode === \'60\' || savedMode === \'120\' || savedMode === \'custom\') {
+      if (savedMode === 'auto' || savedMode === '30' || savedMode === '60' || savedMode === '120' || savedMode === 'custom') {
         setFpsMode(savedMode);
       } else if (defaultFps === 30 || defaultFps === 60 || defaultFps === 120) {
-        setFpsMode(String(defaultFps) as \'30\' | \'60\' | \'120\');
+        setFpsMode(String(defaultFps) as '30' | '60' | '120');
       } else {
-        setFpsMode(\'custom\');
+        setFpsMode('custom');
       }
 
       if (Number.isFinite(parsedCustom)) setCustomFps(parsedCustom);
@@ -68,12 +68,12 @@ export default function PreciseTimeline({
   }, [customFps, fpsMode]);
 
   useEffect(() => {
-    if (source.kind !== \'html\') { setAutoFps(null); return; }
+    if (source.kind !== 'html') { setAutoFps(null); return; }
     const v = source.videoRef.current;
     if (!v) { setAutoFps(null); return; }
 
     const anyV = v as any;
-    if (typeof anyV.requestVideoFrameCallback !== \'function\') {
+    if (typeof anyV.requestVideoFrameCallback !== 'function') {
       setAutoFps(null);
       return;
     }
@@ -113,10 +113,10 @@ export default function PreciseTimeline({
   }, [source]);
 
   const selectedFps = (() => {
-    if (fpsMode === \'auto\') return autoFps ?? 30;
-    if (fpsMode === \'30\') return 30;
-    if (fpsMode === \'60\') return 60;
-    if (fpsMode === \'120\') return 120;
+    if (fpsMode === 'auto') return autoFps ?? 30;
+    if (fpsMode === '30') return 30;
+    if (fpsMode === '60') return 60;
+    if (fpsMode === '120') return 120;
     return Math.max(1, Math.min(240, customFps || 30));
   })();
 
@@ -129,7 +129,7 @@ export default function PreciseTimeline({
   const [d, setD] = useState(0);
 
   const readState = useCallback(() => {
-    if (source.kind === \'html\') {
+    if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (!v) return;
       setT(v.currentTime || 0);
@@ -154,7 +154,7 @@ export default function PreciseTimeline({
 
   // Sync from source
   useEffect(() => {
-    if (source.kind === \'html\') {
+    if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (!v) return;
 
@@ -163,18 +163,18 @@ export default function PreciseTimeline({
       const onPlay = () => setIsPlaying(true);
       const onPause = () => setIsPlaying(false);
 
-      v.addEventListener(\'timeupdate\', onTime);
-      v.addEventListener(\'loadedmetadata\', onMeta);
-      v.addEventListener(\'play\', onPlay);
-      v.addEventListener(\'pause\', onPause);
+      v.addEventListener('timeupdate', onTime);
+      v.addEventListener('loadedmetadata', onMeta);
+      v.addEventListener('play', onPlay);
+      v.addEventListener('pause', onPause);
       onMeta();
       onTime();
 
       return () => {
-        v.removeEventListener(\'timeupdate\', onTime);
-        v.removeEventListener(\'loadedmetadata\', onMeta);
-        v.removeEventListener(\'play\', onPlay);
-        v.removeEventListener(\'pause\', onPause);
+        v.removeEventListener('timeupdate', onTime);
+        v.removeEventListener('loadedmetadata', onMeta);
+        v.removeEventListener('play', onPlay);
+        v.removeEventListener('pause', onPause);
       };
     }
 
@@ -185,7 +185,7 @@ export default function PreciseTimeline({
 
   const seekTo = useCallback((next: number) => {
     const nextClamped = clamp(next, 0, d || next);
-    if (source.kind === \'html\') {
+    if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (!v) return;
       v.currentTime = nextClamped;
@@ -199,7 +199,7 @@ export default function PreciseTimeline({
   }, [d, source]);
 
   const togglePlay = useCallback(() => {
-    if (source.kind === \'html\') {
+    if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (!v) return;
       if (v.paused) v.play().catch(() => {});
@@ -214,7 +214,7 @@ export default function PreciseTimeline({
 
   const stepFrame = useCallback((dir: 1 | -1, mult = 1) => {
     // Pause then step for deterministic frame-by-frame scrubbing
-    if (source.kind === \'html\') {
+    if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (v) v.pause();
     } else {
@@ -226,60 +226,60 @@ export default function PreciseTimeline({
   // Keyboard: frame-accurate stepping + play/pause
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === \'INPUT\' || document.activeElement?.tagName === \'TEXTAREA\') return;
-      if (e.key === \' \') { e.preventDefault(); togglePlay(); }
-      if (e.key === \'ArrowRight\') { e.preventDefault(); stepFrame(1, e.shiftKey ? 10 : 1); }
-      if (e.key === \'ArrowLeft\') { e.preventDefault(); stepFrame(-1, e.shiftKey ? 10 : 1); }
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+      if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); stepFrame(1, e.shiftKey ? 10 : 1); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); stepFrame(-1, e.shiftKey ? 10 : 1); }
     };
-    window.addEventListener(\'keydown\', onKeyDown);
-    return () => window.removeEventListener(\'keydown\', onKeyDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, [stepFrame, togglePlay]);
 
   const pct = d > 0 ? (t / d) * 100 : 0;
 
   const shellStyle: React.CSSProperties = useMemo(() => ({
-    pointerEvents: \'auto\',
-    display: \'flex\',
-    alignItems: \'center\',
+    pointerEvents: 'auto',
+    display: 'flex',
+    alignItems: 'center',
     gap: 8,
-    padding: \'10px 12px\',
+    padding: '10px 12px',
     borderRadius: 14,
-    background: \'rgba(15, 15, 18, 0.55)\',
-    border: \'1px solid rgba(255,255,255,0.12)\',
-    color: \'#fff\',
-    backdropFilter: \'blur(10px)\',
-    WebkitBackdropFilter: \'blur(10px)\',
+    background: 'rgba(15, 15, 18, 0.55)',
+    border: '1px solid rgba(255,255,255,0.12)',
+    color: '#fff',
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
   }), []);
 
   const btnStyle: React.CSSProperties = useMemo(() => ({
     width: 34,
     height: 34,
     borderRadius: 10,
-    border: \'1px solid rgba(255,255,255,0.18)\',
-    background: \'rgba(255,255,255,0.08)\',
-    color: \'#fff\',
-    cursor: \'pointer\',
+    border: '1px solid rgba(255,255,255,0.18)',
+    background: 'rgba(255,255,255,0.08)',
+    color: '#fff',
+    cursor: 'pointer',
     fontWeight: 800,
-    display: \'flex\',
-    alignItems: \'center\',
-    justifyContent: \'center\',
-    userSelect: \'none\',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    userSelect: 'none',
   }), []);
 
   return (
     <div style={shellStyle} aria-label="Timeline">
-      <button onClick={togglePlay} style={{ ...btnStyle, width: 48, background: isPlaying ? accent : \'rgba(255,255,255,0.08)\' }} title="Play/Pause (Space)">
-        {isPlaying ? \'⏸\' : \'▶\'}
+      <button onClick={togglePlay} style={{ ...btnStyle, width: 48, background: isPlaying ? accent : 'rgba(255,255,255,0.08)' }} title="Play/Pause (Space)">
+        {isPlaying ? '⏸' : '▶'}
       </button>
       <button onClick={() => stepFrame(-1)} style={btnStyle} title={`Back 1 frame (←) @ ${selectedFps}fps`}>◀</button>
       <button onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
 
-      <div style={{ minWidth: 140, fontFamily: \'ui-monospace, SFMono-Regular, Menlo, monospace\', fontSize: 12, opacity: 0.95 }}>
+      <div style={{ minWidth: 140, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
         <div style={{ lineHeight: 1.1 }}>{formatTime(t)}</div>
         <div style={{ lineHeight: 1.1, opacity: 0.75 }}>{formatTime(d)}</div>
       </div>
 
-      <div style={{ display: \'flex\', alignItems: \'center\', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>FPS</span>
         <select
           value={fpsMode}
@@ -287,22 +287,22 @@ export default function PreciseTimeline({
           style={{
             height: 34,
             borderRadius: 10,
-            border: \'1px solid rgba(255,255,255,0.18)\',
-            background: \'rgba(255,255,255,0.08)\',
-            color: \'#fff\',
-            padding: \'0 8px\',
+            border: '1px solid rgba(255,255,255,0.18)',
+            background: 'rgba(255,255,255,0.08)',
+            color: '#fff',
+            padding: '0 8px',
             fontSize: 12,
-            cursor: \'pointer\',
+            cursor: 'pointer',
           }}
-          title={fpsMode === \'auto\' ? `Auto ≈ ${autoFps ?? \'…\'}fps` : `Step size: ${(1000 / selectedFps).toFixed(2)}ms`}
+          title={fpsMode === 'auto' ? `Auto ≈ ${autoFps ?? '…'}fps` : `Step size: ${(1000 / selectedFps).toFixed(2)}ms`}
         >
-          {source.kind === \'html\' && <option value="auto">Auto{autoFps ? ` (${autoFps})` : \'\'}</option>}
+          {source.kind === 'html' && <option value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
           <option value="30">30</option>
           <option value="60">60</option>
           <option value="120">120</option>
           <option value="custom">Custom…</option>
         </select>
-        {fpsMode === \'custom\' && (
+        {fpsMode === 'custom' && (
           <input
             type="number"
             min={1}
@@ -314,12 +314,12 @@ export default function PreciseTimeline({
               width: 64,
               height: 34,
               borderRadius: 10,
-              border: \'1px solid rgba(255,255,255,0.18)\',
-              background: \'rgba(255,255,255,0.08)\',
-              color: \'#fff\',
-              padding: \'0 8px\',
-              outline: \'none\',
-              fontFamily: \'ui-monospace, SFMono-Regular, Menlo, monospace\',
+              border: '1px solid rgba(255,255,255,0.18)',
+              background: 'rgba(255,255,255,0.08)',
+              color: '#fff',
+              padding: '0 8px',
+              outline: 'none',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
             }}
             title="Custom FPS for frame stepping"
           />
@@ -335,14 +335,14 @@ export default function PreciseTimeline({
           value={clamp(t, 0, d || t)}
           onChange={(e) => seekTo(Number(e.target.value))}
           style={{
-            width: \'100%\',
+            width: '100%',
             accentColor: accent,
             height: 6,
           }}
           aria-label="Scrub timeline"
         />
-        <div style={{ height: 4, borderRadius: 3, background: \'rgba(255,255,255,0.18)\', marginTop: 6, overflow: \'hidden\' }}>
-          <div style={{ width: `${pct}%`, height: \'100%\', background: accent }} />
+        <div style={{ height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.18)', marginTop: 6, overflow: 'hidden' }}>
+          <div style={{ width: `${pct}%`, height: '100%', background: accent }} />
         </div>
       </div>
     </div>
