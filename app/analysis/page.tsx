@@ -8,11 +8,10 @@ import React, {
   useState,
 } from 'react';
 import dynamic from 'next/dynamic';
-import { Camera, Upload, GripVertical } from 'lucide-react';
+import { Camera, Upload, Menu } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
-import { SidebarSection } from '@/components/SidebarSection';
 import ScreenRecorder from '@/components/ScreenRecorder';
 import MobileToolStrip from '@/components/MobileToolStrip';
 // URL-loaded sources are resolved into same-origin video streams (see /api/video/*),
@@ -41,6 +40,8 @@ const btnStyle: React.CSSProperties = {
 };
 
 export default function Home() {
+  const LEFT_TOOLBAR_W = 68;
+
   // ── Refs that must never unmount ─────────────────────────────────────────
   const videoRef      = useRef<HTMLVideoElement>(null);
   const videoRefB     = useRef<HTMLVideoElement>(null);
@@ -74,8 +75,6 @@ export default function Home() {
   const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('comet');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [layoutMode, setLayoutMode]       = useState<'youtube' | 'reels'>('youtube');
-  const [sidebarWidth, setSidebarWidth]   = useState(240);
-  const [isResizing, setIsResizing]       = useState(false);
   const [webcamActive, setWebcamActive]   = useState(false);
   const [micActive, setMicActive]         = useState(false);
   const [isRecording, setIsRecording]     = useState(false);
@@ -102,6 +101,7 @@ export default function Home() {
   const [isDragOverB, setIsDragOverB]       = useState(false);
   const [isMobile, setIsMobile]             = useState(false);
   const touchChrome                         = isMobile || layoutMode === 'reels';
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const headerBtnStyle = useMemo((): React.CSSProperties => ({
     ...btnStyle,
@@ -169,37 +169,22 @@ export default function Home() {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
+  // Mobile: auto-switch layout based on device orientation (portrait=reels, landscape=youtube)
+  useEffect(() => {
+    if (!isMobile) return;
+    const mq = window.matchMedia('(orientation: portrait)');
+    const apply = () => setLayoutMode(mq.matches ? 'reels' : 'youtube');
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, [isMobile]);
+
   useEffect(() => {
     updateSizeB();
     const ro = new ResizeObserver(updateSizeB);
     if (containerRefB.current) ro.observe(containerRefB.current);
     return () => ro.disconnect();
   }, [updateSizeB, videoSrcB]);
-
-  // ── Sidebar resize ────────────────────────────────────────────────────────
-  const resizeStartX = useRef(0);
-  const resizeStartW = useRef(240);
-
-  const onResizePointerDown = useCallback((e: React.PointerEvent) => {
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    setIsResizing(true);
-    resizeStartX.current = e.clientX;
-    resizeStartW.current = sidebarWidth;
-  }, [sidebarWidth]);
-
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      if (!isResizing) return;
-      const delta = e.clientX - resizeStartX.current;
-      setSidebarWidth(Math.max(160, Math.min(360, resizeStartW.current + delta)));
-    };
-    const onUp = () => setIsResizing(false);
-    if (isResizing) {
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-      return () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
-    }
-  }, [isResizing]);
 
   // ── Keyboard shortcuts (undo / redo) ──────────────────────────────────────
   useEffect(() => {
@@ -531,46 +516,6 @@ export default function Home() {
     canvasRef.current?.setRacketTrail(trail);
   }, []);
 
-  const getYouTubeAccessToken = useCallback(async (): Promise<string> => {
-    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-    if (!clientId) {
-      alert('Missing NEXT_PUBLIC_GOOGLE_CLIENT_ID. Configure Google OAuth client ID to enable URL imports.');
-      throw new Error('Missing Google client ID');
-    }
-
-    // Load Google Identity Services if needed
-    if (!(window as any).google?.accounts?.oauth2) {
-      await new Promise<void>((resolve, reject) => {
-        const existing = document.querySelector('script[data-google-identity]');
-        if (existing) return resolve();
-        const s = document.createElement('script');
-        s.src = 'https://accounts.google.com/gsi/client';
-        s.async = true;
-        s.defer = true;
-        s.dataset.googleIdentity = '1';
-        s.onload = () => resolve();
-        s.onerror = () => reject(new Error('Failed to load Google Identity script'));
-        document.head.appendChild(s);
-      });
-    }
-
-    return await new Promise<string>((resolve, reject) => {
-      try {
-        const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
-          client_id: clientId,
-          scope: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly',
-          callback: (resp: any) => {
-            if (resp?.access_token) resolve(resp.access_token);
-            else reject(new Error(resp?.error ?? 'No access token'));
-          },
-        });
-        tokenClient.requestAccessToken({ prompt: '' });
-      } catch (e) {
-        reject(e);
-      }
-    });
-  }, []);
-
   // ── URL Input handler ────────────────────────────────────────────────────
   const handleUrlSubmit = useCallback(async () => {
     const raw = urlInput.trim();
@@ -589,41 +534,13 @@ export default function Home() {
     clearGhosts();
     canvasRef.current?.clearAll();
 
-    // If already a direct video file URL, load it immediately.
-    if (raw.match(/\.(mp4|webm|mov)(\?.*)?$/i)) {
-      const streamUrl = `/api/video/stream?url=${encodeURIComponent(raw)}`;
-      setProcessingStatus(null);
-      setVideoSrc(streamUrl);
-      if (videoRef.current) {
-        cleanupVideoEl(videoRef.current);
-        videoRef.current.src = streamUrl;
-        videoRef.current.load();
-      }
-      return;
-    }
-
-    // Otherwise, normalize: import into the coach's YouTube as Unlisted, then load that.
+    // URL import (no auth): resolve any platform via server-side yt-dlp, then proxy stream same-origin.
     try {
-      setProcessingStatus('Importing to YouTube (unlisted)…');
-      const accessToken = await getYouTubeAccessToken();
-      const impRes = await fetch('/api/youtube/import', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ url: raw }),
-      });
-      const imp = await impRes.json();
-      if (!impRes.ok || !imp?.ok || !imp?.watchUrl) {
-        throw new Error(imp?.error || 'Import failed');
-      }
-
       setProcessingStatus('Preparing video…');
-      const res = await fetch(`/api/video/resolve?url=${encodeURIComponent(imp.watchUrl)}`);
+      const res = await fetch(`/api/video/resolve?url=${encodeURIComponent(raw)}`);
       const data = await res.json();
       if (!res.ok || !data?.ok || !data?.streamPath) {
-        throw new Error(data?.error || 'Could not resolve uploaded YouTube video');
+        throw new Error(data?.error || 'Could not resolve this URL');
       }
 
       const streamUrl = data.streamPath as string;
@@ -639,7 +556,7 @@ export default function Home() {
     } catch (e: any) {
       console.warn('[CoachLab] URL import failed:', e);
       setProcessingStatus(null);
-      alert(`Could not import this URL to YouTube.\n\n${e?.message ?? ''}`.trim());
+      alert(`Could not load this URL.\n\n${e?.message ?? ''}`.trim());
     }
   }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, videoRef]);
 
@@ -691,170 +608,208 @@ export default function Home() {
         zIndex: 90,
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'center',
-        padding: `calc(env(safe-area-inset-top, 0px) + 10px) 12px 10px`,
+        justifyContent: isMobile ? 'flex-end' : 'flex-end',
+        paddingTop: 'calc(env(safe-area-inset-top, 0px) + 10px)',
+        paddingRight: 12,
+        paddingBottom: 10,
+        paddingLeft: isMobile ? 12 : LEFT_TOOLBAR_W + 24,
         pointerEvents: 'none',
       }}>
-        <div
-          style={{
-            width: '100%',
-            maxWidth: layoutMode === 'reels' ? 'min(520px, 100%)' : '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '12px',
-            pointerEvents: 'auto',
-            padding: '10px 12px',
-            borderRadius: 16,
-            background: 'rgba(15, 15, 18, 0.55)',
-            border: '1px solid rgba(255,255,255,0.12)',
-            backdropFilter: 'blur(10px)',
-            WebkitBackdropFilter: 'blur(10px)',
-          }}
-        >
-        {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-          <div style={{
-            width: '28px', height: '28px', borderRadius: '6px',
-            background: '#35679A', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Camera size={14} color="#fff" />
-          </div>
-          <span style={{ fontSize: '15px', fontWeight: 700, color: layoutMode === 'reels' ? '#fff' : '#1D1D1F', letterSpacing: '-0.02em' }}>
-            Coach Lab
-          </span>
-        </div>
-
-        {/* Actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: touchChrome ? 'wrap' : 'nowrap', overflowX: touchChrome ? 'visible' : 'auto', justifyContent: touchChrome ? 'flex-end' : undefined }}>
-        {/* URL Input */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-            <input
-              type="text"
-              placeholder="YouTube / MP4 URL…"
-              value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
+        {isMobile ? (
+          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+            <button
+              onClick={() => setMobileMenuOpen((v) => !v)}
               style={{
-                height: touchChrome ? 40 : 30,
-                padding: '0 10px',
-                borderRadius: '6px',
-                border: '1px solid #E8E8ED',
-                fontSize: touchChrome ? 14 : 12,
-                width: touchChrome ? 'min(100%, 220px)' : '200px',
-                outline: 'none',
-                minWidth: 0,
+                width: 44,
+                height: 44,
+                borderRadius: 14,
+                border: '1px solid rgba(255,255,255,0.14)',
+                background: 'rgba(15, 15, 18, 0.70)',
+                color: '#fff',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
               }}
-            />
-            <button onClick={handleUrlSubmit} style={{ ...headerBtnStyle, height: touchChrome ? 40 : 30, padding: '0 14px', width: 'auto', fontSize: touchChrome ? 14 : 12 }}>
-              Load
+              title="Menu"
+              aria-label="Menu"
+            >
+              <Menu size={20} />
             </button>
-            {embedUrl && (
-              <button
-                onClick={() => {
-                  setEmbedUrl(null);
-                  setYouTubePlayer(null);
-                  setProcessingStatus(null);
-                  canvasRef.current?.clearAll();
-                }}
-                style={{ ...headerBtnStyle, height: touchChrome ? 40 : 30, width: touchChrome ? 44 : 30, fontSize: 12, color: '#EF4444' }}
-              >
-                ✕
-              </button>
+
+            {mobileMenuOpen && (
+              <div style={{
+                position: 'absolute',
+                right: 0,
+                top: 52,
+                width: 'min(92vw, 360px)',
+                maxHeight: 'min(72vh, 560px)',
+                overflow: 'auto',
+                borderRadius: 16,
+                padding: 12,
+                background: 'rgba(15, 15, 18, 0.92)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                color: '#fff',
+                boxShadow: '0 18px 60px rgba(0,0,0,0.45)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 8,
+                    background: '#35679A', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Camera size={14} color="#fff" />
+                  </div>
+                  <div style={{ fontWeight: 800 }}>Coach Lab</div>
+                  <span style={{ flex: 1 }} />
+                  <button onClick={() => setMobileMenuOpen(false)} style={{ ...headerBtnStyle, width: 44, padding: 0 }}>✕</button>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                  <input
+                    type="text"
+                    placeholder="Paste video URL…"
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
+                    style={{
+                      flex: 1,
+                      height: 40,
+                      padding: '0 10px',
+                      borderRadius: 10,
+                      border: '1px solid rgba(255,255,255,0.16)',
+                      fontSize: 14,
+                      outline: 'none',
+                      background: 'rgba(255,255,255,0.06)',
+                      color: '#fff',
+                      minWidth: 0,
+                    }}
+                  />
+                  <button onClick={handleUrlSubmit} style={{ ...headerBtnStyle, height: 40, padding: '0 14px', width: 'auto' }}>
+                    Load
+                  </button>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <button onClick={() => fileInputRef.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video A</button>
+                  <button onClick={() => fileInputRefB.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video B</button>
+                  {!webcamActive ? (
+                    <button onClick={startWebcam} style={headerBtnStyle}>Webcam</button>
+                  ) : (
+                    <button onClick={() => { webcamStreamRef.current?.getTracks().forEach((t) => t.stop()); webcamStreamRef.current = null; setWebcamActive(false); }} style={headerBtnStyle}>Webcam off</button>
+                  )}
+                  {!micActive ? (
+                    <button onClick={startMic} style={headerBtnStyle}>Mic</button>
+                  ) : (
+                    <button onClick={stopMic} style={headerBtnStyle}>Mic off</button>
+                  )}
+                  <button onClick={handleScreenshot} style={headerBtnStyle}>Screenshot</button>
+                  <button onClick={resetSession} style={headerBtnStyle}>New</button>
+                </div>
+
+                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ fontSize: 11, opacity: 0.7, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Layout</span>
+                  <button onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, background: layoutMode === 'youtube' ? '#35679A' : 'rgba(255,255,255,0.06)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)' }}>16:9</button>
+                  <button onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, background: layoutMode === 'reels' ? '#35679A' : 'rgba(255,255,255,0.06)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)' }}>9:16</button>
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <ScreenRecorder
+                    getCanvas={getCanvas}
+                    getWebcamStream={getWebcamStream}
+                    getMicStream={getMicStream}
+                    getCropRegion={getCropRegion}
+                    layoutMode={layoutMode === 'reels' ? 'reels' : 'youtube'}
+                    onRecordingChange={handleRecordingChange}
+                  />
+                </div>
+
+                {processingStatus && (
+                  <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
+                    {processingStatus}
+                  </div>
+                )}
+              </div>
             )}
           </div>
-
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            style={headerBtnStyle}
+        ) : (
+          <div
+            style={{
+              width: '100%',
+              maxWidth: layoutMode === 'reels' ? 'min(520px, 100%)' : 'min(1100px, 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              gap: '12px',
+              pointerEvents: 'auto',
+              padding: '10px 12px',
+              borderRadius: 16,
+              background: 'rgba(15, 15, 18, 0.55)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+            }}
           >
-            <Upload size={touchChrome ? 18 : 14} />
-            {videoSrc ? 'Replace A' : 'Upload Video A'}
-          </button>
+            {/* Actions (desktop) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap', overflowX: 'auto' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                <input
+                  type="text"
+                  placeholder="Paste video URL…"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
+                  style={{
+                    height: 30,
+                    padding: '0 10px',
+                    borderRadius: 8,
+                    border: '1px solid #E8E8ED',
+                    fontSize: 12,
+                    width: 240,
+                    outline: 'none',
+                    minWidth: 0,
+                  }}
+                />
+                <button onClick={handleUrlSubmit} style={{ ...headerBtnStyle, height: 30, padding: '0 14px', width: 'auto', fontSize: 12 }}>
+                  Load
+                </button>
+              </div>
 
-          <button
-            onClick={() => fileInputRefB.current?.click()}
-            style={headerBtnStyle}
-          >
-            <Upload size={touchChrome ? 18 : 14} />
-            {videoSrcB ? 'Replace B' : 'Upload Video B'}
-          </button>
+              <button onClick={() => fileInputRef.current?.click()} style={headerBtnStyle}><Upload size={14} /> {videoSrc ? 'Replace A' : 'Upload A'}</button>
+              <button onClick={() => fileInputRefB.current?.click()} style={headerBtnStyle}><Upload size={14} /> {videoSrcB ? 'Replace B' : 'Upload B'}</button>
 
-          {!webcamActive ? (
-            <button onClick={startWebcam} style={headerBtnStyle} title="Enable webcam overlay">
-              <span>&#128247;</span> Webcam
-            </button>
-          ) : (
-            <span style={{ fontSize: '12px', color: '#35679A', fontWeight: 500 }}>&#9679; Webcam on</span>
-          )}
+              {!webcamActive ? (
+                <button onClick={startWebcam} style={headerBtnStyle} title="Enable webcam overlay">Webcam</button>
+              ) : (
+                <span style={{ fontSize: 12, color: '#35679A', fontWeight: 700 }}>&#9679; Webcam</span>
+              )}
 
-          {!micActive ? (
-            <button onClick={startMic} style={headerBtnStyle} title="Enable microphone (audio in recordings)">
-              <span>&#127908;</span> Mic
-            </button>
-          ) : (
-            <button onClick={stopMic} style={{ ...headerBtnStyle, color: '#EF4444' }} title="Disable microphone">
-              <span>&#127908;</span> Mic on
-            </button>
-          )}
+              {!micActive ? (
+                <button onClick={startMic} style={headerBtnStyle} title="Enable microphone (audio in recordings)">Mic</button>
+              ) : (
+                <button onClick={stopMic} style={{ ...headerBtnStyle, color: '#EF4444' }} title="Disable microphone">Mic on</button>
+              )}
 
-          {processingStatus && (
-            <span style={{ fontSize: '11px', color: '#35679A', fontStyle: 'italic', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {processingStatus}
-            </span>
-          )}
+              <button onClick={handleScreenshot} style={headerBtnStyle} title="Save screenshot">Screenshot</button>
+              <button onClick={resetSession} style={headerBtnStyle} title="Clear state and load a new video">New</button>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Recording / export format">
-            <button
-              onClick={() => setLayoutMode('youtube')}
-              style={{
-                ...headerBtnStyle,
-                height: touchChrome ? undefined : 30,
-                padding: touchChrome ? undefined : '0 10px',
-                fontSize: touchChrome ? undefined : 12,
-                width: 'auto',
-                background: layoutMode === 'youtube' ? '#35679A' : '#fff',
-                color: layoutMode === 'youtube' ? '#fff' : '#1D1D1F',
-                border: layoutMode === 'youtube' ? '1px solid #35679A' : '1px solid #E8E8ED',
-              }}
-            >
-              YouTube
-            </button>
-            <button
-              onClick={() => setLayoutMode('reels')}
-              style={{
-                ...headerBtnStyle,
-                height: touchChrome ? undefined : 30,
-                padding: touchChrome ? undefined : '0 10px',
-                fontSize: touchChrome ? undefined : 12,
-                width: 'auto',
-                background: layoutMode === 'reels' ? '#35679A' : '#fff',
-                color: layoutMode === 'reels' ? '#fff' : '#1D1D1F',
-                border: layoutMode === 'reels' ? '1px solid #35679A' : '1px solid #E8E8ED',
-              }}
-            >
-              Reels
-            </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title="Layout">
+                <button onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, height: 30, padding: '0 10px', width: 'auto', fontSize: 12, background: layoutMode === 'youtube' ? '#35679A' : '#fff', color: layoutMode === 'youtube' ? '#fff' : '#1D1D1F', border: layoutMode === 'youtube' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>16:9</button>
+                <button onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, height: 30, padding: '0 10px', width: 'auto', fontSize: 12, background: layoutMode === 'reels' ? '#35679A' : '#fff', color: layoutMode === 'reels' ? '#fff' : '#1D1D1F', border: layoutMode === 'reels' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>9:16</button>
+              </div>
+
+              <ScreenRecorder
+                getCanvas={getCanvas}
+                getWebcamStream={getWebcamStream}
+                getMicStream={getMicStream}
+                getCropRegion={getCropRegion}
+                layoutMode={layoutMode === 'reels' ? 'reels' : 'youtube'}
+                onRecordingChange={handleRecordingChange}
+              />
+            </div>
           </div>
-
-          <ScreenRecorder
-            getCanvas={getCanvas}
-            getWebcamStream={getWebcamStream}
-            getMicStream={getMicStream}
-            getCropRegion={getCropRegion}
-            layoutMode={layoutMode === 'reels' ? 'reels' : 'youtube'}
-            onRecordingChange={handleRecordingChange}
-          />
-
-          <button onClick={handleScreenshot} style={headerBtnStyle} title="Save screenshot">
-            <Camera size={touchChrome ? 18 : 14} /> Screenshot
-          </button>
-
-          <button onClick={resetSession} style={headerBtnStyle} title="Clear state and load a new video">
-            New
-          </button>
-        </div>
-        </div>
+        )}
       </header>
 
       {/* ── Main layout ── */}
@@ -869,10 +824,10 @@ export default function Home() {
         }}
       >
 
-        {/* Left sidebar (desktop only) */}
-        {!isMobile && layoutMode !== 'reels' && (
+        {/* Left toolbar (desktop) — slim icon strip */}
+        {!isMobile && (
         <aside style={{
-          width: sidebarWidth,
+          width: LEFT_TOOLBAR_W,
           display: 'flex',
           flexDirection: 'column',
           background: 'rgba(255,255,255,0.92)',
@@ -888,10 +843,11 @@ export default function Home() {
           backdropFilter: 'blur(10px)',
           WebkitBackdropFilter: 'blur(10px)',
         }}>
-          <SidebarSection title="Tools">
+          <div style={{ padding: 6 }}>
             <ToolPalette
               activeTool={activeTool}
               onToolChange={handleToolChange}
+              compact
               drawingOptions={drawingOptions}
               onOptionsChange={handleOptionsChange}
               onUndo={() => canvasRef.current?.undo()}
@@ -927,93 +883,9 @@ export default function Home() {
               onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
               onClearCrop={() => canvasRef.current?.clearCropRegion()}
             />
-          </SidebarSection>
-
-          {/* V2 feature: StroMotion UI is intentionally hidden for now. */}
-          {false && <SidebarSection title="StroMotion"><div /></SidebarSection>}
-
-          {/* Resize handle */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 0, right: 0,
-              height: '100%',
-              width: '4px',
-              cursor: 'col-resize',
-              background: isResizing ? '#35679A22' : 'transparent',
-              zIndex: 20,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            onPointerDown={onResizePointerDown}
-            title="Drag to resize"
-          >
-            <GripVertical size={12} style={{ color: '#9ca3af', pointerEvents: 'none' }} />
           </div>
-        </aside>
-        )}
 
-        {/* Reels (desktop): same tool palette as 16:9, floated on the left edge */}
-        {!isMobile && layoutMode === 'reels' && (
-        <aside style={{
-          width: sidebarWidth,
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'rgba(255,255,255,0.92)',
-          overflowY: 'auto',
-          position: 'absolute',
-          left: 12,
-          top: 96,
-          bottom: 100,
-          zIndex: 80,
-          borderRadius: 14,
-          boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
-          border: '1px solid rgba(0,0,0,0.08)',
-          backdropFilter: 'blur(10px)',
-          WebkitBackdropFilter: 'blur(10px)',
-          maxHeight: 'calc(100vh - 120px)',
-        }}>
-          <SidebarSection title="Tools">
-            <ToolPalette
-              activeTool={activeTool}
-              onToolChange={handleToolChange}
-              drawingOptions={drawingOptions}
-              onOptionsChange={handleOptionsChange}
-              onUndo={() => canvasRef.current?.undo()}
-              onRedo={() => canvasRef.current?.redo()}
-              onClear={() => canvasRef.current?.clearAll()}
-              onResetSkeleton={() => canvasRef.current?.resetSkeleton()}
-              onResetBallTrail={() => canvasRef.current?.resetBallTrail()}
-              ballTrailMode={ballTrailMode}
-              onBallTrailModeChange={setBallTrailMode}
-              onAutoSwing={handleAutoSwing}
-              onRacketMultiplier={handleRacketMultiplier}
-              circleSpinning={circleSpinning}
-              onCircleSpinningChange={setCircleSpinning}
-              circleGapMode={circleGapMode}
-              onCircleGapModeChange={setCircleGapMode}
-              rect3d={rect3d}
-              onRect3dChange={setRect3d}
-              triangle3d={triangle3d}
-              onTriangle3dChange={setTriangle3d}
-              webcamPipMode={webcamPipMode}
-              onWebcamPipModeChange={setWebcamPipMode}
-              webcamOpacity={webcamOpacity}
-              onWebcamOpacityChange={setWebcamOpacity}
-              webcamActive={webcamActive}
-              skeletonShowAngles={skeletonShowAngles}
-              onSkeletonShowAnglesChange={setSkeletonShowAngles}
-              skeletonShowHeadLine={skeletonShowHeadLine}
-              onSkeletonShowHeadLineChange={setSkeletonShowHeadLine}
-              skeletonClassicColors={skeletonClassicColors}
-              onSkeletonClassicColorsChange={setSkeletonClassicColors}
-              ballSampleMode={ballSampleMode}
-              onBallSampleModeChange={setBallSampleMode}
-              onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
-              onClearCrop={() => canvasRef.current?.clearCropRegion()}
-            />
-          </SidebarSection>
+          {/* Resize handle removed in compact mode */}
         </aside>
         )}
 

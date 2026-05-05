@@ -307,7 +307,7 @@ export default function PreciseTimeline({
     flexDirection: 'column',
     gap: 10,
     width: '100%',
-    padding: '10px 12px',
+    padding: `10px 12px calc(env(safe-area-inset-bottom, 0px) + 10px)`,
     borderRadius: '14px 14px 0 0',
     background: 'rgba(15, 15, 18, 0.58)',
     border: '1px solid rgba(255,255,255,0.12)',
@@ -351,11 +351,13 @@ export default function PreciseTimeline({
       <div
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
+          flexWrap: 'nowrap',
           alignItems: 'center',
           gap: 8,
-          rowGap: 10,
           width: '100%',
+          overflowX: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          paddingBottom: 2,
         }}
       >
         <button onClick={togglePlay} style={{ ...btnStyle, minWidth: 52, background: isPlaying ? accent : 'rgba(255,255,255,0.08)' }} title="Play/Pause (Space)">

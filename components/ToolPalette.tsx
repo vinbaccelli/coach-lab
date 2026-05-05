@@ -31,6 +31,8 @@ export type WebcamPipMode = 'rectangle' | 'circle' | 'hidden';
 interface ToolPaletteProps {
   activeTool: ToolType;
   onToolChange: (tool: ToolType) => void;
+  /** If true, renders a slim icon-first toolbar for narrow sidebars. */
+  compact?: boolean;
   drawingOptions: DrawingOptions;
   onOptionsChange: (opts: Partial<DrawingOptions>) => void;
   onUndo: () => void;
@@ -89,6 +91,7 @@ const pillBtn = (active: boolean): React.CSSProperties => ({
 export default function ToolPalette({
   activeTool,
   onToolChange,
+  compact = false,
   drawingOptions,
   onOptionsChange,
   onUndo,
@@ -139,38 +142,40 @@ export default function ToolPalette({
 
   return (
     <div className="flex flex-col gap-1 h-full select-none">
-      <div className="px-2 pt-2 pb-1">
-        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-          Toolbar
-        </p>
+      <div className={compact ? 'px-1 pt-2 pb-1' : 'px-2 pt-2 pb-1'}>
+        {!compact && (
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
+            Toolbar
+          </p>
+        )}
 
         <div className="flex flex-col gap-1">
           {/* Single-column desktop toolbar (matches mobile's clarity) */}
           <button
             onClick={() => setTool('select')}
-            className={`tool-btn w-full flex-row gap-1 ${activeTool === 'select' ? 'active' : ''}`}
+            className={`tool-btn w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${activeTool === 'select' ? 'active' : ''}`}
             title="Select"
           >
             <MousePointer2 size={15} />
-            <span>Select</span>
+            {!compact && <span>Select</span>}
           </button>
 
           <button
             onClick={() => togglePanel('style')}
-            className={`tool-btn w-full flex-row gap-1 ${openPanel === 'style' ? 'active' : ''}`}
+            className={`tool-btn w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${openPanel === 'style' ? 'active' : ''}`}
             title="Style"
           >
             <Shapes size={15} />
-            <span>Style</span>
+            {!compact && <span>Style</span>}
           </button>
 
           <button
             onClick={() => togglePanel('draw')}
-            className={`tool-btn w-full flex-row gap-1 ${isDrawTool ? 'active' : ''}`}
+            className={`tool-btn w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${isDrawTool ? 'active' : ''}`}
             title="Draw tools"
           >
             <Pen size={15} />
-            <span>Draw</span>
+            {!compact && <span>Draw</span>}
           </button>
           {openPanel === 'draw' && (
             <div className="px-1 py-1 rounded-md bg-gray-50 border border-gray-200">
