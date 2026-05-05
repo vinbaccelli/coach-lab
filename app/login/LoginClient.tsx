@@ -13,6 +13,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
     setErr(null);
     setLoading(true);
     try {
+      if (!supabase) throw new Error('Supabase env vars are missing. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel.');
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -49,7 +50,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
 
         <button
           onClick={signIn}
-          disabled={loading}
+          disabled={loading || !supabase}
           style={{
             width: '100%',
             height: 44,
@@ -59,9 +60,10 @@ export default function LoginClient({ redirect }: { redirect: string }) {
             color: '#fff',
             fontWeight: 800,
             cursor: loading ? 'not-allowed' : 'pointer',
+            opacity: supabase ? 1 : 0.6,
           }}
         >
-          {loading ? 'Opening Google…' : 'Continue with Google'}
+          {!supabase ? 'Missing Supabase config' : loading ? 'Opening Google…' : 'Continue with Google'}
         </button>
 
         {err && (

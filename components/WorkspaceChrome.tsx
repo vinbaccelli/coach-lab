@@ -18,6 +18,7 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
   const [email, setEmail] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!supabase) return;
     let cancelled = false;
     supabase.auth.getSession().then(({ data }) => {
       if (!cancelled) setEmail(data.session?.user?.email ?? null);
@@ -32,6 +33,7 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
   }, [supabase]);
 
   const signOut = useCallback(async () => {
+    if (!supabase) return;
     await supabase.auth.signOut();
     router.push('/login');
     router.refresh();
@@ -108,42 +110,50 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
 
         <span style={{ flex: 1, minWidth: 8 }} />
 
-        <span
-          style={{
-            fontSize: 12,
-            opacity: 0.75,
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            maxWidth: 'min(100%, 220px)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-          title={email ?? ''}
-        >
-          {email ?? '…'}
-        </span>
+        {supabase ? (
+          <>
+            <span
+              style={{
+                fontSize: 12,
+                opacity: 0.75,
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                maxWidth: 'min(100%, 220px)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={email ?? ''}
+            >
+              {email ?? '…'}
+            </span>
 
-        <button
-          type="button"
-          onClick={signOut}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            height: 40,
-            padding: '0 14px',
-            borderRadius: 10,
-            border: '1px solid rgba(255,255,255,0.14)',
-            background: 'rgba(255,255,255,0.06)',
-            color: '#fff',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}
-        >
-          <LogOut size={16} />
-          Sign out
-        </button>
+            <button
+              type="button"
+              onClick={signOut}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                height: 40,
+                padding: '0 14px',
+                borderRadius: 10,
+                border: '1px solid rgba(255,255,255,0.14)',
+                background: 'rgba(255,255,255,0.06)',
+                color: '#fff',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <LogOut size={16} />
+              Sign out
+            </button>
+          </>
+        ) : (
+          <span style={{ fontSize: 12, opacity: 0.6 }}>
+            Configure Supabase env vars to enable login.
+          </span>
+        )}
       </header>
 
       <main style={{ flex: 1, minHeight: 0 }}>{children}</main>
