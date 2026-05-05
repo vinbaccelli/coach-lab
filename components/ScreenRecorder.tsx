@@ -337,7 +337,9 @@ export default function ScreenRecorder({
 
       // Failsafe only if onstop never completes (crash). Do not race FFmpeg async work.
       if (stopFailsafeRef.current) clearTimeout(stopFailsafeRef.current);
-      stopFailsafeRef.current = window.setTimeout(() => {
+      // Use the global setTimeout return type so it works in Vercel (node typings)
+      // and in the browser (number).
+      stopFailsafeRef.current = setTimeout(() => {
         stopFailsafeRef.current = null;
         if (saveFinishedRef.current) return;
         const rawBlob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
