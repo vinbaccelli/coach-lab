@@ -18,6 +18,8 @@ type Source =
   | { kind: 'html'; videoRef: React.RefObject<HTMLVideoElement | null> }
   | { kind: 'youtube'; playerRef: React.MutableRefObject<any | null> };
 
+const SPEED_OPTIONS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+
 export default function PreciseTimeline({
   source,
   defaultFps = 30,
@@ -120,17 +122,21 @@ export default function PreciseTimeline({
     return Math.max(1, Math.min(240, customFps || 30));
   })();
 
-  const frameStep = 1 / selectedFps;
-  const frameStepRef = useRef(frameStep);
+  const frameStepRef = useRef(1 / selectedFps);
   useEffect(() => { frameStepRef.current = 1 / selectedFps; }, [selectedFps]);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [t, setT] = useState(0);
   const [d, setD] = useState(0);
+  const dRef = useRef(0);
+  useEffect(() => { dRef.current = d; }, [d]);
   const tRef = useRef(0);
   useEffect(() => { tRef.current = t; }, [t]);
   const playbackRateRef = useRef(1);
   const [playbackRate, setPlaybackRate] = useState(1);
+
+  const scrubTrackRef = useRef<HTMLDivElement | null>(null);
+  const scrubbingRef = useRef(false);
 
   const readState = useCallback(() => {
     if (source.kind === 'html') {
@@ -188,19 +194,47 @@ export default function PreciseTimeline({
   }, [readState, source]);
 
   const seekTo = useCallback((next: number) => {
-    const nextClamped = clamp(next, 0, d || next);
+    const dur = dRef.current;
+    const nextClamped = clamp(next, 0, dur || next);
     if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (!v) return;
       v.currentTime = nextClamped;
       setT(nextClamped);
+      tRef.current = nextClamped;
       return;
     }
     const p = source.playerRef.current;
     if (!p) return;
     p.seekTo?.(nextClamped, true);
     setT(nextClamped);
-  }, [d, source]);
+    tRef.current = nextClamped;
+  }, [source]);
+
+  const seekFromClientX = useCallback((clientX: number) => {
+    const el = scrubTrackRef.current;
+    const dur = dRef.current;
+    if (!el || !dur) return;
+    const r = el.getBoundingClientRect();
+    const pct = clamp((clientX - r.left) / Math.max(1, r.width), 0, 1);
+    seekTo(pct * dur);
+  }, [seekTo]);
+
+  useEffect(() => {
+    const onWinMove = (e: PointerEvent) => {
+      if (!scrubbingRef.current) return;
+      seekFromClientX(e.clientX);
+    };
+    const onWinUp = () => { scrubbingRef.current = false; };
+    window.addEventListener('pointermove', onWinMove);
+    window.addEventListener('pointerup', onWinUp);
+    window.addEventListener('pointercancel', onWinUp);
+    return () => {
+      window.removeEventListener('pointermove', onWinMove);
+      window.removeEventListener('pointerup', onWinUp);
+      window.removeEventListener('pointercancel', onWinUp);
+    };
+  }, [seekFromClientX]);
 
   const setRate = useCallback((r: number) => {
     playbackRateRef.current = r;
@@ -209,6 +243,19 @@ export default function PreciseTimeline({
       const v = source.videoRef.current;
       if (v) v.playbackRate = r;
     }
+  }, [source]);
+
+  useEffect(() => {
+    if (source.kind !== 'html') return;
+    const v = source.videoRef.current;
+    if (!v) return;
+    const onRate = () => {
+      const r = v.playbackRate;
+      if (SPEED_OPTIONS.some((x) => Math.abs(x - r) < 0.001)) setPlaybackRate(r);
+    };
+    v.addEventListener('ratechange', onRate);
+    onRate();
+    return () => v.removeEventListener('ratechange', onRate);
   }, [source]);
 
   const togglePlay = useCallback(() => {
@@ -257,20 +304,23 @@ export default function PreciseTimeline({
   const shellStyle: React.CSSProperties = useMemo(() => ({
     pointerEvents: 'auto',
     display: 'flex',
-    alignItems: 'center',
-    gap: 8,
+    flexDirection: 'column',
+    gap: 10,
+    width: '100%',
     padding: '10px 12px',
-    borderRadius: 14,
-    background: 'rgba(15, 15, 18, 0.55)',
+    borderRadius: '14px 14px 0 0',
+    background: 'rgba(15, 15, 18, 0.58)',
     border: '1px solid rgba(255,255,255,0.12)',
+    borderBottom: 'none',
     color: '#fff',
-    backdropFilter: 'blur(10px)',
-    WebkitBackdropFilter: 'blur(10px)',
+    backdropFilter: 'blur(12px)',
+    WebkitBackdropFilter: 'blur(12px)',
+    touchAction: 'manipulation',
   }), []);
 
   const btnStyle: React.CSSProperties = useMemo(() => ({
-    width: 34,
-    height: 34,
+    minWidth: 40,
+    height: 40,
     borderRadius: 10,
     border: '1px solid rgba(255,255,255,0.18)',
     background: 'rgba(255,255,255,0.08)',
@@ -281,105 +331,172 @@ export default function PreciseTimeline({
     alignItems: 'center',
     justifyContent: 'center',
     userSelect: 'none',
+    flexShrink: 0,
+  }), []);
+
+  const selectStyle: React.CSSProperties = useMemo(() => ({
+    height: 40,
+    borderRadius: 10,
+    border: '1px solid rgba(255,255,255,0.18)',
+    background: 'rgba(255,255,255,0.08)',
+    color: '#fff',
+    padding: '0 10px',
+    fontSize: 13,
+    cursor: 'pointer',
+    minWidth: 72,
   }), []);
 
   return (
     <div style={shellStyle} aria-label="Timeline">
-      <button onClick={togglePlay} style={{ ...btnStyle, width: 48, background: isPlaying ? accent : 'rgba(255,255,255,0.08)' }} title="Play/Pause (Space)">
-        {isPlaying ? '⏸' : '▶'}
-      </button>
-      <button onClick={() => stepFrame(-1)} style={btnStyle} title={`Back 1 frame (←) @ ${selectedFps}fps`}>◀</button>
-      <button onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 8,
+          rowGap: 10,
+          width: '100%',
+        }}
+      >
+        <button onClick={togglePlay} style={{ ...btnStyle, minWidth: 52, background: isPlaying ? accent : 'rgba(255,255,255,0.08)' }} title="Play/Pause (Space)">
+          {isPlaying ? '⏸' : '▶'}
+        </button>
+        <button onClick={() => stepFrame(-1)} style={btnStyle} title={`Back 1 frame (←) @ ${selectedFps}fps`}>◀</button>
+        <button onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
 
-      <div style={{ minWidth: 140, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
-        <div style={{ lineHeight: 1.1 }}>{formatTime(t)}</div>
-        <div style={{ lineHeight: 1.1, opacity: 0.75 }}>{formatTime(d)}</div>
-      </div>
-
-      {/* Speed */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>Speed</span>
-        {[0.25, 0.5, 1].map((r) => (
-          <button
-            key={r}
-            onClick={() => setRate(r)}
-            style={{
-              ...btnStyle,
-              width: 46,
-              background: playbackRate === r ? accent : 'rgba(255,255,255,0.08)',
-            }}
-            title={`Set speed to ${r}×`}
-          >
-            {r}×
-          </button>
-        ))}
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>FPS</span>
-        <select
-          value={fpsMode}
-          onChange={(e) => setFpsMode(e.target.value as any)}
-          style={{
-            height: 34,
-            borderRadius: 10,
-            border: '1px solid rgba(255,255,255,0.18)',
-            background: 'rgba(255,255,255,0.08)',
-            color: '#fff',
-            padding: '0 8px',
-            fontSize: 12,
-            cursor: 'pointer',
-          }}
-          title={fpsMode === 'auto' ? `Auto ≈ ${autoFps ?? '…'}fps` : `Step size: ${(1000 / selectedFps).toFixed(2)}ms`}
-        >
-          {source.kind === 'html' && <option value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
-          <option value="30">30</option>
-          <option value="60">60</option>
-          <option value="120">120</option>
-          <option value="custom">Custom…</option>
-        </select>
-        {fpsMode === 'custom' && (
-          <input
-            type="number"
-            min={1}
-            max={240}
-            step={1}
-            value={customFps}
-            onChange={(e) => setCustomFps(Number(e.target.value) || 30)}
-            style={{
-              width: 64,
-              height: 34,
-              borderRadius: 10,
-              border: '1px solid rgba(255,255,255,0.18)',
-              background: 'rgba(255,255,255,0.08)',
-              color: '#fff',
-              padding: '0 8px',
-              outline: 'none',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            }}
-            title="Custom FPS for frame stepping"
-          />
-        )}
-      </div>
-
-      <div style={{ flex: 1, minWidth: 120 }}>
-        <input
-          type="range"
-          min={0}
-          max={d || 0}
-          step={frameStep}
-          value={clamp(t, 0, d || t)}
-          onChange={(e) => seekTo(Number(e.target.value))}
-          style={{
-            width: '100%',
-            accentColor: accent,
-            height: 6,
-          }}
-          aria-label="Scrub timeline"
-        />
-        <div style={{ height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.18)', marginTop: 6, overflow: 'hidden' }}>
-          <div style={{ width: `${pct}%`, height: '100%', background: accent }} />
+        <div style={{ minWidth: 130, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
+          <div style={{ lineHeight: 1.1 }}>{formatTime(t)}</div>
+          <div style={{ lineHeight: 1.1, opacity: 0.75 }}>{formatTime(d)}</div>
         </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>Speed</span>
+          <select
+            value={playbackRate}
+            onChange={(e) => setRate(Number(e.target.value))}
+            style={selectStyle}
+            title="Playback speed"
+            aria-label="Playback speed"
+          >
+            {SPEED_OPTIONS.map((r) => (
+              <option key={r} value={r}>{r}×</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>FPS</span>
+          <select
+            value={fpsMode}
+            onChange={(e) => setFpsMode(e.target.value as 'auto' | '30' | '60' | '120' | 'custom')}
+            style={{ ...selectStyle, minWidth: 100 }}
+            title={fpsMode === 'auto' ? `Auto ≈ ${autoFps ?? '…'}fps` : `Step size: ${(1000 / selectedFps).toFixed(2)}ms`}
+          >
+            {source.kind === 'html' && <option value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
+            <option value="30">30</option>
+            <option value="60">60</option>
+            <option value="120">120</option>
+            <option value="custom">Custom…</option>
+          </select>
+          {fpsMode === 'custom' && (
+            <input
+              type="number"
+              min={1}
+              max={240}
+              step={1}
+              value={customFps}
+              onChange={(e) => setCustomFps(Number(e.target.value) || 30)}
+              style={{
+                width: 64,
+                height: 40,
+                borderRadius: 10,
+                border: '1px solid rgba(255,255,255,0.18)',
+                background: 'rgba(255,255,255,0.08)',
+                color: '#fff',
+                padding: '0 8px',
+                outline: 'none',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              }}
+              title="Custom FPS for frame stepping"
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Full-width touch scrub bar */}
+      <div
+        ref={scrubTrackRef}
+        role="slider"
+        tabIndex={0}
+        aria-valuemin={0}
+        aria-valuemax={d || 0}
+        aria-valuenow={t}
+        aria-label="Scrub timeline"
+        style={{
+          width: '100%',
+          height: 44,
+          borderRadius: 10,
+          background: 'rgba(255,255,255,0.1)',
+          position: 'relative',
+          cursor: 'pointer',
+          touchAction: 'none',
+          flexShrink: 0,
+        }}
+        onPointerDown={(e) => {
+          scrubbingRef.current = true;
+          (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+          seekFromClientX(e.clientX);
+        }}
+        onPointerMove={(e) => {
+          if (!scrubbingRef.current) return;
+          if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+          seekFromClientX(e.clientX);
+        }}
+        onPointerUp={(e) => {
+          scrubbingRef.current = false;
+          try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+        }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            height: 8,
+            width: '100%',
+            borderRadius: 4,
+            background: 'rgba(255,255,255,0.2)',
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            height: 8,
+            width: `${pct}%`,
+            borderRadius: 4,
+            background: accent,
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            left: `calc(${pct}% - 10px)`,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: 20,
+            height: 20,
+            borderRadius: '50%',
+            background: '#fff',
+            boxShadow: `0 0 0 2px ${accent}`,
+            pointerEvents: 'none',
+          }}
+        />
       </div>
     </div>
   );

@@ -1932,12 +1932,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       if (s.tool === 'triangle') {
         const t = s as StrokeTriangle;
-        // Approx: treat as bounding box of the triangle.
-        const x0 = t.cx - t.rx, x1 = t.cx + t.rx;
-        const y0 = t.cy - t.ry, y1 = t.cy + t.ry;
-        const cx = Math.max(x0, Math.min(x1, pos.x));
-        const cy = Math.max(y0, Math.min(y1, pos.y));
-        return Math.hypot(pos.x - cx, pos.y - cy);
+        const v1: Pt = { x: t.cx, y: t.cy - t.ry };
+        const v2: Pt = { x: t.cx + t.rx, y: t.cy + t.ry };
+        const v3: Pt = { x: t.cx - t.rx, y: t.cy + t.ry };
+        return Math.min(
+          distToSegment(pos, v1, v2),
+          distToSegment(pos, v2, v3),
+          distToSegment(pos, v3, v1),
+        );
       }
       if (s.tool === 'text') {
         const tx = s as StrokeText;
@@ -1969,17 +1971,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const eraseAt = useCallback((pos: Pt) => {
       const T = 22;
+      // Same distance-to-stroke test as the Select tool so erasing hits outlines,
+      // including circles/rects/triangles (not just their center).
       strokesRef.current = strokesRef.current.filter((s) => {
-        if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing')
-          return !s.pts.some(p => Math.hypot(p.x - pos.x, p.y - pos.y) < T);
-        if (s.tool === 'line' || s.tool === 'arrow' || s.tool === 'arrowAngle')
-          return Math.hypot(s.p1.x - pos.x, s.p1.y - pos.y) > T
-              && Math.hypot(s.p2.x - pos.x, s.p2.y - pos.y) > T;
-        if (s.tool === 'circle' || s.tool === 'bodyCircle' || s.tool === 'rect' || s.tool === 'triangle')
-          return Math.hypot(s.cx - pos.x, s.cy - pos.y) > T;
-        if (s.tool === 'text')
-          return Math.hypot(s.pos.x - pos.x, s.pos.y - pos.y) > T;
-        return true;
+        const d = hitTestStroke(s, pos);
+        const lw = typeof (s as { lw?: number }).lw === 'number' ? (s as { lw: number }).lw : 2;
+        return d > T + lw * 0.6;
       });
       angleMeasRef.current = angleMeasRef.current.filter(
         m => Math.hypot(m.v.x - pos.x, m.v.y - pos.y) > T,

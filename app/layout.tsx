@@ -6,8 +6,9 @@ import { RecordingProvider } from '../contexts/RecordingContext';
 import PersistentWebcamOverlay from '../components/PersistentWebcamOverlay';
 
 export const metadata: Metadata = {
-  title: 'Coach Lab – Video Analysis Tool',
-  description: 'Professional coaching video analysis with frame-by-frame playback, drawing tools, and screen recording.',
+  title: 'CoachLab – Coaching intelligence platform',
+  description:
+    'Control panel for tennis and sports coaching: video analysis, player database, match reports, and AI-assisted match intelligence — with YouTube-backed video and Google sign-in.',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,

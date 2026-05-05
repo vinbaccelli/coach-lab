@@ -64,17 +64,18 @@ function IconBtn({
       onClick={onClick}
       title={title}
       style={{
-        width: 34,
-        height: 34,
+        width: 44,
+        height: 44,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        borderRadius: 8,
+        borderRadius: 10,
         border: active ? '1px solid #35679A' : '1px solid rgba(255,255,255,0.25)',
         background: active ? 'rgba(53,103,154,0.22)' : 'rgba(0,0,0,0.35)',
         color: '#fff',
         cursor: 'pointer',
         backdropFilter: 'blur(6px)',
+        touchAction: 'manipulation',
       }}
     >
       {children}
@@ -123,47 +124,47 @@ export default function MobileToolStrip(props: Props) {
     <div style={{ position: 'relative' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <IconBtn active={activeTool === 'select'} title="Select" onClick={() => { setPanel(null); onToolChange('select'); }}>
-          <MousePointer2 size={18} />
+          <MousePointer2 size={22} />
         </IconBtn>
         <IconBtn active={panel === 'draw'} title="Draw" onClick={() => setPanel(panel === 'draw' ? null : 'draw')}>
-          <Pen size={18} />
+          <Pen size={22} />
         </IconBtn>
         <IconBtn active={panel === 'angle'} title="Angle" onClick={() => setPanel(panel === 'angle' ? null : 'angle')}>
-          <Triangle size={18} />
+          <Triangle size={22} />
         </IconBtn>
         <IconBtn active={activeTool === 'text'} title="Text" onClick={() => { setPanel(null); onToolChange('text'); }}>
-          <Type size={18} />
+          <Type size={22} />
         </IconBtn>
         <IconBtn active={activeTool === 'skeleton'} title="Skeleton" onClick={() => { setPanel(null); onToolChange('skeleton'); }}>
-          <PersonStanding size={18} />
+          <PersonStanding size={22} />
         </IconBtn>
         {/* V2 feature: Ball Trail is intentionally hidden from UI for now. */}
         {/* <IconBtn active={activeTool === 'ballShadow'} title="Ball Trail" onClick={() => { setPanel(null); onToolChange('ballShadow'); }}>
           <Footprints size={18} />
         </IconBtn> */}
         <IconBtn active={panel === 'swing'} title="Swing" onClick={() => setPanel(panel === 'swing' ? null : 'swing')}>
-          <TrendingUp size={18} />
+          <TrendingUp size={22} />
         </IconBtn>
         <IconBtn active={activeTool === 'zoom'} title="Zoom" onClick={() => { setPanel(null); onToolChange('zoom'); }}>
-          <ZoomIn size={18} />
+          <ZoomIn size={22} />
         </IconBtn>
         <IconBtn active={activeTool === 'cropSelect'} title="Crop" onClick={() => { setPanel(null); onToolChange('cropSelect'); }}>
-          <Square size={18} />
+          <Square size={22} />
         </IconBtn>
         <IconBtn active={panel === 'shapes'} title="Shapes" onClick={() => setPanel(panel === 'shapes' ? null : 'shapes')}>
-          <Shapes size={18} />
+          <Shapes size={22} />
         </IconBtn>
         <IconBtn active={panel === 'style'} title="Style" onClick={() => setPanel(panel === 'style' ? null : 'style')}>
-          <Minus size={18} />
+          <Minus size={22} />
         </IconBtn>
         <IconBtn title="Undo" onClick={() => { setPanel(null); onUndo(); }}>
-          <Undo2 size={18} />
+          <Undo2 size={22} />
         </IconBtn>
         <IconBtn title="Redo" onClick={() => { setPanel(null); onRedo(); }}>
-          <Redo2 size={18} />
+          <Redo2 size={22} />
         </IconBtn>
         <IconBtn title="Clear All" onClick={() => { setPanel(null); onClear(); }}>
-          <Trash2 size={18} />
+          <Trash2 size={22} />
         </IconBtn>
       </div>
 

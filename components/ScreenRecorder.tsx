@@ -15,11 +15,15 @@ interface ScreenRecorderProps {
 type RecState = 'idle' | 'recording' | 'stopped';
 
 function getBestMimeType(): string {
+  // Prefer MP4/H.264 when the browser supports it (Safari / some Chromium builds).
   const candidates = [
+    'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+    'video/mp4;codecs=avc1',
+    'video/mp4;codecs=h264',
+    'video/mp4',
     'video/webm;codecs=vp9,opus',
     'video/webm;codecs=vp8,opus',
     'video/webm',
-    'video/mp4',
   ];
   for (const t of candidates) {
     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) return t;
@@ -58,6 +62,8 @@ export default function ScreenRecorder({
   const mimeTypeRef     = useRef('video/webm');
   const saveHandleRef   = useRef<any | null>(null);
   const recStateRef     = useRef<RecState>('idle');
+  const saveFinishedRef = useRef(false);
+  const stopFailsafeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { recStateRef.current = recState; }, [recState]);
 
   // Clean up timer on unmount
@@ -158,6 +164,12 @@ export default function ScreenRecorder({
     };
 
     recorder.onstop = async () => {
+      if (stopFailsafeRef.current) {
+        clearTimeout(stopFailsafeRef.current);
+        stopFailsafeRef.current = null;
+      }
+      saveFinishedRef.current = false;
+
       if (paintTimerRef.current) { clearInterval(paintTimerRef.current); paintTimerRef.current = null; }
       if (rafPaintRef.current) { cancelAnimationFrame(rafPaintRef.current); rafPaintRef.current = null; }
       const duration = Date.now() - startTimeRef.current;
@@ -166,6 +178,7 @@ export default function ScreenRecorder({
         setError('Recording produced an empty file. Try again (and ensure the video/canvas is playing).');
         setRecState('idle');
         onRecordingChange?.(false);
+        saveFinishedRef.current = true;
         return;
       }
 
@@ -179,8 +192,11 @@ export default function ScreenRecorder({
       let outBlob: Blob = finalBlob;
       let outExt = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
 
-      // Prefer MP4 output. If MediaRecorder didn't produce MP4, attempt FFmpeg.wasm conversion.
-      if (!outBlob.type.includes('mp4')) {
+      const nameLooksMp4 = typeof mimeTypeRef.current === 'string' && /mp4/i.test(mimeTypeRef.current);
+      const blobLooksMp4 = outBlob.type.includes('mp4') || nameLooksMp4;
+
+      // Prefer MP4 output. If MediaRecorder didn't yield MP4, transcode with FFmpeg.wasm.
+      if (!blobLooksMp4) {
         try {
           setProgress('Loading FFmpeg…');
           const { FFmpeg } = await import('@ffmpeg/ffmpeg');
@@ -193,25 +209,47 @@ export default function ScreenRecorder({
             wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
           });
           setProgress('Converting to MP4…');
-          // Guard against hanging conversions in the browser (network/COEP issues).
-          const convert = async () => {
+
+          const runConvert = async (args: string[]) => {
+            await ffmpeg.deleteFile('input.webm').catch(() => {});
+            await ffmpeg.deleteFile('output.mp4').catch(() => {});
             await ffmpeg.writeFile('input.webm', await fetchFile(outBlob));
-            await ffmpeg.exec([
-              '-i', 'input.webm',
-              '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-              '-c:a', 'aac', '-movflags', '+faststart',
-              'output.mp4',
-            ]);
+            await ffmpeg.exec(args);
             return await ffmpeg.readFile('output.mp4');
           };
+
+          const convertWithAudio = async () =>
+            runConvert([
+              '-i', 'input.webm',
+              '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
+              '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
+              'output.mp4',
+            ]);
+
+          const convertVideoOnly = async () =>
+            runConvert([
+              '-i', 'input.webm',
+              '-an',
+              '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
+              '-movflags', '+faststart',
+              'output.mp4',
+            ]);
+
           const mp4Data = await Promise.race([
-            convert(),
-            new Promise<Uint8Array>((_, reject) => setTimeout(() => reject(new Error('FFmpeg conversion timeout')), 20_000)),
+            (async () => {
+              try {
+                return await convertWithAudio();
+              } catch {
+                return await convertVideoOnly();
+              }
+            })(),
+            new Promise<Uint8Array>((_, reject) => setTimeout(() => reject(new Error('FFmpeg conversion timeout')), 45_000)),
           ]);
-          outBlob = new Blob([(mp4Data as Uint8Array).buffer as ArrayBuffer], { type: 'video/mp4' });
+          const ab = (mp4Data as Uint8Array).buffer as ArrayBuffer;
+          outBlob = new Blob([ab], { type: 'video/mp4' });
           outExt = 'mp4';
           setProgress(null);
-        } catch (err: any) {
+        } catch (err: unknown) {
           console.warn('[ScreenRecorder] MP4 conversion failed; falling back to WebM:', err);
           setProgress(null);
           outBlob = finalBlob;
@@ -257,6 +295,7 @@ export default function ScreenRecorder({
 
       setRecState('idle');
       onRecordingChange?.(false);
+      saveFinishedRef.current = true;
     };
 
     recorder.start(250); // smaller timeslice helps ensure we get non-empty data for short recordings
@@ -296,9 +335,11 @@ export default function ScreenRecorder({
       recorder.stop();
       setRecState('stopped');
 
-      // Failsafe: if onstop never fires, force a download of what we have.
-      window.setTimeout(() => {
-        if (recStateRef.current !== 'stopped') return;
+      // Failsafe only if onstop never completes (crash). Do not race FFmpeg async work.
+      if (stopFailsafeRef.current) clearTimeout(stopFailsafeRef.current);
+      stopFailsafeRef.current = window.setTimeout(() => {
+        stopFailsafeRef.current = null;
+        if (saveFinishedRef.current) return;
         const rawBlob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
         if (rawBlob.size === 0) {
           setError('Recording produced an empty file.');
@@ -315,7 +356,8 @@ export default function ScreenRecorder({
         setTimeout(() => URL.revokeObjectURL(url), 10_000);
         setRecState('idle');
         onRecordingChange?.(false);
-      }, 8_000);
+        saveFinishedRef.current = true;
+      }, 55_000);
     }
   }, []);
 

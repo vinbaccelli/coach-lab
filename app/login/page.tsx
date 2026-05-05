@@ -7,7 +7,7 @@ export default async function LoginPage({
   searchParams?: Promise<{ redirect?: string }>;
 }) {
   const sp = (await searchParams) ?? {};
-  const redirect = sp.redirect || '/dashboard';
+  const redirect = sp.redirect || '/';
   return <LoginClient redirect={redirect} />;
 }
 
