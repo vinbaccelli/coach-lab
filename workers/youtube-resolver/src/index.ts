@@ -46,7 +46,7 @@ export default {
 
     try {
       const ytdl = new YtdlCore();
-      const info = await ytdl.getInfo(target);
+      const info = await ytdl.getFullInfo(target);
       const fmt = pickFormat(info.formats || []);
       const directUrl = fmt?.url;
       if (!directUrl || !isHttpUrl(directUrl)) {
