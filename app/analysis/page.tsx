@@ -598,7 +598,7 @@ export default function Home() {
 
     try {
       setProcessingStatus('Resolving YouTube…');
-      const res = await fetch(`${resolver.replace(/\\/$/, '')}/resolve?url=${encodeURIComponent(raw)}`);
+      const res = await fetch(`${resolver.replace(/\/$/, '')}/resolve?url=${encodeURIComponent(raw)}`);
       const data = await res.json().catch(() => null);
       const direct = data?.directUrl as string | undefined;
       if (!res.ok || !direct) throw new Error(data?.error || `Resolver failed (${res.status})`);
