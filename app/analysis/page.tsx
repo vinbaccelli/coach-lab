@@ -580,7 +580,8 @@ export default function Home() {
       return;
     }
 
-    const isYouTube = /(^|\\.)youtu\\.be\\//i.test(raw) || /youtube\\.com\\//i.test(raw);
+    const lower = raw.toLowerCase();
+    const isYouTube = lower.includes('youtu.be/') || lower.includes('youtube.com/');
 
     // YouTube via Cloudflare Worker -> direct URL -> proxy same-origin -> HTML video
     if (!isYouTube) {
