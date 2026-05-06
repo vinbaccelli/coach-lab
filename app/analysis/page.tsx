@@ -81,6 +81,7 @@ export default function Home() {
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBOffset, setVideoBOffset]   = useState(0);
   const [videoBDuration, setVideoBDuration] = useState(0);
+  const [playBothEnabled, setPlayBothEnabled] = useState(false);
   const [circleSpinning, setCircleSpinning] = useState(false);
   const [circleGapMode, setCircleGapMode]   = useState(false);
   const [rect3d, setRect3d]                 = useState(false);
@@ -92,8 +93,7 @@ export default function Home() {
   const [webcamPipMode, setWebcamPipMode]   = useState<WebcamPipMode>('rectangle');
   const [webcamOpacity, setWebcamOpacity]   = useState(1);
   const [urlInput, setUrlInput]             = useState('');
-  // Legacy embed state (kept null) — URL workflow uses <video>.
-  const [embedUrl, setEmbedUrl]             = useState<null>(null);
+  const [urlTarget, setUrlTarget]           = useState<'A' | 'B'>('A');
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
   /** Drag-over state for the two video panels */
@@ -126,9 +126,8 @@ export default function Home() {
   const ytVideoId = null;
 
   const handleToolChange = useCallback((t: ToolType) => {
-    // URL sources are resolved into a real <video> stream, so all tools can work consistently.
     setActiveTool(t);
-  }, [embedUrl]);
+  }, []);
 
   // StroMotion hook
   const stroMotionConfig = {
@@ -240,7 +239,6 @@ export default function Home() {
     lastBlobUrlBRef.current = null;
     setVideoSrc(null);
     setVideoSrcB(null);
-    setEmbedUrl(null);
     setYouTubePlayer(null);
     setShowTapToPlay(false);
     setProcessingStatus(null);
@@ -268,7 +266,6 @@ export default function Home() {
     const url = URL.createObjectURL(file);
     lastBlobUrlARef.current = url;
     setVideoSrc(url);
-    setEmbedUrl(null);
     setShowTapToPlay(false);
     if (videoRef.current) {
       cleanupVideoEl(videoRef.current);
@@ -320,7 +317,6 @@ export default function Home() {
     const url = URL.createObjectURL(file);
     lastBlobUrlARef.current = url;
     setVideoSrc(url);
-    setEmbedUrl(null);
     setShowTapToPlay(false);
     if (videoRef.current) { cleanupVideoEl(videoRef.current); videoRef.current.src = url; videoRef.current.load(); }
     setProcessingStatus(null);
@@ -361,6 +357,7 @@ export default function Home() {
     const vA = videoRef.current;
     const vB = videoRefB.current;
     if (!vA || !vB || !videoBLoaded) return;
+    if (!playBothEnabled) return;
 
     let rafId: number;
     const syncLoop = () => {
@@ -387,7 +384,7 @@ export default function Home() {
     rafId = requestAnimationFrame(syncLoop);
     return () => cancelAnimationFrame(rafId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoBLoaded, videoBOffset, videoBDuration]);
+  }, [videoBLoaded, videoBOffset, videoBDuration, playBothEnabled]);
 
   // ── Webcam ────────────────────────────────────────────────────────────────
   const startWebcam = useCallback(async () => {
@@ -439,6 +436,26 @@ export default function Home() {
   const handleRecordingChange = useCallback((recording: boolean) => {
     setIsRecording(recording);
   }, []);
+
+  const togglePlayBoth = useCallback(() => {
+    const vA = videoRef.current;
+    const vB = videoRefB.current;
+    if (!vA || !vB) return;
+    const shouldPlay = vA.paused || vB.paused;
+    if (shouldPlay) {
+      const targetBTime = vA.currentTime - videoBOffset;
+      if (Number.isFinite(targetBTime)) {
+        vB.currentTime = Math.max(0, Math.min(videoBDuration || Infinity, targetBTime));
+      }
+      vA.play().catch(() => {});
+      vB.play().catch(() => {});
+      setPlayBothEnabled(true);
+    } else {
+      vA.pause();
+      vB.pause();
+      setPlayBothEnabled(false);
+    }
+  }, [videoBDuration, videoBOffset]);
 
   const handleOptionsChange = useCallback((opts: Partial<DrawingOptions>) => {
     setDrawingOptions(prev => ({ ...prev, ...opts }));
@@ -522,43 +539,86 @@ export default function Home() {
     if (!raw) return;
 
     // Reset current session state before loading a new URL source.
-    revokeBlobUrl(lastBlobUrlARef.current);
-    lastBlobUrlARef.current = null;
-    setVideoSrc(null);
-    setEmbedUrl(null);
-    if (videoRef.current) cleanupVideoEl(videoRef.current);
+    if (urlTarget === 'A') {
+      revokeBlobUrl(lastBlobUrlARef.current);
+      lastBlobUrlARef.current = null;
+      setVideoSrc(null);
+      if (videoRef.current) cleanupVideoEl(videoRef.current);
+    } else {
+      revokeBlobUrl(lastBlobUrlBRef.current);
+      lastBlobUrlBRef.current = null;
+      setVideoSrcB(null);
+      if (videoRefB.current) cleanupVideoEl(videoRefB.current);
+      setVideoBLoaded(false);
+    }
     setShowTapToPlay(false);
     setProcessingStatus('Resolving video URL…');
     setStroMotionEnabled(false);
     setStroMotionRegion(undefined);
     clearGhosts();
-    canvasRef.current?.clearAll();
+    (urlTarget === 'A' ? canvasRef.current : canvasRefB.current)?.clearAll();
 
-    // URL import (no auth): resolve any platform via server-side yt-dlp, then proxy stream same-origin.
-    try {
-      setProcessingStatus('Preparing video…');
-      const res = await fetch(`/api/video/resolve?url=${encodeURIComponent(raw)}`);
-      const data = await res.json();
-      if (!res.ok || !data?.ok || !data?.streamPath) {
-        throw new Error(data?.error || 'Could not resolve this URL');
-      }
-
-      const streamUrl = data.streamPath as string;
+    // Fast path: direct video URL -> proxy same-origin for Canvas/ML features
+    if (raw.match(/\.(mp4|webm|mov)(\?.*)?$/i)) {
+      const streamUrl = `/api/video/stream?url=${encodeURIComponent(raw)}`;
       setProcessingStatus(null);
-      setVideoSrc(streamUrl);
+      if (urlTarget === 'A') {
+        setVideoSrc(streamUrl);
+        if (videoRef.current) {
+          cleanupVideoEl(videoRef.current);
+          videoRef.current.src = streamUrl;
+          videoRef.current.load();
+        }
+      } else {
+        setVideoSrcB(streamUrl);
+        if (videoRefB.current) {
+          cleanupVideoEl(videoRefB.current);
+          videoRefB.current.src = streamUrl;
+          videoRefB.current.load();
+        }
+      }
+      return;
+    }
 
-      if (videoRef.current) {
-        cleanupVideoEl(videoRef.current);
-        videoRef.current.src = streamUrl;
-        videoRef.current.load();
+    const isYouTube = /(^|\\.)youtu\\.be\\//i.test(raw) || /youtube\\.com\\//i.test(raw);
+
+    // YouTube via Cloudflare Worker -> direct URL -> proxy same-origin -> HTML video
+    if (!isYouTube) {
+      setProcessingStatus(null);
+      alert('Only YouTube links are supported at the moment — please download the video and upload it directly.');
+      return;
+    }
+
+    const resolver = process.env.NEXT_PUBLIC_YT_RESOLVER_URL;
+    if (!resolver) {
+      setProcessingStatus(null);
+      alert('Missing YouTube resolver config. Set NEXT_PUBLIC_YT_RESOLVER_URL in Vercel environment variables.');
+      return;
+    }
+
+    try {
+      setProcessingStatus('Resolving YouTube…');
+      const res = await fetch(`${resolver.replace(/\\/$/, '')}/resolve?url=${encodeURIComponent(raw)}`);
+      const data = await res.json().catch(() => null);
+      const direct = data?.directUrl as string | undefined;
+      if (!res.ok || !direct) throw new Error(data?.error || `Resolver failed (${res.status})`);
+      const streamUrl = `/api/video/stream?url=${encodeURIComponent(direct)}`;
+      setProcessingStatus(null);
+      if (urlTarget === 'A') {
+        setVideoSrc(streamUrl);
+        if (videoRef.current) { cleanupVideoEl(videoRef.current); videoRef.current.src = streamUrl; videoRef.current.load(); }
+      } else {
+        setVideoSrcB(streamUrl);
+        if (videoRefB.current) { cleanupVideoEl(videoRefB.current); videoRefB.current.src = streamUrl; videoRefB.current.load(); }
       }
       return;
     } catch (e: any) {
-      console.warn('[CoachLab] URL import failed:', e);
+      console.warn('[CoachLab] YouTube resolver failed:', e);
       setProcessingStatus(null);
-      alert(`Could not load this URL.\n\n${e?.message ?? ''}`.trim());
+      alert(`Could not load this YouTube URL.\n\n${e?.message ?? ''}`.trim());
+      return;
     }
-  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, videoRef]);
+  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, urlTarget, videoBDuration]);
 
   return (
     <div
@@ -667,6 +727,26 @@ export default function Home() {
                 </div>
 
                 <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                  <select
+                    value={urlTarget}
+                    onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
+                    style={{
+                      height: 40,
+                      borderRadius: 10,
+                      border: '1px solid rgba(255,255,255,0.16)',
+                      background: 'rgba(255,255,255,0.06)',
+                      color: '#fff',
+                      padding: '0 10px',
+                      fontSize: 13,
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                    }}
+                    title="Load URL into Video A or B"
+                    aria-label="URL target"
+                  >
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                  </select>
                   <input
                     type="text"
                     placeholder="Paste video URL…"
@@ -754,6 +834,26 @@ export default function Home() {
             {/* Actions (desktop) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap', overflowX: 'auto' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                <select
+                  value={urlTarget}
+                  onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
+                  style={{
+                    height: 30,
+                    borderRadius: 8,
+                    border: '1px solid #E8E8ED',
+                    background: '#fff',
+                    color: '#1D1D1F',
+                    padding: '0 8px',
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                  }}
+                  title="Load URL into Video A or B"
+                  aria-label="URL target"
+                >
+                  <option value="A">A</option>
+                  <option value="B">B</option>
+                </select>
                 <input
                   type="text"
                   placeholder="Paste video URL…"
@@ -835,7 +935,7 @@ export default function Home() {
           position: 'absolute',
           left: 12,
           top: 12,
-          bottom: 12,
+          bottom: 170,
           zIndex: 80,
           borderRadius: 14,
           boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
@@ -1160,11 +1260,45 @@ export default function Home() {
               padding: 0,
             }}
           >
-            <PreciseTimeline
-              source={{ kind: 'html', videoRef }}
-              defaultFps={30}
-              accent={layoutMode === 'reels' ? '#FF3B30' : '#35679A'}
-            />
+            <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {videoSrcB && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px' }}>
+                  <button
+                    onClick={togglePlayBoth}
+                    style={{
+                      height: 34,
+                      padding: '0 12px',
+                      borderRadius: 10,
+                      border: '1px solid rgba(255,255,255,0.18)',
+                      background: playBothEnabled ? '#35679A' : 'rgba(255,255,255,0.08)',
+                      color: '#fff',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                    }}
+                    title="Play Video A + Video B in sync"
+                  >
+                    {playBothEnabled ? 'Pause Both' : 'Play Both'}
+                  </button>
+                  <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 800 }}>A + B</span>
+                </div>
+              )}
+
+              {videoSrcB && (
+                <div>
+                  <PreciseTimeline
+                    source={{ kind: 'html', videoRef: videoRefB }}
+                    defaultFps={30}
+                    accent={'#22c55e'}
+                  />
+                </div>
+              )}
+
+              <PreciseTimeline
+                source={{ kind: 'html', videoRef }}
+                defaultFps={30}
+                accent={layoutMode === 'reels' ? '#FF3B30' : '#35679A'}
+              />
+            </div>
           </div>
 
           {/* Video B offset control */}
@@ -1173,7 +1307,7 @@ export default function Home() {
               style={{
                 position: 'absolute',
                 right: 12,
-                bottom: 132,
+                bottom: videoSrcB ? 260 : 132,
                 zIndex: 80,
                 pointerEvents: 'auto',
                 padding: '8px 10px',

@@ -112,6 +112,8 @@ export interface CanvasHandle {
 export interface CanvasProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   webcamVideoRef?: React.RefObject<HTMLVideoElement | null>;
+  /** When false, Canvas does NOT draw the video frame (overlay-only). */
+  renderVideo?: boolean;
   activeTool: ToolType;
   drawingOptions: DrawingOptions;
   containerWidth: number;
@@ -932,6 +934,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     {
       videoRef,
       webcamVideoRef,
+      renderVideo = true,
       activeTool,
       drawingOptions,
       containerWidth,
@@ -1032,6 +1035,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const rect3dRef = useRef(rect3d);
     const triangle3dRef = useRef(triangle3d);
     const transparentWhenNoVideoRef = useRef(transparentWhenNoVideo);
+    const renderVideoRef = useRef(renderVideo);
 
     // Zoom / pan state
     const zoomRef    = useRef(1.0);
@@ -1080,6 +1084,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { rect3dRef.current = rect3d; }, [rect3d]);
     useEffect(() => { triangle3dRef.current = triangle3d; }, [triangle3d]);
     useEffect(() => { transparentWhenNoVideoRef.current = transparentWhenNoVideo; }, [transparentWhenNoVideo]);
+    useEffect(() => { renderVideoRef.current = renderVideo; }, [renderVideo]);
 
     // ── Touch pinch zoom ────────────────────────────────────────────────────
     useEffect(() => {
@@ -1309,6 +1314,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     useEffect(() => {
       if (!skeletonEnabled) return;
+      if (!renderVideoRef.current) return;
       const video = videoRef.current;
       if (!video) return;
 
@@ -1464,7 +1470,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const video = videoRef.current;
         let dx = 0, dy = 0, dw = W, dh = H, vW = W, vH = H;
 
-        if (video && video.readyState >= 2 && video.videoWidth > 0) {
+        if (!renderVideoRef.current) {
+          dx = 0; dy = 0; dw = W; dh = H; vW = W; vH = H;
+          videoBoundsRef.current = { dx, dy, dw, dh };
+        } else if (video && video.readyState >= 2 && video.videoWidth > 0) {
           vW = video.videoWidth;
           vH = video.videoHeight;
           const scale = Math.min(W / vW, H / vH);
@@ -1477,7 +1486,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.drawImage(video, dx, dy, dw, dh);
 
           // ── Real-time ball detection (runs when playing or scrubbing) ──────
-          if (ballTrailEnabledRef.current && !isBallDetectingRef.current) {
+          if (renderVideoRef.current && ballTrailEnabledRef.current && !isBallDetectingRef.current) {
             const det = ballDetectRef.current;
             if (det && video.readyState >= 2 && video.videoWidth > 0) {
               const currentTime = video.currentTime;
@@ -1539,6 +1548,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.fillStyle = '#111';
             ctx.fillRect(0, 0, W, H);
           }
+          dx = 0; dy = 0; dw = W; dh = H; vW = W; vH = H;
+          videoBoundsRef.current = { dx, dy, dw, dh };
         }
 
         // ── StroMotion ghost frames ───────────────────────────────────────

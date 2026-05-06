@@ -16,6 +16,7 @@ function formatTime(seconds: number): string {
 
 type Source =
   | { kind: 'html'; videoRef: React.RefObject<HTMLVideoElement | null> }
+  | { kind: 'react'; playerRef: React.RefObject<any | null> }
   | { kind: 'youtube'; playerRef: React.MutableRefObject<any | null> };
 
 const SPEED_OPTIONS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
@@ -148,6 +149,21 @@ export default function PreciseTimeline({
       return;
     }
 
+    if (source.kind === 'react') {
+      const rp = source.playerRef.current;
+      if (!rp) return;
+      try {
+        const cur = Number(rp.getCurrentTime?.() ?? 0);
+        const dur = Number(rp.getDuration?.() ?? 0);
+        setT(Number.isFinite(cur) ? cur : 0);
+        setD(Number.isFinite(dur) ? dur : 0);
+        // ReactPlayer doesn't expose paused reliably across all internal players; keep last known.
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
     const p = source.playerRef.current;
     if (!p) return;
     try {
@@ -188,6 +204,12 @@ export default function PreciseTimeline({
       };
     }
 
+    if (source.kind === 'react') {
+      const id = window.setInterval(readState, 120);
+      readState();
+      return () => window.clearInterval(id);
+    }
+
     const id = window.setInterval(readState, 100);
     readState();
     return () => window.clearInterval(id);
@@ -200,6 +222,14 @@ export default function PreciseTimeline({
       const v = source.videoRef.current;
       if (!v) return;
       v.currentTime = nextClamped;
+      setT(nextClamped);
+      tRef.current = nextClamped;
+      return;
+    }
+    if (source.kind === 'react') {
+      const rp = source.playerRef.current;
+      if (!rp) return;
+      rp.seekTo?.(nextClamped, 'seconds');
       setT(nextClamped);
       tRef.current = nextClamped;
       return;
@@ -242,6 +272,13 @@ export default function PreciseTimeline({
     if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (v) v.playbackRate = r;
+      return;
+    }
+    if (source.kind === 'react') {
+      const rp = source.playerRef.current;
+      const internal = rp?.getInternalPlayer?.();
+      try { internal?.setPlaybackRate?.(r); } catch {}
+      return;
     }
   }, [source]);
 
@@ -266,6 +303,24 @@ export default function PreciseTimeline({
       else v.pause();
       return;
     }
+    if (source.kind === 'react') {
+      const rp = source.playerRef.current;
+      const internal = rp?.getInternalPlayer?.();
+      try {
+        // YouTube internal player
+        if (internal?.getPlayerState?.) {
+          const st = internal.getPlayerState();
+          if (st === 1) internal.pauseVideo?.();
+          else internal.playVideo?.();
+        } else if (internal?.paused !== undefined) {
+          if (internal.paused) internal.play?.();
+          else internal.pause?.();
+        }
+      } catch {}
+      // Optimistic UI update; polling will correct if needed.
+      setIsPlaying((p) => !p);
+      return;
+    }
     const p = source.playerRef.current;
     if (!p) return;
     if (isPlaying) p.pauseVideo?.();
@@ -277,6 +332,12 @@ export default function PreciseTimeline({
     if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (v) v.pause();
+    } else if (source.kind === 'react') {
+      try {
+        const internal = source.playerRef.current?.getInternalPlayer?.();
+        internal?.pauseVideo?.();
+        internal?.pause?.();
+      } catch {}
     } else {
       source.playerRef.current?.pauseVideo?.();
     }
