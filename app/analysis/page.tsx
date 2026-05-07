@@ -559,7 +559,14 @@ export default function Home() {
     (urlTarget === 'A' ? canvasRef.current : canvasRefB.current)?.clearAll();
 
     // Fast path: direct video URL -> proxy same-origin for Canvas/ML features
-    if (raw.match(/\.(mp4|webm|mov)(\?.*)?$/i)) {
+    const looksLikeDirectFile = raw.match(/\.(mp4|webm|mov)(\?.*)?$/i);
+    // YouTube resolver returns a direct `googlevideo.com/videoplayback?...` URL which often has no extension.
+    // Treat those as direct stream URLs too.
+    const lowerRaw = raw.toLowerCase();
+    const looksLikeYouTubeDirectStream =
+      lowerRaw.includes('googlevideo.com/') || lowerRaw.includes('/videoplayback?') || lowerRaw.includes('mime=video');
+
+    if (looksLikeDirectFile || looksLikeYouTubeDirectStream) {
       const streamUrl = `/api/video/stream?url=${encodeURIComponent(raw)}`;
       setProcessingStatus(null);
       if (urlTarget === 'A') {
@@ -590,16 +597,16 @@ export default function Home() {
       return;
     }
 
-    const resolver = process.env.NEXT_PUBLIC_YT_RESOLVER_URL;
-    if (!resolver) {
-      setProcessingStatus(null);
-      alert('Missing YouTube resolver config. Set NEXT_PUBLIC_YT_RESOLVER_URL in Vercel environment variables.');
-      return;
-    }
+    const resolverEnv = process.env.NEXT_PUBLIC_YT_RESOLVER_URL?.trim();
+    const resolverBase = resolverEnv ? resolverEnv.replace(/\/$/, '') : '';
+    /** Prefer explicit Worker URL when set; otherwise same-origin Node route (works where CF Workers cannot decipher). */
+    const resolveUrl = resolverBase
+      ? `${resolverBase}/resolve?url=${encodeURIComponent(raw)}`
+      : `/api/youtube/resolve?url=${encodeURIComponent(raw)}`;
 
     try {
       setProcessingStatus('Resolving YouTube…');
-      const res = await fetch(`${resolver.replace(/\/$/, '')}/resolve?url=${encodeURIComponent(raw)}`);
+      const res = await fetch(resolveUrl);
       const data = await res.json().catch(() => null);
       const direct = data?.directUrl as string | undefined;
       if (!res.ok || !direct) throw new Error(data?.error || `Resolver failed (${res.status})`);
