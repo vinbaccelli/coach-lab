@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { nearestYoutubePlaybackRate } from '@/lib/videoController';
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -243,6 +244,13 @@ export default function PreciseTimeline({
       const v = source.videoRef.current;
       if (v) v.playbackRate = r;
       return;
+    }
+    const p = source.playerRef.current;
+    const ytR = nearestYoutubePlaybackRate(r);
+    try {
+      p?.setPlaybackRate?.(ytR);
+    } catch {
+      // ignore
     }
   }, [source]);
 

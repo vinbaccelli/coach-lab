@@ -14,6 +14,13 @@ import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
 import { detectSwingSegments } from '@/lib/swingDetection';
 import type { RacketTrail } from '@/lib/racketMultiplier';
+import type { VideoController } from '@/lib/videoController';
+import {
+  bufferSmoothKeypoints,
+  loadYoutubeThumbnailImage,
+  smoothPoseKeypoints,
+  type PoseKeypoint,
+} from '@/lib/youtubeThumbnailPose';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -139,6 +146,13 @@ export interface CanvasProps {
   triangle3d?: boolean;
   /** When videoRef has no playable video (e.g. YouTube embed), keep canvas transparent */
   transparentWhenNoVideo?: boolean;
+  /**
+   * YouTube iframe mode: pose uses CDN thumbnail + playback timing (iframe pixels are not readable).
+   */
+  youtubePose?: {
+    videoId: string;
+    controllerRef: React.MutableRefObject<VideoController | null>;
+  };
 }
 
 // ── Module-level pose render cache ─────────────────────────────────────────
@@ -958,6 +972,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       rect3d = false,
       triangle3d = false,
       transparentWhenNoVideo = false,
+      youtubePose,
     },
     ref,
   ) {
@@ -1036,6 +1051,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const triangle3dRef = useRef(triangle3d);
     const transparentWhenNoVideoRef = useRef(transparentWhenNoVideo);
     const renderVideoRef = useRef(renderVideo);
+    const youtubePoseRef = useRef(youtubePose);
+    const youtubePoseDimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+    const youtubeSmoothBufRef = useRef<PoseKeypoint[][]>([]);
+    const youtubePoseCacheRef = useRef<Map<number, PoseKeypoint[]>>(new Map());
 
     // Zoom / pan state
     const zoomRef    = useRef(1.0);
@@ -1085,6 +1104,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { triangle3dRef.current = triangle3d; }, [triangle3d]);
     useEffect(() => { transparentWhenNoVideoRef.current = transparentWhenNoVideo; }, [transparentWhenNoVideo]);
     useEffect(() => { renderVideoRef.current = renderVideo; }, [renderVideo]);
+    useEffect(() => { youtubePoseRef.current = youtubePose; }, [youtubePose]);
 
     // ── Touch pinch zoom ────────────────────────────────────────────────────
     useEffect(() => {
@@ -1156,6 +1176,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         poseProcessingRef.current = false;
         skeletonFramesRef.current = [];
         latestKeypointsRef.current = null;
+        youtubePoseCacheRef.current.clear();
+        youtubeSmoothBufRef.current = [];
         cachedBallRef.current = [];
         ballProcessingRef.current = false;
         ballTrackRef.current = [];
@@ -1216,16 +1238,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       getDetectedSwings: () => {
         const frames = skeletonFramesRef.current;
         const video = videoRef.current;
-        if (frames.length === 0 || !video) return [];
-        return detectSwingSegments(frames, video.videoWidth, video.videoHeight);
+        const vw = video && video.videoWidth > 0 ? video.videoWidth : youtubePoseDimsRef.current.w;
+        const vh = video && video.videoHeight > 0 ? video.videoHeight : youtubePoseDimsRef.current.h;
+        if (frames.length === 0 || vw <= 0 || vh <= 0) return [];
+        return detectSwingSegments(frames, vw, vh);
       },
       drawSwingFromSegment: (segment: SwingSegment, color: string) => {
         const video = videoRef.current;
         const canvas = canvasRef.current;
-        if (!video || !canvas) return;
+        if (!canvas) return;
 
-        const vW2 = video.videoWidth || canvas.width;
-        const vH2 = video.videoHeight || canvas.height;
+        const vW2 = (video && video.videoWidth > 0 ? video.videoWidth : youtubePoseDimsRef.current.w) || canvas.width;
+        const vH2 = (video && video.videoHeight > 0 ? video.videoHeight : youtubePoseDimsRef.current.h) || canvas.height;
         const sc = Math.min(canvas.width / vW2, canvas.height / vH2);
         const dw2 = vW2 * sc;
         const dh2 = vH2 * sc;
@@ -1314,6 +1338,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     useEffect(() => {
       if (!skeletonEnabled) return;
+      if (youtubePoseRef.current) return;
       if (!renderVideoRef.current) return;
       const video = videoRef.current;
       if (!video) return;
@@ -1362,6 +1387,92 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         cancelAnimationFrame(rafId);
       };
     }, [skeletonEnabled, videoRef]);
+
+    useEffect(() => {
+      youtubePoseCacheRef.current.clear();
+      youtubeSmoothBufRef.current = [];
+      youtubePoseDimsRef.current = youtubePose?.videoId ? { w: 1280, h: 720 } : { w: 0, h: 0 };
+    }, [youtubePose?.videoId]);
+
+    // YouTube iframe: pose from thumbnail + time sync (no iframe pixel access).
+    useEffect(() => {
+      if (!skeletonEnabled) return;
+      const yp = youtubePoseRef.current;
+      if (!yp) return;
+
+      let rafId: number;
+      poseLoopActiveRef.current = true;
+      let thumb: HTMLImageElement | null = null;
+      let lastGood: PoseKeypoint[] | null = null;
+      let baseEstimated = false;
+
+      const ensureThumb = async () => {
+        if (thumb?.complete) return;
+        const img = await loadYoutubeThumbnailImage(yp.videoId);
+        if (!img) return;
+        thumb = img;
+        youtubePoseDimsRef.current = {
+          w: img.naturalWidth || 1280,
+          h: img.naturalHeight || 720,
+        };
+      };
+
+      const poseLoop = async () => {
+        if (!poseLoopActiveRef.current) return;
+        if (skeletonSuppressedRef.current) {
+          if (lastGood?.length) latestKeypointsRef.current = lastGood;
+          rafId = requestAnimationFrame(poseLoop);
+          return;
+        }
+
+        await ensureThumb();
+        const ctrl = yp.controllerRef.current;
+        const det = detectorRef.current;
+        const now = ctrl?.getCurrentTime() ?? 0;
+
+        if (det && thumb && thumb.complete) {
+          try {
+            if (!baseEstimated) {
+              const poses = await det.estimatePoses(thumb, { flipHorizontal: false });
+              const raw = poses?.[0]?.keypoints as PoseKeypoint[] | undefined;
+              if (raw?.length) {
+                lastGood = raw;
+                youtubePoseCacheRef.current.set(0, raw);
+                baseEstimated = true;
+              }
+            }
+            if (lastGood?.length) {
+              const merged = smoothPoseKeypoints(
+                latestKeypointsRef.current as PoseKeypoint[] | null,
+                lastGood,
+                { alpha: 0.35, minScore: 0.22 },
+              );
+              const buf = bufferSmoothKeypoints(youtubeSmoothBufRef.current, merged, 5);
+              latestKeypointsRef.current = buf;
+
+              const playing = ctrl?.isPlaying?.() ?? false;
+              const lastFrame = skeletonFramesRef.current.at(-1);
+              if (playing && (!lastFrame || Math.abs(now - lastFrame.timeSeconds) > 1 / 120)) {
+                skeletonFramesRef.current.push({ timeSeconds: now, keypoints: buf });
+                if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+                  skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+                }
+              }
+            }
+          } catch {
+            if (lastGood?.length) latestKeypointsRef.current = lastGood;
+          }
+        }
+
+        rafId = requestAnimationFrame(poseLoop);
+      };
+
+      rafId = requestAnimationFrame(poseLoop);
+      return () => {
+        poseLoopActiveRef.current = false;
+        cancelAnimationFrame(rafId);
+      };
+    }, [skeletonEnabled, youtubePose?.videoId]);
 
     // ── Ball detection canvas initialization ──────────────────────────────
 
@@ -1468,12 +1579,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         // Video frame (letterboxed to preserve aspect ratio)
         const video = videoRef.current;
+        const yt = youtubePoseRef.current;
+        const ytDim = youtubePoseDimsRef.current;
         let dx = 0, dy = 0, dw = W, dh = H, vW = W, vH = H;
 
-        if (!renderVideoRef.current) {
-          dx = 0; dy = 0; dw = W; dh = H; vW = W; vH = H;
-          videoBoundsRef.current = { dx, dy, dw, dh };
-        } else if (video && video.readyState >= 2 && video.videoWidth > 0) {
+        if (renderVideoRef.current && video && video.readyState >= 2 && video.videoWidth > 0) {
           vW = video.videoWidth;
           vH = video.videoHeight;
           const scale = Math.min(W / vW, H / vH);
@@ -1541,6 +1651,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               }
             }
           }
+        } else if (yt && ytDim.w > 0 && ytDim.h > 0) {
+          vW = ytDim.w;
+          vH = ytDim.h;
+          const scale = Math.min(W / vW, H / vH);
+          dw = vW * scale;
+          dh = vH * scale;
+          dx = (W - dw) / 2;
+          dy = (H - dh) / 2;
+          videoBoundsRef.current = { dx, dy, dw, dh };
+        } else if (!renderVideoRef.current) {
+          dx = 0; dy = 0; dw = W; dh = H; vW = W; vH = H;
+          videoBoundsRef.current = { dx, dy, dw, dh };
         } else {
           if (transparentWhenNoVideoRef.current) {
             ctx.clearRect(0, 0, W, H);
@@ -1585,9 +1707,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
+        const playbackT =
+          yt?.controllerRef.current?.getCurrentTime?.() ??
+          video?.currentTime ??
+          0;
+
         // ── Skeleton overlay ─────────────────────────────────────────────
-        if (skeletonEnabledRef.current && !skeletonSuppressedRef.current && video) {
-          if (latestKeypointsRef.current && latestKeypointsRef.current.length > 0 && video.videoWidth > 0) {
+        const skeletonDimsOk =
+          (video && video.readyState >= 2 && video.videoWidth > 0) ||
+          (yt && ytDim.w > 0 && ytDim.h > 0);
+
+        if (skeletonEnabledRef.current && !skeletonSuppressedRef.current && skeletonDimsOk) {
+          if (latestKeypointsRef.current && latestKeypointsRef.current.length > 0 && vW > 0 && vH > 0) {
             ctx.save();
             ctx.translate(dx, dy);
             drawSkeletonOverlay(ctx, latestKeypointsRef.current, vW, vH, dw, dh, {
@@ -1596,9 +1727,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               classicColors: skeletonClassicColorsRef.current,
             });
             ctx.restore();
-          } else if (cachedPosesRef.current.length > 0 && poseRenderFns) {
+          } else if (cachedPosesRef.current.length > 0 && poseRenderFns && video) {
             // Fallback to legacy cached poses
-            const pf = poseRenderFns.getPoseAtTime(cachedPosesRef.current, video.currentTime);
+            const pf = poseRenderFns.getPoseAtTime(cachedPosesRef.current, playbackT);
             if (pf && pf.poses.length > 0) {
               const scaleXY = dw / vW;
               ctx.save();

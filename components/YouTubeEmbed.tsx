@@ -47,6 +47,7 @@ export default function YouTubeEmbed({
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
 
   useEffect(() => {
     let cancelled = false;
@@ -67,6 +68,8 @@ export default function YouTubeEmbed({
             rel: 0,
             modestbranding: 1,
             iv_load_policy: 3,
+            enablejsapi: 1,
+            ...(origin ? { origin } : {}),
           },
           events: {
             onReady: () => {
@@ -91,6 +94,15 @@ export default function YouTubeEmbed({
     };
   }, [videoId, onPlayer]);
 
-  return <div ref={hostRef} style={{ width: '100%', height: '100%' }} />;
+  return (
+    <div
+      ref={hostRef}
+      style={{
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+      }}
+    />
+  );
 }
 

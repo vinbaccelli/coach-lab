@@ -14,14 +14,19 @@ import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/component
 import PreciseTimeline from '@/components/PreciseTimeline';
 import ScreenRecorder from '@/components/ScreenRecorder';
 import MobileToolStrip from '@/components/MobileToolStrip';
-// URL-loaded sources are resolved into same-origin video streams (see /api/video/*),
-// so we no longer need iframe embeds for editing workflows.
-// YouTube timeline is handled by PreciseTimeline (player-backed)
+import YouTubeEmbed from '@/components/YouTubeEmbed';
+import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
-import { normalizeYoutubeUrlInput } from '@/lib/youtubeResolve';
-import { resolveYoutubeForAnalysis } from '@/app/actions/youtubeResolve';
+import { normalizeWebUrlInput, resolveEmbedTarget } from '@/lib/embedUrl';
+import {
+  createHtml5VideoController,
+  createYoutubeIframeController,
+  type VideoController,
+} from '@/lib/videoController';
+import { runEmbedTabCaptureFlow } from '@/lib/embedTabCaptureFlow';
+import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 
 // Dynamic import prevents TensorFlow / Fabric from loading server-side
 const CanvasOverlay = dynamic(() => import('@/components/Canvas'), { ssr: false });
@@ -61,6 +66,16 @@ export default function Home() {
   // Legacy YouTube iframe player ref removed — URL workflow uses <video>.
   const lastBlobUrlARef = useRef<string | null>(null);
   const lastBlobUrlBRef = useRef<string | null>(null);
+  const ytPlayerARef = useRef<any>(null);
+  const ytPlayerBRef = useRef<any>(null);
+  const playbackControllerARef = useRef<VideoController | null>(null);
+  const playbackControllerBRef = useRef<VideoController | null>(null);
+  const captureShellRef = useRef<HTMLDivElement | null>(null);
+  const captureShellRefB = useRef<HTMLDivElement | null>(null);
+  const sessionCaptureBlobRef = useRef<Blob | null>(null);
+  /** Converted MP4 for download (original WebM stays in sessionCaptureBlobRef for playback). */
+  const sessionMp4BlobRef = useRef<Blob | null>(null);
+  const captureMp4ConversionGenRef = useRef(0);
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeTool, setActiveTool]       = useState<ToolType>('pen');
@@ -96,6 +111,18 @@ export default function Home() {
   const [webcamOpacity, setWebcamOpacity]   = useState(1);
   const [urlInput, setUrlInput]             = useState('');
   const [urlTarget, setUrlTarget]           = useState<'A' | 'B'>('A');
+  const [youtubeVideoIdA, setYoutubeVideoIdA] = useState<string | null>(null);
+  const [youtubeVideoIdB, setYoutubeVideoIdB] = useState<string | null>(null);
+  const [genericEmbedSrcA, setGenericEmbedSrcA] = useState<string | null>(null);
+  const [genericEmbedSrcB, setGenericEmbedSrcB] = useState<string | null>(null);
+  const [embedCaptureRecording, setEmbedCaptureRecording] = useState(false);
+  const [captureProgress01, setCaptureProgress01] = useState(0);
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [showCaptureSaveToast, setShowCaptureSaveToast] = useState(false);
+  /** Post-capture MP4 prep: button stays disabled until ready_mp4 or ready_webm (fallback). */
+  const [captureDownloadStatus, setCaptureDownloadStatus] = useState<
+    'idle' | 'preparing' | 'ready_mp4' | 'ready_webm'
+  >('idle');
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
   /** Drag-over state for the two video panels */
@@ -125,7 +152,11 @@ export default function Home() {
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
   const ballTrailEnabled = activeTool === 'ballShadow';
-  const ytVideoId = null;
+
+  const html5ControllerA = useMemo(() => createHtml5VideoController(videoRef), []);
+  const ytIframeControllerA = useMemo(() => createYoutubeIframeController(ytPlayerARef), []);
+  const html5ControllerB = useMemo(() => createHtml5VideoController(videoRefB), []);
+  const ytIframeControllerB = useMemo(() => createYoutubeIframeController(ytPlayerBRef), []);
 
   const handleToolChange = useCallback((t: ToolType) => {
     setActiveTool(t);
@@ -133,7 +164,7 @@ export default function Home() {
 
   // StroMotion hook
   const stroMotionConfig = {
-    enabled: stroMotionEnabled,
+    enabled: stroMotionEnabled && !youtubeVideoIdA && !youtubeVideoIdB && !genericEmbedSrcA && !genericEmbedSrcB,
     startFrame: Math.round(stroMotionStart * 30),
     endFrame: Math.round(stroMotionEnd * 30),
     ghostCount: stroMotionCount,
@@ -155,12 +186,32 @@ export default function Home() {
     setCanvasSizeB({ width: el.clientWidth, height: el.clientHeight });
   }, []);
 
+  const attachPanelAContainer = useCallback((el: HTMLDivElement | null) => {
+    (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+    (captureShellRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+  }, []);
+
+  const attachPanelBContainer = useCallback((el: HTMLDivElement | null) => {
+    (containerRefB as React.MutableRefObject<HTMLDivElement | null>).current = el;
+    (captureShellRefB as React.MutableRefObject<HTMLDivElement | null>).current = el;
+  }, []);
+
   useEffect(() => {
     updateSize();
     const ro = new ResizeObserver(updateSize);
     if (containerRef.current) ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, [updateSize]);
+
+  /** Drop FFmpeg WASM when leaving the page so memory does not linger after tab close. */
+  useEffect(() => {
+    const onBeforeUnload = () => disposeFfmpegWasm();
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      disposeFfmpegWasm();
+    };
+  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
@@ -213,12 +264,20 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoRef]);
 
+  useEffect(() => {
+    if (!youtubeVideoIdA && !youtubeVideoIdB) return;
+    const t = window.setInterval(() => {
+      const a = ytPlayerARef.current?.getPlayerState?.();
+      const b = ytPlayerBRef.current?.getPlayerState?.();
+      if (a === 1 || b === 1) setShowTapToPlay(false);
+    }, 400);
+    return () => window.clearInterval(t);
+  }, [youtubeVideoIdA, youtubeVideoIdB]);
+
   /** Called by PlaybackControls when play() is rejected (e.g. Safari NotAllowedError) */
   const handlePlayBlocked = useCallback(() => {
     setShowTapToPlay(true);
   }, []);
-
-  const setYouTubePlayer = useCallback((_p: any | null) => {}, []);
 
   const cleanupVideoEl = useCallback((v: HTMLVideoElement | null) => {
     if (!v) return;
@@ -235,13 +294,27 @@ export default function Home() {
   }, []);
 
   const resetSession = useCallback(() => {
+    disposeFfmpegWasm();
+    setCaptureBusy(false);
+    ytPlayerARef.current = null;
+    ytPlayerBRef.current = null;
     revokeBlobUrl(lastBlobUrlARef.current);
     revokeBlobUrl(lastBlobUrlBRef.current);
     lastBlobUrlARef.current = null;
     lastBlobUrlBRef.current = null;
     setVideoSrc(null);
     setVideoSrcB(null);
-    setYouTubePlayer(null);
+    setYoutubeVideoIdA(null);
+    setYoutubeVideoIdB(null);
+    setGenericEmbedSrcA(null);
+    setGenericEmbedSrcB(null);
+    setEmbedCaptureRecording(false);
+    setCaptureProgress01(0);
+    setShowCaptureSaveToast(false);
+    sessionCaptureBlobRef.current = null;
+    sessionMp4BlobRef.current = null;
+    captureMp4ConversionGenRef.current += 1;
+    setCaptureDownloadStatus('idle');
     setShowTapToPlay(false);
     setProcessingStatus(null);
     setVideoBLoaded(false);
@@ -258,7 +331,7 @@ export default function Home() {
     cleanupVideoEl(videoRefB.current);
     canvasRef.current?.clearAll();
     canvasRefB.current?.clearAll();
-  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, setYouTubePlayer]);
+  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl]);
 
   // ── Video upload ──────────────────────────────────────────────────────────
   const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -268,6 +341,8 @@ export default function Home() {
     const url = URL.createObjectURL(file);
     lastBlobUrlARef.current = url;
     setVideoSrc(url);
+    setYoutubeVideoIdA(null);
+    setGenericEmbedSrcA(null);
     setShowTapToPlay(false);
     if (videoRef.current) {
       cleanupVideoEl(videoRef.current);
@@ -291,6 +366,8 @@ export default function Home() {
     const url = URL.createObjectURL(file);
     lastBlobUrlBRef.current = url;
     setVideoSrcB(url);
+    setYoutubeVideoIdB(null);
+    setGenericEmbedSrcB(null);
     if (videoRefB.current) {
       cleanupVideoEl(videoRefB.current);
       videoRefB.current.src = url;
@@ -319,6 +396,8 @@ export default function Home() {
     const url = URL.createObjectURL(file);
     lastBlobUrlARef.current = url;
     setVideoSrc(url);
+    setYoutubeVideoIdA(null);
+    setGenericEmbedSrcA(null);
     setShowTapToPlay(false);
     if (videoRef.current) { cleanupVideoEl(videoRef.current); videoRef.current.src = url; videoRef.current.load(); }
     setProcessingStatus(null);
@@ -345,6 +424,8 @@ export default function Home() {
     const url = URL.createObjectURL(file);
     lastBlobUrlBRef.current = url;
     setVideoSrcB(url);
+    setYoutubeVideoIdB(null);
+    setGenericEmbedSrcB(null);
     if (videoRefB.current) { cleanupVideoEl(videoRefB.current); videoRefB.current.src = url; videoRefB.current.load(); }
     setVideoBLoaded(false);
     canvasRefB.current?.clearAll();
@@ -358,6 +439,7 @@ export default function Home() {
   useEffect(() => {
     const vA = videoRef.current;
     const vB = videoRefB.current;
+    if (youtubeVideoIdA || genericEmbedSrcA) return;
     if (!vA || !vB || !videoBLoaded) return;
     if (!playBothEnabled) return;
 
@@ -386,7 +468,7 @@ export default function Home() {
     rafId = requestAnimationFrame(syncLoop);
     return () => cancelAnimationFrame(rafId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoBLoaded, videoBOffset, videoBDuration, playBothEnabled]);
+  }, [videoBLoaded, videoBOffset, videoBDuration, playBothEnabled, youtubeVideoIdA, genericEmbedSrcA]);
 
   // ── Webcam ────────────────────────────────────────────────────────────────
   const startWebcam = useCallback(async () => {
@@ -440,6 +522,7 @@ export default function Home() {
   }, []);
 
   const togglePlayBoth = useCallback(() => {
+    if (youtubeVideoIdA || youtubeVideoIdB || genericEmbedSrcA || genericEmbedSrcB) return;
     const vA = videoRef.current;
     const vB = videoRefB.current;
     if (!vA || !vB) return;
@@ -457,7 +540,7 @@ export default function Home() {
       vB.pause();
       setPlayBothEnabled(false);
     }
-  }, [videoBDuration, videoBOffset]);
+  }, [videoBDuration, videoBOffset, youtubeVideoIdA, youtubeVideoIdB, genericEmbedSrcA, genericEmbedSrcB]);
 
   const handleOptionsChange = useCallback((opts: Partial<DrawingOptions>) => {
     setDrawingOptions(prev => ({ ...prev, ...opts }));
@@ -466,16 +549,20 @@ export default function Home() {
   // ── Auto Swing Detection ──────────────────────────────────────────────────
   const handleAutoSwing = useCallback(async () => {
     const video = videoRef.current;
-    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) {
-      alert('No video loaded. Upload a video first.');
+    const ctrl = playbackControllerARef.current;
+    const dur = youtubeVideoIdA ? ctrl?.getDuration() : video?.duration;
+    if (!Number.isFinite(dur) || !dur || dur <= 0) {
+      alert('No video loaded. Upload a video or paste a YouTube URL first.');
       return;
     }
 
     setProcessingStatus('Analyzing motion…');
     let swings: Array<{ startTime: number; endTime: number; wristPositions: Array<{ time: number; x: number; y: number }> }> = [];
     try {
-      const { detectSwingsFromVideo } = await import('@/lib/swingDetection');
-      swings = await detectSwingsFromVideo(video);
+      if (!youtubeVideoIdA && video && Number.isFinite(video.duration) && video.duration > 0) {
+        const { detectSwingsFromVideo } = await import('@/lib/swingDetection');
+        swings = await detectSwingsFromVideo(video);
+      }
     } catch {
       swings = [];
     } finally {
@@ -499,7 +586,7 @@ export default function Home() {
     const idx = parseInt(choice, 10) - 1;
     if (isNaN(idx) || idx < 0 || idx >= swings.length) return;
     canvasRef.current?.drawSwingFromSegment(swings[idx], '#FF8C00');
-  }, [videoRef]);
+  }, [videoRef, youtubeVideoIdA]);
 
   // ── Racket Multiplier ─────────────────────────────────────────────────────
   const handleRacketMultiplier = useCallback(async () => {
@@ -537,7 +624,7 @@ export default function Home() {
 
   // ── URL Input handler ────────────────────────────────────────────────────
   const handleUrlSubmit = useCallback(async () => {
-    const raw = normalizeYoutubeUrlInput(urlInput);
+    const raw = normalizeWebUrlInput(urlInput);
     if (!raw) return;
 
     // Reset current session state before loading a new URL source.
@@ -545,16 +632,27 @@ export default function Home() {
       revokeBlobUrl(lastBlobUrlARef.current);
       lastBlobUrlARef.current = null;
       setVideoSrc(null);
+      setYoutubeVideoIdA(null);
+      setGenericEmbedSrcA(null);
       if (videoRef.current) cleanupVideoEl(videoRef.current);
     } else {
       revokeBlobUrl(lastBlobUrlBRef.current);
       lastBlobUrlBRef.current = null;
       setVideoSrcB(null);
+      setYoutubeVideoIdB(null);
+      setGenericEmbedSrcB(null);
       if (videoRefB.current) cleanupVideoEl(videoRefB.current);
       setVideoBLoaded(false);
     }
     setShowTapToPlay(false);
-    setProcessingStatus('Resolving video URL…');
+    sessionCaptureBlobRef.current = null;
+    sessionMp4BlobRef.current = null;
+    captureMp4ConversionGenRef.current += 1;
+    setCaptureDownloadStatus('idle');
+    setShowCaptureSaveToast(false);
+    setCaptureBusy(false);
+    disposeFfmpegWasm();
+    setProcessingStatus('Getting your video ready…');
     setStroMotionEnabled(false);
     setStroMotionRegion(undefined);
     clearGhosts();
@@ -572,6 +670,8 @@ export default function Home() {
       const streamUrl = `/api/video/stream?url=${encodeURIComponent(raw)}`;
       setProcessingStatus(null);
       if (urlTarget === 'A') {
+        setYoutubeVideoIdA(null);
+        setGenericEmbedSrcA(null);
         setVideoSrc(streamUrl);
         if (videoRef.current) {
           cleanupVideoEl(videoRef.current);
@@ -579,6 +679,8 @@ export default function Home() {
           videoRef.current.load();
         }
       } else {
+        setYoutubeVideoIdB(null);
+        setGenericEmbedSrcB(null);
         setVideoSrcB(streamUrl);
         if (videoRefB.current) {
           cleanupVideoEl(videoRefB.current);
@@ -589,55 +691,151 @@ export default function Home() {
       return;
     }
 
-    const lower = raw.toLowerCase();
-    const isYouTube = lower.includes('youtu.be/') || lower.includes('youtube.com/');
-
-    // YouTube: resolve on the server (Node) via a Server Action — avoids `fetch('/api/...')` under strict COEP.
-    if (!isYouTube) {
+    const resolved = resolveEmbedTarget(raw);
+    if (!resolved) {
       setProcessingStatus(null);
-      alert('Only YouTube links are supported at the moment — please download the video and upload it directly.');
+      alert(
+        'We couldn’t open that link here. Try a YouTube address, a social clip link, or paste a direct video link — then tap Load again.',
+      );
       return;
     }
 
-    try {
-      setProcessingStatus('Resolving YouTube…');
-      let lastMessage = 'Could not resolve a direct stream URL';
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (attempt > 0) {
-          setProcessingStatus(`Resolving YouTube… (retry ${attempt + 1}/3)`);
-          await new Promise((r) => setTimeout(r, 450 * attempt));
-        }
-        const result = await resolveYoutubeForAnalysis(raw);
-        if (result.ok) {
-          const streamUrl = `/api/video/stream?url=${encodeURIComponent(result.directUrl)}`;
-          setProcessingStatus(null);
-          if (urlTarget === 'A') {
-            setVideoSrc(streamUrl);
-            if (videoRef.current) {
-              cleanupVideoEl(videoRef.current);
-              videoRef.current.src = streamUrl;
-              videoRef.current.load();
-            }
-          } else {
-            setVideoSrcB(streamUrl);
-            if (videoRefB.current) {
-              cleanupVideoEl(videoRefB.current);
-              videoRefB.current.src = streamUrl;
-              videoRefB.current.load();
-            }
-          }
-          return;
-        }
-        lastMessage = result.error;
+    setProcessingStatus(null);
+    if (resolved.kind === 'youtube') {
+      setShowTapToPlay(true);
+      if (urlTarget === 'A') {
+        setYoutubeVideoIdA(resolved.videoId);
+        setGenericEmbedSrcA(null);
+      } else {
+        setYoutubeVideoIdB(resolved.videoId);
+        setGenericEmbedSrcB(null);
       }
-      throw new Error(lastMessage);
-    } catch (e: any) {
-      console.warn('[CoachLab] YouTube resolver failed:', e);
-      setProcessingStatus(null);
-      alert(`Could not load this YouTube URL.\n\n${e?.message ?? ''}`.trim());
-      return;
+    } else {
+      setShowTapToPlay(false);
+      if (urlTarget === 'A') {
+        setYoutubeVideoIdA(null);
+        setGenericEmbedSrcA(resolved.src);
+      } else {
+        setYoutubeVideoIdB(null);
+        setGenericEmbedSrcB(resolved.src);
+      }
     }
   }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, urlTarget, videoBDuration]);
+
+  const handleEmbedCaptureRequest = useCallback(
+    async (
+      panel: 'A' | 'B',
+      opts: { mode: 'full' | 'section'; startSec: number | null; endSec: number | null },
+    ) => {
+      const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
+      if (!videoEl) return;
+
+      setCaptureBusy(true);
+      setEmbedCaptureRecording(true);
+      setCaptureProgress01(0);
+
+      const yt = panel === 'A' ? ytPlayerARef.current : ytPlayerBRef.current;
+      const isYt = panel === 'A' ? !!youtubeVideoIdA : !!youtubeVideoIdB;
+      const shell = panel === 'A' ? captureShellRef.current : captureShellRefB.current;
+
+      const result = await runEmbedTabCaptureFlow({
+        opts,
+        videoEl,
+        ytPlayer: yt,
+        isYoutube: isYt,
+        captureShellEl: shell,
+        onProgress: setCaptureProgress01,
+      });
+
+      setCaptureBusy(false);
+      setEmbedCaptureRecording(false);
+      setCaptureProgress01(0);
+
+      if (!result.ok) {
+        alert(result.message);
+        return;
+      }
+
+      sessionCaptureBlobRef.current = result.blob;
+      sessionMp4BlobRef.current = null;
+      setCaptureDownloadStatus('preparing');
+      const conversionGen = ++captureMp4ConversionGenRef.current;
+      const capturedBlob = result.blob;
+      void (async () => {
+        const conv = await convertWebmBlobToMp4(capturedBlob);
+        if (conversionGen !== captureMp4ConversionGenRef.current) return;
+        if (conv.ok) {
+          sessionMp4BlobRef.current = conv.blob;
+          setCaptureDownloadStatus('ready_mp4');
+        } else {
+          sessionMp4BlobRef.current = null;
+          setCaptureDownloadStatus('ready_webm');
+        }
+      })();
+
+      const url = URL.createObjectURL(result.blob);
+
+      if (panel === 'A') {
+        revokeBlobUrl(lastBlobUrlARef.current);
+        lastBlobUrlARef.current = url;
+        setYoutubeVideoIdA(null);
+        setGenericEmbedSrcA(null);
+        setVideoSrc(url);
+        cleanupVideoEl(videoEl);
+        videoEl.src = url;
+        videoEl.load();
+        await videoEl.play().catch(() => {});
+      } else {
+        revokeBlobUrl(lastBlobUrlBRef.current);
+        lastBlobUrlBRef.current = url;
+        setYoutubeVideoIdB(null);
+        setGenericEmbedSrcB(null);
+        setVideoSrcB(url);
+        cleanupVideoEl(videoEl);
+        videoEl.src = url;
+        videoEl.load();
+        setVideoBLoaded(false);
+        await videoEl.play().catch(() => {});
+      }
+
+      setShowCaptureSaveToast(true);
+      setShowTapToPlay(false);
+    },
+    [
+      cleanupVideoEl,
+      revokeBlobUrl,
+      youtubeVideoIdA,
+      youtubeVideoIdB,
+    ],
+  );
+
+  const handleDownloadCaptureBlob = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (captureDownloadStatus === 'preparing') return;
+
+    const mp4 = sessionMp4BlobRef.current;
+    const webm = sessionCaptureBlobRef.current;
+
+    const blob =
+      captureDownloadStatus === 'ready_mp4' && mp4
+        ? mp4
+        : captureDownloadStatus === 'ready_webm' && webm
+          ? webm
+          : null;
+
+    if (!blob) return;
+
+    const ext = captureDownloadStatus === 'ready_mp4' ? 'mp4' : 'webm';
+    const a = document.createElement('a');
+    const href = URL.createObjectURL(blob);
+    a.href = href;
+    a.download = `coach-lab-capture.${ext}`;
+    a.click();
+    URL.revokeObjectURL(href);
+  }, [captureDownloadStatus]);
+
+  playbackControllerARef.current = youtubeVideoIdA ? ytIframeControllerA : html5ControllerA;
+  playbackControllerBRef.current = youtubeVideoIdB ? ytIframeControllerB : html5ControllerB;
 
   return (
     <div
@@ -804,7 +1002,9 @@ export default function Home() {
                     <button onClick={stopMic} style={headerBtnStyle}>Mic off</button>
                   )}
                   <button onClick={handleScreenshot} style={headerBtnStyle}>Screenshot</button>
-                  <button onClick={resetSession} style={headerBtnStyle}>New</button>
+                  <button type="button" onClick={resetSession} style={headerBtnStyle} title="Start fresh — clears videos and recordings">
+                    New
+                  </button>
                 </div>
 
                 <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -911,7 +1111,7 @@ export default function Home() {
               )}
 
               <button onClick={handleScreenshot} style={headerBtnStyle} title="Save screenshot">Screenshot</button>
-              <button onClick={resetSession} style={headerBtnStyle} title="Clear state and load a new video">New</button>
+              <button type="button" onClick={resetSession} style={headerBtnStyle} title="Start fresh — clears videos and recordings">New</button>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title="Layout">
                 <button onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, height: 30, padding: '0 10px', width: 'auto', fontSize: 12, background: layoutMode === 'youtube' ? '#35679A' : '#fff', color: layoutMode === 'youtube' ? '#fff' : '#1D1D1F', border: layoutMode === 'youtube' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>16:9</button>
@@ -1085,13 +1285,13 @@ export default function Home() {
               }}
             >
               <div
-                ref={containerRef}
+                ref={attachPanelAContainer}
                 style={{ width: '100%', height: '100%', position: 'relative' }}
                 onDragOver={handleDragOverA}
                 onDragLeave={handleDragLeaveA}
                 onDrop={handleDropA}
               >
-                {!videoSrc ? (
+                {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (
                   <div style={{
                     position: 'absolute', inset: 0,
                     display: 'flex', flexDirection: 'column',
@@ -1118,33 +1318,79 @@ export default function Home() {
                     <span style={{ fontSize: '11px', color: '#4b5563' }}>or drag &amp; drop a video here</span>
                   </div>
                 ) : (
-                  <CanvasOverlay
-                    ref={canvasRef}
-                    videoRef={videoRef}
-                    webcamVideoRef={webcamVideoRef}
-                    activeTool={activeTool}
-                    drawingOptions={drawingOptions}
-                    containerWidth={canvasSize.width}
-                    containerHeight={canvasSize.height}
-                    ballTrailMode={ballTrailMode}
-                    skeletonEnabled={skeletonEnabled}
-                    ballTrailEnabled={ballTrailEnabled}
-                    onProcessingStatus={setProcessingStatus}
-                    isRecording={isRecording}
-                    circleSpinning={circleSpinning}
-                    circleGapMode={circleGapMode}
-                    webcamPipMode={webcamPipMode}
-                    webcamOpacity={webcamOpacity}
-                    stroMotionGhosts={ghostFrames}
-                    stroMotionOpacity={stroMotionOpacity}
-                    stroMotionRegion={stroMotionRegion}
-                    skeletonShowAngles={skeletonShowAngles}
-                    skeletonShowHeadLine={skeletonShowHeadLine}
-                    skeletonClassicColors={skeletonClassicColors}
-                    ballSampleMode={ballSampleMode}
-                    rect3d={rect3d}
-                    triangle3d={triangle3d}
-                  />
+                  <>
+                    {youtubeVideoIdA ? (
+                      <div style={{
+                        position: 'absolute', inset: 0, zIndex: 0, background: '#000',
+                      }}
+                      >
+                        <YouTubeEmbed
+                          videoId={youtubeVideoIdA}
+                          onPlayer={(p) => { ytPlayerARef.current = p; }}
+                        />
+                      </div>
+                    ) : null}
+                    {genericEmbedSrcA && !youtubeVideoIdA ? (
+                      <div style={{
+                        position: 'absolute', inset: 0, zIndex: 0, background: '#000',
+                      }}
+                      >
+                        <iframe
+                          title="Embedded video"
+                          src={genericEmbedSrcA}
+                          style={{ width: '100%', height: '100%', border: 'none' }}
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                        />
+                      </div>
+                    ) : null}
+                    <CanvasOverlay
+                      ref={canvasRef}
+                      videoRef={videoRef}
+                      webcamVideoRef={webcamVideoRef}
+                      renderVideo={!youtubeVideoIdA && !genericEmbedSrcA}
+                      transparentWhenNoVideo={!!youtubeVideoIdA || !!genericEmbedSrcA}
+                      youtubePose={youtubeVideoIdA ? { videoId: youtubeVideoIdA, controllerRef: playbackControllerARef } : undefined}
+                      activeTool={activeTool}
+                      drawingOptions={drawingOptions}
+                      containerWidth={canvasSize.width}
+                      containerHeight={canvasSize.height}
+                      ballTrailMode={ballTrailMode}
+                      skeletonEnabled={skeletonEnabled}
+                      ballTrailEnabled={ballTrailEnabled}
+                      onProcessingStatus={setProcessingStatus}
+                      isRecording={isRecording}
+                      circleSpinning={circleSpinning}
+                      circleGapMode={circleGapMode}
+                      webcamPipMode={webcamPipMode}
+                      webcamOpacity={webcamOpacity}
+                      stroMotionGhosts={ghostFrames}
+                      stroMotionOpacity={stroMotionOpacity}
+                      stroMotionRegion={stroMotionRegion}
+                      skeletonShowAngles={skeletonShowAngles}
+                      skeletonShowHeadLine={skeletonShowHeadLine}
+                      skeletonClassicColors={skeletonClassicColors}
+                      ballSampleMode={ballSampleMode}
+                      rect3d={rect3d}
+                      triangle3d={triangle3d}
+                    />
+                    <EmbedCapturePanel
+                      visible={
+                        !!(youtubeVideoIdA || genericEmbedSrcA) &&
+                        !embedCaptureRecording &&
+                        !captureBusy &&
+                        !videoSrc
+                      }
+                      sectionSeekSupported={!!youtubeVideoIdA}
+                      genericIframeNote={
+                        genericEmbedSrcA && !youtubeVideoIdA
+                          ? 'If you don’t see the video, it may be blocked from embedding — keep it playing in this tab, tap Capture, then choose This tab when your browser asks what to share.'
+                          : undefined
+                      }
+                      busy={captureBusy}
+                      onCapture={(o) => void handleEmbedCaptureRequest('A', o)}
+                    />
+                  </>
                 )}
                 {/* Drag-over overlay for Video A */}
                 {isDragOverA && (
@@ -1161,7 +1407,7 @@ export default function Home() {
                   </div>
                 )}
                 {/* ── Safari "Tap to Play" overlay ─────────────────────────────── */}
-                {showTapToPlay && videoSrc && (
+                {showTapToPlay && (videoSrc || youtubeVideoIdA) && (
                   <div
                     role="button"
                     aria-label="Tap to play video"
@@ -1173,9 +1419,17 @@ export default function Home() {
                       cursor: 'pointer',
                     }}
                     onClick={() => {
+                      if (youtubeVideoIdA) {
+                        try {
+                          ytPlayerARef.current?.playVideo?.();
+                        } catch (err: unknown) {
+                          console.warn('[CoachLab] Tap-to-Play (YouTube) failed:', err);
+                        }
+                        setShowTapToPlay(false);
+                        return;
+                      }
                       const v = videoRef.current;
                       if (!v) return;
-                      // Direct user-gesture call — Safari will allow this
                       v.play().catch((err: unknown) => {
                         console.warn('[CoachLab] Tap-to-Play failed:', err);
                       });
@@ -1197,7 +1451,7 @@ export default function Home() {
                     </div>
                   </div>
                 )}
-                {videoSrcB && (
+                {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
                   <div style={{
                     position: 'absolute', top: 4, left: 8,
                     fontSize: '11px', fontWeight: 700, color: '#fff',
@@ -1208,20 +1462,48 @@ export default function Home() {
             </div>
 
             {/* Video B is not shown in Reels (portrait) mode */}
-            {layoutMode !== 'reels' && (videoSrcB ? (
+            {layoutMode !== 'reels' && ((videoSrcB || youtubeVideoIdB || genericEmbedSrcB) ? (
               <>
                 <div style={{ width: '1px', background: '#333', flexShrink: 0 }} />
                 <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
                   <div
-                    ref={containerRefB}
+                    ref={attachPanelBContainer}
                     style={{ width: '100%', height: '100%', position: 'relative' }}
                     onDragOver={handleDragOverB}
                     onDragLeave={handleDragLeaveB}
                     onDrop={handleDropB}
                   >
+                    {youtubeVideoIdB ? (
+                      <div style={{
+                        position: 'absolute', inset: 0, zIndex: 0, background: '#000',
+                      }}
+                      >
+                        <YouTubeEmbed
+                          videoId={youtubeVideoIdB}
+                          onPlayer={(p) => { ytPlayerBRef.current = p; }}
+                        />
+                      </div>
+                    ) : null}
+                    {genericEmbedSrcB && !youtubeVideoIdB ? (
+                      <div style={{
+                        position: 'absolute', inset: 0, zIndex: 0, background: '#000',
+                      }}
+                      >
+                        <iframe
+                          title="Embedded video B"
+                          src={genericEmbedSrcB}
+                          style={{ width: '100%', height: '100%', border: 'none' }}
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                        />
+                      </div>
+                    ) : null}
                     <CanvasOverlay
                       ref={canvasRefB}
                       videoRef={videoRefB}
+                      renderVideo={!youtubeVideoIdB && !genericEmbedSrcB}
+                      transparentWhenNoVideo={!!youtubeVideoIdB || !!genericEmbedSrcB}
+                      youtubePose={youtubeVideoIdB ? { videoId: youtubeVideoIdB, controllerRef: playbackControllerBRef } : undefined}
                       activeTool={activeTool}
                       drawingOptions={drawingOptions}
                       containerWidth={canvasSizeB.width}
@@ -1238,6 +1520,22 @@ export default function Home() {
                       skeletonClassicColors={skeletonClassicColors}
                       rect3d={rect3d}
                       triangle3d={triangle3d}
+                    />
+                    <EmbedCapturePanel
+                      visible={
+                        !!(youtubeVideoIdB || genericEmbedSrcB) &&
+                        !embedCaptureRecording &&
+                        !captureBusy &&
+                        !videoSrcB
+                      }
+                      sectionSeekSupported={!!youtubeVideoIdB}
+                      genericIframeNote={
+                        genericEmbedSrcB && !youtubeVideoIdB
+                          ? 'If you don’t see the video, it may be blocked from embedding — keep it playing in this tab, tap Capture, then choose This tab when your browser asks what to share.'
+                          : undefined
+                      }
+                      busy={captureBusy}
+                      onCapture={(o) => void handleEmbedCaptureRequest('B', o)}
                     />
                     <div style={{
                       position: 'absolute', top: 4, left: 8,
@@ -1280,7 +1578,7 @@ export default function Home() {
             }}
           >
             <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {videoSrcB && (
+              {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px' }}>
                   <button
                     onClick={togglePlayBoth}
@@ -1302,31 +1600,41 @@ export default function Home() {
                 </div>
               )}
 
-              {videoSrcB && (
+              {(videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB) && (
                 <div>
                   <PreciseTimeline
-                    source={{ kind: 'html', videoRef: videoRefB }}
+                    source={
+                      youtubeVideoIdB
+                        ? { kind: 'youtube', playerRef: ytPlayerBRef }
+                        : { kind: 'html', videoRef: videoRefB }
+                    }
                     defaultFps={30}
                     accent={'#22c55e'}
                   />
                 </div>
               )}
 
-              <PreciseTimeline
-                source={{ kind: 'html', videoRef }}
-                defaultFps={30}
-                accent={layoutMode === 'reels' ? '#FF3B30' : '#35679A'}
-              />
+              {(videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc) && (
+                <PreciseTimeline
+                  source={
+                    youtubeVideoIdA
+                      ? { kind: 'youtube', playerRef: ytPlayerARef }
+                      : { kind: 'html', videoRef }
+                  }
+                  defaultFps={30}
+                  accent={layoutMode === 'reels' ? '#FF3B30' : '#35679A'}
+                />
+              )}
             </div>
           </div>
 
           {/* Video B offset control */}
-          {layoutMode !== 'reels' && videoSrcB && (
+          {layoutMode !== 'reels' && (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
             <div
               style={{
                 position: 'absolute',
                 right: 12,
-                bottom: videoSrcB ? 260 : 132,
+                bottom: (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) ? 260 : 132,
                 zIndex: 80,
                 pointerEvents: 'auto',
                 padding: '8px 10px',
@@ -1369,6 +1677,115 @@ export default function Home() {
           {false && <div />}
         </main>
       </div>
+
+      {embedCaptureRecording && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 132,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 200,
+            width: 'min(420px, calc(100vw - 32px))',
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            style={{
+              height: 8,
+              borderRadius: 6,
+              background: 'rgba(255,255,255,0.12)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${Math.round(Math.min(1, Math.max(0, captureProgress01)) * 100)}%`,
+                background: '#35679A',
+                transition: 'width 0.15s ease-out',
+              }}
+            />
+          </div>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#fff', textAlign: 'center', fontWeight: 600 }}>
+            Recording your clip… {Math.round(Math.min(1, Math.max(0, captureProgress01)) * 100)}%
+          </div>
+        </div>
+      )}
+
+      {showCaptureSaveToast && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 24,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 210,
+            maxWidth: 'min(440px, calc(100vw - 24px))',
+            padding: '12px 16px',
+            borderRadius: 12,
+            background: 'rgba(15, 15, 18, 0.94)',
+            border: '1px solid rgba(255,255,255,0.14)',
+            color: '#fff',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 10,
+            fontSize: 13,
+          }}
+        >
+          <span style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontWeight: 600 }}>Your video is ready to analyse.</span>
+            <span style={{ opacity: 0.88 }}>
+              Would you like to save a copy to your device?
+            </span>
+            {captureDownloadStatus === 'preparing' && (
+              <span style={{ fontSize: 11, opacity: 0.72, fontWeight: 500 }}>
+                Processing your video… almost ready.
+              </span>
+            )}
+            {captureDownloadStatus === 'ready_webm' && (
+              <span style={{ fontSize: 11, opacity: 0.85, fontWeight: 500, color: '#FFB84D' }}>
+                We couldn&apos;t prepare the usual save file — your download will still play in most video apps.
+              </span>
+            )}
+          </span>
+          <button
+            type="button"
+            disabled={captureDownloadStatus === 'preparing'}
+            onClick={() => {
+              handleDownloadCaptureBlob();
+              setShowCaptureSaveToast(false);
+            }}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 8,
+              border: 'none',
+              background: captureDownloadStatus === 'preparing' ? 'rgba(53,103,154,0.45)' : '#35679A',
+              color: '#fff',
+              fontWeight: 700,
+              cursor: captureDownloadStatus === 'preparing' ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {captureDownloadStatus === 'ready_webm' ? 'Download video' : 'Download MP4'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowCaptureSaveToast(false)}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.2)',
+              background: 'transparent',
+              color: '#fff',
+              cursor: 'pointer',
+            }}
+          >
+            Not now
+          </button>
+        </div>
+      )}
 
       {/* Hidden file inputs */}
       <input

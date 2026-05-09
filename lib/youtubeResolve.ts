@@ -11,6 +11,7 @@ export type YoutubeResolveSuccess = {
     container: string | null;
     mimeType: string | null;
     hasAudio: boolean | null;
+    /** `watch_page` | `innertube` | `piped_api` */
     source: string;
   };
 };
@@ -291,6 +292,111 @@ async function resolveViaWatchPageHtml(targetUrl: string): Promise<{
   return null;
 }
 
+/** Public Piped HTTP APIs — rotated when direct InnerTube/HTML extraction fails (common from DC IPs). See https://docs.piped.video/docs/api-documentation/ */
+const DEFAULT_PIPED_API_BASES = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.tokhmi.xyz',
+  'https://pipedapi.syncpundit.com',
+];
+
+function getYoutubeVideoId(url: string): string | null {
+  try {
+    return YtdlCore.getVideoID(url);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchJsonWithTimeout(url: string, ms: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        'User-Agent': BROWSER_HEADERS['User-Agent']!,
+        Accept: 'application/json',
+      },
+    });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+/**
+ * Fallback when `@ybd-project/ytdl-core` returns nothing (YouTube changes / bot mitigation / DC IPs).
+ * Uses Team Piped's `/streams/:videoId` JSON API ([docs](https://docs.piped.video/docs/api-documentation/)).
+ * Third-party instances may break without notice — self-host or override via `YOUTUBE_PIPED_INSTANCES`.
+ */
+async function resolveViaPipedApi(videoId: string): Promise<YoutubeResolveSuccess | null> {
+  if (process.env.YOUTUBE_DISABLE_PIPED_FALLBACK === '1') return null;
+
+  const envList = process.env.YOUTUBE_PIPED_INSTANCES?.split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+  const bases = envList?.length ? envList : DEFAULT_PIPED_API_BASES;
+
+  for (const base of bases) {
+    try {
+      const endpoint = `${base}/streams/${encodeURIComponent(videoId)}`;
+      const res = await fetchJsonWithTimeout(endpoint, 14_000);
+      if (!res.ok) continue;
+
+      const j = (await res.json()) as {
+        title?: string;
+        videoStreams?: Array<{
+          url?: string;
+          mimeType?: string;
+          height?: number;
+          bitrate?: number;
+          videoOnly?: boolean;
+        }>;
+      };
+
+      const streams = Array.isArray(j.videoStreams) ? j.videoStreams : [];
+      const muxed = streams.filter(
+        (s) =>
+          typeof s.url === 'string' &&
+          isHttpUrl(s.url) &&
+          !s.videoOnly &&
+          String(s.mimeType || '').toLowerCase().includes('video'),
+      );
+      const pool =
+        muxed.length > 0
+          ? muxed
+          : streams.filter((s) => typeof s.url === 'string' && isHttpUrl(s.url));
+
+      pool.sort(
+        (a, b) =>
+          (Number(b.height || 0) - Number(a.height || 0)) ||
+          (Number(b.bitrate || 0) - Number(a.bitrate || 0)),
+      );
+
+      const best = pool[0];
+      if (!best?.url || !isHttpUrl(best.url)) continue;
+
+      const mime = String(best.mimeType || '');
+      return {
+        ok: true,
+        directUrl: best.url,
+        title: typeof j.title === 'string' ? j.title : null,
+        chosen: {
+          itag: null,
+          height: best.height ?? null,
+          container: mime.includes('webm') ? 'webm' : 'mp4',
+          mimeType: best.mimeType ?? null,
+          hasAudio: best.videoOnly === false ? true : best.videoOnly === true ? false : null,
+          source: 'piped_api',
+        },
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 /**
  * Resolve a YouTube watch URL to a direct googlevideo stream URL (Node runtime).
  */
@@ -351,5 +457,20 @@ export async function resolveYoutubeWatchUrl(target: string): Promise<YoutubeRes
     }
   }
 
-  return { ok: false, error: lastErr || 'Could not resolve a direct stream URL' };
+  const vid = getYoutubeVideoId(trimmed);
+  if (vid) {
+    try {
+      const piped = await resolveViaPipedApi(vid);
+      if (piped) return piped;
+    } catch {
+      /* fall through */
+    }
+  }
+
+  return {
+    ok: false,
+    error:
+      lastErr ||
+      'Could not resolve a direct stream URL. YouTube may be blocking automated requests from this host — try again in a few minutes, set YOUTUBE_PIPED_INSTANCES to healthy Piped APIs, or download the video and upload it.',
+  };
 }
