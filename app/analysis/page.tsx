@@ -590,19 +590,16 @@ export default function Home() {
     const lower = raw.toLowerCase();
     const isYouTube = lower.includes('youtu.be/') || lower.includes('youtube.com/');
 
-    // YouTube via Cloudflare Worker -> direct URL -> proxy same-origin -> HTML video
+    // YouTube: resolve on our server (Vercel Node route), then proxy bytes same-origin for Canvas/ML.
+    // Always use a relative `/api/...` URL here — `NEXT_PUBLIC_*` vars are baked in at build time, so an old
+    // Cloudflare Worker URL could otherwise stick in the bundle until the next deploy even after you delete env vars.
     if (!isYouTube) {
       setProcessingStatus(null);
       alert('Only YouTube links are supported at the moment — please download the video and upload it directly.');
       return;
     }
 
-    const resolverEnv = process.env.NEXT_PUBLIC_YT_RESOLVER_URL?.trim();
-    const resolverBase = resolverEnv ? resolverEnv.replace(/\/$/, '') : '';
-    /** Prefer explicit Worker URL when set; otherwise same-origin Node route (works where CF Workers cannot decipher). */
-    const resolveUrl = resolverBase
-      ? `${resolverBase}/resolve?url=${encodeURIComponent(raw)}`
-      : `/api/youtube/resolve?url=${encodeURIComponent(raw)}`;
+    const resolveUrl = `/api/youtube/resolve?url=${encodeURIComponent(raw)}`;
 
     try {
       setProcessingStatus('Resolving YouTube…');
