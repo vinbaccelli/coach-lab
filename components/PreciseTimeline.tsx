@@ -25,10 +25,15 @@ export default function PreciseTimeline({
   source,
   defaultFps = 30,
   accent = '#35679A',
+  leadingInsetPx = 0,
+  compact = false,
 }: {
   source: Source;
   defaultFps?: number;
   accent?: string;
+  /** Extra left padding so controls stay clear of a floating toolbar */
+  leadingInsetPx?: number;
+  compact?: boolean;
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
@@ -314,9 +319,10 @@ export default function PreciseTimeline({
     pointerEvents: 'auto',
     display: 'flex',
     flexDirection: 'column',
-    gap: 10,
+    gap: compact ? 6 : 10,
     width: '100%',
-    padding: `10px 12px calc(env(safe-area-inset-bottom, 0px) + 10px)`,
+    padding: `${compact ? 6 : 10}px 12px ${compact ? 6 : 10}px calc(env(safe-area-inset-bottom, 0px) + ${compact ? 6 : 10}px)`,
+    paddingLeft: Math.max(12, leadingInsetPx),
     borderRadius: '14px 14px 0 0',
     background: 'rgba(15, 15, 18, 0.58)',
     border: '1px solid rgba(255,255,255,0.12)',
@@ -325,7 +331,7 @@ export default function PreciseTimeline({
     backdropFilter: 'blur(12px)',
     WebkitBackdropFilter: 'blur(12px)',
     touchAction: 'manipulation',
-  }), []);
+  }), [compact, leadingInsetPx]);
 
   const btnStyle: React.CSSProperties = useMemo(() => ({
     minWidth: 40,

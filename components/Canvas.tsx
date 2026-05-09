@@ -21,6 +21,7 @@ import {
   smoothPoseKeypoints,
   type PoseKeypoint,
 } from '@/lib/youtubeThumbnailPose';
+import { smoothKeypointsEma } from '@/lib/keypointSmooth';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -153,6 +154,13 @@ export interface CanvasProps {
     videoId: string;
     controllerRef: React.MutableRefObject<VideoController | null>;
   };
+  /**
+   * When tab-capture is recording a MediaStream into videoRef, drawing that stream on canvas
+   * creates an infinite on-screen mirror. Skip painting the stream while still running pose on it.
+   */
+  suppressTabCaptureMirror?: boolean;
+  /** Selfie segmentation mask for webcam PiP — coach-only cutout over the canvas */
+  webcamCutout?: boolean;
 }
 
 // ── Module-level pose render cache ─────────────────────────────────────────
@@ -973,6 +981,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       triangle3d = false,
       transparentWhenNoVideo = false,
       youtubePose,
+      suppressTabCaptureMirror = false,
+      webcamCutout = false,
     },
     ref,
   ) {
@@ -1056,6 +1066,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const youtubeSmoothBufRef = useRef<PoseKeypoint[][]>([]);
     const youtubePoseCacheRef = useRef<Map<number, PoseKeypoint[]>>(new Map());
 
+    const suppressTabCaptureMirrorRef = useRef(false);
+    const poseSmoothPrevRef = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
+    const poseEstimateInFlightRef = useRef(false);
+    const poseScheduleRef = useRef<{ kind: 'rvfc' | 'raf'; id: number } | null>(null);
+    const webcamCutoutRef = useRef(false);
+    const webcamSegmenterRef = useRef<{ dispose: () => void } | null>(null);
+    const webcamMaskRef = useRef<HTMLCanvasElement | null>(null);
+
     // Zoom / pan state
     const zoomRef    = useRef(1.0);
     const panXRef    = useRef(0);
@@ -1105,6 +1123,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { transparentWhenNoVideoRef.current = transparentWhenNoVideo; }, [transparentWhenNoVideo]);
     useEffect(() => { renderVideoRef.current = renderVideo; }, [renderVideo]);
     useEffect(() => { youtubePoseRef.current = youtubePose; }, [youtubePose]);
+    useEffect(() => { suppressTabCaptureMirrorRef.current = suppressTabCaptureMirror; }, [suppressTabCaptureMirror]);
+    useEffect(() => { webcamCutoutRef.current = webcamCutout; }, [webcamCutout]);
 
     // ── Touch pinch zoom ────────────────────────────────────────────────────
     useEffect(() => {
@@ -1176,6 +1196,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         poseProcessingRef.current = false;
         skeletonFramesRef.current = [];
         latestKeypointsRef.current = null;
+        poseSmoothPrevRef.current = null;
         youtubePoseCacheRef.current.clear();
         youtubeSmoothBufRef.current = [];
         cachedBallRef.current = [];
@@ -1192,6 +1213,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         poseProcessingRef.current = false;
         skeletonFramesRef.current = [];
         latestKeypointsRef.current = null;
+        poseSmoothPrevRef.current = null;
         onProcessingStatus?.(null);
       },
       resetBallTrail: () => {
@@ -1335,6 +1357,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     }, [skeletonEnabled, onProcessingStatus]);
 
     // ── Pose detection loop — separate from the drawing rAF ───────────────
+    // Uses requestVideoFrameCallback when playing to stay in sync with displayed frames;
+    // falls back to rAF. Mutex + EMA reduce backlog and jitter.
 
     useEffect(() => {
       if (!skeletonEnabled) return;
@@ -1343,50 +1367,207 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const video = videoRef.current;
       if (!video) return;
 
-      let rafId: number;
       poseLoopActiveRef.current = true;
+      let pausedTimer: number | ReturnType<typeof setTimeout> | undefined;
 
-      const poseLoop = async () => {
+      const cancelScheduled = () => {
+        if (pausedTimer !== undefined) {
+          window.clearTimeout(pausedTimer);
+          pausedTimer = undefined;
+        }
+        const v = videoRef.current;
+        const s = poseScheduleRef.current;
+        if (!s) return;
+        if (s.kind === 'rvfc' && v && typeof v.cancelVideoFrameCallback === 'function') {
+          try { v.cancelVideoFrameCallback(s.id); } catch { /* noop */ }
+        } else {
+          cancelAnimationFrame(s.id);
+        }
+        poseScheduleRef.current = null;
+      };
+
+      const scheduleNext = () => {
+        if (!poseLoopActiveRef.current) return;
+        const v = videoRef.current;
+        if (!v) return;
+
+        if (v.paused) {
+          pausedTimer = window.setTimeout(() => {
+            pausedTimer = undefined;
+            void runIteration();
+          }, 118);
+          return;
+        }
+
+        if (typeof v.requestVideoFrameCallback !== 'function') {
+          const id = requestAnimationFrame(() => { poseScheduleRef.current = null; void runIteration(); });
+          poseScheduleRef.current = { kind: 'raf', id };
+          return;
+        }
+
+        const id = v.requestVideoFrameCallback(() => {
+          poseScheduleRef.current = null;
+          void runIteration();
+        });
+        poseScheduleRef.current = { kind: 'rvfc', id };
+      };
+
+      const runIteration = async () => {
         if (!poseLoopActiveRef.current) return;
         if (skeletonSuppressedRef.current) {
           latestKeypointsRef.current = null;
-          rafId = requestAnimationFrame(poseLoop);
+          scheduleNext();
           return;
         }
 
         const det = detectorRef.current;
-        if (det && video.readyState >= 4 && video.videoWidth > 0) {
-          try {
-            const poses = await det.estimatePoses(video, { flipHorizontal: false });
-            if (poses && poses.length > 0 && poses[0].keypoints) {
-              const keypoints = poses[0].keypoints;
-              latestKeypointsRef.current = keypoints;
-              // Maintain skeletonFramesRef for swing detection.
-              // Only push when the video has advanced to a new timestamp to avoid
-              // flooding the buffer with identical zero-velocity frames while paused.
-              const now = video.currentTime;
-              const lastFrame = skeletonFramesRef.current.at(-1);
-              if (!video.paused && (!lastFrame || now !== lastFrame.timeSeconds)) {
-                skeletonFramesRef.current.push({ timeSeconds: now, keypoints });
-                if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
-                  skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
-                }
-              }
-            }
-          } catch (e) {
-            // Silent fail — video may not be ready
-          }
+        const v = videoRef.current;
+        if (!det || !v || v.readyState < 4 || v.videoWidth === 0) {
+          scheduleNext();
+          return;
         }
 
-        rafId = requestAnimationFrame(poseLoop);
+        if (poseEstimateInFlightRef.current) {
+          scheduleNext();
+          return;
+        }
+
+        poseEstimateInFlightRef.current = true;
+        try {
+          const poses = await det.estimatePoses(v, { flipHorizontal: false });
+          const raw = poses?.[0]?.keypoints as Array<{ x: number; y: number; score: number; name: string }> | undefined;
+          if (raw?.length) {
+            const playbackAlpha = Math.min(
+              0.72,
+              Math.max(0.28, 0.38 + (Math.abs(v.playbackRate || 1) - 1) * 0.08),
+            );
+            const smoothed = smoothKeypointsEma(poseSmoothPrevRef.current, raw, playbackAlpha);
+            poseSmoothPrevRef.current = smoothed as typeof raw;
+            latestKeypointsRef.current = smoothed as typeof raw;
+
+            const nowT = v.currentTime;
+            const lastFrame = skeletonFramesRef.current.at(-1);
+            if (!v.paused && (!lastFrame || nowT !== lastFrame.timeSeconds)) {
+              skeletonFramesRef.current.push({ timeSeconds: nowT, keypoints: smoothed as typeof raw });
+              if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+                skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+              }
+            }
+          }
+        } catch {
+          /* video may not be ready */
+        } finally {
+          poseEstimateInFlightRef.current = false;
+        }
+
+        scheduleNext();
       };
 
-      rafId = requestAnimationFrame(poseLoop);
+      scheduleNext();
+
       return () => {
         poseLoopActiveRef.current = false;
-        cancelAnimationFrame(rafId);
+        cancelScheduled();
       };
     }, [skeletonEnabled, videoRef]);
+
+    /** Reset temporal smoothing when the HTML video source changes */
+    useEffect(() => {
+      const v = videoRef.current;
+      if (!v) return;
+      const onReload = () => { poseSmoothPrevRef.current = null; };
+      v.addEventListener('loadeddata', onReload);
+      return () => v.removeEventListener('loadeddata', onReload);
+    }, [videoRef]);
+
+    // ── Webcam selfie mask for cutout PiP (updates off-thread from render loop) ──
+    useEffect(() => {
+      if (!webcamCutout || !isRecording) {
+        webcamSegmenterRef.current?.dispose();
+        webcamSegmenterRef.current = null;
+        webcamMaskRef.current = null;
+        return;
+      }
+
+      let cancelled = false;
+      let busy = false;
+
+      (async () => {
+        try {
+          const tf = await import('@tensorflow/tfjs-core');
+          await import('@tensorflow/tfjs-backend-webgl');
+          await tf.setBackend('webgl');
+          await tf.ready();
+          const bs = await import('@tensorflow-models/body-segmentation');
+          const { createSegmenter, SupportedModels, toBinaryMask } = bs;
+          if (cancelled) return;
+
+          const segmenter = await createSegmenter(SupportedModels.MediaPipeSelfieSegmentation, {
+            runtime: 'tfjs',
+            modelType: 'general',
+          });
+          if (cancelled) {
+            segmenter.dispose();
+            return;
+          }
+
+          const maskCanvas = document.createElement('canvas');
+          webcamMaskRef.current = maskCanvas;
+
+          const segmentOnce = async () => {
+            const wc = webcamVideoRef?.current;
+            if (!wc || wc.readyState < 2 || wc.videoWidth === 0) return;
+            const seg = await segmenter.segmentPeople(wc, { flipHorizontal: true });
+            if (!seg?.[0]) return;
+            const bin = await toBinaryMask(
+              seg[0],
+              { r: 255, g: 255, b: 255, a: 255 },
+              { r: 0, g: 0, b: 0, a: 0 },
+              false,
+              0.62,
+            );
+            maskCanvas.width = bin.width;
+            maskCanvas.height = bin.height;
+            const mctx = maskCanvas.getContext('2d');
+            if (mctx) {
+              mctx.putImageData(bin, 0, 0);
+            }
+          };
+
+          const tick = async () => {
+            if (cancelled || !webcamCutoutRef.current || !isRecordingRef.current) return;
+            if (!busy) {
+              busy = true;
+              try {
+                await segmentOnce();
+              } catch {
+                /* ignore frame errors */
+              } finally {
+                busy = false;
+              }
+            }
+            window.setTimeout(tick, 90);
+          };
+
+          webcamSegmenterRef.current = {
+            dispose: () => {
+              try { segmenter.dispose(); } catch { /* noop */ }
+            },
+          };
+
+          void tick();
+        } catch {
+          onProcessingStatus?.('Webcam cutout unavailable — showing normal PiP');
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+        webcamSegmenterRef.current?.dispose();
+        webcamSegmenterRef.current = null;
+        webcamMaskRef.current = null;
+      };
+    }, [webcamCutout, isRecording, webcamVideoRef, onProcessingStatus]);
 
     useEffect(() => {
       youtubePoseCacheRef.current.clear();
@@ -1593,7 +1774,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           dy = (H - dh) / 2;
           // Store for rubber-band region selection coordinate mapping
           videoBoundsRef.current = { dx, dy, dw, dh };
-          ctx.drawImage(video, dx, dy, dw, dh);
+          const hideStreamMirror =
+            suppressTabCaptureMirrorRef.current &&
+            !!video.srcObject &&
+            typeof MediaStream !== 'undefined' &&
+            video.srcObject instanceof MediaStream;
+          if (!hideStreamMirror) {
+            ctx.drawImage(video, dx, dy, dw, dh);
+          }
 
           // ── Real-time ball detection (runs when playing or scrubbing) ──────
           if (renderVideoRef.current && ballTrailEnabledRef.current && !isBallDetectingRef.current) {
@@ -1765,16 +1953,41 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // Webcam PiP — bottom-right corner when recording
+        // Webcam PiP — compact corner bubble when recording
         const webcam = webcamVideoRef?.current;
         if (isRecordingRef.current && webcam && webcam.readyState >= 2 && webcamPipModeRef.current !== 'hidden') {
-          const camW = Math.round(W * 0.22);
-          const camH = Math.round(camW * (9 / 16));
-          const margin = 16;
+          const camW = Math.round(W * 0.15);
+          const camH = Math.round(camW * (11 / 9));
+          const margin = 12;
           const cx2 = W - camW - margin;
           const cy2 = H - camH - margin;
           ctx.save();
           ctx.globalAlpha = webcamOpacityRef.current;
+
+          const maskCanvas = webcamMaskRef.current;
+          const useCutout =
+            webcamCutoutRef.current && maskCanvas && maskCanvas.width > 0 && maskCanvas.height > 0;
+
+          const drawPipPixels = () => {
+            if (useCutout) {
+              const tmp = document.createElement('canvas');
+              tmp.width = camW;
+              tmp.height = camH;
+              const tctx = tmp.getContext('2d');
+              if (!tctx) return;
+              tctx.save();
+              tctx.translate(camW, 0);
+              tctx.scale(-1, 1);
+              tctx.drawImage(webcam, 0, 0, camW, camH);
+              tctx.restore();
+              tctx.globalCompositeOperation = 'destination-in';
+              tctx.drawImage(maskCanvas, 0, 0, camW, camH);
+              ctx.drawImage(tmp, cx2, cy2);
+            } else {
+              ctx.drawImage(webcam, cx2, cy2, camW, camH);
+            }
+          };
+
           if (webcamPipModeRef.current === 'circle') {
             const r = Math.min(camW, camH) / 2;
             const centerX = cx2 + camW / 2;
@@ -1782,17 +1995,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.beginPath();
             ctx.arc(centerX, centerY, r, 0, Math.PI * 2);
             ctx.clip();
-            ctx.drawImage(webcam, cx2, cy2, camW, camH);
+            drawPipPixels();
           } else {
-            // rectangle mode
             ctx.beginPath();
             if (ctx.roundRect) ctx.roundRect(cx2, cy2, camW, camH, 10);
             else ctx.rect(cx2, cy2, camW, camH);
             ctx.clip();
-            ctx.drawImage(webcam, cx2, cy2, camW, camH);
+            drawPipPixels();
             ctx.globalAlpha = 1;
-            ctx.strokeStyle = '#35679A';
-            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+            ctx.lineWidth = 2;
             ctx.beginPath();
             if (ctx.roundRect) ctx.roundRect(cx2, cy2, camW, camH, 10);
             else ctx.rect(cx2, cy2, camW, camH);

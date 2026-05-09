@@ -144,9 +144,16 @@ export async function runEmbedTabCaptureFlow(args: {
           window.clearInterval(iv);
           onProgress?.(1);
         } else {
+          /** Duration often stays 0 until metadata loads — pulse progress instead of freezing at 0%. */
+          let pulse = 0;
+          const pulseIv = window.setInterval(() => {
+            pulse = Math.min(0.94, pulse + 0.012);
+            onProgress?.(pulse);
+          }, 320);
           await new Promise<void>((resolve) => {
             track?.addEventListener('ended', () => resolve(), { once: true });
           });
+          window.clearInterval(pulseIv);
           onProgress?.(1);
         }
         ytPlayer.pauseVideo?.();

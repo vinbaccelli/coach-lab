@@ -57,6 +57,9 @@ interface ToolPaletteProps {
   webcamOpacity?: number;
   onWebcamOpacityChange?: (v: number) => void;
   webcamActive?: boolean;
+  /** Selfie cutout (transparent background) for PiP */
+  webcamCutout?: boolean;
+  onWebcamCutoutChange?: (v: boolean) => void;
   skeletonShowAngles?: boolean;
   onSkeletonShowAnglesChange?: (v: boolean) => void;
   skeletonShowHeadLine?: boolean;
@@ -116,6 +119,8 @@ export default function ToolPalette({
   webcamOpacity = 1,
   onWebcamOpacityChange,
   webcamActive,
+  webcamCutout = false,
+  onWebcamCutoutChange,
   skeletonShowAngles,
   onSkeletonShowAnglesChange,
   skeletonShowHeadLine,
@@ -605,6 +610,26 @@ export default function ToolPalette({
                 </button>
               ))}
             </div>
+            {onWebcamCutoutChange && (
+              <div className="flex gap-1 mb-2 flex-wrap items-center">
+                <button
+                  type="button"
+                  style={pillBtn(!webcamCutout)}
+                  onClick={() => onWebcamCutoutChange(false)}
+                  title="Solid webcam background"
+                >
+                  Normal bg
+                </button>
+                <button
+                  type="button"
+                  style={pillBtn(webcamCutout)}
+                  onClick={() => onWebcamCutoutChange(true)}
+                  title="Person cutout (uses selfie segmentation — slightly heavier)"
+                >
+                  Cutout
+                </button>
+              </div>
+            )}
             {onWebcamOpacityChange && (
               <div>
                 <p className="text-[9px] text-gray-500 px-1 mb-1">

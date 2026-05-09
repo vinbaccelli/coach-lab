@@ -111,6 +111,10 @@ export default function Home() {
   const [webcamOpacity, setWebcamOpacity]   = useState(1);
   const [urlInput, setUrlInput]             = useState('');
   const [urlTarget, setUrlTarget]           = useState<'A' | 'B'>('A');
+  /** Which video the shared Reels timeline controls */
+  const [timelineTarget, setTimelineTarget] = useState<'A' | 'B'>('A');
+  /** Selfie-segmentation cutout for webcam PiP */
+  const [webcamCutout, setWebcamCutout]     = useState(false);
   const [youtubeVideoIdA, setYoutubeVideoIdA] = useState<string | null>(null);
   const [youtubeVideoIdB, setYoutubeVideoIdB] = useState<string | null>(null);
   const [genericEmbedSrcA, setGenericEmbedSrcA] = useState<string | null>(null);
@@ -330,11 +334,32 @@ export default function Home() {
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current = null;
     setMicActive(false);
+    setUrlInput('');
+    setTimelineTarget('A');
+    setWebcamCutout(false);
     cleanupVideoEl(videoRef.current);
     cleanupVideoEl(videoRefB.current);
     canvasRef.current?.clearAll();
     canvasRefB.current?.clearAll();
   }, [cleanupVideoEl, clearGhosts, revokeBlobUrl]);
+
+  /** Full page reload should not inherit URL field or stale session state */
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+      if (nav?.type === 'reload') {
+        setUrlInput('');
+        resetSession();
+      }
+    } catch {
+      const legacy = performance as Performance & { navigation?: { type?: number } };
+      if (legacy.navigation?.type === 1) {
+        setUrlInput('');
+        resetSession();
+      }
+    }
+  }, [resetSession]);
 
   // ── Video upload ──────────────────────────────────────────────────────────
   const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -846,6 +871,9 @@ export default function Home() {
   playbackControllerARef.current = youtubeVideoIdA ? ytIframeControllerA : html5ControllerA;
   playbackControllerBRef.current = youtubeVideoIdB ? ytIframeControllerB : html5ControllerB;
 
+  const hasVideoBContent = !!(videoSrcB || youtubeVideoIdB || genericEmbedSrcB);
+  const timelineLeadingInset = LEFT_TOOLBAR_W + 16;
+
   return (
     <div
       style={{
@@ -1152,8 +1180,8 @@ export default function Home() {
         }}
       >
 
-        {/* Left toolbar (desktop) — slim icon strip */}
-        {!isMobile && (
+        {/* Left toolbar (desktop) — 16:9 layout only; Reels uses floating toolbar on the stage */}
+        {!isMobile && layoutMode !== 'reels' && (
         <aside style={{
           width: LEFT_TOOLBAR_W,
           display: 'flex',
@@ -1210,6 +1238,8 @@ export default function Home() {
               onBallSampleModeChange={setBallSampleMode}
               onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
               onClearCrop={() => canvasRef.current?.clearCropRegion()}
+              webcamCutout={webcamCutout}
+              onWebcamCutoutChange={setWebcamCutout}
             />
           </div>
 
@@ -1232,14 +1262,28 @@ export default function Home() {
         >
           <div
             style={{
-              flex: 1,
+              flex: layoutMode === 'reels' ? '0 0 auto' : 1,
               position: 'relative',
               minHeight: 0,
               background: '#000',
               display: 'flex',
+              flexDirection: layoutMode === 'reels' ? 'column' : 'row',
               justifyContent: layoutMode === 'reels' ? 'center' : undefined,
               alignItems: layoutMode === 'reels' ? 'center' : undefined,
-              padding: layoutMode === 'reels' ? '12px' : undefined,
+              alignSelf: layoutMode === 'reels' ? 'center' : undefined,
+              width: '100%',
+              overflow: layoutMode === 'reels' ? 'auto' : 'hidden',
+              padding: layoutMode === 'reels' ? '8px 10px' : undefined,
+              ...(layoutMode === 'reels'
+                ? {
+                    width: 'min(100vw - 20px, calc((100dvh - 260px) * 9 / 16))',
+                    maxWidth: '100%',
+                    aspectRatio: '9 / 16',
+                    maxHeight: 'calc(100dvh - 220px)',
+                    borderRadius: 18,
+                    boxShadow: '0 18px 60px rgba(0,0,0,0.55)',
+                  }
+                : {}),
             }}
           >
             {isMobile && (
@@ -1274,28 +1318,89 @@ export default function Home() {
                 />
               </div>
             )}
+            {!isMobile && layoutMode === 'reels' && (
+              <aside
+                style={{
+                  position: 'absolute',
+                  left: 6,
+                  top: 48,
+                  bottom: 12,
+                  width: LEFT_TOOLBAR_W,
+                  zIndex: 84,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  background: 'rgba(16,16,20,0.40)',
+                  overflowY: 'auto',
+                  borderRadius: 12,
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  backdropFilter: 'blur(12px)',
+                  WebkitBackdropFilter: 'blur(12px)',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+                }}
+              >
+                <div style={{ padding: 6 }}>
+                  <ToolPalette
+                    activeTool={activeTool}
+                    onToolChange={handleToolChange}
+                    compact
+                    drawingOptions={drawingOptions}
+                    onOptionsChange={handleOptionsChange}
+                    onUndo={() => canvasRef.current?.undo()}
+                    onRedo={() => canvasRef.current?.redo()}
+                    onClear={() => canvasRef.current?.clearAll()}
+                    onResetSkeleton={() => canvasRef.current?.resetSkeleton()}
+                    onResetBallTrail={() => canvasRef.current?.resetBallTrail()}
+                    ballTrailMode={ballTrailMode}
+                    onBallTrailModeChange={setBallTrailMode}
+                    onAutoSwing={handleAutoSwing}
+                    onRacketMultiplier={handleRacketMultiplier}
+                    circleSpinning={circleSpinning}
+                    onCircleSpinningChange={setCircleSpinning}
+                    circleGapMode={circleGapMode}
+                    onCircleGapModeChange={setCircleGapMode}
+                    rect3d={rect3d}
+                    onRect3dChange={setRect3d}
+                    triangle3d={triangle3d}
+                    onTriangle3dChange={setTriangle3d}
+                    webcamPipMode={webcamPipMode}
+                    onWebcamPipModeChange={setWebcamPipMode}
+                    webcamOpacity={webcamOpacity}
+                    onWebcamOpacityChange={setWebcamOpacity}
+                    webcamActive={webcamActive}
+                    webcamCutout={webcamCutout}
+                    onWebcamCutoutChange={setWebcamCutout}
+                    skeletonShowAngles={skeletonShowAngles}
+                    onSkeletonShowAnglesChange={setSkeletonShowAngles}
+                    skeletonShowHeadLine={skeletonShowHeadLine}
+                    onSkeletonShowHeadLineChange={setSkeletonShowHeadLine}
+                    skeletonClassicColors={skeletonClassicColors}
+                    onSkeletonClassicColorsChange={setSkeletonClassicColors}
+                    ballSampleMode={ballSampleMode}
+                    onBallSampleModeChange={setBallSampleMode}
+                    onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
+                    onClearCrop={() => canvasRef.current?.clearCropRegion()}
+                  />
+                </div>
+              </aside>
+            )}
             {/* Video A */}
             <div
               style={{
-                flex: layoutMode === 'reels' ? '0 0 auto' : 1,
+                flex: layoutMode === 'reels' ? (hasVideoBContent ? '1 1 50%' : '1 1 auto') : 1,
                 position: 'relative',
                 minWidth: 0,
-                ...(layoutMode === 'reels'
-                  ? {
-                      width: 'min(520px, 100%)',
-                      height: '100%',
-                      maxHeight: '100%',
-                      aspectRatio: '9 / 16',
-                      borderRadius: 18,
-                      overflow: 'hidden',
-                      boxShadow: '0 18px 60px rgba(0,0,0,0.55)',
-                    }
-                  : {}),
+                minHeight: layoutMode === 'reels' ? 0 : undefined,
+                overflow: 'hidden',
               }}
             >
               <div
                 ref={attachPanelAContainer}
-                style={{ width: '100%', height: '100%', position: 'relative' }}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  position: 'relative',
+                  paddingLeft: !isMobile ? LEFT_TOOLBAR_W + 8 : 0,
+                }}
                 onDragOver={handleDragOverA}
                 onDragLeave={handleDragLeaveA}
                 onDrop={handleDropA}
@@ -1386,6 +1491,10 @@ export default function Home() {
                       ballSampleMode={ballSampleMode}
                       rect3d={rect3d}
                       triangle3d={triangle3d}
+                      suppressTabCaptureMirror={
+                        embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)
+                      }
+                      webcamCutout={webcamCutout}
                     />
                     <EmbedCapturePanel
                       visible={
@@ -1466,7 +1575,7 @@ export default function Home() {
                 )}
                 {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
                   <div style={{
-                    position: 'absolute', top: 4, left: 8,
+                    position: 'absolute', top: 4, left: !isMobile ? LEFT_TOOLBAR_W + 12 : 8,
                     fontSize: '11px', fontWeight: 700, color: '#fff',
                     background: 'rgba(0,0,0,0.5)', padding: '1px 6px', borderRadius: '4px',
                   }}>A</div>
@@ -1474,14 +1583,36 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Video B is not shown in Reels (portrait) mode */}
-            {layoutMode !== 'reels' && ((videoSrcB || youtubeVideoIdB || genericEmbedSrcB) ? (
+            {layoutMode === 'reels' && hasVideoBContent && (
+              <div
+                style={{
+                  height: 1,
+                  flexShrink: 0,
+                  width: '100%',
+                  background: 'rgba(255,255,255,0.14)',
+                }}
+              />
+            )}
+            {layoutMode !== 'reels' && hasVideoBContent && (
+              <div style={{ width: '1px', background: '#333', flexShrink: 0 }} />
+            )}
+            {hasVideoBContent ? (
               <>
-                <div style={{ width: '1px', background: '#333', flexShrink: 0 }} />
-                <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+                <div style={{
+                  flex: layoutMode === 'reels' ? '1 1 50%' : 1,
+                  position: 'relative',
+                  minWidth: 0,
+                  minHeight: layoutMode === 'reels' ? 0 : undefined,
+                  overflow: 'hidden',
+                }}>
                   <div
                     ref={attachPanelBContainer}
-                    style={{ width: '100%', height: '100%', position: 'relative' }}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      position: 'relative',
+                      paddingLeft: !isMobile ? LEFT_TOOLBAR_W + 8 : 0,
+                    }}
                     onDragOver={handleDragOverB}
                     onDragLeave={handleDragLeaveB}
                     onDrop={handleDropB}
@@ -1537,6 +1668,10 @@ export default function Home() {
                       skeletonClassicColors={skeletonClassicColors}
                       rect3d={rect3d}
                       triangle3d={triangle3d}
+                      suppressTabCaptureMirror={
+                        embedLiveVideoB && (!!youtubeVideoIdB || !!genericEmbedSrcB)
+                      }
+                      webcamCutout={webcamCutout}
                     />
                     <EmbedCapturePanel
                       visible={
@@ -1555,7 +1690,7 @@ export default function Home() {
                       onCapture={(o) => void handleEmbedCaptureRequest('B', o)}
                     />
                     <div style={{
-                      position: 'absolute', top: 4, left: 8,
+                      position: 'absolute', top: 4, left: !isMobile ? LEFT_TOOLBAR_W + 12 : 8,
                       fontSize: '11px', fontWeight: 700, color: '#fff',
                       background: 'rgba(0,0,0,0.5)', padding: '1px 6px', borderRadius: '4px',
                     }}>B</div>
@@ -1576,7 +1711,7 @@ export default function Home() {
                   </div>
                 </div>
               </>
-            ) : null)}
+            ) : null}
           </div>
 
           {/* Timeline: full width at bottom; pointer events on child */}
@@ -1595,8 +1730,8 @@ export default function Home() {
             }}
           >
             <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px' }}>
+              {hasVideoBContent && layoutMode !== 'reels' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: `0 10px 0 ${timelineLeadingInset}px` }}>
                   <button
                     onClick={togglePlayBoth}
                     style={{
@@ -1617,30 +1752,112 @@ export default function Home() {
                 </div>
               )}
 
-              {(videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB) && (
-                <div>
-                  <PreciseTimeline
-                    source={
-                      youtubeVideoIdB
-                        ? { kind: 'youtube', playerRef: ytPlayerBRef }
-                        : { kind: 'html', videoRef: videoRefB }
-                    }
-                    defaultFps={30}
-                    accent={'#22c55e'}
-                  />
-                </div>
-              )}
+              {layoutMode === 'reels' && hasVideoBContent ? (
+                <>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: `0 12px 0 ${!isMobile ? timelineLeadingInset : 12}px`,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <span style={{ fontSize: 11, opacity: 0.65, fontWeight: 800 }}>Controls</span>
+                    <button
+                      type="button"
+                      onClick={() => setTimelineTarget('A')}
+                      style={{
+                        minWidth: 36,
+                        height: 30,
+                        padding: '0 10px',
+                        borderRadius: 8,
+                        border: `1px solid ${timelineTarget === 'A' ? '#FF3B30' : 'rgba(255,255,255,0.18)'}`,
+                        background: timelineTarget === 'A' ? '#FF3B30' : 'rgba(255,255,255,0.08)',
+                        color: '#fff',
+                        fontWeight: 900,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      A
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTimelineTarget('B')}
+                      style={{
+                        minWidth: 36,
+                        height: 30,
+                        padding: '0 10px',
+                        borderRadius: 8,
+                        border: `1px solid ${timelineTarget === 'B' ? '#22c55e' : 'rgba(255,255,255,0.18)'}`,
+                        background: timelineTarget === 'B' ? '#22c55e' : 'rgba(255,255,255,0.08)',
+                        color: '#fff',
+                        fontWeight: 900,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      B
+                    </button>
+                  </div>
+                  {timelineTarget === 'B'
+                    ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
+                        <PreciseTimeline
+                          source={
+                            youtubeVideoIdB
+                              ? { kind: 'youtube', playerRef: ytPlayerBRef }
+                              : { kind: 'html', videoRef: videoRefB }
+                          }
+                          defaultFps={30}
+                          accent="#22c55e"
+                          leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                          compact
+                        />
+                      )
+                    : ((videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc)) && (
+                        <PreciseTimeline
+                          source={
+                            youtubeVideoIdA
+                              ? { kind: 'youtube', playerRef: ytPlayerARef }
+                              : { kind: 'html', videoRef }
+                          }
+                          defaultFps={30}
+                          accent="#FF3B30"
+                          leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                          compact
+                        />
+                      )}
+                </>
+              ) : (
+                <>
+                  {(videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB) && (
+                    <div>
+                      <PreciseTimeline
+                        source={
+                          youtubeVideoIdB
+                            ? { kind: 'youtube', playerRef: ytPlayerBRef }
+                            : { kind: 'html', videoRef: videoRefB }
+                        }
+                        defaultFps={30}
+                        accent={'#22c55e'}
+                        leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                      />
+                    </div>
+                  )}
 
-              {(videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc) && (
-                <PreciseTimeline
-                  source={
-                    youtubeVideoIdA
-                      ? { kind: 'youtube', playerRef: ytPlayerARef }
-                      : { kind: 'html', videoRef }
-                  }
-                  defaultFps={30}
-                  accent={layoutMode === 'reels' ? '#FF3B30' : '#35679A'}
-                />
+                  {(videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc) && (
+                    <PreciseTimeline
+                      source={
+                        youtubeVideoIdA
+                          ? { kind: 'youtube', playerRef: ytPlayerARef }
+                          : { kind: 'html', videoRef }
+                      }
+                      defaultFps={30}
+                      accent={layoutMode === 'reels' ? '#FF3B30' : '#35679A'}
+                      leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                      compact={layoutMode === 'reels'}
+                    />
+                  )}
+                </>
               )}
             </div>
           </div>
