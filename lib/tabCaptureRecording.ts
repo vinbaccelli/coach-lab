@@ -76,7 +76,17 @@ export class TabCaptureRecorder {
     this.recorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) this.chunks.push(e.data);
     };
-    this.recorder.start(250);
+    try {
+      this.recorder.start(250);
+    } catch (e) {
+      try {
+        this.recorder?.stop();
+      } catch {
+        /* noop */
+      }
+      this.recorder = null;
+      throw e;
+    }
   }
 
   async stop(): Promise<Blob> {

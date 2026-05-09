@@ -15,6 +15,10 @@ function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
 
+function isInvalidStateError(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as DOMException).name === 'InvalidStateError';
+}
+
 async function waitUntilOk(pred: () => boolean, intervalMs: number, timeoutMs = 3_600_000) {
   const start = performance.now();
   return new Promise<void>((resolve, reject) => {
@@ -57,17 +61,26 @@ export async function runEmbedTabCaptureFlow(args: {
 
     stream = await getTabCaptureStream();
     const track = stream.getVideoTracks()[0];
-    if (!track) {
+    if (!track || track.readyState === 'ended') {
       stopAllTracks(stream);
       stream = null;
       throw new Error('No video from shared tab.');
     }
 
-    recorder = new TabCaptureRecorder();
-    recorder.start(stream);
-
+    /** Attach preview first so the display track is active; starting MediaRecorder immediately sometimes throws InvalidStateError (especially after fullscreen). */
     videoEl.srcObject = stream;
     await videoEl.play().catch(() => {});
+    await sleep(80);
+
+    recorder = new TabCaptureRecorder();
+    try {
+      recorder.start(stream);
+    } catch (e) {
+      if (!isInvalidStateError(e)) throw e;
+      await sleep(200);
+      recorder = new TabCaptureRecorder();
+      recorder.start(stream);
+    }
 
     if (isYoutube && ytPlayer) {
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {

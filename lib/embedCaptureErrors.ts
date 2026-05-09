@@ -30,7 +30,7 @@ export function formatTabCaptureError(err: unknown): string {
     return 'Recording needs a secure connection (HTTPS). Open CoachLab from https:// or try another network.';
   }
   if (name === 'InvalidStateError') {
-    return 'Recording could not start because something was busy. Close other recordings or tabs using the camera, then try again.';
+    return 'Recording could not start yet — wait a second, then tap Capture again. If it keeps happening, stop any other screen recording or tab-share, refresh this page, and try once more.';
   }
 
   const raw = err instanceof Error ? err.message : String(err);
