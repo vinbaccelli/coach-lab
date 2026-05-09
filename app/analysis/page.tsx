@@ -20,6 +20,8 @@ import MobileToolStrip from '@/components/MobileToolStrip';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
+import { normalizeYoutubeUrlInput } from '@/lib/youtubeResolve';
+import { resolveYoutubeForAnalysis } from '@/app/actions/youtubeResolve';
 
 // Dynamic import prevents TensorFlow / Fabric from loading server-side
 const CanvasOverlay = dynamic(() => import('@/components/Canvas'), { ssr: false });
@@ -534,16 +536,8 @@ export default function Home() {
   }, []);
 
   // ── URL Input handler ────────────────────────────────────────────────────
-  const normalizeYouTubeUrlInput = (raw: string) => {
-    let s = raw.trim().replace(/[\u200b-\u200d\ufeff]/g, '');
-    if (!/^https?:\/\//i.test(s) && /youtube\.com|youtu\.be/i.test(s)) {
-      s = `https://${s.replace(/^\/\//, '')}`;
-    }
-    return s;
-  };
-
   const handleUrlSubmit = useCallback(async () => {
-    const raw = normalizeYouTubeUrlInput(urlInput);
+    const raw = normalizeYoutubeUrlInput(urlInput);
     if (!raw) return;
 
     // Reset current session state before loading a new URL source.
@@ -598,9 +592,7 @@ export default function Home() {
     const lower = raw.toLowerCase();
     const isYouTube = lower.includes('youtu.be/') || lower.includes('youtube.com/');
 
-    // YouTube: resolve on our server (Vercel Node route), then proxy bytes same-origin for Canvas/ML.
-    // Always use a relative `/api/...` URL here — `NEXT_PUBLIC_*` vars are baked in at build time, so an old
-    // Cloudflare Worker URL could otherwise stick in the bundle until the next deploy even after you delete env vars.
+    // YouTube: resolve on the server (Node) via a Server Action — avoids `fetch('/api/...')` under strict COEP.
     if (!isYouTube) {
       setProcessingStatus(null);
       alert('Only YouTube links are supported at the moment — please download the video and upload it directly.');
@@ -615,23 +607,9 @@ export default function Home() {
           setProcessingStatus(`Resolving YouTube… (retry ${attempt + 1}/3)`);
           await new Promise((r) => setTimeout(r, 450 * attempt));
         }
-        const resolveUrl = new URL('/api/youtube/resolve', window.location.origin);
-        resolveUrl.searchParams.set('url', raw);
-        const res = await fetch(resolveUrl.toString(), {
-          cache: 'no-store',
-          credentials: 'same-origin',
-          headers: { Accept: 'application/json' },
-        });
-        const text = await res.text();
-        let data: Record<string, unknown> | null = null;
-        try {
-          data = text ? (JSON.parse(text) as Record<string, unknown>) : null;
-        } catch {
-          data = null;
-        }
-        const direct = typeof data?.directUrl === 'string' ? data.directUrl : undefined;
-        if (res.ok && direct) {
-          const streamUrl = `/api/video/stream?url=${encodeURIComponent(direct)}`;
+        const result = await resolveYoutubeForAnalysis(raw);
+        if (result.ok) {
+          const streamUrl = `/api/video/stream?url=${encodeURIComponent(result.directUrl)}`;
           setProcessingStatus(null);
           if (urlTarget === 'A') {
             setVideoSrc(streamUrl);
@@ -650,9 +628,7 @@ export default function Home() {
           }
           return;
         }
-        lastMessage =
-          (typeof data?.error === 'string' ? data.error : null) || `Resolver failed (${res.status})`;
-        if (text && text.length < 400 && !data) lastMessage = `${lastMessage}\n\nRaw: ${text}`;
+        lastMessage = result.error;
       }
       throw new Error(lastMessage);
     } catch (e: any) {
