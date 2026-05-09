@@ -56,13 +56,18 @@ export async function runEmbedTabCaptureFlow(args: {
     }
 
     stream = await getTabCaptureStream();
+    const track = stream.getVideoTracks()[0];
+    if (!track) {
+      stopAllTracks(stream);
+      stream = null;
+      throw new Error('No video from shared tab.');
+    }
+
     recorder = new TabCaptureRecorder();
     recorder.start(stream);
 
     videoEl.srcObject = stream;
     await videoEl.play().catch(() => {});
-
-    const track = stream.getVideoTracks()[0];
 
     if (isYoutube && ytPlayer) {
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
@@ -157,6 +162,9 @@ export async function runEmbedTabCaptureFlow(args: {
       await document.exitFullscreen?.();
     } catch {
       /* noop */
+    }
+    if (typeof console !== 'undefined') {
+      console.warn('[CoachLab tab capture]', e);
     }
     return {
       ok: false,

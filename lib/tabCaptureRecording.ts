@@ -19,20 +19,30 @@ export async function getTabCaptureStream(): Promise<MediaStream> {
     throw new Error('Screen capture is not supported in this browser.');
   }
 
-  const video: MediaTrackConstraints = {
-    frameRate: { ideal: 60, max: 60 },
-    width: { ideal: 3840 },
-    height: { ideal: 2160 },
-  };
+  /** Prefer current tab when supported (Chromium). Avoid aggressive 4K ideals — they often trigger OverconstrainedError on laptops / Safari. */
+  const preferTab = {
+    video: {
+      frameRate: { ideal: 30, max: 60 },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+    },
+    audio: false,
+    preferCurrentTab: true,
+  } as Parameters<MediaDevices['getDisplayMedia']>[0];
+
+  const minimal = {
+    video: true,
+    audio: false,
+  } as Parameters<MediaDevices['getDisplayMedia']>[0];
 
   try {
-    return await navigator.mediaDevices.getDisplayMedia({
-      video,
-      audio: false,
-      preferCurrentTab: true,
-    } as Parameters<MediaDevices['getDisplayMedia']>[0]);
-  } catch (e) {
-    throw e instanceof Error ? e : new Error(String(e));
+    return await navigator.mediaDevices.getDisplayMedia(preferTab);
+  } catch {
+    try {
+      return await navigator.mediaDevices.getDisplayMedia(minimal);
+    } catch (e) {
+      throw e instanceof Error ? e : new Error(String(e));
+    }
   }
 }
 
@@ -75,7 +85,14 @@ export class TabCaptureRecorder {
       return new Blob(this.chunks, { type: pickRecorderMimeType() });
     }
     return new Promise((resolve, reject) => {
-      rec.onerror = () => reject(new Error('MediaRecorder error'));
+      rec.onerror = (ev) => {
+        const inner = (ev as { error?: DOMException }).error;
+        reject(
+          inner instanceof Error
+            ? inner
+            : new Error('Recording stopped unexpectedly. Try again or use a shorter clip.'),
+        );
+      };
       rec.onstop = () => {
         const blob = new Blob(this.chunks, { type: rec.mimeType || pickRecorderMimeType() });
         this.recorder = null;
