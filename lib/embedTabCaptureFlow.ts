@@ -19,6 +19,29 @@ function isInvalidStateError(e: unknown): boolean {
   return typeof e === 'object' && e !== null && (e as DOMException).name === 'InvalidStateError';
 }
 
+/** Wait until at least one decoded frame is ready (helps Chromium accept MediaRecorder on display streams). */
+function waitForPreviewFrames(videoEl: HTMLVideoElement): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    if (typeof videoEl.requestVideoFrameCallback === 'function') {
+      videoEl.requestVideoFrameCallback(() => done());
+      window.setTimeout(done, 400);
+      return;
+    }
+    if (videoEl.readyState >= 2) {
+      done();
+      return;
+    }
+    videoEl.addEventListener('loadeddata', done, { once: true });
+    window.setTimeout(done, 400);
+  });
+}
+
+function stopStreams(stream: MediaStream | null, recordStream: MediaStream | null) {
+  stopAllTracks(stream);
+  if (recordStream && recordStream !== stream) stopAllTracks(recordStream);
+}
+
 async function waitUntilOk(pred: () => boolean, intervalMs: number, timeoutMs = 3_600_000) {
   const start = performance.now();
   return new Promise<void>((resolve, reject) => {
@@ -49,15 +72,18 @@ export async function runEmbedTabCaptureFlow(args: {
   captureShellEl: HTMLElement | null;
   onProgress?: (ratio01: number) => void;
 }): Promise<{ ok: true; blob: Blob } | { ok: false; message: string }> {
-  const { opts, videoEl, ytPlayer, isYoutube, captureShellEl, onProgress } = args;
+  const { opts, videoEl, ytPlayer, isYoutube, onProgress } = args;
 
   let recorder: TabCaptureRecorder | null = null;
   let stream: MediaStream | null = null;
+  /** When clone() succeeds, recorder uses this so &lt;video&gt; and MediaRecorder are not sharing one pipeline (fixes recurring InvalidStateError in Chromium). */
+  let recordStream: MediaStream | null = null;
 
   try {
-    if (captureShellEl && document.fullscreenEnabled) {
-      await captureShellEl.requestFullscreen().catch(() => {});
-    }
+    /**
+     * Avoid requestFullscreen before capture — it correlates with InvalidStateError when calling
+     * MediaRecorder.start() right after getDisplayMedia on several Chromium / embedded-WebView builds.
+     */
 
     stream = await getTabCaptureStream();
     const track = stream.getVideoTracks()[0];
@@ -67,19 +93,36 @@ export async function runEmbedTabCaptureFlow(args: {
       throw new Error('No video from shared tab.');
     }
 
-    /** Attach preview first so the display track is active; starting MediaRecorder immediately sometimes throws InvalidStateError (especially after fullscreen). */
+    try {
+      recordStream = stream.clone();
+    } catch {
+      recordStream = stream;
+    }
+
     videoEl.srcObject = stream;
     await videoEl.play().catch(() => {});
-    await sleep(80);
+    await waitForPreviewFrames(videoEl);
+    await sleep(60);
 
     recorder = new TabCaptureRecorder();
     try {
-      recorder.start(stream);
+      recorder.start(recordStream);
     } catch (e) {
       if (!isInvalidStateError(e)) throw e;
-      await sleep(200);
+      await sleep(250);
       recorder = new TabCaptureRecorder();
-      recorder.start(stream);
+      try {
+        recorder.start(recordStream);
+      } catch (e2) {
+        if (!isInvalidStateError(e2)) throw e2;
+        /** Last resort: detach preview so only the recorder holds the pipeline (never stop() clone tracks — that can end the whole tab capture in Chromium). */
+        videoEl.srcObject = null;
+        await sleep(80);
+        recorder = new TabCaptureRecorder();
+        recorder.start(recordStream);
+        videoEl.srcObject = stream;
+        await videoEl.play().catch(() => {});
+      }
     }
 
     if (isYoutube && ytPlayer) {
@@ -150,8 +193,9 @@ export async function runEmbedTabCaptureFlow(args: {
 
     const blob = await recorder.stop();
     recorder = null;
-    stopAllTracks(stream);
+    stopStreams(stream, recordStream);
     stream = null;
+    recordStream = null;
     videoEl.srcObject = null;
 
     try {
@@ -169,7 +213,9 @@ export async function runEmbedTabCaptureFlow(args: {
         /* noop */
       }
     }
-    stopAllTracks(stream);
+    stopStreams(stream, recordStream);
+    stream = null;
+    recordStream = null;
     if (videoEl) videoEl.srcObject = null;
     try {
       await document.exitFullscreen?.();
