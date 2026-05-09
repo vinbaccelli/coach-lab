@@ -534,8 +534,16 @@ export default function Home() {
   }, []);
 
   // ── URL Input handler ────────────────────────────────────────────────────
+  const normalizeYouTubeUrlInput = (raw: string) => {
+    let s = raw.trim().replace(/[\u200b-\u200d\ufeff]/g, '');
+    if (!/^https?:\/\//i.test(s) && /youtube\.com|youtu\.be/i.test(s)) {
+      s = `https://${s.replace(/^\/\//, '')}`;
+    }
+    return s;
+  };
+
   const handleUrlSubmit = useCallback(async () => {
-    const raw = urlInput.trim();
+    const raw = normalizeYouTubeUrlInput(urlInput);
     if (!raw) return;
 
     // Reset current session state before loading a new URL source.
@@ -599,24 +607,54 @@ export default function Home() {
       return;
     }
 
-    const resolveUrl = `/api/youtube/resolve?url=${encodeURIComponent(raw)}`;
-
     try {
       setProcessingStatus('Resolving YouTube…');
-      const res = await fetch(resolveUrl);
-      const data = await res.json().catch(() => null);
-      const direct = data?.directUrl as string | undefined;
-      if (!res.ok || !direct) throw new Error(data?.error || `Resolver failed (${res.status})`);
-      const streamUrl = `/api/video/stream?url=${encodeURIComponent(direct)}`;
-      setProcessingStatus(null);
-      if (urlTarget === 'A') {
-        setVideoSrc(streamUrl);
-        if (videoRef.current) { cleanupVideoEl(videoRef.current); videoRef.current.src = streamUrl; videoRef.current.load(); }
-      } else {
-        setVideoSrcB(streamUrl);
-        if (videoRefB.current) { cleanupVideoEl(videoRefB.current); videoRefB.current.src = streamUrl; videoRefB.current.load(); }
+      let lastMessage = 'Could not resolve a direct stream URL';
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+          setProcessingStatus(`Resolving YouTube… (retry ${attempt + 1}/3)`);
+          await new Promise((r) => setTimeout(r, 450 * attempt));
+        }
+        const resolveUrl = new URL('/api/youtube/resolve', window.location.origin);
+        resolveUrl.searchParams.set('url', raw);
+        const res = await fetch(resolveUrl.toString(), {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
+        });
+        const text = await res.text();
+        let data: Record<string, unknown> | null = null;
+        try {
+          data = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+        } catch {
+          data = null;
+        }
+        const direct = typeof data?.directUrl === 'string' ? data.directUrl : undefined;
+        if (res.ok && direct) {
+          const streamUrl = `/api/video/stream?url=${encodeURIComponent(direct)}`;
+          setProcessingStatus(null);
+          if (urlTarget === 'A') {
+            setVideoSrc(streamUrl);
+            if (videoRef.current) {
+              cleanupVideoEl(videoRef.current);
+              videoRef.current.src = streamUrl;
+              videoRef.current.load();
+            }
+          } else {
+            setVideoSrcB(streamUrl);
+            if (videoRefB.current) {
+              cleanupVideoEl(videoRefB.current);
+              videoRefB.current.src = streamUrl;
+              videoRefB.current.load();
+            }
+          }
+          return;
+        }
+        lastMessage =
+          (typeof data?.error === 'string' ? data.error : null) || `Resolver failed (${res.status})`;
+        if (text && text.length < 400 && !data) lastMessage = `${lastMessage}\n\nRaw: ${text}`;
       }
-      return;
+      throw new Error(lastMessage);
     } catch (e: any) {
       console.warn('[CoachLab] YouTube resolver failed:', e);
       setProcessingStatus(null);
