@@ -8,8 +8,28 @@ function domName(err: unknown): string | undefined {
   return typeof n === 'string' ? n : undefined;
 }
 
+/** Browser quirks often throw DOMExceptions or Events with non-standard shapes — extract anything usable. */
+export function rawMessage(err: unknown): string {
+  if (typeof err === 'string') return err;
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'object' && err !== null) {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === 'string' && m.length > 0) return m;
+    const code = (err as DOMException).code;
+    if (typeof code === 'number' && code !== 0) return `DOMException code ${code}`;
+  }
+  try {
+    const s = String(err);
+    if (s && s !== '[object Object]') return s;
+  } catch {
+    /* noop */
+  }
+  return '';
+}
+
 export function formatTabCaptureError(err: unknown): string {
   const name = domName(err);
+  const raw = rawMessage(err);
 
   if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
     return 'Sharing was cancelled or blocked. Tap Capture again and choose your browser tab when asked.';
@@ -33,8 +53,6 @@ export function formatTabCaptureError(err: unknown): string {
     return 'Recording could not start yet — wait a second, then tap Capture again. If it keeps happening, stop any other screen recording or tab-share, refresh this page, and try once more.';
   }
 
-  const raw = err instanceof Error ? err.message : String(err);
-
   if (/screen capture is not supported|getdisplaymedia is not supported/i.test(raw)) {
     return 'This browser does not support recording from a tab. Try Chrome or Edge on desktop.';
   }
@@ -53,6 +71,10 @@ export function formatTabCaptureError(err: unknown): string {
 
   if (/secure context|HTTPS/i.test(raw)) {
     return 'Recording needs a secure page (https). Check the address bar and try again.';
+  }
+
+  if (/could not establish|pipeline|sink|decode/i.test(raw)) {
+    return 'Your browser could not connect the recording pipeline to this tab. Pick “This tab” / “Chrome Tab” when asked (not the whole screen), then try again.';
   }
 
   return 'Something went wrong while recording. Please try again.';

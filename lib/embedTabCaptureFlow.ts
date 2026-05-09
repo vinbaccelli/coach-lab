@@ -3,7 +3,7 @@ import {
   stopAllTracks,
   TabCaptureRecorder,
 } from '@/lib/tabCaptureRecording';
-import { formatTabCaptureError } from '@/lib/embedCaptureErrors';
+import { formatTabCaptureError, rawMessage } from '@/lib/embedCaptureErrors';
 
 export type EmbedCaptureOpts = {
   mode: 'full' | 'section';
@@ -35,11 +35,6 @@ function waitForPreviewFrames(videoEl: HTMLVideoElement): Promise<void> {
     videoEl.addEventListener('loadeddata', done, { once: true });
     window.setTimeout(done, 400);
   });
-}
-
-function stopStreams(stream: MediaStream | null, recordStream: MediaStream | null) {
-  stopAllTracks(stream);
-  if (recordStream && recordStream !== stream) stopAllTracks(recordStream);
 }
 
 async function waitUntilOk(pred: () => boolean, intervalMs: number, timeoutMs = 3_600_000) {
@@ -76,8 +71,6 @@ export async function runEmbedTabCaptureFlow(args: {
 
   let recorder: TabCaptureRecorder | null = null;
   let stream: MediaStream | null = null;
-  /** When clone() succeeds, recorder uses this so &lt;video&gt; and MediaRecorder are not sharing one pipeline (fixes recurring InvalidStateError in Chromium). */
-  let recordStream: MediaStream | null = null;
 
   try {
     /**
@@ -93,12 +86,10 @@ export async function runEmbedTabCaptureFlow(args: {
       throw new Error('No video from shared tab.');
     }
 
-    try {
-      recordStream = stream.clone();
-    } catch {
-      recordStream = stream;
-    }
-
+    /**
+     * Use one MediaStream for both &lt;video&gt; and MediaRecorder.
+     * stream.clone() for the recorder breaks recording on several browsers (opaque failures / empty errors).
+     */
     videoEl.srcObject = stream;
     await videoEl.play().catch(() => {});
     await waitForPreviewFrames(videoEl);
@@ -106,20 +97,20 @@ export async function runEmbedTabCaptureFlow(args: {
 
     recorder = new TabCaptureRecorder();
     try {
-      recorder.start(recordStream);
+      recorder.start(stream);
     } catch (e) {
       if (!isInvalidStateError(e)) throw e;
       await sleep(250);
       recorder = new TabCaptureRecorder();
       try {
-        recorder.start(recordStream);
+        recorder.start(stream);
       } catch (e2) {
         if (!isInvalidStateError(e2)) throw e2;
-        /** Last resort: detach preview so only the recorder holds the pipeline (never stop() clone tracks — that can end the whole tab capture in Chromium). */
+        /** Detach preview so only MediaRecorder consumes the stream (Chromium tab capture quirk). */
         videoEl.srcObject = null;
-        await sleep(80);
+        await sleep(100);
         recorder = new TabCaptureRecorder();
-        recorder.start(recordStream);
+        recorder.start(stream);
         videoEl.srcObject = stream;
         await videoEl.play().catch(() => {});
       }
@@ -193,9 +184,8 @@ export async function runEmbedTabCaptureFlow(args: {
 
     const blob = await recorder.stop();
     recorder = null;
-    stopStreams(stream, recordStream);
+    stopAllTracks(stream);
     stream = null;
-    recordStream = null;
     videoEl.srcObject = null;
 
     try {
@@ -213,9 +203,8 @@ export async function runEmbedTabCaptureFlow(args: {
         /* noop */
       }
     }
-    stopStreams(stream, recordStream);
+    stopAllTracks(stream);
     stream = null;
-    recordStream = null;
     if (videoEl) videoEl.srcObject = null;
     try {
       await document.exitFullscreen?.();
@@ -223,7 +212,7 @@ export async function runEmbedTabCaptureFlow(args: {
       /* noop */
     }
     if (typeof console !== 'undefined') {
-      console.warn('[CoachLab tab capture]', e);
+      console.warn('[CoachLab tab capture]', e, rawMessage(e));
     }
     return {
       ok: false,

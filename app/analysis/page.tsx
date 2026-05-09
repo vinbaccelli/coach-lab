@@ -116,6 +116,8 @@ export default function Home() {
   const [genericEmbedSrcA, setGenericEmbedSrcA] = useState<string | null>(null);
   const [genericEmbedSrcB, setGenericEmbedSrcB] = useState<string | null>(null);
   const [embedCaptureRecording, setEmbedCaptureRecording] = useState(false);
+  /** Which panel (A/B) is running tab capture — drives Canvas to paint the live capture instead of YouTube thumbnail pose. */
+  const [embedCapturePanelId, setEmbedCapturePanelId] = useState<'A' | 'B' | null>(null);
   const [captureProgress01, setCaptureProgress01] = useState(0);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [showCaptureSaveToast, setShowCaptureSaveToast] = useState(false);
@@ -309,6 +311,7 @@ export default function Home() {
     setGenericEmbedSrcA(null);
     setGenericEmbedSrcB(null);
     setEmbedCaptureRecording(false);
+    setEmbedCapturePanelId(null);
     setCaptureProgress01(0);
     setShowCaptureSaveToast(false);
     sessionCaptureBlobRef.current = null;
@@ -730,6 +733,7 @@ export default function Home() {
       const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
       if (!videoEl) return;
 
+      setEmbedCapturePanelId(panel);
       setCaptureBusy(true);
       setEmbedCaptureRecording(true);
       setCaptureProgress01(0);
@@ -749,6 +753,7 @@ export default function Home() {
 
       setCaptureBusy(false);
       setEmbedCaptureRecording(false);
+      setEmbedCapturePanelId(null);
       setCaptureProgress01(0);
 
       if (!result.ok) {
@@ -833,6 +838,10 @@ export default function Home() {
     a.click();
     URL.revokeObjectURL(href);
   }, [captureDownloadStatus]);
+
+  /** During tab capture, paint & pose-use the live MediaRecorder preview stream — not YouTube thumbnail pose. */
+  const embedLiveVideoA = embedCapturePanelId === 'A';
+  const embedLiveVideoB = embedCapturePanelId === 'B';
 
   playbackControllerARef.current = youtubeVideoIdA ? ytIframeControllerA : html5ControllerA;
   playbackControllerBRef.current = youtubeVideoIdB ? ytIframeControllerB : html5ControllerB;
@@ -1348,9 +1357,13 @@ export default function Home() {
                       ref={canvasRef}
                       videoRef={videoRef}
                       webcamVideoRef={webcamVideoRef}
-                      renderVideo={!youtubeVideoIdA && !genericEmbedSrcA}
-                      transparentWhenNoVideo={!!youtubeVideoIdA || !!genericEmbedSrcA}
-                      youtubePose={youtubeVideoIdA ? { videoId: youtubeVideoIdA, controllerRef: playbackControllerARef } : undefined}
+                      renderVideo={embedLiveVideoA || (!youtubeVideoIdA && !genericEmbedSrcA)}
+                      transparentWhenNoVideo={(!!youtubeVideoIdA || !!genericEmbedSrcA) && !embedLiveVideoA}
+                      youtubePose={
+                        youtubeVideoIdA && !embedLiveVideoA
+                          ? { videoId: youtubeVideoIdA, controllerRef: playbackControllerARef }
+                          : undefined
+                      }
                       activeTool={activeTool}
                       drawingOptions={drawingOptions}
                       containerWidth={canvasSize.width}
@@ -1501,9 +1514,13 @@ export default function Home() {
                     <CanvasOverlay
                       ref={canvasRefB}
                       videoRef={videoRefB}
-                      renderVideo={!youtubeVideoIdB && !genericEmbedSrcB}
-                      transparentWhenNoVideo={!!youtubeVideoIdB || !!genericEmbedSrcB}
-                      youtubePose={youtubeVideoIdB ? { videoId: youtubeVideoIdB, controllerRef: playbackControllerBRef } : undefined}
+                      renderVideo={embedLiveVideoB || (!youtubeVideoIdB && !genericEmbedSrcB)}
+                      transparentWhenNoVideo={(!!youtubeVideoIdB || !!genericEmbedSrcB) && !embedLiveVideoB}
+                      youtubePose={
+                        youtubeVideoIdB && !embedLiveVideoB
+                          ? { videoId: youtubeVideoIdB, controllerRef: playbackControllerBRef }
+                          : undefined
+                      }
                       activeTool={activeTool}
                       drawingOptions={drawingOptions}
                       containerWidth={canvasSizeB.width}
