@@ -25,7 +25,7 @@ function waitForPreviewFrames(videoEl: HTMLVideoElement): Promise<void> {
     const done = () => resolve();
     if (typeof videoEl.requestVideoFrameCallback === 'function') {
       videoEl.requestVideoFrameCallback(() => done());
-      window.setTimeout(done, 400);
+      window.setTimeout(done, 720);
       return;
     }
     if (videoEl.readyState >= 2) {
@@ -33,7 +33,7 @@ function waitForPreviewFrames(videoEl: HTMLVideoElement): Promise<void> {
       return;
     }
     videoEl.addEventListener('loadeddata', done, { once: true });
-    window.setTimeout(done, 400);
+    window.setTimeout(done, 720);
   });
 }
 
@@ -78,6 +78,18 @@ export async function runEmbedTabCaptureFlow(args: {
      * MediaRecorder.start() right after getDisplayMedia on several Chromium / embedded-WebView builds.
      */
 
+    if (isYoutube && ytPlayer) {
+      try {
+        await waitUntilOk(() => Number(ytPlayer.getDuration?.() ?? 0) > 0.25, 120, 30_000);
+      } catch {
+        return {
+          ok: false,
+          message:
+            'The embedded player is still loading. Wait until the video is visible and playing, then tap Capture again.',
+        };
+      }
+    }
+
     stream = await getTabCaptureStream();
     const track = stream.getVideoTracks()[0];
     if (!track || track.readyState === 'ended') {
@@ -93,7 +105,7 @@ export async function runEmbedTabCaptureFlow(args: {
     videoEl.srcObject = stream;
     await videoEl.play().catch(() => {});
     await waitForPreviewFrames(videoEl);
-    await sleep(60);
+    await sleep(isYoutube ? 180 : 140);
 
     recorder = new TabCaptureRecorder();
     try {

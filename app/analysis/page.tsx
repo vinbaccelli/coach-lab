@@ -113,8 +113,8 @@ export default function Home() {
   const [webcamOpacity, setWebcamOpacity]   = useState(1);
   const [urlInput, setUrlInput]             = useState('');
   const [urlTarget, setUrlTarget]           = useState<'A' | 'B'>('A');
-  /** Reels dual-video: which stream the timeline drives (AB = sync both, uploaded HTML5 only). */
-  const [reelsPlaybackTarget, setReelsPlaybackTarget] = useState<'A' | 'B' | 'AB'>('A');
+  /** Which stream the unified timeline controls (AB = sync both for uploaded HTML5 pairs). */
+  const [playbackTarget, setPlaybackTarget] = useState<'A' | 'B' | 'AB'>('A');
   const [desktopReelsMenuOpen, setDesktopReelsMenuOpen] = useState(false);
   /** Selfie-segmentation cutout for webcam PiP */
   const [webcamCutout, setWebcamCutout]     = useState(false);
@@ -122,6 +122,89 @@ export default function Home() {
   const [youtubeVideoIdB, setYoutubeVideoIdB] = useState<string | null>(null);
   const [genericEmbedSrcA, setGenericEmbedSrcA] = useState<string | null>(null);
   const [genericEmbedSrcB, setGenericEmbedSrcB] = useState<string | null>(null);
+
+  const hasVideoBContent = useMemo(
+    () => !!(videoSrcB || youtubeVideoIdB || genericEmbedSrcB),
+    [videoSrcB, youtubeVideoIdB, genericEmbedSrcB],
+  );
+
+  /** Embed URL flow: iframe / YouTube API ready before showing Capture */
+  const [embedReadyA, setEmbedReadyA] = useState(false);
+  const [embedReadyB, setEmbedReadyB] = useState(false);
+
+  /** AB enables dual sync for uploaded HTML5 pairs (embed/YouTube ignore the sync loop). */
+  useEffect(() => {
+    if (!hasVideoBContent) {
+      setPlayBothEnabled(false);
+      return;
+    }
+    setPlayBothEnabled(playbackTarget === 'AB');
+  }, [hasVideoBContent, playbackTarget]);
+
+  useEffect(() => {
+    if (!hasVideoBContent) setPlaybackTarget('A');
+  }, [hasVideoBContent]);
+
+  useEffect(() => {
+    setEmbedReadyA(false);
+  }, [youtubeVideoIdA, genericEmbedSrcA, videoSrc]);
+
+  useEffect(() => {
+    if (videoSrc || !youtubeVideoIdA) return;
+    let cancelled = false;
+    const iv = window.setInterval(() => {
+      const d = Number(ytPlayerARef.current?.getDuration?.() ?? 0);
+      if (d > 0 && !cancelled) {
+        setEmbedReadyA(true);
+        window.clearInterval(iv);
+      }
+    }, 120);
+    const timeout = window.setTimeout(() => {
+      if (!cancelled) setEmbedReadyA(true);
+    }, 24000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+      window.clearTimeout(timeout);
+    };
+  }, [youtubeVideoIdA, videoSrc]);
+
+  useEffect(() => {
+    if (videoSrc || !genericEmbedSrcA || youtubeVideoIdA) return;
+    const fallback = window.setTimeout(() => setEmbedReadyA(true), 20000);
+    return () => window.clearTimeout(fallback);
+  }, [genericEmbedSrcA, youtubeVideoIdA, videoSrc]);
+
+  useEffect(() => {
+    setEmbedReadyB(false);
+  }, [youtubeVideoIdB, genericEmbedSrcB, videoSrcB]);
+
+  useEffect(() => {
+    if (videoSrcB || !youtubeVideoIdB) return;
+    let cancelled = false;
+    const iv = window.setInterval(() => {
+      const d = Number(ytPlayerBRef.current?.getDuration?.() ?? 0);
+      if (d > 0 && !cancelled) {
+        setEmbedReadyB(true);
+        window.clearInterval(iv);
+      }
+    }, 120);
+    const timeout = window.setTimeout(() => {
+      if (!cancelled) setEmbedReadyB(true);
+    }, 24000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+      window.clearTimeout(timeout);
+    };
+  }, [youtubeVideoIdB, videoSrcB]);
+
+  useEffect(() => {
+    if (videoSrcB || !genericEmbedSrcB || youtubeVideoIdB) return;
+    const fallback = window.setTimeout(() => setEmbedReadyB(true), 20000);
+    return () => window.clearTimeout(fallback);
+  }, [genericEmbedSrcB, youtubeVideoIdB, videoSrcB]);
+
   const [embedCaptureRecording, setEmbedCaptureRecording] = useState(false);
   /** Which panel (A/B) is running tab capture — drives Canvas to paint the live capture instead of YouTube thumbnail pose. */
   const [embedCapturePanelId, setEmbedCapturePanelId] = useState<'A' | 'B' | null>(null);
@@ -132,6 +215,8 @@ export default function Home() {
   const [captureDownloadStatus, setCaptureDownloadStatus] = useState<
     'idle' | 'preparing' | 'ready_mp4' | 'ready_webm'
   >('idle');
+  const [captureToast, setCaptureToast] = useState<string | null>(null);
+  const [captureError, setCaptureError] = useState<string | null>(null);
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
   /** Drag-over state for the two video panels */
@@ -339,8 +424,9 @@ export default function Home() {
     micStreamRef.current = null;
     setMicActive(false);
     setUrlInput('');
-    setReelsPlaybackTarget('A');
+    setPlaybackTarget('A');
     setWebcamCutout(false);
+    setCaptureError(null);
     cleanupVideoEl(videoRef.current);
     cleanupVideoEl(videoRefB.current);
     canvasRef.current?.clearAll();
@@ -502,13 +588,14 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoBLoaded, videoBOffset, videoBDuration, playBothEnabled, youtubeVideoIdA, genericEmbedSrcA]);
 
-  /** Reels “AB” enables dual sync (HTML5 file pairs only; embed paths ignore sync loop). */
-  useEffect(() => {
-    if (layoutMode !== 'reels') return;
-    setPlayBothEnabled(reelsPlaybackTarget === 'AB');
-  }, [layoutMode, reelsPlaybackTarget]);
-
   // ── Webcam ────────────────────────────────────────────────────────────────
+  const stopWebcam = useCallback(() => {
+    webcamStreamRef.current?.getTracks().forEach((t) => t.stop());
+    webcamStreamRef.current = null;
+    if (webcamVideoRef.current) webcamVideoRef.current.srcObject = null;
+    setWebcamActive(false);
+  }, []);
+
   const startWebcam = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -523,6 +610,11 @@ export default function Home() {
       alert('Could not access webcam. Please check browser permissions.');
     }
   }, []);
+
+  const toggleWebcam = useCallback(async () => {
+    if (webcamActive) stopWebcam();
+    else await startWebcam();
+  }, [webcamActive, startWebcam, stopWebcam]);
 
   const startMic = useCallback(async () => {
     try {
@@ -559,26 +651,42 @@ export default function Home() {
     setIsRecording(recording);
   }, []);
 
-  const togglePlayBoth = useCallback(() => {
-    if (youtubeVideoIdA || youtubeVideoIdB || genericEmbedSrcA || genericEmbedSrcB) return;
-    const vA = videoRef.current;
-    const vB = videoRefB.current;
-    if (!vA || !vB) return;
-    const shouldPlay = vA.paused || vB.paused;
-    if (shouldPlay) {
-      const targetBTime = vA.currentTime - videoBOffset;
-      if (Number.isFinite(targetBTime)) {
-        vB.currentTime = Math.max(0, Math.min(videoBDuration || Infinity, targetBTime));
-      }
-      vA.play().catch(() => {});
-      vB.play().catch(() => {});
-      setPlayBothEnabled(true);
-    } else {
-      vA.pause();
-      vB.pause();
-      setPlayBothEnabled(false);
-    }
-  }, [videoBDuration, videoBOffset, youtubeVideoIdA, youtubeVideoIdB, genericEmbedSrcA, genericEmbedSrcB]);
+  const removeVideoA = useCallback(() => {
+    revokeBlobUrl(lastBlobUrlARef.current);
+    lastBlobUrlARef.current = null;
+    setVideoSrc(null);
+    setYoutubeVideoIdA(null);
+    setGenericEmbedSrcA(null);
+    ytPlayerARef.current = null;
+    setShowTapToPlay(false);
+    sessionCaptureBlobRef.current = null;
+    sessionMp4BlobRef.current = null;
+    setCaptureDownloadStatus('idle');
+    cleanupVideoEl(videoRef.current);
+    canvasRef.current?.clearAll();
+    setCaptureError(null);
+  }, [cleanupVideoEl, revokeBlobUrl]);
+
+  const removeVideoB = useCallback(() => {
+    revokeBlobUrl(lastBlobUrlBRef.current);
+    lastBlobUrlBRef.current = null;
+    setVideoSrcB(null);
+    setYoutubeVideoIdB(null);
+    setGenericEmbedSrcB(null);
+    ytPlayerBRef.current = null;
+    setVideoBLoaded(false);
+    cleanupVideoEl(videoRefB.current);
+    canvasRefB.current?.clearAll();
+    setCaptureError(null);
+  }, [cleanupVideoEl, revokeBlobUrl]);
+
+  const onGenericEmbedIframeLoadA = useCallback(() => {
+    if (!youtubeVideoIdA && genericEmbedSrcA) setEmbedReadyA(true);
+  }, [youtubeVideoIdA, genericEmbedSrcA]);
+
+  const onGenericEmbedIframeLoadB = useCallback(() => {
+    if (!youtubeVideoIdB && genericEmbedSrcB) setEmbedReadyB(true);
+  }, [youtubeVideoIdB, genericEmbedSrcB]);
 
   const handleOptionsChange = useCallback((opts: Partial<DrawingOptions>) => {
     setDrawingOptions(prev => ({ ...prev, ...opts }));
@@ -768,6 +876,17 @@ export default function Home() {
       const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
       if (!videoEl) return;
 
+      const ready = panel === 'A' ? embedReadyA : embedReadyB;
+      const hasEmbedOnly =
+        panel === 'A'
+          ? !!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc
+          : !!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB;
+      if (hasEmbedOnly && !ready) {
+        setCaptureError('The video is still loading. Wait until it appears, then try Capture again.');
+        return;
+      }
+
+      setCaptureError(null);
       setEmbedCapturePanelId(panel);
       setCaptureBusy(true);
       setEmbedCaptureRecording(true);
@@ -792,7 +911,7 @@ export default function Home() {
       setCaptureProgress01(0);
 
       if (!result.ok) {
-        alert(result.message);
+        setCaptureError(result.message);
         return;
       }
 
@@ -846,6 +965,12 @@ export default function Home() {
       revokeBlobUrl,
       youtubeVideoIdA,
       youtubeVideoIdB,
+      genericEmbedSrcA,
+      genericEmbedSrcB,
+      videoSrc,
+      videoSrcB,
+      embedReadyA,
+      embedReadyB,
     ],
   );
 
@@ -878,10 +1003,30 @@ export default function Home() {
   const embedLiveVideoA = embedCapturePanelId === 'A';
   const embedLiveVideoB = embedCapturePanelId === 'B';
 
+  const lockEmbedInteractionA =
+    Boolean(
+      captureBusy &&
+        embedCapturePanelId === 'A' &&
+        (youtubeVideoIdA || genericEmbedSrcA) &&
+        !videoSrc,
+    );
+  const lockEmbedInteractionB =
+    Boolean(
+      captureBusy &&
+        embedCapturePanelId === 'B' &&
+        (youtubeVideoIdB || genericEmbedSrcB) &&
+        !videoSrcB,
+    );
+  const showUrlLoadingOverlayA = Boolean(
+    (youtubeVideoIdA || genericEmbedSrcA) && !videoSrc && !embedReadyA,
+  );
+  const showUrlLoadingOverlayB = Boolean(
+    (youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB && !embedReadyB,
+  );
+
   playbackControllerARef.current = youtubeVideoIdA ? ytIframeControllerA : html5ControllerA;
   playbackControllerBRef.current = youtubeVideoIdB ? ytIframeControllerB : html5ControllerB;
 
-  const hasVideoBContent = !!(videoSrcB || youtubeVideoIdB || genericEmbedSrcB);
   const panelToolbarInset =
     !isMobile && layoutMode === 'reels'
       ? REELS_TOOLBAR_W + 8
@@ -895,98 +1040,44 @@ export default function Home() {
 
   const renderTimelineDock = () => (
     <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {hasVideoBContent && layoutMode !== 'reels' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: `0 10px 0 ${timelineLeadingInset}px` }}>
-          <button
-            type="button"
-            onClick={togglePlayBoth}
+      {hasVideoBContent && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: `0 12px 0 ${!isMobile ? timelineLeadingInset : 12}px`,
+            flexWrap: 'wrap',
+          }}
+        >
+          <span style={{ fontSize: 11, opacity: 0.65, fontWeight: 600 }}>Playback</span>
+          <select
+            value={playbackTarget}
+            onChange={(e) => setPlaybackTarget(e.target.value as 'A' | 'B' | 'AB')}
             style={{
-              height: 34,
-              padding: '0 12px',
+              height: 32,
               borderRadius: 10,
-              border: '1px solid rgba(255,255,255,0.18)',
-              background: playBothEnabled ? 'rgba(0,113,227,0.35)' : 'rgba(255,255,255,0.08)',
+              border: '1px solid rgba(255,255,255,0.2)',
+              background: 'rgba(255,255,255,0.08)',
               color: '#fff',
+              padding: '0 10px',
+              fontSize: 13,
               fontWeight: 600,
               cursor: 'pointer',
-              letterSpacing: '0.02em',
             }}
-            title="Play Video A + Video B in sync (uploaded files)"
+            aria-label="Playback target"
+            title="AB: sync both clips (uploaded MP4/WebM pairs)"
           >
-            {playBothEnabled ? 'Pause AB' : 'AB'}
-          </button>
-          <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 600 }}>Sync both</span>
+            <option value="A">A</option>
+            <option value="B">B</option>
+            <option value="AB">AB</option>
+          </select>
         </div>
       )}
 
-      {layoutMode === 'reels' && hasVideoBContent ? (
-        <>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: `0 12px 0 ${!isMobile ? timelineLeadingInset : 12}px`,
-              flexWrap: 'wrap',
-            }}
-          >
-            <span style={{ fontSize: 11, opacity: 0.65, fontWeight: 600 }}>Playback</span>
-            <select
-              value={reelsPlaybackTarget}
-              onChange={(e) => setReelsPlaybackTarget(e.target.value as 'A' | 'B' | 'AB')}
-              style={{
-                height: 32,
-                borderRadius: 10,
-                border: '1px solid rgba(255,255,255,0.2)',
-                background: 'rgba(255,255,255,0.08)',
-                color: '#fff',
-                padding: '0 10px',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-              aria-label="Playback target"
-              title="AB sync works for uploaded HTML5 pairs"
-            >
-              <option value="A">A</option>
-              <option value="B">B</option>
-              <option value="AB">AB</option>
-            </select>
-          </div>
-          {reelsPlaybackTarget === 'B'
-            ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
-                <PreciseTimeline
-                  source={
-                    youtubeVideoIdB
-                      ? { kind: 'youtube', playerRef: ytPlayerBRef }
-                      : { kind: 'html', videoRef: videoRefB }
-                  }
-                  defaultFps={30}
-                  accent="#34C759"
-                  leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
-                  compact
-                  phoneChrome={reelsDesktop}
-                />
-              )
-            : ((videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc)) && (
-                <PreciseTimeline
-                  source={
-                    youtubeVideoIdA
-                      ? { kind: 'youtube', playerRef: ytPlayerARef }
-                      : { kind: 'html', videoRef }
-                  }
-                  defaultFps={30}
-                  accent="#FF3B30"
-                  leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
-                  compact
-                  phoneChrome={reelsDesktop}
-                />
-              )}
-        </>
-      ) : (
-        <>
-          {(videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB) && (
-            <div>
+      {hasVideoBContent ? (
+        playbackTarget === 'B'
+          ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
               <PreciseTimeline
                 source={
                   youtubeVideoIdB
@@ -996,25 +1087,40 @@ export default function Home() {
                 defaultFps={30}
                 accent="#34C759"
                 leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                compact
+                phoneChrome={!isMobile}
               />
-            </div>
-          )}
-
-          {(videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc) && (
-            <PreciseTimeline
-              source={
-                youtubeVideoIdA
-                  ? { kind: 'youtube', playerRef: ytPlayerARef }
-                  : { kind: 'html', videoRef }
-              }
-              defaultFps={30}
-              accent={layoutMode === 'reels' ? '#FF3B30' : 'rgba(0,113,227,0.9)'}
-              leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
-              compact={layoutMode === 'reels'}
-              phoneChrome={reelsDesktop && layoutMode === 'reels'}
-            />
-          )}
-        </>
+            )
+          : ((videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc)) && (
+              <PreciseTimeline
+                source={
+                  youtubeVideoIdA
+                    ? { kind: 'youtube', playerRef: ytPlayerARef }
+                    : { kind: 'html', videoRef }
+                }
+                defaultFps={30}
+                accent={layoutMode === 'reels' ? '#FF3B30' : 'rgba(0,113,227,0.9)'}
+                leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                compact
+                phoneChrome={!isMobile}
+              />
+            )
+      ) : (
+        (videoSrc || youtubeVideoIdA) &&
+        !(genericEmbedSrcA && !videoSrc) && (
+          <PreciseTimeline
+            source={
+              youtubeVideoIdA
+                ? { kind: 'youtube', playerRef: ytPlayerARef }
+                : { kind: 'html', videoRef }
+            }
+            defaultFps={30}
+            accent={layoutMode === 'reels' ? '#FF3B30' : 'rgba(0,113,227,0.9)'}
+            leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+            compact
+            phoneChrome={!isMobile}
+          />
+        )
       )}
     </div>
   );
@@ -1174,9 +1280,9 @@ export default function Home() {
                   <button onClick={() => fileInputRef.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video A</button>
                   <button onClick={() => fileInputRefB.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video B</button>
                   {!webcamActive ? (
-                    <button onClick={startWebcam} style={headerBtnStyle}>Webcam</button>
+                    <button onClick={() => void toggleWebcam()} style={headerBtnStyle}>Webcam</button>
                   ) : (
-                    <button onClick={() => { webcamStreamRef.current?.getTracks().forEach((t) => t.stop()); webcamStreamRef.current = null; setWebcamActive(false); }} style={headerBtnStyle}>Webcam off</button>
+                    <button onClick={() => void toggleWebcam()} style={headerBtnStyle}>Webcam off</button>
                   )}
                   {!micActive ? (
                     <button onClick={startMic} style={headerBtnStyle}>Mic</button>
@@ -1186,6 +1292,9 @@ export default function Home() {
                   <button onClick={handleScreenshot} style={headerBtnStyle}>Screenshot</button>
                   <button type="button" onClick={resetSession} style={headerBtnStyle} title="Start fresh — clears videos and recordings">
                     New
+                  </button>
+                  <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, borderColor: '#f97316', color: '#fdba74' }} title="Remove all videos">
+                    Clear all
                   </button>
                 </div>
 
@@ -1301,11 +1410,9 @@ export default function Home() {
               </button>
 
               {!webcamActive ? (
-                <button onClick={startWebcam} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Enable webcam overlay">{layoutMode === 'reels' ? 'Cam' : 'Webcam'}</button>
+                <button onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Enable webcam overlay">{layoutMode === 'reels' ? 'Cam' : 'Webcam'}</button>
               ) : (
-                <span style={{ fontSize: layoutMode === 'reels' ? 11 : 12, color: '#35679A', fontWeight: 700 }}>
-                  {layoutMode === 'reels' ? '● Cam' : '● Webcam'}
-                </span>
+                <button onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Turn webcam off">{layoutMode === 'reels' ? '● Cam' : '● Webcam'}</button>
               )}
 
               {!micActive ? (
@@ -1316,6 +1423,14 @@ export default function Home() {
 
               <button onClick={handleScreenshot} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Save screenshot">{layoutMode === 'reels' ? 'Shot' : 'Screenshot'}</button>
               <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Start fresh — clears videos and recordings">New</button>
+              <button
+                type="button"
+                onClick={resetSession}
+                style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}), borderColor: '#c2410c', color: '#9a3412' }}
+                title="Remove all videos and return to the upload screen"
+              >
+                Clear all
+              </button>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: layoutMode === 'reels' ? 4 : 6 }} title="Layout">
                 <button type="button" onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 26 : 30, padding: layoutMode === 'reels' ? '0 8px' : '0 10px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12, background: layoutMode === 'youtube' ? '#35679A' : '#fff', color: layoutMode === 'youtube' ? '#fff' : '#1D1D1F', border: layoutMode === 'youtube' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>16:9</button>
@@ -1578,11 +1693,13 @@ export default function Home() {
                       {videoSrcB ? 'B' : '+B'}
                     </button>
                     {!webcamActive ? (
-                      <button type="button" onClick={startWebcam} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="Webcam">
+                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="Webcam">
                         Cam
                       </button>
                     ) : (
-                      <span style={{ fontSize: 11, color: 'rgba(90,200,250,0.95)', fontWeight: 600 }}>● Cam</span>
+                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: 'rgba(90,200,250,0.95)', border: '1px solid rgba(255,255,255,0.18)' }} title="Turn webcam off">
+                        ● Cam
+                      </button>
                     )}
                     {!micActive ? (
                       <button type="button" onClick={startMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="Mic">
@@ -1794,28 +1911,113 @@ export default function Home() {
                 ) : (
                   <>
                     {youtubeVideoIdA ? (
-                      <div style={{
-                        position: 'absolute', inset: 0, zIndex: 0, background: '#000',
-                      }}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          zIndex: 0,
+                          background: '#000',
+                        }}
                       >
-                        <YouTubeEmbed
-                          videoId={youtubeVideoIdA}
-                          onPlayer={(p) => { ytPlayerARef.current = p; }}
-                        />
+                        <div
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            pointerEvents: lockEmbedInteractionA ? 'none' : 'auto',
+                            opacity: lockEmbedInteractionA ? 0.96 : 1,
+                          }}
+                        >
+                          <YouTubeEmbed
+                            videoId={youtubeVideoIdA}
+                            onPlayer={(p) => { ytPlayerARef.current = p; }}
+                          />
+                        </div>
+                        {showUrlLoadingOverlayA ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              zIndex: 4,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: 'rgba(0,0,0,0.72)',
+                              color: '#fff',
+                              fontSize: 15,
+                              fontWeight: 600,
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            Loading video…
+                          </div>
+                        ) : null}
+                        {lockEmbedInteractionA ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              zIndex: 6,
+                              background: 'transparent',
+                              cursor: 'not-allowed',
+                            }}
+                            aria-hidden
+                          />
+                        ) : null}
                       </div>
                     ) : null}
                     {genericEmbedSrcA && !youtubeVideoIdA ? (
-                      <div style={{
-                        position: 'absolute', inset: 0, zIndex: 0, background: '#000',
-                      }}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          zIndex: 0,
+                          background: '#000',
+                        }}
                       >
                         <iframe
                           title="Embedded video"
                           src={genericEmbedSrcA}
-                          style={{ width: '100%', height: '100%', border: 'none' }}
+                          onLoad={onGenericEmbedIframeLoadA}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            border: 'none',
+                            pointerEvents: lockEmbedInteractionA ? 'none' : 'auto',
+                          }}
                           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
                           referrerPolicy="strict-origin-when-cross-origin"
                         />
+                        {showUrlLoadingOverlayA ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              zIndex: 4,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: 'rgba(0,0,0,0.72)',
+                              color: '#fff',
+                              fontSize: 15,
+                              fontWeight: 600,
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            Loading video…
+                          </div>
+                        ) : null}
+                        {lockEmbedInteractionA ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              zIndex: 6,
+                              background: 'transparent',
+                              cursor: 'not-allowed',
+                            }}
+                            aria-hidden
+                          />
+                        ) : null}
                       </div>
                     ) : null}
                     <CanvasOverlay
@@ -1842,6 +2044,7 @@ export default function Home() {
                       circleGapMode={circleGapMode}
                       webcamPipMode={webcamPipMode}
                       webcamOpacity={webcamOpacity}
+                      webcamActive={webcamActive}
                       stroMotionGhosts={ghostFrames}
                       stroMotionOpacity={stroMotionOpacity}
                       stroMotionRegion={stroMotionRegion}
@@ -1859,6 +2062,7 @@ export default function Home() {
                     <EmbedCapturePanel
                       visible={
                         !!(youtubeVideoIdA || genericEmbedSrcA) &&
+                        embedReadyA &&
                         !embedCaptureRecording &&
                         !captureBusy &&
                         !videoSrc
@@ -1872,6 +2076,29 @@ export default function Home() {
                       busy={captureBusy}
                       onCapture={(o) => void handleEmbedCaptureRequest('A', o)}
                     />
+                    <button
+                      type="button"
+                      onClick={removeVideoA}
+                      title="Remove Video A from this session"
+                      style={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 8,
+                        zIndex: 92,
+                        padding: '6px 10px',
+                        borderRadius: 10,
+                        border: '1px solid rgba(255,255,255,0.28)',
+                        background: 'rgba(15,15,18,0.82)',
+                        color: '#fff',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        backdropFilter: 'blur(10px)',
+                        WebkitBackdropFilter: 'blur(10px)',
+                      }}
+                    >
+                      Remove Video A
+                    </button>
                   </>
                 )}
                 {/* Drag-over overlay for Video A */}
@@ -1978,33 +2205,119 @@ export default function Home() {
                     onDrop={handleDropB}
                   >
                     {youtubeVideoIdB ? (
-                      <div style={{
-                        position: 'absolute', inset: 0, zIndex: 0, background: '#000',
-                      }}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          zIndex: 0,
+                          background: '#000',
+                        }}
                       >
-                        <YouTubeEmbed
-                          videoId={youtubeVideoIdB}
-                          onPlayer={(p) => { ytPlayerBRef.current = p; }}
-                        />
+                        <div
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            pointerEvents: lockEmbedInteractionB ? 'none' : 'auto',
+                            opacity: lockEmbedInteractionB ? 0.96 : 1,
+                          }}
+                        >
+                          <YouTubeEmbed
+                            videoId={youtubeVideoIdB}
+                            onPlayer={(p) => { ytPlayerBRef.current = p; }}
+                          />
+                        </div>
+                        {showUrlLoadingOverlayB ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              zIndex: 4,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: 'rgba(0,0,0,0.72)',
+                              color: '#fff',
+                              fontSize: 15,
+                              fontWeight: 600,
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            Loading video…
+                          </div>
+                        ) : null}
+                        {lockEmbedInteractionB ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              zIndex: 6,
+                              background: 'transparent',
+                              cursor: 'not-allowed',
+                            }}
+                            aria-hidden
+                          />
+                        ) : null}
                       </div>
                     ) : null}
                     {genericEmbedSrcB && !youtubeVideoIdB ? (
-                      <div style={{
-                        position: 'absolute', inset: 0, zIndex: 0, background: '#000',
-                      }}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          zIndex: 0,
+                          background: '#000',
+                        }}
                       >
                         <iframe
                           title="Embedded video B"
                           src={genericEmbedSrcB}
-                          style={{ width: '100%', height: '100%', border: 'none' }}
+                          onLoad={onGenericEmbedIframeLoadB}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            border: 'none',
+                            pointerEvents: lockEmbedInteractionB ? 'none' : 'auto',
+                          }}
                           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
                           referrerPolicy="strict-origin-when-cross-origin"
                         />
+                        {showUrlLoadingOverlayB ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              zIndex: 4,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: 'rgba(0,0,0,0.72)',
+                              color: '#fff',
+                              fontSize: 15,
+                              fontWeight: 600,
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            Loading video…
+                          </div>
+                        ) : null}
+                        {lockEmbedInteractionB ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              zIndex: 6,
+                              background: 'transparent',
+                              cursor: 'not-allowed',
+                            }}
+                            aria-hidden
+                          />
+                        ) : null}
                       </div>
                     ) : null}
                     <CanvasOverlay
                       ref={canvasRefB}
                       videoRef={videoRefB}
+                      webcamVideoRef={webcamVideoRef}
                       renderVideo={embedLiveVideoB || (!youtubeVideoIdB && !genericEmbedSrcB)}
                       transparentWhenNoVideo={(!!youtubeVideoIdB || !!genericEmbedSrcB) && !embedLiveVideoB}
                       youtubePose={
@@ -2023,9 +2336,13 @@ export default function Home() {
                       isRecording={isRecording}
                       circleSpinning={circleSpinning}
                       circleGapMode={circleGapMode}
+                      webcamPipMode={webcamPipMode}
+                      webcamOpacity={webcamOpacity}
+                      webcamActive={webcamActive}
                       skeletonShowAngles={skeletonShowAngles}
                       skeletonShowHeadLine={skeletonShowHeadLine}
                       skeletonClassicColors={skeletonClassicColors}
+                      ballSampleMode={ballSampleMode}
                       rect3d={rect3d}
                       triangle3d={triangle3d}
                       suppressTabCaptureMirror={
@@ -2036,6 +2353,7 @@ export default function Home() {
                     <EmbedCapturePanel
                       visible={
                         !!(youtubeVideoIdB || genericEmbedSrcB) &&
+                        embedReadyB &&
                         !embedCaptureRecording &&
                         !captureBusy &&
                         !videoSrcB
@@ -2049,6 +2367,29 @@ export default function Home() {
                       busy={captureBusy}
                       onCapture={(o) => void handleEmbedCaptureRequest('B', o)}
                     />
+                    <button
+                      type="button"
+                      onClick={removeVideoB}
+                      title="Remove Video B from this session"
+                      style={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 8,
+                        zIndex: 92,
+                        padding: '6px 10px',
+                        borderRadius: 10,
+                        border: '1px solid rgba(255,255,255,0.28)',
+                        background: 'rgba(15,15,18,0.82)',
+                        color: '#fff',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        backdropFilter: 'blur(10px)',
+                        WebkitBackdropFilter: 'blur(10px)',
+                      }}
+                    >
+                      Remove Video B
+                    </button>
                     <div style={{
                       position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
                       fontSize: '11px', fontWeight: 700, color: '#fff',
@@ -2159,6 +2500,51 @@ export default function Home() {
           {false && <div />}
         </main>
       </div>
+
+      {captureError ? (
+        <div
+          role="alert"
+          style={{
+            position: 'fixed',
+            top: 'calc(env(safe-area-inset-top, 0px) + 52px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 205,
+            maxWidth: 'min(440px, calc(100vw - 24px))',
+            padding: '12px 14px',
+            borderRadius: 12,
+            background: 'rgba(45, 18, 18, 0.96)',
+            border: '1px solid rgba(252, 165, 165, 0.45)',
+            color: '#fff',
+            boxShadow: '0 12px 36px rgba(0,0,0,0.35)',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 10,
+            fontSize: 13,
+            lineHeight: 1.45,
+            pointerEvents: 'auto',
+          }}
+        >
+          <span style={{ flex: '1 1 220px' }}>{captureError}</span>
+          <button
+            type="button"
+            onClick={() => setCaptureError(null)}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 8,
+              border: 'none',
+              background: '#35679A',
+              color: '#fff',
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
 
       {embedCaptureRecording && (
         <div

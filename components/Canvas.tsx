@@ -161,6 +161,37 @@ export interface CanvasProps {
   suppressTabCaptureMirror?: boolean;
   /** Selfie segmentation mask for webcam PiP — coach-only cutout over the canvas */
   webcamCutout?: boolean;
+  /** When true, webcam PiP is drawn whenever the stream is ready (not only while screen-recording). */
+  webcamActive?: boolean;
+}
+
+const WEBCAM_PIP_ASPECT = 11 / 9;
+const WEBCAM_PIP_HANDLE = 16;
+
+function clampWebcamPip(
+  p: { x: number; y: number; w: number; h: number },
+  cw: number,
+  ch: number,
+): { x: number; y: number; w: number; h: number } {
+  const minW = 72;
+  const maxW = Math.min(cw, ch) * 0.58;
+  let { x, y, w, h } = p;
+  w = Math.max(minW, Math.min(maxW, w));
+  h = Math.round(w / WEBCAM_PIP_ASPECT);
+  if (h > ch * 0.58) {
+    h = Math.round(ch * 0.58);
+    w = Math.round(h * WEBCAM_PIP_ASPECT);
+  }
+  x = Math.max(0, Math.min(cw - w, x));
+  y = Math.max(0, Math.min(ch - h, y));
+  return { x, y, w, h };
+}
+
+function defaultWebcamPipRect(cw: number, ch: number) {
+  const margin = 12;
+  const w = Math.round(cw * 0.18);
+  const h = Math.round(w / WEBCAM_PIP_ASPECT);
+  return clampWebcamPip({ x: cw - w - margin, y: ch - h - margin, w, h }, cw, ch);
 }
 
 // ── Module-level pose render cache ─────────────────────────────────────────
@@ -983,6 +1014,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       youtubePose,
       suppressTabCaptureMirror = false,
       webcamCutout = false,
+      webcamActive = false,
     },
     ref,
   ) {
@@ -1073,6 +1105,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const webcamCutoutRef = useRef(false);
     const webcamSegmenterRef = useRef<{ dispose: () => void } | null>(null);
     const webcamMaskRef = useRef<HTMLCanvasElement | null>(null);
+    const webcamActiveRef = useRef(webcamActive);
+    /** Pixel rect on the backing canvas; (0,0,0,0) means “use default lower-right” */
+    const webcamPipRectRef = useRef({ x: 0, y: 0, w: 0, h: 0 });
+    type WebcamPipDrag =
+      | { kind: 'move'; sx: number; sy: number; orig: { x: number; y: number; w: number; h: number } }
+      | {
+          kind: 'resize-br' | 'resize-bl' | 'resize-tr' | 'resize-tl';
+          sx: number;
+          sy: number;
+          orig: { x: number; y: number; w: number; h: number };
+        };
+    const webcamPipDragRef = useRef<WebcamPipDrag | null>(null);
+    const webcamPinchRef = useRef<{ dist: number; w: number; cx: number; cy: number } | null>(null);
+    const lastPipContainerRef = useRef<{ w: number; h: number } | null>(null);
 
     // Zoom / pan state
     const zoomRef    = useRef(1.0);
@@ -1125,17 +1171,71 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { youtubePoseRef.current = youtubePose; }, [youtubePose]);
     useEffect(() => { suppressTabCaptureMirrorRef.current = suppressTabCaptureMirror; }, [suppressTabCaptureMirror]);
     useEffect(() => { webcamCutoutRef.current = webcamCutout; }, [webcamCutout]);
+    useEffect(() => { webcamActiveRef.current = webcamActive; }, [webcamActive]);
 
-    // ── Touch pinch zoom ────────────────────────────────────────────────────
+    useEffect(() => {
+      if (!webcamActive) {
+        webcamPipRectRef.current = { x: 0, y: 0, w: 0, h: 0 };
+        webcamPipDragRef.current = null;
+      }
+    }, [webcamActive]);
+
+    /** Scale PiP when analysis panel resizes so it stays proportionally placed */
+    useEffect(() => {
+      const prev = lastPipContainerRef.current;
+      const pip = webcamPipRectRef.current;
+      if (prev && pip.w > 0 && pip.h > 0 && prev.w > 0 && prev.h > 0) {
+        const sx = containerWidth / prev.w;
+        const sy = containerHeight / prev.h;
+        webcamPipRectRef.current = clampWebcamPip(
+          {
+            x: pip.x * sx,
+            y: pip.y * sy,
+            w: pip.w * sx,
+            h: pip.h * sy,
+          },
+          containerWidth,
+          containerHeight,
+        );
+      }
+      lastPipContainerRef.current = { w: containerWidth, h: containerHeight };
+    }, [containerWidth, containerHeight]);
+
+    // ── Touch pinch: webcam PiP resize when pinch centroid is over PiP; else canvas zoom ───
     useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       let lastDist = 0;
+      let pinchWebcam = false;
+      let baseDist = 0;
+      let baseW = 0;
+      let cx0 = 0;
+      let cy0 = 0;
 
       const onTouchStart = (e: TouchEvent) => {
         if (e.touches.length === 2) {
           const t1 = e.touches[0], t2 = e.touches[1];
-          lastDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+          const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+          lastDist = dist;
+          const rect = canvas.getBoundingClientRect();
+          const mx = ((t1.clientX + t2.clientX) / 2 - rect.left) * (canvas.width / rect.width);
+          const my = ((t1.clientY + t2.clientY) / 2 - rect.top) * (canvas.height / rect.height);
+          pinchWebcam = false;
+          baseDist = 0;
+          if (webcamActiveRef.current) {
+            let pip = webcamPipRectRef.current;
+            if (!pip.w || !pip.h) pip = defaultWebcamPipRect(canvas.width, canvas.height);
+            pip = clampWebcamPip(pip, canvas.width, canvas.height);
+            webcamPipRectRef.current = pip;
+            pinchWebcam =
+              mx >= pip.x && mx <= pip.x + pip.w && my >= pip.y && my <= pip.y + pip.h;
+            if (pinchWebcam) {
+              baseDist = dist;
+              baseW = pip.w;
+              cx0 = pip.x + pip.w / 2;
+              cy0 = pip.y + pip.h / 2;
+            }
+          }
           e.preventDefault();
         }
       };
@@ -1143,17 +1243,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (e.touches.length === 2) {
           const t1 = e.touches[0], t2 = e.touches[1];
           const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-          if (lastDist > 0) {
+          if (pinchWebcam && baseDist > 0 && webcamActiveRef.current) {
+            const factor = dist / baseDist;
+            const nw = Math.max(72, Math.round(baseW * factor));
+            const nh = Math.round(nw / WEBCAM_PIP_ASPECT);
+            const nx = cx0 - nw / 2;
+            const ny = cy0 - nh / 2;
+            webcamPipRectRef.current = clampWebcamPip(
+              { x: nx, y: ny, w: nw, h: nh },
+              canvas.width,
+              canvas.height,
+            );
+          } else if (!pinchWebcam && lastDist > 0) {
             const factor = dist / lastDist;
             zoomRef.current = Math.max(0.25, Math.min(8, zoomRef.current * factor));
           }
           lastDist = dist;
           e.preventDefault();
-        } else if (e.touches.length === 1 && zoomRef.current > 1) {
+        } else if (e.touches.length === 1 && zoomRef.current > 1 && !pinchWebcam) {
           e.preventDefault();
         }
       };
-      const onTouchEnd = () => { lastDist = 0; };
+      const onTouchEnd = () => {
+        lastDist = 0;
+        pinchWebcam = false;
+        baseDist = 0;
+      };
 
       canvas.addEventListener('touchstart', onTouchStart, { passive: false });
       canvas.addEventListener('touchmove', onTouchMove, { passive: false });
@@ -1482,7 +1597,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     // ── Webcam selfie mask for cutout PiP (updates off-thread from render loop) ──
     useEffect(() => {
-      if (!webcamCutout || !isRecording) {
+      if (!webcamCutout || !webcamActive) {
         webcamSegmenterRef.current?.dispose();
         webcamSegmenterRef.current = null;
         webcamMaskRef.current = null;
@@ -1535,7 +1650,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           };
 
           const tick = async () => {
-            if (cancelled || !webcamCutoutRef.current || !isRecordingRef.current) return;
+            if (cancelled || !webcamCutoutRef.current || !webcamActiveRef.current) return;
             if (!busy) {
               busy = true;
               try {
@@ -1567,7 +1682,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         webcamSegmenterRef.current = null;
         webcamMaskRef.current = null;
       };
-    }, [webcamCutout, isRecording, webcamVideoRef, onProcessingStatus]);
+    }, [webcamCutout, webcamActive, webcamVideoRef, onProcessingStatus]);
 
     useEffect(() => {
       youtubePoseCacheRef.current.clear();
@@ -1953,14 +2068,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // Webcam PiP — compact corner bubble when recording
+        // Webcam PiP — default lower-right; move/resize with Select tool or pinch (touch)
         const webcam = webcamVideoRef?.current;
-        if (isRecordingRef.current && webcam && webcam.readyState >= 2 && webcamPipModeRef.current !== 'hidden') {
-          const camW = Math.round(W * 0.15);
-          const camH = Math.round(camW * (11 / 9));
-          const margin = 12;
-          const cx2 = W - camW - margin;
-          const cy2 = H - camH - margin;
+        const showWebcamPip =
+          webcamActiveRef.current &&
+          webcam &&
+          webcam.readyState >= 2 &&
+          webcamPipModeRef.current !== 'hidden';
+        if (showWebcamPip) {
+          let pip = webcamPipRectRef.current;
+          if (!pip.w || !pip.h) {
+            pip = defaultWebcamPipRect(W, H);
+            webcamPipRectRef.current = pip;
+          }
+          pip = clampWebcamPip(pip, W, H);
+          webcamPipRectRef.current = pip;
+          const cx2 = pip.x;
+          const cy2 = pip.y;
+          const camW = pip.w;
+          const camH = pip.h;
           ctx.save();
           ctx.globalAlpha = webcamOpacityRef.current;
 
@@ -2050,6 +2176,36 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.moveTo(live.v.x, live.v.y);
             ctx.lineTo(live.p1.x, live.p1.y);
             ctx.stroke();
+            ctx.restore();
+          }
+        }
+
+        // Webcam PiP corner handles (select tool) — drawn above strokes
+        if (
+          webcamActiveRef.current &&
+          activeToolRef.current === 'select' &&
+          webcamVideoRef?.current &&
+          webcamVideoRef.current.readyState >= 2 &&
+          webcamPipModeRef.current !== 'hidden'
+        ) {
+          let pipH = webcamPipRectRef.current;
+          if (pipH.w > 0 && pipH.h > 0) {
+            pipH = clampWebcamPip(pipH, W, H);
+            const hsz = WEBCAM_PIP_HANDLE / 2;
+            ctx.save();
+            ctx.fillStyle = 'rgba(255,255,255,0.9)';
+            ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+            ctx.lineWidth = 1;
+            const corners: Array<[number, number]> = [
+              [pipH.x, pipH.y],
+              [pipH.x + pipH.w, pipH.y],
+              [pipH.x, pipH.y + pipH.h],
+              [pipH.x + pipH.w, pipH.y + pipH.h],
+            ];
+            for (const [hx, hy] of corners) {
+              ctx.fillRect(hx - hsz, hy - hsz, WEBCAM_PIP_HANDLE, WEBCAM_PIP_HANDLE);
+              ctx.strokeRect(hx - hsz, hy - hsz, WEBCAM_PIP_HANDLE, WEBCAM_PIP_HANDLE);
+            }
             ctx.restore();
           }
         }
@@ -2323,6 +2479,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     // ── Erase near a point ─────────────────────────────────────────────────
 
+    const webcamPipHitTest = useCallback((pos: Pt): 'tl' | 'tr' | 'bl' | 'br' | 'inside' | 'miss' => {
+      if (!webcamActiveRef.current || !webcamVideoRef?.current || webcamVideoRef.current.readyState < 2) {
+        return 'miss';
+      }
+      const canvas = canvasRef.current;
+      if (!canvas) return 'miss';
+      const cw = canvas.width;
+      const ch = canvas.height;
+      let pip = webcamPipRectRef.current;
+      if (!pip.w || !pip.h) pip = defaultWebcamPipRect(cw, ch);
+      pip = clampWebcamPip(pip, cw, ch);
+      const hTol = WEBCAM_PIP_HANDLE / 2 + 4;
+      const corners: Array<{ id: 'tl' | 'tr' | 'bl' | 'br'; x: number; y: number }> = [
+        { id: 'tl', x: pip.x, y: pip.y },
+        { id: 'tr', x: pip.x + pip.w, y: pip.y },
+        { id: 'bl', x: pip.x, y: pip.y + pip.h },
+        { id: 'br', x: pip.x + pip.w, y: pip.y + pip.h },
+      ];
+      for (const c of corners) {
+        if (Math.abs(pos.x - c.x) <= hTol && Math.abs(pos.y - c.y) <= hTol) return c.id;
+      }
+      if (pos.x >= pip.x && pos.x <= pip.x + pip.w && pos.y >= pip.y && pos.y <= pip.y + pip.h) return 'inside';
+      return 'miss';
+    }, [webcamVideoRef]);
+
     const eraseAt = useCallback((pos: Pt) => {
       const T = 22;
       // Same distance-to-stroke test as the Select tool so erasing hits outlines,
@@ -2371,8 +2552,28 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // ── Select tool: pick nearest object and drag it ────────────────────
+      // ── Select tool: webcam PiP drag / resize first ─────────────────────
       if (tool === 'select') {
+        const pipHit = webcamPipHitTest(pos);
+        if (pipHit !== 'miss') {
+          const canvas = canvasRef.current;
+          const cw = canvas?.width ?? 0;
+          const ch = canvas?.height ?? 0;
+          let pip = webcamPipRectRef.current;
+          if (!pip.w || !pip.h) pip = defaultWebcamPipRect(cw, ch);
+          pip = clampWebcamPip(pip, cw, ch);
+          webcamPipRectRef.current = pip;
+          if (pipHit === 'inside') {
+            webcamPipDragRef.current = { kind: 'move', sx: pos.x, sy: pos.y, orig: { ...pip } };
+          } else {
+            const rk: WebcamPipDrag['kind'] =
+              pipHit === 'tl' ? 'resize-tl' : pipHit === 'tr' ? 'resize-tr' : pipHit === 'bl' ? 'resize-bl' : 'resize-br';
+            webcamPipDragRef.current = { kind: rk, sx: pos.x, sy: pos.y, orig: { ...pip } };
+          }
+          isDraggingRef.current = true;
+          return;
+        }
+
         const HIT_T = 28;
         let best: Selection = null;
         let bestDist = Infinity;
@@ -2646,7 +2847,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           break;
       }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pushHistory, finishSwingPath, finishManualSwingPath, eraseAt, videoRef]);
+    }, [pushHistory, finishSwingPath, finishManualSwingPath, eraseAt, videoRef, webcamPipHitTest]);
 
     // ── Pointer move ───────────────────────────────────────────────────────
 
@@ -2664,6 +2865,49 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           panXRef.current = panStartRef.current.px + (e.clientX - panStartRef.current.x) * scaleX;
           panYRef.current = panStartRef.current.py + (e.clientY - panStartRef.current.y) * scaleY;
         }
+        return;
+      }
+
+      // ── Webcam PiP drag / resize ─────────────────────────────────────────
+      const pipDrag = webcamPipDragRef.current;
+      if (pipDrag) {
+        const canvas = canvasRef.current;
+        const cw = canvas?.width ?? 0;
+        const ch = canvas?.height ?? 0;
+        const o = pipDrag.orig;
+        let pip: { x: number; y: number; w: number; h: number };
+        if (pipDrag.kind === 'move') {
+          pip = clampWebcamPip(
+            {
+              ...o,
+              x: o.x + (pos.x - pipDrag.sx),
+              y: o.y + (pos.y - pipDrag.sy),
+            },
+            cw,
+            ch,
+          );
+        } else if (pipDrag.kind === 'resize-br') {
+          const nw = Math.max(72, pos.x - o.x);
+          const nh = Math.round(nw / WEBCAM_PIP_ASPECT);
+          pip = clampWebcamPip({ x: o.x, y: o.y, w: nw, h: nh }, cw, ch);
+        } else if (pipDrag.kind === 'resize-bl') {
+          const nw = Math.max(72, o.x + o.w - pos.x);
+          const nh = Math.round(nw / WEBCAM_PIP_ASPECT);
+          const nx = o.x + o.w - nw;
+          pip = clampWebcamPip({ x: nx, y: o.y, w: nw, h: nh }, cw, ch);
+        } else if (pipDrag.kind === 'resize-tr') {
+          const nw = Math.max(72, pos.x - o.x);
+          const nh = Math.round(nw / WEBCAM_PIP_ASPECT);
+          const ny = o.y + o.h - nh;
+          pip = clampWebcamPip({ x: o.x, y: ny, w: nw, h: nh }, cw, ch);
+        } else {
+          const nw = Math.max(72, o.x + o.w - pos.x);
+          const nh = Math.round(nw / WEBCAM_PIP_ASPECT);
+          const nx = o.x + o.w - nw;
+          const ny = o.y + o.h - nh;
+          pip = clampWebcamPip({ x: nx, y: ny, w: nw, h: nh }, cw, ch);
+        }
+        webcamPipRectRef.current = pip;
         return;
       }
 
@@ -2758,6 +3002,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer up ─────────────────────────────────────────────────────────
 
     const onPointerUp = useCallback((_e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (webcamPipDragRef.current) {
+        webcamPipDragRef.current = null;
+        isDraggingRef.current = false;
+        return;
+      }
+
       // ── End pan ────────────────────────────────────────────────────────
       if (isPanningRef.current) {
         isPanningRef.current = false;
@@ -2895,6 +3145,29 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           : zoomRef.current > 1.0 ? 'zoom-out' : 'zoom-in',
     };
 
+    const onWheelCanvas = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
+      if (!webcamActiveRef.current) return;
+      if (!e.ctrlKey && !e.metaKey) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+      let pip = webcamPipRectRef.current;
+      if (!pip.w || !pip.h) pip = defaultWebcamPipRect(canvas.width, canvas.height);
+      if (x < pip.x || x > pip.x + pip.w || y < pip.y || y > pip.y + pip.h) return;
+      const cx = pip.x + pip.w / 2;
+      const cy = pip.y + pip.h / 2;
+      const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+      const nw = Math.max(72, Math.round(pip.w * factor));
+      const nh = Math.round(nw / WEBCAM_PIP_ASPECT);
+      const nx = cx - nw / 2;
+      const ny = cy - nh / 2;
+      webcamPipRectRef.current = clampWebcamPip({ x: nx, y: ny, w: nw, h: nh }, canvas.width, canvas.height);
+      e.preventDefault();
+      e.stopPropagation();
+    }, []);
+
     return (
       <canvas
         ref={canvasRef}
@@ -2914,6 +3187,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         onPointerUp={onPointerUp}
         onPointerLeave={onPointerUp}
         onDoubleClick={onDoubleClick}
+        onWheel={onWheelCanvas}
       />
     );
   },
