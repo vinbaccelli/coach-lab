@@ -1747,7 +1747,7 @@ export default function Home() {
                         Cam
                       </button>
                     ) : (
-                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, color: '#007AFF', borderColor: '#bfdbfe', background: '#eff6ff' }} title="Turn webcam off">
+                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, color: '#166534', borderColor: '#bbf7d0', background: '#f0fdf4' }} title="Turn webcam off">
                         ● Cam
                       </button>
                     )}
