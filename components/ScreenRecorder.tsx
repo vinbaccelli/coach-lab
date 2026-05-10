@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { webmFixDuration } from 'webm-fix-duration';
+import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 
 interface ScreenRecorderProps {
   getCanvas: () => HTMLCanvasElement | null;
@@ -99,7 +100,7 @@ export default function ScreenRecorder({
 
     const paintOnce = () => {
       const src = getCanvas();
-      if (!src) return;
+      if (!src || src.width < 2 || src.height < 2) return;
       const crop = getCropRegion?.();
       const sx0 = crop ? crop.x * src.width : 0;
       const sy0 = crop ? crop.y * src.height : 0;
@@ -153,6 +154,12 @@ export default function ScreenRecorder({
         videoBitsPerSecond: 5_000_000,
       });
     } catch (err) {
+      if (rafPaintRef.current) { cancelAnimationFrame(rafPaintRef.current); rafPaintRef.current = null; }
+      try {
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+      } catch { /* noop */ }
+      streamRef.current = null;
+      recCanvasRef.current = null;
       setError('MediaRecorder not supported in this browser.');
       console.error('[ScreenRecorder] MediaRecorder init failed:', err);
       return;
@@ -164,111 +171,90 @@ export default function ScreenRecorder({
     };
 
     recorder.onstop = async () => {
-      if (stopFailsafeRef.current) {
-        clearTimeout(stopFailsafeRef.current);
-        stopFailsafeRef.current = null;
-      }
-      saveFinishedRef.current = false;
-
-      if (paintTimerRef.current) { clearInterval(paintTimerRef.current); paintTimerRef.current = null; }
-      if (rafPaintRef.current) { cancelAnimationFrame(rafPaintRef.current); rafPaintRef.current = null; }
-      const duration = Date.now() - startTimeRef.current;
-      const rawBlob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
-      if (rawBlob.size === 0) {
-        setError('Recording produced an empty file. Try again (and ensure the video/canvas is playing).');
-        setRecState('idle');
-        onRecordingChange?.(false);
-        saveFinishedRef.current = true;
-        return;
-      }
-
-      let finalBlob: Blob;
       try {
-        finalBlob = await webmFixDuration(rawBlob, duration, mimeTypeRef.current || 'video/webm');
-      } catch {
-        finalBlob = rawBlob;
-      }
-
-      let outBlob: Blob = finalBlob;
-      let outExt = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
-
-      const nameLooksMp4 = typeof mimeTypeRef.current === 'string' && /mp4/i.test(mimeTypeRef.current);
-      const blobLooksMp4 = outBlob.type.includes('mp4') || nameLooksMp4;
-
-      // Prefer MP4 output. If MediaRecorder didn't yield MP4, transcode with FFmpeg.wasm.
-      if (!blobLooksMp4) {
-        try {
-          setProgress('Loading FFmpeg…');
-          const { FFmpeg } = await import('@ffmpeg/ffmpeg');
-          const { toBlobURL, fetchFile } = await import('@ffmpeg/util');
-          const ffmpeg = new FFmpeg();
-          ffmpeg.on('log', ({ message }) => setProgress(message.slice(0, 80)));
-          const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-          await ffmpeg.load({
-            coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-          });
-          setProgress('Converting to MP4…');
-
-          const runConvert = async (args: string[]) => {
-            await ffmpeg.deleteFile('input.webm').catch(() => {});
-            await ffmpeg.deleteFile('output.mp4').catch(() => {});
-            await ffmpeg.writeFile('input.webm', await fetchFile(outBlob));
-            await ffmpeg.exec(args);
-            return await ffmpeg.readFile('output.mp4');
-          };
-
-          const convertWithAudio = async () =>
-            runConvert([
-              '-i', 'input.webm',
-              '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
-              '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
-              'output.mp4',
-            ]);
-
-          const convertVideoOnly = async () =>
-            runConvert([
-              '-i', 'input.webm',
-              '-an',
-              '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
-              '-movflags', '+faststart',
-              'output.mp4',
-            ]);
-
-          const mp4Data = await Promise.race([
-            (async () => {
-              try {
-                return await convertWithAudio();
-              } catch {
-                return await convertVideoOnly();
-              }
-            })(),
-            new Promise<Uint8Array>((_, reject) => setTimeout(() => reject(new Error('FFmpeg conversion timeout')), 45_000)),
-          ]);
-          const ab = (mp4Data as Uint8Array).buffer as ArrayBuffer;
-          outBlob = new Blob([ab], { type: 'video/mp4' });
-          outExt = 'mp4';
-          setProgress(null);
-        } catch (err: unknown) {
-          console.warn('[ScreenRecorder] MP4 conversion failed; falling back to WebM:', err);
-          setProgress(null);
-          outBlob = finalBlob;
-          outExt = 'webm';
+        if (stopFailsafeRef.current) {
+          clearTimeout(stopFailsafeRef.current);
+          stopFailsafeRef.current = null;
         }
-      }
+        saveFinishedRef.current = false;
 
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const suggestedName = `coach-lab-${ts}.${outExt}`;
+        if (paintTimerRef.current) { clearInterval(paintTimerRef.current); paintTimerRef.current = null; }
+        if (rafPaintRef.current) { cancelAnimationFrame(rafPaintRef.current); rafPaintRef.current = null; }
+        const duration = Date.now() - startTimeRef.current;
+        const rawBlob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
+        if (rawBlob.size === 0) {
+          setError('Recording produced an empty file. Try again (and ensure the video/canvas is playing).');
+          try {
+            streamRef.current?.getTracks().forEach((t) => t.stop());
+          } catch { /* noop */ }
+          streamRef.current = null;
+          recCanvasRef.current = null;
+          setRecState('idle');
+          onRecordingChange?.(false);
+          saveFinishedRef.current = true;
+          return;
+        }
 
-      // Prefer writing via File System Access API (survives async FFmpeg conversion without being blocked as a download).
-      const handle = saveHandleRef.current;
-      if (handle && typeof handle.createWritable === 'function') {
+        let finalBlob: Blob = rawBlob;
         try {
-          const writable = await handle.createWritable();
-          await writable.write(outBlob);
-          await writable.close();
-        } catch (err) {
-          console.warn('[ScreenRecorder] Failed writing via file picker; falling back to download:', err);
+          finalBlob = await webmFixDuration(rawBlob, duration, mimeTypeRef.current || 'video/webm');
+        } catch (fixErr) {
+          console.warn('[ScreenRecorder] webmFixDuration skipped:', fixErr);
+          finalBlob = rawBlob;
+        }
+
+        let outBlob: Blob = finalBlob;
+        let outExt = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
+
+        const nameLooksMp4 = typeof mimeTypeRef.current === 'string' && /mp4/i.test(mimeTypeRef.current);
+        const blobLooksMp4 = outBlob.type.includes('mp4') || nameLooksMp4;
+
+        if (!blobLooksMp4) {
+          try {
+            setProgress('Converting to MP4…');
+            const conv = await convertWebmToMp4ForScreenRecord(finalBlob);
+            if (conv.ok) {
+              setProgress(null);
+              outBlob = conv.blob;
+              outExt = 'mp4';
+            } else {
+              console.warn('[ScreenRecorder] MP4 conversion failed; keeping WebM:', conv.error);
+              setProgress('Saved as WebM — MP4 was not available in this session.');
+              window.setTimeout(() => setProgress(null), 6000);
+              outBlob = finalBlob;
+              outExt = 'webm';
+            }
+          } catch (convErr: unknown) {
+            console.warn('[ScreenRecorder] MP4 conversion threw; falling back to WebM:', convErr);
+            setProgress(null);
+            outBlob = finalBlob;
+            outExt = 'webm';
+            const msg = convErr instanceof Error ? convErr.message : String(convErr);
+            if (msg && !/cancel/i.test(msg)) {
+              setError(`Conversion interrupted (${msg}). WebM download will still run if data exists.`);
+            }
+          }
+        }
+
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const suggestedName = `coach-lab-${ts}.${outExt}`;
+
+        const handle = saveHandleRef.current;
+        if (handle && typeof handle.createWritable === 'function') {
+          try {
+            const writable = await handle.createWritable();
+            await writable.write(outBlob);
+            await writable.close();
+          } catch (err) {
+            console.warn('[ScreenRecorder] Failed writing via file picker; falling back to download:', err);
+            const url = URL.createObjectURL(outBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = suggestedName;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10_000);
+          }
+        } else {
           const url = URL.createObjectURL(outBlob);
           const a = document.createElement('a');
           a.href = url;
@@ -276,26 +262,36 @@ export default function ScreenRecorder({
           a.click();
           setTimeout(() => URL.revokeObjectURL(url), 10_000);
         }
-      } else {
-        const url = URL.createObjectURL(outBlob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = suggestedName;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        saveHandleRef.current = null;
+
+        try {
+          streamRef.current?.getTracks().forEach((t) => t.stop());
+        } catch { /* noop */ }
+        streamRef.current = null;
+        recCanvasRef.current = null;
+
+        setRecState('idle');
+        onRecordingChange?.(false);
+        saveFinishedRef.current = true;
+      } catch (fatal: unknown) {
+        console.error('[ScreenRecorder] onstop failed:', fatal);
+        setProgress(null);
+        const msg = fatal instanceof Error ? fatal.message : String(fatal);
+        setError(
+          msg
+            ? `Recording finished but saving failed (${msg}). You can try Record again without refreshing.`
+            : 'Recording finished but saving failed. Try again.',
+        );
+        try {
+          streamRef.current?.getTracks().forEach((t) => t.stop());
+        } catch { /* noop */ }
+        streamRef.current = null;
+        recCanvasRef.current = null;
+        chunksRef.current = [];
+        setRecState('idle');
+        onRecordingChange?.(false);
+        saveFinishedRef.current = true;
       }
-      saveHandleRef.current = null;
-
-      // Release stream tracks to help Safari (and others) GC sooner.
-      try {
-        streamRef.current?.getTracks().forEach((t) => t.stop());
-      } catch {}
-      streamRef.current = null;
-      recCanvasRef.current = null;
-
-      setRecState('idle');
-      onRecordingChange?.(false);
-      saveFinishedRef.current = true;
     };
 
     recorder.start(250); // smaller timeslice helps ensure we get non-empty data for short recordings

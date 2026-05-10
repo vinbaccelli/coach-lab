@@ -27,6 +27,8 @@ export default function PreciseTimeline({
   accent = '#35679A',
   leadingInsetPx = 0,
   compact = false,
+  /** Desktop 9:16 phone: taller scrub; Speed/FPS tucked into Options */
+  phoneChrome = false,
 }: {
   source: Source;
   defaultFps?: number;
@@ -34,6 +36,7 @@ export default function PreciseTimeline({
   /** Extra left padding so controls stay clear of a floating toolbar */
   leadingInsetPx?: number;
   compact?: boolean;
+  phoneChrome?: boolean;
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
@@ -319,35 +322,35 @@ export default function PreciseTimeline({
     pointerEvents: 'auto',
     display: 'flex',
     flexDirection: 'column',
-    gap: compact ? 6 : 10,
+    gap: phoneChrome ? 8 : compact ? 6 : 10,
     width: '100%',
-    padding: `${compact ? 6 : 10}px 12px ${compact ? 6 : 10}px calc(env(safe-area-inset-bottom, 0px) + ${compact ? 6 : 10}px)`,
+    padding: `${phoneChrome ? 8 : compact ? 6 : 10}px 12px ${phoneChrome ? 8 : compact ? 6 : 10}px calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 8 : compact ? 6 : 10}px)`,
     paddingLeft: Math.max(12, leadingInsetPx),
-    borderRadius: '14px 14px 0 0',
-    background: 'rgba(15, 15, 18, 0.58)',
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderBottom: 'none',
+    borderRadius: phoneChrome ? 0 : '14px 14px 0 0',
+    background: phoneChrome ? 'rgba(255,255,255,0.06)' : 'rgba(15, 15, 18, 0.58)',
+    border: phoneChrome ? 'none' : '1px solid rgba(255,255,255,0.12)',
+    borderBottom: phoneChrome ? 'none' : 'none',
     color: '#fff',
-    backdropFilter: 'blur(12px)',
-    WebkitBackdropFilter: 'blur(12px)',
+    backdropFilter: phoneChrome ? 'blur(20px) saturate(1.15)' : 'blur(12px)',
+    WebkitBackdropFilter: phoneChrome ? 'blur(20px) saturate(1.15)' : 'blur(12px)',
     touchAction: 'manipulation',
-  }), [compact, leadingInsetPx]);
+  }), [compact, leadingInsetPx, phoneChrome]);
 
   const btnStyle: React.CSSProperties = useMemo(() => ({
-    minWidth: 40,
-    height: 40,
+    minWidth: phoneChrome ? 44 : 40,
+    height: phoneChrome ? 44 : 40,
     borderRadius: 10,
     border: '1px solid rgba(255,255,255,0.18)',
     background: 'rgba(255,255,255,0.08)',
     color: '#fff',
     cursor: 'pointer',
-    fontWeight: 800,
+    fontWeight: 600,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     userSelect: 'none',
     flexShrink: 0,
-  }), []);
+  }), [phoneChrome]);
 
   const selectStyle: React.CSSProperties = useMemo(() => ({
     height: 40,
@@ -386,58 +389,130 @@ export default function PreciseTimeline({
           <div style={{ lineHeight: 1.1, opacity: 0.75 }}>{formatTime(d)}</div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>Speed</span>
-          <select
-            value={playbackRate}
-            onChange={(e) => setRate(Number(e.target.value))}
-            style={selectStyle}
-            title="Playback speed"
-            aria-label="Playback speed"
-          >
-            {SPEED_OPTIONS.map((r) => (
-              <option key={r} value={r}>{r}×</option>
-            ))}
-          </select>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>FPS</span>
-          <select
-            value={fpsMode}
-            onChange={(e) => setFpsMode(e.target.value as 'auto' | '30' | '60' | '120' | 'custom')}
-            style={{ ...selectStyle, minWidth: 100 }}
-            title={fpsMode === 'auto' ? `Auto ≈ ${autoFps ?? '…'}fps` : `Step size: ${(1000 / selectedFps).toFixed(2)}ms`}
-          >
-            {source.kind === 'html' && <option value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
-            <option value="30">30</option>
-            <option value="60">60</option>
-            <option value="120">120</option>
-            <option value="custom">Custom…</option>
-          </select>
-          {fpsMode === 'custom' && (
-            <input
-              type="number"
-              min={1}
-              max={240}
-              step={1}
-              value={customFps}
-              onChange={(e) => setCustomFps(Number(e.target.value) || 30)}
+        {phoneChrome ? (
+          <details style={{ flexShrink: 0 }}>
+            <summary
               style={{
-                width: 64,
-                height: 40,
-                borderRadius: 10,
-                border: '1px solid rgba(255,255,255,0.18)',
-                background: 'rgba(255,255,255,0.08)',
-                color: '#fff',
-                padding: '0 8px',
-                outline: 'none',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                ...btnStyle,
+                minWidth: 72,
+                height: phoneChrome ? 40 : 40,
+                listStyle: 'none',
+                fontSize: 12,
+                fontWeight: 600,
               }}
-              title="Custom FPS for frame stepping"
-            />
-          )}
-        </div>
+            >
+              Options ▾
+            </summary>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 600 }}>Speed</span>
+                <select
+                  value={playbackRate}
+                  onChange={(e) => setRate(Number(e.target.value))}
+                  style={{ ...selectStyle, height: 36 }}
+                  title="Playback speed"
+                  aria-label="Playback speed"
+                >
+                  {SPEED_OPTIONS.map((r) => (
+                    <option key={r} value={r}>{r}×</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 600 }}>FPS</span>
+                <select
+                  value={fpsMode}
+                  onChange={(e) => setFpsMode(e.target.value as 'auto' | '30' | '60' | '120' | 'custom')}
+                  style={{ ...selectStyle, minWidth: 100, height: 36 }}
+                  title={fpsMode === 'auto' ? `Auto ≈ ${autoFps ?? '…'}fps` : `Step size: ${(1000 / selectedFps).toFixed(2)}ms`}
+                >
+                  {source.kind === 'html' && <option value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
+                  <option value="30">30</option>
+                  <option value="60">60</option>
+                  <option value="120">120</option>
+                  <option value="custom">Custom…</option>
+                </select>
+                {fpsMode === 'custom' && (
+                  <input
+                    type="number"
+                    min={1}
+                    max={240}
+                    step={1}
+                    value={customFps}
+                    onChange={(e) => setCustomFps(Number(e.target.value) || 30)}
+                    style={{
+                      width: 64,
+                      height: 36,
+                      borderRadius: 10,
+                      border: '1px solid rgba(255,255,255,0.18)',
+                      background: 'rgba(255,255,255,0.08)',
+                      color: '#fff',
+                      padding: '0 8px',
+                      outline: 'none',
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    }}
+                    title="Custom FPS for frame stepping"
+                  />
+                )}
+              </div>
+            </div>
+          </details>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>Speed</span>
+              <select
+                value={playbackRate}
+                onChange={(e) => setRate(Number(e.target.value))}
+                style={selectStyle}
+                title="Playback speed"
+                aria-label="Playback speed"
+              >
+                {SPEED_OPTIONS.map((r) => (
+                  <option key={r} value={r}>{r}×</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 700 }}>FPS</span>
+              <select
+                value={fpsMode}
+                onChange={(e) => setFpsMode(e.target.value as 'auto' | '30' | '60' | '120' | 'custom')}
+                style={{ ...selectStyle, minWidth: 100 }}
+                title={fpsMode === 'auto' ? `Auto ≈ ${autoFps ?? '…'}fps` : `Step size: ${(1000 / selectedFps).toFixed(2)}ms`}
+              >
+                {source.kind === 'html' && <option value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
+                <option value="30">30</option>
+                <option value="60">60</option>
+                <option value="120">120</option>
+                <option value="custom">Custom…</option>
+              </select>
+              {fpsMode === 'custom' && (
+                <input
+                  type="number"
+                  min={1}
+                  max={240}
+                  step={1}
+                  value={customFps}
+                  onChange={(e) => setCustomFps(Number(e.target.value) || 30)}
+                  style={{
+                    width: 64,
+                    height: 40,
+                    borderRadius: 10,
+                    border: '1px solid rgba(255,255,255,0.18)',
+                    background: 'rgba(255,255,255,0.08)',
+                    color: '#fff',
+                    padding: '0 8px',
+                    outline: 'none',
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  }}
+                  title="Custom FPS for frame stepping"
+                />
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Full-width touch scrub bar */}
@@ -451,7 +526,7 @@ export default function PreciseTimeline({
         aria-label="Scrub timeline"
         style={{
           width: '100%',
-          height: 44,
+          height: phoneChrome ? 52 : 44,
           borderRadius: 10,
           background: 'rgba(255,255,255,0.1)',
           position: 'relative',
@@ -480,7 +555,7 @@ export default function PreciseTimeline({
             left: 0,
             top: '50%',
             transform: 'translateY(-50%)',
-            height: 8,
+            height: phoneChrome ? 10 : 8,
             width: '100%',
             borderRadius: 4,
             background: 'rgba(255,255,255,0.2)',
@@ -493,7 +568,7 @@ export default function PreciseTimeline({
             left: 0,
             top: '50%',
             transform: 'translateY(-50%)',
-            height: 8,
+            height: phoneChrome ? 10 : 8,
             width: `${pct}%`,
             borderRadius: 4,
             background: accent,
@@ -503,11 +578,11 @@ export default function PreciseTimeline({
         <div
           style={{
             position: 'absolute',
-            left: `calc(${pct}% - 10px)`,
+            left: `calc(${pct}% - ${phoneChrome ? 11 : 10}px)`,
             top: '50%',
             transform: 'translateY(-50%)',
-            width: 20,
-            height: 20,
+            width: phoneChrome ? 22 : 20,
+            height: phoneChrome ? 22 : 20,
             borderRadius: '50%',
             background: '#fff',
             boxShadow: `0 0 0 2px ${accent}`,

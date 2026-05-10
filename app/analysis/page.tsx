@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import dynamic from 'next/dynamic';
-import { Camera, Upload, Menu } from 'lucide-react';
+import { Camera, MoreHorizontal, Upload, Menu } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
@@ -113,8 +113,9 @@ export default function Home() {
   const [webcamOpacity, setWebcamOpacity]   = useState(1);
   const [urlInput, setUrlInput]             = useState('');
   const [urlTarget, setUrlTarget]           = useState<'A' | 'B'>('A');
-  /** Which video the shared Reels timeline controls */
-  const [timelineTarget, setTimelineTarget] = useState<'A' | 'B'>('A');
+  /** Reels dual-video: which stream the timeline drives (AB = sync both, uploaded HTML5 only). */
+  const [reelsPlaybackTarget, setReelsPlaybackTarget] = useState<'A' | 'B' | 'AB'>('A');
+  const [desktopReelsMenuOpen, setDesktopReelsMenuOpen] = useState(false);
   /** Selfie-segmentation cutout for webcam PiP */
   const [webcamCutout, setWebcamCutout]     = useState(false);
   const [youtubeVideoIdA, setYoutubeVideoIdA] = useState<string | null>(null);
@@ -338,7 +339,7 @@ export default function Home() {
     micStreamRef.current = null;
     setMicActive(false);
     setUrlInput('');
-    setTimelineTarget('A');
+    setReelsPlaybackTarget('A');
     setWebcamCutout(false);
     cleanupVideoEl(videoRef.current);
     cleanupVideoEl(videoRefB.current);
@@ -500,6 +501,12 @@ export default function Home() {
     return () => cancelAnimationFrame(rafId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoBLoaded, videoBOffset, videoBDuration, playBothEnabled, youtubeVideoIdA, genericEmbedSrcA]);
+
+  /** Reels “AB” enables dual sync (HTML5 file pairs only; embed paths ignore sync loop). */
+  useEffect(() => {
+    if (layoutMode !== 'reels') return;
+    setPlayBothEnabled(reelsPlaybackTarget === 'AB');
+  }, [layoutMode, reelsPlaybackTarget]);
 
   // ── Webcam ────────────────────────────────────────────────────────────────
   const startWebcam = useCallback(async () => {
@@ -884,6 +891,134 @@ export default function Home() {
   const timelineLeadingInset =
     layoutMode === 'reels' && !isMobile ? REELS_TOOLBAR_W + 12 : LEFT_TOOLBAR_W + 16;
 
+  const reelsDesktop = !isMobile && layoutMode === 'reels';
+
+  const renderTimelineDock = () => (
+    <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {hasVideoBContent && layoutMode !== 'reels' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: `0 10px 0 ${timelineLeadingInset}px` }}>
+          <button
+            type="button"
+            onClick={togglePlayBoth}
+            style={{
+              height: 34,
+              padding: '0 12px',
+              borderRadius: 10,
+              border: '1px solid rgba(255,255,255,0.18)',
+              background: playBothEnabled ? 'rgba(0,113,227,0.35)' : 'rgba(255,255,255,0.08)',
+              color: '#fff',
+              fontWeight: 600,
+              cursor: 'pointer',
+              letterSpacing: '0.02em',
+            }}
+            title="Play Video A + Video B in sync (uploaded files)"
+          >
+            {playBothEnabled ? 'Pause AB' : 'AB'}
+          </button>
+          <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 600 }}>Sync both</span>
+        </div>
+      )}
+
+      {layoutMode === 'reels' && hasVideoBContent ? (
+        <>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: `0 12px 0 ${!isMobile ? timelineLeadingInset : 12}px`,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span style={{ fontSize: 11, opacity: 0.65, fontWeight: 600 }}>Playback</span>
+            <select
+              value={reelsPlaybackTarget}
+              onChange={(e) => setReelsPlaybackTarget(e.target.value as 'A' | 'B' | 'AB')}
+              style={{
+                height: 32,
+                borderRadius: 10,
+                border: '1px solid rgba(255,255,255,0.2)',
+                background: 'rgba(255,255,255,0.08)',
+                color: '#fff',
+                padding: '0 10px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+              aria-label="Playback target"
+              title="AB sync works for uploaded HTML5 pairs"
+            >
+              <option value="A">A</option>
+              <option value="B">B</option>
+              <option value="AB">AB</option>
+            </select>
+          </div>
+          {reelsPlaybackTarget === 'B'
+            ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
+                <PreciseTimeline
+                  source={
+                    youtubeVideoIdB
+                      ? { kind: 'youtube', playerRef: ytPlayerBRef }
+                      : { kind: 'html', videoRef: videoRefB }
+                  }
+                  defaultFps={30}
+                  accent="#34C759"
+                  leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                  compact
+                  phoneChrome={reelsDesktop}
+                />
+              )
+            : ((videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc)) && (
+                <PreciseTimeline
+                  source={
+                    youtubeVideoIdA
+                      ? { kind: 'youtube', playerRef: ytPlayerARef }
+                      : { kind: 'html', videoRef }
+                  }
+                  defaultFps={30}
+                  accent="#FF3B30"
+                  leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                  compact
+                  phoneChrome={reelsDesktop}
+                />
+              )}
+        </>
+      ) : (
+        <>
+          {(videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB) && (
+            <div>
+              <PreciseTimeline
+                source={
+                  youtubeVideoIdB
+                    ? { kind: 'youtube', playerRef: ytPlayerBRef }
+                    : { kind: 'html', videoRef: videoRefB }
+                }
+                defaultFps={30}
+                accent="#34C759"
+                leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+              />
+            </div>
+          )}
+
+          {(videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc) && (
+            <PreciseTimeline
+              source={
+                youtubeVideoIdA
+                  ? { kind: 'youtube', playerRef: ytPlayerARef }
+                  : { kind: 'html', videoRef }
+              }
+              defaultFps={30}
+              accent={layoutMode === 'reels' ? '#FF3B30' : 'rgba(0,113,227,0.9)'}
+              leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+              compact={layoutMode === 'reels'}
+              phoneChrome={reelsDesktop && layoutMode === 'reels'}
+            />
+          )}
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div
       style={{
@@ -892,7 +1027,7 @@ export default function Home() {
         height: '100%',
         minHeight: 0,
         overflow: 'hidden',
-        background: layoutMode === 'reels' ? '#0b0b0c' : '#F8F8F8',
+        background: layoutMode === 'reels' ? '#000000' : '#FAF8F5',
         color: '#1D1D1F',
       }}
     >
@@ -1079,7 +1214,7 @@ export default function Home() {
               </div>
             )}
           </div>
-        ) : (
+        ) : reelsDesktop ? null : (
           <div
             style={{
               width: '100%',
@@ -1207,7 +1342,7 @@ export default function Home() {
           flex: 1,
           overflow: 'hidden',
           justifyContent: layoutMode === 'reels' ? 'center' : undefined,
-          background: layoutMode === 'reels' ? '#0b0b0c' : undefined,
+          background: layoutMode === 'reels' ? '#000000' : undefined,
           position: 'relative',
         }}
       >
@@ -1289,9 +1424,11 @@ export default function Home() {
             minWidth: 0,
             alignItems: layoutMode === 'reels' ? 'center' : undefined,
             paddingTop:
-              layoutMode === 'reels'
-                ? 'calc(env(safe-area-inset-top, 0px) + 42px)'
-                : 'calc(env(safe-area-inset-top, 0px) + 52px)',
+              reelsDesktop
+                ? 'calc(env(safe-area-inset-top, 0px) + 8px)'
+                : layoutMode === 'reels'
+                  ? 'calc(env(safe-area-inset-top, 0px) + 42px)'
+                  : 'calc(env(safe-area-inset-top, 0px) + 52px)',
             width: '100%',
           }}
         >
@@ -1307,7 +1444,7 @@ export default function Home() {
               alignItems: layoutMode === 'reels' ? 'center' : undefined,
               alignSelf: layoutMode === 'reels' ? 'center' : undefined,
               width: '100%',
-              overflow: layoutMode === 'reels' ? 'auto' : 'hidden',
+              overflow: reelsDesktop ? 'hidden' : layoutMode === 'reels' ? 'auto' : 'hidden',
               padding: layoutMode === 'reels' ? '4px 8px' : undefined,
               ...(layoutMode === 'reels'
                 ? {
@@ -1316,11 +1453,190 @@ export default function Home() {
                     maxHeight: 'min(92dvh, calc(100dvh - 88px))',
                     aspectRatio: '9 / 16',
                     borderRadius: 22,
-                    boxShadow: '0 20px 70px rgba(0,0,0,0.58)',
+                    border: '1px solid rgba(255,255,255,0.22)',
+                    boxShadow: '0 24px 80px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.06)',
                   }
                 : {}),
             }}
           >
+            {reelsDesktop && (
+              <div
+                style={{
+                  flexShrink: 0,
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  minHeight: 42,
+                  padding: '6px 8px',
+                  borderBottom: '1px solid rgba(255,255,255,0.1)',
+                  background: 'rgba(255,255,255,0.06)',
+                  backdropFilter: 'blur(22px) saturate(1.2)',
+                  WebkitBackdropFilter: 'blur(22px) saturate(1.2)',
+                  zIndex: 92,
+                  boxSizing: 'border-box',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setDesktopReelsMenuOpen((o) => !o)}
+                  style={{
+                    flexShrink: 0,
+                    width: 36,
+                    height: 34,
+                    borderRadius: 10,
+                    border: '1px solid rgba(255,255,255,0.14)',
+                    background: 'rgba(255,255,255,0.09)',
+                    color: '#fff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                  }}
+                  aria-expanded={desktopReelsMenuOpen}
+                  aria-label="Open actions menu"
+                >
+                  <MoreHorizontal size={18} strokeWidth={1.5} />
+                </button>
+                {desktopReelsMenuOpen && (
+                  <div
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflowX: 'auto',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      WebkitOverflowScrolling: 'touch',
+                      paddingBottom: 2,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      <select
+                        value={urlTarget}
+                        onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
+                        style={{
+                          height: 28,
+                          borderRadius: 8,
+                          border: '1px solid rgba(255,255,255,0.2)',
+                          background: 'rgba(255,255,255,0.08)',
+                          color: '#fff',
+                          padding: '0 6px',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                        title="Load URL into Video A or B"
+                        aria-label="URL target"
+                      >
+                        <option value="A">A</option>
+                        <option value="B">B</option>
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="Paste URL…"
+                        value={urlInput}
+                        onChange={(e) => setUrlInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
+                        style={{
+                          height: 28,
+                          width: 120,
+                          padding: '0 8px',
+                          borderRadius: 8,
+                          border: '1px solid rgba(255,255,255,0.2)',
+                          fontSize: 11,
+                          outline: 'none',
+                          background: 'rgba(255,255,255,0.08)',
+                          color: '#fff',
+                          minWidth: 0,
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleUrlSubmit}
+                        style={{ ...headerBtnStyle, height: 28, padding: '0 8px', fontSize: 11, background: 'rgba(255,255,255,0.12)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)' }}
+                      >
+                        Load
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }}
+                      title={videoSrc ? 'Replace Video A' : 'Upload Video A'}
+                    >
+                      <Upload size={12} />
+                      {videoSrc ? 'A' : '+A'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRefB.current?.click()}
+                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }}
+                      title={videoSrcB ? 'Replace Video B' : 'Upload Video B'}
+                    >
+                      <Upload size={12} />
+                      {videoSrcB ? 'B' : '+B'}
+                    </button>
+                    {!webcamActive ? (
+                      <button type="button" onClick={startWebcam} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="Webcam">
+                        Cam
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: 11, color: 'rgba(90,200,250,0.95)', fontWeight: 600 }}>● Cam</span>
+                    )}
+                    {!micActive ? (
+                      <button type="button" onClick={startMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="Mic">
+                        Mic
+                      </button>
+                    ) : (
+                      <button type="button" onClick={stopMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, color: '#FFB4AB' }} title="Stop mic">
+                        Mic on
+                      </button>
+                    )}
+                    <button type="button" onClick={handleScreenshot} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="Screenshot">
+                      Shot
+                    </button>
+                    <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="New session">
+                      New
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setLayoutMode('youtube'); setDesktopReelsMenuOpen(false); }}
+                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }}
+                    >
+                      16:9
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setLayoutMode('reels'); }}
+                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.28)' }}
+                    >
+                      9:16
+                    </button>
+                    <ScreenRecorder
+                      getCanvas={getCanvas}
+                      getWebcamStream={getWebcamStream}
+                      getMicStream={getMicStream}
+                      getCropRegion={getCropRegion}
+                      layoutMode="reels"
+                      onRecordingChange={handleRecordingChange}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                minWidth: 0,
+                width: '100%',
+                display: 'flex',
+                flexDirection: layoutMode === 'reels' ? 'column' : 'row',
+                overflow: 'hidden',
+                position: 'relative',
+              }}
+            >
             {isMobile && (
               <div style={{
                 position: 'absolute',
@@ -1358,8 +1674,8 @@ export default function Home() {
                 style={{
                   position: 'absolute',
                   left: 4,
-                  top: 40,
-                  bottom: 8,
+                  top: reelsDesktop ? 8 : 40,
+                  bottom: reelsDesktop ? 120 : 8,
                   width: REELS_TOOLBAR_W,
                   zIndex: 84,
                   display: 'flex',
@@ -1756,155 +2072,43 @@ export default function Home() {
                 </div>
               </>
             ) : null}
-          </div>
-
-          {/* Timeline: full width at bottom; pointer events on child */}
-          <div
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              width: '100%',
-              zIndex: 70,
-              pointerEvents: 'none',
-              display: 'flex',
-              justifyContent: 'stretch',
-              padding: 0,
-            }}
-          >
-            <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {hasVideoBContent && layoutMode !== 'reels' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: `0 10px 0 ${timelineLeadingInset}px` }}>
-                  <button
-                    onClick={togglePlayBoth}
-                    style={{
-                      height: 34,
-                      padding: '0 12px',
-                      borderRadius: 10,
-                      border: '1px solid rgba(255,255,255,0.18)',
-                      background: playBothEnabled ? '#35679A' : 'rgba(255,255,255,0.08)',
-                      color: '#fff',
-                      fontWeight: 800,
-                      cursor: 'pointer',
-                    }}
-                    title="Play Video A + Video B in sync"
-                  >
-                    {playBothEnabled ? 'Pause Both' : 'Play Both'}
-                  </button>
-                  <span style={{ fontSize: 11, opacity: 0.75, fontWeight: 800 }}>A + B</span>
-                </div>
-              )}
-
-              {layoutMode === 'reels' && hasVideoBContent ? (
-                <>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: `0 12px 0 ${!isMobile ? timelineLeadingInset : 12}px`,
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <span style={{ fontSize: 11, opacity: 0.65, fontWeight: 800 }}>Controls</span>
-                    <button
-                      type="button"
-                      onClick={() => setTimelineTarget('A')}
-                      style={{
-                        minWidth: 36,
-                        height: 30,
-                        padding: '0 10px',
-                        borderRadius: 8,
-                        border: `1px solid ${timelineTarget === 'A' ? '#FF3B30' : 'rgba(255,255,255,0.18)'}`,
-                        background: timelineTarget === 'A' ? '#FF3B30' : 'rgba(255,255,255,0.08)',
-                        color: '#fff',
-                        fontWeight: 900,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      A
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTimelineTarget('B')}
-                      style={{
-                        minWidth: 36,
-                        height: 30,
-                        padding: '0 10px',
-                        borderRadius: 8,
-                        border: `1px solid ${timelineTarget === 'B' ? '#22c55e' : 'rgba(255,255,255,0.18)'}`,
-                        background: timelineTarget === 'B' ? '#22c55e' : 'rgba(255,255,255,0.08)',
-                        color: '#fff',
-                        fontWeight: 900,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      B
-                    </button>
-                  </div>
-                  {timelineTarget === 'B'
-                    ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
-                        <PreciseTimeline
-                          source={
-                            youtubeVideoIdB
-                              ? { kind: 'youtube', playerRef: ytPlayerBRef }
-                              : { kind: 'html', videoRef: videoRefB }
-                          }
-                          defaultFps={30}
-                          accent="#22c55e"
-                          leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
-                          compact
-                        />
-                      )
-                    : ((videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc)) && (
-                        <PreciseTimeline
-                          source={
-                            youtubeVideoIdA
-                              ? { kind: 'youtube', playerRef: ytPlayerARef }
-                              : { kind: 'html', videoRef }
-                          }
-                          defaultFps={30}
-                          accent="#FF3B30"
-                          leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
-                          compact
-                        />
-                      )}
-                </>
-              ) : (
-                <>
-                  {(videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB) && (
-                    <div>
-                      <PreciseTimeline
-                        source={
-                          youtubeVideoIdB
-                            ? { kind: 'youtube', playerRef: ytPlayerBRef }
-                            : { kind: 'html', videoRef: videoRefB }
-                        }
-                        defaultFps={30}
-                        accent={'#22c55e'}
-                        leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
-                      />
-                    </div>
-                  )}
-
-                  {(videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc) && (
-                    <PreciseTimeline
-                      source={
-                        youtubeVideoIdA
-                          ? { kind: 'youtube', playerRef: ytPlayerARef }
-                          : { kind: 'html', videoRef }
-                      }
-                      defaultFps={30}
-                      accent={layoutMode === 'reels' ? '#FF3B30' : '#35679A'}
-                      leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
-                      compact={layoutMode === 'reels'}
-                    />
-                  )}
-                </>
-              )}
             </div>
+            {reelsDesktop && (
+              <div
+                style={{
+                  flexShrink: 0,
+                  width: '100%',
+                  zIndex: 72,
+                  pointerEvents: 'auto',
+                  borderTop: '1px solid rgba(255,255,255,0.1)',
+                  background: 'rgba(0,0,0,0.35)',
+                  backdropFilter: 'blur(18px) saturate(1.1)',
+                  WebkitBackdropFilter: 'blur(18px) saturate(1.1)',
+                }}
+              >
+                {renderTimelineDock()}
+              </div>
+            )}
           </div>
+
+          {!reelsDesktop && (
+            <div
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                width: '100%',
+                zIndex: 70,
+                pointerEvents: 'none',
+                display: 'flex',
+                justifyContent: 'stretch',
+                padding: 0,
+              }}
+            >
+              {renderTimelineDock()}
+            </div>
+          )}
 
           {/* Video B offset control */}
           {layoutMode !== 'reels' && (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (

@@ -7,13 +7,14 @@
 /* ── Coach Lab Design System ── */
 :root {
   --white: #ffffff;
-  --blue-light: #D4E8F7;
-  --blue-mid: #93C5E0;
-  --blue-accent: #2563EB;
-  --gray-dark: #333333;
-  --gray-mid: #666666;
-  --gray-light: #F5F5F5;
-  --border: #E5E7EB;
+  --cream: #faf8f5;
+  --blue-light: #e8f0f7;
+  --blue-mid: #c5d4e0;
+  --blue-accent: #0071e3;
+  --gray-dark: #1d1d1f;
+  --gray-mid: #6e6e73;
+  --gray-light: #f5f2eb;
+  --border: #e5e5ea;
 }
 
 * {
@@ -34,10 +35,10 @@ body {
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--gray-light);
+  background: rgba(0, 0, 0, 0.04);
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--blue-mid);
+  background: rgba(0, 0, 0, 0.18);
   border-radius: 3px;
 }
 
