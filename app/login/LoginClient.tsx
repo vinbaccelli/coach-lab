@@ -18,6 +18,8 @@ export default function LoginClient({ redirect }: { redirect: string }) {
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(redirect)}`,
+          scopes:
+            'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
           // We want refresh tokens so YouTube upload can work long-term.
           queryParams: {
             access_type: 'offline',

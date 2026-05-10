@@ -31,6 +31,8 @@ import {
 } from '@/lib/videoController';
 import { runEmbedTabCaptureFlow } from '@/lib/embedTabCaptureFlow';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
+import SaveReportModal from '@/components/shared/SaveReportModal';
+import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 
 // Dynamic import prevents TensorFlow / Fabric from loading server-side
 const CanvasOverlay = dynamic(() => import('@/components/Canvas'), { ssr: false });
@@ -215,6 +217,9 @@ export default function Home() {
   const [captureProgress01, setCaptureProgress01] = useState(0);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [showCaptureSaveToast, setShowCaptureSaveToast] = useState(false);
+  const [captureYoutubeBusy, setCaptureYoutubeBusy] = useState(false);
+  const [captureSaveModalOpen, setCaptureSaveModalOpen] = useState(false);
+  const [captureYoutubeUrl, setCaptureYoutubeUrl] = useState<string | null>(null);
   /** Post-capture MP4 prep: button stays disabled until ready_mp4 or ready_webm (fallback). */
   const [captureDownloadStatus, setCaptureDownloadStatus] = useState<
     'idle' | 'preparing' | 'ready_mp4' | 'ready_webm'
@@ -1043,6 +1048,38 @@ export default function Home() {
     a.click();
     URL.revokeObjectURL(href);
   }, [captureDownloadStatus]);
+
+  const handleYoutubeUploadCapture = useCallback(async () => {
+    if (captureYoutubeBusy || captureDownloadStatus === 'preparing') return;
+    const mp4 = sessionMp4BlobRef.current;
+    const webm = sessionCaptureBlobRef.current;
+    const blob =
+      captureDownloadStatus === 'ready_mp4' && mp4
+        ? mp4
+        : captureDownloadStatus === 'ready_webm' && webm
+          ? webm
+          : null;
+    if (!blob) return;
+
+    setCaptureYoutubeBusy(true);
+    try {
+      const ext = captureDownloadStatus === 'ready_mp4' ? 'mp4' : 'webm';
+      const mime = blob.type || (ext === 'mp4' ? 'video/mp4' : 'video/webm');
+      const fd = new FormData();
+      fd.append('video', new File([blob], `coach-lab-capture.${ext}`, { type: mime }));
+      fd.append('title', `Coach Lab analysis ${localDateTimeForFolder()}`);
+      const res = await fetch('/api/youtube/upload', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Upload failed');
+      setCaptureYoutubeUrl(typeof data.url === 'string' ? data.url : null);
+      setShowCaptureSaveToast(false);
+      setCaptureSaveModalOpen(true);
+    } catch (e: unknown) {
+      window.alert(e instanceof Error ? e.message : 'YouTube upload failed');
+    } finally {
+      setCaptureYoutubeBusy(false);
+    }
+  }, [captureDownloadStatus, captureYoutubeBusy]);
 
   /** During tab capture, paint & pose-use the live MediaRecorder preview stream — not YouTube thumbnail pose. */
   const embedLiveVideoA = embedCapturePanelId === 'A';
@@ -2683,7 +2720,7 @@ export default function Home() {
           <span style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontWeight: 600 }}>Your video is ready to analyse.</span>
             <span style={{ color: '#6e6e73' }}>
-              Would you like to save a copy to your device?
+              Download a copy, upload to your YouTube as unlisted, or dismiss.
             </span>
             {captureDownloadStatus === 'preparing' && (
               <span style={{ fontSize: 11, color: '#6e6e73', fontWeight: 500 }}>
@@ -2717,6 +2754,25 @@ export default function Home() {
           </button>
           <button
             type="button"
+            disabled={
+              captureDownloadStatus === 'preparing' || captureYoutubeBusy
+            }
+            onClick={() => void handleYoutubeUploadCapture()}
+            style={{
+              padding: '10px 16px',
+              borderRadius: 10,
+              border: '1px solid #E5E5E5',
+              background: captureYoutubeBusy ? '#F5F5F5' : '#FFFFFF',
+              color: '#1A1A1A',
+              fontWeight: 600,
+              cursor:
+                captureDownloadStatus === 'preparing' || captureYoutubeBusy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {captureYoutubeBusy ? 'Uploading…' : 'Upload to YouTube (Unlisted)'}
+          </button>
+          <button
+            type="button"
             onClick={() => setShowCaptureSaveToast(false)}
             style={{
               padding: '10px 16px',
@@ -2732,6 +2788,18 @@ export default function Home() {
           </button>
         </div>
       )}
+
+      <SaveReportModal
+        open={captureSaveModalOpen}
+        onClose={() => {
+          setCaptureSaveModalOpen(false);
+          setCaptureYoutubeUrl(null);
+        }}
+        folderLabel={`${localDateTimeForFolder()} — Analysis recording`}
+        bodyText=""
+        youtubeUrl={captureYoutubeUrl}
+        source="analysis_capture"
+      />
 
       <PrecisionDrawInstructions
         open={precisionInstructionsOpen}
