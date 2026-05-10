@@ -29,6 +29,7 @@ import {
   createYoutubeIframeController,
   type VideoController,
 } from '@/lib/videoController';
+import { resolveYoutubeForAnalysis } from '@/app/actions/youtubeResolve';
 import { runEmbedTabCaptureFlow } from '@/lib/embedTabCaptureFlow';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 import SaveReportModal from '@/components/shared/SaveReportModal';
@@ -905,8 +906,41 @@ export default function Home() {
       return;
     }
 
-    setProcessingStatus(null);
     if (resolved.kind === 'youtube') {
+      const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(resolved.videoId)}`;
+      setProcessingStatus('Connecting to stream…');
+      try {
+        const streamResult = await resolveYoutubeForAnalysis(watchUrl);
+        if (streamResult.ok && streamResult.directUrl) {
+          const streamUrl = `/api/video/stream?url=${encodeURIComponent(streamResult.directUrl)}`;
+          setProcessingStatus(null);
+          setShowTapToPlay(false);
+          if (urlTarget === 'A') {
+            setYoutubeVideoIdA(null);
+            setGenericEmbedSrcA(null);
+            setVideoSrc(streamUrl);
+            if (videoRef.current) {
+              cleanupVideoEl(videoRef.current);
+              videoRef.current.src = streamUrl;
+              videoRef.current.load();
+            }
+          } else {
+            setYoutubeVideoIdB(null);
+            setGenericEmbedSrcB(null);
+            setVideoSrcB(streamUrl);
+            if (videoRefB.current) {
+              cleanupVideoEl(videoRefB.current);
+              videoRefB.current.src = streamUrl;
+              videoRefB.current.load();
+            }
+            setVideoBLoaded(false);
+          }
+          return;
+        }
+      } catch (e) {
+        if (typeof console !== 'undefined') console.warn('[analysis] YouTube resolve failed, using embed', e);
+      }
+      setProcessingStatus(null);
       setShowTapToPlay(true);
       if (urlTarget === 'A') {
         setYoutubeVideoIdA(resolved.videoId);
@@ -938,6 +972,44 @@ export default function Home() {
           'The video player is not ready yet. Wait until the clip appears, then open Capture again.',
         );
         return;
+      }
+
+      const yid = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
+      if (yid) {
+        try {
+          setProcessingStatus('Preparing a playable copy (no tab share)…');
+          const r = await resolveYoutubeForAnalysis(
+            `https://www.youtube.com/watch?v=${encodeURIComponent(yid)}`,
+          );
+          if (r.ok && r.directUrl) {
+            const streamUrl = `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`;
+            setProcessingStatus(null);
+            if (panel === 'A') {
+              setYoutubeVideoIdA(null);
+              setGenericEmbedSrcA(null);
+              setVideoSrc(streamUrl);
+              cleanupVideoEl(videoEl);
+              videoEl.src = streamUrl;
+              videoEl.load();
+              await videoEl.play().catch(() => {});
+            } else {
+              setYoutubeVideoIdB(null);
+              setGenericEmbedSrcB(null);
+              setVideoSrcB(streamUrl);
+              cleanupVideoEl(videoEl);
+              videoEl.src = streamUrl;
+              videoEl.load();
+              setVideoBLoaded(false);
+              await videoEl.play().catch(() => {});
+            }
+            setShowCaptureSaveToast(true);
+            setShowTapToPlay(false);
+            return;
+          }
+        } catch (e) {
+          if (typeof console !== 'undefined') console.warn('[analysis] YouTube import failed, try tab capture', e);
+        }
+        setProcessingStatus(null);
       }
 
       const ready = panel === 'A' ? embedReadyA : embedReadyB;
@@ -1044,6 +1116,7 @@ export default function Home() {
       videoSrcB,
       embedReadyA,
       embedReadyB,
+      setProcessingStatus,
     ],
   );
 
@@ -1573,7 +1646,9 @@ export default function Home() {
 
         {/* Left toolbar (desktop) — 16:9 layout only; Reels uses floating toolbar on the stage */}
         {!isMobile && layoutMode !== 'reels' && (
-        <aside style={{
+        <aside
+          className="coachlab-video-toolbar"
+          style={{
           width: LEFT_TOOLBAR_W,
           display: 'flex',
           flexDirection: 'column',
@@ -1589,7 +1664,8 @@ export default function Home() {
           border: '1px solid rgba(0,0,0,0.08)',
           backdropFilter: 'blur(10px)',
           WebkitBackdropFilter: 'blur(10px)',
-        }}>
+        }}
+        >
           <div style={{ padding: 6 }}>
             <ToolPalette
               activeTool={activeTool}
@@ -1865,7 +1941,9 @@ export default function Home() {
               }}
             >
             {showMobileToolStrip && (
-              <div style={{
+              <div
+                className="coachlab-video-toolbar"
+                style={{
                 position: 'absolute',
                 left: 8,
                 top: 8,
@@ -1873,7 +1951,8 @@ export default function Home() {
                 zIndex: 60,
                 overflowY: 'auto',
                 maxHeight: 'calc(100% - 180px)',
-              }}>
+              }}
+              >
                 <MobileToolStrip
                   activeTool={activeTool}
                   onToolChange={handleToolChange}
@@ -1902,6 +1981,7 @@ export default function Home() {
             )}
             {!isMobile && layoutMode === 'reels' && (
               <aside
+                className="coachlab-video-toolbar"
                 style={{
                   position: 'absolute',
                   left: 4,

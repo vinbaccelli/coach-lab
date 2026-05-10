@@ -100,31 +100,32 @@ body {
   filter: none;
 }
 
-/* Mobile analysis rails: black pills + white icons for legibility on video */
-@media (max-width: 900px) {
-  .coachlab-mobile-toolrail .tool-btn.tool-btn-chrome,
-  .coachlab-mobile-toolrail .tool-btn.tool-btn-chrome.active {
-    background: #111111 !important;
-    border-color: rgba(255, 255, 255, 0.2) !important;
-    color: #ffffff !important;
-    filter: none !important;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35) !important;
-  }
-  .coachlab-mobile-toolrail .tool-btn.tool-btn-chrome:hover {
-    background: #1f1f1f !important;
-    border-color: rgba(255, 255, 255, 0.28) !important;
-  }
-  .coachlab-mobile-toolrail .tool-btn.tool-btn-chrome.active {
-    background: #2a2a2a !important;
-    border-color: rgba(255, 255, 255, 0.35) !important;
-  }
-  .coachlab-mobile-toolrail .tool-btn.tool-btn-chrome svg {
-    stroke: #ffffff !important;
-    stroke-width: 2.25px !important;
-  }
-  .coachlab-mobile-toolrail .tool-btn.tool-btn-chrome span {
-    color: rgba(255, 255, 255, 0.95) !important;
-  }
+/*
+ * Analysis video overlays: black chrome buttons + white glyphs (mobile strip + desktop rails).
+ * Scoped so cream-panel `.tool-btn` defaults stay unchanged elsewhere.
+ */
+.coachlab-video-toolbar .tool-btn.tool-btn-chrome,
+.coachlab-video-toolbar .tool-btn.tool-btn-chrome.active {
+  background: #111111 !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  color: #ffffff !important;
+  filter: none !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35) !important;
+}
+.coachlab-video-toolbar .tool-btn.tool-btn-chrome:hover {
+  background: #1f1f1f !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+.coachlab-video-toolbar .tool-btn.tool-btn-chrome.active {
+  background: #2a2a2a !important;
+  border-color: rgba(255, 255, 255, 0.38) !important;
+}
+.coachlab-video-toolbar .tool-btn.tool-btn-chrome svg {
+  stroke: #ffffff !important;
+  stroke-width: 2.25px !important;
+}
+.coachlab-video-toolbar .tool-btn.tool-btn-chrome span {
+  color: rgba(255, 255, 255, 0.95) !important;
 }
 
 /* ── Range Input ── */

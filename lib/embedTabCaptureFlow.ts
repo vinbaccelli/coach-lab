@@ -199,24 +199,22 @@ export async function runEmbedTabCaptureFlow(args: {
     }
     onProgress?.(0.04);
 
-    if (!safeVideoSrcObject(videoEl, stream)) {
-      try {
-        await recorder.stop();
-      } catch {
-        /* noop */
+    /**
+     * Preview on &lt;video&gt; is optional: recorder already holds the tab MediaStream.
+     * Attaching `srcObject` can throw on some Safari / embedded WebViews — do not fail the whole capture.
+     */
+    const previewOk = safeVideoSrcObject(videoEl, stream);
+    if (previewOk) {
+      await videoEl.play().catch(() => {});
+      await waitForPreviewFrames(videoEl);
+      await sleep(isYoutube ? 240 : 180);
+    } else {
+      if (typeof console !== 'undefined') {
+        console.warn('[embedTabCaptureFlow] preview attach failed — continuing recording without local preview');
       }
-      recorder = null;
-      stopAllTracks(stream);
-      stream = null;
-      return {
-        ok: false,
-        message:
-          'Could not attach the recording preview. Refresh the page and try Capture again.',
-      };
+      onProgress?.(0.08);
+      await sleep(isYoutube ? 420 : 300);
     }
-    await videoEl.play().catch(() => {});
-    await waitForPreviewFrames(videoEl);
-    await sleep(isYoutube ? 240 : 180);
 
     if (isYoutube && ytPlayer && typeof ytPlayer.seekTo === 'function') {
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
