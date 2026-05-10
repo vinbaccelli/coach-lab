@@ -47,8 +47,8 @@ const RACKET_TRAIL_MAX_ALPHA = 0.65;
 const SHAPE_SPIN_SPEED = 0.025;
 /** Minimum alpha applied to any StroMotion ghost frame */
 const MIN_GHOST_OPACITY = 0.02;
-/** Vertical offset (screen px) from finger to precision crosshair */
-const PRECISION_CURSOR_OFFSET_Y = 50;
+/** Vertical offset (screen px) from finger to precision crosshair — tuned for one-handed phones */
+const PRECISION_CURSOR_OFFSET_Y = 38;
 /** Synthetic pointer id for injected precision clicks */
 const PRECISION_SYNTHETIC_POINTER_ID = 91001;
 /** Fade-out duration when anchor finger lifts (ms) */
@@ -78,6 +78,9 @@ interface StrokeRect {
   color: string; lw: number; dashed?: boolean;
   spinning?: boolean;
   is3d?: boolean;
+  /** Two-click perimeter cut (0..1 CW from top-left corner); minor segment between them is removed */
+  outlineGapT0?: number;
+  outlineGapT1?: number;
 }
 interface StrokeTriangle {
   tool: 'triangle';
@@ -85,6 +88,8 @@ interface StrokeTriangle {
   color: string; lw: number; dashed?: boolean;
   spinning?: boolean;
   is3d?: boolean;
+  outlineGapT0?: number;
+  outlineGapT1?: number;
 }
 interface StrokeSwing   { tool: 'swingPath' | 'manualSwing';        pts: Pt[]; color: string; lw: number; dashed?: boolean }
 interface StrokeText    { tool: 'text';                             pos: Pt; text: string; color: string; fontSize: number }
@@ -499,6 +504,7 @@ function drawSmoothPath(
   ctx.restore();
 }
 
+/** gapStart/gapEnd = two click angles on the ellipse; the *minor* arc between them is removed; we stroke the major arc only. */
 function drawCircleStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeEllipse,
@@ -516,26 +522,219 @@ function drawCircleStroke(
     ctx.setLineDash([8, 6]);
   }
 
-  if (s.gapStart !== undefined) {
+  const rx = Math.max(1, s.rx);
+  const ry = Math.max(1, s.ry);
+
+  if (s.gapStart !== undefined && s.gapEnd !== undefined) {
     ctx.translate(s.cx, s.cy);
-    const startAngle = s.gapStart ?? 0;
-    const endAngle   = s.gapEnd   ?? Math.PI * 2;
-    const rx = Math.max(1, s.rx);
-    const ry = Math.max(1, s.ry);
+    const A = s.gapStart;
+    const B = s.gapEnd;
+    let cw = B - A;
+    if (cw < 0) cw += Math.PI * 2;
+    const minor = Math.min(cw, Math.PI * 2 - cw);
+    const major = Math.PI * 2 - minor;
     ctx.beginPath();
     if (Math.abs(rx - ry) < 1) {
-      ctx.arc(0, 0, rx, startAngle, endAngle);
+      ctx.arc(0, 0, rx, B, B + major, false);
     } else {
-      ctx.ellipse(0, 0, rx, ry, 0, startAngle, endAngle);
+      ctx.ellipse(0, 0, rx, ry, 0, B, B + major, false);
     }
     ctx.stroke();
+  } else if (s.gapStart !== undefined) {
+    // First cut point placed — still show full outline until second click completes the gap.
+    ctx.beginPath();
+    ctx.ellipse(s.cx, s.cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 59, 48, 0.35)';
+    ctx.beginPath();
+    ctx.arc(s.cx, s.cy, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   } else {
     ctx.beginPath();
-    ctx.ellipse(s.cx, s.cy, Math.max(1, s.rx), Math.max(1, s.ry), 0, 0, Math.PI * 2);
+    ctx.ellipse(s.cx, s.cy, rx, ry, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
 
   ctx.restore();
+}
+
+function rectOutlineArcLen(rx: number, ry: number): number {
+  return 4 * rx + 4 * ry;
+}
+
+/** Arc length u from top-left corner, clockwise */
+function rectPointAtArcU(cx: number, cy: number, rx: number, ry: number, u: number): Pt {
+  const P = rectOutlineArcLen(rx, ry);
+  let uu = ((u % P) + P) % P;
+  const top = 2 * rx;
+  const right = 2 * ry;
+  const bottom = 2 * rx;
+  if (uu <= top) return { x: cx - rx + uu, y: cy - ry };
+  uu -= top;
+  if (uu <= right) return { x: cx + rx, y: cy - ry + uu };
+  uu -= right;
+  if (uu <= bottom) return { x: cx + rx - uu, y: cy + ry };
+  uu -= bottom;
+  return { x: cx - rx, y: cy + ry - uu };
+}
+
+function closestRectOutlineT(cx: number, cy: number, rx: number, ry: number, p: Pt): number {
+  const rxr = Math.max(1e-6, rx);
+  const ryr = Math.max(1e-6, ry);
+  const P = rectOutlineArcLen(rxr, ryr);
+  type Seg = { len: number; uBase: number; at: (u: number) => Pt };
+  const segs: Seg[] = [
+    { len: 2 * rxr, uBase: 0, at: (u) => ({ x: cx - rxr + u, y: cy - ryr }) },
+    { len: 2 * ryr, uBase: 2 * rxr, at: (u) => ({ x: cx + rxr, y: cy - ryr + u }) },
+    { len: 2 * rxr, uBase: 2 * rxr + 2 * ryr, at: (u) => ({ x: cx + rxr - u, y: cy + ryr }) },
+    { len: 2 * ryr, uBase: 4 * rxr + 2 * ryr, at: (u) => ({ x: cx - rxr, y: cy + ryr - u }) },
+  ];
+  let bestT = 0;
+  let bestD = Infinity;
+  for (const seg of segs) {
+    const a = seg.at(0);
+    const b = seg.at(seg.len);
+    const abx = b.x - a.x;
+    const aby = b.y - a.y;
+    const apx = p.x - a.x;
+    const apy = p.y - a.y;
+    const denom = abx * abx + aby * aby;
+    const tt = denom > 0 ? Math.max(0, Math.min(1, (apx * abx + apy * aby) / denom)) : 0;
+    const cxp = a.x + tt * abx;
+    const cyp = a.y + tt * aby;
+    const d = Math.hypot(p.x - cxp, p.y - cyp);
+    const arcU = seg.uBase + tt * seg.len;
+    if (d < bestD) {
+      bestD = d;
+      bestT = arcU / P;
+    }
+  }
+  return ((bestT % 1) + 1) % 1;
+}
+
+function triEdgeLens(rx: number, ry: number): { e0: number; e1: number; e2: number; P: number } {
+  const rxr = Math.max(1e-6, rx);
+  const ryr = Math.max(1e-6, ry);
+  const e0 = Math.hypot(rxr, 2 * ryr);
+  const e1 = 2 * rxr;
+  const e2 = Math.hypot(rxr, 2 * ryr);
+  return { e0, e1, e2, P: e0 + e1 + e2 };
+}
+
+function triPointAtArcU(cx: number, cy: number, rx: number, ry: number, u: number): Pt {
+  const rxr = Math.max(1e-6, rx);
+  const ryr = Math.max(1e-6, ry);
+  const { e0, e1, e2, P } = triEdgeLens(rxr, ryr);
+  const v0 = { x: cx, y: cy - ryr };
+  const v1 = { x: cx + rxr, y: cy + ryr };
+  const v2 = { x: cx - rxr, y: cy + ryr };
+  let uu = ((u % P) + P) % P;
+  if (uu <= e0) {
+    const t = uu / e0;
+    return { x: v0.x + t * (v1.x - v0.x), y: v0.y + t * (v1.y - v0.y) };
+  }
+  uu -= e0;
+  if (uu <= e1) {
+    const t = uu / e1;
+    return { x: v1.x + t * (v2.x - v1.x), y: v1.y + t * (v2.y - v1.y) };
+  }
+  uu -= e1;
+  const t = uu / e2;
+  return { x: v2.x + t * (v0.x - v2.x), y: v2.y + t * (v0.y - v2.y) };
+}
+
+function closestTriOutlineT(cx: number, cy: number, rx: number, ry: number, p: Pt): number {
+  const rxr = Math.max(1e-6, rx);
+  const ryr = Math.max(1e-6, ry);
+  const { e0, e1, e2, P } = triEdgeLens(rxr, ryr);
+  const v0 = { x: cx, y: cy - ryr };
+  const v1 = { x: cx + rxr, y: cy + ryr };
+  const v2 = { x: cx - rxr, y: cy + ryr };
+  const edges: Array<{ a: Pt; b: Pt; u0: number; len: number }> = [
+    { a: v0, b: v1, u0: 0, len: e0 },
+    { a: v1, b: v2, u0: e0, len: e1 },
+    { a: v2, b: v0, u0: e0 + e1, len: e2 },
+  ];
+  let bestT = 0;
+  let bestD = Infinity;
+  for (const { a, b, u0, len } of edges) {
+    const abx = b.x - a.x;
+    const aby = b.y - a.y;
+    const apx = p.x - a.x;
+    const apy = p.y - a.y;
+    const denom = abx * abx + aby * aby;
+    const tt = denom > 0 ? Math.max(0, Math.min(1, (apx * abx + apy * aby) / denom)) : 0;
+    const px = a.x + tt * abx;
+    const py = a.y + tt * aby;
+    const d = Math.hypot(p.x - px, p.y - py);
+    const arcU = u0 + tt * len;
+    if (d < bestD) {
+      bestD = d;
+      bestT = arcU / P;
+    }
+  }
+  return ((bestT % 1) + 1) % 1;
+}
+
+/** Stroke the major arc along rect perimeter (same convention as ellipse gap). */
+function strokeRectOutlineMajorGap(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  tA: number,
+  tB: number,
+): void {
+  const rxr = Math.max(1, rx);
+  const ryr = Math.max(1, ry);
+  const P = rectOutlineArcLen(rxr, ryr);
+  let fw = tB - tA;
+  if (fw < 0) fw += 1;
+  const minorT = Math.min(fw, 1 - fw);
+  const majorT = 1 - minorT;
+  const uStart = ((tB % 1) + 1) % 1 * P;
+  const len = majorT * P;
+  const steps = Math.max(24, Math.ceil(len / 3));
+  ctx.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const u = (uStart + (len * i) / steps) % P;
+    const pt = rectPointAtArcU(cx, cy, rxr, ryr, u);
+    if (i === 0) ctx.moveTo(pt.x, pt.y);
+    else ctx.lineTo(pt.x, pt.y);
+  }
+  ctx.stroke();
+}
+
+function strokeTriOutlineMajorGap(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  tA: number,
+  tB: number,
+): void {
+  const rxr = Math.max(1, rx);
+  const ryr = Math.max(1, ry);
+  const { P } = triEdgeLens(rxr, ryr);
+  let fw = tB - tA;
+  if (fw < 0) fw += 1;
+  const minorT = Math.min(fw, 1 - fw);
+  const majorT = 1 - minorT;
+  const uStart = ((tB % 1) + 1) % 1 * P;
+  const len = majorT * P;
+  const steps = Math.max(24, Math.ceil(len / 3));
+  ctx.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const u = (uStart + (len * i) / steps) % P;
+    const pt = triPointAtArcU(cx, cy, rxr, ryr, u);
+    if (i === 0) ctx.moveTo(pt.x, pt.y);
+    else ctx.lineTo(pt.x, pt.y);
+  }
+  ctx.stroke();
 }
 
 function drawRectStroke(
@@ -557,7 +756,24 @@ function drawRectStroke(
     ctx.strokeRect(cx - s.rx, cy - s.ry, s.rx * 2, s.ry * 2);
   };
 
-  drawRectAt(s.cx, s.cy);
+  const gap0 = s.outlineGapT0;
+  const gap1 = s.outlineGapT1;
+  if (gap0 !== undefined && gap1 !== undefined) {
+    strokeRectOutlineMajorGap(ctx, s.cx, s.cy, s.rx, s.ry, gap0, gap1);
+  } else if (gap0 !== undefined) {
+    drawRectAt(s.cx, s.cy);
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 59, 48, 0.35)';
+    const P = rectOutlineArcLen(Math.max(1, s.rx), Math.max(1, s.ry));
+    const u = gap0 * P;
+    const dot = rectPointAtArcU(s.cx, s.cy, s.rx, s.ry, u);
+    ctx.beginPath();
+    ctx.arc(dot.x, dot.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  } else {
+    drawRectAt(s.cx, s.cy);
+  }
 
   if (s.is3d && !s.spinning) {
     const off = Math.max(8, s.lw * 2);
@@ -603,7 +819,23 @@ function drawTriangleStroke(
     ctx.stroke();
   };
 
-  drawTri(0, 0);
+  const g0 = s.outlineGapT0;
+  const g1 = s.outlineGapT1;
+  if (g0 !== undefined && g1 !== undefined) {
+    strokeTriOutlineMajorGap(ctx, 0, 0, s.rx, s.ry, g0, g1);
+  } else if (g0 !== undefined) {
+    drawTri(0, 0);
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 59, 48, 0.35)';
+    const { P } = triEdgeLens(s.rx, s.ry);
+    const dot = triPointAtArcU(0, 0, s.rx, s.ry, g0 * P);
+    ctx.beginPath();
+    ctx.arc(dot.x, dot.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  } else {
+    drawTri(0, 0);
+  }
 
   if (s.is3d && !s.spinning) {
     const off = Math.max(8, s.lw * 2);
@@ -2501,8 +2733,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const canvas = canvasRef.current;
       if (!canvas) return { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
+      /** Match precision crosshair mapping so finger drawing lands where the offset crosshair would. */
+      const yAdj = e.pointerType === 'touch' ? PRECISION_CURSOR_OFFSET_Y : 0;
       const sx = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const sy = (e.clientY - rect.top)  * (canvas.height / rect.height);
+      const sy = (e.clientY - yAdj - rect.top) * (canvas.height / rect.height);
       const W = canvas.width;
       const H = canvas.height;
       // Inverse zoom/pan transform so returned coords are in logical canvas space
@@ -2809,8 +3043,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // ── Pan: middle-click or Space+drag ─────────────────────────────────
-      if (e.button === 1 || spaceHeldRef.current) {
+      // ── Pan: middle-click or Space+drag, or Zoom tool + primary drag while zoomed in ──────
+      if (
+        e.button === 1 ||
+        spaceHeldRef.current ||
+        (tool === 'zoom' && e.button === 0 && zoomRef.current > 1)
+      ) {
         isPanningRef.current = true;
         panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
         e.preventDefault();
@@ -2887,26 +3125,90 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           return (dx2 * dx2) / (rx * rx) + (dy2 * dy2) / (ry * ry) <= 1;
         });
 
-        if (idx >= 0 && circleGapModeRef.current && (tool === 'circle' || tool === 'bodyCircle')) {
-          const el = strokesRef.current[idx] as StrokeEllipse;
-          const angle = Math.atan2(pos.y - el.cy, pos.x - el.cx);
-          const updated = { ...el };
-          if (gapCircleIdxRef.current !== idx || el.gapStart === undefined) {
-            updated.gapStart = angle;
-            updated.gapEnd = undefined;
-            gapCircleIdxRef.current = idx;
-          } else {
-            updated.gapEnd = el.gapStart;
-            updated.gapStart = angle;
-            gapCircleIdxRef.current = -1;
-            pushHistory();
+        if (idx >= 0 && circleGapModeRef.current) {
+          const hitStroke = strokesRef.current[idx];
+
+          if (
+            (tool === 'circle' || tool === 'bodyCircle') &&
+            (hitStroke.tool === 'circle' || hitStroke.tool === 'bodyCircle')
+          ) {
+            const el = hitStroke as StrokeEllipse;
+            const angle = Math.atan2(pos.y - el.cy, pos.x - el.cx);
+            const updated = { ...el };
+            if (el.gapStart !== undefined && el.gapEnd !== undefined) {
+              updated.gapStart = angle;
+              updated.gapEnd = undefined;
+              gapCircleIdxRef.current = idx;
+            } else if (gapCircleIdxRef.current !== idx || el.gapStart === undefined) {
+              updated.gapStart = angle;
+              updated.gapEnd = undefined;
+              gapCircleIdxRef.current = idx;
+            } else {
+              updated.gapEnd = angle;
+              gapCircleIdxRef.current = -1;
+              pushHistory();
+            }
+            strokesRef.current = [
+              ...strokesRef.current.slice(0, idx),
+              updated,
+              ...strokesRef.current.slice(idx + 1),
+            ];
+            return;
           }
-          strokesRef.current = [
-            ...strokesRef.current.slice(0, idx),
-            updated,
-            ...strokesRef.current.slice(idx + 1),
-          ];
-          return;
+
+          if (tool === 'rect' && hitStroke.tool === 'rect') {
+            const rr = hitStroke as StrokeRect;
+            if (rr.is3d) {
+              const t = closestRectOutlineT(rr.cx, rr.cy, rr.rx, rr.ry, pos);
+              const updated = { ...rr };
+              if (rr.outlineGapT0 !== undefined && rr.outlineGapT1 !== undefined) {
+                updated.outlineGapT0 = t;
+                updated.outlineGapT1 = undefined;
+                gapCircleIdxRef.current = idx;
+              } else if (gapCircleIdxRef.current !== idx || rr.outlineGapT0 === undefined) {
+                updated.outlineGapT0 = t;
+                updated.outlineGapT1 = undefined;
+                gapCircleIdxRef.current = idx;
+              } else {
+                updated.outlineGapT1 = t;
+                gapCircleIdxRef.current = -1;
+                pushHistory();
+              }
+              strokesRef.current = [
+                ...strokesRef.current.slice(0, idx),
+                updated,
+                ...strokesRef.current.slice(idx + 1),
+              ];
+              return;
+            }
+          }
+
+          if (tool === 'triangle' && hitStroke.tool === 'triangle') {
+            const tr = hitStroke as StrokeTriangle;
+            if (tr.is3d) {
+              const t = closestTriOutlineT(tr.cx, tr.cy, tr.rx, tr.ry, pos);
+              const updated = { ...tr };
+              if (tr.outlineGapT0 !== undefined && tr.outlineGapT1 !== undefined) {
+                updated.outlineGapT0 = t;
+                updated.outlineGapT1 = undefined;
+                gapCircleIdxRef.current = idx;
+              } else if (gapCircleIdxRef.current !== idx || tr.outlineGapT0 === undefined) {
+                updated.outlineGapT0 = t;
+                updated.outlineGapT1 = undefined;
+                gapCircleIdxRef.current = idx;
+              } else {
+                updated.outlineGapT1 = t;
+                gapCircleIdxRef.current = -1;
+                pushHistory();
+              }
+              strokesRef.current = [
+                ...strokesRef.current.slice(0, idx),
+                updated,
+                ...strokesRef.current.slice(idx + 1),
+              ];
+              return;
+            }
+          }
         }
 
         if (idx >= 0) {
@@ -2946,10 +3248,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             color: opts.color, lw,
             dashed: opts.dashed ?? false,
             spinning: circleSpinningRef.current || undefined,
-            // Apply a default 90° open gap when gap mode is on
-            ...(circleGapModeRef.current
-              ? { gapStart: Math.PI * 0.25, gapEnd: Math.PI * 1.75 }
-              : {}),
           };
           isDraggingRef.current = true;
           break;

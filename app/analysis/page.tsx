@@ -226,6 +226,19 @@ export default function Home() {
   >('idle');
   const [captureToast, setCaptureToast] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  const [captureRecordingElapsedSec, setCaptureRecordingElapsedSec] = useState(0);
+
+  useEffect(() => {
+    if (!captureBusy || !embedCaptureRecording) {
+      setCaptureRecordingElapsedSec(0);
+      return;
+    }
+    const t0 = Date.now();
+    const iv = window.setInterval(() => {
+      setCaptureRecordingElapsedSec(Math.floor((Date.now() - t0) / 1000));
+    }, 250);
+    return () => window.clearInterval(iv);
+  }, [captureBusy, embedCaptureRecording]);
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
   /** Drag-over state for the two video panels */
@@ -1212,7 +1225,7 @@ export default function Home() {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: '100%',
+        height: '100dvh',
         minHeight: 0,
         overflow: 'hidden',
         background: layoutMode === 'reels' ? '#000000' : '#FFFFFF',
@@ -1650,8 +1663,8 @@ export default function Home() {
                   ...(layoutMode === 'reels'
                 ? {
                     /** Tall phone frame: limited by viewport height first (reads like a real device) */
-                    width: 'min(420px, 92vw, calc((min(92dvh, calc(100dvh - 88px))) * 9 / 16))',
-                    maxHeight: 'min(92dvh, calc(100dvh - 88px))',
+                    width: 'min(480px, 96vw, calc((min(94dvh, calc(100dvh - 56px))) * 9 / 16))',
+                    maxHeight: 'min(94dvh, calc(100dvh - 56px))',
                     aspectRatio: '9 / 16',
                     borderRadius: 22,
                     border: '1px solid rgba(229, 229, 229, 0.55)',
@@ -2157,12 +2170,7 @@ export default function Home() {
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
                     />
                     <EmbedCapturePanel
-                      visible={
-                        !!(youtubeVideoIdA || genericEmbedSrcA) &&
-                        !embedCaptureRecording &&
-                        !captureBusy &&
-                        !videoSrc
-                      }
+                      visible={!!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc}
                       embedReady={embedReadyA}
                       sectionSeekSupported={!!youtubeVideoIdA}
                       genericIframeNote={
@@ -2170,7 +2178,11 @@ export default function Home() {
                           ? 'If you don’t see the video, it may be blocked from embedding — keep it playing in this tab, tap Capture, then choose This tab when your browser asks what to share.'
                           : undefined
                       }
-                      busy={captureBusy}
+                      busy={captureBusy && embedCapturePanelId === 'A'}
+                      progress01={embedCapturePanelId === 'A' ? captureProgress01 : 0}
+                      recordingElapsedSec={embedCapturePanelId === 'A' ? captureRecordingElapsedSec : 0}
+                      errorMessage={embedCapturePanelId === 'A' ? captureError : null}
+                      onRetry={() => setCaptureError(null)}
                       onCapture={(o) => void handleEmbedCaptureRequest('A', o)}
                     />
                     <button
@@ -2451,12 +2463,7 @@ export default function Home() {
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
                     />
                     <EmbedCapturePanel
-                      visible={
-                        !!(youtubeVideoIdB || genericEmbedSrcB) &&
-                        !embedCaptureRecording &&
-                        !captureBusy &&
-                        !videoSrcB
-                      }
+                      visible={!!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB}
                       embedReady={embedReadyB}
                       sectionSeekSupported={!!youtubeVideoIdB}
                       genericIframeNote={
@@ -2464,7 +2471,11 @@ export default function Home() {
                           ? 'If you don’t see the video, it may be blocked from embedding — keep it playing in this tab, tap Capture, then choose This tab when your browser asks what to share.'
                           : undefined
                       }
-                      busy={captureBusy}
+                      busy={captureBusy && embedCapturePanelId === 'B'}
+                      progress01={embedCapturePanelId === 'B' ? captureProgress01 : 0}
+                      recordingElapsedSec={embedCapturePanelId === 'B' ? captureRecordingElapsedSec : 0}
+                      errorMessage={embedCapturePanelId === 'B' ? captureError : null}
+                      onRetry={() => setCaptureError(null)}
                       onCapture={(o) => void handleEmbedCaptureRequest('B', o)}
                     />
                     <button

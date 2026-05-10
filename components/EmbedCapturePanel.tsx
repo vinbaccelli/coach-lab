@@ -22,15 +22,23 @@ export default function EmbedCapturePanel({
   sectionSeekSupported,
   genericIframeNote,
   busy,
+  progress01 = 0,
+  recordingElapsedSec = 0,
+  errorMessage,
+  onRetry,
   onCapture,
 }: {
   visible: boolean;
-  /** When false, Capture stays disabled and panel shows a loading state */
   embedReady: boolean;
-  /** When false (e.g. Instagram iframe), section shows times as hints only — user scrubs manually */
   sectionSeekSupported: boolean;
   genericIframeNote?: string;
   busy: boolean;
+  /** 0..1 while recording */
+  progress01?: number;
+  /** Seconds since recording started */
+  recordingElapsedSec?: number;
+  errorMessage?: string | null;
+  onRetry?: () => void;
   onCapture: (opts: {
     mode: CaptureModeChoice;
     startSec: number | null;
@@ -41,10 +49,13 @@ export default function EmbedCapturePanel({
   const [startStr, setStartStr] = useState('0:00');
   const [endStr, setEndStr] = useState('0:30');
 
-  const parsed = useMemo(() => ({
-    start: parseTimeToSeconds(startStr),
-    end: parseTimeToSeconds(endStr),
-  }), [startStr, endStr]);
+  const parsed = useMemo(
+    () => ({
+      start: parseTimeToSeconds(startStr),
+      end: parseTimeToSeconds(endStr),
+    }),
+    [startStr, endStr],
+  );
 
   const sectionInvalid =
     mode === 'section' &&
@@ -70,7 +81,19 @@ export default function EmbedCapturePanel({
 
   if (!visible) return null;
 
-  const panelBusyOrLoading = busy || !embedReady;
+  const loadingVideo = !embedReady && !busy;
+  const preparingCapture = busy && embedReady && progress01 < 0.04 && recordingElapsedSec < 3;
+  const recording = busy && embedReady && !preparingCapture;
+
+  const statusLine = (() => {
+    if (errorMessage) return null;
+    if (loadingVideo) return 'Loading video…';
+    if (!embedReady) return 'Loading video…';
+    if (busy && preparingCapture) return 'Preparing video for capture — please wait…';
+    if (busy && recording) return 'Recording in progress…';
+    if (embedReady && !busy) return 'Video ready — press Capture to begin';
+    return '';
+  })();
 
   return (
     <div
@@ -102,24 +125,113 @@ export default function EmbedCapturePanel({
         Record this video for analysis
       </p>
 
-      {!embedReady ? (
-        <p style={{ margin: '0 0 14px', fontSize: 13, color: '#6B6B6B', fontWeight: 500 }}>
-          Loading video…
-        </p>
-      ) : (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          marginBottom: 12,
+          minHeight: 36,
+        }}
+      >
+        {(loadingVideo || (busy && preparingCapture) || (!embedReady && !errorMessage)) && (
+          <span
+            style={{
+              width: 20,
+              height: 20,
+              border: '2px solid rgba(26,26,26,0.15)',
+              borderTopColor: '#1A1A1A',
+              borderRadius: '50%',
+              animation: 'coachlab-spin 0.7s linear infinite',
+            }}
+          />
+        )}
+        {embedReady && !busy && !errorMessage && (
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: '#22c55e',
+              flexShrink: 0,
+              boxShadow: '0 0 0 3px rgba(34,197,94,0.25)',
+            }}
+          />
+        )}
+        <span style={{ fontWeight: 600, color: errorMessage ? '#b45309' : '#1A1A1A' }}>
+          {errorMessage ?? statusLine}
+        </span>
+      </div>
+      <style>{`@keyframes coachlab-spin { to { transform: rotate(360deg); } }`}</style>
+
+      {busy && recording && (
+        <div style={{ marginBottom: 12 }}>
+          <div
+            style={{
+              height: 8,
+              borderRadius: 6,
+              background: '#E5E5E5',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${Math.round(Math.min(1, Math.max(0, progress01)) * 100)}%`,
+                background: '#1A1A1A',
+                transition: 'width 0.15s ease-out',
+              }}
+            />
+          </div>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#57534e', fontVariantNumeric: 'tabular-nums' }}>
+            Elapsed: {Math.floor(recordingElapsedSec / 60)}:
+            {String(recordingElapsedSec % 60).padStart(2, '0')}
+          </div>
+        </div>
+      )}
+
+      {!errorMessage && embedReady && (
         <>
           <p style={{ margin: '0 0 10px', opacity: 0.88, fontSize: 12, color: '#3C3C3C' }}>
             When you tap Capture, your browser will ask what to share. Choose{' '}
-            <strong style={{ color: '#1A1A1A' }}>This tab</strong> (sometimes labelled “Chrome Tab”) — not your whole screen — so only this page is recorded.
-          </p>
-          <p style={{ margin: '0 0 14px', opacity: 0.82, fontSize: 11.5, color: '#5C5C5C' }}>
-            Then tap <strong style={{ color: '#1A1A1A' }}>Allow</strong>. You&apos;ll see the live picture here while we finish recording.
+            <strong style={{ color: '#1A1A1A' }}>This tab</strong> — not your whole screen.
           </p>
         </>
       )}
 
+      {errorMessage ? (
+        <div style={{ marginBottom: 14 }}>
+          <p style={{ margin: '0 0 10px', fontSize: 13, color: '#991b1b', lineHeight: 1.5 }}>{errorMessage}</p>
+          {onRetry ? (
+            <button
+              type="button"
+              onClick={onRetry}
+              style={{
+                padding: '10px 16px',
+                borderRadius: 10,
+                border: '1px solid #E5E5E5',
+                background: '#1A1A1A',
+                color: '#fff',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Try again
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: embedReady && !busy ? 'pointer' : 'default', opacity: embedReady ? 1 : 0.45 }}>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            cursor: embedReady && !busy ? 'pointer' : 'default',
+            opacity: embedReady ? 1 : 0.45,
+          }}
+        >
           <input
             type="radio"
             name="capmode"
@@ -129,7 +241,15 @@ export default function EmbedCapturePanel({
           />
           <span>Full video</span>
         </label>
-        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: embedReady && !busy ? 'pointer' : 'default', opacity: embedReady ? 1 : 0.45 }}>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            cursor: embedReady && !busy ? 'pointer' : 'default',
+            opacity: embedReady ? 1 : 0.45,
+          }}
+        >
           <input
             type="radio"
             name="capmode"
@@ -182,7 +302,7 @@ export default function EmbedCapturePanel({
                 </span>
                 {!sectionSeekSupported && (
                   <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: '#6B6B6B' }}>
-                    Move the video to where you want to begin first. Recording stops automatically at the “Ends at” time you entered.
+                    Move the video to where you want to begin first. Recording stops at the “Ends at” time you entered.
                   </span>
                 )}
                 {sectionInvalid && (
@@ -209,16 +329,16 @@ export default function EmbedCapturePanel({
           padding: '12px 16px',
           borderRadius: 12,
           border: '1px solid #E5E5E5',
-          background: captureAllowed ? '#1A1A1A' : 'rgba(26,26,26,0.15)',
-          color: captureAllowed ? '#FFFFFF' : 'rgba(26,26,26,0.45)',
+          background: captureAllowed ? '#1A1A1A' : 'rgba(26,26,26,0.12)',
+          color: captureAllowed ? '#FFFFFF' : 'rgba(26,26,26,0.5)',
           fontWeight: 700,
           fontSize: 14,
           cursor: captureAllowed ? 'pointer' : 'not-allowed',
         }}
       >
-        {busy ? 'Recording…' : !embedReady ? 'Loading video…' : 'Capture'}
+        {busy ? 'Working…' : !embedReady ? 'Waiting for video…' : 'Capture'}
       </button>
-      {panelBusyOrLoading && embedReady && busy ? (
+      {busy && embedReady ? (
         <p style={{ margin: '10px 0 0', fontSize: 11, color: '#6B6B6B', textAlign: 'center' }}>
           Finish sharing only when the clip completes or you stop recording from the browser bar.
         </p>

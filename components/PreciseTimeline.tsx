@@ -324,7 +324,7 @@ export default function PreciseTimeline({
     flexDirection: 'column',
     gap: phoneChrome ? 8 : compact ? 6 : 10,
     width: '100%',
-    padding: `${phoneChrome ? 8 : compact ? 6 : 10}px 12px ${phoneChrome ? 8 : compact ? 6 : 10}px calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 8 : compact ? 6 : 10}px)`,
+    padding: `${phoneChrome ? 8 : compact ? 6 : 10}px 12px calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 20 : compact ? 16 : 18}px) calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 8 : compact ? 6 : 10}px)`,
     paddingLeft: Math.max(12, leadingInsetPx),
     borderRadius: phoneChrome ? 0 : '14px 14px 0 0',
     background: phoneChrome ? 'rgba(255,255,255,0.06)' : 'rgba(15, 15, 18, 0.58)',

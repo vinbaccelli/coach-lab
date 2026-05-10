@@ -8,6 +8,8 @@ export type ManualOutcome =
 export type LoggedPoint = {
   winner: Side;
   outcome: ManualOutcome;
+  /** Coach-flagged decisive moment */
+  killer?: boolean;
 };
 
 /** Plain-text report aligned with decoder sections (simplified aggregates). */
@@ -71,11 +73,20 @@ export function compileManualReport(
     }
   });
   lines.push('');
-  lines.push(`FORCED ERRORS INDUCED AND WINNERS`);
+  lines.push(`POINT HISTORY`);
   points.forEach((pt, i) => {
-    if (pt.outcome.kind === 'winner') {
-      lines.push(`Point ${i + 1}: Winner (${pt.outcome.stroke}) by ${pt.winner === 'player' ? playerName : opponentName}`);
-    }
+    const tag =
+      pt.outcome.kind === 'serve'
+        ? pt.outcome.detail === 'ace'
+          ? 'Ace'
+          : 'Double fault'
+        : pt.outcome.kind === 'ue'
+          ? `UE ${pt.outcome.stroke}`
+          : `Winner ${pt.outcome.stroke}`;
+    const killer = pt.killer ? ' [KILLER POINT — decisive moment]' : '';
+    lines.push(
+      `Point ${i + 1}: ${tag} — won by ${pt.winner === 'player' ? playerName : opponentName}${killer}`,
+    );
   });
   lines.push('');
   lines.push(`COACHES SUMMARY`);

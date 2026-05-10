@@ -74,15 +74,13 @@ function IconBtn({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: 12,
-        border: active
-          ? '1px solid rgba(255,255,255,0.45)'
-          : '1px solid rgba(255,255,255,0.22)',
-        background: active ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.08)',
-        color: '#fff',
+        border: active ? '2px solid #111111' : '2px solid rgba(0,0,0,0.14)',
+        background: active ? 'rgba(255,255,255,0.98)' : 'rgba(255,255,255,0.92)',
+        color: '#111111',
         cursor: 'pointer',
-        backdropFilter: 'blur(12px) saturate(1.2)',
-        WebkitBackdropFilter: 'blur(12px) saturate(1.2)',
-        boxShadow: '0 1px 2px rgba(0,0,0,0.55), 0 0 1px rgba(0,0,0,0.35)',
+        backdropFilter: 'blur(14px) saturate(1.15)',
+        WebkitBackdropFilter: 'blur(14px) saturate(1.15)',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
         touchAction: 'manipulation',
       }}
     >
@@ -133,7 +131,7 @@ export default function MobileToolStrip(props: Props) {
   }), []);
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div className="coachlab-mobile-toolrail" style={{ position: 'relative' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <IconBtn active={activeTool === 'select'} title="Select" onClick={() => { setPanel(null); onToolChange('select'); }}>
           <MousePointer2 size={22} />
