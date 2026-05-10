@@ -8,10 +8,9 @@ import {
   ArrowRight,
   Type,
   PersonStanding,
-  Footprints,
   TrendingUp,
   ZoomIn,
-  Shapes,
+  LayoutGrid,
   Eraser,
   Undo2,
   Redo2,
@@ -22,11 +21,12 @@ import {
   Activity,
   Zap,
   Crosshair,
+  Crop,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import type { BallTrailMode } from '@/components/ToolPalette';
 
-type Panel = null | 'draw' | 'angle' | 'style' | 'shapes' | 'swing';
+type Panel = null | 'tools' | 'view';
 
 interface Props {
   activeTool: ToolType;
@@ -47,6 +47,7 @@ interface Props {
   triangle3d?: boolean;
   onTriangle3dChange?: (v: boolean) => void;
   onClearCrop?: () => void;
+  onResetCropZoom?: () => void;
   precisionDrawEnabled?: boolean;
   onPrecisionDrawToggle?: () => void;
   onShowPrecisionInstructions?: () => void;
@@ -65,6 +66,8 @@ function IconBtn({
 }) {
   return (
     <button
+      type="button"
+      className={`tool-btn tool-btn-chrome ${active ? 'active' : ''}`}
       onClick={onClick}
       title={title}
       style={{
@@ -74,13 +77,8 @@ function IconBtn({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: 12,
-        border: active ? '2px solid #111111' : '2px solid rgba(0,0,0,0.14)',
-        background: active ? 'rgba(255,255,255,0.98)' : 'rgba(255,255,255,0.92)',
-        color: '#111111',
+        padding: 0,
         cursor: 'pointer',
-        backdropFilter: 'blur(14px) saturate(1.15)',
-        WebkitBackdropFilter: 'blur(14px) saturate(1.15)',
-        boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
         touchAction: 'manipulation',
       }}
     >
@@ -88,6 +86,15 @@ function IconBtn({
     </button>
   );
 }
+
+const secLabel: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: '#6e6e73',
+  margin: '10px 0 6px',
+};
 
 export default function MobileToolStrip(props: Props) {
   const {
@@ -109,6 +116,7 @@ export default function MobileToolStrip(props: Props) {
     triangle3d,
     onTriangle3dChange,
     onClearCrop,
+    onResetCropZoom,
     precisionDrawEnabled = false,
     onPrecisionDrawToggle,
     onShowPrecisionInstructions,
@@ -116,19 +124,33 @@ export default function MobileToolStrip(props: Props) {
 
   const [panel, setPanel] = useState<Panel>(null);
   const isCircle3d = activeTool === 'bodyCircle';
+  const toolsOpen = panel === 'tools';
+  const viewOpen = panel === 'view';
+
+  const shapeGapEligible =
+    activeTool === 'circle' ||
+    activeTool === 'bodyCircle' ||
+    (activeTool === 'rect' && !!rect3d) ||
+    (activeTool === 'triangle' && !!triangle3d);
 
   const panelStyle: React.CSSProperties = useMemo(() => ({
     position: 'absolute',
     left: 46,
     top: 0,
-    minWidth: 196,
+    minWidth: 220,
+    maxWidth: 'min(92vw, 320px)',
+    maxHeight: 'min(72vh, 520px)',
+    overflowY: 'auto',
+    WebkitOverflowScrolling: 'touch',
     background: 'rgba(250,249,247,0.97)',
     border: '1px solid #E5E5E5',
     borderRadius: 14,
-    padding: 10,
+    padding: 12,
     color: '#1A1A1A',
     boxShadow: '0 12px 36px rgba(0,0,0,0.08)',
   }), []);
+
+  const showSwingArrowOpt = activeTool === 'manualSwing' || activeTool === 'swingPath';
 
   return (
     <div className="coachlab-mobile-toolrail" style={{ position: 'relative' }}>
@@ -139,7 +161,7 @@ export default function MobileToolStrip(props: Props) {
         {onPrecisionDrawToggle ? (
           <IconBtn
             active={precisionDrawEnabled}
-            title="Precision draw — move with one finger; tap with a second finger to click at the crosshair. Details: Style → Show instructions again."
+            title="Precision draw — one finger moves crosshair; second finger taps to click there."
             onClick={() => {
               setPanel(null);
               onPrecisionDrawToggle();
@@ -148,36 +170,22 @@ export default function MobileToolStrip(props: Props) {
             <Crosshair size={20} strokeWidth={precisionDrawEnabled ? 2.5 : 2} />
           </IconBtn>
         ) : null}
-        <IconBtn active={panel === 'draw'} title="Draw" onClick={() => setPanel(panel === 'draw' ? null : 'draw')}>
-          <Pen size={22} />
-        </IconBtn>
-        <IconBtn active={panel === 'angle'} title="Angle" onClick={() => setPanel(panel === 'angle' ? null : 'angle')}>
-          <Triangle size={22} />
-        </IconBtn>
-        <IconBtn active={activeTool === 'text'} title="Text" onClick={() => { setPanel(null); onToolChange('text'); }}>
-          <Type size={22} />
+        <IconBtn
+          active={toolsOpen || ['pen', 'line', 'arrow', 'erase', 'circle', 'bodyCircle', 'rect', 'triangle', 'angle', 'arrowAngle', 'text', 'manualSwing', 'cropSelect'].includes(activeTool)}
+          title="Draw & annotate — lines, shapes, text, swing"
+          onClick={() => setPanel(toolsOpen ? null : 'tools')}
+        >
+          <LayoutGrid size={22} />
         </IconBtn>
         <IconBtn active={activeTool === 'skeleton'} title="Skeleton" onClick={() => { setPanel(null); onToolChange('skeleton'); }}>
           <PersonStanding size={22} />
         </IconBtn>
-        {/* V2 feature: Ball Trail is intentionally hidden from UI for now. */}
-        {/* <IconBtn active={activeTool === 'ballShadow'} title="Ball Trail" onClick={() => { setPanel(null); onToolChange('ballShadow'); }}>
-          <Footprints size={18} />
-        </IconBtn> */}
-        <IconBtn active={panel === 'swing'} title="Swing" onClick={() => setPanel(panel === 'swing' ? null : 'swing')}>
-          <TrendingUp size={22} />
-        </IconBtn>
-        <IconBtn active={activeTool === 'zoom'} title="Zoom" onClick={() => { setPanel(null); onToolChange('zoom'); }}>
+        <IconBtn
+          active={viewOpen || activeTool === 'zoom' || activeTool === 'cropSelect'}
+          title="Zoom & crop"
+          onClick={() => setPanel(viewOpen ? null : 'view')}
+        >
           <ZoomIn size={22} />
-        </IconBtn>
-        <IconBtn active={activeTool === 'cropSelect'} title="Crop" onClick={() => { setPanel(null); onToolChange('cropSelect'); }}>
-          <Square size={22} />
-        </IconBtn>
-        <IconBtn active={panel === 'shapes'} title="Shapes" onClick={() => setPanel(panel === 'shapes' ? null : 'shapes')}>
-          <Shapes size={22} />
-        </IconBtn>
-        <IconBtn active={panel === 'style'} title="Style" onClick={() => setPanel(panel === 'style' ? null : 'style')}>
-          <Minus size={22} />
         </IconBtn>
         <IconBtn title="Undo" onClick={() => { setPanel(null); onUndo(); }}>
           <Undo2 size={22} />
@@ -190,137 +198,138 @@ export default function MobileToolStrip(props: Props) {
         </IconBtn>
       </div>
 
-      {panel === 'draw' && (
+      {panel === 'tools' && (
         <div style={panelStyle}>
+          <div style={secLabel}>Line & color</div>
+          <label style={{ fontSize: 11, display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+            Color
+            <input type="color" value={drawingOptions.color} onChange={(e) => onOptionsChange({ color: e.target.value })} />
+          </label>
+          <label style={{ fontSize: 11, display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+            Thickness
+            <input type="range" min={1} max={12} step={1} value={drawingOptions.lineWidth} onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })} />
+          </label>
+          <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+            <input type="checkbox" checked={!!drawingOptions.dashed} onChange={(e) => onOptionsChange({ dashed: e.target.checked })} />
+            Dashed line
+          </label>
+          {showSwingArrowOpt && (
+            <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <input type="checkbox" checked={!!drawingOptions.arrowAtEnd} onChange={(e) => onOptionsChange({ arrowAtEnd: e.target.checked })} />
+              Arrow at end of path
+            </label>
+          )}
+          {activeTool === 'text' && (
+            <label style={{ fontSize: 11, display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              Font size
+              <input type="range" min={10} max={72} step={2} value={drawingOptions.fontSize} onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })} />
+            </label>
+          )}
+          {onShowPrecisionInstructions ? (
+            <button
+              type="button"
+              onClick={() => {
+                onShowPrecisionInstructions();
+              }}
+              style={{
+                marginBottom: 10,
+                padding: '8px 0',
+                border: 'none',
+                background: 'none',
+                color: '#35679A',
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+                textDecoration: 'underline',
+                textUnderlineOffset: 2,
+              }}
+            >
+              Precision draw instructions
+            </button>
+          ) : null}
+
+          <div style={secLabel}>Stroke</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button onClick={() => { onToolChange('pen'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Pen size={14} />Pen</button>
-            <button onClick={() => { onToolChange('line'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Minus size={14} />Line</button>
-            <button onClick={() => { onToolChange('arrow'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><ArrowRight size={14} />Arrow</button>
-            <button onClick={() => { onToolChange('erase'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Eraser size={14} />Eraser</button>
-            <button onClick={() => { onToolChange(isCircle3d ? 'bodyCircle' : 'circle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Circle size={14} />Circle</button>
-            <button onClick={() => { onToolChange('rect'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Square size={14} />Rect</button>
-            <button onClick={() => { onToolChange('triangle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Triangle size={14} />Tri</button>
+            <button type="button" onClick={() => { onToolChange('pen'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Pen size={14} />Pen</button>
+            <button type="button" onClick={() => { onToolChange('line'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Minus size={14} />Line</button>
+            <button type="button" onClick={() => { onToolChange('arrow'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><ArrowRight size={14} />Arrow</button>
+            <button type="button" onClick={() => { onToolChange('erase'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Eraser size={14} />Eraser</button>
           </div>
-        </div>
-      )}
 
-      {panel === 'angle' && (
-        <div style={panelStyle}>
+          <div style={secLabel}>Shapes</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button onClick={() => { onToolChange('angle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Triangle size={14} />Angle</button>
-            <button onClick={() => { onToolChange('arrowAngle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Activity size={14} />Arrow</button>
-          </div>
-        </div>
-      )}
-
-      {panel === 'swing' && (
-        <div style={panelStyle}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <button onClick={() => { onToolChange('manualSwing'); setPanel(null); }} className="tool-btn flex-row gap-1"><Zap size={14} />Manual</button>
-            <p style={{ margin: 0, fontSize: 10, color: '#6b7280' }}>Auto swing is on desktop toolbar.</p>
-          </div>
-        </div>
-      )}
-
-      {panel === 'shapes' && (
-        <div style={panelStyle}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
-              <button onClick={() => { onToolChange(isCircle3d ? 'bodyCircle' : 'circle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3">
-                <Circle size={14} />Circle
-              </button>
+            <button type="button" onClick={() => { onToolChange(isCircle3d ? 'bodyCircle' : 'circle'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Circle size={14} />Circle</button>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+              <input type="checkbox" checked={isCircle3d} onChange={(e) => onToolChange(e.target.checked ? 'bodyCircle' : 'circle')} />
+              3D body circle
+            </label>
+            <button type="button" onClick={() => { onToolChange('rect'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Square size={14} />Rectangle</button>
+            {onRect3dChange && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-                <input type="checkbox" checked={isCircle3d} onChange={(e) => onToolChange(e.target.checked ? 'bodyCircle' : 'circle')} />
-                3D
+                <input type="checkbox" checked={!!rect3d} onChange={(e) => onRect3dChange(e.target.checked)} />
+                3D rectangle
               </label>
-            </div>
-            {(activeTool === 'circle' || activeTool === 'bodyCircle') && onCircleGapModeChange && (
-              <button onClick={() => onCircleGapModeChange(!circleGapMode)} className="tool-btn flex-row gap-1">
-                ✂ {circleGapMode ? 'Gap ON' : 'Gap'}
-              </button>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
-              <button onClick={() => { onToolChange('rect'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Square size={14} />Rect</button>
-              {onRect3dChange && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-                  <input type="checkbox" checked={!!rect3d} onChange={(e) => onRect3dChange(e.target.checked)} />
-                  3D
-                </label>
-              )}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
-              <button onClick={() => { onToolChange('triangle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Triangle size={14} />Tri</button>
-              {onTriangle3dChange && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-                  <input type="checkbox" checked={!!triangle3d} onChange={(e) => onTriangle3dChange(e.target.checked)} />
-                  3D
-                </label>
-              )}
-            </div>
+            <button type="button" onClick={() => { onToolChange('triangle'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Triangle size={14} />Triangle</button>
+            {onTriangle3dChange && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                <input type="checkbox" checked={!!triangle3d} onChange={(e) => onTriangle3dChange(e.target.checked)} />
+                3D triangle
+              </label>
+            )}
             {onCircleSpinningChange && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
                 <input type="checkbox" checked={!!circleSpinning} onChange={(e) => onCircleSpinningChange(e.target.checked)} />
-                Animation
+                Animated outline
               </label>
             )}
+            {onCircleGapModeChange && shapeGapEligible && (
+              <button type="button" onClick={() => onCircleGapModeChange(!circleGapMode)} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3">
+                ✂ {circleGapMode ? 'Outline gap ON' : 'Outline gap (2 taps)'}
+              </button>
+            )}
           </div>
-        </div>
-      )}
 
-      {panel === 'style' && (
-        <div style={panelStyle}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <label style={{ fontSize: 11, display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-              Color
-              <input type="color" value={drawingOptions.color} onChange={(e) => onOptionsChange({ color: e.target.value })} />
-            </label>
-            <label style={{ fontSize: 11, display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-              Size
-              <input type="range" min={1} max={12} step={1} value={drawingOptions.lineWidth} onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })} />
-            </label>
-            <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={!!drawingOptions.dashed} onChange={(e) => onOptionsChange({ dashed: e.target.checked })} />
-              Dashed
-            </label>
-            {activeTool === 'ballShadow' && (
+          <div style={secLabel}>Measure</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button type="button" onClick={() => { onToolChange('angle'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Triangle size={14} />Angle</button>
+            <button type="button" onClick={() => { onToolChange('arrowAngle'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Activity size={14} />Arrow + angle</button>
+          </div>
+
+          <div style={secLabel}>More</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button type="button" onClick={() => { onToolChange('text'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Type size={14} />Text</button>
+            <button type="button" onClick={() => { onToolChange('manualSwing'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Zap size={14} />Manual swing path</button>
+          </div>
+
+          {activeTool === 'ballShadow' && (
+            <div style={{ marginTop: 10 }}>
+              <div style={secLabel}>Ball trail</div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {(['comet', 'arc', 'strobe'] as BallTrailMode[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => onBallTrailModeChange(m)}
-                    className={`tool-btn flex-row gap-1 ${ballTrailMode === m ? 'active' : ''}`}
-                  >
+                  <button key={m} type="button" onClick={() => onBallTrailModeChange(m)} className={`tool-btn flex-row gap-1 ${ballTrailMode === m ? 'active' : ''}`}>
                     {m}
                   </button>
                 ))}
               </div>
-            )}
-            {activeTool === 'cropSelect' && onClearCrop && (
-              <button onClick={onClearCrop} className="tool-btn flex-row gap-1">
-                Clear crop
+            </div>
+          )}
+        </div>
+      )}
+
+      {panel === 'view' && (
+        <div style={panelStyle}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button type="button" onClick={() => { onToolChange('zoom'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><ZoomIn size={14} />Zoom & pan</button>
+            <button type="button" onClick={() => { onToolChange('cropSelect'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Crop size={14} />Crop region</button>
+            {onResetCropZoom ? (
+              <button type="button" onClick={() => onResetCropZoom()} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3">
+                Reset zoom
               </button>
-            )}
-            {onShowPrecisionInstructions ? (
-              <button
-                type="button"
-                onClick={() => {
-                  onShowPrecisionInstructions();
-                  setPanel(null);
-                }}
-                style={{
-                  marginTop: 4,
-                  padding: 0,
-                  border: 'none',
-                  background: 'none',
-                  color: '#35679A',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  textUnderlineOffset: 2,
-                }}
-              >
-                Show instructions again
+            ) : null}
+            {onClearCrop ? (
+              <button type="button" onClick={() => onClearCrop()} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3">
+                Clear crop
               </button>
             ) : null}
           </div>

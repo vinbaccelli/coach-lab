@@ -91,7 +91,7 @@ interface StrokeTriangle {
   outlineGapT0?: number;
   outlineGapT1?: number;
 }
-interface StrokeSwing   { tool: 'swingPath' | 'manualSwing';        pts: Pt[]; color: string; lw: number; dashed?: boolean }
+interface StrokeSwing   { tool: 'swingPath' | 'manualSwing';        pts: Pt[]; color: string; lw: number; dashed?: boolean; arrowAtEnd?: boolean }
 interface StrokeText    { tool: 'text';                             pos: Pt; text: string; color: string; fontSize: number }
 
 type Stroke = StrokePen | StrokeLine | StrokeArrow | StrokeEllipse | StrokeRect | StrokeTriangle | StrokeSwing | StrokeText;
@@ -463,6 +463,7 @@ function drawSmoothPath(
   width: number,
   opacity: number,
   dashed: boolean,
+  arrowAtEnd = false,
 ): void {
   if (points.length < 2) return;
 
@@ -486,19 +487,20 @@ function drawSmoothPath(
   ctx.lineTo(last.x, last.y);
   ctx.stroke();
 
-  // Draw arrowhead at end
-  if (points.length >= 2) {
+  if (arrowAtEnd && points.length >= 2) {
     const p1 = points[points.length - 2];
     const p2 = points[points.length - 1];
     const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
     const headLen = Math.max(12, width * 3);
     ctx.setLineDash([]);
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
     ctx.beginPath();
     ctx.moveTo(p2.x, p2.y);
     ctx.lineTo(p2.x - headLen * Math.cos(angle - Math.PI / 7), p2.y - headLen * Math.sin(angle - Math.PI / 7));
-    ctx.moveTo(p2.x, p2.y);
     ctx.lineTo(p2.x - headLen * Math.cos(angle + Math.PI / 7), p2.y - headLen * Math.sin(angle + Math.PI / 7));
-    ctx.stroke();
+    ctx.closePath();
+    ctx.fill();
   }
 
   ctx.restore();
@@ -888,7 +890,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
     ctx.stroke();
 
   } else if (s.tool === 'swingPath' || s.tool === 'manualSwing') {
-    drawSmoothPath(ctx, s.pts, s.color, s.lw, 1, s.dashed ?? false);
+    drawSmoothPath(ctx, s.pts, s.color, s.lw, 1, s.dashed ?? false, s.arrowAtEnd === true);
     ctx.restore();
     return;
 
@@ -1684,6 +1686,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           color,
           lw: 4,
           dashed: false,
+          arrowAtEnd: drawingOptsRef.current.arrowAtEnd === true,
         });
         pushHistory();
       },
@@ -2463,14 +2466,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
           const pts = swingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false);
+          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true);
         }
 
         // Manual swing path being drawn
         if (manualSwingActiveRef.current && manualSwingPtsRef.current.length > 0) {
           const pts = manualSwingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false);
+          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true);
         }
 
         // Locked angle measurements
@@ -2825,7 +2828,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const opts = drawingOptsRef.current;
         strokesRef.current = [
           ...strokesRef.current,
-          { tool: 'swingPath', pts: [...pts], color: opts.color, lw: opts.lineWidth, dashed: opts.dashed ?? false },
+          {
+            tool: 'swingPath',
+            pts: [...pts],
+            color: opts.color,
+            lw: opts.lineWidth,
+            dashed: opts.dashed ?? false,
+            arrowAtEnd: opts.arrowAtEnd === true,
+          },
         ];
         pushHistory();
       }
@@ -2839,7 +2849,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const opts = drawingOptsRef.current;
         strokesRef.current = [
           ...strokesRef.current,
-          { tool: 'manualSwing', pts: [...pts], color: opts.color, lw: opts.lineWidth, dashed: opts.dashed ?? false },
+          {
+            tool: 'manualSwing',
+            pts: [...pts],
+            color: opts.color,
+            lw: opts.lineWidth,
+            dashed: opts.dashed ?? false,
+            arrowAtEnd: opts.arrowAtEnd === true,
+          },
         ];
         pushHistory();
       }

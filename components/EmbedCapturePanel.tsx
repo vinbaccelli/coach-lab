@@ -190,13 +190,11 @@ export default function EmbedCapturePanel({
         </div>
       )}
 
-      {!errorMessage && embedReady && (
-        <>
-          <p style={{ margin: '0 0 10px', opacity: 0.88, fontSize: 12, color: '#3C3C3C' }}>
-            When you tap Capture, your browser will ask what to share. Choose{' '}
-            <strong style={{ color: '#1A1A1A' }}>This tab</strong> — not your whole screen.
-          </p>
-        </>
+      {!errorMessage && embedReady && !busy && (
+        <p style={{ margin: '0 0 12px', padding: '12px 14px', borderRadius: 12, background: 'rgba(26,26,26,0.06)', border: '1px solid #E5E5E5', opacity: 1, fontSize: 12, color: '#3C3C3C', lineHeight: 1.5 }}>
+          <strong style={{ color: '#1A1A1A' }}>Before you tap Capture:</strong> your browser will ask what to share.
+          Choose <strong style={{ color: '#1A1A1A' }}>This tab</strong> / <strong style={{ color: '#1A1A1A' }}>Chrome Tab</strong> — not your whole screen — so the recording matches this player.
+        </p>
       )}
 
       {errorMessage ? (
@@ -340,7 +338,7 @@ export default function EmbedCapturePanel({
       </button>
       {busy && embedReady ? (
         <p style={{ margin: '10px 0 0', fontSize: 11, color: '#6B6B6B', textAlign: 'center' }}>
-          Finish sharing only when the clip completes or you stop recording from the browser bar.
+          Keep this tab shared until the progress bar finishes.
         </p>
       ) : null}
     </div>

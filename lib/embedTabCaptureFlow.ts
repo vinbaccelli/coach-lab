@@ -86,7 +86,7 @@ function safeVideoSrcObject(el: HTMLVideoElement | null, stream: MediaStream | n
   }
 }
 
-async function startRecorderWithRetries(stream: MediaStream, videoEl: HTMLVideoElement): Promise<TabCaptureRecorder> {
+async function startRecorderWithRetries(stream: MediaStream, videoEl: HTMLVideoElement | null): Promise<TabCaptureRecorder> {
   let attempt = 0;
   const maxAttempts = 6;
   let lastErr: unknown;
@@ -95,7 +95,7 @@ async function startRecorderWithRetries(stream: MediaStream, videoEl: HTMLVideoE
     attempt += 1;
     const recorder = new TabCaptureRecorder();
     try {
-      await sleep(attempt === 1 ? 120 : 180 + attempt * 90);
+      await sleep(attempt === 1 ? 340 : 240 + attempt * 110);
       recorder.start(stream);
       return recorder;
     } catch (e) {
@@ -113,9 +113,9 @@ async function startRecorderWithRetries(stream: MediaStream, videoEl: HTMLVideoE
         } catch {
           /* noop */
         }
-        await sleep(140 + attempt * 70);
+        await sleep(180 + attempt * 80);
         if (!safeVideoSrcObject(videoEl, stream)) {
-          await sleep(200);
+          await sleep(220);
         }
         await videoEl.play().catch(() => {});
         await waitForPreviewFrames(videoEl);
@@ -132,8 +132,10 @@ export async function runEmbedTabCaptureFlow(args: {
   isYoutube: boolean;
   captureShellEl: HTMLElement | null;
   onProgress?: (ratio01: number) => void;
+  /** Media duration (seconds) read before capture — used for progress on non-YouTube “full” clips */
+  videoDurationHintSec?: number | null;
 }): Promise<{ ok: true; blob: Blob } | { ok: false; message: string }> {
-  const { opts, videoEl, ytPlayer, isYoutube, onProgress } = args;
+  const { opts, videoEl, ytPlayer, isYoutube, onProgress, videoDurationHintSec } = args;
 
   let recorder: TabCaptureRecorder | null = null;
   let stream: MediaStream | null = null;
@@ -184,10 +186,26 @@ export async function runEmbedTabCaptureFlow(args: {
     }
 
     /**
-     * Use one MediaStream for both &lt;video&gt; and MediaRecorder.
-     * stream.clone() for the recorder breaks recording on several browsers (opaque failures / empty errors).
+     * Start MediaRecorder before attaching the tab stream to &lt;video&gt; — avoids InvalidStateError
+     * when both compete for first frames (common in Chromium tab capture).
      */
+    await sleep(isYoutube ? 160 : 120);
+    try {
+      recorder = await startRecorderWithRetries(stream, null);
+    } catch (e) {
+      stopAllTracks(stream);
+      stream = null;
+      throw e;
+    }
+    onProgress?.(0.04);
+
     if (!safeVideoSrcObject(videoEl, stream)) {
+      try {
+        await recorder.stop();
+      } catch {
+        /* noop */
+      }
+      recorder = null;
       stopAllTracks(stream);
       stream = null;
       return {
@@ -198,9 +216,7 @@ export async function runEmbedTabCaptureFlow(args: {
     }
     await videoEl.play().catch(() => {});
     await waitForPreviewFrames(videoEl);
-    await sleep(isYoutube ? 260 : 200);
-
-    recorder = await startRecorderWithRetries(stream, videoEl);
+    await sleep(isYoutube ? 240 : 180);
 
     if (isYoutube && ytPlayer && typeof ytPlayer.seekTo === 'function') {
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
@@ -267,11 +283,28 @@ export async function runEmbedTabCaptureFlow(args: {
         window.clearInterval(iv);
         onProgress?.(1);
       } else {
-        /** Wait until user stops sharing this tab */
-        await new Promise<void>((resolve) => {
-          track?.addEventListener('ended', () => resolve(), { once: true });
-        });
-        onProgress?.(1);
+        const hint = videoDurationHintSec;
+        if (hint != null && hint > 0.5 && Number.isFinite(hint)) {
+          const durMs = hint * 1000;
+          const t0 = performance.now();
+          const iv = window.setInterval(() => {
+            onProgress?.(Math.min(1, (performance.now() - t0) / durMs));
+          }, 100);
+          await sleep(durMs);
+          window.clearInterval(iv);
+          onProgress?.(1);
+        } else {
+          let pulse = 0.06;
+          const pulseIv = window.setInterval(() => {
+            pulse = Math.min(0.92, pulse + 0.013);
+            onProgress?.(pulse);
+          }, 280);
+          await new Promise<void>((resolve) => {
+            track?.addEventListener('ended', () => resolve(), { once: true });
+          });
+          window.clearInterval(pulseIv);
+          onProgress?.(1);
+        }
       }
     }
 

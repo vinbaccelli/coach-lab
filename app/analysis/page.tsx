@@ -92,6 +92,7 @@ export default function Home() {
     lineWidth: 3,
     fontSize: 24,
     dashed: false,
+    arrowAtEnd: false,
   });
   const [canvasSize, setCanvasSize]       = useState({ width: 800, height: 450 });
   const [videoSrc, setVideoSrc]           = useState<string | null>(null);
@@ -959,6 +960,14 @@ export default function Home() {
       const isYt = panel === 'A' ? !!youtubeVideoIdA : !!youtubeVideoIdB;
       const shell = panel === 'A' ? captureShellRef.current : captureShellRefB.current;
 
+      const durHint =
+        !isYt &&
+        typeof videoEl.duration === 'number' &&
+        Number.isFinite(videoEl.duration) &&
+        videoEl.duration > 0.25
+          ? videoEl.duration
+          : null;
+
       const result = await runEmbedTabCaptureFlow({
         opts,
         videoEl,
@@ -966,6 +975,7 @@ export default function Home() {
         isYoutube: isYt,
         captureShellEl: shell,
         onProgress: setCaptureProgress01,
+        videoDurationHintSec: durHint,
       });
 
       setCaptureBusy(false);
@@ -1883,6 +1893,7 @@ export default function Home() {
                   triangle3d={triangle3d}
                   onTriangle3dChange={setTriangle3d}
                   onClearCrop={() => canvasRef.current?.clearCropRegion()}
+                  onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
                   precisionDrawEnabled={precisionDrawEnabled}
                   onPrecisionDrawToggle={handlePrecisionDrawToggle}
                   onShowPrecisionInstructions={showPrecisionInstructionsAgain}

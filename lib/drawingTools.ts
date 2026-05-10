@@ -29,6 +29,8 @@ export interface DrawingOptions {
   lineWidth: number;
   fontSize: number;
   dashed: boolean;
+  /** When true, manual/auto swing paths draw an arrowhead at the final segment (like the Arrow tool). */
+  arrowAtEnd?: boolean;
 }
 
 /** Calculate the angle (in degrees) between three points: vertex at b */

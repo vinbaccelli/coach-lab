@@ -22,6 +22,7 @@ import {
   Zap,
   ZoomIn,
   Shapes,
+  Crop,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -72,7 +73,7 @@ interface ToolPaletteProps {
   onClearCrop?: () => void;
 }
 
-type Panel = null | 'draw' | 'angle' | 'style' | 'swing';
+type Panel = null | 'draw' | 'angle' | 'style' | 'swing' | 'view';
 
 const PRESET_COLORS = [
   '#1E40AF', '#DC2626', '#16A34A', '#D97706', '#7C3AED',
@@ -137,8 +138,21 @@ export default function ToolPalette({
 
   const isCircle3d = activeTool === 'bodyCircle';
   const isShapeTool = activeTool === 'circle' || activeTool === 'bodyCircle' || activeTool === 'rect' || activeTool === 'triangle';
-  const isDrawTool = activeTool === 'pen' || activeTool === 'line' || activeTool === 'arrow' || activeTool === 'erase' || isShapeTool;
-  const isAngleTool = activeTool === 'angle' || activeTool === 'arrowAngle';
+  const isDrawTool =
+    activeTool === 'pen' ||
+    activeTool === 'line' ||
+    activeTool === 'arrow' ||
+    activeTool === 'erase' ||
+    isShapeTool ||
+    activeTool === 'text' ||
+    activeTool === 'angle' ||
+    activeTool === 'arrowAngle' ||
+    activeTool === 'manualSwing';
+  const shapeGapEligible =
+    activeTool === 'circle' ||
+    activeTool === 'bodyCircle' ||
+    (activeTool === 'rect' && !!rect3d) ||
+    (activeTool === 'triangle' && !!triangle3d);
 
   const setTool = (t: ToolType) => {
     onToolChange(t);
@@ -177,13 +191,13 @@ export default function ToolPalette({
           <button
             onClick={() => togglePanel('draw')}
             className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${isDrawTool ? 'active' : ''}`}
-            title="Draw tools"
+            title="Draw, shapes, text, measure, swing"
           >
             <Pen size={15} />
             {!compact && <span>Draw</span>}
           </button>
           {openPanel === 'draw' && (
-            <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm">
+            <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm max-h-[min(70vh,520px)] overflow-y-auto">
               <div className="grid grid-cols-1 gap-1.5">
                 <button onClick={() => setTool('pen')} className={`tool-btn flex-row gap-1 ${activeTool === 'pen' ? 'active' : ''}`}>
                   <Pen size={14} /><span>Pen</span>
@@ -205,6 +219,19 @@ export default function ToolPalette({
                 </button>
                 <button onClick={() => setTool('triangle')} className={`tool-btn flex-row gap-1 ${activeTool === 'triangle' ? 'active' : ''}`}>
                   <Triangle size={14} /><span>Triangle</span>
+                </button>
+                <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mt-1 mb-0 px-0.5">Annotate</p>
+                <button onClick={() => setTool('text')} className={`tool-btn flex-row gap-1 ${activeTool === 'text' ? 'active' : ''}`}>
+                  <Type size={14} /><span>Text</span>
+                </button>
+                <button onClick={() => setTool('angle')} className={`tool-btn flex-row gap-1 ${activeTool === 'angle' ? 'active' : ''}`}>
+                  <Triangle size={14} /><span>Angle</span>
+                </button>
+                <button onClick={() => setTool('arrowAngle')} className={`tool-btn flex-row gap-1 ${activeTool === 'arrowAngle' ? 'active' : ''}`}>
+                  <Activity size={14} /><span>Arrow + angle</span>
+                </button>
+                <button onClick={() => setTool('manualSwing')} className={`tool-btn flex-row gap-1 ${activeTool === 'manualSwing' ? 'active' : ''}`}>
+                  <Zap size={14} /><span>Manual swing</span>
                 </button>
               </div>
 
@@ -263,14 +290,13 @@ export default function ToolPalette({
                     </label>
                   )}
 
-                  {/* Circle-only gap mode */}
-                  {onCircleGapModeChange && (activeTool === 'circle' || activeTool === 'bodyCircle') && (
+                  {onCircleGapModeChange && shapeGapEligible && (
                     <button
                       onClick={() => onCircleGapModeChange(!circleGapMode)}
                       className={`tool-btn w-full flex-row gap-1 ${circleGapMode ? 'active text-blue-600' : 'text-gray-500'}`}
                     >
                       <span className="text-[13px]">✂</span>
-                      <span>{circleGapMode ? 'Gap Mode ON' : 'Add Gap'}</span>
+                      <span>{circleGapMode ? 'Outline gap ON' : 'Outline gap (2 clicks)'}</span>
                     </button>
                   )}
                 </div>
@@ -278,62 +304,38 @@ export default function ToolPalette({
             </div>
           )}
 
-          <button
-            onClick={() => togglePanel('angle')}
-            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${isAngleTool ? 'active' : ''}`}
-            title="Angle tools"
-          >
-            <Triangle size={15} />
-            <span>Angle</span>
-          </button>
-          {openPanel === 'angle' && (
-            <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm">
-              <div className="grid grid-cols-1 gap-1.5">
-                <button onClick={() => setTool('angle')} className={`tool-btn flex-row gap-1 ${activeTool === 'angle' ? 'active' : ''}`}>
-                  <Triangle size={14} /><span>Angle</span>
-                </button>
-                <button onClick={() => setTool('arrowAngle')} className={`tool-btn flex-row gap-1 ${activeTool === 'arrowAngle' ? 'active' : ''}`}>
-                  <Activity size={14} /><span>Arrow Angle</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          <button onClick={() => setTool('text')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'text' ? 'active' : ''}`} title="Text">
-            <Type size={15} /><span>Text</span>
-          </button>
-
           <button onClick={() => setTool('skeleton')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'skeleton' ? 'active' : ''}`} title="Skeleton">
             <PersonStanding size={15} /><span>Skeleton</span>
           </button>
 
-          {/* V2 feature: Ball Trail is intentionally hidden from UI for now. */}
-          {/* <button onClick={() => setTool('ballShadow')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'ballShadow' ? 'active' : ''}`} title="Ball Trail">
-            <Footprints size={15} /><span>Ball Trail</span>
-          </button> */}
-
-          <button onClick={() => togglePanel('swing')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${openPanel === 'swing' ? 'active' : ''}`} title="Swing">
-            <TrendingUp size={15} /><span>Swing</span>
+          <button
+            onClick={() => togglePanel('view')}
+            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${openPanel === 'view' || activeTool === 'zoom' || activeTool === 'cropSelect' ? 'active' : ''}`}
+            title="Zoom & crop"
+          >
+            <ZoomIn size={15} />
+            {!compact && <span>View</span>}
           </button>
-          {openPanel === 'swing' && (
+          {openPanel === 'view' && (
             <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm flex flex-col gap-1.5">
-              <button onClick={() => setTool('manualSwing')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'manualSwing' ? 'active' : ''}`}>
-                <Zap size={14} /><span>Manual</span>
+              <button onClick={() => setTool('zoom')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'zoom' ? 'active' : ''}`}>
+                <ZoomIn size={14} /><span>Zoom & pan</span>
               </button>
-              {onAutoSwing && (
-                <button onClick={() => { setOpenPanel(null); onAutoSwing(); }} className="tool-btn w-full flex-row gap-1">
-                  <TrendingUp size={14} /><span>Auto</span>
+              <button onClick={() => setTool('cropSelect')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'cropSelect' ? 'active' : ''}`}>
+                <Crop size={14} /><span>Crop</span>
+              </button>
+              {onResetCropZoom && (
+                <button type="button" onClick={onResetCropZoom} className="tool-btn w-full flex-row gap-1 text-gray-600">
+                  <RefreshCw size={14} /><span>Reset zoom</span>
+                </button>
+              )}
+              {onClearCrop && (
+                <button type="button" onClick={onClearCrop} className="tool-btn w-full flex-row gap-1 text-gray-600">
+                  <RefreshCw size={14} /><span>Clear crop</span>
                 </button>
               )}
             </div>
           )}
-
-          <button onClick={() => setTool('zoom')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'zoom' ? 'active' : ''}`} title="Zoom / Pan">
-            <ZoomIn size={15} /><span>Zoom</span>
-          </button>
-          <button onClick={() => setTool('cropSelect')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'cropSelect' ? 'active' : ''}`} title="Crop (affects recordings/exports)">
-            <Square size={15} /><span>Crop</span>
-          </button>
         </div>
       </div>
 
@@ -404,6 +406,17 @@ export default function ToolPalette({
                   <span>Dashed</span>
                 </button>
               </div>
+              {(activeTool === 'manualSwing' || activeTool === 'swingPath') && (
+                <label className="flex items-center gap-2 text-xs text-gray-600 mt-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!!drawingOptions.arrowAtEnd}
+                    onChange={(e) => onOptionsChange({ arrowAtEnd: e.target.checked })}
+                    className="accent-blue-500"
+                  />
+                  Arrow at end of path
+                </label>
+              )}
             </div>
           </div>
         </>
