@@ -21,6 +21,7 @@ import {
   Circle,
   Activity,
   Zap,
+  Crosshair,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import type { BallTrailMode } from '@/components/ToolPalette';
@@ -46,6 +47,9 @@ interface Props {
   triangle3d?: boolean;
   onTriangle3dChange?: (v: boolean) => void;
   onClearCrop?: () => void;
+  precisionDrawEnabled?: boolean;
+  onPrecisionDrawToggle?: () => void;
+  onShowPrecisionInstructions?: () => void;
 }
 
 function IconBtn({
@@ -69,12 +73,16 @@ function IconBtn({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        borderRadius: 10,
-        border: active ? '1px solid #35679A' : '1px solid rgba(255,255,255,0.25)',
-        background: active ? 'rgba(53,103,154,0.22)' : 'rgba(0,0,0,0.35)',
+        borderRadius: 12,
+        border: active
+          ? '1px solid rgba(255,255,255,0.45)'
+          : '1px solid rgba(255,255,255,0.22)',
+        background: active ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.08)',
         color: '#fff',
         cursor: 'pointer',
-        backdropFilter: 'blur(6px)',
+        backdropFilter: 'blur(12px) saturate(1.2)',
+        WebkitBackdropFilter: 'blur(12px) saturate(1.2)',
+        boxShadow: '0 1px 2px rgba(0,0,0,0.55), 0 0 1px rgba(0,0,0,0.35)',
         touchAction: 'manipulation',
       }}
     >
@@ -103,6 +111,9 @@ export default function MobileToolStrip(props: Props) {
     triangle3d,
     onTriangle3dChange,
     onClearCrop,
+    precisionDrawEnabled = false,
+    onPrecisionDrawToggle,
+    onShowPrecisionInstructions,
   } = props;
 
   const [panel, setPanel] = useState<Panel>(null);
@@ -110,14 +121,15 @@ export default function MobileToolStrip(props: Props) {
 
   const panelStyle: React.CSSProperties = useMemo(() => ({
     position: 'absolute',
-    left: 42,
+    left: 46,
     top: 0,
-    minWidth: 180,
-    background: 'rgba(255,255,255,0.98)',
-    border: '1px solid rgba(0,0,0,0.12)',
-    borderRadius: 10,
-    padding: 8,
-    color: '#111',
+    minWidth: 196,
+    background: 'rgba(250,249,247,0.97)',
+    border: '1px solid #E5E5E5',
+    borderRadius: 14,
+    padding: 10,
+    color: '#1A1A1A',
+    boxShadow: '0 12px 36px rgba(0,0,0,0.08)',
   }), []);
 
   return (
@@ -126,6 +138,18 @@ export default function MobileToolStrip(props: Props) {
         <IconBtn active={activeTool === 'select'} title="Select" onClick={() => { setPanel(null); onToolChange('select'); }}>
           <MousePointer2 size={22} />
         </IconBtn>
+        {onPrecisionDrawToggle ? (
+          <IconBtn
+            active={precisionDrawEnabled}
+            title="Precision draw — move with one finger; tap with a second finger to click at the crosshair. Details: Style → Show instructions again."
+            onClick={() => {
+              setPanel(null);
+              onPrecisionDrawToggle();
+            }}
+          >
+            <Crosshair size={20} strokeWidth={precisionDrawEnabled ? 2.5 : 2} />
+          </IconBtn>
+        ) : null}
         <IconBtn active={panel === 'draw'} title="Draw" onClick={() => setPanel(panel === 'draw' ? null : 'draw')}>
           <Pen size={22} />
         </IconBtn>
@@ -170,23 +194,23 @@ export default function MobileToolStrip(props: Props) {
 
       {panel === 'draw' && (
         <div style={panelStyle}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-            <button onClick={() => { onToolChange('pen'); setPanel(null); }} className="tool-btn flex-row gap-1"><Pen size={14} />Pen</button>
-            <button onClick={() => { onToolChange('line'); setPanel(null); }} className="tool-btn flex-row gap-1"><Minus size={14} />Line</button>
-            <button onClick={() => { onToolChange('arrow'); setPanel(null); }} className="tool-btn flex-row gap-1"><ArrowRight size={14} />Arrow</button>
-            <button onClick={() => { onToolChange('erase'); setPanel(null); }} className="tool-btn flex-row gap-1"><Eraser size={14} />Eraser</button>
-            <button onClick={() => { onToolChange(isCircle3d ? 'bodyCircle' : 'circle'); setPanel(null); }} className="tool-btn flex-row gap-1"><Circle size={14} />Circle</button>
-            <button onClick={() => { onToolChange('rect'); setPanel(null); }} className="tool-btn flex-row gap-1"><Square size={14} />Rect</button>
-            <button onClick={() => { onToolChange('triangle'); setPanel(null); }} className="tool-btn flex-row gap-1"><Triangle size={14} />Tri</button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button onClick={() => { onToolChange('pen'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Pen size={14} />Pen</button>
+            <button onClick={() => { onToolChange('line'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Minus size={14} />Line</button>
+            <button onClick={() => { onToolChange('arrow'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><ArrowRight size={14} />Arrow</button>
+            <button onClick={() => { onToolChange('erase'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Eraser size={14} />Eraser</button>
+            <button onClick={() => { onToolChange(isCircle3d ? 'bodyCircle' : 'circle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Circle size={14} />Circle</button>
+            <button onClick={() => { onToolChange('rect'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Square size={14} />Rect</button>
+            <button onClick={() => { onToolChange('triangle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Triangle size={14} />Tri</button>
           </div>
         </div>
       )}
 
       {panel === 'angle' && (
         <div style={panelStyle}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-            <button onClick={() => { onToolChange('angle'); setPanel(null); }} className="tool-btn flex-row gap-1"><Triangle size={14} />Angle</button>
-            <button onClick={() => { onToolChange('arrowAngle'); setPanel(null); }} className="tool-btn flex-row gap-1"><Activity size={14} />Arrow</button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button onClick={() => { onToolChange('angle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Triangle size={14} />Angle</button>
+            <button onClick={() => { onToolChange('arrowAngle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Activity size={14} />Arrow</button>
           </div>
         </div>
       )}
@@ -202,9 +226,9 @@ export default function MobileToolStrip(props: Props) {
 
       {panel === 'shapes' && (
         <div style={panelStyle}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-              <button onClick={() => { onToolChange(isCircle3d ? 'bodyCircle' : 'circle'); setPanel(null); }} className="tool-btn flex-row gap-1">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
+              <button onClick={() => { onToolChange(isCircle3d ? 'bodyCircle' : 'circle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3">
                 <Circle size={14} />Circle
               </button>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
@@ -217,8 +241,8 @@ export default function MobileToolStrip(props: Props) {
                 ✂ {circleGapMode ? 'Gap ON' : 'Gap'}
               </button>
             )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-              <button onClick={() => { onToolChange('rect'); setPanel(null); }} className="tool-btn flex-row gap-1"><Square size={14} />Rect</button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
+              <button onClick={() => { onToolChange('rect'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Square size={14} />Rect</button>
               {onRect3dChange && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
                   <input type="checkbox" checked={!!rect3d} onChange={(e) => onRect3dChange(e.target.checked)} />
@@ -226,8 +250,8 @@ export default function MobileToolStrip(props: Props) {
                 </label>
               )}
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-              <button onClick={() => { onToolChange('triangle'); setPanel(null); }} className="tool-btn flex-row gap-1"><Triangle size={14} />Tri</button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
+              <button onClick={() => { onToolChange('triangle'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Triangle size={14} />Tri</button>
               {onTriangle3dChange && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
                   <input type="checkbox" checked={!!triangle3d} onChange={(e) => onTriangle3dChange(e.target.checked)} />
@@ -278,6 +302,29 @@ export default function MobileToolStrip(props: Props) {
                 Clear crop
               </button>
             )}
+            {onShowPrecisionInstructions ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onShowPrecisionInstructions();
+                  setPanel(null);
+                }}
+                style={{
+                  marginTop: 4,
+                  padding: 0,
+                  border: 'none',
+                  background: 'none',
+                  color: '#35679A',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  textUnderlineOffset: 2,
+                }}
+              >
+                Show instructions again
+              </button>
+            ) : null}
           </div>
         </div>
       )}

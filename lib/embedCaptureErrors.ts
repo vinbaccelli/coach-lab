@@ -78,13 +78,24 @@ export function formatTabCaptureError(err: unknown): string {
   }
 
   if (/recording produced no video|empty file was empty|no usable video/i.test(raw)) {
-    return raw;
+    return 'The recording did not contain usable video. Try Capture again and keep this tab shared until recording finishes.';
   }
 
-  /** Surface short technical detail so deployed debugging isn’t a dead end */
+  if (
+    /null is not an object|undefined is not an object|cannot read properties of null|reading 'src'|evaluating 'this\.|\.src\b/i.test(
+      raw,
+    )
+  ) {
+    return 'The recording preview was not ready yet. Wait until the video plays clearly in this tab, then tap Capture again. If this repeats, refresh the page.';
+  }
+
   const trimmed = raw.trim();
   if (trimmed.length > 0 && trimmed.length < 220 && !/^error$/i.test(trimmed)) {
-    return `Recording failed: ${trimmed}`;
+    /** Never surface minified stack fragments or opaque browser internals to coaches */
+    if (/^\s*null\s*$|^\s*undefined\s*$|^\[object/i.test(trimmed)) {
+      return 'Something went wrong while recording. Please tap Retry or refresh the page and try again.';
+    }
+    return 'Something went wrong while recording. Please try again.';
   }
 
   return 'Something went wrong while recording. Please try again.';

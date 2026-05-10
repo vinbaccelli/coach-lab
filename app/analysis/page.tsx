@@ -14,6 +14,10 @@ import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/component
 import PreciseTimeline from '@/components/PreciseTimeline';
 import ScreenRecorder from '@/components/ScreenRecorder';
 import MobileToolStrip from '@/components/MobileToolStrip';
+import PrecisionDrawInstructions, {
+  hasSeenPrecisionInstructions,
+  markPrecisionInstructionsSeen,
+} from '@/components/PrecisionDrawInstructions';
 import YouTubeEmbed from '@/components/YouTubeEmbed';
 import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
@@ -35,13 +39,13 @@ const btnStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: '6px',
-  padding: '6px 12px',
-  borderRadius: '6px',
-  border: '1px solid #E8E8ED',
-  background: '#fff',
+  padding: '8px 14px',
+  borderRadius: '12px',
+  border: '1px solid #E5E5E5',
+  background: '#FFFFFF',
   cursor: 'pointer',
   fontSize: '13px',
-  color: '#1D1D1F',
+  color: '#1A1A1A',
   fontWeight: 500,
   whiteSpace: 'nowrap',
 };
@@ -315,6 +319,42 @@ export default function Home() {
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, []);
+
+  /** Mobile + tablet: floating tool strip (precision toggle lives here; hidden on desktop). */
+  const [showMobileToolStrip, setShowMobileToolStrip] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1024px)');
+    const fn = () => setShowMobileToolStrip(mq.matches);
+    fn();
+    mq.addEventListener('change', fn);
+    return () => mq.removeEventListener('change', fn);
+  }, []);
+
+  const [precisionDrawEnabled, setPrecisionDrawEnabled] = useState(false);
+  const [precisionInstructionsOpen, setPrecisionInstructionsOpen] = useState(false);
+
+  const handlePrecisionDrawToggle = useCallback(() => {
+    setPrecisionDrawEnabled((prev) => {
+      const next = !prev;
+      if (next && typeof window !== 'undefined' && !hasSeenPrecisionInstructions()) {
+        queueMicrotask(() => setPrecisionInstructionsOpen(true));
+      }
+      return next;
+    });
+  }, []);
+
+  const dismissPrecisionInstructions = useCallback(() => {
+    markPrecisionInstructionsSeen();
+    setPrecisionInstructionsOpen(false);
+  }, []);
+
+  const showPrecisionInstructionsAgain = useCallback(() => {
+    setPrecisionInstructionsOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!showMobileToolStrip) setPrecisionDrawEnabled(false);
+  }, [showMobileToolStrip]);
 
   // Mobile: auto-switch layout based on device orientation (portrait=reels, landscape=youtube)
   useEffect(() => {
@@ -874,7 +914,12 @@ export default function Home() {
       opts: { mode: 'full' | 'section'; startSec: number | null; endSec: number | null },
     ) => {
       const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
-      if (!videoEl) return;
+      if (!videoEl) {
+        setCaptureError(
+          'The video player is not ready yet. Wait until the clip appears, then open Capture again.',
+        );
+        return;
+      }
 
       const ready = panel === 'A' ? embedReadyA : embedReadyB;
       const hasEmbedOnly =
@@ -1050,16 +1095,16 @@ export default function Home() {
             flexWrap: 'wrap',
           }}
         >
-          <span style={{ fontSize: 11, opacity: 0.65, fontWeight: 600 }}>Playback</span>
+          <span style={{ fontSize: 11, color: '#6e6e73', fontWeight: 600 }}>Playback</span>
           <select
             value={playbackTarget}
             onChange={(e) => setPlaybackTarget(e.target.value as 'A' | 'B' | 'AB')}
             style={{
               height: 32,
               borderRadius: 10,
-              border: '1px solid rgba(255,255,255,0.2)',
-              background: 'rgba(255,255,255,0.08)',
-              color: '#fff',
+              border: '1px solid #E5E5E5',
+              background: '#FFFFFF',
+              color: '#1A1A1A',
               padding: '0 10px',
               fontSize: 13,
               fontWeight: 600,
@@ -1133,8 +1178,8 @@ export default function Home() {
         height: '100%',
         minHeight: 0,
         overflow: 'hidden',
-        background: layoutMode === 'reels' ? '#000000' : '#FAF8F5',
-        color: '#1D1D1F',
+        background: layoutMode === 'reels' ? '#000000' : '#FFFFFF',
+        color: '#1A1A1A',
       }}
     >
 
@@ -1188,11 +1233,12 @@ export default function Home() {
                 width: 44,
                 height: 44,
                 borderRadius: 14,
-                border: '1px solid rgba(255,255,255,0.14)',
-                background: 'rgba(15, 15, 18, 0.70)',
-                color: '#fff',
-                backdropFilter: 'blur(10px)',
-                WebkitBackdropFilter: 'blur(10px)',
+                border: '1px solid #E5E5E5',
+                background: 'rgba(255, 255, 255, 0.85)',
+                color: '#1A1A1A',
+                backdropFilter: 'blur(18px) saturate(1.1)',
+                WebkitBackdropFilter: 'blur(18px) saturate(1.1)',
+                boxShadow: '0 8px 28px rgba(0,0,0,0.08)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1201,7 +1247,7 @@ export default function Home() {
               title="Menu"
               aria-label="Menu"
             >
-              <Menu size={20} />
+              <Menu size={20} strokeWidth={1.75} />
             </button>
 
             {mobileMenuOpen && (
@@ -1213,20 +1259,22 @@ export default function Home() {
                 maxHeight: 'min(72vh, 560px)',
                 overflow: 'auto',
                 borderRadius: 16,
-                padding: 12,
-                background: 'rgba(15, 15, 18, 0.92)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                color: '#fff',
-                boxShadow: '0 18px 60px rgba(0,0,0,0.45)',
+                padding: 14,
+                background: 'rgba(250, 249, 247, 0.97)',
+                border: '1px solid #E5E5E5',
+                color: '#1A1A1A',
+                backdropFilter: 'blur(20px) saturate(1.1)',
+                WebkitBackdropFilter: 'blur(20px) saturate(1.1)',
+                boxShadow: '0 18px 48px rgba(0,0,0,0.1)',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                   <div style={{
                     width: 28, height: 28, borderRadius: 8,
-                    background: '#35679A', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: '#1A1A1A', display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
                     <Camera size={14} color="#fff" />
                   </div>
-                  <div style={{ fontWeight: 800 }}>Coach Lab</div>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>Coach Lab</div>
                   <span style={{ flex: 1 }} />
                   <button onClick={() => setMobileMenuOpen(false)} style={{ ...headerBtnStyle, width: 44, padding: 0 }}>✕</button>
                 </div>
@@ -1238,12 +1286,12 @@ export default function Home() {
                     style={{
                       height: 40,
                       borderRadius: 10,
-                      border: '1px solid rgba(255,255,255,0.16)',
-                      background: 'rgba(255,255,255,0.06)',
-                      color: '#fff',
+                      border: '1px solid #E5E5E5',
+                      background: '#FFFFFF',
+                      color: '#1A1A1A',
                       padding: '0 10px',
                       fontSize: 13,
-                      fontWeight: 800,
+                      fontWeight: 700,
                       cursor: 'pointer',
                     }}
                     title="Load URL into Video A or B"
@@ -1263,11 +1311,11 @@ export default function Home() {
                       height: 40,
                       padding: '0 10px',
                       borderRadius: 10,
-                      border: '1px solid rgba(255,255,255,0.16)',
+                      border: '1px solid #E5E5E5',
                       fontSize: 14,
                       outline: 'none',
-                      background: 'rgba(255,255,255,0.06)',
-                      color: '#fff',
+                      background: '#FFFFFF',
+                      color: '#1A1A1A',
                       minWidth: 0,
                     }}
                   />
@@ -1293,15 +1341,15 @@ export default function Home() {
                   <button type="button" onClick={resetSession} style={headerBtnStyle} title="Start fresh — clears videos and recordings">
                     New
                   </button>
-                  <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, borderColor: '#f97316', color: '#fdba74' }} title="Remove all videos">
+                  <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, borderColor: '#fca5a5', color: '#b91c1c', background: '#fff7f7' }} title="Remove all videos">
                     Clear all
                   </button>
                 </div>
 
-                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span style={{ fontSize: 11, opacity: 0.7, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Layout</span>
-                  <button onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, background: layoutMode === 'youtube' ? '#35679A' : 'rgba(255,255,255,0.06)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)' }}>16:9</button>
-                  <button onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, background: layoutMode === 'reels' ? '#35679A' : 'rgba(255,255,255,0.06)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)' }}>9:16</button>
+                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 11, color: '#6e6e73', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Layout</span>
+                  <button type="button" onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, background: layoutMode === 'youtube' ? '#1A1A1A' : '#FFFFFF', color: layoutMode === 'youtube' ? '#FFFFFF' : '#1A1A1A', border: layoutMode === 'youtube' ? '1px solid #1A1A1A' : '1px solid #E5E5E5' }}>16:9</button>
+                  <button type="button" onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, background: layoutMode === 'reels' ? '#1A1A1A' : '#FFFFFF', color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A', border: layoutMode === 'reels' ? '1px solid #1A1A1A' : '1px solid #E5E5E5' }}>9:16</button>
                 </div>
 
                 <div style={{ marginTop: 10 }}>
@@ -1316,7 +1364,7 @@ export default function Home() {
                 </div>
 
                 {processingStatus && (
-                  <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
+                  <div style={{ marginTop: 10, fontSize: 12, color: '#6e6e73', lineHeight: 1.45 }}>
                     {processingStatus}
                   </div>
                 )}
@@ -1335,10 +1383,11 @@ export default function Home() {
               pointerEvents: 'auto',
               padding: layoutMode === 'reels' ? '6px 8px' : '10px 12px',
               borderRadius: layoutMode === 'reels' ? 12 : 16,
-              background: 'rgba(15, 15, 18, 0.55)',
-              border: '1px solid rgba(255,255,255,0.12)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
+              background: 'rgba(255, 255, 255, 0.72)',
+              border: '1px solid rgba(229, 229, 229, 0.95)',
+              backdropFilter: 'blur(18px) saturate(1.15)',
+              WebkitBackdropFilter: 'blur(18px) saturate(1.15)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.06)',
             }}
           >
             {/* Actions (desktop) */}
@@ -1350,9 +1399,9 @@ export default function Home() {
                   style={{
                     height: 30,
                     borderRadius: 8,
-                    border: '1px solid #E8E8ED',
-                    background: '#fff',
-                    color: '#1D1D1F',
+                    border: '1px solid #E5E5E5',
+                    background: '#FFFFFF',
+                    color: '#1A1A1A',
                     padding: '0 8px',
                     fontSize: 12,
                     fontWeight: 800,
@@ -1433,8 +1482,8 @@ export default function Home() {
               </button>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: layoutMode === 'reels' ? 4 : 6 }} title="Layout">
-                <button type="button" onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 26 : 30, padding: layoutMode === 'reels' ? '0 8px' : '0 10px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12, background: layoutMode === 'youtube' ? '#35679A' : '#fff', color: layoutMode === 'youtube' ? '#fff' : '#1D1D1F', border: layoutMode === 'youtube' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>16:9</button>
-                <button type="button" onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 26 : 30, padding: layoutMode === 'reels' ? '0 8px' : '0 10px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12, background: layoutMode === 'reels' ? '#35679A' : '#fff', color: layoutMode === 'reels' ? '#fff' : '#1D1D1F', border: layoutMode === 'reels' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>9:16</button>
+                <button type="button" onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 26 : 30, padding: layoutMode === 'reels' ? '0 8px' : '0 10px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12, background: layoutMode === 'youtube' ? '#1A1A1A' : '#FFFFFF', color: layoutMode === 'youtube' ? '#FFFFFF' : '#1A1A1A', border: layoutMode === 'youtube' ? '1px solid #1A1A1A' : '1px solid #E5E5E5' }}>16:9</button>
+                <button type="button" onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 26 : 30, padding: layoutMode === 'reels' ? '0 8px' : '0 10px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12, background: layoutMode === 'reels' ? '#1A1A1A' : '#FFFFFF', color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A', border: layoutMode === 'reels' ? '1px solid #1A1A1A' : '1px solid #E5E5E5' }}>9:16</button>
               </div>
 
               <ScreenRecorder
@@ -1561,15 +1610,15 @@ export default function Home() {
               width: '100%',
               overflow: reelsDesktop ? 'hidden' : layoutMode === 'reels' ? 'auto' : 'hidden',
               padding: layoutMode === 'reels' ? '4px 8px' : undefined,
-              ...(layoutMode === 'reels'
+                  ...(layoutMode === 'reels'
                 ? {
                     /** Tall phone frame: limited by viewport height first (reads like a real device) */
                     width: 'min(420px, 92vw, calc((min(92dvh, calc(100dvh - 88px))) * 9 / 16))',
                     maxHeight: 'min(92dvh, calc(100dvh - 88px))',
                     aspectRatio: '9 / 16',
                     borderRadius: 22,
-                    border: '1px solid rgba(255,255,255,0.22)',
-                    boxShadow: '0 24px 80px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.06)',
+                    border: '1px solid rgba(229, 229, 229, 0.55)',
+                    boxShadow: '0 28px 72px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.25)',
                   }
                 : {}),
             }}
@@ -1584,10 +1633,10 @@ export default function Home() {
                   gap: 8,
                   minHeight: 42,
                   padding: '6px 8px',
-                  borderBottom: '1px solid rgba(255,255,255,0.1)',
-                  background: 'rgba(255,255,255,0.06)',
-                  backdropFilter: 'blur(22px) saturate(1.2)',
-                  WebkitBackdropFilter: 'blur(22px) saturate(1.2)',
+                  borderBottom: '1px solid #E5E5E5',
+                  background: 'rgba(255, 255, 255, 0.82)',
+                  backdropFilter: 'blur(18px) saturate(1.12)',
+                  WebkitBackdropFilter: 'blur(18px) saturate(1.12)',
                   zIndex: 92,
                   boxSizing: 'border-box',
                 }}
@@ -1600,13 +1649,14 @@ export default function Home() {
                     width: 36,
                     height: 34,
                     borderRadius: 10,
-                    border: '1px solid rgba(255,255,255,0.14)',
-                    background: 'rgba(255,255,255,0.09)',
-                    color: '#fff',
+                    border: '1px solid #E5E5E5',
+                    background: '#FFFFFF',
+                    color: '#1A1A1A',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     cursor: 'pointer',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
                   }}
                   aria-expanded={desktopReelsMenuOpen}
                   aria-label="Open actions menu"
@@ -1633,9 +1683,9 @@ export default function Home() {
                         style={{
                           height: 28,
                           borderRadius: 8,
-                          border: '1px solid rgba(255,255,255,0.2)',
-                          background: 'rgba(255,255,255,0.08)',
-                          color: '#fff',
+                          border: '1px solid #E5E5E5',
+                          background: '#FFFFFF',
+                          color: '#1A1A1A',
                           padding: '0 6px',
                           fontSize: 11,
                           fontWeight: 700,
@@ -1658,18 +1708,18 @@ export default function Home() {
                           width: 120,
                           padding: '0 8px',
                           borderRadius: 8,
-                          border: '1px solid rgba(255,255,255,0.2)',
+                          border: '1px solid #E5E5E5',
                           fontSize: 11,
                           outline: 'none',
-                          background: 'rgba(255,255,255,0.08)',
-                          color: '#fff',
+                          background: '#FFFFFF',
+                          color: '#1A1A1A',
                           minWidth: 0,
                         }}
                       />
                       <button
                         type="button"
                         onClick={handleUrlSubmit}
-                        style={{ ...headerBtnStyle, height: 28, padding: '0 8px', fontSize: 11, background: 'rgba(255,255,255,0.12)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)' }}
+                        style={{ ...headerBtnStyle, height: 28, padding: '0 8px', fontSize: 11 }}
                       >
                         Load
                       </button>
@@ -1677,7 +1727,7 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }}
+                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }}
                       title={videoSrc ? 'Replace Video A' : 'Upload Video A'}
                     >
                       <Upload size={12} />
@@ -1686,47 +1736,47 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() => fileInputRefB.current?.click()}
-                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }}
+                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }}
                       title={videoSrcB ? 'Replace Video B' : 'Upload Video B'}
                     >
                       <Upload size={12} />
                       {videoSrcB ? 'B' : '+B'}
                     </button>
                     {!webcamActive ? (
-                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="Webcam">
+                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }} title="Webcam">
                         Cam
                       </button>
                     ) : (
-                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: 'rgba(90,200,250,0.95)', border: '1px solid rgba(255,255,255,0.18)' }} title="Turn webcam off">
+                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, color: '#007AFF', borderColor: '#bfdbfe', background: '#eff6ff' }} title="Turn webcam off">
                         ● Cam
                       </button>
                     )}
                     {!micActive ? (
-                      <button type="button" onClick={startMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="Mic">
+                      <button type="button" onClick={startMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }} title="Mic">
                         Mic
                       </button>
                     ) : (
-                      <button type="button" onClick={stopMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, color: '#FFB4AB' }} title="Stop mic">
+                      <button type="button" onClick={stopMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, color: '#b91c1c', borderColor: '#fecaca', background: '#fff7f7' }} title="Stop mic">
                         Mic on
                       </button>
                     )}
-                    <button type="button" onClick={handleScreenshot} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="Screenshot">
+                    <button type="button" onClick={handleScreenshot} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }} title="Screenshot">
                       Shot
                     </button>
-                    <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }} title="New session">
+                    <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }} title="New session">
                       New
                     </button>
                     <button
                       type="button"
                       onClick={() => { setLayoutMode('youtube'); setDesktopReelsMenuOpen(false); }}
-                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)' }}
+                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, background: '#FFFFFF', color: '#1A1A1A', border: '1px solid #E5E5E5' }}
                     >
                       16:9
                     </button>
                     <button
                       type="button"
                       onClick={() => { setLayoutMode('reels'); }}
-                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.28)' }}
+                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, background: '#1A1A1A', color: '#FFFFFF', border: '1px solid #1A1A1A' }}
                     >
                       9:16
                     </button>
@@ -1754,7 +1804,7 @@ export default function Home() {
                 position: 'relative',
               }}
             >
-            {isMobile && (
+            {showMobileToolStrip && (
               <div style={{
                 position: 'absolute',
                 left: 8,
@@ -1783,6 +1833,9 @@ export default function Home() {
                   triangle3d={triangle3d}
                   onTriangle3dChange={setTriangle3d}
                   onClearCrop={() => canvasRef.current?.clearCropRegion()}
+                  precisionDrawEnabled={precisionDrawEnabled}
+                  onPrecisionDrawToggle={handlePrecisionDrawToggle}
+                  onShowPrecisionInstructions={showPrecisionInstructionsAgain}
                 />
               </div>
             )}
@@ -1797,13 +1850,13 @@ export default function Home() {
                   zIndex: 84,
                   display: 'flex',
                   flexDirection: 'column',
-                  background: 'rgba(12,12,16,0.42)',
+                  background: 'rgba(255, 255, 255, 0.52)',
                   overflow: 'hidden',
-                  borderRadius: 10,
-                  border: '1px solid rgba(255,255,255,0.10)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
+                  borderRadius: 14,
+                  border: '1px solid rgba(229, 229, 229, 0.85)',
+                  backdropFilter: 'blur(20px) saturate(1.15)',
+                  WebkitBackdropFilter: 'blur(20px) saturate(1.15)',
+                  boxShadow: '0 8px 28px rgba(0,0,0,0.08)',
                 }}
               >
                 <div
@@ -1884,29 +1937,35 @@ export default function Home() {
               >
                 {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (
                   <div style={{
-                    position: 'absolute', inset: 0,
+                    position: 'absolute', inset: 16,
                     display: 'flex', flexDirection: 'column',
                     alignItems: 'center', justifyContent: 'center',
-                    gap: '12px', color: '#9ca3af',
+                    gap: '14px',
+                    borderRadius: 20,
+                    border: '2px dashed #E5E5E5',
+                    background: '#FFFFFF',
+                    color: '#6e6e73',
                   }}>
                     <button
                       onClick={() => fileInputRef.current?.click()}
                       style={{
                         display: 'flex', flexDirection: 'column', alignItems: 'center',
-                        gap: '12px', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af',
+                        gap: '14px', background: 'none', border: 'none', cursor: 'pointer', color: '#6e6e73',
+                        padding: '8px 24px',
                       }}
                     >
                       <div style={{
-                        width: '80px', height: '80px', borderRadius: '50%',
-                        background: '#1f2937',
+                        width: '88px', height: '88px', borderRadius: '20px',
+                        background: '#FAF9F7',
+                        border: '1px solid #E5E5E5',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                       }}>
-                        <Upload size={36} color="#9ca3af" />
+                        <Upload size={36} color="#1A1A1A" strokeWidth={1.5} />
                       </div>
-                      <span style={{ fontSize: '14px', fontWeight: 500 }}>Upload Video A</span>
-                      <span style={{ fontSize: '12px', color: '#6b7280' }}>MP4, WebM, MOV supported</span>
+                      <span style={{ fontSize: '15px', fontWeight: 600, color: '#1A1A1A' }}>Upload Video A</span>
+                      <span style={{ fontSize: '12px', color: '#6e6e73' }}>MP4, WebM, MOV supported</span>
                     </button>
-                    <span style={{ fontSize: '11px', color: '#4b5563' }}>or drag &amp; drop a video here</span>
+                    <span style={{ fontSize: '11px', color: '#8e8e93' }}>or drag and drop a video here</span>
                   </div>
                 ) : (
                   <>
@@ -2058,15 +2117,16 @@ export default function Home() {
                         embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)
                       }
                       webcamCutout={webcamCutout}
+                      precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
                     />
                     <EmbedCapturePanel
                       visible={
                         !!(youtubeVideoIdA || genericEmbedSrcA) &&
-                        embedReadyA &&
                         !embedCaptureRecording &&
                         !captureBusy &&
                         !videoSrc
                       }
+                      embedReady={embedReadyA}
                       sectionSeekSupported={!!youtubeVideoIdA}
                       genericIframeNote={
                         genericEmbedSrcA && !youtubeVideoIdA
@@ -2087,14 +2147,15 @@ export default function Home() {
                         zIndex: 92,
                         padding: '6px 10px',
                         borderRadius: 10,
-                        border: '1px solid rgba(255,255,255,0.28)',
-                        background: 'rgba(15,15,18,0.82)',
-                        color: '#fff',
+                        border: '1px solid #E5E5E5',
+                        background: 'rgba(250, 249, 247, 0.94)',
+                        color: '#1A1A1A',
                         fontSize: 12,
-                        fontWeight: 700,
+                        fontWeight: 600,
                         cursor: 'pointer',
-                        backdropFilter: 'blur(10px)',
-                        WebkitBackdropFilter: 'blur(10px)',
+                        backdropFilter: 'blur(14px)',
+                        WebkitBackdropFilter: 'blur(14px)',
+                        boxShadow: '0 6px 20px rgba(0,0,0,0.08)',
                       }}
                     >
                       Remove Video A
@@ -2105,12 +2166,12 @@ export default function Home() {
                 {isDragOverA && (
                   <div style={{
                     position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none',
-                    background: 'rgba(53,103,154,0.35)',
-                    border: '3px dashed #35679A',
+                    background: 'rgba(250, 249, 247, 0.92)',
+                    border: '3px dashed #E5E5E5',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    borderRadius: '4px',
+                    borderRadius: '16px',
                   }}>
-                    <span style={{ color: '#fff', fontSize: '18px', fontWeight: 700, textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
+                    <span style={{ color: '#1A1A1A', fontSize: '17px', fontWeight: 600 }}>
                       Drop Video A here
                     </span>
                   </div>
@@ -2163,8 +2224,9 @@ export default function Home() {
                 {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
                   <div style={{
                     position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
-                    fontSize: '11px', fontWeight: 700, color: '#fff',
-                    background: 'rgba(0,0,0,0.5)', padding: '1px 6px', borderRadius: '4px',
+                    fontSize: '11px', fontWeight: 700, color: '#1A1A1A',
+                    background: 'rgba(250,249,247,0.94)', border: '1px solid #E5E5E5', padding: '2px 8px', borderRadius: '8px',
+                    backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
                   }}>A</div>
                 )}
               </div>
@@ -2349,15 +2411,16 @@ export default function Home() {
                         embedLiveVideoB && (!!youtubeVideoIdB || !!genericEmbedSrcB)
                       }
                       webcamCutout={webcamCutout}
+                      precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
                     />
                     <EmbedCapturePanel
                       visible={
                         !!(youtubeVideoIdB || genericEmbedSrcB) &&
-                        embedReadyB &&
                         !embedCaptureRecording &&
                         !captureBusy &&
                         !videoSrcB
                       }
+                      embedReady={embedReadyB}
                       sectionSeekSupported={!!youtubeVideoIdB}
                       genericIframeNote={
                         genericEmbedSrcB && !youtubeVideoIdB
@@ -2378,33 +2441,35 @@ export default function Home() {
                         zIndex: 92,
                         padding: '6px 10px',
                         borderRadius: 10,
-                        border: '1px solid rgba(255,255,255,0.28)',
-                        background: 'rgba(15,15,18,0.82)',
-                        color: '#fff',
+                        border: '1px solid #E5E5E5',
+                        background: 'rgba(250, 249, 247, 0.94)',
+                        color: '#1A1A1A',
                         fontSize: 12,
-                        fontWeight: 700,
+                        fontWeight: 600,
                         cursor: 'pointer',
-                        backdropFilter: 'blur(10px)',
-                        WebkitBackdropFilter: 'blur(10px)',
+                        backdropFilter: 'blur(14px)',
+                        WebkitBackdropFilter: 'blur(14px)',
+                        boxShadow: '0 6px 20px rgba(0,0,0,0.08)',
                       }}
                     >
                       Remove Video B
                     </button>
                     <div style={{
                       position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
-                      fontSize: '11px', fontWeight: 700, color: '#fff',
-                      background: 'rgba(0,0,0,0.5)', padding: '1px 6px', borderRadius: '4px',
+                      fontSize: '11px', fontWeight: 700, color: '#1A1A1A',
+                      background: 'rgba(250,249,247,0.94)', border: '1px solid #E5E5E5', padding: '2px 8px', borderRadius: '8px',
+                      backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
                     }}>B</div>
                     {/* Drag-over overlay for Video B */}
                     {isDragOverB && (
                       <div style={{
                         position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none',
-                        background: 'rgba(53,103,154,0.35)',
-                        border: '3px dashed #35679A',
+                        background: 'rgba(250, 249, 247, 0.92)',
+                        border: '3px dashed #E5E5E5',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        borderRadius: '4px',
+                        borderRadius: '16px',
                       }}>
-                        <span style={{ color: '#fff', fontSize: '18px', fontWeight: 700, textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
+                        <span style={{ color: '#1A1A1A', fontSize: '17px', fontWeight: 600 }}>
                           Drop Video B here
                         </span>
                       </div>
@@ -2421,10 +2486,10 @@ export default function Home() {
                   width: '100%',
                   zIndex: 72,
                   pointerEvents: 'auto',
-                  borderTop: '1px solid rgba(255,255,255,0.1)',
-                  background: 'rgba(0,0,0,0.35)',
-                  backdropFilter: 'blur(18px) saturate(1.1)',
-                  WebkitBackdropFilter: 'blur(18px) saturate(1.1)',
+                  borderTop: '1px solid #E5E5E5',
+                  background: 'rgba(250, 249, 247, 0.92)',
+                  backdropFilter: 'blur(18px) saturate(1.08)',
+                  WebkitBackdropFilter: 'blur(18px) saturate(1.08)',
                 }}
               >
                 {renderTimelineDock()}
@@ -2460,13 +2525,14 @@ export default function Home() {
                 bottom: (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) ? 260 : 132,
                 zIndex: 80,
                 pointerEvents: 'auto',
-                padding: '8px 10px',
+                padding: '8px 12px',
                 borderRadius: 12,
-                background: 'rgba(15, 15, 18, 0.55)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                color: '#fff',
-                backdropFilter: 'blur(10px)',
-                WebkitBackdropFilter: 'blur(10px)',
+                background: 'rgba(250, 249, 247, 0.96)',
+                border: '1px solid #E5E5E5',
+                color: '#1A1A1A',
+                backdropFilter: 'blur(14px)',
+                WebkitBackdropFilter: 'blur(14px)',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.06)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
@@ -2474,7 +2540,7 @@ export default function Home() {
               }}
               title="Shift Video B start time relative to Video A (seconds)"
             >
-              <span style={{ fontWeight: 800, opacity: 0.9 }}>B offset</span>
+              <span style={{ fontWeight: 700 }}>B offset</span>
               <input
                 type="number"
                 step="0.1"
@@ -2485,14 +2551,14 @@ export default function Home() {
                   height: 30,
                   padding: '0 8px',
                   borderRadius: 10,
-                  border: '1px solid rgba(255,255,255,0.18)',
-                  background: 'rgba(255,255,255,0.08)',
-                  color: '#fff',
+                  border: '1px solid #E5E5E5',
+                  background: '#FFFFFF',
+                  color: '#1A1A1A',
                   outline: 'none',
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                 }}
               />
-              <span style={{ opacity: 0.65 }}>sec</span>
+              <span style={{ color: '#6e6e73' }}>sec</span>
             </div>
           )}
 
@@ -2511,19 +2577,21 @@ export default function Home() {
             transform: 'translateX(-50%)',
             zIndex: 205,
             maxWidth: 'min(440px, calc(100vw - 24px))',
-            padding: '12px 14px',
-            borderRadius: 12,
-            background: 'rgba(45, 18, 18, 0.96)',
-            border: '1px solid rgba(252, 165, 165, 0.45)',
-            color: '#fff',
-            boxShadow: '0 12px 36px rgba(0,0,0,0.35)',
+            padding: '14px 16px',
+            borderRadius: 14,
+            background: 'rgba(250, 249, 247, 0.97)',
+            border: '1px solid #E5E5E5',
+            color: '#1A1A1A',
+            boxShadow: '0 16px 44px rgba(0,0,0,0.12)',
             display: 'flex',
             flexWrap: 'wrap',
             alignItems: 'center',
-            gap: 10,
+            gap: 12,
             fontSize: 13,
             lineHeight: 1.45,
             pointerEvents: 'auto',
+            backdropFilter: 'blur(18px)',
+            WebkitBackdropFilter: 'blur(18px)',
           }}
         >
           <span style={{ flex: '1 1 220px' }}>{captureError}</span>
@@ -2531,12 +2599,12 @@ export default function Home() {
             type="button"
             onClick={() => setCaptureError(null)}
             style={{
-              padding: '8px 14px',
-              borderRadius: 8,
-              border: 'none',
-              background: '#35679A',
-              color: '#fff',
-              fontWeight: 700,
+              padding: '10px 16px',
+              borderRadius: 10,
+              border: '1px solid #E5E5E5',
+              background: '#1A1A1A',
+              color: '#FFFFFF',
+              fontWeight: 600,
               fontSize: 13,
               cursor: 'pointer',
             }}
@@ -2556,13 +2624,20 @@ export default function Home() {
             zIndex: 200,
             width: 'min(420px, calc(100vw - 32px))',
             pointerEvents: 'none',
+            padding: '12px 14px',
+            borderRadius: 14,
+            background: 'rgba(250, 249, 247, 0.96)',
+            border: '1px solid #E5E5E5',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            boxShadow: '0 12px 36px rgba(0,0,0,0.1)',
           }}
         >
           <div
             style={{
               height: 8,
               borderRadius: 6,
-              background: 'rgba(255,255,255,0.12)',
+              background: '#E5E5E5',
               overflow: 'hidden',
             }}
           >
@@ -2570,12 +2645,12 @@ export default function Home() {
               style={{
                 height: '100%',
                 width: `${Math.round(Math.min(1, Math.max(0, captureProgress01)) * 100)}%`,
-                background: '#35679A',
+                background: '#1A1A1A',
                 transition: 'width 0.15s ease-out',
               }}
             />
           </div>
-          <div style={{ marginTop: 8, fontSize: 12, color: '#fff', textAlign: 'center', fontWeight: 600 }}>
+          <div style={{ marginTop: 10, fontSize: 12, color: '#1A1A1A', textAlign: 'center', fontWeight: 600 }}>
             Recording your clip… {Math.round(Math.min(1, Math.max(0, captureProgress01)) * 100)}%
           </div>
         </div>
@@ -2590,31 +2665,33 @@ export default function Home() {
             transform: 'translateX(-50%)',
             zIndex: 210,
             maxWidth: 'min(440px, calc(100vw - 24px))',
-            padding: '12px 16px',
-            borderRadius: 12,
-            background: 'rgba(15, 15, 18, 0.94)',
-            border: '1px solid rgba(255,255,255,0.14)',
-            color: '#fff',
-            boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+            padding: '14px 16px',
+            borderRadius: 14,
+            background: 'rgba(250, 249, 247, 0.97)',
+            border: '1px solid #E5E5E5',
+            color: '#1A1A1A',
+            boxShadow: '0 16px 44px rgba(0,0,0,0.12)',
             display: 'flex',
             flexWrap: 'wrap',
             alignItems: 'center',
-            gap: 10,
+            gap: 12,
             fontSize: 13,
+            backdropFilter: 'blur(18px)',
+            WebkitBackdropFilter: 'blur(18px)',
           }}
         >
           <span style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontWeight: 600 }}>Your video is ready to analyse.</span>
-            <span style={{ opacity: 0.88 }}>
+            <span style={{ color: '#6e6e73' }}>
               Would you like to save a copy to your device?
             </span>
             {captureDownloadStatus === 'preparing' && (
-              <span style={{ fontSize: 11, opacity: 0.72, fontWeight: 500 }}>
+              <span style={{ fontSize: 11, color: '#6e6e73', fontWeight: 500 }}>
                 Processing your video… almost ready.
               </span>
             )}
             {captureDownloadStatus === 'ready_webm' && (
-              <span style={{ fontSize: 11, opacity: 0.85, fontWeight: 500, color: '#FFB84D' }}>
+              <span style={{ fontSize: 11, fontWeight: 500, color: '#b45309' }}>
                 We couldn&apos;t prepare the usual save file — your download will still play in most video apps.
               </span>
             )}
@@ -2627,12 +2704,12 @@ export default function Home() {
               setShowCaptureSaveToast(false);
             }}
             style={{
-              padding: '8px 14px',
-              borderRadius: 8,
-              border: 'none',
-              background: captureDownloadStatus === 'preparing' ? 'rgba(53,103,154,0.45)' : '#35679A',
-              color: '#fff',
-              fontWeight: 700,
+              padding: '10px 16px',
+              borderRadius: 10,
+              border: '1px solid #E5E5E5',
+              background: captureDownloadStatus === 'preparing' ? '#F5F5F5' : '#1A1A1A',
+              color: captureDownloadStatus === 'preparing' ? '#9ca3af' : '#FFFFFF',
+              fontWeight: 600,
               cursor: captureDownloadStatus === 'preparing' ? 'not-allowed' : 'pointer',
             }}
           >
@@ -2642,18 +2719,24 @@ export default function Home() {
             type="button"
             onClick={() => setShowCaptureSaveToast(false)}
             style={{
-              padding: '8px 14px',
-              borderRadius: 8,
-              border: '1px solid rgba(255,255,255,0.2)',
-              background: 'transparent',
-              color: '#fff',
+              padding: '10px 16px',
+              borderRadius: 10,
+              border: '1px solid #E5E5E5',
+              background: '#FFFFFF',
+              color: '#1A1A1A',
               cursor: 'pointer',
+              fontWeight: 500,
             }}
           >
             Not now
           </button>
         </div>
       )}
+
+      <PrecisionDrawInstructions
+        open={precisionInstructionsOpen}
+        onDismiss={dismissPrecisionInstructions}
+      />
 
       {/* Hidden file inputs */}
       <input

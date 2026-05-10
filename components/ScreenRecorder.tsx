@@ -368,13 +368,13 @@ export default function ScreenRecorder({
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
-            padding: '6px 12px',
-            borderRadius: '6px',
-            border: '1px solid #E8E8ED',
-            background: '#fff',
+            padding: '8px 14px',
+            borderRadius: '12px',
+            border: '1px solid #E5E5E5',
+            background: '#FFFFFF',
             cursor: 'pointer',
             fontSize: '13px',
-            color: '#1D1D1F',
+            color: '#1A1A1A',
             fontWeight: 500,
           }}
           title="Start screen recording"
@@ -423,11 +423,11 @@ export default function ScreenRecorder({
       )}
 
       {recState === 'stopped' && (
-        <span style={{ fontSize: '12px', color: '#35679A' }}>Saving recording…</span>
+        <span style={{ fontSize: '12px', color: '#6e6e73' }}>Saving recording…</span>
       )}
 
       {progress && (
-        <span style={{ fontSize: '11px', color: '#35679A', fontFamily: 'monospace', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: '11px', color: '#6e6e73', fontFamily: 'monospace', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {progress}
         </span>
       )}

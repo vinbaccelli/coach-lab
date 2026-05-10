@@ -47,6 +47,14 @@ const RACKET_TRAIL_MAX_ALPHA = 0.65;
 const SHAPE_SPIN_SPEED = 0.025;
 /** Minimum alpha applied to any StroMotion ghost frame */
 const MIN_GHOST_OPACITY = 0.02;
+/** Vertical offset (screen px) from finger to precision crosshair */
+const PRECISION_CURSOR_OFFSET_Y = 50;
+/** Synthetic pointer id for injected precision clicks */
+const PRECISION_SYNTHETIC_POINTER_ID = 91001;
+/** Fade-out duration when anchor finger lifts (ms) */
+const PRECISION_CURSOR_FADE_MS = 220;
+/** Ripple duration at synthetic click (ms) */
+const PRECISION_RIPPLE_MS = 420;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -163,6 +171,11 @@ export interface CanvasProps {
   webcamCutout?: boolean;
   /** When true, webcam PiP is drawn whenever the stream is ready (not only while screen-recording). */
   webcamActive?: boolean;
+  /**
+   * Mobile/tablet: use crosshair offset from finger and second-finger tap to inject clicks at crosshair.
+   * Ignored for mouse/pen; zoom tool bypasses precision routing.
+   */
+  precisionTouchDraw?: boolean;
 }
 
 const WEBCAM_PIP_ASPECT = 11 / 9;
@@ -1015,6 +1028,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       suppressTabCaptureMirror = false,
       webcamCutout = false,
       webcamActive = false,
+      precisionTouchDraw = false,
     },
     ref,
   ) {
@@ -1038,6 +1052,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const rafRef          = useRef<number>(0);
     const animTickRef     = useRef<number>(0);
     const longPressRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Precision touch drawing (mobile): anchor finger moves crosshair; second finger injects events at crosshair
+    const precisionTouchDrawRef = useRef(false);
+    useEffect(() => {
+      precisionTouchDrawRef.current = precisionTouchDraw;
+      if (!precisionTouchDraw) {
+        precisionAnchorPointerIdRef.current = null;
+        precisionCrosshairTargetRef.current = null;
+        precisionCrosshairDisplayRef.current = null;
+        precisionFadeStartRef.current = null;
+        precisionRippleRef.current = null;
+      }
+    }, [precisionTouchDraw]);
+    const precisionAnchorPointerIdRef = useRef<number | null>(null);
+    const precisionCrosshairTargetRef = useRef<Pt | null>(null);
+    const precisionCrosshairDisplayRef = useRef<Pt | null>(null);
+    const precisionFadeStartRef = useRef<number | null>(null);
+    const precisionRippleRef = useRef<{ x: number; y: number; t0: number } | null>(null);
 
     // Dragging circle
     const dragCircleIdxRef = useRef<number>(-1);
@@ -1213,6 +1245,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       let cy0 = 0;
 
       const onTouchStart = (e: TouchEvent) => {
+        if (
+          precisionTouchDrawRef.current &&
+          precisionAnchorPointerIdRef.current !== null &&
+          e.touches.length >= 2
+        ) {
+          e.preventDefault();
+          return;
+        }
         if (e.touches.length === 2) {
           const t1 = e.touches[0], t2 = e.touches[1];
           const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -1240,6 +1280,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       };
       const onTouchMove = (e: TouchEvent) => {
+        if (
+          precisionTouchDrawRef.current &&
+          precisionAnchorPointerIdRef.current !== null &&
+          e.touches.length >= 2
+        ) {
+          e.preventDefault();
+          return;
+        }
         if (e.touches.length === 2) {
           const t1 = e.touches[0], t2 = e.touches[1];
           const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -1614,7 +1662,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           await tf.setBackend('webgl');
           await tf.ready();
           const bs = await import('@tensorflow-models/body-segmentation');
-          const { createSegmenter, SupportedModels, toBinaryMask } = bs;
+          const { createSegmenter, SupportedModels } = bs;
           if (cancelled) return;
 
           const segmenter = await createSegmenter(SupportedModels.MediaPipeSelfieSegmentation, {
@@ -1634,18 +1682,52 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             if (!wc || wc.readyState < 2 || wc.videoWidth === 0) return;
             const seg = await segmenter.segmentPeople(wc, { flipHorizontal: true });
             if (!seg?.[0]) return;
-            const bin = await toBinaryMask(
-              seg[0],
-              { r: 255, g: 255, b: 255, a: 255 },
-              { r: 0, g: 0, b: 0, a: 0 },
-              false,
-              0.62,
-            );
+            /**
+             * Build alpha mask from raw selfie output. TF.js may put probability in R or A;
+             * toBinaryMask + Library defaults can classify every pixel as background. Use max(R,G,B,A).
+             */
+            const raw = await seg[0].mask.toImageData();
+            const rw = raw.width;
+            const rh = raw.height;
+            const bytes = new Uint8ClampedArray(rw * rh * 4);
+            const floor = 0.34;
+            for (let i = 0; i < rw * rh; i++) {
+              const o = i * 4;
+              const conf = Math.max(
+                raw.data[o] / 255,
+                raw.data[o + 1] / 255,
+                raw.data[o + 2] / 255,
+                raw.data[o + 3] / 255,
+              );
+              let a = 0;
+              if (conf > floor) {
+                const t = (conf - floor) / (1 - floor);
+                a = Math.round(Math.min(255, t ** 0.82 * 255));
+              }
+              bytes[o] = 0;
+              bytes[o + 1] = 0;
+              bytes[o + 2] = 0;
+              bytes[o + 3] = a;
+            }
+            const bin = new ImageData(bytes, rw, rh);
             maskCanvas.width = bin.width;
             maskCanvas.height = bin.height;
             const mctx = maskCanvas.getContext('2d');
             if (mctx) {
-              mctx.putImageData(bin, 0, 0);
+              const feather = document.createElement('canvas');
+              feather.width = bin.width;
+              feather.height = bin.height;
+              const fx = feather.getContext('2d');
+              if (fx) {
+                fx.putImageData(bin, 0, 0);
+                mctx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+                mctx.save();
+                mctx.filter = 'blur(2px)';
+                mctx.drawImage(feather, 0, 0);
+                mctx.restore();
+              } else {
+                mctx.putImageData(bin, 0, 0);
+              }
             }
           };
 
@@ -2311,6 +2393,86 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
+        // ── Precision touch cursor + ripple (inside zoom/pan transform) ───
+        if (precisionTouchDrawRef.current) {
+          const tgt = precisionCrosshairTargetRef.current;
+          let disp = precisionCrosshairDisplayRef.current;
+          if (tgt && precisionAnchorPointerIdRef.current !== null) {
+            if (!disp) {
+              disp = { ...tgt };
+              precisionCrosshairDisplayRef.current = disp;
+            } else {
+              const k = 0.42;
+              disp.x += (tgt.x - disp.x) * k;
+              disp.y += (tgt.y - disp.y) * k;
+            }
+          }
+
+          let cursorAlpha = 0;
+          if (precisionAnchorPointerIdRef.current !== null) {
+            cursorAlpha = 1;
+          } else if (precisionFadeStartRef.current !== null) {
+            cursorAlpha = Math.max(
+              0,
+              1 - (performance.now() - precisionFadeStartRef.current) / PRECISION_CURSOR_FADE_MS,
+            );
+            if (cursorAlpha <= 0.02) {
+              precisionFadeStartRef.current = null;
+              precisionCrosshairDisplayRef.current = null;
+              precisionCrosshairTargetRef.current = null;
+            }
+          }
+
+          const drawPt = disp ?? tgt;
+          if (drawPt && cursorAlpha > 0.04) {
+            const px = drawPt.x;
+            const py = drawPt.y;
+            ctx.save();
+            ctx.globalAlpha = cursorAlpha;
+            ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(px, py, 14, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(px, py, 14, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(px - 22, py);
+            ctx.lineTo(px + 22, py);
+            ctx.moveTo(px, py - 22);
+            ctx.lineTo(px, py + 22);
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(255,255,255,0.95)';
+            ctx.beginPath();
+            ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+
+          const rip = precisionRippleRef.current;
+          if (rip) {
+            const elapsed = performance.now() - rip.t0;
+            if (elapsed > PRECISION_RIPPLE_MS) {
+              precisionRippleRef.current = null;
+            } else {
+              const t = elapsed / PRECISION_RIPPLE_MS;
+              const r = 12 + t * 36;
+              const a = (1 - t) * 0.55 * cursorAlpha;
+              ctx.save();
+              ctx.globalAlpha = a;
+              ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(rip.x, rip.y, r, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.restore();
+            }
+          }
+        }
+
         // ── Undo zoom/pan transform ───────────────────────────────────────
         ctx.restore();
 
@@ -2355,6 +2517,69 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return e.pointerType === 'pen' && e.pressure > 0
         ? Math.max(1, base * e.pressure * 2.5)
         : base;
+    };
+
+    const getPosFromClientXY = (clientX: number, clientY: number): Pt => {
+      const canvas = canvasRef.current;
+      if (!canvas) return { x: 0, y: 0 };
+      const rect = canvas.getBoundingClientRect();
+      const sx = (clientX - rect.left) * (canvas.width / rect.width);
+      const sy = (clientY - rect.top) * (canvas.height / rect.height);
+      const W = canvas.width;
+      const H = canvas.height;
+      return {
+        x: (sx - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
+        y: (sy - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
+      };
+    };
+
+    const logicalPtToClient = (pt: Pt): { clientX: number; clientY: number } => {
+      const canvas = canvasRef.current!;
+      const rect = canvas.getBoundingClientRect();
+      const W = canvas.width;
+      const H = canvas.height;
+      const sx = (pt.x - W / 2) * zoomRef.current + W / 2 + panXRef.current;
+      const sy = (pt.y - H / 2) * zoomRef.current + H / 2 + panYRef.current;
+      return {
+        clientX: rect.left + (sx * rect.width) / W,
+        clientY: rect.top + (sy * rect.height) / H,
+      };
+    };
+
+    const precisionToolUsesToggleDownUp = (t: ToolType): boolean =>
+      t === 'pen' ||
+      t === 'erase' ||
+      t === 'line' ||
+      t === 'arrow' ||
+      t === 'arrowAngle' ||
+      t === 'circle' ||
+      t === 'bodyCircle' ||
+      t === 'rect' ||
+      t === 'triangle' ||
+      t === 'cropSelect';
+
+    const dispatchPrecisionSynthetic = (type: 'pointerdown' | 'pointerup', logicalPt: Pt) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const { clientX, clientY } = logicalPtToClient(logicalPt);
+      try {
+        canvas.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            clientX,
+            clientY,
+            pointerId: PRECISION_SYNTHETIC_POINTER_ID,
+            pointerType: 'mouse',
+            isPrimary: true,
+            button: 0,
+            buttons: type === 'pointerup' ? 0 : 1,
+            pressure: 0.5,
+          }),
+        );
+      } catch {
+        /* noop */
+      }
     };
 
     // ── Finish swing path ──────────────────────────────────────────────────
@@ -2521,7 +2746,47 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer down ───────────────────────────────────────────────────────
 
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-      (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+      const canvasEl = e.target as HTMLCanvasElement;
+      const toolEarly = activeToolRef.current;
+      const precisionEligible =
+        precisionTouchDrawRef.current &&
+        e.pointerType === 'touch' &&
+        toolEarly !== 'zoom';
+
+      if (precisionEligible) {
+        const anchor = precisionAnchorPointerIdRef.current;
+        if (anchor === null) {
+          precisionAnchorPointerIdRef.current = e.pointerId;
+          const ch = getPosFromClientXY(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
+          precisionCrosshairTargetRef.current = ch;
+          precisionCrosshairDisplayRef.current = { ...ch };
+          precisionFadeStartRef.current = null;
+          canvasEl.setPointerCapture(e.pointerId);
+          e.preventDefault();
+          return;
+        }
+        if (e.pointerId !== anchor) {
+          const ch =
+            precisionCrosshairDisplayRef.current ??
+            precisionCrosshairTargetRef.current;
+          if (!ch) {
+            e.preventDefault();
+            return;
+          }
+          precisionRippleRef.current = { x: ch.x, y: ch.y, t0: performance.now() };
+          const useToggle = precisionToolUsesToggleDownUp(toolEarly);
+          const dragging = isDraggingRef.current && activeStrokeRef.current !== null;
+          if (useToggle && dragging) {
+            dispatchPrecisionSynthetic('pointerup', ch);
+          } else {
+            dispatchPrecisionSynthetic('pointerdown', ch);
+          }
+          e.preventDefault();
+          return;
+        }
+      }
+
+      canvasEl.setPointerCapture(e.pointerId);
       const pos  = getPos(e);
       const lw   = pressureWidth(e);
       const tool = activeToolRef.current;
@@ -2852,7 +3117,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer move ───────────────────────────────────────────────────────
 
     const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-      const pos  = getPos(e);
+      let pos = getPos(e);
+      if (
+        precisionTouchDrawRef.current &&
+        precisionAnchorPointerIdRef.current === e.pointerId &&
+        e.pointerType === 'touch' &&
+        activeToolRef.current !== 'zoom'
+      ) {
+        pos = getPosFromClientXY(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
+        precisionCrosshairTargetRef.current = pos;
+        e.preventDefault();
+      }
       const tool = activeToolRef.current;
 
       // ── Pan drag ────────────────────────────────────────────────────────
@@ -3001,7 +3276,34 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     // ── Pointer up ─────────────────────────────────────────────────────────
 
-    const onPointerUp = useCallback((_e: React.PointerEvent<HTMLCanvasElement>) => {
+    const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (
+        precisionTouchDrawRef.current &&
+        precisionAnchorPointerIdRef.current === e.pointerId &&
+        e.pointerType === 'touch'
+      ) {
+        const ch =
+          precisionCrosshairTargetRef.current ??
+          precisionCrosshairDisplayRef.current;
+        const toolUp = activeToolRef.current;
+        if (
+          ch &&
+          precisionToolUsesToggleDownUp(toolUp) &&
+          isDraggingRef.current &&
+          activeStrokeRef.current !== null
+        ) {
+          dispatchPrecisionSynthetic('pointerup', ch);
+        }
+        precisionAnchorPointerIdRef.current = null;
+        precisionFadeStartRef.current = performance.now();
+        try {
+          (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+
       if (webcamPipDragRef.current) {
         webcamPipDragRef.current = null;
         isDraggingRef.current = false;

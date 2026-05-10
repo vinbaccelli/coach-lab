@@ -23,9 +23,13 @@ function isInvalidStateError(e: unknown): boolean {
 function waitForPreviewFrames(videoEl: HTMLVideoElement): Promise<void> {
   return new Promise((resolve) => {
     const done = () => resolve();
+    if (!videoEl) {
+      done();
+      return;
+    }
     if (typeof videoEl.requestVideoFrameCallback === 'function') {
       videoEl.requestVideoFrameCallback(() => done());
-      window.setTimeout(done, 720);
+      window.setTimeout(done, 900);
       return;
     }
     if (videoEl.readyState >= 2) {
@@ -33,8 +37,20 @@ function waitForPreviewFrames(videoEl: HTMLVideoElement): Promise<void> {
       return;
     }
     videoEl.addEventListener('loadeddata', done, { once: true });
-    window.setTimeout(done, 720);
+    window.setTimeout(done, 900);
   });
+}
+
+/** Ensure tab-capture video track is receiving frames before starting MediaRecorder. */
+async function waitForLiveVideoTrack(track: MediaStreamTrack | undefined, timeoutMs = 8_000): Promise<boolean> {
+  if (!track) return false;
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
+    if (track.readyState === 'ended') return false;
+    if (track.readyState === 'live') return true;
+    await sleep(80);
+  }
+  return track.readyState === 'live';
 }
 
 async function waitUntilOk(pred: () => boolean, intervalMs: number, timeoutMs = 3_600_000) {
@@ -59,6 +75,56 @@ async function waitUntilOk(pred: () => boolean, intervalMs: number, timeoutMs = 
   });
 }
 
+function safeVideoSrcObject(el: HTMLVideoElement | null, stream: MediaStream | null): boolean {
+  if (!el) return false;
+  try {
+    el.srcObject = stream;
+    return true;
+  } catch (e) {
+    console.warn('[embedTabCaptureFlow] srcObject attach failed', rawMessage(e));
+    return false;
+  }
+}
+
+async function startRecorderWithRetries(stream: MediaStream, videoEl: HTMLVideoElement): Promise<TabCaptureRecorder> {
+  let attempt = 0;
+  const maxAttempts = 6;
+  let lastErr: unknown;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const recorder = new TabCaptureRecorder();
+    try {
+      await sleep(attempt === 1 ? 120 : 180 + attempt * 90);
+      recorder.start(stream);
+      return recorder;
+    } catch (e) {
+      lastErr = e;
+      if (!isInvalidStateError(e)) throw e;
+      try {
+        await recorder.stop();
+      } catch {
+        /* noop */
+      }
+      /** Detach preview so only MediaRecorder consumes the stream (Chromium tab capture quirk). */
+      if (videoEl) {
+        try {
+          videoEl.srcObject = null;
+        } catch {
+          /* noop */
+        }
+        await sleep(140 + attempt * 70);
+        if (!safeVideoSrcObject(videoEl, stream)) {
+          await sleep(200);
+        }
+        await videoEl.play().catch(() => {});
+        await waitForPreviewFrames(videoEl);
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 export async function runEmbedTabCaptureFlow(args: {
   opts: EmbedCaptureOpts;
   videoEl: HTMLVideoElement;
@@ -73,12 +139,20 @@ export async function runEmbedTabCaptureFlow(args: {
   let stream: MediaStream | null = null;
 
   try {
+    if (!videoEl || typeof videoEl.play !== 'function') {
+      return {
+        ok: false,
+        message:
+          'The video player is not ready. Wait until you can see the clip, then tap Capture again.',
+      };
+    }
+
     /**
      * Avoid requestFullscreen before capture — it correlates with InvalidStateError when calling
      * MediaRecorder.start() right after getDisplayMedia on several Chromium / embedded-WebView builds.
      */
 
-    if (isYoutube && ytPlayer) {
+    if (isYoutube && ytPlayer && typeof ytPlayer.getDuration === 'function') {
       try {
         await waitUntilOk(() => Number(ytPlayer.getDuration?.() ?? 0) > 0.25, 120, 30_000);
       } catch {
@@ -98,37 +172,37 @@ export async function runEmbedTabCaptureFlow(args: {
       throw new Error('No video from shared tab.');
     }
 
+    const liveOk = await waitForLiveVideoTrack(track, 10_000);
+    if (!liveOk) {
+      stopAllTracks(stream);
+      stream = null;
+      return {
+        ok: false,
+        message:
+          'The shared tab is not sending video yet. Close the share dialog and tap Capture again, then choose this browser tab.',
+      };
+    }
+
     /**
      * Use one MediaStream for both &lt;video&gt; and MediaRecorder.
      * stream.clone() for the recorder breaks recording on several browsers (opaque failures / empty errors).
      */
-    videoEl.srcObject = stream;
+    if (!safeVideoSrcObject(videoEl, stream)) {
+      stopAllTracks(stream);
+      stream = null;
+      return {
+        ok: false,
+        message:
+          'Could not attach the recording preview. Refresh the page and try Capture again.',
+      };
+    }
     await videoEl.play().catch(() => {});
     await waitForPreviewFrames(videoEl);
-    await sleep(isYoutube ? 180 : 140);
+    await sleep(isYoutube ? 260 : 200);
 
-    recorder = new TabCaptureRecorder();
-    try {
-      recorder.start(stream);
-    } catch (e) {
-      if (!isInvalidStateError(e)) throw e;
-      await sleep(250);
-      recorder = new TabCaptureRecorder();
-      try {
-        recorder.start(stream);
-      } catch (e2) {
-        if (!isInvalidStateError(e2)) throw e2;
-        /** Detach preview so only MediaRecorder consumes the stream (Chromium tab capture quirk). */
-        videoEl.srcObject = null;
-        await sleep(100);
-        recorder = new TabCaptureRecorder();
-        recorder.start(stream);
-        videoEl.srcObject = stream;
-        await videoEl.play().catch(() => {});
-      }
-    }
+    recorder = await startRecorderWithRetries(stream, videoEl);
 
-    if (isYoutube && ytPlayer) {
+    if (isYoutube && ytPlayer && typeof ytPlayer.seekTo === 'function') {
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
         const startSec = opts.startSec;
         const endSec = opts.endSec;
@@ -205,7 +279,11 @@ export async function runEmbedTabCaptureFlow(args: {
     recorder = null;
     stopAllTracks(stream);
     stream = null;
-    videoEl.srcObject = null;
+    try {
+      if (videoEl) videoEl.srcObject = null;
+    } catch {
+      /* noop */
+    }
 
     try {
       await document.exitFullscreen?.();
@@ -233,7 +311,11 @@ export async function runEmbedTabCaptureFlow(args: {
     }
     stopAllTracks(stream);
     stream = null;
-    if (videoEl) videoEl.srcObject = null;
+    try {
+      if (videoEl) videoEl.srcObject = null;
+    } catch {
+      /* noop */
+    }
     try {
       await document.exitFullscreen?.();
     } catch {

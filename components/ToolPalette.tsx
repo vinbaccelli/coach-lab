@@ -158,7 +158,7 @@ export default function ToolPalette({
           {/* Single-column desktop toolbar (matches mobile's clarity) */}
           <button
             onClick={() => setTool('select')}
-            className={`tool-btn w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${activeTool === 'select' ? 'active' : ''}`}
+            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${activeTool === 'select' ? 'active' : ''}`}
             title="Select"
           >
             <MousePointer2 size={15} />
@@ -167,7 +167,7 @@ export default function ToolPalette({
 
           <button
             onClick={() => togglePanel('style')}
-            className={`tool-btn w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${openPanel === 'style' ? 'active' : ''}`}
+            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${openPanel === 'style' ? 'active' : ''}`}
             title="Style"
           >
             <Shapes size={15} />
@@ -176,15 +176,15 @@ export default function ToolPalette({
 
           <button
             onClick={() => togglePanel('draw')}
-            className={`tool-btn w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${isDrawTool ? 'active' : ''}`}
+            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${isDrawTool ? 'active' : ''}`}
             title="Draw tools"
           >
             <Pen size={15} />
             {!compact && <span>Draw</span>}
           </button>
           {openPanel === 'draw' && (
-            <div className="px-1 py-1 rounded-md bg-gray-50 border border-gray-200">
-              <div className="grid grid-cols-2 gap-1">
+            <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm">
+              <div className="grid grid-cols-1 gap-1.5">
                 <button onClick={() => setTool('pen')} className={`tool-btn flex-row gap-1 ${activeTool === 'pen' ? 'active' : ''}`}>
                   <Pen size={14} /><span>Pen</span>
                 </button>
@@ -280,15 +280,15 @@ export default function ToolPalette({
 
           <button
             onClick={() => togglePanel('angle')}
-            className={`tool-btn w-full flex-row gap-1 ${isAngleTool ? 'active' : ''}`}
+            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${isAngleTool ? 'active' : ''}`}
             title="Angle tools"
           >
             <Triangle size={15} />
             <span>Angle</span>
           </button>
           {openPanel === 'angle' && (
-            <div className="px-1 py-1 rounded-md bg-gray-50 border border-gray-200">
-              <div className="grid grid-cols-2 gap-1">
+            <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm">
+              <div className="grid grid-cols-1 gap-1.5">
                 <button onClick={() => setTool('angle')} className={`tool-btn flex-row gap-1 ${activeTool === 'angle' ? 'active' : ''}`}>
                   <Triangle size={14} /><span>Angle</span>
                 </button>
@@ -299,11 +299,11 @@ export default function ToolPalette({
             </div>
           )}
 
-          <button onClick={() => setTool('text')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'text' ? 'active' : ''}`} title="Text">
+          <button onClick={() => setTool('text')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'text' ? 'active' : ''}`} title="Text">
             <Type size={15} /><span>Text</span>
           </button>
 
-          <button onClick={() => setTool('skeleton')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'skeleton' ? 'active' : ''}`} title="Skeleton">
+          <button onClick={() => setTool('skeleton')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'skeleton' ? 'active' : ''}`} title="Skeleton">
             <PersonStanding size={15} /><span>Skeleton</span>
           </button>
 
@@ -312,11 +312,11 @@ export default function ToolPalette({
             <Footprints size={15} /><span>Ball Trail</span>
           </button> */}
 
-          <button onClick={() => togglePanel('swing')} className={`tool-btn w-full flex-row gap-1 ${openPanel === 'swing' ? 'active' : ''}`} title="Swing">
+          <button onClick={() => togglePanel('swing')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${openPanel === 'swing' ? 'active' : ''}`} title="Swing">
             <TrendingUp size={15} /><span>Swing</span>
           </button>
           {openPanel === 'swing' && (
-            <div className="px-1 py-1 rounded-md bg-gray-50 border border-gray-200 flex flex-col gap-1">
+            <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm flex flex-col gap-1.5">
               <button onClick={() => setTool('manualSwing')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'manualSwing' ? 'active' : ''}`}>
                 <Zap size={14} /><span>Manual</span>
               </button>
@@ -328,10 +328,10 @@ export default function ToolPalette({
             </div>
           )}
 
-          <button onClick={() => setTool('zoom')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'zoom' ? 'active' : ''}`} title="Zoom / Pan">
+          <button onClick={() => setTool('zoom')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'zoom' ? 'active' : ''}`} title="Zoom / Pan">
             <ZoomIn size={15} /><span>Zoom</span>
           </button>
-          <button onClick={() => setTool('cropSelect')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'cropSelect' ? 'active' : ''}`} title="Crop (affects recordings/exports)">
+          <button onClick={() => setTool('cropSelect')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'cropSelect' ? 'active' : ''}`} title="Crop (affects recordings/exports)">
             <Square size={15} /><span>Crop</span>
           </button>
         </div>
@@ -655,18 +655,18 @@ export default function ToolPalette({
           Actions
         </p>
         <div className="flex flex-col gap-1">
-          <button onClick={onUndo} className="tool-btn w-full flex-row gap-1" title="Undo (Ctrl+Z)">
+          <button onClick={onUndo} className="tool-btn tool-btn-chrome w-full flex-row gap-1" title="Undo (Ctrl+Z)">
             <Undo2 size={15} />
             <span>Undo</span>
           </button>
-          <button onClick={onRedo} className="tool-btn w-full flex-row gap-1" title="Redo (Ctrl+Y)">
+          <button onClick={onRedo} className="tool-btn tool-btn-chrome w-full flex-row gap-1" title="Redo (Ctrl+Y)">
             <Redo2 size={15} />
             <span>Redo</span>
           </button>
         </div>
         <button
           onClick={onClear}
-          className="tool-btn w-full flex-row gap-1 text-red-500 hover:bg-red-50 hover:text-red-600"
+          className="tool-btn tool-btn-chrome w-full flex-row gap-1 !text-red-300 hover:!bg-white/10 hover:!text-red-200"
           title="Clear all drawings"
         >
           <Trash2 size={15} />

@@ -7,14 +7,11 @@
 /* ── Coach Lab Design System ── */
 :root {
   --white: #ffffff;
-  --cream: #faf8f5;
-  --blue-light: #e8f0f7;
-  --blue-mid: #c5d4e0;
-  --blue-accent: #0071e3;
-  --gray-dark: #1d1d1f;
+  --cream: #faf9f7;
+  --gray-dark: #1a1a1a;
   --gray-mid: #6e6e73;
-  --gray-light: #f5f2eb;
-  --border: #e5e5ea;
+  --gray-light: #faf9f7;
+  --border: #e5e5e5;
 }
 
 * {
@@ -57,16 +54,50 @@ body {
   @apply btn px-3 py-2 border border-gray-300 hover:bg-blue-50 text-gray-700;
 }
 
-/* ── Tool Button ── */
+/* ── Tool Button: default = readable on cream/white panels & submenus ── */
 .tool-btn {
-  @apply flex flex-col items-center justify-center gap-0.5 w-12 h-12 rounded-lg text-gray-600
-         hover:bg-blue-50 hover:text-blue-600 transition-colors cursor-pointer border border-transparent;
+  @apply flex flex-col items-center justify-center gap-0.5 min-h-12 rounded-xl
+         transition-colors cursor-pointer border font-medium;
+  border-color: #e5e5e5;
+  background: #ffffff;
+  color: #1a1a1a;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+.tool-btn:hover {
+  background: #faf9f7;
+  border-color: #d4d4d4;
 }
 .tool-btn.active {
-  @apply bg-blue-100 text-blue-700 border-blue-200;
+  background: #faf9f7;
+  border-color: #c4c4c4;
+  color: #1a1a1a;
 }
 .tool-btn span {
   @apply text-[9px] font-medium leading-none;
+  color: #3a3a3a;
+}
+
+/* Left / upper frosted rails over video: white icons + legible shadow */
+.tool-btn-chrome {
+  @apply text-white border font-medium;
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  box-shadow: none;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 1px rgba(0, 0, 0, 0.35));
+}
+.tool-btn-chrome:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.tool-btn-chrome.active {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.45);
+  color: #ffffff;
+}
+.tool-btn-chrome span {
+  color: rgba(255, 255, 255, 0.92);
+  filter: none;
 }
 
 /* ── Range Input ── */
