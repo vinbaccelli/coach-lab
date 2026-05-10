@@ -77,5 +77,15 @@ export function formatTabCaptureError(err: unknown): string {
     return 'Your browser could not connect the recording pipeline to this tab. Pick “This tab” / “Chrome Tab” when asked (not the whole screen), then try again.';
   }
 
+  if (/recording produced no video|empty file was empty|no usable video/i.test(raw)) {
+    return raw;
+  }
+
+  /** Surface short technical detail so deployed debugging isn’t a dead end */
+  const trimmed = raw.trim();
+  if (trimmed.length > 0 && trimmed.length < 220 && !/^error$/i.test(trimmed)) {
+    return `Recording failed: ${trimmed}`;
+  }
+
   return 'Something went wrong while recording. Please try again.';
 }

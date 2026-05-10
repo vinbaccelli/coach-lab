@@ -19,12 +19,10 @@ export async function getTabCaptureStream(): Promise<MediaStream> {
     throw new Error('Screen capture is not supported in this browser.');
   }
 
-  /** Prefer current tab when supported (Chromium). Avoid aggressive 4K ideals — they often trigger OverconstrainedError on laptops / Safari. */
+  /** Prefer current tab when supported (Chromium). Omit fixed width/height ideals — they often cause OverconstrainedError or flaky pipelines on laptops and deployed HTTPS. */
   const preferTab = {
     video: {
       frameRate: { ideal: 30, max: 60 },
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
     },
     audio: false,
     preferCurrentTab: true,
@@ -114,7 +112,14 @@ export class TabCaptureRecorder {
       } catch {
         /* noop */
       }
-      rec.stop();
+      /** Allow one paint so the final chunk is queued before stop (reduces empty blobs). */
+      window.setTimeout(() => {
+        try {
+          if (rec.state !== 'inactive') rec.stop();
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }, 40);
     });
   }
 }

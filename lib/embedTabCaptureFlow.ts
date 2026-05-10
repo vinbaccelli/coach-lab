@@ -201,6 +201,15 @@ export async function runEmbedTabCaptureFlow(args: {
       /* noop */
     }
 
+    const minBytes = 256;
+    if (!blob || blob.size < minBytes) {
+      return {
+        ok: false,
+        message:
+          'The recording file was empty — often a browser tab-share glitch. Refresh the page, tap Capture again, choose “This tab” / “Chrome Tab”, keep the video playing, then stop sharing only when finished.',
+      };
+    }
+
     return { ok: true, blob };
   } catch (e) {
     if (recorder) {

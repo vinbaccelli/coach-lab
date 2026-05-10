@@ -48,6 +48,8 @@ const btnStyle: React.CSSProperties = {
 
 export default function Home() {
   const LEFT_TOOLBAR_W = 68;
+  /** Narrower floating rail in 9:16 preview so more pixels stay on the “phone” */
+  const REELS_TOOLBAR_W = 46;
 
   // ── Refs that must never unmount ─────────────────────────────────────────
   const videoRef      = useRef<HTMLVideoElement>(null);
@@ -135,7 +137,8 @@ export default function Home() {
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
   const [isMobile, setIsMobile]             = useState(false);
-  const touchChrome                         = isMobile || layoutMode === 'reels';
+  /** Large tap targets only on real phones — desktop 9:16 preview keeps compact UI */
+  const touchChrome                         = isMobile;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const headerBtnStyle = useMemo((): React.CSSProperties => ({
@@ -872,7 +875,14 @@ export default function Home() {
   playbackControllerBRef.current = youtubeVideoIdB ? ytIframeControllerB : html5ControllerB;
 
   const hasVideoBContent = !!(videoSrcB || youtubeVideoIdB || genericEmbedSrcB);
-  const timelineLeadingInset = LEFT_TOOLBAR_W + 16;
+  const panelToolbarInset =
+    !isMobile && layoutMode === 'reels'
+      ? REELS_TOOLBAR_W + 8
+      : !isMobile
+        ? LEFT_TOOLBAR_W + 8
+        : 0;
+  const timelineLeadingInset =
+    layoutMode === 'reels' && !isMobile ? REELS_TOOLBAR_W + 12 : LEFT_TOOLBAR_W + 16;
 
   return (
     <div
@@ -926,7 +936,7 @@ export default function Home() {
         paddingTop: 'calc(env(safe-area-inset-top, 0px) + 10px)',
         paddingRight: 12,
         paddingBottom: 10,
-        paddingLeft: isMobile ? 12 : LEFT_TOOLBAR_W + 24,
+        paddingLeft: isMobile ? 12 : layoutMode === 'reels' ? 12 : LEFT_TOOLBAR_W + 24,
         pointerEvents: 'none',
       }}>
         {isMobile ? (
@@ -1073,14 +1083,14 @@ export default function Home() {
           <div
             style={{
               width: '100%',
-              maxWidth: layoutMode === 'reels' ? 'min(520px, 100%)' : 'min(1100px, 100%)',
+              maxWidth: layoutMode === 'reels' ? 'min(480px, 100%)' : 'min(1100px, 100%)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'flex-end',
-              gap: '12px',
+              gap: layoutMode === 'reels' ? '6px' : '12px',
               pointerEvents: 'auto',
-              padding: '10px 12px',
-              borderRadius: 16,
+              padding: layoutMode === 'reels' ? '6px 8px' : '10px 12px',
+              borderRadius: layoutMode === 'reels' ? 12 : 16,
               background: 'rgba(15, 15, 18, 0.55)',
               border: '1px solid rgba(255,255,255,0.12)',
               backdropFilter: 'blur(10px)',
@@ -1088,7 +1098,7 @@ export default function Home() {
             }}
           >
             {/* Actions (desktop) */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap', overflowX: 'auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: layoutMode === 'reels' ? '5px' : '8px', flexWrap: 'nowrap', overflowX: 'auto' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                 <select
                   value={urlTarget}
@@ -1122,37 +1132,59 @@ export default function Home() {
                     borderRadius: 8,
                     border: '1px solid #E8E8ED',
                     fontSize: 12,
-                    width: 240,
+                    width: layoutMode === 'reels' ? 148 : 240,
                     outline: 'none',
                     minWidth: 0,
                   }}
                 />
-                <button onClick={handleUrlSubmit} style={{ ...headerBtnStyle, height: 30, padding: '0 14px', width: 'auto', fontSize: 12 }}>
+                <button onClick={handleUrlSubmit} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 28 : 30, padding: layoutMode === 'reels' ? '0 10px' : '0 14px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12 }}>
                   Load
                 </button>
               </div>
 
-              <button onClick={() => fileInputRef.current?.click()} style={headerBtnStyle}><Upload size={14} /> {videoSrc ? 'Replace A' : 'Upload A'}</button>
-              <button onClick={() => fileInputRefB.current?.click()} style={headerBtnStyle}><Upload size={14} /> {videoSrcB ? 'Replace B' : 'Upload B'}</button>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }}
+                title={videoSrc ? 'Replace Video A' : 'Upload Video A'}
+              >
+                <Upload size={layoutMode === 'reels' ? 12 : 14} />
+                {layoutMode === 'reels'
+                  ? (videoSrc ? 'A' : '+A')
+                  : (videoSrc ? 'Replace A' : 'Upload A')}
+              </button>
+              <button
+                type="button"
+                onClick={() => fileInputRefB.current?.click()}
+                style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }}
+                title={videoSrcB ? 'Replace Video B' : 'Upload Video B'}
+              >
+                <Upload size={layoutMode === 'reels' ? 12 : 14} />
+                {layoutMode === 'reels'
+                  ? (videoSrcB ? 'B' : '+B')
+                  : (videoSrcB ? 'Replace B' : 'Upload B')}
+              </button>
 
               {!webcamActive ? (
-                <button onClick={startWebcam} style={headerBtnStyle} title="Enable webcam overlay">Webcam</button>
+                <button onClick={startWebcam} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Enable webcam overlay">{layoutMode === 'reels' ? 'Cam' : 'Webcam'}</button>
               ) : (
-                <span style={{ fontSize: 12, color: '#35679A', fontWeight: 700 }}>&#9679; Webcam</span>
+                <span style={{ fontSize: layoutMode === 'reels' ? 11 : 12, color: '#35679A', fontWeight: 700 }}>
+                  {layoutMode === 'reels' ? '● Cam' : '● Webcam'}
+                </span>
               )}
 
               {!micActive ? (
-                <button onClick={startMic} style={headerBtnStyle} title="Enable microphone (audio in recordings)">Mic</button>
+                <button onClick={startMic} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Enable microphone (audio in recordings)">Mic</button>
               ) : (
-                <button onClick={stopMic} style={{ ...headerBtnStyle, color: '#EF4444' }} title="Disable microphone">Mic on</button>
+                <button onClick={stopMic} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}), color: '#EF4444' }} title="Disable microphone">{layoutMode === 'reels' ? 'Mic on' : 'Mic on'}</button>
               )}
 
-              <button onClick={handleScreenshot} style={headerBtnStyle} title="Save screenshot">Screenshot</button>
-              <button type="button" onClick={resetSession} style={headerBtnStyle} title="Start fresh — clears videos and recordings">New</button>
+              <button onClick={handleScreenshot} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Save screenshot">{layoutMode === 'reels' ? 'Shot' : 'Screenshot'}</button>
+              <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Start fresh — clears videos and recordings">New</button>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title="Layout">
-                <button onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, height: 30, padding: '0 10px', width: 'auto', fontSize: 12, background: layoutMode === 'youtube' ? '#35679A' : '#fff', color: layoutMode === 'youtube' ? '#fff' : '#1D1D1F', border: layoutMode === 'youtube' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>16:9</button>
-                <button onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, height: 30, padding: '0 10px', width: 'auto', fontSize: 12, background: layoutMode === 'reels' ? '#35679A' : '#fff', color: layoutMode === 'reels' ? '#fff' : '#1D1D1F', border: layoutMode === 'reels' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>9:16</button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: layoutMode === 'reels' ? 4 : 6 }} title="Layout">
+                <button type="button" onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 26 : 30, padding: layoutMode === 'reels' ? '0 8px' : '0 10px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12, background: layoutMode === 'youtube' ? '#35679A' : '#fff', color: layoutMode === 'youtube' ? '#fff' : '#1D1D1F', border: layoutMode === 'youtube' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>16:9</button>
+                <button type="button" onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 26 : 30, padding: layoutMode === 'reels' ? '0 8px' : '0 10px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12, background: layoutMode === 'reels' ? '#35679A' : '#fff', color: layoutMode === 'reels' ? '#fff' : '#1D1D1F', border: layoutMode === 'reels' ? '1px solid #35679A' : '1px solid #E8E8ED' }}>9:16</button>
               </div>
 
               <ScreenRecorder
@@ -1256,7 +1288,10 @@ export default function Home() {
             overflow: 'hidden',
             minWidth: 0,
             alignItems: layoutMode === 'reels' ? 'center' : undefined,
-            paddingTop: 'calc(env(safe-area-inset-top, 0px) + 52px)',
+            paddingTop:
+              layoutMode === 'reels'
+                ? 'calc(env(safe-area-inset-top, 0px) + 42px)'
+                : 'calc(env(safe-area-inset-top, 0px) + 52px)',
             width: '100%',
           }}
         >
@@ -1273,15 +1308,15 @@ export default function Home() {
               alignSelf: layoutMode === 'reels' ? 'center' : undefined,
               width: '100%',
               overflow: layoutMode === 'reels' ? 'auto' : 'hidden',
-              padding: layoutMode === 'reels' ? '8px 10px' : undefined,
+              padding: layoutMode === 'reels' ? '4px 8px' : undefined,
               ...(layoutMode === 'reels'
                 ? {
-                    width: 'min(100vw - 20px, calc((100dvh - 260px) * 9 / 16))',
-                    maxWidth: '100%',
+                    /** Tall phone frame: limited by viewport height first (reads like a real device) */
+                    width: 'min(420px, 92vw, calc((min(92dvh, calc(100dvh - 88px))) * 9 / 16))',
+                    maxHeight: 'min(92dvh, calc(100dvh - 88px))',
                     aspectRatio: '9 / 16',
-                    maxHeight: 'calc(100dvh - 220px)',
-                    borderRadius: 18,
-                    boxShadow: '0 18px 60px rgba(0,0,0,0.55)',
+                    borderRadius: 22,
+                    boxShadow: '0 20px 70px rgba(0,0,0,0.58)',
                   }
                 : {}),
             }}
@@ -1322,23 +1357,32 @@ export default function Home() {
               <aside
                 style={{
                   position: 'absolute',
-                  left: 6,
-                  top: 48,
-                  bottom: 12,
-                  width: LEFT_TOOLBAR_W,
+                  left: 4,
+                  top: 40,
+                  bottom: 8,
+                  width: REELS_TOOLBAR_W,
                   zIndex: 84,
                   display: 'flex',
                   flexDirection: 'column',
-                  background: 'rgba(16,16,20,0.40)',
-                  overflowY: 'auto',
-                  borderRadius: 12,
-                  border: '1px solid rgba(255,255,255,0.12)',
-                  backdropFilter: 'blur(12px)',
-                  WebkitBackdropFilter: 'blur(12px)',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+                  background: 'rgba(12,12,16,0.42)',
+                  overflow: 'hidden',
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.10)',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
+                  boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
                 }}
               >
-                <div style={{ padding: 6 }}>
+                <div
+                  style={{
+                    padding: 4,
+                    transform: 'scale(0.88)',
+                    transformOrigin: 'top left',
+                    width: `${100 / 0.88}%`,
+                    maxHeight: 'calc(100% / 0.88)',
+                    overflowY: 'auto',
+                  }}
+                >
                   <ToolPalette
                     activeTool={activeTool}
                     onToolChange={handleToolChange}
@@ -1399,7 +1443,7 @@ export default function Home() {
                   width: '100%',
                   height: '100%',
                   position: 'relative',
-                  paddingLeft: !isMobile ? LEFT_TOOLBAR_W + 8 : 0,
+                  paddingLeft: panelToolbarInset,
                 }}
                 onDragOver={handleDragOverA}
                 onDragLeave={handleDragLeaveA}
@@ -1575,7 +1619,7 @@ export default function Home() {
                 )}
                 {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
                   <div style={{
-                    position: 'absolute', top: 4, left: !isMobile ? LEFT_TOOLBAR_W + 12 : 8,
+                    position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
                     fontSize: '11px', fontWeight: 700, color: '#fff',
                     background: 'rgba(0,0,0,0.5)', padding: '1px 6px', borderRadius: '4px',
                   }}>A</div>
@@ -1611,7 +1655,7 @@ export default function Home() {
                       width: '100%',
                       height: '100%',
                       position: 'relative',
-                      paddingLeft: !isMobile ? LEFT_TOOLBAR_W + 8 : 0,
+                      paddingLeft: panelToolbarInset,
                     }}
                     onDragOver={handleDragOverB}
                     onDragLeave={handleDragLeaveB}
@@ -1690,7 +1734,7 @@ export default function Home() {
                       onCapture={(o) => void handleEmbedCaptureRequest('B', o)}
                     />
                     <div style={{
-                      position: 'absolute', top: 4, left: !isMobile ? LEFT_TOOLBAR_W + 12 : 8,
+                      position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
                       fontSize: '11px', fontWeight: 700, color: '#fff',
                       background: 'rgba(0,0,0,0.5)', padding: '1px 6px', borderRadius: '4px',
                     }}>B</div>
