@@ -3,7 +3,6 @@ import {
   stopAllTracks,
   TabCaptureRecorder,
 } from '@/lib/tabCaptureRecording';
-import { formatTabCaptureError, rawMessage } from '@/lib/embedCaptureErrors';
 
 export type EmbedCaptureOpts = {
   mode: 'full' | 'section';
@@ -11,49 +10,20 @@ export type EmbedCaptureOpts = {
   endSec: number | null;
 };
 
-function sleep(ms: number) {
-  return new Promise<void>((r) => setTimeout(r, ms));
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-function isInvalidStateError(e: unknown): boolean {
-  return typeof e === 'object' && e !== null && (e as DOMException).name === 'InvalidStateError';
+function fail(step: string, raw: unknown, friendly: string): { ok: false; message: string } {
+  console.error(`[CoachLab capture] FAILED at "${step}":`, raw);
+  return { ok: false, message: friendly };
 }
 
-/** Wait until at least one decoded frame is ready (helps Chromium accept MediaRecorder on display streams). */
-function waitForPreviewFrames(videoEl: HTMLVideoElement): Promise<void> {
-  return new Promise((resolve) => {
-    const done = () => resolve();
-    if (!videoEl) {
-      done();
-      return;
-    }
-    if (typeof videoEl.requestVideoFrameCallback === 'function') {
-      videoEl.requestVideoFrameCallback(() => done());
-      window.setTimeout(done, 900);
-      return;
-    }
-    if (videoEl.readyState >= 2) {
-      done();
-      return;
-    }
-    videoEl.addEventListener('loadeddata', done, { once: true });
-    window.setTimeout(done, 900);
-  });
-}
-
-/** Ensure tab-capture video track is receiving frames before starting MediaRecorder. */
-async function waitForLiveVideoTrack(track: MediaStreamTrack | undefined, timeoutMs = 8_000): Promise<boolean> {
-  if (!track) return false;
-  const start = performance.now();
-  while (performance.now() - start < timeoutMs) {
-    if (track.readyState === 'ended') return false;
-    if (track.readyState === 'live') return true;
-    await sleep(80);
-  }
-  return track.readyState === 'live';
-}
-
-async function waitUntilOk(pred: () => boolean, intervalMs: number, timeoutMs = 3_600_000) {
+async function waitUntilOk(
+  pred: () => boolean,
+  intervalMs: number,
+  timeoutMs = 3_600_000,
+): Promise<void> {
   const start = performance.now();
   return new Promise<void>((resolve, reject) => {
     const iv = window.setInterval(() => {
@@ -75,56 +45,6 @@ async function waitUntilOk(pred: () => boolean, intervalMs: number, timeoutMs = 
   });
 }
 
-function safeVideoSrcObject(el: HTMLVideoElement | null, stream: MediaStream | null): boolean {
-  if (!el) return false;
-  try {
-    el.srcObject = stream;
-    return true;
-  } catch (e) {
-    console.warn('[embedTabCaptureFlow] srcObject attach failed', rawMessage(e));
-    return false;
-  }
-}
-
-async function startRecorderWithRetries(stream: MediaStream, videoEl: HTMLVideoElement | null): Promise<TabCaptureRecorder> {
-  let attempt = 0;
-  const maxAttempts = 6;
-  let lastErr: unknown;
-
-  while (attempt < maxAttempts) {
-    attempt += 1;
-    const recorder = new TabCaptureRecorder();
-    try {
-      await sleep(attempt === 1 ? 340 : 240 + attempt * 110);
-      recorder.start(stream);
-      return recorder;
-    } catch (e) {
-      lastErr = e;
-      if (!isInvalidStateError(e)) throw e;
-      try {
-        await recorder.stop();
-      } catch {
-        /* noop */
-      }
-      /** Detach preview so only MediaRecorder consumes the stream (Chromium tab capture quirk). */
-      if (videoEl) {
-        try {
-          videoEl.srcObject = null;
-        } catch {
-          /* noop */
-        }
-        await sleep(180 + attempt * 80);
-        if (!safeVideoSrcObject(videoEl, stream)) {
-          await sleep(220);
-        }
-        await videoEl.play().catch(() => {});
-        await waitForPreviewFrames(videoEl);
-      }
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-}
-
 export async function runEmbedTabCaptureFlow(args: {
   opts: EmbedCaptureOpts;
   videoEl: HTMLVideoElement;
@@ -132,107 +52,192 @@ export async function runEmbedTabCaptureFlow(args: {
   isYoutube: boolean;
   captureShellEl: HTMLElement | null;
   onProgress?: (ratio01: number) => void;
-  /** Media duration (seconds) read before capture — used for progress on non-YouTube “full” clips */
+  onCountdown?: (n: number | null) => void;
+  onStepStatus?: (msg: string) => void;
   videoDurationHintSec?: number | null;
 }): Promise<{ ok: true; blob: Blob } | { ok: false; message: string }> {
-  const { opts, videoEl, ytPlayer, isYoutube, onProgress, videoDurationHintSec } = args;
+  const {
+    opts,
+    ytPlayer,
+    isYoutube,
+    onProgress,
+    onCountdown,
+    onStepStatus,
+    videoDurationHintSec,
+  } = args;
 
   let recorder: TabCaptureRecorder | null = null;
   let stream: MediaStream | null = null;
 
   try {
-    if (!videoEl || typeof videoEl.play !== 'function') {
-      return {
-        ok: false,
-        message:
-          'The video player is not ready. Wait until you can see the clip, then tap Capture again.',
-      };
+    // ── 1. Check getDisplayMedia availability ──────────────────────────
+    onStepStatus?.('Checking browser support…');
+
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices?.getDisplayMedia
+    ) {
+      return fail(
+        'getDisplayMedia check',
+        'navigator.mediaDevices.getDisplayMedia is unavailable',
+        'Screen sharing is not available in this browser. Try Chrome or Edge on a desktop computer.',
+      );
     }
 
-    /**
-     * Avoid requestFullscreen before capture — it correlates with InvalidStateError when calling
-     * MediaRecorder.start() right after getDisplayMedia on several Chromium / embedded-WebView builds.
-     */
+    // ── 2. Call getDisplayMedia IMMEDIATELY and store stream ───────────
+    onStepStatus?.('Requesting screen share — choose "This tab"…');
 
-    if (isYoutube && ytPlayer && typeof ytPlayer.getDuration === 'function') {
-      try {
-        await waitUntilOk(() => Number(ytPlayer.getDuration?.() ?? 0) > 0.25, 120, 30_000);
-      } catch {
-        return {
-          ok: false,
-          message:
-            'The embedded player is still loading. Wait until the video is visible and playing, then tap Capture again.',
-        };
+    try {
+      stream = await getTabCaptureStream();
+    } catch (e: unknown) {
+      const name = (e as DOMException)?.name;
+      switch (name) {
+        case 'NotAllowedError':
+        case 'PermissionDeniedError':
+          return fail(
+            'getDisplayMedia',
+            e,
+            'Screen sharing was cancelled or blocked by the browser. Tap Capture and choose your browser tab when asked.',
+          );
+        case 'NotFoundError':
+          return fail(
+            'getDisplayMedia',
+            e,
+            'No screen or tab could be shared. Check your browser settings and try again.',
+          );
+        case 'NotReadableError':
+        case 'AbortError':
+          return fail(
+            'getDisplayMedia',
+            e,
+            'Could not access the shared tab. Close other apps using screen share if needed, then try again.',
+          );
+        case 'NotSupportedError':
+          return fail(
+            'getDisplayMedia',
+            e,
+            'This browser cannot record from a tab. Try Chrome or Edge on a desktop computer.',
+          );
+        case 'SecurityError':
+          return fail(
+            'getDisplayMedia',
+            e,
+            'Recording needs a secure connection (HTTPS). Open CoachLab from https:// and try again.',
+          );
+        default:
+          return fail(
+            'getDisplayMedia',
+            e,
+            `Screen sharing failed: ${(e as Error)?.message || 'Unknown error'}. Try refreshing the page.`,
+          );
       }
     }
 
-    stream = await getTabCaptureStream();
-    const track = stream.getVideoTracks()[0];
-    if (!track || track.readyState === 'ended') {
+    // ── 3. Validate stream has video tracks ───────────────────────────
+    onStepStatus?.('Verifying video stream…');
+
+    const videoTracks = stream.getVideoTracks();
+    if (videoTracks.length === 0) {
       stopAllTracks(stream);
-      stream = null;
-      throw new Error('No video from shared tab.');
+      return fail(
+        'video track check',
+        `getVideoTracks() returned ${videoTracks.length} tracks`,
+        'No video track received from the shared tab. Make sure you chose "This tab" when asked, then try again.',
+      );
     }
 
-    const liveOk = await waitForLiveVideoTrack(track, 10_000);
-    if (!liveOk) {
+    // ── 4. Wait for track to be live ──────────────────────────────────
+    const track = videoTracks[0];
+
+    if (track.readyState === 'ended') {
       stopAllTracks(stream);
-      stream = null;
-      return {
-        ok: false,
-        message:
-          'The shared tab is not sending video yet. Close the share dialog and tap Capture again, then choose this browser tab.',
-      };
+      return fail(
+        'track readyState',
+        `readyState=${track.readyState} immediately after getDisplayMedia`,
+        'The video track ended immediately. Close any other screen shares and try again.',
+      );
     }
 
-    /**
-     * Start MediaRecorder before attaching the tab stream to &lt;video&gt; — avoids InvalidStateError
-     * when both compete for first frames (common in Chromium tab capture).
-     */
-    await sleep(isYoutube ? 160 : 120);
+    const trackDeadline = performance.now() + 8_000;
+    while (track.readyState !== 'live' && performance.now() < trackDeadline) {
+      if (track.readyState === 'ended') {
+        stopAllTracks(stream);
+        return fail(
+          'track readyState wait',
+          `readyState transitioned to "ended" while waiting`,
+          'The shared tab stopped sending video. Try Capture again and keep this tab visible.',
+        );
+      }
+      await sleep(100);
+    }
+
+    if (track.readyState !== 'live') {
+      stopAllTracks(stream);
+      return fail(
+        'track readyState timeout',
+        `readyState=${track.readyState} after 8 s`,
+        'The shared tab is not sending video. Close the share dialog, tap Capture, and choose this browser tab.',
+      );
+    }
+
+    // ── 5. 3-second countdown ─────────────────────────────────────────
+    onStepStatus?.('Get ready…');
+    onCountdown?.(3);
+    await sleep(1000);
+    onCountdown?.(2);
+    await sleep(1000);
+    onCountdown?.(1);
+    await sleep(1000);
+    onCountdown?.(null);
+
+    onStepStatus?.('Recording…');
+
+    // ── 6. Start MediaRecorder on the stream ──────────────────────────
+    await sleep(150);
+    recorder = new TabCaptureRecorder();
+
     try {
-      recorder = await startRecorderWithRetries(stream, null);
-    } catch (e) {
-      stopAllTracks(stream);
-      stream = null;
-      throw e;
+      recorder.start(stream);
+    } catch (startErr) {
+      console.error('[CoachLab capture] first recorder.start() failed:', startErr);
+      await sleep(300);
+      recorder = new TabCaptureRecorder();
+      try {
+        recorder.start(stream);
+      } catch (retryErr) {
+        stopAllTracks(stream);
+        return fail(
+          'MediaRecorder.start',
+          retryErr,
+          'Could not start the recorder. Close any other screen recordings, refresh the page, and try again.',
+        );
+      }
     }
+
     onProgress?.(0.04);
 
-    /**
-     * Preview on &lt;video&gt; is optional: recorder already holds the tab MediaStream.
-     * Attaching `srcObject` can throw on some Safari / embedded WebViews — do not fail the whole capture.
-     */
-    const previewOk = safeVideoSrcObject(videoEl, stream);
-    if (previewOk) {
-      await videoEl.play().catch(() => {});
-      await waitForPreviewFrames(videoEl);
-      await sleep(isYoutube ? 240 : 180);
-    } else {
-      if (typeof console !== 'undefined') {
-        console.warn('[embedTabCaptureFlow] preview attach failed — continuing recording without local preview');
-      }
-      onProgress?.(0.08);
-      await sleep(isYoutube ? 420 : 300);
-    }
-
+    // ── 7. Run the recording for the requested duration ───────────────
     if (isYoutube && ytPlayer && typeof ytPlayer.seekTo === 'function') {
+      // YouTube with player API available
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
         const startSec = opts.startSec;
         const endSec = opts.endSec;
-        ytPlayer.seekTo?.(startSec, true);
+        ytPlayer.seekTo(startSec, true);
         ytPlayer.playVideo?.();
         const span = Math.max(0.001, endSec - startSec);
         const progIv = window.setInterval(() => {
           const t = Number(ytPlayer.getCurrentTime?.() ?? 0);
           onProgress?.(Math.min(1, Math.max(0, (t - startSec) / span)));
         }, 80);
-        await waitUntilOk(() => Number(ytPlayer.getCurrentTime?.() ?? 0) >= endSec - 0.12, 80);
+        await waitUntilOk(
+          () => Number(ytPlayer.getCurrentTime?.() ?? 0) >= endSec - 0.12,
+          80,
+        );
         window.clearInterval(progIv);
         ytPlayer.pauseVideo?.();
         onProgress?.(1);
       } else {
-        ytPlayer.seekTo?.(0, true);
+        ytPlayer.seekTo(0, true);
         ytPlayer.playVideo?.();
         const dur = Number(ytPlayer.getDuration?.() ?? 0);
         if (dur > 0) {
@@ -240,18 +245,20 @@ export async function runEmbedTabCaptureFlow(args: {
             const t = Number(ytPlayer.getCurrentTime?.() ?? 0);
             onProgress?.(Math.min(1, t / dur));
           }, 250);
-          await waitUntilOk(() => Number(ytPlayer.getCurrentTime?.() ?? 0) >= dur - 0.25, 200);
+          await waitUntilOk(
+            () => Number(ytPlayer.getCurrentTime?.() ?? 0) >= dur - 0.25,
+            200,
+          );
           window.clearInterval(iv);
           onProgress?.(1);
         } else {
-          /** Duration often stays 0 until metadata loads — pulse progress instead of freezing at 0%. */
           let pulse = 0;
           const pulseIv = window.setInterval(() => {
             pulse = Math.min(0.94, pulse + 0.012);
             onProgress?.(pulse);
           }, 320);
           await new Promise<void>((resolve) => {
-            track?.addEventListener('ended', () => resolve(), { once: true });
+            track.addEventListener('ended', () => resolve(), { once: true });
           });
           window.clearInterval(pulseIv);
           onProgress?.(1);
@@ -259,18 +266,19 @@ export async function runEmbedTabCaptureFlow(args: {
         ytPlayer.pauseVideo?.();
       }
     } else if (isYoutube && !ytPlayer) {
-      /** YouTube iframe API not ready yet — same as open-ended tab capture */
+      // YouTube without player API — wait for track to end
       let pulse = 0;
       const pulseIv = window.setInterval(() => {
         pulse = Math.min(0.92, pulse + 0.015);
         onProgress?.(pulse);
       }, 400);
       await new Promise<void>((resolve) => {
-        track?.addEventListener('ended', () => resolve(), { once: true });
+        track.addEventListener('ended', () => resolve(), { once: true });
       });
       window.clearInterval(pulseIv);
       onProgress?.(1);
-    } else if (!isYoutube) {
+    } else {
+      // Non-YouTube embed
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
         const ms = Math.max(300, (opts.endSec - opts.startSec) * 1000);
         const t0 = performance.now();
@@ -292,13 +300,14 @@ export async function runEmbedTabCaptureFlow(args: {
           window.clearInterval(iv);
           onProgress?.(1);
         } else {
+          // Unknown duration — pulse progress until the track ends
           let pulse = 0.06;
           const pulseIv = window.setInterval(() => {
             pulse = Math.min(0.92, pulse + 0.013);
             onProgress?.(pulse);
           }, 280);
           await new Promise<void>((resolve) => {
-            track?.addEventListener('ended', () => resolve(), { once: true });
+            track.addEventListener('ended', () => resolve(), { once: true });
           });
           window.clearInterval(pulseIv);
           onProgress?.(1);
@@ -306,58 +315,51 @@ export async function runEmbedTabCaptureFlow(args: {
       }
     }
 
-    const blob = await recorder.stop();
+    // ── 8. Stop recorder, get blob, stop tracks ──────────────────────
+    onStepStatus?.('Processing recording…');
+
+    let blob: Blob;
+    try {
+      blob = await recorder.stop();
+    } catch (stopErr) {
+      stopAllTracks(stream);
+      return fail(
+        'recorder.stop',
+        stopErr,
+        'Failed to finalize the recording. Refresh the page and try again.',
+      );
+    }
     recorder = null;
     stopAllTracks(stream);
     stream = null;
-    try {
-      if (videoEl) videoEl.srcObject = null;
-    } catch {
-      /* noop */
-    }
 
     try {
       await document.exitFullscreen?.();
-    } catch {
-      /* noop */
+    } catch { /* noop */ }
+
+    const MIN_BLOB_BYTES = 256;
+    if (!blob || blob.size < MIN_BLOB_BYTES) {
+      return fail(
+        'blob size validation',
+        `blob.size=${blob?.size ?? 0}`,
+        'The recording was empty. Refresh the page, tap Capture, choose "This tab", and keep the video playing until finished.',
+      );
     }
 
-    const minBytes = 256;
-    if (!blob || blob.size < minBytes) {
-      return {
-        ok: false,
-        message:
-          'The recording file was empty — often a browser tab-share glitch. Refresh the page, tap Capture again, choose “This tab” / “Chrome Tab”, keep the video playing, then stop sharing only when finished.',
-      };
-    }
-
+    // ── 9. Success ────────────────────────────────────────────────────
     return { ok: true, blob };
-  } catch (e) {
+  } catch (e: unknown) {
+    // Top-level safety net
     if (recorder) {
-      try {
-        await recorder.stop();
-      } catch {
-        /* noop */
-      }
+      try { await recorder.stop(); } catch { /* noop */ }
     }
     stopAllTracks(stream);
-    stream = null;
-    try {
-      if (videoEl) videoEl.srcObject = null;
-    } catch {
-      /* noop */
-    }
-    try {
-      await document.exitFullscreen?.();
-    } catch {
-      /* noop */
-    }
-    if (typeof console !== 'undefined') {
-      console.warn('[CoachLab tab capture]', e, rawMessage(e));
-    }
-    return {
-      ok: false,
-      message: formatTabCaptureError(e),
-    };
+    try { await document.exitFullscreen?.(); } catch { /* noop */ }
+
+    return fail(
+      'unexpected top-level',
+      e,
+      `Recording failed: ${(e as Error)?.message || 'Unknown error'}. Please refresh and try again.`,
+    );
   }
 }

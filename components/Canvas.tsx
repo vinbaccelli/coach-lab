@@ -5,6 +5,7 @@ import React, {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg } from '@/lib/drawingTools';
@@ -22,6 +23,7 @@ import {
   type PoseKeypoint,
 } from '@/lib/youtubeThumbnailPose';
 import { smoothKeypointsEma } from '@/lib/keypointSmooth';
+import { acquirePoseDetector, releasePoseDetector } from '@/lib/sharedPoseDetector';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -102,6 +104,7 @@ interface LiveAngle { phase: 1 | 2; v: Pt; p1: Pt; cursor: Pt }
 type Selection =
   | { kind: 'stroke'; idx: number; start: Pt; orig: Stroke }
   | { kind: 'angle'; idx: number; start: Pt; orig: AngleMeas }
+  | { kind: 'textResize'; idx: number; start: Pt; orig: StrokeText; corner: 'tl' | 'tr' | 'bl' | 'br' }
   | null;
 
 // ── Public handle ──────────────────────────────────────────────────────────
@@ -181,6 +184,7 @@ export interface CanvasProps {
    * Ignored for mouse/pen; zoom tool bypasses precision routing.
    */
   precisionTouchDraw?: boolean;
+  poseFrameSkip?: number;
 }
 
 const WEBCAM_PIP_ASPECT = 11 / 9;
@@ -1263,6 +1267,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamCutout = false,
       webcamActive = false,
       precisionTouchDraw = false,
+      poseFrameSkip = 0,
     },
     ref,
   ) {
@@ -1309,6 +1314,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const dragCircleIdxRef = useRef<number>(-1);
     const dragCircleOffRef = useRef<Pt>({ x: 0, y: 0 });
     const selectionRef     = useRef<Selection>(null);
+
+    // Text editing state
+    const textEditingIdxRef = useRef<number>(-1);
+    const textEditInputRef  = useRef<HTMLTextAreaElement | null>(null);
+    const [textEditing, setTextEditing] = useState<{
+      idx: number; left: number; top: number; width: number; fontSize: number; value: string; color: string;
+    } | null>(null);
 
     // Circle gap mode: tracks which circle is being given a gap and which click phase
     const gapCircleIdxRef  = useRef<number>(-1);
@@ -1368,6 +1380,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const poseSmoothPrevRef = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
     const poseEstimateInFlightRef = useRef(false);
     const poseScheduleRef = useRef<{ kind: 'rvfc' | 'raf'; id: number } | null>(null);
+    const poseFrameCountRef = useRef(0);
+    const poseFrameSkipRef = useRef(poseFrameSkip);
+    useEffect(() => { poseFrameSkipRef.current = poseFrameSkip; }, [poseFrameSkip]);
     const webcamCutoutRef = useRef(false);
     const webcamSegmenterRef = useRef<{ dispose: () => void } | null>(null);
     const webcamMaskRef = useRef<HTMLCanvasElement | null>(null);
@@ -1715,7 +1730,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       },
     }), [onProcessingStatus, pushHistory, videoRef]);
 
-    // ── Skeleton detector loader ───────────────────────────────────────────
+    // ── Skeleton detector loader (shared singleton) ────────────────────────
 
     useEffect(() => {
       if (!skeletonEnabled) {
@@ -1730,19 +1745,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       let cancelled = false;
 
       (async () => {
-        onProcessingStatus?.('Loading pose model…');
         try {
-          const tf = await import('@tensorflow/tfjs-core');
-          await import('@tensorflow/tfjs-backend-webgl');
-          await import('@tensorflow/tfjs-converter');
-          await tf.setBackend('webgl');
-          await tf.ready();
-          const pd = await import('@tensorflow-models/pose-detection');
-          if (cancelled) return;
-          const det = await pd.createDetector(
-            pd.SupportedModels.MoveNet,
-            { modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING },
-          );
+          const det = await acquirePoseDetector(onProcessingStatus ?? undefined);
           if (cancelled) return;
           detectorRef.current = det;
           onProcessingStatus?.('Skeleton ready — press play');
@@ -1751,7 +1755,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       })();
 
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+        releasePoseDetector();
+      };
     }, [skeletonEnabled, onProcessingStatus]);
 
     // ── Pose detection loop — separate from the drawing rAF ───────────────
@@ -1830,6 +1837,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           return;
         }
 
+        const skip = poseFrameSkipRef.current;
+        if (skip > 0) {
+          poseFrameCountRef.current++;
+          if (poseFrameCountRef.current % (skip + 1) !== 0) {
+            scheduleNext();
+            return;
+          }
+        }
+
         poseEstimateInFlightRef.current = true;
         try {
           const poses = await det.estimatePoses(v, { flipHorizontal: false });
@@ -1889,6 +1905,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       let cancelled = false;
       let busy = false;
+      let rafId = 0;
 
       (async () => {
         try {
@@ -1910,59 +1927,59 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
 
           const maskCanvas = document.createElement('canvas');
+          const featherCanvas = document.createElement('canvas');
           webcamMaskRef.current = maskCanvas;
 
           const segmentOnce = async () => {
             const wc = webcamVideoRef?.current;
             if (!wc || wc.readyState < 2 || wc.videoWidth === 0) return;
-            const seg = await segmenter.segmentPeople(wc, { flipHorizontal: true });
+            const seg = await segmenter.segmentPeople(wc, { flipHorizontal: false });
             if (!seg?.[0]) return;
-            /**
-             * Build alpha mask from raw selfie output. TF.js may put probability in R or A;
-             * toBinaryMask + Library defaults can classify every pixel as background. Use max(R,G,B,A).
-             */
+
             const raw = await seg[0].mask.toImageData();
             const rw = raw.width;
             const rh = raw.height;
             const bytes = new Uint8ClampedArray(rw * rh * 4);
-            const floor = 0.34;
+            const threshold = 0.3;
+
             for (let i = 0; i < rw * rh; i++) {
               const o = i * 4;
-              const conf = Math.max(
-                raw.data[o] / 255,
-                raw.data[o + 1] / 255,
-                raw.data[o + 2] / 255,
-                raw.data[o + 3] / 255,
-              );
+              const r = raw.data[o];
+              const g = raw.data[o + 1];
+              const b = raw.data[o + 2];
+              const personConf = Math.max(r, g, b) / 255;
+
               let a = 0;
-              if (conf > floor) {
-                const t = (conf - floor) / (1 - floor);
-                a = Math.round(Math.min(255, t ** 0.82 * 255));
+              if (personConf > threshold) {
+                const t = (personConf - threshold) / (1 - threshold);
+                a = Math.round(Math.min(255, t * 255));
               }
-              bytes[o] = 0;
-              bytes[o + 1] = 0;
-              bytes[o + 2] = 0;
+              bytes[o] = 255;
+              bytes[o + 1] = 255;
+              bytes[o + 2] = 255;
               bytes[o + 3] = a;
             }
+
             const bin = new ImageData(bytes, rw, rh);
-            maskCanvas.width = bin.width;
-            maskCanvas.height = bin.height;
+
+            if (maskCanvas.width !== rw || maskCanvas.height !== rh) {
+              maskCanvas.width = rw;
+              maskCanvas.height = rh;
+              featherCanvas.width = rw;
+              featherCanvas.height = rh;
+            }
+
+            const fx = featherCanvas.getContext('2d');
             const mctx = maskCanvas.getContext('2d');
-            if (mctx) {
-              const feather = document.createElement('canvas');
-              feather.width = bin.width;
-              feather.height = bin.height;
-              const fx = feather.getContext('2d');
-              if (fx) {
-                fx.putImageData(bin, 0, 0);
-                mctx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
-                mctx.save();
-                mctx.filter = 'blur(2px)';
-                mctx.drawImage(feather, 0, 0);
-                mctx.restore();
-              } else {
-                mctx.putImageData(bin, 0, 0);
-              }
+            if (fx && mctx) {
+              fx.putImageData(bin, 0, 0);
+              mctx.clearRect(0, 0, rw, rh);
+              mctx.save();
+              mctx.filter = 'blur(3px)';
+              mctx.drawImage(featherCanvas, 0, 0);
+              mctx.restore();
+            } else if (mctx) {
+              mctx.putImageData(bin, 0, 0);
             }
           };
 
@@ -1972,13 +1989,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               busy = true;
               try {
                 await segmentOnce();
-              } catch {
-                /* ignore frame errors */
-              } finally {
-                busy = false;
-              }
+              } catch { /* ignore frame errors */ }
+              finally { busy = false; }
             }
-            window.setTimeout(tick, 90);
+            rafId = requestAnimationFrame(() => { void tick(); });
           };
 
           webcamSegmenterRef.current = {
@@ -1995,6 +2009,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       return () => {
         cancelled = true;
+        cancelAnimationFrame(rafId);
         webcamSegmenterRef.current?.dispose();
         webcamSegmenterRef.current = null;
         webcamMaskRef.current = null;
@@ -2424,7 +2439,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               tctx.drawImage(webcam, 0, 0, camW, camH);
               tctx.restore();
               tctx.globalCompositeOperation = 'destination-in';
+              tctx.save();
+              tctx.translate(camW, 0);
+              tctx.scale(-1, 1);
               tctx.drawImage(maskCanvas, 0, 0, camW, camH);
+              tctx.restore();
               ctx.drawImage(tmp, cx2, cy2);
             } else {
               ctx.drawImage(webcam, cx2, cy2, camW, camH);
@@ -2566,6 +2585,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               x1 = Math.max(m.v.x, m.p1.x, m.p2.x);
               y1 = Math.max(m.v.y, m.p1.y, m.p2.y);
             }
+          } else if (sel.kind === 'textResize') {
+            const s = strokesRef.current[sel.idx];
+            if (s && s.tool === 'text') {
+              const bb = getTextBBox(s as StrokeText);
+              x0 = bb.x0; y0 = bb.y0;
+              x1 = bb.x1; y1 = bb.y1;
+            }
           }
           if (x1 > x0 || y1 > y0) {
             ctx.save();
@@ -2574,6 +2600,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.setLineDash([6, 4]);
             ctx.strokeRect(x0 - 6, y0 - 6, (x1 - x0) + 12, (y1 - y0) + 12);
             ctx.setLineDash([]);
+            // Draw corner resize handles for text strokes
+            const isTextSel = (sel.kind === 'stroke' || sel.kind === 'textResize') &&
+              strokesRef.current[sel.idx]?.tool === 'text';
+            if (isTextSel) {
+              const HANDLE_SZ = 7;
+              ctx.fillStyle = '#FFD700';
+              ctx.strokeStyle = '#000';
+              ctx.lineWidth = 1;
+              const corners = [
+                [x0 - 6, y0 - 6], [x1 + 6, y0 - 6],
+                [x0 - 6, y1 + 6], [x1 + 6, y1 + 6],
+              ];
+              for (const [hx, hy] of corners) {
+                ctx.fillRect(hx - HANDLE_SZ / 2, hy - HANDLE_SZ / 2, HANDLE_SZ, HANDLE_SZ);
+                ctx.strokeRect(hx - HANDLE_SZ / 2, hy - HANDLE_SZ / 2, HANDLE_SZ, HANDLE_SZ);
+              }
+            }
             ctx.restore();
           }
         }
@@ -2880,6 +2923,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return Math.hypot(p.x - cx, p.y - cy);
     };
 
+    const getTextBBox = (tx: StrokeText): { x0: number; y0: number; x1: number; y1: number } => {
+      const canvas = canvasRef.current;
+      if (!canvas) return { x0: tx.pos.x, y0: tx.pos.y - tx.fontSize, x1: tx.pos.x + 100, y1: tx.pos.y };
+      const ctx = canvas.getContext('2d')!;
+      ctx.font = `bold ${tx.fontSize}px Inter, sans-serif`;
+      const metrics = ctx.measureText(tx.text || ' ');
+      const w = metrics.width;
+      const h = tx.fontSize;
+      return { x0: tx.pos.x, y0: tx.pos.y - h, x1: tx.pos.x + w, y1: tx.pos.y };
+    };
+
+    const textResizeHandleHit = (tx: StrokeText, pos: Pt): 'tl' | 'tr' | 'bl' | 'br' | null => {
+      const bb = getTextBBox(tx);
+      const HANDLE_R = 8;
+      const corners: Array<{ id: 'tl' | 'tr' | 'bl' | 'br'; x: number; y: number }> = [
+        { id: 'tl', x: bb.x0, y: bb.y0 },
+        { id: 'tr', x: bb.x1, y: bb.y0 },
+        { id: 'bl', x: bb.x0, y: bb.y1 },
+        { id: 'br', x: bb.x1, y: bb.y1 },
+      ];
+      for (const c of corners) {
+        if (Math.hypot(pos.x - c.x, pos.y - c.y) <= HANDLE_R) return c.id;
+      }
+      return null;
+    };
+
     const hitTestStroke = (s: Stroke, pos: Pt): number => {
       if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
         const pts = (s as StrokePen | StrokeSwing).pts;
@@ -2929,7 +2998,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       if (s.tool === 'text') {
         const tx = s as StrokeText;
-        return Math.hypot(pos.x - tx.pos.x, pos.y - tx.pos.y);
+        const bb = getTextBBox(tx);
+        const cx = Math.max(bb.x0, Math.min(bb.x1, pos.x));
+        const cy = Math.max(bb.y0, Math.min(bb.y1, pos.y));
+        const inside = pos.x >= bb.x0 && pos.x <= bb.x1 && pos.y >= bb.y0 && pos.y <= bb.y1;
+        return inside ? 0 : Math.hypot(pos.x - cx, pos.y - cy);
       }
       return Infinity;
     };
@@ -3060,11 +3133,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // ── Pan: middle-click or Space+drag, or Zoom tool + primary drag while zoomed in ──────
+      // ── Pan: middle-click, Space+drag, zoom tool drag while zoomed, OR single-finger touch while zoomed ──
+      const isTouchPanWhileZoomed = e.pointerType === 'touch' && zoomRef.current > 1 && tool !== 'cropSelect';
       if (
         e.button === 1 ||
         spaceHeldRef.current ||
-        (tool === 'zoom' && e.button === 0 && zoomRef.current > 1)
+        (tool === 'zoom' && e.button === 0 && zoomRef.current > 1) ||
+        isTouchPanWhileZoomed
       ) {
         isPanningRef.current = true;
         panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
@@ -3092,6 +3167,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
           isDraggingRef.current = true;
           return;
+        }
+
+        // Check if clicking on a text resize handle of a currently-selected text stroke
+        const prevSel = selectionRef.current;
+        if (prevSel && prevSel.kind === 'stroke') {
+          const prevS = strokesRef.current[prevSel.idx];
+          if (prevS && prevS.tool === 'text') {
+            const corner = textResizeHandleHit(prevS as StrokeText, pos);
+            if (corner) {
+              selectionRef.current = { kind: 'textResize', idx: prevSel.idx, start: pos, orig: prevS as StrokeText, corner };
+              isDraggingRef.current = true;
+              return;
+            }
+          }
         }
 
         const HIT_T = 28;
@@ -3126,6 +3215,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         selectionRef.current = null;
+
+        if (zoomRef.current > 1) {
+          isPanningRef.current = true;
+          panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
+          e.preventDefault();
+          return;
+        }
+
         isDraggingRef.current = false;
         return;
       }
@@ -3517,6 +3614,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const sel = selectionRef.current;
         const dx = pos.x - sel.start.x;
         const dy = pos.y - sel.start.y;
+        if (sel.kind === 'textResize') {
+          const origBB = getTextBBox(sel.orig);
+          const origW = origBB.x1 - origBB.x0;
+          const origH = origBB.y1 - origBB.y0;
+          let scaleX = 1;
+          if (sel.corner === 'tr' || sel.corner === 'br') {
+            scaleX = Math.max(0.25, (origW + dx) / Math.max(1, origW));
+          } else {
+            scaleX = Math.max(0.25, (origW - dx) / Math.max(1, origW));
+          }
+          let scaleY = 1;
+          if (sel.corner === 'bl' || sel.corner === 'br') {
+            scaleY = Math.max(0.25, (origH + dy) / Math.max(1, origH));
+          } else {
+            scaleY = Math.max(0.25, (origH - dy) / Math.max(1, origH));
+          }
+          const scale = Math.max(scaleX, scaleY);
+          const newFontSize = Math.max(8, Math.round(sel.orig.fontSize * scale));
+          const updated: StrokeText = { ...sel.orig, fontSize: newFontSize };
+          strokesRef.current = [
+            ...strokesRef.current.slice(0, sel.idx),
+            updated,
+            ...strokesRef.current.slice(sel.idx + 1),
+          ];
+          return;
+        }
         if (sel.kind === 'stroke') {
           const updated = translateStroke(sel.orig, dx, dy);
           strokesRef.current = [
@@ -3634,7 +3757,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // ── Finalize Select drag ───────────────────────────────────────────
       if (selectionRef.current) {
-        selectionRef.current = null;
+        const finSel = selectionRef.current;
+        if (finSel.kind === 'textResize') {
+          // Keep the text stroke selected so resize handles remain visible
+          const s = strokesRef.current[finSel.idx];
+          selectionRef.current = s ? { kind: 'stroke', idx: finSel.idx, start: finSel.start, orig: s } : null;
+        } else {
+          selectionRef.current = null;
+        }
         isDraggingRef.current = false;
         pushHistory();
         return;
@@ -3736,8 +3866,28 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       pushHistory();
     }, [pushHistory]);
 
-    // Double-click to finish swing path on desktop
-    const onDoubleClick = useCallback((_e: React.MouseEvent) => {
+    // Commit text editing changes
+    const commitTextEdit = useCallback(() => {
+      const idx = textEditingIdxRef.current;
+      if (idx < 0) return;
+      const val = textEditInputRef.current?.value ?? '';
+      if (val && strokesRef.current[idx]?.tool === 'text') {
+        const tx = strokesRef.current[idx] as StrokeText;
+        if (val !== tx.text) {
+          strokesRef.current = [
+            ...strokesRef.current.slice(0, idx),
+            { ...tx, text: val },
+            ...strokesRef.current.slice(idx + 1),
+          ];
+          pushHistory();
+        }
+      }
+      textEditingIdxRef.current = -1;
+      setTextEditing(null);
+    }, [pushHistory]);
+
+    // Double-click to finish swing path on desktop OR edit text
+    const onDoubleClick = useCallback((e: React.MouseEvent) => {
       if (activeToolRef.current === 'swingPath' && swingDrawingRef.current) {
         finishSwingPath();
       }
@@ -3748,6 +3898,50 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         zoomRef.current = 1.0;
         panXRef.current = 0;
         panYRef.current = 0;
+      }
+
+      // Double-click/tap to edit text stroke
+      const tool = activeToolRef.current;
+      if (tool === 'select' || tool === 'text') {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const sx = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const sy = (e.clientY - rect.top) * (canvas.height / rect.height);
+        const W = canvas.width;
+        const H = canvas.height;
+        const pos: Pt = {
+          x: (sx - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
+          y: (sy - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
+        };
+        for (let i = strokesRef.current.length - 1; i >= 0; i--) {
+          const s = strokesRef.current[i];
+          if (s.tool === 'text') {
+            const tx = s as StrokeText;
+            const bb = getTextBBox(tx);
+            if (pos.x >= bb.x0 - 10 && pos.x <= bb.x1 + 10 && pos.y >= bb.y0 - 10 && pos.y <= bb.y1 + 10) {
+              // Convert canvas coords back to screen coords for overlay positioning
+              const logX = bb.x0;
+              const logY = bb.y0;
+              const screenX = ((logX - W / 2) * zoomRef.current + W / 2 + panXRef.current) * (rect.width / canvas.width);
+              const screenY = ((logY - H / 2) * zoomRef.current + H / 2 + panYRef.current) * (rect.height / canvas.height);
+              const scaledFontSize = tx.fontSize * zoomRef.current * (rect.height / canvas.height);
+              const bbW = (bb.x1 - bb.x0) * zoomRef.current * (rect.width / canvas.width);
+              textEditingIdxRef.current = i;
+              setTextEditing({
+                idx: i,
+                left: screenX,
+                top: screenY,
+                width: Math.max(100, bbW + 20),
+                fontSize: scaledFontSize,
+                value: tx.text,
+                color: tx.color,
+              });
+              e.preventDefault();
+              return;
+            }
+          }
+        }
       }
     }, [finishSwingPath, finishManualSwingPath]);
 
@@ -3786,26 +3980,66 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     }, []);
 
     return (
-      <canvas
-        ref={canvasRef}
-        width={containerWidth}
-        height={containerHeight}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          display: 'block',
-          touchAction: 'none',
-          cursor: cursorFor[activeTool] ?? 'default',
-        }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
-        onDoubleClick={onDoubleClick}
-        onWheel={onWheelCanvas}
-      />
+      <>
+        <canvas
+          ref={canvasRef}
+          width={containerWidth}
+          height={containerHeight}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            display: 'block',
+            touchAction: 'none',
+            cursor: cursorFor[activeTool] ?? 'default',
+          }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerUp}
+          onDoubleClick={onDoubleClick}
+          onWheel={onWheelCanvas}
+        />
+        {textEditing && (
+          <textarea
+            ref={textEditInputRef}
+            autoFocus
+            defaultValue={textEditing.value}
+            style={{
+              position: 'absolute',
+              left: textEditing.left,
+              top: textEditing.top,
+              width: textEditing.width,
+              minHeight: textEditing.fontSize * 1.4,
+              fontSize: textEditing.fontSize,
+              fontWeight: 'bold',
+              fontFamily: 'Inter, sans-serif',
+              color: textEditing.color,
+              background: 'rgba(0,0,0,0.65)',
+              border: '2px solid #FFD700',
+              borderRadius: 4,
+              padding: '2px 4px',
+              outline: 'none',
+              resize: 'none',
+              zIndex: 9999,
+              lineHeight: 1.2,
+              overflow: 'hidden',
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commitTextEdit();
+              }
+              if (e.key === 'Escape') {
+                textEditingIdxRef.current = -1;
+                setTextEditing(null);
+              }
+            }}
+            onBlur={commitTextEdit}
+          />
+        )}
+      </>
     );
   },
 );

@@ -158,60 +158,26 @@ export default function Home() {
   }, [youtubeVideoIdA, genericEmbedSrcA, videoSrc]);
 
   useEffect(() => {
-    if (videoSrc || !youtubeVideoIdA) return;
+    if (videoSrc || (!youtubeVideoIdA && !genericEmbedSrcA)) return;
     let cancelled = false;
-    const iv = window.setInterval(() => {
-      const d = Number(ytPlayerARef.current?.getDuration?.() ?? 0);
-      if (d > 0 && !cancelled) {
-        setEmbedReadyA(true);
-        window.clearInterval(iv);
-      }
-    }, 120);
-    const timeout = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       if (!cancelled) setEmbedReadyA(true);
-    }, 24000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(iv);
-      window.clearTimeout(timeout);
-    };
-  }, [youtubeVideoIdA, videoSrc]);
-
-  useEffect(() => {
-    if (videoSrc || !genericEmbedSrcA || youtubeVideoIdA) return;
-    const fallback = window.setTimeout(() => setEmbedReadyA(true), 20000);
-    return () => window.clearTimeout(fallback);
-  }, [genericEmbedSrcA, youtubeVideoIdA, videoSrc]);
+    }, 3000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [youtubeVideoIdA, genericEmbedSrcA, videoSrc]);
 
   useEffect(() => {
     setEmbedReadyB(false);
   }, [youtubeVideoIdB, genericEmbedSrcB, videoSrcB]);
 
   useEffect(() => {
-    if (videoSrcB || !youtubeVideoIdB) return;
+    if (videoSrcB || (!youtubeVideoIdB && !genericEmbedSrcB)) return;
     let cancelled = false;
-    const iv = window.setInterval(() => {
-      const d = Number(ytPlayerBRef.current?.getDuration?.() ?? 0);
-      if (d > 0 && !cancelled) {
-        setEmbedReadyB(true);
-        window.clearInterval(iv);
-      }
-    }, 120);
-    const timeout = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       if (!cancelled) setEmbedReadyB(true);
-    }, 24000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(iv);
-      window.clearTimeout(timeout);
-    };
-  }, [youtubeVideoIdB, videoSrcB]);
-
-  useEffect(() => {
-    if (videoSrcB || !genericEmbedSrcB || youtubeVideoIdB) return;
-    const fallback = window.setTimeout(() => setEmbedReadyB(true), 20000);
-    return () => window.clearTimeout(fallback);
-  }, [genericEmbedSrcB, youtubeVideoIdB, videoSrcB]);
+    }, 3000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [youtubeVideoIdB, genericEmbedSrcB, videoSrcB]);
 
   const [embedCaptureRecording, setEmbedCaptureRecording] = useState(false);
   /** Which panel (A/B) is running tab capture — drives Canvas to paint the live capture instead of YouTube thumbnail pose. */
@@ -229,6 +195,8 @@ export default function Home() {
   const [captureToast, setCaptureToast] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [captureRecordingElapsedSec, setCaptureRecordingElapsedSec] = useState(0);
+  const [captureCountdown, setCaptureCountdown] = useState<number | null>(null);
+  const [captureStepStatus, setCaptureStepStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!captureBusy || !embedCaptureRecording) {
@@ -623,6 +591,9 @@ export default function Home() {
 
     let rafId: number;
     const syncLoop = () => {
+      if (vB.playbackRate !== vA.playbackRate) {
+        vB.playbackRate = vA.playbackRate;
+      }
       if (!vA.paused) {
         const targetBTime = vA.currentTime - videoBOffset;
         if (targetBTime >= 0 && targetBTime <= videoBDuration) {
@@ -639,6 +610,8 @@ export default function Home() {
           if (!vB.paused) vB.pause();
           vB.currentTime = 0;
         }
+      } else {
+        if (!vB.paused) vB.pause();
       }
       rafId = requestAnimationFrame(syncLoop);
     };
@@ -740,12 +713,20 @@ export default function Home() {
     setCaptureError(null);
   }, [cleanupVideoEl, revokeBlobUrl]);
 
+  const iframeLoadTimerARef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onGenericEmbedIframeLoadA = useCallback(() => {
-    if (!youtubeVideoIdA && genericEmbedSrcA) setEmbedReadyA(true);
+    if (!youtubeVideoIdA && genericEmbedSrcA) {
+      if (iframeLoadTimerARef.current) clearTimeout(iframeLoadTimerARef.current);
+      iframeLoadTimerARef.current = setTimeout(() => setEmbedReadyA(true), 3000);
+    }
   }, [youtubeVideoIdA, genericEmbedSrcA]);
 
+  const iframeLoadTimerBRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onGenericEmbedIframeLoadB = useCallback(() => {
-    if (!youtubeVideoIdB && genericEmbedSrcB) setEmbedReadyB(true);
+    if (!youtubeVideoIdB && genericEmbedSrcB) {
+      if (iframeLoadTimerBRef.current) clearTimeout(iframeLoadTimerBRef.current);
+      iframeLoadTimerBRef.current = setTimeout(() => setEmbedReadyB(true), 3000);
+    }
   }, [youtubeVideoIdB, genericEmbedSrcB]);
 
   const handleOptionsChange = useCallback((opts: Partial<DrawingOptions>) => {
@@ -1023,6 +1004,8 @@ export default function Home() {
       }
 
       setCaptureError(null);
+      setCaptureCountdown(null);
+      setCaptureStepStatus(null);
       setEmbedCapturePanelId(panel);
       setCaptureBusy(true);
       setEmbedCaptureRecording(true);
@@ -1047,6 +1030,8 @@ export default function Home() {
         isYoutube: isYt,
         captureShellEl: shell,
         onProgress: setCaptureProgress01,
+        onCountdown: setCaptureCountdown,
+        onStepStatus: setCaptureStepStatus,
         videoDurationHintSec: durHint,
       });
 
@@ -1054,6 +1039,8 @@ export default function Home() {
       setEmbedCaptureRecording(false);
       setEmbedCapturePanelId(null);
       setCaptureProgress01(0);
+      setCaptureCountdown(null);
+      setCaptureStepStatus(null);
 
       if (!result.ok) {
         setCaptureError(result.message);
@@ -1389,10 +1376,12 @@ export default function Home() {
                 right: 0,
                 top: 52,
                 width: 'min(92vw, 360px)',
-                maxHeight: 'min(72vh, 560px)',
-                overflow: 'auto',
+                maxHeight: 'min(72dvh, 560px)',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                WebkitOverflowScrolling: 'touch',
                 borderRadius: 16,
-                padding: 14,
+                padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
                 background: 'rgba(250, 249, 247, 0.97)',
                 border: '1px solid #E5E5E5',
                 color: '#1A1A1A',
@@ -1724,11 +1713,9 @@ export default function Home() {
             minWidth: 0,
             alignItems: layoutMode === 'reels' ? 'center' : undefined,
             paddingTop:
-              reelsDesktop
-                ? 'calc(env(safe-area-inset-top, 0px) + 8px)'
-                : layoutMode === 'reels'
-                  ? 'calc(env(safe-area-inset-top, 0px) + 42px)'
-                  : 'calc(env(safe-area-inset-top, 0px) + 52px)',
+              layoutMode === 'reels'
+                ? 0
+                : 'calc(env(safe-area-inset-top, 0px) + 52px)',
             width: '100%',
           }}
         >
@@ -1743,20 +1730,33 @@ export default function Home() {
               justifyContent: layoutMode === 'reels' ? 'center' : undefined,
               alignItems: layoutMode === 'reels' ? 'center' : undefined,
               alignSelf: layoutMode === 'reels' ? 'center' : undefined,
-              width: '100%',
               overflow: reelsDesktop ? 'hidden' : layoutMode === 'reels' ? 'auto' : 'hidden',
-              padding: layoutMode === 'reels' ? '4px 8px' : undefined,
-                  ...(layoutMode === 'reels'
-                ? {
-                    /** Tall phone frame: limited by viewport height first (reads like a real device) */
-                    width: 'min(480px, 96vw, calc((min(94dvh, calc(100dvh - 56px))) * 9 / 16))',
-                    maxHeight: 'min(94dvh, calc(100dvh - 56px))',
-                    aspectRatio: '9 / 16',
-                    borderRadius: 22,
-                    border: '1px solid rgba(229, 229, 229, 0.55)',
-                    boxShadow: '0 28px 72px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.25)',
-                  }
-                : {}),
+              padding: 0,
+              ...(layoutMode === 'reels'
+                ? isMobile
+                  ? {
+                      width: '100dvw',
+                      height: '100dvh',
+                      maxHeight: '100dvh',
+                      borderRadius: 0,
+                      border: 'none',
+                      boxShadow: 'none',
+                      margin: 0,
+                      paddingTop: 'env(safe-area-inset-top, 0px)',
+                      paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+                    }
+                  : {
+                      width: 'calc(100dvh * 9 / 16)',
+                      maxWidth: '100vw',
+                      height: '100dvh',
+                      maxHeight: '100dvh',
+                      aspectRatio: '9 / 16',
+                      borderRadius: 0,
+                      border: 'none',
+                      boxShadow: 'none',
+                      margin: '0 auto',
+                    }
+                : { width: '100%' }),
             }}
           >
             {reelsDesktop && (
@@ -2259,6 +2259,7 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
+                      poseFrameSkip={hasVideoBContent ? 2 : 0}
                     />
                     <EmbedCapturePanel
                       visible={!!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc}
@@ -2272,7 +2273,9 @@ export default function Home() {
                       busy={captureBusy && embedCapturePanelId === 'A'}
                       progress01={embedCapturePanelId === 'A' ? captureProgress01 : 0}
                       recordingElapsedSec={embedCapturePanelId === 'A' ? captureRecordingElapsedSec : 0}
-                      errorMessage={embedCapturePanelId === 'A' ? captureError : null}
+                      errorMessage={embedCapturePanelId === 'A' || !embedCapturePanelId ? captureError : null}
+                      countdown={embedCapturePanelId === 'A' ? captureCountdown : null}
+                      stepStatus={embedCapturePanelId === 'A' ? captureStepStatus : null}
                       onRetry={() => setCaptureError(null)}
                       onCapture={(o) => void handleEmbedCaptureRequest('A', o)}
                     />
@@ -2552,6 +2555,7 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
+                      poseFrameSkip={2}
                     />
                     <EmbedCapturePanel
                       visible={!!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB}
@@ -2565,7 +2569,9 @@ export default function Home() {
                       busy={captureBusy && embedCapturePanelId === 'B'}
                       progress01={embedCapturePanelId === 'B' ? captureProgress01 : 0}
                       recordingElapsedSec={embedCapturePanelId === 'B' ? captureRecordingElapsedSec : 0}
-                      errorMessage={embedCapturePanelId === 'B' ? captureError : null}
+                      errorMessage={embedCapturePanelId === 'B' || !embedCapturePanelId ? captureError : null}
+                      countdown={embedCapturePanelId === 'B' ? captureCountdown : null}
+                      stepStatus={embedCapturePanelId === 'B' ? captureStepStatus : null}
                       onRetry={() => setCaptureError(null)}
                       onCapture={(o) => void handleEmbedCaptureRequest('B', o)}
                     />

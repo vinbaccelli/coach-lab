@@ -25,6 +25,8 @@ export default function EmbedCapturePanel({
   progress01 = 0,
   recordingElapsedSec = 0,
   errorMessage,
+  countdown,
+  stepStatus,
   onRetry,
   onCapture,
 }: {
@@ -33,11 +35,11 @@ export default function EmbedCapturePanel({
   sectionSeekSupported: boolean;
   genericIframeNote?: string;
   busy: boolean;
-  /** 0..1 while recording */
   progress01?: number;
-  /** Seconds since recording started */
   recordingElapsedSec?: number;
   errorMessage?: string | null;
+  countdown?: number | null;
+  stepStatus?: string | null;
   onRetry?: () => void;
   onCapture: (opts: {
     mode: CaptureModeChoice;
@@ -82,11 +84,14 @@ export default function EmbedCapturePanel({
   if (!visible) return null;
 
   const loadingVideo = !embedReady && !busy;
-  const preparingCapture = busy && embedReady && progress01 < 0.04 && recordingElapsedSec < 3;
-  const recording = busy && embedReady && !preparingCapture;
+  const showCountdown = countdown != null && countdown > 0;
+  const preparingCapture = busy && !showCountdown && progress01 < 0.04 && recordingElapsedSec < 3;
+  const recording = busy && !showCountdown && !preparingCapture;
 
   const statusLine = (() => {
     if (errorMessage) return null;
+    if (showCountdown) return null;
+    if (stepStatus) return stepStatus;
     if (loadingVideo) return 'Loading video…';
     if (!embedReady) return 'Loading video…';
     if (busy && preparingCapture) return 'Preparing video for capture — please wait…';
@@ -125,44 +130,81 @@ export default function EmbedCapturePanel({
         Record this video for analysis
       </p>
 
-      <div
-        style={{
+      {/* Countdown overlay */}
+      {showCountdown && (
+        <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
+          justifyContent: 'center',
+          padding: '28px 0',
           marginBottom: 12,
-          minHeight: 36,
-        }}
-      >
-        {(loadingVideo || (busy && preparingCapture) || (!embedReady && !errorMessage)) && (
-          <span
-            style={{
-              width: 20,
-              height: 20,
-              border: '2px solid rgba(26,26,26,0.15)',
-              borderTopColor: '#1A1A1A',
-              borderRadius: '50%',
-              animation: 'coachlab-spin 0.7s linear infinite',
-            }}
-          />
-        )}
-        {embedReady && !busy && !errorMessage && (
-          <span
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: '50%',
-              background: '#22c55e',
-              flexShrink: 0,
-              boxShadow: '0 0 0 3px rgba(34,197,94,0.25)',
-            }}
-          />
-        )}
-        <span style={{ fontWeight: 600, color: errorMessage ? '#b45309' : '#1A1A1A' }}>
-          {errorMessage ?? statusLine}
-        </span>
-      </div>
-      <style>{`@keyframes coachlab-spin { to { transform: rotate(360deg); } }`}</style>
+        }}>
+          <div style={{
+            width: 80,
+            height: 80,
+            borderRadius: '50%',
+            background: '#1A1A1A',
+            color: '#FFFFFF',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 36,
+            fontWeight: 800,
+            fontVariantNumeric: 'tabular-nums',
+            animation: 'coachlab-countdown-pulse 1s ease-in-out infinite',
+          }}>
+            {countdown}
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes coachlab-spin { to { transform: rotate(360deg); } }
+        @keyframes coachlab-countdown-pulse {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.1); }
+        }
+      `}</style>
+
+      {!showCountdown && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            marginBottom: 12,
+            minHeight: 36,
+          }}
+        >
+          {(loadingVideo || (busy && preparingCapture) || (!embedReady && !errorMessage)) && (
+            <span
+              style={{
+                width: 20,
+                height: 20,
+                border: '2px solid rgba(26,26,26,0.15)',
+                borderTopColor: '#1A1A1A',
+                borderRadius: '50%',
+                animation: 'coachlab-spin 0.7s linear infinite',
+              }}
+            />
+          )}
+          {embedReady && !busy && !errorMessage && (
+            <span
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: '#22c55e',
+                flexShrink: 0,
+                boxShadow: '0 0 0 3px rgba(34,197,94,0.25)',
+              }}
+            />
+          )}
+          <span style={{ fontWeight: 600, color: errorMessage ? '#b45309' : '#1A1A1A' }}>
+            {errorMessage ?? statusLine}
+          </span>
+        </div>
+      )}
 
       {busy && recording && (
         <div style={{ marginBottom: 12 }}>
@@ -300,7 +342,7 @@ export default function EmbedCapturePanel({
                 </span>
                 {!sectionSeekSupported && (
                   <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: '#6B6B6B' }}>
-                    Move the video to where you want to begin first. Recording stops at the “Ends at” time you entered.
+                    Move the video to where you want to begin first. Recording stops at the "Ends at" time you entered.
                   </span>
                 )}
                 {sectionInvalid && (
@@ -336,7 +378,7 @@ export default function EmbedCapturePanel({
       >
         {busy ? 'Working…' : !embedReady ? 'Waiting for video…' : 'Capture'}
       </button>
-      {busy && embedReady ? (
+      {busy && !showCountdown && recording ? (
         <p style={{ margin: '10px 0 0', fontSize: 11, color: '#6B6B6B', textAlign: 'center' }}>
           Keep this tab shared until the progress bar finishes.
         </p>
