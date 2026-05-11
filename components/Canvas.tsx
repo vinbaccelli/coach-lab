@@ -158,6 +158,7 @@ export interface CanvasProps {
   skeletonShowAngles?: boolean;
   skeletonShowHeadLine?: boolean;
   skeletonClassicColors?: boolean;
+  skeletonParts?: SkeletonPartVisibility;
   ballSampleMode?: boolean;
   rect3d?: boolean;
   triangle3d?: boolean;
@@ -237,6 +238,27 @@ function ensurePoseRender(): void {
 
 // ── Standalone skeleton renderer ───────────────────────────────────────────
 
+/** Body-part visibility flags */
+export type SkeletonPartVisibility = {
+  rightArm?: boolean;
+  leftArm?: boolean;
+  rightLeg?: boolean;
+  leftLeg?: boolean;
+};
+
+const RIGHT_ARM_JOINTS = new Set([6, 8, 10]);
+const LEFT_ARM_JOINTS  = new Set([5, 7, 9]);
+const RIGHT_LEG_JOINTS = new Set([12, 14, 16]);
+const LEFT_LEG_JOINTS  = new Set([11, 13, 15]);
+
+function isJointVisible(idx: number, parts: SkeletonPartVisibility): boolean {
+  if (RIGHT_ARM_JOINTS.has(idx) && parts.rightArm === false) return false;
+  if (LEFT_ARM_JOINTS.has(idx)  && parts.leftArm  === false) return false;
+  if (RIGHT_LEG_JOINTS.has(idx) && parts.rightLeg === false) return false;
+  if (LEFT_LEG_JOINTS.has(idx)  && parts.leftLeg  === false) return false;
+  return true;
+}
+
 function drawSkeletonOverlay(
   ctx: CanvasRenderingContext2D,
   keypoints: Array<{ x: number; y: number; score: number; name: string }>,
@@ -249,29 +271,41 @@ function drawSkeletonOverlay(
     showHeadLine?: boolean;
     classicColors?: boolean;
     showFootLine?: boolean;
+    parts?: SkeletonPartVisibility;
   },
 ): void {
   const sx = canvasW / nativeW;
   const sy = canvasH / nativeH;
 
-  const showAngles   = opts?.showAngles   !== false;
-  const showHeadLine = opts?.showHeadLine !== false;
-  const classicColors = opts?.classicColors === true;
-  const showFootLine = opts?.showFootLine !== false;
+  const showAngles    = opts?.showAngles   !== false;
+  const showHeadLine  = opts?.showHeadLine === true;
+  const classicColors = opts?.classicColors !== false;
+  const showFootLine  = opts?.showFootLine !== false;
+  const parts: SkeletonPartVisibility = opts?.parts ?? {};
   const jointRadius = Math.max(2, Math.min(7, Math.round(Math.min(canvasW, canvasH) / 180)));
 
+  // Bones: head connections excluded from default, torso uses a single central spine line
   const BONES: [number, number][] = [
-    [0, 1], [0, 2], [1, 3], [2, 4],
-    [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
-    [5, 11], [6, 12], [11, 12],
-    [11, 13], [13, 15], [12, 14], [14, 16],
+    // arms
+    [5, 7], [7, 9],   // left arm
+    [6, 8], [8, 10],  // right arm
+    // shoulders
+    [5, 6],
+    // central spine: midpoint of shoulders → midpoint of hips (drawn separately below)
+    // hips
+    [11, 12],
+    // legs
+    [11, 13], [13, 15], // left leg
+    [12, 14], [14, 16], // right leg
   ];
 
   ctx.save();
   ctx.strokeStyle = classicColors ? '#39FF14' : '#35679A';
   ctx.lineWidth = classicColors ? 4 : 3;
   ctx.lineCap = 'round';
+
   for (const [a, b] of BONES) {
+    if (!isJointVisible(a, parts) || !isJointVisible(b, parts)) continue;
     const ka = keypoints[a];
     const kb = keypoints[b];
     if (!ka || !kb || ka.score < 0.3 || kb.score < 0.3) continue;
@@ -281,7 +315,25 @@ function drawSkeletonOverlay(
     ctx.stroke();
   }
 
-  // Headline: horizontal line at head height (helps keep face visible in recordings)
+  // Central spine: single line from midpoint of shoulders to midpoint of hips
+  const lShoulder = keypoints[5], rShoulder = keypoints[6];
+  const lHip = keypoints[11], rHip = keypoints[12];
+  if (
+    lShoulder && rShoulder && lHip && rHip &&
+    lShoulder.score >= 0.3 && rShoulder.score >= 0.3 &&
+    lHip.score >= 0.3 && rHip.score >= 0.3
+  ) {
+    const midShoulderX = ((lShoulder.x + rShoulder.x) / 2) * sx;
+    const midShoulderY = ((lShoulder.y + rShoulder.y) / 2) * sy;
+    const midHipX = ((lHip.x + rHip.x) / 2) * sx;
+    const midHipY = ((lHip.y + rHip.y) / 2) * sy;
+    ctx.beginPath();
+    ctx.moveTo(midShoulderX, midShoulderY);
+    ctx.lineTo(midHipX, midHipY);
+    ctx.stroke();
+  }
+
+  // Head line (off by default — checkbox in skeleton panel)
   if (showHeadLine) {
     const headIdxs = [0, 1, 2, 3, 4];
     const ys = headIdxs
@@ -306,6 +358,7 @@ function drawSkeletonOverlay(
   // Foot direction lines
   if (showFootLine) {
     for (const [kneeIdx, ankleIdx] of [[13, 15], [14, 16]] as [number, number][]) {
+      if (!isJointVisible(kneeIdx, parts) || !isJointVisible(ankleIdx, parts)) continue;
       const knee  = keypoints[kneeIdx];
       const ankle = keypoints[ankleIdx];
       if (!knee || !ankle || knee.score < 0.3 || ankle.score < 0.3) continue;
@@ -329,14 +382,14 @@ function drawSkeletonOverlay(
     }
   }
 
-  // Draw joint dots — skip head keypoints (indices 0-4)
+  // Joint dots — skip head keypoints (0-4), respect body-part visibility
   for (let i = 5; i < keypoints.length; i++) {
+    if (!isJointVisible(i, parts)) continue;
     const kp = keypoints[i];
     if (!kp || kp.score < 0.3) continue;
     ctx.beginPath();
     ctx.arc(kp.x * sx, kp.y * sy, jointRadius, 0, Math.PI * 2);
     if (classicColors) {
-      // even indices = right side (red), odd = left side (blue)
       ctx.fillStyle = i % 2 === 0 ? '#FF4444' : '#4488FF';
     } else {
       ctx.fillStyle = '#F8F8F8';
@@ -357,6 +410,7 @@ function drawSkeletonOverlay(
     ctx.shadowBlur = 3;
 
     for (const [vi, ai, bi] of ANGLES) {
+      if (!isJointVisible(vi, parts) || !isJointVisible(ai, parts) || !isJointVisible(bi, parts)) continue;
       const v = keypoints[vi];
       const a = keypoints[ai];
       const b = keypoints[bi];
@@ -1256,8 +1310,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionOpacity = 0.3,
       stroMotionRegion,
       skeletonShowAngles = true,
-      skeletonShowHeadLine = true,
-      skeletonClassicColors = false,
+      skeletonShowHeadLine = false,
+      skeletonClassicColors = true,
+      skeletonParts,
       ballSampleMode = false,
       rect3d = false,
       triangle3d = false,
@@ -1366,6 +1421,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonShowAnglesRef   = useRef(skeletonShowAngles);
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
+    const skeletonPartsRef = useRef(skeletonParts);
     const ballSampleModeRef = useRef(ballSampleMode);
     const rect3dRef = useRef(rect3d);
     const triangle3dRef = useRef(triangle3d);
@@ -1444,6 +1500,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonShowAnglesRef.current   = skeletonShowAngles; },   [skeletonShowAngles]);
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; },  [skeletonShowHeadLine]);
     useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; }, [skeletonClassicColors]);
+    useEffect(() => { skeletonPartsRef.current = skeletonParts; }, [skeletonParts]);
     useEffect(() => { ballSampleModeRef.current = ballSampleMode; }, [ballSampleMode]);
     useEffect(() => { rect3dRef.current = rect3d; }, [rect3d]);
     useEffect(() => { triangle3dRef.current = triangle3d; }, [triangle3d]);
@@ -2360,6 +2417,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               showAngles: skeletonShowAnglesRef.current,
               showHeadLine: skeletonShowHeadLineRef.current,
               classicColors: skeletonClassicColorsRef.current,
+              parts: skeletonPartsRef.current,
             });
             ctx.restore();
           } else if (cachedPosesRef.current.length > 0 && poseRenderFns && video) {

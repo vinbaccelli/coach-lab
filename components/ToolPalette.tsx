@@ -67,6 +67,14 @@ interface ToolPaletteProps {
   onSkeletonShowHeadLineChange?: (v: boolean) => void;
   skeletonClassicColors?: boolean;
   onSkeletonClassicColorsChange?: (v: boolean) => void;
+  skeletonShowRightArm?: boolean;
+  onSkeletonShowRightArmChange?: (v: boolean) => void;
+  skeletonShowLeftArm?: boolean;
+  onSkeletonShowLeftArmChange?: (v: boolean) => void;
+  skeletonShowRightLeg?: boolean;
+  onSkeletonShowRightLegChange?: (v: boolean) => void;
+  skeletonShowLeftLeg?: boolean;
+  onSkeletonShowLeftLegChange?: (v: boolean) => void;
   ballSampleMode?: boolean;
   onBallSampleModeChange?: (v: boolean) => void;
   onResetCropZoom?: () => void;
@@ -128,6 +136,14 @@ export default function ToolPalette({
   onSkeletonShowHeadLineChange,
   skeletonClassicColors,
   onSkeletonClassicColorsChange,
+  skeletonShowRightArm,
+  onSkeletonShowRightArmChange,
+  skeletonShowLeftArm,
+  onSkeletonShowLeftArmChange,
+  skeletonShowRightLeg,
+  onSkeletonShowRightLegChange,
+  skeletonShowLeftLeg,
+  onSkeletonShowLeftLegChange,
   ballSampleMode,
   onBallSampleModeChange,
   onResetCropZoom,
@@ -475,22 +491,51 @@ export default function ToolPalette({
             {onSkeletonShowAnglesChange !== undefined && (
               <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
                 <input type="checkbox" checked={skeletonShowAngles ?? true}
-                  onChange={e => onSkeletonShowAnglesChange(e.target.checked)} className="accent-blue-500" />
+                  onChange={e => onSkeletonShowAnglesChange(e.target.checked)} className="accent-green-500" />
                 <span className="text-[9px] text-gray-600 font-medium">Show angles</span>
               </label>
             )}
             {onSkeletonShowHeadLineChange !== undefined && (
               <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
-                <input type="checkbox" checked={skeletonShowHeadLine ?? true}
-                  onChange={e => onSkeletonShowHeadLineChange(e.target.checked)} className="accent-blue-500" />
-                <span className="text-[9px] text-gray-600 font-medium">Show headline</span>
+                <input type="checkbox" checked={skeletonShowHeadLine ?? false}
+                  onChange={e => onSkeletonShowHeadLineChange(e.target.checked)} className="accent-green-500" />
+                <span className="text-[9px] text-gray-600 font-medium">Show head line</span>
               </label>
             )}
             {onSkeletonClassicColorsChange !== undefined && (
               <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
-                <input type="checkbox" checked={skeletonClassicColors ?? false}
-                  onChange={e => onSkeletonClassicColorsChange(e.target.checked)} className="accent-blue-500" />
-                <span className="text-[9px] text-gray-600 font-medium">Classic neon mode</span>
+                <input type="checkbox" checked={skeletonClassicColors ?? true}
+                  onChange={e => onSkeletonClassicColorsChange(e.target.checked)} className="accent-green-500" />
+                <span className="text-[9px] text-gray-600 font-medium">Neon colors (green/red/blue)</span>
+              </label>
+            )}
+            <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mt-2 mb-1 px-1">Body Parts</p>
+            {onSkeletonShowRightArmChange !== undefined && (
+              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
+                <input type="checkbox" checked={skeletonShowRightArm ?? true}
+                  onChange={e => onSkeletonShowRightArmChange(e.target.checked)} className="accent-red-500" />
+                <span className="text-[9px] text-gray-600 font-medium">Right arm</span>
+              </label>
+            )}
+            {onSkeletonShowLeftArmChange !== undefined && (
+              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
+                <input type="checkbox" checked={skeletonShowLeftArm ?? true}
+                  onChange={e => onSkeletonShowLeftArmChange(e.target.checked)} className="accent-blue-500" />
+                <span className="text-[9px] text-gray-600 font-medium">Left arm</span>
+              </label>
+            )}
+            {onSkeletonShowRightLegChange !== undefined && (
+              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
+                <input type="checkbox" checked={skeletonShowRightLeg ?? true}
+                  onChange={e => onSkeletonShowRightLegChange(e.target.checked)} className="accent-red-500" />
+                <span className="text-[9px] text-gray-600 font-medium">Right leg</span>
+              </label>
+            )}
+            {onSkeletonShowLeftLegChange !== undefined && (
+              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
+                <input type="checkbox" checked={skeletonShowLeftLeg ?? true}
+                  onChange={e => onSkeletonShowLeftLegChange(e.target.checked)} className="accent-blue-500" />
+                <span className="text-[9px] text-gray-600 font-medium">Left leg</span>
               </label>
             )}
           </div>

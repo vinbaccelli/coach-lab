@@ -31,6 +31,7 @@ import {
 } from '@/lib/videoController';
 import { resolveYoutubeForAnalysis } from '@/app/actions/youtubeResolve';
 import { runEmbedTabCaptureFlow } from '@/lib/embedTabCaptureFlow';
+import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 import SaveReportModal from '@/components/shared/SaveReportModal';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
@@ -114,8 +115,12 @@ export default function Home() {
   const [rect3d, setRect3d]                 = useState(false);
   const [triangle3d, setTriangle3d]         = useState(false);
   const [skeletonShowAngles, setSkeletonShowAngles] = useState(true);
-  const [skeletonShowHeadLine, setSkeletonShowHeadLine] = useState(true);
-  const [skeletonClassicColors, setSkeletonClassicColors] = useState(false);
+  const [skeletonShowHeadLine, setSkeletonShowHeadLine] = useState(false);
+  const [skeletonClassicColors, setSkeletonClassicColors] = useState(true);
+  const [skeletonShowRightArm, setSkeletonShowRightArm] = useState(true);
+  const [skeletonShowLeftArm, setSkeletonShowLeftArm] = useState(true);
+  const [skeletonShowRightLeg, setSkeletonShowRightLeg] = useState(true);
+  const [skeletonShowLeftLeg, setSkeletonShowLeftLeg] = useState(true);
   const [ballSampleMode, setBallSampleMode] = useState(false);
   const [webcamPipMode, setWebcamPipMode]   = useState<WebcamPipMode>('rectangle');
   const [webcamOpacity, setWebcamOpacity]   = useState(1);
@@ -239,6 +244,13 @@ export default function Home() {
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
   const ballTrailEnabled = activeTool === 'ballShadow';
+
+  const skeletonParts = useMemo(() => ({
+    rightArm: skeletonShowRightArm,
+    leftArm: skeletonShowLeftArm,
+    rightLeg: skeletonShowRightLeg,
+    leftLeg: skeletonShowLeftLeg,
+  }), [skeletonShowRightArm, skeletonShowLeftArm, skeletonShowRightLeg, skeletonShowLeftLeg]);
 
   const html5ControllerA = useMemo(() => createHtml5VideoController(videoRef), []);
   const ytIframeControllerA = useMemo(() => createYoutubeIframeController(ytPlayerARef), []);
@@ -577,10 +589,13 @@ export default function Home() {
     canvasRefB.current?.clearAll();
   }, [cleanupVideoEl, revokeBlobUrl]);
 
-  // ── Video B sync loop (keeps B in sync with A + offset) ───────────────────
-
-  /** Acceptable drift (seconds) before Video B is hard-seeked to catch up */
-  const VIDEO_B_SYNC_DRIFT_THRESHOLD = 0.1;
+  // ── Video B sync engine (keeps B in lockstep with A) ──────────────────────
+  // Two layers:
+  //  1. Event listeners on vA (play/pause/seeking/ratechange) fire synchronously
+  //     whenever PreciseTimeline or keyboard shortcuts act on Video A, giving
+  //     instant mirroring to Video B with zero frame delay.
+  //  2. A single rAF drift-correction loop catches any residual timing skew
+  //     during continuous playback (threshold: 100 ms).
 
   useEffect(() => {
     const vA = videoRef.current;
@@ -589,35 +604,95 @@ export default function Home() {
     if (!vA || !vB || !videoBLoaded) return;
     if (!playBothEnabled) return;
 
+    const DRIFT_THRESHOLD = 0.1;
+    let playPendingB = false;
     let rafId: number;
-    const syncLoop = () => {
+
+    const bTarget = () => vA.currentTime - videoBOffset;
+    const bInRange = (t: number) => t >= 0 && t <= videoBDuration;
+
+    // ── Event handlers: respond instantly to user actions on A ──
+
+    const onPlayA = () => {
+      const t = bTarget();
+      if (bInRange(t) && vB.paused && !playPendingB) {
+        playPendingB = true;
+        vB.play()
+          .then(() => { playPendingB = false; })
+          .catch(() => { playPendingB = false; });
+      }
+    };
+
+    const onPauseA = () => {
+      if (!vB.paused) vB.pause();
+      playPendingB = false;
+    };
+
+    const onSeekingA = () => {
+      const t = bTarget();
+      if (bInRange(t)) {
+        vB.currentTime = t;
+      } else if (t < 0) {
+        vB.currentTime = 0;
+        if (!vB.paused) vB.pause();
+      }
+    };
+
+    const onRateA = () => {
+      vB.playbackRate = vA.playbackRate;
+    };
+
+    vA.addEventListener('play', onPlayA);
+    vA.addEventListener('pause', onPauseA);
+    vA.addEventListener('seeking', onSeekingA);
+    vA.addEventListener('ratechange', onRateA);
+
+    // ── Single rAF drift-correction loop ──
+
+    const correctDrift = () => {
+      const t = bTarget();
+
       if (vB.playbackRate !== vA.playbackRate) {
         vB.playbackRate = vA.playbackRate;
       }
+
       if (!vA.paused) {
-        const targetBTime = vA.currentTime - videoBOffset;
-        if (targetBTime >= 0 && targetBTime <= videoBDuration) {
-          const drift = Math.abs(vB.currentTime - targetBTime);
-          if (drift > VIDEO_B_SYNC_DRIFT_THRESHOLD) {
-            vB.currentTime = targetBTime;
+        if (bInRange(t)) {
+          const drift = Math.abs(vB.currentTime - t);
+          if (drift > DRIFT_THRESHOLD) vB.currentTime = t;
+          if (vB.paused && !playPendingB) {
+            playPendingB = true;
+            vB.play()
+              .then(() => { playPendingB = false; })
+              .catch(() => { playPendingB = false; });
           }
-          if (vB.paused) {
-            vB.play().catch((err) => {
-              console.warn('[VideoB sync] play() rejected:', err);
-            });
-          }
-        } else if (targetBTime < 0) {
+        } else {
           if (!vB.paused) vB.pause();
-          vB.currentTime = 0;
+          playPendingB = false;
+          if (t < 0) vB.currentTime = 0;
         }
       } else {
         if (!vB.paused) vB.pause();
+        playPendingB = false;
       }
-      rafId = requestAnimationFrame(syncLoop);
+
+      rafId = requestAnimationFrame(correctDrift);
     };
 
-    rafId = requestAnimationFrame(syncLoop);
-    return () => cancelAnimationFrame(rafId);
+    // Initial alignment
+    vB.playbackRate = vA.playbackRate;
+    const t0 = bTarget();
+    if (bInRange(t0)) vB.currentTime = t0;
+
+    rafId = requestAnimationFrame(correctDrift);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      vA.removeEventListener('play', onPlayA);
+      vA.removeEventListener('pause', onPauseA);
+      vA.removeEventListener('seeking', onSeekingA);
+      vA.removeEventListener('ratechange', onRateA);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoBLoaded, videoBOffset, videoBDuration, playBothEnabled, youtubeVideoIdA, genericEmbedSrcA]);
 
@@ -947,8 +1022,24 @@ export default function Home() {
       panel: 'A' | 'B',
       opts: { mode: 'full' | 'section'; startSec: number | null; endSec: number | null },
     ) => {
+      // Acquire the screen-share stream IMMEDIATELY from the user gesture,
+      // before any async work, so the browser doesn't revoke the gesture context.
+      let preAcquiredStream: MediaStream | null = null;
+      try {
+        preAcquiredStream = await getTabCaptureStream();
+      } catch (e: unknown) {
+        const msg =
+          (e as DOMException)?.name === 'NotAllowedError' ||
+          (e as DOMException)?.name === 'PermissionDeniedError'
+            ? 'Screen sharing was cancelled or blocked by the browser. Tap Capture and choose your browser tab when asked.'
+            : `Screen sharing failed: ${(e as Error)?.message || 'Unknown error'}. Try refreshing the page.`;
+        setCaptureError(msg);
+        return;
+      }
+
       const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
       if (!videoEl) {
+        stopAllTracks(preAcquiredStream);
         setCaptureError(
           'The video player is not ready yet. Wait until the clip appears, then open Capture again.',
         );
@@ -963,6 +1054,7 @@ export default function Home() {
             `https://www.youtube.com/watch?v=${encodeURIComponent(yid)}`,
           );
           if (r.ok && r.directUrl) {
+            stopAllTracks(preAcquiredStream);
             const streamUrl = `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`;
             setProcessingStatus(null);
             if (panel === 'A') {
@@ -999,6 +1091,7 @@ export default function Home() {
           ? !!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc
           : !!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB;
       if (hasEmbedOnly && !ready) {
+        stopAllTracks(preAcquiredStream);
         setCaptureError('The video is still loading. Wait until it appears, then try Capture again.');
         return;
       }
@@ -1033,6 +1126,7 @@ export default function Home() {
         onCountdown: setCaptureCountdown,
         onStepStatus: setCaptureStepStatus,
         videoDurationHintSec: durHint,
+        preAcquiredStream: preAcquiredStream,
       });
 
       setCaptureBusy(false);
@@ -1215,16 +1309,16 @@ export default function Home() {
             flexWrap: 'wrap',
           }}
         >
-          <span style={{ fontSize: 11, color: '#6e6e73', fontWeight: 600 }}>Playback</span>
+          <span style={{ fontSize: 11, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.6)' : '#6e6e73', fontWeight: 600 }}>Playback</span>
           <select
             value={playbackTarget}
             onChange={(e) => setPlaybackTarget(e.target.value as 'A' | 'B' | 'AB')}
             style={{
               height: 32,
-              borderRadius: 10,
-              border: '1px solid #E5E5E5',
-              background: '#FFFFFF',
-              color: '#1A1A1A',
+              borderRadius: layoutMode === 'reels' ? 0 : 10,
+              border: layoutMode === 'reels' ? '1px solid rgba(255,255,255,0.2)' : '1px solid #E5E5E5',
+              background: layoutMode === 'reels' ? 'rgba(255,255,255,0.1)' : '#FFFFFF',
+              color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
               padding: '0 10px',
               fontSize: 13,
               fontWeight: 600,
@@ -1352,13 +1446,13 @@ export default function Home() {
               style={{
                 width: 44,
                 height: 44,
-                borderRadius: 14,
-                border: '1px solid #E5E5E5',
-                background: 'rgba(255, 255, 255, 0.85)',
-                color: '#1A1A1A',
+                borderRadius: layoutMode === 'reels' ? 0 : 14,
+                border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(255, 255, 255, 0.85)',
+                color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
                 backdropFilter: 'blur(18px) saturate(1.1)',
                 WebkitBackdropFilter: 'blur(18px) saturate(1.1)',
-                boxShadow: '0 8px 28px rgba(0,0,0,0.08)',
+                boxShadow: layoutMode === 'reels' ? 'none' : '0 8px 28px rgba(0,0,0,0.08)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1380,14 +1474,14 @@ export default function Home() {
                 overflowY: 'auto',
                 overflowX: 'hidden',
                 WebkitOverflowScrolling: 'touch',
-                borderRadius: 16,
+                borderRadius: layoutMode === 'reels' ? 0 : 16,
                 padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
-                background: 'rgba(250, 249, 247, 0.97)',
-                border: '1px solid #E5E5E5',
-                color: '#1A1A1A',
+                background: layoutMode === 'reels' ? 'rgba(0,0,0,0.75)' : 'rgba(250, 249, 247, 0.97)',
+                border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
                 backdropFilter: 'blur(20px) saturate(1.1)',
                 WebkitBackdropFilter: 'blur(20px) saturate(1.1)',
-                boxShadow: '0 18px 48px rgba(0,0,0,0.1)',
+                boxShadow: layoutMode === 'reels' ? 'none' : '0 18px 48px rgba(0,0,0,0.1)',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                   <div style={{
@@ -1504,12 +1598,12 @@ export default function Home() {
               gap: layoutMode === 'reels' ? '6px' : '12px',
               pointerEvents: 'auto',
               padding: layoutMode === 'reels' ? '6px 8px' : '10px 12px',
-              borderRadius: layoutMode === 'reels' ? 12 : 16,
-              background: 'rgba(255, 255, 255, 0.72)',
-              border: '1px solid rgba(229, 229, 229, 0.95)',
+              borderRadius: layoutMode === 'reels' ? 0 : 16,
+              background: layoutMode === 'reels' ? 'rgba(0,0,0,0.5)' : 'rgba(255, 255, 255, 0.72)',
+              border: layoutMode === 'reels' ? 'none' : '1px solid rgba(229, 229, 229, 0.95)',
               backdropFilter: 'blur(18px) saturate(1.15)',
               WebkitBackdropFilter: 'blur(18px) saturate(1.15)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.06)',
+              boxShadow: layoutMode === 'reels' ? 'none' : '0 8px 32px rgba(0,0,0,0.06)',
             }}
           >
             {/* Actions (desktop) */}
@@ -1690,6 +1784,14 @@ export default function Home() {
               onSkeletonShowHeadLineChange={setSkeletonShowHeadLine}
               skeletonClassicColors={skeletonClassicColors}
               onSkeletonClassicColorsChange={setSkeletonClassicColors}
+              skeletonShowRightArm={skeletonShowRightArm}
+              onSkeletonShowRightArmChange={setSkeletonShowRightArm}
+              skeletonShowLeftArm={skeletonShowLeftArm}
+              onSkeletonShowLeftArmChange={setSkeletonShowLeftArm}
+              skeletonShowRightLeg={skeletonShowRightLeg}
+              onSkeletonShowRightLegChange={setSkeletonShowRightLeg}
+              skeletonShowLeftLeg={skeletonShowLeftLeg}
+              onSkeletonShowLeftLegChange={setSkeletonShowLeftLeg}
               ballSampleMode={ballSampleMode}
               onBallSampleModeChange={setBallSampleMode}
               onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
@@ -1742,8 +1844,7 @@ export default function Home() {
                       border: 'none',
                       boxShadow: 'none',
                       margin: 0,
-                      paddingTop: 'env(safe-area-inset-top, 0px)',
-                      paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+                      padding: 0,
                     }
                   : {
                       width: 'calc(100dvh * 9 / 16)',
@@ -1760,39 +1861,27 @@ export default function Home() {
             }}
           >
             {reelsDesktop && (
-              <div
-                style={{
-                  flexShrink: 0,
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  minHeight: 42,
-                  padding: '6px 8px',
-                  borderBottom: '1px solid #E5E5E5',
-                  background: 'rgba(255, 255, 255, 0.82)',
-                  backdropFilter: 'blur(18px) saturate(1.12)',
-                  WebkitBackdropFilter: 'blur(18px) saturate(1.12)',
-                  zIndex: 92,
-                  boxSizing: 'border-box',
-                }}
-              >
+              <>
                 <button
                   type="button"
                   onClick={() => setDesktopReelsMenuOpen((o) => !o)}
                   style={{
-                    flexShrink: 0,
-                    width: 36,
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    zIndex: 92,
+                    width: 34,
                     height: 34,
-                    borderRadius: 10,
-                    border: '1px solid #E5E5E5',
-                    background: '#FFFFFF',
-                    color: '#1A1A1A',
+                    borderRadius: 0,
+                    border: 'none',
+                    background: 'rgba(0,0,0,0.4)',
+                    color: '#FFFFFF',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     cursor: 'pointer',
-                    boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+                    backdropFilter: 'blur(8px)',
+                    WebkitBackdropFilter: 'blur(8px)',
                   }}
                   aria-expanded={desktopReelsMenuOpen}
                   aria-label="Open actions menu"
@@ -1802,14 +1891,19 @@ export default function Home() {
                 {desktopReelsMenuOpen && (
                   <div
                     style={{
-                      flex: 1,
-                      minWidth: 0,
-                      overflowX: 'auto',
+                      position: 'absolute',
+                      top: 46,
+                      right: 8,
+                      zIndex: 92,
                       display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      WebkitOverflowScrolling: 'touch',
-                      paddingBottom: 2,
+                      flexDirection: 'column',
+                      gap: 4,
+                      padding: 8,
+                      background: 'rgba(0,0,0,0.6)',
+                      backdropFilter: 'blur(18px) saturate(1.12)',
+                      WebkitBackdropFilter: 'blur(18px) saturate(1.12)',
+                      borderRadius: 0,
+                      minWidth: 180,
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
@@ -1818,10 +1912,10 @@ export default function Home() {
                         onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
                         style={{
                           height: 28,
-                          borderRadius: 8,
-                          border: '1px solid #E5E5E5',
-                          background: '#FFFFFF',
-                          color: '#1A1A1A',
+                          borderRadius: 0,
+                          border: '1px solid rgba(255,255,255,0.2)',
+                          background: 'rgba(255,255,255,0.1)',
+                          color: '#FFFFFF',
                           padding: '0 6px',
                           fontSize: 11,
                           fontWeight: 700,
@@ -1843,90 +1937,92 @@ export default function Home() {
                           height: 28,
                           width: 120,
                           padding: '0 8px',
-                          borderRadius: 8,
-                          border: '1px solid #E5E5E5',
+                          borderRadius: 0,
+                          border: '1px solid rgba(255,255,255,0.2)',
                           fontSize: 11,
                           outline: 'none',
-                          background: '#FFFFFF',
-                          color: '#1A1A1A',
+                          background: 'rgba(255,255,255,0.1)',
+                          color: '#FFFFFF',
                           minWidth: 0,
                         }}
                       />
                       <button
                         type="button"
                         onClick={handleUrlSubmit}
-                        style={{ ...headerBtnStyle, height: 28, padding: '0 8px', fontSize: 11 }}
+                        style={{ ...headerBtnStyle, height: 28, padding: '0 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
                       >
                         Load
                       </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }}
-                      title={videoSrc ? 'Replace Video A' : 'Upload Video A'}
-                    >
-                      <Upload size={12} />
-                      {videoSrc ? 'A' : '+A'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => fileInputRefB.current?.click()}
-                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }}
-                      title={videoSrcB ? 'Replace Video B' : 'Upload Video B'}
-                    >
-                      <Upload size={12} />
-                      {videoSrcB ? 'B' : '+B'}
-                    </button>
-                    {!webcamActive ? (
-                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }} title="Webcam">
-                        Cam
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
+                        title={videoSrc ? 'Replace Video A' : 'Upload Video A'}
+                      >
+                        <Upload size={12} />
+                        {videoSrc ? 'A' : '+A'}
                       </button>
-                    ) : (
-                      <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, color: '#166534', borderColor: '#bbf7d0', background: '#f0fdf4' }} title="Turn webcam off">
-                        ● Cam
+                      <button
+                        type="button"
+                        onClick={() => fileInputRefB.current?.click()}
+                        style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
+                        title={videoSrcB ? 'Replace Video B' : 'Upload Video B'}
+                      >
+                        <Upload size={12} />
+                        {videoSrcB ? 'B' : '+B'}
                       </button>
-                    )}
-                    {!micActive ? (
-                      <button type="button" onClick={startMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }} title="Mic">
-                        Mic
+                      {!webcamActive ? (
+                        <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="Webcam">
+                          Cam
+                        </button>
+                      ) : (
+                        <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, color: '#4ade80', borderColor: 'rgba(74,222,128,0.4)', background: 'rgba(74,222,128,0.15)' }} title="Turn webcam off">
+                          ● Cam
+                        </button>
+                      )}
+                      {!micActive ? (
+                        <button type="button" onClick={startMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="Mic">
+                          Mic
+                        </button>
+                      ) : (
+                        <button type="button" onClick={stopMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, color: '#f87171', borderColor: 'rgba(248,113,113,0.4)', background: 'rgba(248,113,113,0.15)' }} title="Stop mic">
+                          Mic on
+                        </button>
+                      )}
+                      <button type="button" onClick={handleScreenshot} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="Screenshot">
+                        Shot
                       </button>
-                    ) : (
-                      <button type="button" onClick={stopMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, color: '#b91c1c', borderColor: '#fecaca', background: '#fff7f7' }} title="Stop mic">
-                        Mic on
+                      <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="New session">
+                        New
                       </button>
-                    )}
-                    <button type="button" onClick={handleScreenshot} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }} title="Screenshot">
-                      Shot
-                    </button>
-                    <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11 }} title="New session">
-                      New
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setLayoutMode('youtube'); setDesktopReelsMenuOpen(false); }}
-                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, background: '#FFFFFF', color: '#1A1A1A', border: '1px solid #E5E5E5' }}
-                    >
-                      16:9
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setLayoutMode('reels'); }}
-                      style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, background: '#1A1A1A', color: '#FFFFFF', border: '1px solid #1A1A1A' }}
-                    >
-                      9:16
-                    </button>
-                    <ScreenRecorder
-                      getCanvas={getCanvas}
-                      getWebcamStream={getWebcamStream}
-                      getMicStream={getMicStream}
-                      getCropRegion={getCropRegion}
-                      layoutMode="reels"
-                      onRecordingChange={handleRecordingChange}
-                    />
+                      <button
+                        type="button"
+                        onClick={() => { setLayoutMode('youtube'); setDesktopReelsMenuOpen(false); }}
+                        style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
+                      >
+                        16:9
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setLayoutMode('reels'); }}
+                        style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, borderRadius: 0, background: 'rgba(255,255,255,0.3)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.4)' }}
+                      >
+                        9:16
+                      </button>
+                      <ScreenRecorder
+                        getCanvas={getCanvas}
+                        getWebcamStream={getWebcamStream}
+                        getMicStream={getMicStream}
+                        getCropRegion={getCropRegion}
+                        layoutMode="reels"
+                        onRecordingChange={handleRecordingChange}
+                      />
+                    </div>
                   </div>
                 )}
-              </div>
+              </>
             )}
             <div
               style={{
@@ -1991,13 +2087,13 @@ export default function Home() {
                   zIndex: 84,
                   display: 'flex',
                   flexDirection: 'column',
-                  background: 'rgba(255, 255, 255, 0.52)',
+                  background: 'rgba(0,0,0,0.3)',
                   overflow: 'hidden',
-                  borderRadius: 14,
-                  border: '1px solid rgba(229, 229, 229, 0.85)',
+                  borderRadius: 0,
+                  border: 'none',
                   backdropFilter: 'blur(20px) saturate(1.15)',
                   WebkitBackdropFilter: 'blur(20px) saturate(1.15)',
-                  boxShadow: '0 8px 28px rgba(0,0,0,0.08)',
+                  boxShadow: 'none',
                 }}
               >
                 <div
@@ -2046,6 +2142,14 @@ export default function Home() {
                     onSkeletonShowHeadLineChange={setSkeletonShowHeadLine}
                     skeletonClassicColors={skeletonClassicColors}
                     onSkeletonClassicColorsChange={setSkeletonClassicColors}
+                    skeletonShowRightArm={skeletonShowRightArm}
+                    onSkeletonShowRightArmChange={setSkeletonShowRightArm}
+                    skeletonShowLeftArm={skeletonShowLeftArm}
+                    onSkeletonShowLeftArmChange={setSkeletonShowLeftArm}
+                    skeletonShowRightLeg={skeletonShowRightLeg}
+                    onSkeletonShowRightLegChange={setSkeletonShowRightLeg}
+                    skeletonShowLeftLeg={skeletonShowLeftLeg}
+                    onSkeletonShowLeftLegChange={setSkeletonShowLeftLeg}
                     ballSampleMode={ballSampleMode}
                     onBallSampleModeChange={setBallSampleMode}
                     onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
@@ -2078,14 +2182,14 @@ export default function Home() {
               >
                 {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (
                   <div style={{
-                    position: 'absolute', inset: 16,
+                    position: 'absolute', inset: layoutMode === 'reels' ? 0 : 16,
                     display: 'flex', flexDirection: 'column',
                     alignItems: 'center', justifyContent: 'center',
                     gap: '14px',
-                    borderRadius: 20,
-                    border: '2px dashed #E5E5E5',
-                    background: '#FFFFFF',
-                    color: '#6e6e73',
+                    borderRadius: layoutMode === 'reels' ? 0 : 20,
+                    border: layoutMode === 'reels' ? '2px dashed rgba(255,255,255,0.3)' : '2px dashed #E5E5E5',
+                    background: layoutMode === 'reels' ? '#000' : '#FFFFFF',
+                    color: layoutMode === 'reels' ? 'rgba(255,255,255,0.6)' : '#6e6e73',
                   }}>
                     <button
                       onClick={() => fileInputRef.current?.click()}
@@ -2096,15 +2200,15 @@ export default function Home() {
                       }}
                     >
                       <div style={{
-                        width: '88px', height: '88px', borderRadius: '20px',
-                        background: '#FAF9F7',
-                        border: '1px solid #E5E5E5',
+                        width: '88px', height: '88px', borderRadius: layoutMode === 'reels' ? 0 : '20px',
+                        background: layoutMode === 'reels' ? 'rgba(255,255,255,0.08)' : '#FAF9F7',
+                        border: layoutMode === 'reels' ? '1px solid rgba(255,255,255,0.15)' : '1px solid #E5E5E5',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                       }}>
-                        <Upload size={36} color="#1A1A1A" strokeWidth={1.5} />
+                        <Upload size={36} color={layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A'} strokeWidth={1.5} />
                       </div>
-                      <span style={{ fontSize: '15px', fontWeight: 600, color: '#1A1A1A' }}>Upload Video A</span>
-                      <span style={{ fontSize: '12px', color: '#6e6e73' }}>MP4, WebM, MOV supported</span>
+                      <span style={{ fontSize: '15px', fontWeight: 600, color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A' }}>Upload Video A</span>
+                      <span style={{ fontSize: '12px', color: layoutMode === 'reels' ? 'rgba(255,255,255,0.5)' : '#6e6e73' }}>MP4, WebM, MOV supported</span>
                     </button>
                     <span style={{ fontSize: '11px', color: '#8e8e93' }}>or drag and drop a video here</span>
                   </div>
@@ -2251,6 +2355,7 @@ export default function Home() {
                       skeletonShowAngles={skeletonShowAngles}
                       skeletonShowHeadLine={skeletonShowHeadLine}
                       skeletonClassicColors={skeletonClassicColors}
+                      skeletonParts={skeletonParts}
                       ballSampleMode={ballSampleMode}
                       rect3d={rect3d}
                       triangle3d={triangle3d}
@@ -2259,7 +2364,7 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
-                      poseFrameSkip={hasVideoBContent ? 2 : 0}
+                      poseFrameSkip={hasVideoBContent ? 3 : 0}
                     />
                     <EmbedCapturePanel
                       visible={!!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc}
@@ -2285,20 +2390,20 @@ export default function Home() {
                       title="Remove Video A from this session"
                       style={{
                         position: 'absolute',
-                        top: 8,
+                        top: reelsDesktop ? 48 : 8,
                         right: 8,
                         zIndex: 92,
                         padding: '6px 10px',
-                        borderRadius: 10,
-                        border: '1px solid #E5E5E5',
-                        background: 'rgba(250, 249, 247, 0.94)',
-                        color: '#1A1A1A',
+                        borderRadius: layoutMode === 'reels' ? 0 : 10,
+                        border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                        background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250, 249, 247, 0.94)',
+                        color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
                         fontSize: 12,
                         fontWeight: 600,
                         cursor: 'pointer',
                         backdropFilter: 'blur(14px)',
                         WebkitBackdropFilter: 'blur(14px)',
-                        boxShadow: '0 6px 20px rgba(0,0,0,0.08)',
+                        boxShadow: layoutMode === 'reels' ? 'none' : '0 6px 20px rgba(0,0,0,0.08)',
                       }}
                     >
                       Remove Video A
@@ -2309,12 +2414,12 @@ export default function Home() {
                 {isDragOverA && (
                   <div style={{
                     position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none',
-                    background: 'rgba(250, 249, 247, 0.92)',
-                    border: '3px dashed #E5E5E5',
+                    background: layoutMode === 'reels' ? 'rgba(0,0,0,0.6)' : 'rgba(250, 249, 247, 0.92)',
+                    border: layoutMode === 'reels' ? '3px dashed rgba(255,255,255,0.4)' : '3px dashed #E5E5E5',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    borderRadius: '16px',
+                    borderRadius: layoutMode === 'reels' ? 0 : '16px',
                   }}>
-                    <span style={{ color: '#1A1A1A', fontSize: '17px', fontWeight: 600 }}>
+                    <span style={{ color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A', fontSize: '17px', fontWeight: 600 }}>
                       Drop Video A here
                     </span>
                   </div>
@@ -2350,12 +2455,12 @@ export default function Home() {
                     }}
                   >
                     <div style={{
-                      background: 'rgba(255,255,255,0.92)',
-                      borderRadius: '14px',
+                      background: layoutMode === 'reels' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.92)',
+                      borderRadius: layoutMode === 'reels' ? 0 : '14px',
                       padding: '14px 28px',
                       fontSize: '17px',
                       fontWeight: 700,
-                      color: '#1D1D1F',
+                      color: layoutMode === 'reels' ? '#FFFFFF' : '#1D1D1F',
                       display: 'flex', alignItems: 'center', gap: '10px',
                       boxShadow: '0 4px 24px rgba(0,0,0,0.25)',
                       pointerEvents: 'none',
@@ -2367,8 +2472,12 @@ export default function Home() {
                 {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
                   <div style={{
                     position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
-                    fontSize: '11px', fontWeight: 700, color: '#1A1A1A',
-                    background: 'rgba(250,249,247,0.94)', border: '1px solid #E5E5E5', padding: '2px 8px', borderRadius: '8px',
+                    fontSize: '11px', fontWeight: 700,
+                    color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
+                    background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250,249,247,0.94)',
+                    border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                    padding: '2px 8px',
+                    borderRadius: layoutMode === 'reels' ? 0 : '8px',
                     backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
                   }}>A</div>
                 )}
@@ -2547,6 +2656,7 @@ export default function Home() {
                       skeletonShowAngles={skeletonShowAngles}
                       skeletonShowHeadLine={skeletonShowHeadLine}
                       skeletonClassicColors={skeletonClassicColors}
+                      skeletonParts={skeletonParts}
                       ballSampleMode={ballSampleMode}
                       rect3d={rect3d}
                       triangle3d={triangle3d}
@@ -2555,7 +2665,7 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
-                      poseFrameSkip={2}
+                      poseFrameSkip={3}
                     />
                     <EmbedCapturePanel
                       visible={!!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB}
@@ -2585,36 +2695,40 @@ export default function Home() {
                         right: 8,
                         zIndex: 92,
                         padding: '6px 10px',
-                        borderRadius: 10,
-                        border: '1px solid #E5E5E5',
-                        background: 'rgba(250, 249, 247, 0.94)',
-                        color: '#1A1A1A',
+                        borderRadius: layoutMode === 'reels' ? 0 : 10,
+                        border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                        background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250, 249, 247, 0.94)',
+                        color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
                         fontSize: 12,
                         fontWeight: 600,
                         cursor: 'pointer',
                         backdropFilter: 'blur(14px)',
                         WebkitBackdropFilter: 'blur(14px)',
-                        boxShadow: '0 6px 20px rgba(0,0,0,0.08)',
+                        boxShadow: layoutMode === 'reels' ? 'none' : '0 6px 20px rgba(0,0,0,0.08)',
                       }}
                     >
                       Remove Video B
                     </button>
                     <div style={{
                       position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
-                      fontSize: '11px', fontWeight: 700, color: '#1A1A1A',
-                      background: 'rgba(250,249,247,0.94)', border: '1px solid #E5E5E5', padding: '2px 8px', borderRadius: '8px',
+                      fontSize: '11px', fontWeight: 700,
+                      color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
+                      background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250,249,247,0.94)',
+                      border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                      padding: '2px 8px',
+                      borderRadius: layoutMode === 'reels' ? 0 : '8px',
                       backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
                     }}>B</div>
                     {/* Drag-over overlay for Video B */}
                     {isDragOverB && (
                       <div style={{
                         position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none',
-                        background: 'rgba(250, 249, 247, 0.92)',
-                        border: '3px dashed #E5E5E5',
+                        background: layoutMode === 'reels' ? 'rgba(0,0,0,0.6)' : 'rgba(250, 249, 247, 0.92)',
+                        border: layoutMode === 'reels' ? '3px dashed rgba(255,255,255,0.4)' : '3px dashed #E5E5E5',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        borderRadius: '16px',
+                        borderRadius: layoutMode === 'reels' ? 0 : '16px',
                       }}>
-                        <span style={{ color: '#1A1A1A', fontSize: '17px', fontWeight: 600 }}>
+                        <span style={{ color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A', fontSize: '17px', fontWeight: 600 }}>
                           Drop Video B here
                         </span>
                       </div>
@@ -2631,8 +2745,8 @@ export default function Home() {
                   width: '100%',
                   zIndex: 72,
                   pointerEvents: 'auto',
-                  borderTop: '1px solid #E5E5E5',
-                  background: 'rgba(250, 249, 247, 0.92)',
+                  borderTop: '1px solid rgba(255,255,255,0.1)',
+                  background: 'rgba(0,0,0,0.5)',
                   backdropFilter: 'blur(18px) saturate(1.08)',
                   WebkitBackdropFilter: 'blur(18px) saturate(1.08)',
                 }}

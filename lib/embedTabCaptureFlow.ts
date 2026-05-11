@@ -55,6 +55,7 @@ export async function runEmbedTabCaptureFlow(args: {
   onCountdown?: (n: number | null) => void;
   onStepStatus?: (msg: string) => void;
   videoDurationHintSec?: number | null;
+  preAcquiredStream?: MediaStream;
 }): Promise<{ ok: true; blob: Blob } | { ok: false; message: string }> {
   const {
     opts,
@@ -64,72 +65,78 @@ export async function runEmbedTabCaptureFlow(args: {
     onCountdown,
     onStepStatus,
     videoDurationHintSec,
+    preAcquiredStream,
   } = args;
 
   let recorder: TabCaptureRecorder | null = null;
   let stream: MediaStream | null = null;
 
   try {
-    // ── 1. Check getDisplayMedia availability ──────────────────────────
-    onStepStatus?.('Checking browser support…');
+    if (preAcquiredStream) {
+      // Stream already acquired from user gesture in the caller
+      stream = preAcquiredStream;
+    } else {
+      // ── 1. Check getDisplayMedia availability ──────────────────────────
+      onStepStatus?.('Checking browser support…');
 
-    if (
-      typeof navigator === 'undefined' ||
-      !navigator.mediaDevices?.getDisplayMedia
-    ) {
-      return fail(
-        'getDisplayMedia check',
-        'navigator.mediaDevices.getDisplayMedia is unavailable',
-        'Screen sharing is not available in this browser. Try Chrome or Edge on a desktop computer.',
-      );
-    }
+      if (
+        typeof navigator === 'undefined' ||
+        !navigator.mediaDevices?.getDisplayMedia
+      ) {
+        return fail(
+          'getDisplayMedia check',
+          'navigator.mediaDevices.getDisplayMedia is unavailable',
+          'Screen sharing is not available in this browser. Try Chrome or Edge on a desktop computer.',
+        );
+      }
 
-    // ── 2. Call getDisplayMedia IMMEDIATELY and store stream ───────────
-    onStepStatus?.('Requesting screen share — choose "This tab"…');
+      // ── 2. Call getDisplayMedia IMMEDIATELY and store stream ───────────
+      onStepStatus?.('Requesting screen share — choose "This tab"…');
 
-    try {
-      stream = await getTabCaptureStream();
-    } catch (e: unknown) {
-      const name = (e as DOMException)?.name;
-      switch (name) {
-        case 'NotAllowedError':
-        case 'PermissionDeniedError':
-          return fail(
-            'getDisplayMedia',
-            e,
-            'Screen sharing was cancelled or blocked by the browser. Tap Capture and choose your browser tab when asked.',
-          );
-        case 'NotFoundError':
-          return fail(
-            'getDisplayMedia',
-            e,
-            'No screen or tab could be shared. Check your browser settings and try again.',
-          );
-        case 'NotReadableError':
-        case 'AbortError':
-          return fail(
-            'getDisplayMedia',
-            e,
-            'Could not access the shared tab. Close other apps using screen share if needed, then try again.',
-          );
-        case 'NotSupportedError':
-          return fail(
-            'getDisplayMedia',
-            e,
-            'This browser cannot record from a tab. Try Chrome or Edge on a desktop computer.',
-          );
-        case 'SecurityError':
-          return fail(
-            'getDisplayMedia',
-            e,
-            'Recording needs a secure connection (HTTPS). Open CoachLab from https:// and try again.',
-          );
-        default:
-          return fail(
-            'getDisplayMedia',
-            e,
-            `Screen sharing failed: ${(e as Error)?.message || 'Unknown error'}. Try refreshing the page.`,
-          );
+      try {
+        stream = await getTabCaptureStream();
+      } catch (e: unknown) {
+        const name = (e as DOMException)?.name;
+        switch (name) {
+          case 'NotAllowedError':
+          case 'PermissionDeniedError':
+            return fail(
+              'getDisplayMedia',
+              e,
+              'Screen sharing was cancelled or blocked by the browser. Tap Capture and choose your browser tab when asked.',
+            );
+          case 'NotFoundError':
+            return fail(
+              'getDisplayMedia',
+              e,
+              'No screen or tab could be shared. Check your browser settings and try again.',
+            );
+          case 'NotReadableError':
+          case 'AbortError':
+            return fail(
+              'getDisplayMedia',
+              e,
+              'Could not access the shared tab. Close other apps using screen share if needed, then try again.',
+            );
+          case 'NotSupportedError':
+            return fail(
+              'getDisplayMedia',
+              e,
+              'This browser cannot record from a tab. Try Chrome or Edge on a desktop computer.',
+            );
+          case 'SecurityError':
+            return fail(
+              'getDisplayMedia',
+              e,
+              'Recording needs a secure connection (HTTPS). Open CoachLab from https:// and try again.',
+            );
+          default:
+            return fail(
+              'getDisplayMedia',
+              e,
+              `Screen sharing failed: ${(e as Error)?.message || 'Unknown error'}. Try refreshing the page.`,
+            );
+        }
       }
     }
 
