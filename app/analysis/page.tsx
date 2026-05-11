@@ -1844,7 +1844,6 @@ export default function Home() {
                       border: 'none',
                       boxShadow: 'none',
                       margin: 0,
-                      padding: 0,
                     }
                   : {
                       width: 'calc(100dvh * 9 / 16)',
