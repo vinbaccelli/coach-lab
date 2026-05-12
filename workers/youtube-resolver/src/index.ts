@@ -301,94 +301,233 @@ async function resolveViaWatchPageHtml(targetUrl: string): Promise<{
   return null;
 }
 
-export default {
-  async fetch(request: Request): Promise<Response> {
-    if (request.method === 'OPTIONS') return json({ ok: true });
-    const url = new URL(request.url);
-    if (url.pathname === '/health') return json({ ok: true });
-    if (url.pathname !== '/resolve') return json({ ok: false, error: 'Not found' }, { status: 404 });
+type ResolveResult =
+  | { ok: true; directUrl: string; title: string | null; chosen: Record<string, any> }
+  | { ok: false; error: string; debug?: Record<string, any> };
 
-    const target = (url.searchParams.get('url') || '').trim();
-    const debug = url.searchParams.get('debug') === '1';
-    if (!target || !isHttpUrl(target) || !isYouTubeUrl(target)) {
-      return json({ ok: false, error: 'Missing/invalid YouTube url' }, { status: 400 });
-    }
+async function resolveTarget(target: string, debug: boolean): Promise<ResolveResult> {
+  const attemptLog: Array<{ strategy: string; error?: string; formats?: ReturnType<typeof summarizeFormats> }> = [];
 
-    try {
-      const attemptLog: Array<{ strategy: string; error?: string; formats?: ReturnType<typeof summarizeFormats> }> = [];
-
-      /**
-       * Run watch-page extraction first (no PoToken import — that path is heavy and can exhaust CPU).
-       * InnerTube `getFullInfo` × many strategies is heavy; defer PoToken until we need InnerTube.
-       */
-      try {
-        const wp = await resolveViaWatchPageHtml(target);
-        if (wp) {
-          const { directUrl, title, fmt } = wp;
-          return json({
-            ok: true,
-            directUrl,
-            title,
-            chosen: {
-              itag: fmt.itag ?? null,
-              height: fmt.height ?? null,
-              container: fmt.container ?? null,
-              mimeType: fmt.mimeType ?? null,
-              hasAudio: fmt.hasAudio ?? null,
-              source: fmt.source ?? 'watch_page',
-            },
-          });
-        }
-      } catch (e: any) {
-        if (debug) attemptLog.push({ strategy: 'watch_page_html', error: e?.message ?? String(e) });
-      }
-
-      await ensureRealPoTokenGenerator();
-
-      let resolved: { info: any; fmt: any; directUrl: string } | null = null;
-      for (const strategy of RESOLVE_STRATEGIES) {
-        const label = JSON.stringify(strategy);
-        try {
-          const ytdl = new YtdlCore(strategy);
-          const info = await ytdl.getFullInfo(target);
-          const formats = info.formats || [];
-          if (debug) attemptLog.push({ strategy: label, formats: summarizeFormats(formats) });
-          const fmt = choosePlayable(formats);
-          const directUrl = fmt?.url;
-          if (directUrl && isHttpUrl(directUrl)) {
-            resolved = { info, fmt, directUrl };
-            break;
-          }
-        } catch (e: any) {
-          if (debug) attemptLog.push({ strategy: label, error: e?.message ?? String(e) });
-        }
-      }
-
-      if (!resolved) {
-        const body: Record<string, any> = { ok: false, error: 'Could not resolve a direct stream URL' };
-        if (debug) {
-          body.poTokenHookError = poTokenHookError;
-          body.attempts = attemptLog;
-        }
-        return json(body, { status: 422 });
-      }
-
-      const { directUrl, fmt, info } = resolved;
-      return json({
+  try {
+    const wp = await resolveViaWatchPageHtml(target);
+    if (wp) {
+      const { directUrl, title, fmt } = wp;
+      return {
         ok: true,
         directUrl,
-        title: info?.videoDetails?.title ?? null,
+        title,
         chosen: {
           itag: fmt.itag ?? null,
           height: fmt.height ?? null,
           container: fmt.container ?? null,
           mimeType: fmt.mimeType ?? null,
           hasAudio: fmt.hasAudio ?? null,
-          source: 'innertube',
+          source: fmt.source ?? 'watch_page',
         },
-      });
-    } catch (e: any) {
-      return json({ ok: false, error: e?.message ?? 'Resolver failed' }, { status: 500 });
+      };
     }
+  } catch (e: any) {
+    if (debug) attemptLog.push({ strategy: 'watch_page_html', error: e?.message ?? String(e) });
+  }
+
+  await ensureRealPoTokenGenerator();
+
+  let resolved: { info: any; fmt: any; directUrl: string } | null = null;
+  for (const strategy of RESOLVE_STRATEGIES) {
+    const label = JSON.stringify(strategy);
+    try {
+      const ytdl = new YtdlCore(strategy);
+      const info = await ytdl.getFullInfo(target);
+      const formats = info.formats || [];
+      if (debug) attemptLog.push({ strategy: label, formats: summarizeFormats(formats) });
+      const fmt = choosePlayable(formats);
+      const directUrl = fmt?.url;
+      if (directUrl && isHttpUrl(directUrl)) {
+        resolved = { info, fmt, directUrl };
+        break;
+      }
+    } catch (e: any) {
+      if (debug) attemptLog.push({ strategy: label, error: e?.message ?? String(e) });
+    }
+  }
+
+  if (!resolved) {
+    const body: Record<string, any> = { error: 'Could not resolve a direct stream URL' };
+    if (debug) {
+      body.poTokenHookError = poTokenHookError;
+      body.attempts = attemptLog;
+    }
+    return { ok: false, ...body } as ResolveResult;
+  }
+
+  const { directUrl, fmt, info } = resolved;
+  return {
+    ok: true,
+    directUrl,
+    title: info?.videoDetails?.title ?? null,
+    chosen: {
+      itag: fmt.itag ?? null,
+      height: fmt.height ?? null,
+      container: fmt.container ?? null,
+      mimeType: fmt.mimeType ?? null,
+      hasAudio: fmt.hasAudio ?? null,
+      source: 'innertube',
+    },
+  };
+}
+
+function corsHeaders(): Record<string, string> {
+  return {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET,HEAD,OPTIONS',
+    'access-control-allow-headers': 'range',
+    'access-control-expose-headers': 'content-length,content-range,content-type,accept-ranges',
+  };
+}
+
+/**
+ * In-memory cache for resolved direct URLs so subsequent range requests
+ * during video seeking don't re-resolve every time.
+ * YouTube URLs typically expire after ~6 hours; we cache for 4.
+ */
+const resolvedUrlCache = new Map<string, { directUrl: string; ts: number }>();
+const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
+
+function getCachedDirectUrl(target: string): string | null {
+  const entry = resolvedUrlCache.get(target);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    resolvedUrlCache.delete(target);
+    return null;
+  }
+  return entry.directUrl;
+}
+
+function setCachedDirectUrl(target: string, directUrl: string) {
+  resolvedUrlCache.set(target, { directUrl, ts: Date.now() });
+  if (resolvedUrlCache.size > 200) {
+    const oldest = resolvedUrlCache.keys().next().value;
+    if (oldest) resolvedUrlCache.delete(oldest);
+  }
+}
+
+/**
+ * `/stream` — Resolve a YouTube URL and proxy the video bytes with CORS headers.
+ * Same Worker IP resolves and fetches → no YouTube IP-lock 403s.
+ * Streaming passthrough doesn't count against the 10ms CPU limit.
+ * Resolved URLs are cached in-memory so range requests during seeking are instant.
+ */
+async function handleStream(request: Request, target: string): Promise<Response> {
+  let directUrl = getCachedDirectUrl(target);
+
+  if (!directUrl) {
+    const result = await resolveTarget(target, false);
+    if (!result.ok) {
+      return json({ ok: false, error: result.error }, { status: 422 });
+    }
+    directUrl = result.directUrl;
+    setCachedDirectUrl(target, directUrl);
+  }
+
+  const range = request.headers.get('range') ?? undefined;
+  const upstream = await fetch(directUrl, {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      ...(range ? { Range: range } : {}),
+    },
+    redirect: 'follow',
+  });
+
+  if (!upstream.ok && upstream.status !== 206) {
+    // If cached URL expired / got 403, invalidate and retry once
+    if (upstream.status === 403 || upstream.status === 410) {
+      resolvedUrlCache.delete(target);
+      const result = await resolveTarget(target, false);
+      if (!result.ok) {
+        return json({ ok: false, error: result.error }, { status: 422 });
+      }
+      directUrl = result.directUrl;
+      setCachedDirectUrl(target, directUrl);
+
+      const retry = await fetch(directUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          ...(range ? { Range: range } : {}),
+        },
+        redirect: 'follow',
+      });
+      if (!retry.ok && retry.status !== 206) {
+        return json(
+          { ok: false, error: `Upstream returned ${retry.status} after re-resolve` },
+          { status: 502 },
+        );
+      }
+
+      const rh = new Headers(corsHeaders());
+      const rct = retry.headers.get('content-type');
+      if (rct) rh.set('content-type', rct);
+      const rcl = retry.headers.get('content-length');
+      if (rcl) rh.set('content-length', rcl);
+      const rcr = retry.headers.get('content-range');
+      if (rcr) rh.set('content-range', rcr);
+      rh.set('accept-ranges', 'bytes');
+      rh.set('cache-control', 'public, max-age=3600');
+      return new Response(retry.body, { status: retry.status, headers: rh });
+    }
+
+    return json(
+      { ok: false, error: `Upstream returned ${upstream.status}` },
+      { status: 502 },
+    );
+  }
+
+  const headers = new Headers(corsHeaders());
+  const ct = upstream.headers.get('content-type');
+  if (ct) headers.set('content-type', ct);
+  const cl = upstream.headers.get('content-length');
+  if (cl) headers.set('content-length', cl);
+  const cr = upstream.headers.get('content-range');
+  if (cr) headers.set('content-range', cr);
+  headers.set('accept-ranges', 'bytes');
+  headers.set('cache-control', 'public, max-age=3600');
+
+  return new Response(upstream.body, { status: upstream.status, headers });
+}
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders() });
+    }
+
+    const url = new URL(request.url);
+
+    if (url.pathname === '/health') return json({ ok: true });
+
+    const target = (url.searchParams.get('url') || '').trim();
+
+    if (url.pathname === '/stream') {
+      if (!target || !isHttpUrl(target) || !isYouTubeUrl(target)) {
+        return json({ ok: false, error: 'Missing/invalid YouTube url' }, { status: 400 });
+      }
+      return handleStream(request, target);
+    }
+
+    if (url.pathname === '/resolve') {
+      const debug = url.searchParams.get('debug') === '1';
+      if (!target || !isHttpUrl(target) || !isYouTubeUrl(target)) {
+        return json({ ok: false, error: 'Missing/invalid YouTube url' }, { status: 400 });
+      }
+      try {
+        const result = await resolveTarget(target, debug);
+        return json(result, { status: result.ok ? 200 : 422 });
+      } catch (e: any) {
+        return json({ ok: false, error: e?.message ?? 'Resolver failed' }, { status: 500 });
+      }
+    }
+
+    return json({ ok: false, error: 'Not found' }, { status: 404 });
   },
 };

@@ -22,7 +22,7 @@ export type ToolType =
   | 'manualSwing'
   | 'erase'
   | 'zoom'
-  | 'cropSelect';
+  | 'objectMultiplier';
 
 export interface DrawingOptions {
   color: string;

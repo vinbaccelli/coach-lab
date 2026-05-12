@@ -22,7 +22,7 @@ import {
   Zap,
   ZoomIn,
   Shapes,
-  Crop,
+  Layers,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -46,9 +46,17 @@ interface ToolPaletteProps {
   onAutoSwing?: () => void;
   onRacketMultiplier?: () => void;
   circleSpinning?: boolean;
+  objMultiplierFrameCount?: number;
+  onObjMultiplierFrameCountChange?: (v: number) => void;
+  objMultiplierDuration?: number;
+  onObjMultiplierDurationChange?: (v: number) => void;
+  onObjMultiplierCapture?: () => void;
+  onObjMultiplierClear?: () => void;
+  objMultiplierActive?: boolean;
+  objMultiplierProgress?: string | null;
   onCircleSpinningChange?: (spinning: boolean) => void;
-  circleGapMode?: boolean;
-  onCircleGapModeChange?: (mode: boolean) => void;
+  outlineEraserSize?: number;
+  onOutlineEraserSizeChange?: (size: number) => void;
   rect3d?: boolean;
   onRect3dChange?: (v: boolean) => void;
   triangle3d?: boolean;
@@ -78,32 +86,101 @@ interface ToolPaletteProps {
   ballSampleMode?: boolean;
   onBallSampleModeChange?: (v: boolean) => void;
   onResetCropZoom?: () => void;
-  onClearCrop?: () => void;
 }
 
-type Panel = null | 'draw' | 'angle' | 'style' | 'swing' | 'view';
+type Panel = null | 'draw' | 'angle' | 'style' | 'swing' | 'view' | 'skeleton-opts' | 'multiplier-opts';
 
 const PRESET_COLORS = [
   '#1E40AF', '#DC2626', '#16A34A', '#D97706', '#7C3AED',
   '#0891B2', '#EC4899', '#111827', '#FFFFFF',
 ];
 
-const pillBtn = (active: boolean): React.CSSProperties => ({
-  padding: '3px 10px',
-  borderRadius: '12px',
-  border: `1px solid ${active ? '#35679A' : '#E8E8ED'}`,
-  background: active ? '#35679A' : '#fff',
-  color: active ? '#fff' : '#1D1D1F',
-  cursor: 'pointer',
-  fontSize: '10px',
-  fontWeight: 600,
-  whiteSpace: 'nowrap' as const,
-});
+/* ---------- Coach Now compact style system (4-point grid) ---------- */
+
+const SS = {
+  toolBtn: (active: boolean): React.CSSProperties => ({
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    border: active ? 'none' : '1px solid #E5E5E5',
+    background: active ? '#1A1A1A' : '#fff',
+    color: active ? '#fff' : '#6e6e73',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    flexShrink: 0,
+    transition: 'background 0.12s, color 0.12s, border-color 0.12s',
+  }),
+  actionBtn: (destructive = false): React.CSSProperties => ({
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    border: '1px solid #E5E5E5',
+    background: '#FAFAFA',
+    color: destructive ? '#DC2626' : '#6e6e73',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    flexShrink: 0,
+    transition: 'background 0.12s, color 0.12s',
+  }),
+  dropdown: {
+    position: 'absolute' as const,
+    left: 'calc(100% + 8px)',
+    top: 0,
+    background: '#fff',
+    border: '1px solid #E5E5E5',
+    borderRadius: 10,
+    boxShadow: '0 4px 16px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.06)',
+    padding: 8,
+    maxWidth: 200,
+    minWidth: 160,
+    zIndex: 50,
+  } as React.CSSProperties,
+  dropdownItem: (active: boolean): React.CSSProperties => ({
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    width: '100%',
+    padding: '6px 8px',
+    borderRadius: 6,
+    border: 'none',
+    background: active ? '#F0F0F0' : 'transparent',
+    color: active ? '#1A1A1A' : '#3a3a3a',
+    cursor: 'pointer',
+    fontSize: 11,
+    fontWeight: active ? 600 : 500,
+    transition: 'background 0.1s',
+  }),
+  sectionLabel: {
+    fontSize: 9,
+    fontWeight: 700,
+    color: '#999',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.05em',
+    padding: '4px 8px 2px',
+  } as React.CSSProperties,
+  hint: {
+    fontSize: 9,
+    color: '#888',
+    padding: '2px 8px 4px',
+    lineHeight: 1.3,
+  } as React.CSSProperties,
+  divider: {
+    height: 1,
+    background: '#E5E5E5',
+    margin: '4px 0',
+  } as React.CSSProperties,
+};
 
 export default function ToolPalette({
   activeTool,
   onToolChange,
-  compact = false,
+  compact: _compact = false,
   drawingOptions,
   onOptionsChange,
   onUndo,
@@ -116,9 +193,17 @@ export default function ToolPalette({
   onAutoSwing,
   onRacketMultiplier,
   circleSpinning,
+  objMultiplierFrameCount = 6,
+  onObjMultiplierFrameCountChange,
+  objMultiplierDuration = 2,
+  onObjMultiplierDurationChange,
+  onObjMultiplierCapture,
+  onObjMultiplierClear,
+  objMultiplierActive = false,
+  objMultiplierProgress,
   onCircleSpinningChange,
-  circleGapMode,
-  onCircleGapModeChange,
+  outlineEraserSize = 0,
+  onOutlineEraserSizeChange,
   rect3d,
   onRect3dChange,
   triangle3d,
@@ -147,7 +232,6 @@ export default function ToolPalette({
   ballSampleMode,
   onBallSampleModeChange,
   onResetCropZoom,
-  onClearCrop,
 }: ToolPaletteProps) {
   const [openPanel, setOpenPanel] = useState<Panel>(null);
   const togglePanel = (p: Exclude<Panel, null>) => setOpenPanel((cur) => (cur === p ? null : p));
@@ -164,7 +248,7 @@ export default function ToolPalette({
     activeTool === 'angle' ||
     activeTool === 'arrowAngle' ||
     activeTool === 'manualSwing';
-  const shapeGapEligible =
+  const shapeEraserEligible =
     activeTool === 'circle' ||
     activeTool === 'bodyCircle' ||
     (activeTool === 'rect' && !!rect3d) ||
@@ -187,509 +271,391 @@ export default function ToolPalette({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [openPanel]);
 
+  const chk = (label: string, checked: boolean, onChange: (v: boolean) => void): React.ReactNode => (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#555', padding: '3px 8px', cursor: 'pointer' }}>
+      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} /> {label}
+    </label>
+  );
+
   return (
-    <div ref={paletteRef} className="flex flex-col gap-1 h-full select-none">
-      <div className={compact ? 'px-1 pt-2 pb-1' : 'px-2 pt-2 pb-1'}>
-        {!compact && (
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-            Toolbar
-          </p>
-        )}
+    <div
+      ref={paletteRef}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 4,
+        padding: '8px 4px',
+        userSelect: 'none',
+        height: '100%',
+      }}
+    >
+      {/* ── Main tool buttons ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+        {/* Select */}
+        <button
+          onClick={() => { setTool('select'); setOpenPanel(null); }}
+          style={SS.toolBtn(activeTool === 'select')}
+          title="Select"
+        >
+          <MousePointer2 size={16} />
+        </button>
 
-        <div className="flex flex-col gap-1">
-          {/* Single-column desktop toolbar (matches mobile's clarity) */}
-          <button
-            onClick={() => { setTool('select'); setOpenPanel(null); }}
-            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${activeTool === 'select' ? 'active' : ''}`}
-            title="Select and move drawings"
-          >
-            <MousePointer2 size={15} />
-            {!compact && <span>Select</span>}
-          </button>
-
+        {/* Style */}
+        <div style={{ position: 'relative' }}>
           <button
             onClick={() => togglePanel('style')}
-            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${openPanel === 'style' ? 'active' : ''}`}
+            style={SS.toolBtn(openPanel === 'style')}
             title="Style"
           >
-            <Shapes size={15} />
-            {!compact && <span>Style</span>}
+            <Shapes size={16} />
           </button>
-
-          <button
-            onClick={() => togglePanel('draw')}
-            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${isDrawTool ? 'active' : ''}`}
-            title="Draw, shapes, text, measure, swing"
-          >
-            <Pen size={15} />
-            {!compact && <span>Draw</span>}
-          </button>
-          {openPanel === 'draw' && (
-            <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm max-h-[min(70vh,520px)] overflow-y-auto">
-              <div className="grid grid-cols-1 gap-2">
-                <button onClick={() => setTool('pen')} className={`tool-btn flex-row gap-1 ${activeTool === 'pen' ? 'active' : ''}`} title="Draw freely on the video — drag to draw">
-                  <Pen size={14} /><span>Freehand</span>
+          {openPanel === 'style' && (
+            <div style={SS.dropdown}>
+              <div style={SS.sectionLabel}>Color</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4, padding: '4px 8px' }}>
+                {PRESET_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => onOptionsChange({ color: c })}
+                    title={c}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 4,
+                      border: drawingOptions.color === c ? '2px solid #35679A' : '1px solid #E5E5E5',
+                      background: c,
+                      cursor: 'pointer',
+                      padding: 0,
+                      transform: drawingOptions.color === c ? 'scale(1.1)' : 'none',
+                      transition: 'transform 0.1s',
+                    }}
+                  />
+                ))}
+                <label style={{ width: 22, height: 22, borderRadius: 4, border: '1px solid #E5E5E5', overflow: 'hidden', cursor: 'pointer', position: 'relative' }} title="Custom color">
+                  <input
+                    type="color"
+                    value={drawingOptions.color}
+                    onChange={(e) => onOptionsChange({ color: e.target.value })}
+                    style={{ position: 'absolute', inset: -4, width: 30, height: 30, cursor: 'pointer', opacity: 0 }}
+                  />
+                  <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', background: drawingOptions.color, color: '#fff', textShadow: '0 0 2px rgba(0,0,0,0.5)' }}>+</span>
+                </label>
+              </div>
+              <div style={SS.sectionLabel}>Thickness</div>
+              <div style={{ padding: '2px 8px 4px' }}>
+                <input
+                  type="range" min={1} max={12} step={1}
+                  value={drawingOptions.lineWidth}
+                  onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })}
+                  style={{ width: '100%' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999' }}>
+                  <span>1</span>
+                  <span style={{ fontWeight: 600, color: '#555' }}>{drawingOptions.lineWidth}px</span>
+                  <span>12</span>
+                </div>
+              </div>
+              <div style={SS.sectionLabel}>Line Style</div>
+              <div style={{ display: 'flex', gap: 4, padding: '2px 8px 4px' }}>
+                <button
+                  onClick={() => onOptionsChange({ dashed: false })}
+                  style={{ ...SS.dropdownItem(!drawingOptions.dashed), flex: 1, justifyContent: 'center' }}
+                  title="Solid"
+                >
+                  —
                 </button>
-                <button onClick={() => setTool('line')} className={`tool-btn flex-row gap-1 ${activeTool === 'line' ? 'active' : ''}`} title="Draw a straight line — click start and end points">
-                  <Minus size={14} /><span>Line</span>
-                </button>
-                <button onClick={() => setTool('arrow')} className={`tool-btn flex-row gap-1 ${activeTool === 'arrow' ? 'active' : ''}`} title="Draw an arrow — click start and end points">
-                  <ArrowRight size={14} /><span>Arrow</span>
-                </button>
-                <button onClick={() => setTool('erase')} className={`tool-btn flex-row gap-1 ${activeTool === 'erase' ? 'active' : ''}`} title="Erase drawings — click on a shape to remove it">
-                  <Eraser size={14} /><span>Eraser</span>
-                </button>
-                <button onClick={() => setTool(isCircle3d ? 'bodyCircle' : 'circle')} className={`tool-btn flex-row gap-1 ${(activeTool === 'circle' || activeTool === 'bodyCircle') ? 'active' : ''}`} title="Draw a circle — click center and drag to set size">
-                  <Circle size={14} /><span>Circle</span>
-                </button>
-                <button onClick={() => setTool('rect')} className={`tool-btn flex-row gap-1 ${activeTool === 'rect' ? 'active' : ''}`} title="Draw a rectangle — click and drag corner to corner">
-                  <Square size={14} /><span>Rectangle</span>
-                </button>
-                <button onClick={() => setTool('triangle')} className={`tool-btn flex-row gap-1 ${activeTool === 'triangle' ? 'active' : ''}`} title="Draw a triangle — click and drag to set size">
-                  <Triangle size={14} /><span>Triangle</span>
-                </button>
-                <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mt-1 mb-0 px-0.5">Annotate</p>
-                <button onClick={() => setTool('text')} className={`tool-btn flex-row gap-1 ${activeTool === 'text' ? 'active' : ''}`} title="Add text annotation — click to place text">
-                  <Type size={14} /><span>Text</span>
-                </button>
-                <button onClick={() => setTool('angle')} className={`tool-btn flex-row gap-1 ${activeTool === 'angle' ? 'active' : ''}`} title="Measure an angle — click vertex, then two endpoints">
-                  <Triangle size={14} /><span>Angle</span>
-                </button>
-                <button onClick={() => setTool('arrowAngle')} className={`tool-btn flex-row gap-1 ${activeTool === 'arrowAngle' ? 'active' : ''}`} title="Draw an arrow with angle measurement at the tip">
-                  <Activity size={14} /><span>Arrow + angle</span>
-                </button>
-                <button onClick={() => setTool('manualSwing')} className={`tool-btn flex-row gap-1 ${activeTool === 'manualSwing' ? 'active' : ''}`} title="Draw a swing path — click points, double-click to finish">
-                  <Zap size={14} /><span>Swing path</span>
+                <button
+                  onClick={() => onOptionsChange({ dashed: true })}
+                  style={{ ...SS.dropdownItem(!!drawingOptions.dashed), flex: 1, justifyContent: 'center' }}
+                  title="Dashed"
+                >
+                  ╌
                 </button>
               </div>
-
-              {(activeTool === 'circle' || activeTool === 'bodyCircle' || activeTool === 'rect' || activeTool === 'triangle') && (
-                <div className="mt-2 border-t border-gray-200 pt-2 px-1 flex flex-col gap-2">
-                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
-                    Shape Options
-                  </p>
-
-                  {(activeTool === 'circle' || activeTool === 'bodyCircle') && (
-                    <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer" title="Enable 3D cut effect on the circle">
-                      <input
-                        type="checkbox"
-                        checked={activeTool === 'bodyCircle'}
-                        onChange={(e) => onToolChange(e.target.checked ? 'bodyCircle' : 'circle')}
-                        className="accent-blue-500"
-                      />
-                      3D cut
-                    </label>
-                  )}
-                  {activeTool === 'rect' && onRect3dChange && (
-                    <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer" title="Enable 3D cut effect on the rectangle">
-                      <input
-                        type="checkbox"
-                        checked={!!rect3d}
-                        onChange={(e) => onRect3dChange(e.target.checked)}
-                        className="accent-blue-500"
-                      />
-                      3D cut
-                    </label>
-                  )}
-                  {activeTool === 'triangle' && onTriangle3dChange && (
-                    <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer" title="Enable 3D cut effect on the triangle">
-                      <input
-                        type="checkbox"
-                        checked={!!triangle3d}
-                        onChange={(e) => onTriangle3dChange(e.target.checked)}
-                        className="accent-blue-500"
-                      />
-                      3D cut
-                    </label>
-                  )}
-
-                  {onCircleSpinningChange && (
-                    <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer" title="Animate the shape outline with a travelling effect">
-                      <input
-                        type="checkbox"
-                        checked={!!circleSpinning}
-                        onChange={(e) => onCircleSpinningChange(e.target.checked)}
-                        className="accent-blue-500"
-                      />
-                      Animation
-                    </label>
-                  )}
-
-                  {onCircleGapModeChange && shapeGapEligible && (
-                    <div className="flex flex-col gap-1">
-                      <button
-                        onClick={() => onCircleGapModeChange(!circleGapMode)}
-                        className={`tool-btn w-full flex-row gap-2 ${circleGapMode ? 'active text-blue-600' : 'text-gray-500'}`}
-                        title="Cut a gap in the shape outline — click start then end of gap"
-                      >
-                        <span className="text-[13px]">✂</span>
-                        <span>{circleGapMode ? 'Gap cutter ON' : 'Gap cutter'}</span>
-                      </button>
-                      {circleGapMode && (
-                        <p className="text-[9px] text-blue-500 px-1 leading-tight font-medium">
-                          Click where the gap starts, then click where it ends.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
+              {(activeTool === 'manualSwing' || activeTool === 'swingPath') && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#555', padding: '4px 8px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!drawingOptions.arrowAtEnd}
+                    onChange={(e) => onOptionsChange({ arrowAtEnd: e.target.checked })}
+                  />
+                  Arrow at end
+                </label>
               )}
             </div>
           )}
+        </div>
 
-          <button onClick={() => { setTool('skeleton'); setOpenPanel(null); }} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'skeleton' ? 'active' : ''}`} title="AI body tracking — overlays joints and connections">
-            <PersonStanding size={15} /><span>Skeleton</span>
+        {/* Draw */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => togglePanel('draw')}
+            style={SS.toolBtn(isDrawTool || openPanel === 'draw')}
+            title="Draw"
+          >
+            <Pen size={16} />
           </button>
+          {openPanel === 'draw' && (
+            <div style={{ ...SS.dropdown, maxHeight: 'min(70vh, 480px)', overflowY: 'auto' }}>
+              <div style={SS.sectionLabel}>Shapes & Lines</div>
+              <button onClick={() => setTool('pen')} style={SS.dropdownItem(activeTool === 'pen')} title="Freehand draw">
+                <Pen size={14} /> Freehand
+              </button>
+              <button onClick={() => setTool('line')} style={SS.dropdownItem(activeTool === 'line')} title="Straight line">
+                <Minus size={14} /> Line
+              </button>
+              <button onClick={() => setTool('arrow')} style={SS.dropdownItem(activeTool === 'arrow')} title="Arrow">
+                <ArrowRight size={14} /> Arrow
+              </button>
+              <button onClick={() => setTool('erase')} style={SS.dropdownItem(activeTool === 'erase')} title="Eraser">
+                <Eraser size={14} /> Eraser
+              </button>
+              <button onClick={() => setTool(isCircle3d ? 'bodyCircle' : 'circle')} style={SS.dropdownItem(activeTool === 'circle' || activeTool === 'bodyCircle')} title="Circle">
+                <Circle size={14} /> Circle
+              </button>
+              <button onClick={() => setTool('rect')} style={SS.dropdownItem(activeTool === 'rect')} title="Rectangle">
+                <Square size={14} /> Rectangle
+              </button>
+              <button onClick={() => setTool('triangle')} style={SS.dropdownItem(activeTool === 'triangle')} title="Triangle">
+                <Triangle size={14} /> Triangle
+              </button>
 
+              <div style={SS.divider} />
+              <div style={SS.sectionLabel}>Annotate</div>
+              <button onClick={() => setTool('text')} style={SS.dropdownItem(activeTool === 'text')} title="Text">
+                <Type size={14} /> Text
+              </button>
+              <button onClick={() => setTool('angle')} style={SS.dropdownItem(activeTool === 'angle')} title="Angle measure">
+                <Triangle size={14} /> Angle
+              </button>
+              <button onClick={() => setTool('arrowAngle')} style={SS.dropdownItem(activeTool === 'arrowAngle')} title="Arrow + angle">
+                <Activity size={14} /> Arrow + angle
+              </button>
+              <button onClick={() => setTool('manualSwing')} style={SS.dropdownItem(activeTool === 'manualSwing')} title="Swing path">
+                <Zap size={14} /> Swing path
+              </button>
+
+              {/* Shape options */}
+              {(activeTool === 'circle' || activeTool === 'bodyCircle' || activeTool === 'rect' || activeTool === 'triangle') && (
+                <>
+                  <div style={SS.divider} />
+                  <div style={SS.sectionLabel}>Shape Options</div>
+                  {(activeTool === 'circle' || activeTool === 'bodyCircle') &&
+                    chk('3D cut', activeTool === 'bodyCircle', (v) => onToolChange(v ? 'bodyCircle' : 'circle'))}
+                  {activeTool === 'rect' && onRect3dChange &&
+                    chk('3D cut', !!rect3d, onRect3dChange)}
+                  {activeTool === 'triangle' && onTriangle3dChange &&
+                    chk('3D cut', !!triangle3d, onTriangle3dChange)}
+                  {onCircleSpinningChange &&
+                    chk('Animation', !!circleSpinning, onCircleSpinningChange)}
+                  {onOutlineEraserSizeChange && shapeEraserEligible && (
+                    <div>
+                      {chk('Outline eraser', outlineEraserSize > 0, (v) => onOutlineEraserSizeChange(v ? 15 : 0))}
+                      {outlineEraserSize > 0 && (
+                        <div style={{ padding: '2px 8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999', marginBottom: 2 }}>
+                            <span>Size</span>
+                            <span style={{ fontWeight: 600, color: '#555' }}>{outlineEraserSize}px</span>
+                          </div>
+                          <input
+                            type="range" min={5} max={50} step={1}
+                            value={outlineEraserSize}
+                            onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
+                            style={{ width: '100%' }}
+                          />
+                          <p style={{ ...SS.hint, color: '#DC2626', padding: '2px 0' }}>Drag over outline to erase.</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Font size inline when text tool */}
+              {activeTool === 'text' && (
+                <>
+                  <div style={SS.divider} />
+                  <div style={SS.sectionLabel}>Font Size</div>
+                  <div style={{ padding: '2px 8px 4px' }}>
+                    <input
+                      type="range" min={10} max={72} step={2}
+                      value={drawingOptions.fontSize}
+                      onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
+                      style={{ width: '100%' }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999' }}>
+                      <span>10</span>
+                      <span style={{ fontWeight: 600, color: '#555' }}>{drawingOptions.fontSize}px</span>
+                      <span>72</span>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Skeleton */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => { setTool('skeleton'); togglePanel('skeleton-opts'); }}
+            style={SS.toolBtn(activeTool === 'skeleton')}
+            title="Skeleton"
+          >
+            <PersonStanding size={16} />
+          </button>
+          {openPanel === 'skeleton-opts' && activeTool === 'skeleton' && (
+            <div style={SS.dropdown}>
+              <div style={SS.sectionLabel}>Skeleton</div>
+              <p style={{ ...SS.hint, color: '#0891B2' }}>AI auto-detects pose from video.</p>
+              <button onClick={onResetSkeleton} style={{ ...SS.dropdownItem(false), color: '#EA580C' }} title="Reset skeleton">
+                <RefreshCw size={13} /> Reset & Re-analyze
+              </button>
+              {onSkeletonShowAnglesChange !== undefined && chk('Show angles', skeletonShowAngles ?? true, onSkeletonShowAnglesChange)}
+              {onSkeletonShowHeadLineChange !== undefined && chk('Show head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange)}
+              {onSkeletonClassicColorsChange !== undefined && chk('Neon colors', skeletonClassicColors ?? true, onSkeletonClassicColorsChange)}
+              <div style={SS.sectionLabel}>Body Parts</div>
+              {onSkeletonShowRightArmChange !== undefined && chk('Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange)}
+              {onSkeletonShowLeftArmChange !== undefined && chk('Left arm', skeletonShowLeftArm ?? true, onSkeletonShowLeftArmChange)}
+              {onSkeletonShowRightLegChange !== undefined && chk('Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange)}
+              {onSkeletonShowLeftLegChange !== undefined && chk('Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange)}
+            </div>
+          )}
+        </div>
+
+        {/* View (Zoom) */}
+        <div style={{ position: 'relative' }}>
           <button
             onClick={() => togglePanel('view')}
-            className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${openPanel === 'view' || activeTool === 'zoom' || activeTool === 'cropSelect' ? 'active' : ''}`}
-            title="Zoom & crop"
+            style={SS.toolBtn(openPanel === 'view' || activeTool === 'zoom')}
+            title="View"
           >
-            <ZoomIn size={15} />
-            {!compact && <span>View</span>}
+            <ZoomIn size={16} />
           </button>
           {openPanel === 'view' && (
-            <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm flex flex-col gap-1.5">
-              <button onClick={() => setTool('zoom')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'zoom' ? 'active' : ''}`} title="Zoom and pan the video — scroll to zoom, drag to pan">
-                <ZoomIn size={14} /><span>Zoom & pan</span>
-              </button>
-              <button onClick={() => setTool('cropSelect')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'cropSelect' ? 'active' : ''}`} title="Crop and zoom into a region of the video">
-                <Crop size={14} /><span>Crop</span>
+            <div style={SS.dropdown}>
+              <button onClick={() => setTool('zoom')} style={SS.dropdownItem(activeTool === 'zoom')} title="Zoom & pan">
+                <ZoomIn size={14} /> Zoom & pan
               </button>
               {onResetCropZoom && (
-                <button type="button" onClick={onResetCropZoom} className="tool-btn w-full flex-row gap-1 text-gray-600" title="Reset zoom to default view">
-                  <RefreshCw size={14} /><span>Reset zoom</span>
+                <button onClick={onResetCropZoom} style={SS.dropdownItem(false)} title="Reset zoom">
+                  <RefreshCw size={14} /> Reset zoom
                 </button>
               )}
-              {onClearCrop && (
-                <button type="button" onClick={onClearCrop} className="tool-btn w-full flex-row gap-1 text-gray-600" title="Remove crop and show full video">
-                  <RefreshCw size={14} /><span>Clear crop</span>
-                </button>
+            </div>
+          )}
+        </div>
+
+        {/* Object Multiplier */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => { setTool('objectMultiplier'); togglePanel('multiplier-opts'); }}
+            style={SS.toolBtn(activeTool === 'objectMultiplier')}
+            title="Multiplier"
+          >
+            <Layers size={16} />
+          </button>
+          {openPanel === 'multiplier-opts' && activeTool === 'objectMultiplier' && (
+            <div style={SS.dropdown}>
+              <div style={SS.sectionLabel}>Object Multiplier</div>
+              {!objMultiplierActive ? (
+                <p style={{ ...SS.hint, color: '#7C3AED' }}>
+                  Draw a rectangle around the object, then choose frames.
+                </p>
+              ) : (
+                <>
+                  <div style={{ padding: '4px 8px' }}>
+                    <div style={{ fontSize: 9, fontWeight: 600, color: '#777', textTransform: 'uppercase' }}>
+                      Frames: {objMultiplierFrameCount}
+                    </div>
+                    <input
+                      type="range" min={3} max={12} step={1}
+                      value={objMultiplierFrameCount}
+                      onChange={(e) => onObjMultiplierFrameCountChange?.(Number(e.target.value))}
+                      style={{ width: '100%', marginTop: 2 }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999' }}>
+                      <span>3</span><span>12</span>
+                    </div>
+                  </div>
+                  <div style={{ padding: '4px 8px' }}>
+                    <div style={{ fontSize: 9, fontWeight: 600, color: '#777', textTransform: 'uppercase' }}>
+                      Duration: {objMultiplierDuration}s
+                    </div>
+                    <input
+                      type="range" min={0.5} max={10} step={0.5}
+                      value={objMultiplierDuration}
+                      onChange={(e) => onObjMultiplierDurationChange?.(Number(e.target.value))}
+                      style={{ width: '100%', marginTop: 2 }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999' }}>
+                      <span>0.5s</span><span>10s</span>
+                    </div>
+                  </div>
+                  {objMultiplierProgress && (
+                    <p style={{ ...SS.hint, color: '#7C3AED', fontWeight: 600 }}>{objMultiplierProgress}</p>
+                  )}
+                  <button onClick={onObjMultiplierCapture} style={{ ...SS.dropdownItem(false), color: '#7C3AED' }} title="Capture">
+                    <Layers size={13} /> Capture
+                  </button>
+                  <button onClick={onObjMultiplierClear} style={SS.dropdownItem(false)} title="Clear overlay">
+                    <RefreshCw size={13} /> Clear overlay
+                  </button>
+                </>
               )}
             </div>
           )}
         </div>
       </div>
 
-      {openPanel === 'style' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-3 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
-              Style
-            </p>
-            <div className="grid grid-cols-3 gap-1 mb-2">
-              {PRESET_COLORS.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => onOptionsChange({ color: c })}
-                  title={c}
-                  className={`w-7 h-7 rounded-md border-2 transition-transform hover:scale-110 ${
-                    drawingOptions.color === c ? 'border-blue-500 scale-110' : 'border-gray-200'
-                  }`}
-                  style={{ background: c }}
-                />
-              ))}
-            </div>
-            <label className="flex items-center gap-2 text-xs text-gray-600 mb-2">
-              <span>Custom:</span>
-              <input
-                type="color"
-                value={drawingOptions.color}
-                onChange={(e) => onOptionsChange({ color: e.target.value })}
-                className="w-8 h-8 rounded cursor-pointer border border-gray-200"
-              />
-            </label>
-            <div className="mb-2">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
-                Thickness
-              </p>
-              <input
-                type="range" min={1} max={12} step={1}
-                value={drawingOptions.lineWidth}
-                onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })}
-                className="w-full"
-              />
-              <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
-                <span>1px</span>
-                <span className="font-medium text-gray-600">{drawingOptions.lineWidth}px</span>
-                <span>12px</span>
-              </div>
-            </div>
-            <div>
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
-                Line Style
-              </p>
-              <div className="flex gap-1">
-                <button
-                  onClick={() => onOptionsChange({ dashed: false })}
-                  className={`tool-btn flex-1 flex-row gap-1 ${!drawingOptions.dashed ? 'active' : ''}`}
-                  title="Solid line"
-                >
-                  <span style={{ fontSize: '14px' }}>—</span>
-                  <span>Solid</span>
-                </button>
-                <button
-                  onClick={() => onOptionsChange({ dashed: true })}
-                  className={`tool-btn flex-1 flex-row gap-1 ${drawingOptions.dashed ? 'active' : ''}`}
-                  title="Dashed line"
-                >
-                  <span style={{ fontSize: '14px' }}>╌</span>
-                  <span>Dashed</span>
-                </button>
-              </div>
-              {(activeTool === 'manualSwing' || activeTool === 'swingPath') && (
-                <label className="flex items-center gap-2 text-xs text-gray-600 mt-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={!!drawingOptions.arrowAtEnd}
-                    onChange={(e) => onOptionsChange({ arrowAtEnd: e.target.checked })}
-                    className="accent-blue-500"
-                  />
-                  Arrow at end of path
-                </label>
-              )}
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Font size (text tool) */}
-      {activeTool === 'text' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-3 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
-              Font Size
-            </p>
-            <input
-              type="range" min={10} max={72} step={2}
-              value={drawingOptions.fontSize}
-              onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
-              className="w-full"
-            />
-            <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
-              <span>10</span>
-              <span className="font-medium text-gray-600">{drawingOptions.fontSize}px</span>
-              <span>72</span>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Skeleton tool */}
-      {activeTool === 'skeleton' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-2 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Skeleton
-            </p>
-            <p className="text-[9px] text-cyan-600 px-1 mb-1.5 leading-tight font-medium">
-              AI auto-detects pose from video.
-            </p>
-            <button
-              onClick={onResetSkeleton}
-              className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600 mb-1"
-            >
-              <RefreshCw size={13} />
-              <span>Reset &amp; Re-analyze</span>
+      {/* Context hints for active tools */}
+      {activeTool === 'swingPath' && openPanel !== 'draw' && (
+        <div style={{ textAlign: 'center', maxWidth: 48, marginTop: 4 }}>
+          <p style={{ ...SS.hint, color: '#7C3AED' }}>Click points, dbl-click to end.</p>
+          {onAutoSwing && (
+            <button onClick={onAutoSwing} style={SS.actionBtn()} title="Auto Swing">
+              <TrendingUp size={13} />
             </button>
-            {onRacketMultiplier && (
-              <button
-                onClick={onRacketMultiplier}
-                className="tool-btn w-full flex-row gap-1 text-purple-600 hover:bg-purple-50 hover:text-purple-700 mb-1"
-              >
-                <Activity size={13} />
-                <span>Racket Multiplier</span>
-              </button>
-            )}
-            {onSkeletonShowAnglesChange !== undefined && (
-              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
-                <input type="checkbox" checked={skeletonShowAngles ?? true}
-                  onChange={e => onSkeletonShowAnglesChange(e.target.checked)} className="accent-green-500" />
-                <span className="text-[9px] text-gray-600 font-medium">Show angles</span>
-              </label>
-            )}
-            {onSkeletonShowHeadLineChange !== undefined && (
-              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
-                <input type="checkbox" checked={skeletonShowHeadLine ?? false}
-                  onChange={e => onSkeletonShowHeadLineChange(e.target.checked)} className="accent-green-500" />
-                <span className="text-[9px] text-gray-600 font-medium">Show head line</span>
-              </label>
-            )}
-            {onSkeletonClassicColorsChange !== undefined && (
-              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
-                <input type="checkbox" checked={skeletonClassicColors ?? true}
-                  onChange={e => onSkeletonClassicColorsChange(e.target.checked)} className="accent-green-500" />
-                <span className="text-[9px] text-gray-600 font-medium">Neon colors (green/red/blue)</span>
-              </label>
-            )}
-            <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mt-2 mb-1 px-1">Body Parts</p>
-            {onSkeletonShowRightArmChange !== undefined && (
-              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
-                <input type="checkbox" checked={skeletonShowRightArm ?? true}
-                  onChange={e => onSkeletonShowRightArmChange(e.target.checked)} className="accent-red-500" />
-                <span className="text-[9px] text-gray-600 font-medium">Right arm</span>
-              </label>
-            )}
-            {onSkeletonShowLeftArmChange !== undefined && (
-              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
-                <input type="checkbox" checked={skeletonShowLeftArm ?? true}
-                  onChange={e => onSkeletonShowLeftArmChange(e.target.checked)} className="accent-blue-500" />
-                <span className="text-[9px] text-gray-600 font-medium">Left arm</span>
-              </label>
-            )}
-            {onSkeletonShowRightLegChange !== undefined && (
-              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
-                <input type="checkbox" checked={skeletonShowRightLeg ?? true}
-                  onChange={e => onSkeletonShowRightLegChange(e.target.checked)} className="accent-red-500" />
-                <span className="text-[9px] text-gray-600 font-medium">Right leg</span>
-              </label>
-            )}
-            {onSkeletonShowLeftLegChange !== undefined && (
-              <label className="flex items-center gap-2 cursor-pointer px-1 mb-1">
-                <input type="checkbox" checked={skeletonShowLeftLeg ?? true}
-                  onChange={e => onSkeletonShowLeftLegChange(e.target.checked)} className="accent-blue-500" />
-                <span className="text-[9px] text-gray-600 font-medium">Left leg</span>
-              </label>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* V2 feature: Ball Trail controls intentionally hidden from UI for now. */}
-      {false && activeTool === 'ballShadow' && (
-        <div />
-      )}
-
-      {/* Swing path tool */}
-      {activeTool === 'swingPath' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-2 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Swing Path
-            </p>
-            <p className="text-[9px] text-purple-500 px-1 mb-0.5 leading-tight font-medium">
-              Click to add points. Double-click to end.
-            </p>
-            {onAutoSwing && (
-              <button
-                onClick={onAutoSwing}
-                className="tool-btn w-full flex-row gap-1 text-orange-500 hover:bg-orange-50 hover:text-orange-600"
-              >
-                <TrendingUp size={13} />
-                <span>Auto Swing</span>
-              </button>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* Manual swing tool */}
-      {activeTool === 'manualSwing' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-2 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Manual Swing
-            </p>
-            <p className="text-[9px] text-blue-500 px-1 mb-0.5 leading-tight font-medium">
-              Click to add waypoints. Double-click or click same spot to finalize.
-            </p>
-          </div>
-        </>
-      )}
-
-      {/* Angle tool */}
-      {activeTool === 'angle' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-2 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Angle Measure
-            </p>
-            <p className="text-[9px] text-amber-500 px-1 leading-tight font-medium">
-              Click 3 points. Drag 3rd for live angle preview.
-            </p>
-          </div>
-        </>
-      )}
-
-      {/* Crop tool */}
-      {activeTool === 'cropSelect' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-2 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Crop
-            </p>
-            <p className="text-[9px] text-orange-500 px-1 leading-tight font-medium mb-1">
-              Drag a rectangle to zoom the view into that region.
-            </p>
-            {onClearCrop && (
-              <button
-                onClick={onClearCrop}
-                className="tool-btn w-full flex-row gap-1 text-gray-500 hover:bg-gray-50"
-              >
-                <RefreshCw size={13} />
-                <span>Reset Crop</span>
-              </button>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* Zoom tool */}
-      {activeTool === 'zoom' && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-2 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Zoom / Pan
-            </p>
-            <p className="text-[9px] text-blue-500 px-1 leading-tight font-medium mb-1">
-              Wheel: zoom · Space+drag: pan · Pinch on touch
-            </p>
-            {onResetCropZoom && (
-              <button
-                onClick={onResetCropZoom}
-                className="tool-btn w-full flex-row gap-1 text-gray-500 hover:bg-gray-50"
-              >
-                <RefreshCw size={13} />
-                <span>Reset Zoom</span>
-              </button>
-            )}
-          </div>
-        </>
-      )}
-
-      <div className="border-t border-gray-100 mx-2" />
-
-      {/* Actions */}
-      <div className="px-2 pb-3 pt-2 flex flex-col gap-1">
-        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5 px-1">
-          Actions
-        </p>
-        <div className="flex flex-col gap-1">
-          <button onClick={onUndo} className="tool-btn tool-btn-chrome w-full flex-row gap-1" title="Undo (Ctrl+Z)">
-            <Undo2 size={15} />
-            <span>Undo</span>
-          </button>
-          <button onClick={onRedo} className="tool-btn tool-btn-chrome w-full flex-row gap-1" title="Redo (Ctrl+Y)">
-            <Redo2 size={15} />
-            <span>Redo</span>
-          </button>
+          )}
         </div>
-        <button
-          onClick={onClear}
-          className="tool-btn tool-btn-chrome w-full flex-row gap-1 !text-red-300 hover:!bg-white/10 hover:!text-red-200"
-          title="Clear all drawings"
-        >
-          <Trash2 size={15} />
-          <span>Clear All</span>
+      )}
+
+      {activeTool === 'manualSwing' && openPanel !== 'draw' && (
+        <div style={{ ...SS.hint, textAlign: 'center', marginTop: 4, maxWidth: 48 }}>
+          <span style={{ color: '#2563EB' }}>Click to add points</span>
+        </div>
+      )}
+
+      {activeTool === 'angle' && openPanel !== 'draw' && (
+        <div style={{ ...SS.hint, textAlign: 'center', marginTop: 4, maxWidth: 48 }}>
+          <span style={{ color: '#D97706' }}>Click 3 points</span>
+        </div>
+      )}
+
+      {activeTool === 'zoom' && openPanel !== 'view' && (
+        <div style={{ ...SS.hint, textAlign: 'center', marginTop: 4, maxWidth: 48 }}>
+          <span style={{ color: '#2563EB' }}>Scroll to zoom</span>
+        </div>
+      )}
+
+      {/* V2 feature: Ball Trail controls intentionally hidden */}
+      {false && activeTool === 'ballShadow' && <div />}
+
+      {/* ── Spacer ── */}
+      <div style={{ flex: 1 }} />
+
+      {/* ── Action buttons (bottom) ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center', paddingBottom: 8 }}>
+        <div style={{ width: 24, height: 1, background: '#E5E5E5', borderRadius: 1, marginBottom: 4 }} />
+        <button onClick={onUndo} style={SS.actionBtn()} title="Undo (Ctrl+Z)">
+          <Undo2 size={14} />
+        </button>
+        <button onClick={onRedo} style={SS.actionBtn()} title="Redo (Ctrl+Y)">
+          <Redo2 size={14} />
+        </button>
+        <button onClick={onClear} style={SS.actionBtn(true)} title="Clear all">
+          <Trash2 size={14} />
         </button>
       </div>
     </div>

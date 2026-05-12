@@ -112,7 +112,7 @@ export default function Home() {
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
   const [circleSpinning, setCircleSpinning] = useState(false);
-  const [circleGapMode, setCircleGapMode]   = useState(false);
+  const [outlineEraserSize, setOutlineEraserSize] = useState(0);
   const [rect3d, setRect3d]                 = useState(false);
   const [triangle3d, setTriangle3d]         = useState(false);
   const [skeletonShowAngles, setSkeletonShowAngles] = useState(true);
@@ -245,6 +245,12 @@ export default function Home() {
   const [stroMotionOpacity, setStroMotionOpacity] = useState(0.3);
   const [stroMotionRegion, setStroMotionRegion]   = useState<{ x: number; y: number; w: number; h: number } | undefined>(undefined);
 
+  // Object Multiplier state
+  const [objMultiplierFrameCount, setObjMultiplierFrameCount] = useState(6);
+  const [objMultiplierDuration, setObjMultiplierDuration] = useState(2);
+  const [objMultiplierHasRegion, setObjMultiplierHasRegion] = useState(false);
+  const [objMultiplierProgress, setObjMultiplierProgress] = useState<string | null>(null);
+
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
   const ballTrailEnabled = activeTool === 'ballShadow';
@@ -263,6 +269,10 @@ export default function Home() {
 
   const handleToolChange = useCallback((t: ToolType) => {
     setActiveTool(t);
+    if (t === 'objectMultiplier') {
+      setObjMultiplierHasRegion(false);
+      setObjMultiplierProgress(null);
+    }
   }, []);
 
   // StroMotion hook
@@ -899,10 +909,69 @@ export default function Home() {
     canvasRef.current?.setRacketTrail(trail);
   }, []);
 
+  // ── Object Multiplier ─────────────────────────────────────────────────────
+  const handleObjMultiplierCapture = useCallback(async () => {
+    const region = canvasRef.current?.getObjMultiplierRegion();
+    if (!region) {
+      alert('Draw a rectangle on the video first to select a region.');
+      return;
+    }
+    setObjMultiplierProgress('Capturing…');
+    const count = await canvasRef.current?.runObjMultiplierCapture(
+      objMultiplierFrameCount,
+      objMultiplierDuration,
+      (done, total) => setObjMultiplierProgress(`Capturing ${done}/${total}…`),
+    );
+    setObjMultiplierProgress(count ? `${count} frames captured` : null);
+  }, [objMultiplierFrameCount, objMultiplierDuration]);
+
+  const handleObjMultiplierClear = useCallback(() => {
+    canvasRef.current?.clearObjMultiplier();
+    setObjMultiplierHasRegion(false);
+    setObjMultiplierProgress(null);
+  }, []);
+
   // ── URL Input handler ────────────────────────────────────────────────────
+
+  const [urlLoadError, setUrlLoadError] = useState<string | null>(null);
+  const [urlLoadPhase, setUrlLoadPhase] = useState<string | null>(null);
+  const urlLoadAbortRef = useRef<AbortController | null>(null);
+
+  const applyVideoStream = useCallback(
+    (streamUrl: string, target: 'A' | 'B') => {
+      if (target === 'A') {
+        setYoutubeVideoIdA(null);
+        setGenericEmbedSrcA(null);
+        setVideoSrc(streamUrl);
+        if (videoRef.current) {
+          cleanupVideoEl(videoRef.current);
+          videoRef.current.crossOrigin = 'anonymous';
+          videoRef.current.src = streamUrl;
+          videoRef.current.load();
+        }
+      } else {
+        setYoutubeVideoIdB(null);
+        setGenericEmbedSrcB(null);
+        setVideoSrcB(streamUrl);
+        if (videoRefB.current) {
+          cleanupVideoEl(videoRefB.current);
+          videoRefB.current.crossOrigin = 'anonymous';
+          videoRefB.current.src = streamUrl;
+          videoRefB.current.load();
+        }
+        setVideoBLoaded(false);
+      }
+    },
+    [cleanupVideoEl],
+  );
+
   const handleUrlSubmit = useCallback(async () => {
     const raw = normalizeWebUrlInput(urlInput);
     if (!raw) return;
+
+    urlLoadAbortRef.current?.abort();
+    const abort = new AbortController();
+    urlLoadAbortRef.current = abort;
 
     // Reset current session state before loading a new URL source.
     if (urlTarget === 'A') {
@@ -929,98 +998,103 @@ export default function Home() {
     setShowCaptureSaveToast(false);
     setCaptureBusy(false);
     disposeFfmpegWasm();
-    setProcessingStatus('Getting your video ready…');
+    setUrlLoadError(null);
+    setUrlLoadPhase('We are loading your video \u2014 this may take a moment\u2026');
+    setProcessingStatus(null);
     setStroMotionEnabled(false);
     setStroMotionRegion(undefined);
     clearGhosts();
     (urlTarget === 'A' ? canvasRef.current : canvasRefB.current)?.clearAll();
 
-    // Fast path: direct video URL -> proxy same-origin for Canvas/ML features
+    // Fast path: direct video URL \u2192 proxy same-origin for Canvas/ML
     const looksLikeDirectFile = raw.match(/\.(mp4|webm|mov)(\?.*)?$/i);
-    // YouTube resolver returns a direct `googlevideo.com/videoplayback?...` URL which often has no extension.
-    // Treat those as direct stream URLs too.
     const lowerRaw = raw.toLowerCase();
     const looksLikeYouTubeDirectStream =
       lowerRaw.includes('googlevideo.com/') || lowerRaw.includes('/videoplayback?') || lowerRaw.includes('mime=video');
 
     if (looksLikeDirectFile || looksLikeYouTubeDirectStream) {
       const streamUrl = `/api/video/stream?url=${encodeURIComponent(raw)}`;
-      setProcessingStatus(null);
-      if (urlTarget === 'A') {
-        setYoutubeVideoIdA(null);
-        setGenericEmbedSrcA(null);
-        setVideoSrc(streamUrl);
-        if (videoRef.current) {
-          cleanupVideoEl(videoRef.current);
-          videoRef.current.src = streamUrl;
-          videoRef.current.load();
-        }
-      } else {
-        setYoutubeVideoIdB(null);
-        setGenericEmbedSrcB(null);
-        setVideoSrcB(streamUrl);
-        if (videoRefB.current) {
-          cleanupVideoEl(videoRefB.current);
-          videoRefB.current.src = streamUrl;
-          videoRefB.current.load();
-        }
-      }
+      setUrlLoadPhase(null);
+      applyVideoStream(streamUrl, urlTarget);
       return;
     }
 
+    // YouTube URL \u2192 resolve + stream via Cloudflare Worker
     const resolved = resolveEmbedTarget(raw);
-    if (!resolved) {
-      setProcessingStatus(null);
-      alert(
-        'We couldn’t open that link here. Try a YouTube address, a social clip link, or paste a direct video link — then tap Load again.',
-      );
-      return;
-    }
+    const isYouTube = resolved?.kind === 'youtube';
 
-    if (resolved.kind === 'youtube') {
-      const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(resolved.videoId)}`;
-      setProcessingStatus('Connecting to stream…');
+    if (isYouTube) {
+      const videoId = resolved.videoId;
+      const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+
+      const slowTimer = window.setTimeout(() => {
+        if (!abort.signal.aborted) setUrlLoadPhase('Still working on it \u2014 almost there\u2026');
+      }, 5000);
+      const verySlowTimer = window.setTimeout(() => {
+        if (!abort.signal.aborted) setUrlLoadPhase('Taking a bit longer than usual\u2026');
+      }, 15000);
+
       try {
+        // Layer 1: Cloudflare Worker stream proxy (resolve + proxy same IP)
+        const workerBase = process.env.NEXT_PUBLIC_YT_RESOLVER_URL;
+        if (workerBase) {
+          const streamUrl = `${workerBase}/stream?url=${encodeURIComponent(watchUrl)}`;
+          try {
+            const checkRes = await fetch(
+              `${workerBase}/resolve?url=${encodeURIComponent(watchUrl)}`,
+              { signal: abort.signal },
+            );
+            if (checkRes.ok) {
+              clearTimeout(slowTimer);
+              clearTimeout(verySlowTimer);
+              setUrlLoadPhase(null);
+              applyVideoStream(streamUrl, urlTarget);
+              return;
+            }
+          } catch (e) {
+            if (abort.signal.aborted) return;
+            console.warn('[analysis] Worker resolve failed, trying Vercel fallback', e);
+          }
+        }
+
+        // Layer 2: Vercel server-side resolve + proxy
+        if (abort.signal.aborted) return;
+        setUrlLoadPhase('Connecting to stream\u2026');
         const streamResult = await resolveYoutubeForAnalysis(watchUrl);
+        if (abort.signal.aborted) return;
+
         if (streamResult.ok && streamResult.directUrl) {
           const streamUrl = `/api/video/stream?url=${encodeURIComponent(streamResult.directUrl)}`;
-          setProcessingStatus(null);
-          setShowTapToPlay(false);
-          if (urlTarget === 'A') {
-            setYoutubeVideoIdA(null);
-            setGenericEmbedSrcA(null);
-            setVideoSrc(streamUrl);
-            if (videoRef.current) {
-              cleanupVideoEl(videoRef.current);
-              videoRef.current.src = streamUrl;
-              videoRef.current.load();
-            }
-          } else {
-            setYoutubeVideoIdB(null);
-            setGenericEmbedSrcB(null);
-            setVideoSrcB(streamUrl);
-            if (videoRefB.current) {
-              cleanupVideoEl(videoRefB.current);
-              videoRefB.current.src = streamUrl;
-              videoRefB.current.load();
-            }
-            setVideoBLoaded(false);
-          }
+          clearTimeout(slowTimer);
+          clearTimeout(verySlowTimer);
+          setUrlLoadPhase(null);
+          applyVideoStream(streamUrl, urlTarget);
           return;
         }
+
+        // All resolution attempts failed
+        clearTimeout(slowTimer);
+        clearTimeout(verySlowTimer);
+        setUrlLoadPhase(null);
+        setUrlLoadError(
+          'We couldn\u2019t load this YouTube video. YouTube may be blocking automated requests. You can download the video and upload it directly using the Upload button.',
+        );
       } catch (e) {
-        if (typeof console !== 'undefined') console.warn('[analysis] YouTube resolve failed, using embed', e);
+        clearTimeout(slowTimer);
+        clearTimeout(verySlowTimer);
+        if (abort.signal.aborted) return;
+        console.warn('[analysis] YouTube resolve error:', e);
+        setUrlLoadPhase(null);
+        setUrlLoadError(
+          'Something went wrong while loading the video. Please try again, or download the video and upload it directly.',
+        );
       }
-      setProcessingStatus(null);
-      setShowTapToPlay(true);
-      if (urlTarget === 'A') {
-        setYoutubeVideoIdA(resolved.videoId);
-        setGenericEmbedSrcA(null);
-      } else {
-        setYoutubeVideoIdB(resolved.videoId);
-        setGenericEmbedSrcB(null);
-      }
-    } else {
+      return;
+    }
+
+    // Non-YouTube embed (generic iframe)
+    if (resolved) {
+      setUrlLoadPhase(null);
       setShowTapToPlay(false);
       if (urlTarget === 'A') {
         setYoutubeVideoIdA(null);
@@ -1029,8 +1103,15 @@ export default function Home() {
         setYoutubeVideoIdB(null);
         setGenericEmbedSrcB(resolved.src);
       }
+      return;
     }
-  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, urlTarget, videoBDuration]);
+
+    // Unrecognized URL
+    setUrlLoadPhase(null);
+    setUrlLoadError(
+      'We couldn\u2019t open that link. Try a YouTube address, a social clip link, or paste a direct video link \u2014 then tap Load again.',
+    );
+  }, [applyVideoStream, cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, urlTarget, videoBDuration]);
 
   const handleEmbedCaptureRequest = useCallback(
     async (
@@ -1643,6 +1724,38 @@ export default function Home() {
                     {processingStatus}
                   </div>
                 )}
+
+                {urlLoadPhase && (
+                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#6e6e73' }}>
+                    <svg width="16" height="16" viewBox="0 0 16 16" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
+                      <circle cx="8" cy="8" r="6" fill="none" stroke="#007AFF" strokeWidth="2" strokeDasharray="28" strokeDashoffset="8" strokeLinecap="round" />
+                    </svg>
+                    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                    {urlLoadPhase}
+                  </div>
+                )}
+
+                {urlLoadError && (
+                  <div style={{ marginTop: 10, padding: 12, borderRadius: 10, background: '#FFF5F5', border: '1px solid #FFD0D0' }}>
+                    <div style={{ fontSize: 13, color: '#CC3333', lineHeight: 1.45, marginBottom: 8 }}>
+                      {urlLoadError}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        onClick={() => { setUrlLoadError(null); handleUrlSubmit(); }}
+                        style={{ ...headerBtnStyle, height: 32, padding: '0 12px', fontSize: 12, background: '#007AFF', color: '#fff', border: 'none' }}
+                      >
+                        Retry
+                      </button>
+                      <button
+                        onClick={() => { setUrlLoadError(null); fileInputRef.current?.click(); }}
+                        style={{ ...headerBtnStyle, height: 32, padding: '0 12px', fontSize: 12 }}
+                      >
+                        Upload instead
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1806,7 +1919,7 @@ export default function Home() {
           position: 'absolute',
           left: 12,
           top: 12,
-          bottom: 80,
+          bottom: 'calc(100px + env(safe-area-inset-bottom, 0px))',
           zIndex: 80,
           borderRadius: 14,
           boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
@@ -1833,8 +1946,8 @@ export default function Home() {
               onRacketMultiplier={handleRacketMultiplier}
               circleSpinning={circleSpinning}
               onCircleSpinningChange={setCircleSpinning}
-              circleGapMode={circleGapMode}
-              onCircleGapModeChange={setCircleGapMode}
+              outlineEraserSize={outlineEraserSize}
+              onOutlineEraserSizeChange={setOutlineEraserSize}
               rect3d={rect3d}
               onRect3dChange={setRect3d}
               triangle3d={triangle3d}
@@ -1856,7 +1969,14 @@ export default function Home() {
               ballSampleMode={ballSampleMode}
               onBallSampleModeChange={setBallSampleMode}
               onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
-              onClearCrop={() => canvasRef.current?.clearCropRegion()}
+              objMultiplierFrameCount={objMultiplierFrameCount}
+              onObjMultiplierFrameCountChange={setObjMultiplierFrameCount}
+              objMultiplierDuration={objMultiplierDuration}
+              onObjMultiplierDurationChange={setObjMultiplierDuration}
+              onObjMultiplierCapture={handleObjMultiplierCapture}
+              onObjMultiplierClear={handleObjMultiplierClear}
+              objMultiplierActive={objMultiplierHasRegion}
+              objMultiplierProgress={objMultiplierProgress}
             />
           </div>
 
@@ -2104,10 +2224,10 @@ export default function Home() {
                 position: 'absolute',
                 left: 8,
                 top: 8,
-                bottom: 160,
+                bottom: 'calc(110px + env(safe-area-inset-bottom, 0px))',
                 zIndex: 60,
                 overflowY: 'auto',
-                maxHeight: 'calc(100% - 180px)',
+                maxHeight: 'calc(100% - 130px)',
               }}
               >
                 <MobileToolStrip
@@ -2122,13 +2242,12 @@ export default function Home() {
                   onBallTrailModeChange={setBallTrailMode}
                   circleSpinning={circleSpinning}
                   onCircleSpinningChange={setCircleSpinning}
-                  circleGapMode={circleGapMode}
-                  onCircleGapModeChange={setCircleGapMode}
+                  outlineEraserSize={outlineEraserSize}
+                  onOutlineEraserSizeChange={setOutlineEraserSize}
                   rect3d={rect3d}
                   onRect3dChange={setRect3d}
                   triangle3d={triangle3d}
                   onTriangle3dChange={setTriangle3d}
-                  onClearCrop={() => canvasRef.current?.clearCropRegion()}
                   onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
                   precisionDrawEnabled={precisionDrawEnabled}
                   onPrecisionDrawToggle={handlePrecisionDrawToggle}
@@ -2143,7 +2262,7 @@ export default function Home() {
                   position: 'absolute',
                   left: 4,
                   top: reelsDesktop ? 8 : 40,
-                  bottom: reelsDesktop ? 120 : 8,
+                  bottom: reelsDesktop ? 'calc(100px + env(safe-area-inset-bottom, 0px))' : 'calc(100px + env(safe-area-inset-bottom, 0px))',
                   width: REELS_TOOLBAR_W,
                   zIndex: 84,
                   display: 'flex',
@@ -2184,8 +2303,8 @@ export default function Home() {
                     onRacketMultiplier={handleRacketMultiplier}
                     circleSpinning={circleSpinning}
                     onCircleSpinningChange={setCircleSpinning}
-                    circleGapMode={circleGapMode}
-                    onCircleGapModeChange={setCircleGapMode}
+                    outlineEraserSize={outlineEraserSize}
+                    onOutlineEraserSizeChange={setOutlineEraserSize}
                     rect3d={rect3d}
                     onRect3dChange={setRect3d}
                     triangle3d={triangle3d}
@@ -2207,7 +2326,14 @@ export default function Home() {
                     ballSampleMode={ballSampleMode}
                     onBallSampleModeChange={setBallSampleMode}
                     onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
-                    onClearCrop={() => canvasRef.current?.clearCropRegion()}
+                    objMultiplierFrameCount={objMultiplierFrameCount}
+                    onObjMultiplierFrameCountChange={setObjMultiplierFrameCount}
+                    objMultiplierDuration={objMultiplierDuration}
+                    onObjMultiplierDurationChange={setObjMultiplierDuration}
+                    onObjMultiplierCapture={handleObjMultiplierCapture}
+                    onObjMultiplierClear={handleObjMultiplierClear}
+                    objMultiplierActive={objMultiplierHasRegion}
+                    objMultiplierProgress={objMultiplierProgress}
                   />
                 </div>
               </aside>
@@ -2235,6 +2361,51 @@ export default function Home() {
                 onDrop={handleDropA}
               >
                 {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (
+                  urlLoadPhase && urlTarget === 'A' ? (
+                    <div style={{
+                      position: 'absolute', inset: layoutMode === 'reels' ? 0 : 16,
+                      display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', justifyContent: 'center',
+                      gap: 16,
+                      borderRadius: layoutMode === 'reels' ? 0 : 20,
+                      background: layoutMode === 'reels' ? '#000' : '#FFFFFF',
+                    }}>
+                      <svg width="40" height="40" viewBox="0 0 40 40" style={{ animation: 'spin 1s linear infinite' }}>
+                        <circle cx="20" cy="20" r="16" fill="none" stroke="#007AFF" strokeWidth="3" strokeDasharray="75" strokeDashoffset="20" strokeLinecap="round" />
+                      </svg>
+                      <span style={{ fontSize: 15, fontWeight: 500, color: layoutMode === 'reels' ? '#fff' : '#1A1A1A', textAlign: 'center', maxWidth: 280 }}>
+                        {urlLoadPhase}
+                      </span>
+                    </div>
+                  ) : urlLoadError && urlTarget === 'A' ? (
+                    <div style={{
+                      position: 'absolute', inset: layoutMode === 'reels' ? 0 : 16,
+                      display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', justifyContent: 'center',
+                      gap: 14,
+                      borderRadius: layoutMode === 'reels' ? 0 : 20,
+                      background: layoutMode === 'reels' ? '#000' : '#FFFFFF',
+                      padding: 24,
+                    }}>
+                      <div style={{ fontSize: 14, color: '#CC3333', textAlign: 'center', lineHeight: 1.5, maxWidth: 320 }}>
+                        {urlLoadError}
+                      </div>
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <button
+                          onClick={() => { setUrlLoadError(null); handleUrlSubmit(); }}
+                          style={{ padding: '8px 20px', borderRadius: 10, border: 'none', background: '#007AFF', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+                        >
+                          Retry
+                        </button>
+                        <button
+                          onClick={() => { setUrlLoadError(null); fileInputRef.current?.click(); }}
+                          style={{ padding: '8px 20px', borderRadius: 10, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
+                        >
+                          Upload instead
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                   <div style={{
                     position: 'absolute', inset: layoutMode === 'reels' ? 0 : 16,
                     display: 'flex', flexDirection: 'column',
@@ -2266,6 +2437,7 @@ export default function Home() {
                     </button>
                     <span style={{ fontSize: '11px', color: '#8e8e93' }}>or drag and drop a video here</span>
                   </div>
+                  )
                 ) : (
                   <>
                     {youtubeVideoIdA ? (
@@ -2399,7 +2571,7 @@ export default function Home() {
                       onProcessingStatus={setProcessingStatus}
                       isRecording={isRecording}
                       circleSpinning={circleSpinning}
-                      circleGapMode={circleGapMode}
+                      outlineEraserSize={outlineEraserSize}
                       webcamPipMode={webcamPipMode}
                       webcamOpacity={webcamOpacity}
                       webcamActive={webcamActive}
@@ -2421,6 +2593,7 @@ export default function Home() {
                       poseFrameSkip={hasVideoBContent ? 4 : 0}
                       panModeEnabled={panModeEnabled}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
+                      onObjMultiplierRegionSelected={() => setObjMultiplierHasRegion(true)}
                     />
                     <EmbedCapturePanel
                       visible={!!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc}
@@ -2705,7 +2878,7 @@ export default function Home() {
                       onProcessingStatus={setProcessingStatus}
                       isRecording={isRecording}
                       circleSpinning={circleSpinning}
-                      circleGapMode={circleGapMode}
+                      outlineEraserSize={outlineEraserSize}
                       webcamPipMode={webcamPipMode}
                       webcamOpacity={webcamOpacity}
                       webcamActive={webcamActive}

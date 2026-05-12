@@ -21,7 +21,6 @@ import {
   Activity,
   Zap,
   Crosshair,
-  Crop,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import type { BallTrailMode } from '@/components/ToolPalette';
@@ -40,13 +39,12 @@ interface Props {
   onBallTrailModeChange: (m: BallTrailMode) => void;
   circleSpinning?: boolean;
   onCircleSpinningChange?: (v: boolean) => void;
-  circleGapMode?: boolean;
-  onCircleGapModeChange?: (v: boolean) => void;
+  outlineEraserSize?: number;
+  onOutlineEraserSizeChange?: (size: number) => void;
   rect3d?: boolean;
   onRect3dChange?: (v: boolean) => void;
   triangle3d?: boolean;
   onTriangle3dChange?: (v: boolean) => void;
-  onClearCrop?: () => void;
   onResetCropZoom?: () => void;
   precisionDrawEnabled?: boolean;
   onPrecisionDrawToggle?: () => void;
@@ -109,13 +107,12 @@ export default function MobileToolStrip(props: Props) {
     onBallTrailModeChange,
     circleSpinning,
     onCircleSpinningChange,
-    circleGapMode,
-    onCircleGapModeChange,
+    outlineEraserSize = 0,
+    onOutlineEraserSizeChange,
     rect3d,
     onRect3dChange,
     triangle3d,
     onTriangle3dChange,
-    onClearCrop,
     onResetCropZoom,
     precisionDrawEnabled = false,
     onPrecisionDrawToggle,
@@ -127,7 +124,7 @@ export default function MobileToolStrip(props: Props) {
   const toolsOpen = panel === 'tools';
   const viewOpen = panel === 'view';
 
-  const shapeGapEligible =
+  const shapeEraserEligible =
     activeTool === 'circle' ||
     activeTool === 'bodyCircle' ||
     (activeTool === 'rect' && !!rect3d) ||
@@ -171,7 +168,7 @@ export default function MobileToolStrip(props: Props) {
           </IconBtn>
         ) : null}
         <IconBtn
-          active={toolsOpen || ['pen', 'line', 'arrow', 'erase', 'circle', 'bodyCircle', 'rect', 'triangle', 'angle', 'arrowAngle', 'text', 'manualSwing', 'cropSelect'].includes(activeTool)}
+          active={toolsOpen || ['pen', 'line', 'arrow', 'erase', 'circle', 'bodyCircle', 'rect', 'triangle', 'angle', 'arrowAngle', 'text', 'manualSwing'].includes(activeTool)}
           title="Draw & annotate — lines, shapes, text, swing"
           onClick={() => setPanel(toolsOpen ? null : 'tools')}
         >
@@ -181,8 +178,8 @@ export default function MobileToolStrip(props: Props) {
           <PersonStanding size={22} />
         </IconBtn>
         <IconBtn
-          active={viewOpen || activeTool === 'zoom' || activeTool === 'cropSelect'}
-          title="Zoom & crop"
+          active={viewOpen || activeTool === 'zoom'}
+          title="Zoom & pan"
           onClick={() => setPanel(viewOpen ? null : 'view')}
         >
           <ZoomIn size={22} />
@@ -283,10 +280,22 @@ export default function MobileToolStrip(props: Props) {
                 Animated outline
               </label>
             )}
-            {onCircleGapModeChange && shapeGapEligible && (
-              <button type="button" onClick={() => onCircleGapModeChange(!circleGapMode)} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3">
-                ✂ {circleGapMode ? 'Outline gap ON' : 'Outline gap (2 taps)'}
-              </button>
+            {onOutlineEraserSizeChange && shapeEraserEligible && (
+              <div className="flex flex-col gap-1 px-3 py-1">
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                  <input type="checkbox" checked={outlineEraserSize > 0} onChange={(e) => onOutlineEraserSizeChange(e.target.checked ? 15 : 0)} />
+                  Outline eraser
+                </label>
+                {outlineEraserSize > 0 && (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999' }}>
+                      <span>Eraser size</span>
+                      <span style={{ fontWeight: 600, color: '#444' }}>{outlineEraserSize}px</span>
+                    </div>
+                    <input type="range" min={5} max={50} step={1} value={outlineEraserSize} onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))} style={{ width: '100%' }} />
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -321,15 +330,9 @@ export default function MobileToolStrip(props: Props) {
         <div style={panelStyle}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <button type="button" onClick={() => { onToolChange('zoom'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><ZoomIn size={14} />Zoom & pan</button>
-            <button type="button" onClick={() => { onToolChange('cropSelect'); setPanel(null); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Crop size={14} />Crop region</button>
             {onResetCropZoom ? (
               <button type="button" onClick={() => onResetCropZoom()} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3">
                 Reset zoom
-              </button>
-            ) : null}
-            {onClearCrop ? (
-              <button type="button" onClick={() => onClearCrop()} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3">
-                Clear crop
               </button>
             ) : null}
           </div>

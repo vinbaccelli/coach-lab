@@ -15,6 +15,21 @@ function formatTime(seconds: number): string {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
 }
 
+function formatTimeShort(seconds: number): string {
+  if (!Number.isFinite(seconds)) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function getMarkerInterval(duration: number): number {
+  if (duration <= 15) return 1;
+  if (duration <= 60) return 2;
+  if (duration <= 180) return 5;
+  if (duration <= 600) return 10;
+  return 30;
+}
+
 type Source =
   | { kind: 'html'; videoRef: React.RefObject<HTMLVideoElement | null> }
   | { kind: 'youtube'; playerRef: React.MutableRefObject<any | null> };
@@ -595,6 +610,99 @@ export default function PreciseTimeline({
           }}
         />
       </div>
+
+      {/* Vertical tick markers */}
+      {d > 0 && (
+        <TimelineMarkers
+          duration={d}
+          overlay={overlay}
+          onSeek={seekTo}
+        />
+      )}
+    </div>
+  );
+}
+
+function TimelineMarkers({
+  duration,
+  overlay,
+  onSeek,
+}: {
+  duration: number;
+  overlay: boolean;
+  onSeek: (t: number) => void;
+}) {
+  const interval = getMarkerInterval(duration);
+  const majorEvery = 5;
+  const count = Math.floor(duration / interval);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+  const markers = useMemo(() => {
+    const m: { time: number; isMajor: boolean }[] = [];
+    for (let i = 1; i <= count; i++) {
+      m.push({ time: i * interval, isMajor: i % majorEvery === 0 });
+    }
+    return m;
+  }, [count, interval]);
+
+  const lineColor = overlay ? 'rgba(255,255,255,0.3)' : '#CCCCCC';
+  const majorColor = overlay ? 'rgba(255,255,255,0.5)' : '#AAAAAA';
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: 16,
+        flexShrink: 0,
+      }}
+    >
+      {markers.map((mk, i) => {
+        const leftPct = (mk.time / duration) * 100;
+        const h = mk.isMajor ? 12 : 8;
+        return (
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              left: `${leftPct}%`,
+              top: 0,
+              width: 1,
+              height: h,
+              background: mk.isMajor ? majorColor : lineColor,
+              cursor: 'pointer',
+              padding: '0 3px',
+              marginLeft: -0.5,
+              backgroundClip: 'content-box',
+            }}
+            onClick={() => onSeek(mk.time)}
+            onMouseEnter={() => setHoveredIdx(i)}
+            onMouseLeave={() => setHoveredIdx(null)}
+          >
+            {hoveredIdx === i && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: h + 4,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: overlay ? 'rgba(0,0,0,0.75)' : '#1A1A1A',
+                  color: '#fff',
+                  fontSize: 10,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                  whiteSpace: 'nowrap',
+                  pointerEvents: 'none',
+                  zIndex: 10,
+                }}
+              >
+                {formatTimeShort(mk.time)}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
