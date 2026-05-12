@@ -22,8 +22,8 @@ import {
   smoothPoseKeypoints,
   type PoseKeypoint,
 } from '@/lib/youtubeThumbnailPose';
-import { smoothKeypointsEma } from '@/lib/keypointSmooth';
-import { acquirePoseDetector, releasePoseDetector } from '@/lib/sharedPoseDetector';
+import { WebcamSegmenter } from '@/lib/webcamSegmentation';
+import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -129,6 +129,9 @@ export interface CanvasHandle {
   /** Crop region (canvas-normalized 0..1) for export/recording */
   getCropRegion: () => { x: number; y: number; w: number; h: number } | null;
   clearCropRegion: () => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoomPan: () => void;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -186,6 +189,10 @@ export interface CanvasProps {
    */
   precisionTouchDraw?: boolean;
   poseFrameSkip?: number;
+  /** When true, one-finger touch / click-drag pans the canvas instead of drawing */
+  panModeEnabled?: boolean;
+  /** Callback to toggle pan mode from the on-canvas UI */
+  onPanModeToggle?: () => void;
 }
 
 const WEBCAM_PIP_ASPECT = 11 / 9;
@@ -315,7 +322,7 @@ function drawSkeletonOverlay(
     ctx.stroke();
   }
 
-  // Central spine: single line from midpoint of shoulders to midpoint of hips
+  // Central spine: dotted line from midpoint of shoulders to midpoint of hips (matches CoachNow style)
   const lShoulder = keypoints[5], rShoulder = keypoints[6];
   const lHip = keypoints[11], rHip = keypoints[12];
   if (
@@ -327,10 +334,14 @@ function drawSkeletonOverlay(
     const midShoulderY = ((lShoulder.y + rShoulder.y) / 2) * sy;
     const midHipX = ((lHip.x + rHip.x) / 2) * sx;
     const midHipY = ((lHip.y + rHip.y) / 2) * sy;
+    ctx.save();
+    ctx.setLineDash([6, 4]);
     ctx.beginPath();
     ctx.moveTo(midShoulderX, midShoulderY);
     ctx.lineTo(midHipX, midHipY);
     ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
   }
 
   // Head line (off by default — checkbox in skeleton panel)
@@ -1323,6 +1334,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamActive = false,
       precisionTouchDraw = false,
       poseFrameSkip = 0,
+      panModeEnabled = false,
+      onPanModeToggle,
     },
     ref,
   ) {
@@ -1389,8 +1402,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const poseLoopActiveRef   = useRef(false);
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
     // When true, skeleton overlay + detection is temporarily suppressed (e.g. after Clear All / Undo).
-    // This prevents the pose loop from immediately repopulating the overlay right after clearing.
     const skeletonSuppressedRef = useRef(false);
+    const poseBridgeRef = useRef<PoseWorkerBridge | null>(null);
+    const renderDirtyRef = useRef(true);
+    const lastRenderVideoTimeRef = useRef(-1);
+    const lastRenderZoomRef = useRef(1);
+    const lastRenderPanRef = useRef({ x: 0, y: 0 });
 
     // Real-time ball detection
     const isBallDetectingRef  = useRef(false);
@@ -1434,15 +1451,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const suppressTabCaptureMirrorRef = useRef(false);
     const poseSmoothPrevRef = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
-    const poseEstimateInFlightRef = useRef(false);
     const poseScheduleRef = useRef<{ kind: 'rvfc' | 'raf'; id: number } | null>(null);
-    const poseFrameCountRef = useRef(0);
     const poseFrameSkipRef = useRef(poseFrameSkip);
     useEffect(() => { poseFrameSkipRef.current = poseFrameSkip; }, [poseFrameSkip]);
     const webcamCutoutRef = useRef(false);
     const webcamSegmenterRef = useRef<{ dispose: () => void } | null>(null);
     const webcamMaskRef = useRef<HTMLCanvasElement | null>(null);
     const webcamActiveRef = useRef(webcamActive);
+    const panModeEnabledRef = useRef(panModeEnabled);
     /** Pixel rect on the backing canvas; (0,0,0,0) means “use default lower-right” */
     const webcamPipRectRef = useRef({ x: 0, y: 0, w: 0, h: 0 });
     type WebcamPipDrag =
@@ -1510,6 +1526,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { suppressTabCaptureMirrorRef.current = suppressTabCaptureMirror; }, [suppressTabCaptureMirror]);
     useEffect(() => { webcamCutoutRef.current = webcamCutout; }, [webcamCutout]);
     useEffect(() => { webcamActiveRef.current = webcamActive; }, [webcamActive]);
+    useEffect(() => { panModeEnabledRef.current = panModeEnabled; }, [panModeEnabled]);
 
     useEffect(() => {
       if (!webcamActive) {
@@ -1642,6 +1659,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       historyRef.current.push([...strokesRef.current]);
       if (historyRef.current.length > 50) historyRef.current.shift();
       historyIdxRef.current = historyRef.current.length - 1;
+      renderDirtyRef.current = true;
     }, []);
 
     // ── Exposed handle ─────────────────────────────────────────────────────
@@ -1656,6 +1674,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         manualSwingPtsRef.current = [];
         manualSwingActiveRef.current = false;
         liveAngleRef.current = null;
+        renderDirtyRef.current = true;
         anglePhaseRef.current = 0;
         angleVRef.current = null;
         angleP1Ref.current = null;
@@ -1703,7 +1722,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return streamRef.current;
       },
       undo: () => {
-        // Undo should also clear any active AI overlays (skeleton/ball) so the user truly "undoes everything".
         skeletonSuppressedRef.current = true;
         cachedPosesRef.current = [];
         poseProcessingRef.current = false;
@@ -1711,6 +1729,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         latestKeypointsRef.current = null;
         cachedBallRef.current = [];
         ballProcessingRef.current = false;
+        renderDirtyRef.current = true;
         ballTrackRef.current = [];
         isBallDetectingRef.current = false;
         onProcessingStatus?.(null);
@@ -1724,6 +1743,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (historyIdxRef.current < historyRef.current.length - 1) {
           historyIdxRef.current++;
           strokesRef.current = [...historyRef.current[historyIdxRef.current]];
+          renderDirtyRef.current = true;
         }
       },
       getDetectedSwings: () => {
@@ -1780,47 +1800,88 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       getCropRegion: () => cropRegionRef.current,
       clearCropRegion: () => {
         cropRegionRef.current = null;
-        // Reset the view back to the full frame when clearing crop.
+        zoomRef.current = 1.0;
+        panXRef.current = 0;
+        panYRef.current = 0;
+      },
+      zoomIn: () => {
+        zoomRef.current = Math.min(5, zoomRef.current + 0.25);
+      },
+      zoomOut: () => {
+        const next = Math.max(1, zoomRef.current - 0.25);
+        zoomRef.current = next;
+        if (next <= 1) { panXRef.current = 0; panYRef.current = 0; }
+      },
+      resetZoomPan: () => {
         zoomRef.current = 1.0;
         panXRef.current = 0;
         panYRef.current = 0;
       },
     }), [onProcessingStatus, pushHistory, videoRef]);
 
-    // ── Skeleton detector loader (shared singleton) ────────────────────────
+    // ── Skeleton: PoseWorkerBridge lifecycle ───────────────────────────────
+    // Creates/disposes the bridge when skeleton is toggled. The bridge handles
+    // worker-vs-main-thread fallback internally; the render loop just calls
+    // bridge.sendFrame(video) and receives keypoints via callback.
 
     useEffect(() => {
       if (!skeletonEnabled) {
         poseLoopActiveRef.current = false;
         skeletonSuppressedRef.current = false;
         latestKeypointsRef.current = null;
+        poseBridgeRef.current?.dispose();
+        poseBridgeRef.current = null;
         return;
       }
       ensurePoseRender();
       if (typeof window === 'undefined') return;
+      if (youtubePoseRef.current) return;
 
-      let cancelled = false;
+      const bridge = new PoseWorkerBridge({
+        frameSkip: poseFrameSkipRef.current,
+        onStatus: onProcessingStatus ?? undefined,
+      });
+      poseBridgeRef.current = bridge;
+      poseLoopActiveRef.current = true;
 
-      (async () => {
-        try {
-          const det = await acquirePoseDetector(onProcessingStatus ?? undefined);
-          if (cancelled) return;
-          detectorRef.current = det;
-          onProcessingStatus?.('Skeleton ready — press play');
-        } catch (e: any) {
-          if (!cancelled) onProcessingStatus?.(`Skeleton load failed: ${e.message}`);
+      bridge.onResult((keypoints) => {
+        if (skeletonSuppressedRef.current) {
+          latestKeypointsRef.current = null;
+          return;
         }
-      })();
+        if (keypoints) {
+          latestKeypointsRef.current = keypoints;
+          renderDirtyRef.current = true;
+
+          const v = videoRef.current;
+          if (v && !v.paused) {
+            const nowT = v.currentTime;
+            const lastFrame = skeletonFramesRef.current.at(-1);
+            if (!lastFrame || nowT !== lastFrame.timeSeconds) {
+              skeletonFramesRef.current.push({ timeSeconds: nowT, keypoints });
+              if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+                skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+              }
+            }
+          }
+        }
+      });
+
+      bridge.onReady(() => {
+        detectorRef.current = true; // signal to YouTube path that a detector exists
+        onProcessingStatus?.('Skeleton ready — press play');
+      });
 
       return () => {
-        cancelled = true;
-        releasePoseDetector();
+        poseLoopActiveRef.current = false;
+        bridge.dispose();
+        poseBridgeRef.current = null;
       };
-    }, [skeletonEnabled, onProcessingStatus]);
+    }, [skeletonEnabled, onProcessingStatus, videoRef]);
 
-    // ── Pose detection loop — separate from the drawing rAF ───────────────
-    // Uses requestVideoFrameCallback when playing to stay in sync with displayed frames;
-    // falls back to rAF. Mutex + EMA reduce backlog and jitter.
+    // ── Pose detection scheduling — sends frames to bridge ───────────────
+    // Uses requestVideoFrameCallback when playing for frame-accurate sync;
+    // falls back to rAF. The bridge handles frame skipping + in-flight guard.
 
     useEffect(() => {
       if (!skeletonEnabled) return;
@@ -1830,11 +1891,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!video) return;
 
       poseLoopActiveRef.current = true;
-      let pausedTimer: number | ReturnType<typeof setTimeout> | undefined;
+      let pausedTimer: number | undefined;
 
       const cancelScheduled = () => {
         if (pausedTimer !== undefined) {
-          window.clearTimeout(pausedTimer);
+          window.clearTimeout(pausedTimer as number);
           pausedTimer = undefined;
         }
         const v = videoRef.current;
@@ -1856,81 +1917,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (v.paused) {
           pausedTimer = window.setTimeout(() => {
             pausedTimer = undefined;
-            void runIteration();
-          }, 118);
+            sendFrame();
+          }, 118) as unknown as number;
           return;
         }
 
         if (typeof v.requestVideoFrameCallback !== 'function') {
-          const id = requestAnimationFrame(() => { poseScheduleRef.current = null; void runIteration(); });
+          const id = requestAnimationFrame(() => { poseScheduleRef.current = null; sendFrame(); });
           poseScheduleRef.current = { kind: 'raf', id };
           return;
         }
 
         const id = v.requestVideoFrameCallback(() => {
           poseScheduleRef.current = null;
-          void runIteration();
+          sendFrame();
         });
         poseScheduleRef.current = { kind: 'rvfc', id };
       };
 
-      const runIteration = async () => {
+      const sendFrame = () => {
         if (!poseLoopActiveRef.current) return;
-        if (skeletonSuppressedRef.current) {
-          latestKeypointsRef.current = null;
-          scheduleNext();
-          return;
-        }
-
-        const det = detectorRef.current;
+        const bridge = poseBridgeRef.current;
         const v = videoRef.current;
-        if (!det || !v || v.readyState < 4 || v.videoWidth === 0) {
-          scheduleNext();
-          return;
+        if (bridge && v) {
+          bridge.frameSkip = poseFrameSkipRef.current;
+          bridge.sendFrame(v);
         }
-
-        if (poseEstimateInFlightRef.current) {
-          scheduleNext();
-          return;
-        }
-
-        const skip = poseFrameSkipRef.current;
-        if (skip > 0) {
-          poseFrameCountRef.current++;
-          if (poseFrameCountRef.current % (skip + 1) !== 0) {
-            scheduleNext();
-            return;
-          }
-        }
-
-        poseEstimateInFlightRef.current = true;
-        try {
-          const poses = await det.estimatePoses(v, { flipHorizontal: false });
-          const raw = poses?.[0]?.keypoints as Array<{ x: number; y: number; score: number; name: string }> | undefined;
-          if (raw?.length) {
-            const playbackAlpha = Math.min(
-              0.72,
-              Math.max(0.28, 0.38 + (Math.abs(v.playbackRate || 1) - 1) * 0.08),
-            );
-            const smoothed = smoothKeypointsEma(poseSmoothPrevRef.current, raw, playbackAlpha);
-            poseSmoothPrevRef.current = smoothed as typeof raw;
-            latestKeypointsRef.current = smoothed as typeof raw;
-
-            const nowT = v.currentTime;
-            const lastFrame = skeletonFramesRef.current.at(-1);
-            if (!v.paused && (!lastFrame || nowT !== lastFrame.timeSeconds)) {
-              skeletonFramesRef.current.push({ timeSeconds: nowT, keypoints: smoothed as typeof raw });
-              if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
-                skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
-              }
-            }
-          }
-        } catch {
-          /* video may not be ready */
-        } finally {
-          poseEstimateInFlightRef.current = false;
-        }
-
         scheduleNext();
       };
 
@@ -1946,12 +1958,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => {
       const v = videoRef.current;
       if (!v) return;
-      const onReload = () => { poseSmoothPrevRef.current = null; };
+      const onReload = () => {
+        poseSmoothPrevRef.current = null;
+        poseBridgeRef.current?.resetSmoothing();
+      };
       v.addEventListener('loadeddata', onReload);
       return () => v.removeEventListener('loadeddata', onReload);
     }, [videoRef]);
 
-    // ── Webcam selfie mask for cutout PiP (updates off-thread from render loop) ──
+    // ── Webcam selfie mask for cutout PiP (MediaPipe CDN) ──
     useEffect(() => {
       if (!webcamCutout || !webcamActive) {
         webcamSegmenterRef.current?.dispose();
@@ -1961,104 +1976,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       let cancelled = false;
-      let busy = false;
-      let rafId = 0;
+      const segmenter = new WebcamSegmenter();
 
       (async () => {
         try {
-          const tf = await import('@tensorflow/tfjs-core');
-          await import('@tensorflow/tfjs-backend-webgl');
-          await tf.setBackend('webgl');
-          await tf.ready();
-          const bs = await import('@tensorflow-models/body-segmentation');
-          const { createSegmenter, SupportedModels } = bs;
-          if (cancelled) return;
+          await segmenter.init();
+          if (cancelled) { segmenter.dispose(); return; }
 
-          const segmenter = await createSegmenter(SupportedModels.MediaPipeSelfieSegmentation, {
-            runtime: 'tfjs',
-            modelType: 'general',
-          });
-          if (cancelled) {
-            segmenter.dispose();
-            return;
+          const wc = webcamVideoRef?.current;
+          if (wc && wc.readyState >= 2) {
+            segmenter.start(wc);
+          } else if (wc) {
+            const onReady = () => {
+              wc.removeEventListener('loadeddata', onReady);
+              if (!cancelled) segmenter.start(wc);
+            };
+            wc.addEventListener('loadeddata', onReady);
           }
 
-          const maskCanvas = document.createElement('canvas');
-          const featherCanvas = document.createElement('canvas');
-          webcamMaskRef.current = maskCanvas;
-
-          const segmentOnce = async () => {
-            const wc = webcamVideoRef?.current;
-            if (!wc || wc.readyState < 2 || wc.videoWidth === 0) return;
-            const seg = await segmenter.segmentPeople(wc, { flipHorizontal: false });
-            if (!seg?.[0]) return;
-
-            const raw = await seg[0].mask.toImageData();
-            const rw = raw.width;
-            const rh = raw.height;
-            const bytes = new Uint8ClampedArray(rw * rh * 4);
-            const threshold = 0.3;
-
-            for (let i = 0; i < rw * rh; i++) {
-              const o = i * 4;
-              const r = raw.data[o];
-              const g = raw.data[o + 1];
-              const b = raw.data[o + 2];
-              const personConf = Math.max(r, g, b) / 255;
-
-              let a = 0;
-              if (personConf > threshold) {
-                const t = (personConf - threshold) / (1 - threshold);
-                a = Math.round(Math.min(255, t * 255));
-              }
-              bytes[o] = 255;
-              bytes[o + 1] = 255;
-              bytes[o + 2] = 255;
-              bytes[o + 3] = a;
-            }
-
-            const bin = new ImageData(bytes, rw, rh);
-
-            if (maskCanvas.width !== rw || maskCanvas.height !== rh) {
-              maskCanvas.width = rw;
-              maskCanvas.height = rh;
-              featherCanvas.width = rw;
-              featherCanvas.height = rh;
-            }
-
-            const fx = featherCanvas.getContext('2d');
-            const mctx = maskCanvas.getContext('2d');
-            if (fx && mctx) {
-              fx.putImageData(bin, 0, 0);
-              mctx.clearRect(0, 0, rw, rh);
-              mctx.save();
-              mctx.filter = 'blur(3px)';
-              mctx.drawImage(featherCanvas, 0, 0);
-              mctx.restore();
-            } else if (mctx) {
-              mctx.putImageData(bin, 0, 0);
-            }
-          };
-
-          const tick = async () => {
-            if (cancelled || !webcamCutoutRef.current || !webcamActiveRef.current) return;
-            if (!busy) {
-              busy = true;
-              try {
-                await segmentOnce();
-              } catch { /* ignore frame errors */ }
-              finally { busy = false; }
-            }
-            rafId = requestAnimationFrame(() => { void tick(); });
-          };
-
-          webcamSegmenterRef.current = {
-            dispose: () => {
-              try { segmenter.dispose(); } catch { /* noop */ }
-            },
-          };
-
-          void tick();
+          webcamSegmenterRef.current = segmenter;
+          webcamMaskRef.current = segmenter.getOutputCanvas();
         } catch {
           onProcessingStatus?.('Webcam cutout unavailable — showing normal PiP');
         }
@@ -2066,8 +2003,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       return () => {
         cancelled = true;
-        cancelAnimationFrame(rafId);
-        webcamSegmenterRef.current?.dispose();
+        segmenter.dispose();
         webcamSegmenterRef.current = null;
         webcamMaskRef.current = null;
       };
@@ -2254,6 +2190,40 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         const W = canvas.width;
         const H = canvas.height;
+
+        const video = videoRef.current;
+        const curVideoTime = video?.currentTime ?? -1;
+        const videoTimeChanged = curVideoTime !== lastRenderVideoTimeRef.current;
+        lastRenderVideoTimeRef.current = curVideoTime;
+
+        const zoomChanged =
+          zoomRef.current !== lastRenderZoomRef.current ||
+          panXRef.current !== lastRenderPanRef.current.x ||
+          panYRef.current !== lastRenderPanRef.current.y;
+        lastRenderZoomRef.current = zoomRef.current;
+        lastRenderPanRef.current = { x: panXRef.current, y: panYRef.current };
+
+        const hasActiveInteraction =
+          !!activeStrokeRef.current ||
+          !!selectionRef.current ||
+          !!liveAngleRef.current ||
+          isSelectingStroRegionRef.current ||
+          isCropSelectingRef.current ||
+          precisionAnchorPointerIdRef.current !== null ||
+          precisionFadeStartRef.current !== null ||
+          circleSpinningRef.current;
+
+        const needsRender =
+          videoTimeChanged ||
+          zoomChanged ||
+          renderDirtyRef.current ||
+          hasActiveInteraction ||
+          webcamActiveRef.current ||
+          (video && !video.paused);
+
+        if (!needsRender) return;
+        renderDirtyRef.current = false;
+
         ctx.clearRect(0, 0, W, H);
 
         // ── Apply zoom/pan transform ──────────────────────────────────────
@@ -2263,7 +2233,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         ctx.translate(-W / 2, -H / 2);
 
         // Video frame (letterboxed to preserve aspect ratio)
-        const video = videoRef.current;
         const yt = youtubePoseRef.current;
         const ytDim = youtubePoseDimsRef.current;
         let dx = 0, dy = 0, dw = W, dh = H, vW = W, vH = H;
@@ -2287,8 +2256,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.drawImage(video, dx, dy, dw, dh);
           }
 
-          // ── Real-time ball detection (runs when playing or scrubbing) ──────
-          if (renderVideoRef.current && ballTrailEnabledRef.current && !isBallDetectingRef.current) {
+          // ── Real-time ball detection (only when video frame changed) ────────
+          if (videoTimeChanged && renderVideoRef.current && ballTrailEnabledRef.current && !isBallDetectingRef.current) {
             const det = ballDetectRef.current;
             if (det && video.readyState >= 2 && video.videoWidth > 0) {
               const currentTime = video.currentTime;
@@ -2486,23 +2455,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
           const drawPipPixels = () => {
             if (useCutout) {
-              const tmp = document.createElement('canvas');
-              tmp.width = camW;
-              tmp.height = camH;
-              const tctx = tmp.getContext('2d');
-              if (!tctx) return;
-              tctx.save();
-              tctx.translate(camW, 0);
-              tctx.scale(-1, 1);
-              tctx.drawImage(webcam, 0, 0, camW, camH);
-              tctx.restore();
-              tctx.globalCompositeOperation = 'destination-in';
-              tctx.save();
-              tctx.translate(camW, 0);
-              tctx.scale(-1, 1);
-              tctx.drawImage(maskCanvas, 0, 0, camW, camH);
-              tctx.restore();
-              ctx.drawImage(tmp, cx2, cy2);
+              ctx.save();
+              ctx.translate(cx2 + camW, cy2);
+              ctx.scale(-1, 1);
+              ctx.drawImage(maskCanvas, 0, 0, camW, camH);
+              ctx.restore();
             } else {
               ctx.drawImage(webcam, cx2, cy2, camW, camH);
             }
@@ -3191,13 +3148,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // ── Pan: middle-click, Space+drag, zoom tool drag while zoomed, OR single-finger touch while zoomed ──
+      // ── Pan: middle-click, Space+drag, zoom tool drag while zoomed, pan-mode, OR single-finger touch while zoomed ──
       const isTouchPanWhileZoomed = e.pointerType === 'touch' && zoomRef.current > 1 && tool !== 'cropSelect';
+      const isPanModeActive = panModeEnabledRef.current && zoomRef.current > 1;
       if (
         e.button === 1 ||
         spaceHeldRef.current ||
         (tool === 'zoom' && e.button === 0 && zoomRef.current > 1) ||
-        isTouchPanWhileZoomed
+        isTouchPanWhileZoomed ||
+        isPanModeActive
       ) {
         isPanningRef.current = true;
         panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
@@ -4013,6 +3972,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ? 'grab'
           : zoomRef.current > 1.0 ? 'zoom-out' : 'zoom-in',
     };
+    if (panModeEnabled && zoomRef.current > 1) {
+      Object.keys(cursorFor).forEach((k) => { (cursorFor as Record<string, string>)[k] = isPanningRef.current ? 'grabbing' : 'grab'; });
+    }
 
     const onWheelCanvas = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
       if (!webcamActiveRef.current) return;
@@ -4037,6 +3999,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       e.stopPropagation();
     }, []);
 
+    const zoomControlBtnStyle: React.CSSProperties = {
+      width: 36,
+      height: 36,
+      borderRadius: 8,
+      border: 'none',
+      background: 'rgba(0,0,0,0.55)',
+      color: '#fff',
+      fontSize: 18,
+      fontWeight: 700,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      WebkitTapHighlightColor: 'transparent',
+      touchAction: 'manipulation',
+      backdropFilter: 'blur(8px)',
+      WebkitBackdropFilter: 'blur(8px)',
+    };
+
     return (
       <>
         <canvas
@@ -4050,7 +4031,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             height: '100%',
             display: 'block',
             touchAction: 'none',
-            cursor: cursorFor[activeTool] ?? 'default',
+            cursor: panModeEnabled && zoomRef.current > 1
+              ? (isPanningRef.current ? 'grabbing' : 'grab')
+              : (cursorFor[activeTool] ?? 'default'),
           }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -4059,6 +4042,73 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           onDoubleClick={onDoubleClick}
           onWheel={onWheelCanvas}
         />
+
+        {/* Zoom / Pan controls — bottom-right corner above playback */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 80,
+            right: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            zIndex: 90,
+            pointerEvents: 'auto',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              zoomRef.current = Math.min(5, zoomRef.current + 0.25);
+            }}
+            style={zoomControlBtnStyle}
+            title="Zoom in"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const next = Math.max(1, zoomRef.current - 0.25);
+              zoomRef.current = next;
+              if (next <= 1) { panXRef.current = 0; panYRef.current = 0; }
+            }}
+            style={zoomControlBtnStyle}
+            title="Zoom out"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              zoomRef.current = 1.0;
+              panXRef.current = 0;
+              panYRef.current = 0;
+            }}
+            style={{
+              ...zoomControlBtnStyle,
+              fontSize: 14,
+            }}
+            title="Reset zoom & pan"
+          >
+            ⌂
+          </button>
+          {onPanModeToggle && (
+            <button
+              type="button"
+              onClick={onPanModeToggle}
+              style={{
+                ...zoomControlBtnStyle,
+                fontSize: 13,
+                background: panModeEnabled ? 'rgba(53,103,154,0.85)' : 'rgba(0,0,0,0.55)',
+                border: panModeEnabled ? '2px solid #5ba3e0' : 'none',
+              }}
+              title={panModeEnabled ? 'Pan mode ON — tap to draw' : 'Pan mode OFF — tap to pan'}
+            >
+              ✥
+            </button>
+          )}
+        </div>
         {textEditing && (
           <textarea
             ref={textEditInputRef}

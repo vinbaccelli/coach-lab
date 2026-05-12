@@ -36,6 +36,16 @@ export interface VideoController {
 export function createHtml5VideoController(
   videoRef: RefObject<HTMLVideoElement | null>,
 ): VideoController {
+  let seekGate = false;
+
+  const waitForSeeked = (v: HTMLVideoElement): void => {
+    if (seekGate) return;
+    seekGate = true;
+    const unlock = () => { seekGate = false; v.removeEventListener('seeked', unlock); };
+    v.addEventListener('seeked', unlock, { once: true });
+    setTimeout(unlock, 300);
+  };
+
   return {
     kind: 'html5',
     play() {
@@ -71,15 +81,17 @@ export function createHtml5VideoController(
     },
     stepForward(frameSeconds: number) {
       const v = videoRef.current;
-      if (!v) return;
+      if (!v || seekGate) return;
       v.pause();
       v.currentTime = Math.min(v.duration || Infinity, v.currentTime + frameSeconds);
+      waitForSeeked(v);
     },
     stepBackward(frameSeconds: number) {
       const v = videoRef.current;
-      if (!v) return;
+      if (!v || seekGate) return;
       v.pause();
       v.currentTime = Math.max(0, v.currentTime - frameSeconds);
+      waitForSeeked(v);
     },
   };
 }

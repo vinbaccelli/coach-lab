@@ -29,6 +29,8 @@ export default function PreciseTimeline({
   compact = false,
   /** Desktop 9:16 phone: taller scrub; Speed/FPS tucked into Options */
   phoneChrome = false,
+  /** Render as a transparent overlay (no background/border/radius) */
+  overlay = false,
 }: {
   source: Source;
   defaultFps?: number;
@@ -37,6 +39,7 @@ export default function PreciseTimeline({
   leadingInsetPx?: number;
   compact?: boolean;
   phoneChrome?: boolean;
+  overlay?: boolean;
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
@@ -324,17 +327,19 @@ export default function PreciseTimeline({
     flexDirection: 'column',
     gap: phoneChrome ? 8 : compact ? 6 : 10,
     width: '100%',
-    padding: `${phoneChrome ? 8 : compact ? 6 : 10}px 12px calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 20 : compact ? 16 : 18}px) calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 8 : compact ? 6 : 10}px)`,
-    paddingLeft: Math.max(12, leadingInsetPx),
-    borderRadius: phoneChrome ? 0 : '14px 14px 0 0',
-    background: phoneChrome ? 'rgba(255,255,255,0.06)' : 'rgba(15, 15, 18, 0.58)',
-    border: phoneChrome ? 'none' : '1px solid rgba(255,255,255,0.12)',
-    borderBottom: phoneChrome ? 'none' : 'none',
+    padding: overlay
+      ? '0'
+      : `${phoneChrome ? 8 : compact ? 6 : 10}px 12px calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 20 : compact ? 16 : 18}px) calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 8 : compact ? 6 : 10}px)`,
+    paddingLeft: overlay ? 0 : Math.max(12, leadingInsetPx),
+    borderRadius: overlay ? 0 : phoneChrome ? 0 : '14px 14px 0 0',
+    background: overlay ? 'transparent' : phoneChrome ? 'rgba(255,255,255,0.06)' : 'rgba(15, 15, 18, 0.58)',
+    border: overlay ? 'none' : phoneChrome ? 'none' : '1px solid rgba(255,255,255,0.12)',
+    borderBottom: 'none',
     color: '#fff',
-    backdropFilter: phoneChrome ? 'blur(20px) saturate(1.15)' : 'blur(12px)',
-    WebkitBackdropFilter: phoneChrome ? 'blur(20px) saturate(1.15)' : 'blur(12px)',
+    backdropFilter: overlay ? 'none' : phoneChrome ? 'blur(20px) saturate(1.15)' : 'blur(12px)',
+    WebkitBackdropFilter: overlay ? 'none' : phoneChrome ? 'blur(20px) saturate(1.15)' : 'blur(12px)',
     touchAction: 'manipulation',
-  }), [compact, leadingInsetPx, phoneChrome]);
+  }), [compact, leadingInsetPx, overlay, phoneChrome]);
 
   const btnStyle: React.CSSProperties = useMemo(() => ({
     minWidth: phoneChrome ? 44 : 40,

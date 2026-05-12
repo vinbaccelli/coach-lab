@@ -63,37 +63,53 @@ export class TabCaptureRecorder {
   private chunks: Blob[] = [];
 
   start(stream: MediaStream, _cb?: RecordingCallbacks) {
-    const mimeType = pickRecorderMimeType();
-    const opts: MediaRecorderOptions = { mimeType };
     try {
-      this.recorder = new MediaRecorder(stream, opts);
-    } catch {
-      this.recorder = new MediaRecorder(stream);
-    }
-    this.chunks = [];
-    this.recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) this.chunks.push(e.data);
-    };
-    try {
-      this.recorder.start(250);
-    } catch (e) {
+      const mimeType = pickRecorderMimeType();
+      const opts: MediaRecorderOptions = { mimeType };
       try {
-        this.recorder?.stop();
+        this.recorder = new MediaRecorder(stream, opts);
       } catch {
-        /* noop */
+        this.recorder = new MediaRecorder(stream);
       }
-      this.recorder = null;
-      throw e;
+      this.chunks = [];
+      this.recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) this.chunks.push(e.data);
+      };
+      try {
+        this.recorder.start(250);
+      } catch (e) {
+        try {
+          this.recorder?.stop();
+        } catch {
+          /* noop */
+        }
+        this.recorder = null;
+        throw e;
+      }
+    } catch (e) {
+      throw new Error(
+        `Could not start the recorder: ${e instanceof Error ? e.message : String(e)}. ` +
+        'Close other apps using the camera or screen, then try again.',
+      );
     }
   }
 
   async stop(): Promise<Blob> {
     const rec = this.recorder;
-    if (!rec || rec.state === 'inactive') {
-      return new Blob(this.chunks, { type: pickRecorderMimeType() });
+    if (!rec) {
+      const fallback = new Blob(this.chunks, { type: pickRecorderMimeType() });
+      this.chunks = [];
+      return fallback;
+    }
+    if (rec.state === 'inactive') {
+      const fallback = new Blob(this.chunks, { type: rec.mimeType || pickRecorderMimeType() });
+      this.recorder = null;
+      this.chunks = [];
+      return fallback;
     }
     return new Promise((resolve, reject) => {
       rec.onerror = (ev) => {
+        this.recorder = null;
         const inner = (ev as { error?: DOMException }).error;
         reject(
           inner instanceof Error
@@ -112,11 +128,11 @@ export class TabCaptureRecorder {
       } catch {
         /* noop */
       }
-      /** Allow one paint so the final chunk is queued before stop (reduces empty blobs). */
       window.setTimeout(() => {
         try {
           if (rec.state !== 'inactive') rec.stop();
         } catch (err) {
+          this.recorder = null;
           reject(err instanceof Error ? err : new Error(String(err)));
         }
       }, 40);

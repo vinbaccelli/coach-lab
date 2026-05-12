@@ -172,11 +172,23 @@ export default function ToolPalette({
 
   const setTool = (t: ToolType) => {
     onToolChange(t);
-    setOpenPanel(null);
   };
 
+  const paletteRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!openPanel) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (paletteRef.current && !paletteRef.current.contains(e.target as Node)) {
+        setOpenPanel(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [openPanel]);
+
   return (
-    <div className="flex flex-col gap-1 h-full select-none">
+    <div ref={paletteRef} className="flex flex-col gap-1 h-full select-none">
       <div className={compact ? 'px-1 pt-2 pb-1' : 'px-2 pt-2 pb-1'}>
         {!compact && (
           <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
@@ -187,9 +199,9 @@ export default function ToolPalette({
         <div className="flex flex-col gap-1">
           {/* Single-column desktop toolbar (matches mobile's clarity) */}
           <button
-            onClick={() => setTool('select')}
+            onClick={() => { setTool('select'); setOpenPanel(null); }}
             className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${compact ? 'justify-center' : ''} ${activeTool === 'select' ? 'active' : ''}`}
-            title="Select"
+            title="Select and move drawings"
           >
             <MousePointer2 size={15} />
             {!compact && <span>Select</span>}
@@ -214,113 +226,118 @@ export default function ToolPalette({
           </button>
           {openPanel === 'draw' && (
             <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm max-h-[min(70vh,520px)] overflow-y-auto">
-              <div className="grid grid-cols-1 gap-1.5">
-                <button onClick={() => setTool('pen')} className={`tool-btn flex-row gap-1 ${activeTool === 'pen' ? 'active' : ''}`}>
-                  <Pen size={14} /><span>Pen</span>
+              <div className="grid grid-cols-1 gap-2">
+                <button onClick={() => setTool('pen')} className={`tool-btn flex-row gap-1 ${activeTool === 'pen' ? 'active' : ''}`} title="Draw freely on the video — drag to draw">
+                  <Pen size={14} /><span>Freehand</span>
                 </button>
-                <button onClick={() => setTool('line')} className={`tool-btn flex-row gap-1 ${activeTool === 'line' ? 'active' : ''}`}>
+                <button onClick={() => setTool('line')} className={`tool-btn flex-row gap-1 ${activeTool === 'line' ? 'active' : ''}`} title="Draw a straight line — click start and end points">
                   <Minus size={14} /><span>Line</span>
                 </button>
-                <button onClick={() => setTool('arrow')} className={`tool-btn flex-row gap-1 ${activeTool === 'arrow' ? 'active' : ''}`}>
+                <button onClick={() => setTool('arrow')} className={`tool-btn flex-row gap-1 ${activeTool === 'arrow' ? 'active' : ''}`} title="Draw an arrow — click start and end points">
                   <ArrowRight size={14} /><span>Arrow</span>
                 </button>
-                <button onClick={() => setTool('erase')} className={`tool-btn flex-row gap-1 ${activeTool === 'erase' ? 'active' : ''}`}>
+                <button onClick={() => setTool('erase')} className={`tool-btn flex-row gap-1 ${activeTool === 'erase' ? 'active' : ''}`} title="Erase drawings — click on a shape to remove it">
                   <Eraser size={14} /><span>Eraser</span>
                 </button>
-                <button onClick={() => setTool(isCircle3d ? 'bodyCircle' : 'circle')} className={`tool-btn flex-row gap-1 ${(activeTool === 'circle' || activeTool === 'bodyCircle') ? 'active' : ''}`}>
+                <button onClick={() => setTool(isCircle3d ? 'bodyCircle' : 'circle')} className={`tool-btn flex-row gap-1 ${(activeTool === 'circle' || activeTool === 'bodyCircle') ? 'active' : ''}`} title="Draw a circle — click center and drag to set size">
                   <Circle size={14} /><span>Circle</span>
                 </button>
-                <button onClick={() => setTool('rect')} className={`tool-btn flex-row gap-1 ${activeTool === 'rect' ? 'active' : ''}`}>
+                <button onClick={() => setTool('rect')} className={`tool-btn flex-row gap-1 ${activeTool === 'rect' ? 'active' : ''}`} title="Draw a rectangle — click and drag corner to corner">
                   <Square size={14} /><span>Rectangle</span>
                 </button>
-                <button onClick={() => setTool('triangle')} className={`tool-btn flex-row gap-1 ${activeTool === 'triangle' ? 'active' : ''}`}>
+                <button onClick={() => setTool('triangle')} className={`tool-btn flex-row gap-1 ${activeTool === 'triangle' ? 'active' : ''}`} title="Draw a triangle — click and drag to set size">
                   <Triangle size={14} /><span>Triangle</span>
                 </button>
                 <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mt-1 mb-0 px-0.5">Annotate</p>
-                <button onClick={() => setTool('text')} className={`tool-btn flex-row gap-1 ${activeTool === 'text' ? 'active' : ''}`}>
+                <button onClick={() => setTool('text')} className={`tool-btn flex-row gap-1 ${activeTool === 'text' ? 'active' : ''}`} title="Add text annotation — click to place text">
                   <Type size={14} /><span>Text</span>
                 </button>
-                <button onClick={() => setTool('angle')} className={`tool-btn flex-row gap-1 ${activeTool === 'angle' ? 'active' : ''}`}>
+                <button onClick={() => setTool('angle')} className={`tool-btn flex-row gap-1 ${activeTool === 'angle' ? 'active' : ''}`} title="Measure an angle — click vertex, then two endpoints">
                   <Triangle size={14} /><span>Angle</span>
                 </button>
-                <button onClick={() => setTool('arrowAngle')} className={`tool-btn flex-row gap-1 ${activeTool === 'arrowAngle' ? 'active' : ''}`}>
+                <button onClick={() => setTool('arrowAngle')} className={`tool-btn flex-row gap-1 ${activeTool === 'arrowAngle' ? 'active' : ''}`} title="Draw an arrow with angle measurement at the tip">
                   <Activity size={14} /><span>Arrow + angle</span>
                 </button>
-                <button onClick={() => setTool('manualSwing')} className={`tool-btn flex-row gap-1 ${activeTool === 'manualSwing' ? 'active' : ''}`}>
-                  <Zap size={14} /><span>Manual swing</span>
+                <button onClick={() => setTool('manualSwing')} className={`tool-btn flex-row gap-1 ${activeTool === 'manualSwing' ? 'active' : ''}`} title="Draw a swing path — click points, double-click to finish">
+                  <Zap size={14} /><span>Swing path</span>
                 </button>
               </div>
 
-              {/* Shape options live inside Draw to keep the toolbar clean */}
               {(activeTool === 'circle' || activeTool === 'bodyCircle' || activeTool === 'rect' || activeTool === 'triangle') && (
-                <div className="mt-2 border-t border-gray-200 pt-2 px-1">
-                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                <div className="mt-2 border-t border-gray-200 pt-2 px-1 flex flex-col gap-2">
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
                     Shape Options
                   </p>
 
-                  {/* 3D effect toggles */}
                   {(activeTool === 'circle' || activeTool === 'bodyCircle') && (
-                    <label className="flex items-center gap-2 text-[10px] text-gray-600 cursor-pointer mb-1">
+                    <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer" title="Enable 3D cut effect on the circle">
                       <input
                         type="checkbox"
                         checked={activeTool === 'bodyCircle'}
                         onChange={(e) => onToolChange(e.target.checked ? 'bodyCircle' : 'circle')}
                         className="accent-blue-500"
                       />
-                      3D cut (use as “eraser” on shape)
+                      3D cut
                     </label>
                   )}
                   {activeTool === 'rect' && onRect3dChange && (
-                    <label className="flex items-center gap-2 text-[10px] text-gray-600 cursor-pointer mb-1">
+                    <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer" title="Enable 3D cut effect on the rectangle">
                       <input
                         type="checkbox"
                         checked={!!rect3d}
                         onChange={(e) => onRect3dChange(e.target.checked)}
                         className="accent-blue-500"
                       />
-                      3D cut (use as “eraser” on shape)
+                      3D cut
                     </label>
                   )}
                   {activeTool === 'triangle' && onTriangle3dChange && (
-                    <label className="flex items-center gap-2 text-[10px] text-gray-600 cursor-pointer mb-1">
+                    <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer" title="Enable 3D cut effect on the triangle">
                       <input
                         type="checkbox"
                         checked={!!triangle3d}
                         onChange={(e) => onTriangle3dChange(e.target.checked)}
                         className="accent-blue-500"
                       />
-                      3D cut (use as “eraser” on shape)
+                      3D cut
                     </label>
                   )}
 
-                  {/* Animation toggle (outline travel) */}
                   {onCircleSpinningChange && (
-                    <label className="flex items-center gap-2 text-[10px] text-gray-600 cursor-pointer mb-1">
+                    <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer" title="Animate the shape outline with a travelling effect">
                       <input
                         type="checkbox"
                         checked={!!circleSpinning}
                         onChange={(e) => onCircleSpinningChange(e.target.checked)}
                         className="accent-blue-500"
                       />
-                      Animation (travelling outline)
+                      Animation
                     </label>
                   )}
 
                   {onCircleGapModeChange && shapeGapEligible && (
-                    <button
-                      onClick={() => onCircleGapModeChange(!circleGapMode)}
-                      className={`tool-btn w-full flex-row gap-1 ${circleGapMode ? 'active text-blue-600' : 'text-gray-500'}`}
-                    >
-                      <span className="text-[13px]">✂</span>
-                      <span>{circleGapMode ? 'Outline gap ON' : 'Outline gap (2 clicks)'}</span>
-                    </button>
+                    <div className="flex flex-col gap-1">
+                      <button
+                        onClick={() => onCircleGapModeChange(!circleGapMode)}
+                        className={`tool-btn w-full flex-row gap-2 ${circleGapMode ? 'active text-blue-600' : 'text-gray-500'}`}
+                        title="Cut a gap in the shape outline — click start then end of gap"
+                      >
+                        <span className="text-[13px]">✂</span>
+                        <span>{circleGapMode ? 'Gap cutter ON' : 'Gap cutter'}</span>
+                      </button>
+                      {circleGapMode && (
+                        <p className="text-[9px] text-blue-500 px-1 leading-tight font-medium">
+                          Click where the gap starts, then click where it ends.
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
             </div>
           )}
 
-          <button onClick={() => setTool('skeleton')} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'skeleton' ? 'active' : ''}`} title="Skeleton">
+          <button onClick={() => { setTool('skeleton'); setOpenPanel(null); }} className={`tool-btn tool-btn-chrome w-full flex-row gap-1 ${activeTool === 'skeleton' ? 'active' : ''}`} title="AI body tracking — overlays joints and connections">
             <PersonStanding size={15} /><span>Skeleton</span>
           </button>
 
@@ -334,19 +351,19 @@ export default function ToolPalette({
           </button>
           {openPanel === 'view' && (
             <div className="px-2 py-2 rounded-xl bg-[#FAF9F7] border border-[#E5E5E5] shadow-sm flex flex-col gap-1.5">
-              <button onClick={() => setTool('zoom')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'zoom' ? 'active' : ''}`}>
+              <button onClick={() => setTool('zoom')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'zoom' ? 'active' : ''}`} title="Zoom and pan the video — scroll to zoom, drag to pan">
                 <ZoomIn size={14} /><span>Zoom & pan</span>
               </button>
-              <button onClick={() => setTool('cropSelect')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'cropSelect' ? 'active' : ''}`}>
+              <button onClick={() => setTool('cropSelect')} className={`tool-btn w-full flex-row gap-1 ${activeTool === 'cropSelect' ? 'active' : ''}`} title="Crop and zoom into a region of the video">
                 <Crop size={14} /><span>Crop</span>
               </button>
               {onResetCropZoom && (
-                <button type="button" onClick={onResetCropZoom} className="tool-btn w-full flex-row gap-1 text-gray-600">
+                <button type="button" onClick={onResetCropZoom} className="tool-btn w-full flex-row gap-1 text-gray-600" title="Reset zoom to default view">
                   <RefreshCw size={14} /><span>Reset zoom</span>
                 </button>
               )}
               {onClearCrop && (
-                <button type="button" onClick={onClearCrop} className="tool-btn w-full flex-row gap-1 text-gray-600">
+                <button type="button" onClick={onClearCrop} className="tool-btn w-full flex-row gap-1 text-gray-600" title="Remove crop and show full video">
                   <RefreshCw size={14} /><span>Clear crop</span>
                 </button>
               )}
@@ -644,62 +661,6 @@ export default function ToolPalette({
                 <RefreshCw size={13} />
                 <span>Reset Zoom</span>
               </button>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* Webcam PiP section */}
-      {webcamActive && onWebcamPipModeChange && (
-        <>
-          <div className="border-t border-gray-100 mx-2" />
-          <div className="px-2 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 px-1">
-              Webcam PiP
-            </p>
-            <div className="flex gap-1 mb-2 flex-wrap">
-              {(['rectangle', 'circle', 'hidden'] as WebcamPipMode[]).map((m) => (
-                <button
-                  key={m}
-                  style={pillBtn(webcamPipMode === m)}
-                  onClick={() => onWebcamPipModeChange(m)}
-                >
-                  {m.charAt(0).toUpperCase() + m.slice(1)}
-                </button>
-              ))}
-            </div>
-            {onWebcamCutoutChange && (
-              <div className="flex gap-1 mb-2 flex-wrap items-center">
-                <button
-                  type="button"
-                  style={pillBtn(!webcamCutout)}
-                  onClick={() => onWebcamCutoutChange(false)}
-                  title="Solid webcam background"
-                >
-                  Normal bg
-                </button>
-                <button
-                  type="button"
-                  style={pillBtn(webcamCutout)}
-                  onClick={() => onWebcamCutoutChange(true)}
-                  title="Person cutout (uses selfie segmentation — slightly heavier)"
-                >
-                  Cutout
-                </button>
-              </div>
-            )}
-            {onWebcamOpacityChange && (
-              <div>
-                <p className="text-[9px] text-gray-500 px-1 mb-1">
-                  Opacity: {Math.round(webcamOpacity * 100)}%
-                </p>
-                <input
-                  type="range" min={30} max={100} step={5}
-                  value={Math.round(webcamOpacity * 100)}
-                  onChange={(e) => onWebcamOpacityChange(Number(e.target.value) / 100)}
-                  className="w-full"
-                />
-              </div>
             )}
           </div>
         </>

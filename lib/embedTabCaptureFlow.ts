@@ -140,10 +140,26 @@ export async function runEmbedTabCaptureFlow(args: {
       }
     }
 
-    // ── 3. Validate stream has video tracks ───────────────────────────
+    // ── 3. Validate stream exists and has video tracks ────────────────
     onStepStatus?.('Verifying video stream…');
 
+    if (!stream) {
+      return fail(
+        'stream null check',
+        'stream is null after acquisition',
+        'Could not obtain a video stream. Please try Capture again — make sure you pick "This tab" when prompted.',
+      );
+    }
+
     const videoTracks = stream.getVideoTracks();
+    if (!videoTracks) {
+      stopAllTracks(stream);
+      return fail(
+        'video track list check',
+        'getVideoTracks() returned null/undefined',
+        'Something went wrong reading the video stream. Please refresh the page and try Capture again.',
+      );
+    }
     if (videoTracks.length === 0) {
       stopAllTracks(stream);
       return fail(
@@ -201,24 +217,24 @@ export async function runEmbedTabCaptureFlow(args: {
 
     // ── 6. Start MediaRecorder on the stream ──────────────────────────
     await sleep(150);
-    recorder = new TabCaptureRecorder();
 
     try {
-      recorder.start(stream);
-    } catch (startErr) {
-      console.error('[CoachLab capture] first recorder.start() failed:', startErr);
-      await sleep(300);
       recorder = new TabCaptureRecorder();
       try {
         recorder.start(stream);
-      } catch (retryErr) {
-        stopAllTracks(stream);
-        return fail(
-          'MediaRecorder.start',
-          retryErr,
-          'Could not start the recorder. Close any other screen recordings, refresh the page, and try again.',
-        );
+      } catch (startErr) {
+        console.error('[CoachLab capture] first recorder.start() failed:', startErr);
+        await sleep(300);
+        recorder = new TabCaptureRecorder();
+        recorder.start(stream);
       }
+    } catch (recErr) {
+      stopAllTracks(stream);
+      return fail(
+        'MediaRecorder.start',
+        recErr,
+        'Could not start the recorder. Close any other screen recordings, refresh the page, and try Capture again.',
+      );
     }
 
     onProgress?.(0.04);
@@ -366,7 +382,7 @@ export async function runEmbedTabCaptureFlow(args: {
     return fail(
       'unexpected top-level',
       e,
-      `Recording failed: ${(e as Error)?.message || 'Unknown error'}. Please refresh and try again.`,
+      `Something went wrong during recording: ${(e as Error)?.message || 'Unknown error'}. Please refresh the page and try Capture again.`,
     );
   }
 }

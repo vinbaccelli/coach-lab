@@ -14,6 +14,7 @@ import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/component
 import PreciseTimeline from '@/components/PreciseTimeline';
 import ScreenRecorder from '@/components/ScreenRecorder';
 import MobileToolStrip from '@/components/MobileToolStrip';
+import WebcamDropdown from '@/components/WebcamDropdown';
 import PrecisionDrawInstructions, {
   hasSeenPrecisionInstructions,
   markPrecisionInstructionsSeen,
@@ -129,8 +130,11 @@ export default function Home() {
   /** Which stream the unified timeline controls (AB = sync both for uploaded HTML5 pairs). */
   const [playbackTarget, setPlaybackTarget] = useState<'A' | 'B' | 'AB'>('A');
   const [desktopReelsMenuOpen, setDesktopReelsMenuOpen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Selfie-segmentation cutout for webcam PiP */
   const [webcamCutout, setWebcamCutout]     = useState(false);
+  const [panModeEnabled, setPanModeEnabled] = useState(false);
   const [youtubeVideoIdA, setYoutubeVideoIdA] = useState<string | null>(null);
   const [youtubeVideoIdB, setYoutubeVideoIdB] = useState<string | null>(null);
   const [genericEmbedSrcA, setGenericEmbedSrcA] = useState<string | null>(null);
@@ -413,6 +417,17 @@ export default function Home() {
   const handlePlayBlocked = useCallback(() => {
     setShowTapToPlay(true);
   }, []);
+
+  const showControls = useCallback(() => {
+    setControlsVisible(true);
+    if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+    controlsTimerRef.current = setTimeout(() => setControlsVisible(false), 3000);
+  }, []);
+
+  useEffect(() => {
+    showControls();
+    return () => { if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current); };
+  }, [showControls]);
 
   const cleanupVideoEl = useCallback((v: HTMLVideoElement | null) => {
     if (!v) return;
@@ -1057,23 +1072,28 @@ export default function Home() {
             stopAllTracks(preAcquiredStream);
             const streamUrl = `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`;
             setProcessingStatus(null);
+            const freshEl = panel === 'A' ? videoRef.current : videoRefB.current;
             if (panel === 'A') {
               setYoutubeVideoIdA(null);
               setGenericEmbedSrcA(null);
               setVideoSrc(streamUrl);
-              cleanupVideoEl(videoEl);
-              videoEl.src = streamUrl;
-              videoEl.load();
-              await videoEl.play().catch(() => {});
+              if (freshEl) {
+                cleanupVideoEl(freshEl);
+                freshEl.src = streamUrl;
+                freshEl.load();
+                await freshEl.play().catch(() => {});
+              }
             } else {
               setYoutubeVideoIdB(null);
               setGenericEmbedSrcB(null);
               setVideoSrcB(streamUrl);
-              cleanupVideoEl(videoEl);
-              videoEl.src = streamUrl;
-              videoEl.load();
+              if (freshEl) {
+                cleanupVideoEl(freshEl);
+                freshEl.src = streamUrl;
+                freshEl.load();
+                await freshEl.play().catch(() => {});
+              }
               setVideoBLoaded(false);
-              await videoEl.play().catch(() => {});
             }
             setShowCaptureSaveToast(true);
             setShowTapToPlay(false);
@@ -1110,6 +1130,7 @@ export default function Home() {
 
       const durHint =
         !isYt &&
+        videoEl &&
         typeof videoEl.duration === 'number' &&
         Number.isFinite(videoEl.duration) &&
         videoEl.duration > 0.25
@@ -1159,6 +1180,7 @@ export default function Home() {
       })();
 
       const url = URL.createObjectURL(result.blob);
+      const postEl = panel === 'A' ? videoRef.current : videoRefB.current;
 
       if (panel === 'A') {
         revokeBlobUrl(lastBlobUrlARef.current);
@@ -1166,21 +1188,25 @@ export default function Home() {
         setYoutubeVideoIdA(null);
         setGenericEmbedSrcA(null);
         setVideoSrc(url);
-        cleanupVideoEl(videoEl);
-        videoEl.src = url;
-        videoEl.load();
-        await videoEl.play().catch(() => {});
+        if (postEl) {
+          cleanupVideoEl(postEl);
+          postEl.src = url;
+          postEl.load();
+          await postEl.play().catch(() => {});
+        }
       } else {
         revokeBlobUrl(lastBlobUrlBRef.current);
         lastBlobUrlBRef.current = url;
         setYoutubeVideoIdB(null);
         setGenericEmbedSrcB(null);
         setVideoSrcB(url);
-        cleanupVideoEl(videoEl);
-        videoEl.src = url;
-        videoEl.load();
+        if (postEl) {
+          cleanupVideoEl(postEl);
+          postEl.src = url;
+          postEl.load();
+          await postEl.play().catch(() => {});
+        }
         setVideoBLoaded(false);
-        await videoEl.play().catch(() => {});
       }
 
       setShowCaptureSaveToast(true);
@@ -1305,20 +1331,20 @@ export default function Home() {
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            padding: `0 12px 0 ${!isMobile ? timelineLeadingInset : 12}px`,
+            padding: '0 12px',
             flexWrap: 'wrap',
           }}
         >
-          <span style={{ fontSize: 11, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.6)' : '#6e6e73', fontWeight: 600 }}>Playback</span>
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: 600 }}>Playback</span>
           <select
             value={playbackTarget}
             onChange={(e) => setPlaybackTarget(e.target.value as 'A' | 'B' | 'AB')}
             style={{
               height: 32,
-              borderRadius: layoutMode === 'reels' ? 0 : 10,
-              border: layoutMode === 'reels' ? '1px solid rgba(255,255,255,0.2)' : '1px solid #E5E5E5',
-              background: layoutMode === 'reels' ? 'rgba(255,255,255,0.1)' : '#FFFFFF',
-              color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.2)',
+              background: 'rgba(255,255,255,0.1)',
+              color: '#FFFFFF',
               padding: '0 10px',
               fontSize: 13,
               fontWeight: 600,
@@ -1345,9 +1371,9 @@ export default function Home() {
                 }
                 defaultFps={30}
                 accent="#34C759"
-                leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                leadingInsetPx={0}
                 compact
-                phoneChrome={!isMobile}
+                overlay
               />
             )
           : ((videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc)) && (
@@ -1359,9 +1385,9 @@ export default function Home() {
                 }
                 defaultFps={30}
                 accent={layoutMode === 'reels' ? '#FF3B30' : 'rgba(0,113,227,0.9)'}
-                leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+                leadingInsetPx={0}
                 compact
-                phoneChrome={!isMobile}
+                overlay
               />
             )
       ) : (
@@ -1375,9 +1401,9 @@ export default function Home() {
             }
             defaultFps={30}
             accent={layoutMode === 'reels' ? '#FF3B30' : 'rgba(0,113,227,0.9)'}
-            leadingInsetPx={!isMobile ? timelineLeadingInset : 12}
+            leadingInsetPx={0}
             compact
-            phoneChrome={!isMobile}
+            overlay
           />
         )
       )}
@@ -1392,7 +1418,7 @@ export default function Home() {
         height: '100dvh',
         minHeight: 0,
         overflow: 'hidden',
-        background: layoutMode === 'reels' ? '#000000' : '#FFFFFF',
+        background: '#FFFFFF',
         color: '#1A1A1A',
       }}
     >
@@ -1543,11 +1569,17 @@ export default function Home() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                   <button onClick={() => fileInputRef.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video A</button>
                   <button onClick={() => fileInputRefB.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video B</button>
-                  {!webcamActive ? (
-                    <button onClick={() => void toggleWebcam()} style={headerBtnStyle}>Webcam</button>
-                  ) : (
-                    <button onClick={() => void toggleWebcam()} style={headerBtnStyle}>Webcam off</button>
-                  )}
+                  <WebcamDropdown
+                    webcamActive={webcamActive}
+                    onToggleWebcam={() => void toggleWebcam()}
+                    webcamPipMode={webcamPipMode}
+                    onWebcamPipModeChange={setWebcamPipMode}
+                    webcamOpacity={webcamOpacity}
+                    onWebcamOpacityChange={setWebcamOpacity}
+                    webcamCutout={webcamCutout}
+                    onWebcamCutoutChange={setWebcamCutout}
+                    triggerStyle={headerBtnStyle}
+                  />
                   {!micActive ? (
                     <button onClick={startMic} style={headerBtnStyle}>Mic</button>
                   ) : (
@@ -1674,11 +1706,18 @@ export default function Home() {
                   : (videoSrcB ? 'Replace B' : 'Upload B')}
               </button>
 
-              {!webcamActive ? (
-                <button onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Enable webcam overlay">{layoutMode === 'reels' ? 'Cam' : 'Webcam'}</button>
-              ) : (
-                <button onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Turn webcam off">{layoutMode === 'reels' ? '● Cam' : '● Webcam'}</button>
-              )}
+              <WebcamDropdown
+                webcamActive={webcamActive}
+                onToggleWebcam={() => void toggleWebcam()}
+                webcamPipMode={webcamPipMode}
+                onWebcamPipModeChange={setWebcamPipMode}
+                webcamOpacity={webcamOpacity}
+                onWebcamOpacityChange={setWebcamOpacity}
+                webcamCutout={webcamCutout}
+                onWebcamCutoutChange={setWebcamCutout}
+                triggerStyle={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }}
+                compact={layoutMode === 'reels'}
+              />
 
               {!micActive ? (
                 <button onClick={startMic} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Enable microphone (audio in recordings)">Mic</button>
@@ -1722,7 +1761,7 @@ export default function Home() {
           flex: 1,
           overflow: 'hidden',
           justifyContent: layoutMode === 'reels' ? 'center' : undefined,
-          background: layoutMode === 'reels' ? '#000000' : undefined,
+          background: layoutMode === 'reels' ? '#FFFFFF' : undefined,
           position: 'relative',
         }}
       >
@@ -1740,7 +1779,7 @@ export default function Home() {
           position: 'absolute',
           left: 12,
           top: 12,
-          bottom: 170,
+          bottom: 80,
           zIndex: 80,
           borderRadius: 14,
           boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
@@ -1773,11 +1812,6 @@ export default function Home() {
               onRect3dChange={setRect3d}
               triangle3d={triangle3d}
               onTriangle3dChange={setTriangle3d}
-              webcamPipMode={webcamPipMode}
-              onWebcamPipModeChange={setWebcamPipMode}
-              webcamOpacity={webcamOpacity}
-              onWebcamOpacityChange={setWebcamOpacity}
-              webcamActive={webcamActive}
               skeletonShowAngles={skeletonShowAngles}
               onSkeletonShowAnglesChange={setSkeletonShowAngles}
               skeletonShowHeadLine={skeletonShowHeadLine}
@@ -1796,8 +1830,6 @@ export default function Home() {
               onBallSampleModeChange={setBallSampleMode}
               onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
               onClearCrop={() => canvasRef.current?.clearCropRegion()}
-              webcamCutout={webcamCutout}
-              onWebcamCutoutChange={setWebcamCutout}
             />
           </div>
 
@@ -1972,15 +2004,18 @@ export default function Home() {
                         <Upload size={12} />
                         {videoSrcB ? 'B' : '+B'}
                       </button>
-                      {!webcamActive ? (
-                        <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="Webcam">
-                          Cam
-                        </button>
-                      ) : (
-                        <button type="button" onClick={() => void toggleWebcam()} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, color: '#4ade80', borderColor: 'rgba(74,222,128,0.4)', background: 'rgba(74,222,128,0.15)' }} title="Turn webcam off">
-                          ● Cam
-                        </button>
-                      )}
+                      <WebcamDropdown
+                        webcamActive={webcamActive}
+                        onToggleWebcam={() => void toggleWebcam()}
+                        webcamPipMode={webcamPipMode}
+                        onWebcamPipModeChange={setWebcamPipMode}
+                        webcamOpacity={webcamOpacity}
+                        onWebcamOpacityChange={setWebcamOpacity}
+                        webcamCutout={webcamCutout}
+                        onWebcamCutoutChange={setWebcamCutout}
+                        triggerStyle={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
+                        compact
+                      />
                       {!micActive ? (
                         <button type="button" onClick={startMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="Mic">
                           Mic
@@ -2128,13 +2163,6 @@ export default function Home() {
                     onRect3dChange={setRect3d}
                     triangle3d={triangle3d}
                     onTriangle3dChange={setTriangle3d}
-                    webcamPipMode={webcamPipMode}
-                    onWebcamPipModeChange={setWebcamPipMode}
-                    webcamOpacity={webcamOpacity}
-                    onWebcamOpacityChange={setWebcamOpacity}
-                    webcamActive={webcamActive}
-                    webcamCutout={webcamCutout}
-                    onWebcamCutoutChange={setWebcamCutout}
                     skeletonShowAngles={skeletonShowAngles}
                     onSkeletonShowAnglesChange={setSkeletonShowAngles}
                     skeletonShowHeadLine={skeletonShowHeadLine}
@@ -2363,7 +2391,9 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
-                      poseFrameSkip={hasVideoBContent ? 3 : 0}
+                      poseFrameSkip={hasVideoBContent ? 4 : 0}
+                      panModeEnabled={panModeEnabled}
+                      onPanModeToggle={() => setPanModeEnabled((p) => !p)}
                     />
                     <EmbedCapturePanel
                       visible={!!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc}
@@ -2664,7 +2694,9 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
-                      poseFrameSkip={3}
+                      poseFrameSkip={4}
+                      panModeEnabled={panModeEnabled}
+                      onPanModeToggle={() => setPanModeEnabled((p) => !p)}
                     />
                     <EmbedCapturePanel
                       visible={!!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB}
@@ -2737,42 +2769,27 @@ export default function Home() {
               </>
             ) : null}
             </div>
-            {reelsDesktop && (
-              <div
-                style={{
-                  flexShrink: 0,
-                  width: '100%',
-                  zIndex: 72,
-                  pointerEvents: 'auto',
-                  borderTop: '1px solid rgba(255,255,255,0.1)',
-                  background: 'rgba(0,0,0,0.5)',
-                  backdropFilter: 'blur(18px) saturate(1.08)',
-                  WebkitBackdropFilter: 'blur(18px) saturate(1.08)',
-                }}
-              >
-                {renderTimelineDock()}
-              </div>
-            )}
-          </div>
-
-          {!reelsDesktop && (
+            {/* Playback controls overlay — positioned inside the video container */}
             <div
+              onPointerMove={showControls}
+              onPointerDown={showControls}
+              onTouchStart={showControls}
               style={{
                 position: 'absolute',
+                bottom: 0,
                 left: 0,
                 right: 0,
-                bottom: 0,
-                width: '100%',
-                zIndex: 70,
-                pointerEvents: 'none',
-                display: 'flex',
-                justifyContent: 'stretch',
-                padding: 0,
+                zIndex: 50,
+                background: 'linear-gradient(transparent, rgba(0,0,0,0.6))',
+                padding: isMobile ? `12px 16px calc(16px + env(safe-area-inset-bottom, 0px))` : '12px 16px 16px',
+                pointerEvents: 'auto',
+                opacity: controlsVisible ? 1 : 0.3,
+                transition: 'opacity 0.4s ease',
               }}
             >
               {renderTimelineDock()}
             </div>
-          )}
+          </div>
 
           {/* Video B offset control */}
           {layoutMode !== 'reels' && (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
