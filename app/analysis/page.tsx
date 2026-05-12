@@ -32,7 +32,7 @@ import {
 } from '@/lib/videoController';
 import { resolveYoutubeForAnalysis } from '@/app/actions/youtubeResolve';
 import { runEmbedTabCaptureFlow } from '@/lib/embedTabCaptureFlow';
-import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
+import { stopAllTracks } from '@/lib/tabCaptureRecording';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 import SaveReportModal from '@/components/shared/SaveReportModal';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
@@ -1037,21 +1037,34 @@ export default function Home() {
       panel: 'A' | 'B',
       opts: { mode: 'full' | 'section'; startSec: number | null; endSec: number | null },
     ) => {
-      // Acquire the screen-share stream IMMEDIATELY from the user gesture,
-      // before any async work, so the browser doesn't revoke the gesture context.
+      // Acquire the screen-share stream IMMEDIATELY from the user gesture.
+      // This MUST be the first await — no state updates, no checks before it.
+      // Safari revokes the gesture token after any microtask boundary.
       let preAcquiredStream: MediaStream | null = null;
       try {
-        preAcquiredStream = await getTabCaptureStream();
+        preAcquiredStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: false,
+        });
       } catch (e: unknown) {
+        const name = (e as DOMException)?.name;
         const msg =
-          (e as DOMException)?.name === 'NotAllowedError' ||
-          (e as DOMException)?.name === 'PermissionDeniedError'
-            ? 'Screen sharing was cancelled or blocked by the browser. Tap Capture and choose your browser tab when asked.'
+          name === 'NotAllowedError' || name === 'PermissionDeniedError'
+            ? 'Screen sharing was cancelled or blocked. Tap Capture and choose your browser tab when asked.'
             : `Screen sharing failed: ${(e as Error)?.message || 'Unknown error'}. Try refreshing the page.`;
         setCaptureError(msg);
         return;
       }
 
+      if (!preAcquiredStream || preAcquiredStream.getVideoTracks().length === 0) {
+        stopAllTracks(preAcquiredStream);
+        setCaptureError('No video track received. Try Capture again and choose "This tab".');
+        return;
+      }
+
+      // Wrap everything after stream acquisition in try-catch to handle minified library errors
+      // (e.g. "null is not an object evaluating this.g.src" from YouTube/TF.js internals).
+      try {
       const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
       if (!videoEl) {
         stopAllTracks(preAcquiredStream);
@@ -1211,6 +1224,20 @@ export default function Home() {
 
       setShowCaptureSaveToast(true);
       setShowTapToPlay(false);
+      } catch (outerErr: unknown) {
+        // Catch minified library crashes (YouTube API, TF.js) that throw e.g. "this.g.src"
+        console.error('[CoachLab capture] unexpected error:', outerErr);
+        stopAllTracks(preAcquiredStream);
+        setCaptureBusy(false);
+        setEmbedCaptureRecording(false);
+        setEmbedCapturePanelId(null);
+        setCaptureProgress01(0);
+        setCaptureCountdown(null);
+        setCaptureStepStatus(null);
+        setCaptureError(
+          `Something went wrong during recording: ${(outerErr as Error)?.message || 'Unknown error'}. Please refresh the page and try Capture again.`,
+        );
+      }
     },
     [
       cleanupVideoEl,

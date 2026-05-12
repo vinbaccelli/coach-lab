@@ -14,33 +14,33 @@ export function pickRecorderMimeType(): string {
   return 'video/webm';
 }
 
+/**
+ * Call getDisplayMedia exactly ONCE.  A retry (even in a catch block) consumes
+ * the user-gesture token on Safari / WebKit, so the second call always fails
+ * with "getDisplayMedia must be called from a user gesture handler".
+ *
+ * This function MUST be the first await in any handler triggered by a click.
+ */
 export async function getTabCaptureStream(): Promise<MediaStream> {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
     throw new Error('Screen capture is not supported in this browser.');
   }
 
-  /** Prefer current tab when supported (Chromium). Omit fixed width/height ideals — they often cause OverconstrainedError or flaky pipelines on laptops and deployed HTTPS. */
-  const preferTab = {
-    video: {
-      frameRate: { ideal: 30, max: 60 },
-    },
-    audio: false,
-    preferCurrentTab: true,
-  } as Parameters<MediaDevices['getDisplayMedia']>[0];
+  const isChromium = /Chrome\//.test(navigator.userAgent) && !/Edg\//.test(navigator.userAgent);
 
-  const minimal = {
-    video: true,
-    audio: false,
-  } as Parameters<MediaDevices['getDisplayMedia']>[0];
+  const constraints: DisplayMediaStreamOptions = isChromium
+    ? {
+        video: { frameRate: { ideal: 30, max: 60 } } as MediaTrackConstraints,
+        audio: false,
+        // @ts-expect-error preferCurrentTab is a Chromium-only extension
+        preferCurrentTab: true,
+      }
+    : { video: true, audio: false };
 
   try {
-    return await navigator.mediaDevices.getDisplayMedia(preferTab);
-  } catch {
-    try {
-      return await navigator.mediaDevices.getDisplayMedia(minimal);
-    } catch (e) {
-      throw e instanceof Error ? e : new Error(String(e));
-    }
+    return await navigator.mediaDevices.getDisplayMedia(constraints);
+  } catch (e) {
+    throw e instanceof Error ? e : new Error(String(e));
   }
 }
 
