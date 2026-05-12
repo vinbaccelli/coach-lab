@@ -230,6 +230,8 @@ export async function runEmbedTabCaptureFlow(args: {
     onProgress?.(0.04);
 
     // ── 7. Run the recording for the requested duration ───────────────
+    const ytEnded = () => ytPlayer?.getPlayerState?.() === 0;
+
     if (isYoutube && ytPlayer && typeof ytPlayer.seekTo === 'function') {
       // YouTube with player API available
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
@@ -238,13 +240,15 @@ export async function runEmbedTabCaptureFlow(args: {
         ytPlayer.seekTo(startSec, true);
         ytPlayer.playVideo?.();
         const span = Math.max(0.001, endSec - startSec);
+        const timeoutMs = (span + 30) * 1000;
         const progIv = window.setInterval(() => {
           const t = Number(ytPlayer.getCurrentTime?.() ?? 0);
           onProgress?.(Math.min(1, Math.max(0, (t - startSec) / span)));
         }, 80);
         await waitUntilOk(
-          () => Number(ytPlayer.getCurrentTime?.() ?? 0) >= endSec - 0.12,
+          () => ytEnded() || Number(ytPlayer.getCurrentTime?.() ?? 0) >= endSec - 0.5,
           80,
+          timeoutMs,
         );
         window.clearInterval(progIv);
         ytPlayer.pauseVideo?.();
@@ -254,13 +258,15 @@ export async function runEmbedTabCaptureFlow(args: {
         ytPlayer.playVideo?.();
         const dur = Number(ytPlayer.getDuration?.() ?? 0);
         if (dur > 0) {
+          const timeoutMs = (dur + 30) * 1000;
           const iv = window.setInterval(() => {
             const t = Number(ytPlayer.getCurrentTime?.() ?? 0);
             onProgress?.(Math.min(1, t / dur));
           }, 250);
           await waitUntilOk(
-            () => Number(ytPlayer.getCurrentTime?.() ?? 0) >= dur - 0.25,
+            () => ytEnded() || Number(ytPlayer.getCurrentTime?.() ?? 0) >= dur - 0.5,
             200,
+            timeoutMs,
           );
           window.clearInterval(iv);
           onProgress?.(1);
@@ -270,9 +276,12 @@ export async function runEmbedTabCaptureFlow(args: {
             pulse = Math.min(0.94, pulse + 0.012);
             onProgress?.(pulse);
           }, 320);
-          await new Promise<void>((resolve) => {
-            track.addEventListener('ended', () => resolve(), { once: true });
-          });
+          await Promise.race([
+            new Promise<void>((resolve) => {
+              track.addEventListener('ended', () => resolve(), { once: true });
+            }),
+            waitUntilOk(() => ytEnded(), 500, 600_000),
+          ]);
           window.clearInterval(pulseIv);
           onProgress?.(1);
         }
