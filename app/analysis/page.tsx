@@ -1072,22 +1072,25 @@ export default function Home() {
           return;
         }
 
-        // All resolution attempts failed
+        // All resolution attempts failed — fall back to YouTube embed + capture
         clearTimeout(slowTimer);
         clearTimeout(verySlowTimer);
-        setUrlLoadPhase(null);
-        setUrlLoadError(
-          'We couldn\u2019t load this YouTube video. YouTube may be blocking automated requests. You can download the video and upload it directly using the Upload button.',
-        );
       } catch (e) {
         clearTimeout(slowTimer);
         clearTimeout(verySlowTimer);
         if (abort.signal.aborted) return;
         console.warn('[analysis] YouTube resolve error:', e);
-        setUrlLoadPhase(null);
-        setUrlLoadError(
-          'Something went wrong while loading the video. Please try again, or download the video and upload it directly.',
-        );
+      }
+
+      // Fallback: load YouTube in an iframe embed so the coach can use Capture
+      setUrlLoadPhase(null);
+      setShowTapToPlay(true);
+      if (urlTarget === 'A') {
+        setYoutubeVideoIdA(videoId);
+        setGenericEmbedSrcA(null);
+      } else {
+        setYoutubeVideoIdB(videoId);
+        setGenericEmbedSrcB(null);
       }
       return;
     }
