@@ -2407,7 +2407,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }
           };
 
-          if (webcamPipModeRef.current === 'circle') {
+          if (useCutout) {
+            drawPipPixels();
+          } else if (webcamPipModeRef.current === 'circle') {
             const r = Math.min(camW, camH) / 2;
             const centerX = cx2 + camW / 2;
             const centerY = cy2 + camH / 2;

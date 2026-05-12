@@ -51,6 +51,10 @@ interface Props {
   onShowPrecisionInstructions?: () => void;
 }
 
+function haptic() {
+  try { navigator?.vibrate?.(10); } catch { /* noop */ }
+}
+
 function IconBtn({
   active,
   title,
@@ -66,7 +70,7 @@ function IconBtn({
     <button
       type="button"
       className={`tool-btn tool-btn-chrome ${active ? 'active' : ''}`}
-      onClick={onClick}
+      onClick={() => { haptic(); onClick(); }}
       title={title}
       style={{
         width: 44,
@@ -132,19 +136,22 @@ export default function MobileToolStrip(props: Props) {
 
   const panelStyle: React.CSSProperties = useMemo(() => ({
     position: 'absolute',
-    left: 46,
+    left: 52,
     top: 0,
     minWidth: 220,
-    maxWidth: 'min(92vw, 320px)',
+    maxWidth: 'min(85vw, 320px)',
     maxHeight: 'min(72vh, 520px)',
     overflowY: 'auto',
+    overflowX: 'hidden',
     WebkitOverflowScrolling: 'touch',
     background: 'rgba(250,249,247,0.97)',
     border: '1px solid #E5E5E5',
     borderRadius: 14,
     padding: 12,
     color: '#1A1A1A',
-    boxShadow: '0 12px 36px rgba(0,0,0,0.08)',
+    boxShadow: '0 12px 36px rgba(0,0,0,0.12)',
+    zIndex: 100,
+    pointerEvents: 'auto',
   }), []);
 
   const showSwingArrowOpt = activeTool === 'manualSwing' || activeTool === 'swingPath';
@@ -256,24 +263,8 @@ export default function MobileToolStrip(props: Props) {
           <div style={secLabel}>Shapes</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <button type="button" onClick={() => { onToolChange(isCircle3d ? 'bodyCircle' : 'circle'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Circle size={14} />Circle</button>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-              <input type="checkbox" checked={isCircle3d} onChange={(e) => onToolChange(e.target.checked ? 'bodyCircle' : 'circle')} />
-              3D body circle
-            </label>
             <button type="button" onClick={() => { onToolChange('rect'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Square size={14} />Rectangle</button>
-            {onRect3dChange && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-                <input type="checkbox" checked={!!rect3d} onChange={(e) => onRect3dChange(e.target.checked)} />
-                3D rectangle
-              </label>
-            )}
             <button type="button" onClick={() => { onToolChange('triangle'); }} className="tool-btn flex-row gap-1 min-h-11 w-full justify-start px-3"><Triangle size={14} />Triangle</button>
-            {onTriangle3dChange && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-                <input type="checkbox" checked={!!triangle3d} onChange={(e) => onTriangle3dChange(e.target.checked)} />
-                3D triangle
-              </label>
-            )}
             {onCircleSpinningChange && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
                 <input type="checkbox" checked={!!circleSpinning} onChange={(e) => onCircleSpinningChange(e.target.checked)} />

@@ -1922,7 +1922,7 @@ export default function Home() {
           position: 'absolute',
           left: 12,
           top: 12,
-          bottom: 'calc(100px + env(safe-area-inset-bottom, 0px))',
+          bottom: 'calc(88px + env(safe-area-inset-bottom, 0px))',
           zIndex: 80,
           borderRadius: 14,
           boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
@@ -2227,10 +2227,9 @@ export default function Home() {
                 position: 'absolute',
                 left: 8,
                 top: 8,
-                bottom: 'calc(110px + env(safe-area-inset-bottom, 0px))',
+                bottom: 'calc(88px + env(safe-area-inset-bottom, 0px))',
                 zIndex: 60,
-                overflowY: 'auto',
-                maxHeight: 'calc(100% - 130px)',
+                overflow: 'visible',
               }}
               >
                 <MobileToolStrip
@@ -2265,7 +2264,7 @@ export default function Home() {
                   position: 'absolute',
                   left: 4,
                   top: reelsDesktop ? 8 : 40,
-                  bottom: reelsDesktop ? 'calc(100px + env(safe-area-inset-bottom, 0px))' : 'calc(100px + env(safe-area-inset-bottom, 0px))',
+                  bottom: 'calc(88px + env(safe-area-inset-bottom, 0px))',
                   width: REELS_TOOLBAR_W,
                   zIndex: 84,
                   display: 'flex',

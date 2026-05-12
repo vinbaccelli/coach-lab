@@ -35,13 +35,17 @@ export default function WebcamDropdown({
 
   useEffect(() => {
     if (!open) return;
-    const onClick = (e: MouseEvent) => {
+    const onClick = (e: MouseEvent | TouchEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     };
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('touchstart', onClick);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('touchstart', onClick);
+    };
   }, [open]);
 
   const pillBtn = (active: boolean): React.CSSProperties => ({
@@ -191,7 +195,7 @@ export default function WebcamDropdown({
               PiP shape
             </span>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {(['rectangle', 'circle', 'hidden'] as WebcamPipMode[]).map((m) => (
+              {(['rectangle', 'circle'] as WebcamPipMode[]).map((m) => (
                 <button
                   key={m}
                   type="button"

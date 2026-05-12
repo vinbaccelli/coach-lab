@@ -132,3 +132,26 @@ body {
 input[type='range'] {
   @apply w-full accent-blue-500;
 }
+
+/* ── Universal button tap feedback ── */
+button, [role="button"] {
+  transition: transform 0.1s ease, background 0.12s, color 0.12s, border-color 0.12s;
+}
+button:active:not(:disabled), [role="button"]:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+/* Tool buttons get snappier feedback */
+.tool-btn:active,
+.tool-btn-chrome:active {
+  transform: scale(0.92) !important;
+}
+
+/* Skeleton loading pulse when tool is activating */
+@keyframes coachlab-tool-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.tool-activating {
+  animation: coachlab-tool-pulse 0.8s ease-in-out infinite;
+}

@@ -111,6 +111,7 @@ const SS = {
     justifyContent: 'center',
     padding: 0,
     flexShrink: 0,
+    touchAction: 'manipulation',
     transition: 'background 0.12s, color 0.12s, border-color 0.12s',
   }),
   actionBtn: (destructive = false): React.CSSProperties => ({
@@ -137,8 +138,11 @@ const SS = {
     borderRadius: 10,
     boxShadow: '0 4px 16px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.06)',
     padding: 8,
-    maxWidth: 200,
+    width: 200,
     minWidth: 160,
+    maxHeight: 'min(75vh, 520px)',
+    overflowY: 'auto' as const,
+    overflowX: 'hidden' as const,
     zIndex: 50,
   } as React.CSSProperties,
   dropdownItem: (active: boolean): React.CSSProperties => ({
@@ -176,6 +180,10 @@ const SS = {
     margin: '4px 0',
   } as React.CSSProperties,
 };
+
+function haptic() {
+  try { navigator?.vibrate?.(10); } catch { /* noop */ }
+}
 
 export default function ToolPalette({
   activeTool,
@@ -234,7 +242,7 @@ export default function ToolPalette({
   onResetCropZoom,
 }: ToolPaletteProps) {
   const [openPanel, setOpenPanel] = useState<Panel>(null);
-  const togglePanel = (p: Exclude<Panel, null>) => setOpenPanel((cur) => (cur === p ? null : p));
+  const togglePanel = (p: Exclude<Panel, null>) => { haptic(); setOpenPanel((cur) => (cur === p ? null : p)); };
 
   const isCircle3d = activeTool === 'bodyCircle';
   const isShapeTool = activeTool === 'circle' || activeTool === 'bodyCircle' || activeTool === 'rect' || activeTool === 'triangle';
@@ -255,6 +263,7 @@ export default function ToolPalette({
     (activeTool === 'triangle' && !!triangle3d);
 
   const setTool = (t: ToolType) => {
+    haptic();
     onToolChange(t);
   };
 
@@ -262,13 +271,17 @@ export default function ToolPalette({
 
   useEffect(() => {
     if (!openPanel) return;
-    const handleClickOutside = (e: MouseEvent) => {
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
       if (paletteRef.current && !paletteRef.current.contains(e.target as Node)) {
         setOpenPanel(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
   }, [openPanel]);
 
   const chk = (label: string, checked: boolean, onChange: (v: boolean) => void): React.ReactNode => (
@@ -397,7 +410,7 @@ export default function ToolPalette({
             <Pen size={16} />
           </button>
           {openPanel === 'draw' && (
-            <div style={{ ...SS.dropdown, maxHeight: 'min(70vh, 480px)', overflowY: 'auto' }}>
+            <div style={{ ...SS.dropdown, maxHeight: 'min(75vh, 520px)' }}>
               <div style={SS.sectionLabel}>Shapes & Lines</div>
               <button onClick={() => setTool('pen')} style={SS.dropdownItem(activeTool === 'pen')} title="Freehand draw">
                 <Pen size={14} /> Freehand
@@ -441,12 +454,6 @@ export default function ToolPalette({
                 <>
                   <div style={SS.divider} />
                   <div style={SS.sectionLabel}>Shape Options</div>
-                  {(activeTool === 'circle' || activeTool === 'bodyCircle') &&
-                    chk('3D cut', activeTool === 'bodyCircle', (v) => onToolChange(v ? 'bodyCircle' : 'circle'))}
-                  {activeTool === 'rect' && onRect3dChange &&
-                    chk('3D cut', !!rect3d, onRect3dChange)}
-                  {activeTool === 'triangle' && onTriangle3dChange &&
-                    chk('3D cut', !!triangle3d, onTriangle3dChange)}
                   {onCircleSpinningChange &&
                     chk('Animation', !!circleSpinning, onCircleSpinningChange)}
                   {onOutlineEraserSizeChange && shapeEraserEligible && (
@@ -560,9 +567,14 @@ export default function ToolPalette({
             <div style={SS.dropdown}>
               <div style={SS.sectionLabel}>Object Multiplier</div>
               {!objMultiplierActive ? (
-                <p style={{ ...SS.hint, color: '#7C3AED' }}>
-                  Draw a rectangle around the object, then choose frames.
-                </p>
+                <div style={{ padding: '6px 8px' }}>
+                  <p style={{ fontSize: 11, color: '#7C3AED', fontWeight: 600, margin: '0 0 4px' }}>
+                    Drag to select the object you want to multiply across frames
+                  </p>
+                  <p style={{ ...SS.hint, margin: 0 }}>
+                    Click and drag a rectangle on the video around the player or object.
+                  </p>
+                </div>
               ) : (
                 <>
                   <div style={{ padding: '4px 8px' }}>
