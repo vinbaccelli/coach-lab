@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 /** Parse "1:20", "01:25:30", or "90" seconds */
 export function parseTimeToSeconds(s: string): number | null {
@@ -12,6 +12,12 @@ export function parseTimeToSeconds(s: string): number | null {
   if (parts.length === 2) return parts[0] * 60 + parts[1];
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
   return null;
+}
+
+function formatTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 export type CaptureModeChoice = 'full' | 'section';
@@ -27,8 +33,10 @@ export default function EmbedCapturePanel({
   errorMessage,
   countdown,
   stepStatus,
+  videoDurationSec,
   onRetry,
   onCapture,
+  onUploadInstead,
 }: {
   visible: boolean;
   embedReady: boolean;
@@ -40,16 +48,27 @@ export default function EmbedCapturePanel({
   errorMessage?: string | null;
   countdown?: number | null;
   stepStatus?: string | null;
+  videoDurationSec?: number | null;
   onRetry?: () => void;
   onCapture: (opts: {
     mode: CaptureModeChoice;
     startSec: number | null;
     endSec: number | null;
   }) => void;
+  onUploadInstead?: () => void;
 }) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [mode, setMode] = useState<CaptureModeChoice>('full');
   const [startStr, setStartStr] = useState('0:00');
   const [endStr, setEndStr] = useState('0:30');
+
+  const [isIOS, setIsIOS] = useState(false);
+  useEffect(() => {
+    setIsIOS(
+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1),
+    );
+  }, []);
 
   const parsed = useMemo(
     () => ({
@@ -88,25 +107,70 @@ export default function EmbedCapturePanel({
   const preparingCapture = busy && !showCountdown && progress01 < 0.04 && recordingElapsedSec < 3;
   const recording = busy && !showCountdown && !preparingCapture;
 
-  const statusLine = (() => {
-    if (errorMessage) return null;
-    if (showCountdown) return null;
-    if (stepStatus) return stepStatus;
-    if (loadingVideo) return 'Loading video…';
-    if (!embedReady) return 'Loading video…';
-    if (busy && preparingCapture) return 'Preparing video for capture — please wait…';
-    if (busy && recording) return 'Recording in progress…';
-    if (embedReady && !busy) return 'Video ready — press Capture to begin';
-    return '';
-  })();
+  const estimatedTotalSec = mode === 'section' && parsed.start != null && parsed.end != null
+    ? parsed.end - parsed.start
+    : videoDurationSec ?? 0;
+  const estimatedRemainingSec = estimatedTotalSec > 0 && progress01 > 0.01
+    ? Math.max(0, Math.round(estimatedTotalSec * (1 - progress01)))
+    : null;
+
+  // ── iOS: show upload prompt instead of capture ──────────────────────
+  if (isIOS) {
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          left: 12, right: 12, top: 12,
+          zIndex: 85,
+          maxWidth: 520,
+          margin: '0 auto',
+          padding: '20px 18px',
+          borderRadius: 16,
+          background: 'rgba(250, 249, 247, 0.94)',
+          border: '1px solid #E5E5E5',
+          color: '#1A1A1A',
+          backdropFilter: 'blur(18px) saturate(1.2)',
+          WebkitBackdropFilter: 'blur(18px) saturate(1.2)',
+          boxShadow: '0 12px 40px rgba(0,0,0,0.08)',
+          pointerEvents: 'auto',
+          fontSize: 13,
+          lineHeight: 1.5,
+        }}
+      >
+        <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>
+          Use all tools on this video
+        </p>
+        <p style={{ margin: '0 0 14px', color: '#3C3C3C' }}>
+          Screen recording isn't available on this device. To use drawing tools, skeleton, and analysis on this video, download it from YouTube and upload it here.
+        </p>
+        {onUploadInstead && (
+          <button
+            type="button"
+            onClick={onUploadInstead}
+            style={{
+              width: '100%',
+              padding: '12px 16px',
+              borderRadius: 12,
+              border: 'none',
+              background: '#1A1A1A',
+              color: '#FFFFFF',
+              fontWeight: 700,
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
+            Upload a video file
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: 12,
-        right: 12,
-        top: 12,
+        left: 12, right: 12, top: 12,
         zIndex: 85,
         maxWidth: 520,
         maxHeight: 'min(70vh, calc(100% - 24px))',
@@ -126,263 +190,265 @@ export default function EmbedCapturePanel({
         lineHeight: 1.45,
       }}
     >
-      <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15, color: '#1A1A1A' }}>
-        Record this video for analysis
-      </p>
-
-      {/* Countdown overlay */}
-      {showCountdown && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '28px 0',
-          marginBottom: 12,
-        }}>
-          <div style={{
-            width: 80,
-            height: 80,
-            borderRadius: '50%',
-            background: '#1A1A1A',
-            color: '#FFFFFF',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 36,
-            fontWeight: 800,
-            fontVariantNumeric: 'tabular-nums',
-            animation: 'coachlab-countdown-pulse 1s ease-in-out infinite',
-          }}>
-            {countdown}
-          </div>
-        </div>
-      )}
-
       <style>{`
         @keyframes coachlab-spin { to { transform: rotate(360deg); } }
-        @keyframes coachlab-countdown-pulse {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.1); }
+        @keyframes coachlab-rec-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
         }
       `}</style>
 
-      {!showCountdown && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            marginBottom: 12,
-            minHeight: 36,
-          }}
-        >
-          {(loadingVideo || (busy && preparingCapture) || (!embedReady && !errorMessage)) && (
+      {/* ── Error state ───────────────────────────────────────────────── */}
+      {errorMessage ? (
+        <>
+          <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>
+            Something went wrong
+          </p>
+          <p style={{ margin: '0 0 14px', fontSize: 13, color: '#991b1b', lineHeight: 1.5 }}>
+            {errorMessage}
+          </p>
+          <div style={{ display: 'flex', gap: 10 }}>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                style={{
+                  flex: 1,
+                  padding: '10px 16px',
+                  borderRadius: 10,
+                  border: 'none',
+                  background: '#1A1A1A',
+                  color: '#fff',
+                  fontWeight: 700,
+                  fontSize: 14,
+                  cursor: 'pointer',
+                }}
+              >
+                Try again
+              </button>
+            )}
+            {onUploadInstead && (
+              <button
+                type="button"
+                onClick={onUploadInstead}
+                style={{
+                  flex: 1,
+                  padding: '10px 16px',
+                  borderRadius: 10,
+                  border: '1px solid #E5E5E5',
+                  background: '#fff',
+                  color: '#1A1A1A',
+                  fontWeight: 600,
+                  fontSize: 14,
+                  cursor: 'pointer',
+                }}
+              >
+                Upload instead
+              </button>
+            )}
+          </div>
+        </>
+      ) : recording ? (
+        /* ── Recording in progress ────────────────────────────────────── */
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
             <span
               style={{
-                width: 20,
-                height: 20,
-                border: '2px solid rgba(26,26,26,0.15)',
-                borderTopColor: '#1A1A1A',
+                width: 12, height: 12,
                 borderRadius: '50%',
-                animation: 'coachlab-spin 0.7s linear infinite',
-              }}
-            />
-          )}
-          {embedReady && !busy && !errorMessage && (
-            <span
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: '50%',
-                background: '#22c55e',
+                background: '#EF4444',
                 flexShrink: 0,
-                boxShadow: '0 0 0 3px rgba(34,197,94,0.25)',
+                animation: 'coachlab-rec-pulse 1.2s ease-in-out infinite',
               }}
             />
-          )}
-          <span style={{ fontWeight: 600, color: errorMessage ? '#b45309' : '#1A1A1A' }}>
-            {errorMessage ?? statusLine}
+            <span style={{ fontWeight: 700, fontSize: 15, color: '#1A1A1A' }}>
+              Recording
+            </span>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ height: 10, borderRadius: 6, background: '#E5E5E5', overflow: 'hidden' }}>
+              <div
+                style={{
+                  height: '100%',
+                  width: `${Math.round(Math.min(1, Math.max(0, progress01)) * 100)}%`,
+                  background: '#EF4444',
+                  transition: 'width 0.15s ease-out',
+                  borderRadius: 6,
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 12, color: '#57534e', fontVariantNumeric: 'tabular-nums' }}>
+              <span>
+                {formatTime(recordingElapsedSec)} elapsed
+              </span>
+              {estimatedRemainingSec != null && estimatedRemainingSec > 0 && (
+                <span>~{formatTime(estimatedRemainingSec)} remaining</span>
+              )}
+            </div>
+          </div>
+          <p style={{ margin: 0, fontSize: 12, color: '#6B6B6B', textAlign: 'center' }}>
+            Keep this tab visible until the recording finishes.
+          </p>
+        </>
+      ) : showCountdown ? (
+        /* ── Countdown ────────────────────────────────────────────────── */
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 0' }}>
+          <div style={{
+            width: 72, height: 72,
+            borderRadius: '50%',
+            background: '#1A1A1A',
+            color: '#FFFFFF',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 32, fontWeight: 800, fontVariantNumeric: 'tabular-nums',
+          }}>
+            {countdown}
+          </div>
+          <p style={{ margin: '12px 0 0', fontSize: 13, color: '#6B6B6B' }}>Starting recording...</p>
+        </div>
+      ) : preparingCapture || (busy && stepStatus) ? (
+        /* ── Preparing / step status ──────────────────────────────────── */
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
+          <span style={{
+            width: 20, height: 20,
+            border: '2px solid rgba(26,26,26,0.15)',
+            borderTopColor: '#1A1A1A',
+            borderRadius: '50%',
+            animation: 'coachlab-spin 0.7s linear infinite',
+          }} />
+          <span style={{ fontWeight: 600, color: '#1A1A1A' }}>
+            {stepStatus || 'Preparing video for capture\u2026'}
           </span>
         </div>
-      )}
-
-      {busy && recording && (
-        <div style={{ marginBottom: 12 }}>
-          <div
-            style={{
-              height: 8,
-              borderRadius: 6,
-              background: '#E5E5E5',
-              overflow: 'hidden',
-            }}
-          >
-            <div
-              style={{
-                height: '100%',
-                width: `${Math.round(Math.min(1, Math.max(0, progress01)) * 100)}%`,
-                background: '#1A1A1A',
-                transition: 'width 0.15s ease-out',
-              }}
-            />
-          </div>
-          <div style={{ marginTop: 8, fontSize: 12, color: '#57534e', fontVariantNumeric: 'tabular-nums' }}>
-            Elapsed: {Math.floor(recordingElapsedSec / 60)}:
-            {String(recordingElapsedSec % 60).padStart(2, '0')}
-          </div>
+      ) : loadingVideo ? (
+        /* ── Loading video ────────────────────────────────────────────── */
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
+          <span style={{
+            width: 20, height: 20,
+            border: '2px solid rgba(26,26,26,0.15)',
+            borderTopColor: '#1A1A1A',
+            borderRadius: '50%',
+            animation: 'coachlab-spin 0.7s linear infinite',
+          }} />
+          <span style={{ fontWeight: 600, color: '#1A1A1A' }}>Loading video\u2026</span>
         </div>
-      )}
+      ) : (
+        /* ── Ready state: simple one-button UI ────────────────────────── */
+        <>
+          <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>
+            Record this video for analysis
+          </p>
 
-      {!errorMessage && embedReady && !busy && (
-        <p style={{ margin: '0 0 12px', padding: '12px 14px', borderRadius: 12, background: 'rgba(26,26,26,0.06)', border: '1px solid #E5E5E5', opacity: 1, fontSize: 12, color: '#3C3C3C', lineHeight: 1.5 }}>
-          <strong style={{ color: '#1A1A1A' }}>Before you tap Capture:</strong> your browser will ask what to share.
-          Choose <strong style={{ color: '#1A1A1A' }}>This tab</strong> / <strong style={{ color: '#1A1A1A' }}>Chrome Tab</strong> — not your whole screen — so the recording matches this player.
-        </p>
-      )}
+          <div style={{
+            margin: '0 0 14px',
+            padding: '12px 14px',
+            borderRadius: 12,
+            background: 'rgba(26,26,26,0.05)',
+            border: '1px solid #E5E5E5',
+            fontSize: 12,
+            color: '#3C3C3C',
+            lineHeight: 1.55,
+          }}>
+            When you tap <strong style={{ color: '#1A1A1A' }}>Record</strong>, your browser will ask what to share.
+            Select <strong style={{ color: '#1A1A1A' }}>&quot;This Tab&quot;</strong> and the video will record automatically.
+          </div>
 
-      {errorMessage ? (
-        <div style={{ marginBottom: 14 }}>
-          <p style={{ margin: '0 0 10px', fontSize: 13, color: '#991b1b', lineHeight: 1.5 }}>{errorMessage}</p>
-          {onRetry ? (
+          {/* Advanced: section recording */}
+          {!showAdvanced ? (
             <button
               type="button"
-              onClick={onRetry}
+              onClick={() => setShowAdvanced(true)}
               style={{
-                padding: '10px 16px',
-                borderRadius: 10,
-                border: '1px solid #E5E5E5',
-                background: '#1A1A1A',
-                color: '#fff',
-                fontWeight: 700,
+                display: 'block',
+                marginBottom: 14,
+                padding: 0,
+                border: 'none',
+                background: 'none',
+                color: '#007AFF',
+                fontSize: 12,
                 cursor: 'pointer',
+                textDecoration: 'underline',
               }}
             >
-              Try again
+              Record only part of the video
             </button>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            cursor: embedReady && !busy ? 'pointer' : 'default',
-            opacity: embedReady ? 1 : 0.45,
-          }}
-        >
-          <input
-            type="radio"
-            name="capmode"
-            checked={mode === 'full'}
-            onChange={() => setMode('full')}
-            disabled={busy || !embedReady}
-          />
-          <span>Full video</span>
-        </label>
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 10,
-            cursor: embedReady && !busy ? 'pointer' : 'default',
-            opacity: embedReady ? 1 : 0.45,
-          }}
-        >
-          <input
-            type="radio"
-            name="capmode"
-            checked={mode === 'section'}
-            onChange={() => setMode('section')}
-            disabled={busy || !embedReady}
-            style={{ marginTop: 3 }}
-          />
-          <span style={{ flex: 1 }}>
-            Part of the video
-            {mode === 'section' && (
-              <span style={{ display: 'block', marginTop: 8, fontWeight: 400, color: '#3C3C3C' }}>
-                <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                  <span>Starts at</span>
+          ) : (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                   <input
-                    type="text"
-                    value={startStr}
-                    onChange={(e) => setStartStr(e.target.value)}
-                    placeholder="1:20"
-                    disabled={busy || !embedReady}
-                    style={{
-                      width: 72,
-                      padding: '6px 8px',
-                      borderRadius: 8,
-                      border: '1px solid #E5E5E5',
-                      background: '#FFFFFF',
-                      color: '#1A1A1A',
-                      fontFamily: 'ui-monospace, monospace',
-                      fontSize: 13,
-                    }}
+                    type="radio" name="capmode"
+                    checked={mode === 'full'}
+                    onChange={() => setMode('full')}
                   />
-                  <span>Ends at</span>
+                  <span>Full video</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
                   <input
-                    type="text"
-                    value={endStr}
-                    onChange={(e) => setEndStr(e.target.value)}
-                    placeholder="1:25"
-                    disabled={busy || !embedReady}
-                    style={{
-                      width: 72,
-                      padding: '6px 8px',
-                      borderRadius: 8,
-                      border: '1px solid #E5E5E5',
-                      background: '#FFFFFF',
-                      color: '#1A1A1A',
-                      fontFamily: 'ui-monospace, monospace',
-                      fontSize: 13,
-                    }}
+                    type="radio" name="capmode"
+                    checked={mode === 'section'}
+                    onChange={() => setMode('section')}
+                    style={{ marginTop: 3 }}
                   />
-                </span>
-                {!sectionSeekSupported && (
-                  <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: '#6B6B6B' }}>
-                    Move the video to where you want to begin first. Recording stops at the "Ends at" time you entered.
+                  <span style={{ flex: 1 }}>
+                    Part of the video
+                    {mode === 'section' && (
+                      <span style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 6, fontWeight: 400, color: '#3C3C3C' }}>
+                        <span>From</span>
+                        <input
+                          type="text" value={startStr}
+                          onChange={(e) => setStartStr(e.target.value)}
+                          placeholder="0:00"
+                          style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
+                        />
+                        <span>to</span>
+                        <input
+                          type="text" value={endStr}
+                          onChange={(e) => setEndStr(e.target.value)}
+                          placeholder="0:30"
+                          style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
+                        />
+                        {sectionInvalid && (
+                          <span style={{ display: 'block', width: '100%', fontSize: 11, color: '#B45309' }}>
+                            End time must be after start time.
+                          </span>
+                        )}
+                      </span>
+                    )}
                   </span>
-                )}
-                {sectionInvalid && (
-                  <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: '#B45309' }}>
-                    The end time needs to come after the start time.
-                  </span>
-                )}
-              </span>
-            )}
-          </span>
-        </label>
-      </div>
+                </label>
+              </div>
+            </div>
+          )}
 
-      {genericIframeNote ? (
-        <p style={{ margin: '0 0 12px', fontSize: 11, color: '#6B6B6B' }}>{genericIframeNote}</p>
-      ) : null}
+          {genericIframeNote && (
+            <p style={{ margin: '0 0 12px', fontSize: 11, color: '#6B6B6B' }}>{genericIframeNote}</p>
+          )}
 
-      <button
-        type="button"
-        disabled={!captureAllowed}
-        onClick={handleCapture}
-        style={{
-          width: '100%',
-          padding: '12px 16px',
-          borderRadius: 12,
-          border: '1px solid #E5E5E5',
-          background: captureAllowed ? '#1A1A1A' : 'rgba(26,26,26,0.12)',
-          color: captureAllowed ? '#FFFFFF' : 'rgba(26,26,26,0.5)',
-          fontWeight: 700,
-          fontSize: 14,
-          cursor: captureAllowed ? 'pointer' : 'not-allowed',
-        }}
-      >
-        {busy ? 'Working…' : !embedReady ? 'Waiting for video…' : 'Capture'}
-      </button>
-      {busy && !showCountdown && recording ? (
-        <p style={{ margin: '10px 0 0', fontSize: 11, color: '#6B6B6B', textAlign: 'center' }}>
-          Keep this tab shared until the progress bar finishes.
-        </p>
-      ) : null}
+          <button
+            type="button"
+            disabled={!captureAllowed}
+            onClick={handleCapture}
+            style={{
+              width: '100%',
+              padding: '13px 16px',
+              borderRadius: 12,
+              border: 'none',
+              background: captureAllowed ? '#EF4444' : 'rgba(26,26,26,0.12)',
+              color: captureAllowed ? '#FFFFFF' : 'rgba(26,26,26,0.5)',
+              fontWeight: 700,
+              fontSize: 15,
+              cursor: captureAllowed ? 'pointer' : 'not-allowed',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+            }}
+          >
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: captureAllowed ? '#fff' : 'rgba(26,26,26,0.3)' }} />
+            {!embedReady ? 'Waiting for video\u2026' : 'Record'}
+          </button>
+        </>
+      )}
     </div>
   );
 }

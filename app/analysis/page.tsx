@@ -2613,8 +2613,10 @@ export default function Home() {
                       errorMessage={embedCapturePanelId === 'A' || !embedCapturePanelId ? captureError : null}
                       countdown={embedCapturePanelId === 'A' ? captureCountdown : null}
                       stepStatus={embedCapturePanelId === 'A' ? captureStepStatus : null}
+                      videoDurationSec={ytPlayerARef.current?.getDuration?.() ?? null}
                       onRetry={() => setCaptureError(null)}
                       onCapture={(o) => void handleEmbedCaptureRequest('A', o)}
+                      onUploadInstead={() => fileInputRef.current?.click()}
                     />
                     <button
                       type="button"
@@ -2916,8 +2918,10 @@ export default function Home() {
                       errorMessage={embedCapturePanelId === 'B' || !embedCapturePanelId ? captureError : null}
                       countdown={embedCapturePanelId === 'B' ? captureCountdown : null}
                       stepStatus={embedCapturePanelId === 'B' ? captureStepStatus : null}
+                      videoDurationSec={ytPlayerBRef.current?.getDuration?.() ?? null}
                       onRetry={() => setCaptureError(null)}
                       onCapture={(o) => void handleEmbedCaptureRequest('B', o)}
+                      onUploadInstead={() => fileInputRefB.current?.click()}
                     />
                     <button
                       type="button"

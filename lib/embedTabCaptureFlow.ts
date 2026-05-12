@@ -203,20 +203,10 @@ export async function runEmbedTabCaptureFlow(args: {
       );
     }
 
-    // ── 5. 3-second countdown ─────────────────────────────────────────
-    onStepStatus?.('Get ready…');
-    onCountdown?.(3);
-    await sleep(1000);
-    onCountdown?.(2);
-    await sleep(1000);
-    onCountdown?.(1);
-    await sleep(1000);
-    onCountdown?.(null);
+    onStepStatus?.('Starting recording…');
 
-    onStepStatus?.('Recording…');
-
-    // ── 6. Start MediaRecorder on the stream ──────────────────────────
-    await sleep(150);
+    // ── 5. Start MediaRecorder on the stream ──────────────────────────
+    await sleep(100);
 
     try {
       recorder = new TabCaptureRecorder();
