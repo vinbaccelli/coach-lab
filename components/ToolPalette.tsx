@@ -85,6 +85,9 @@ interface ToolPaletteProps {
   onSkeletonShowRightLegChange?: (v: boolean) => void;
   skeletonShowLeftLeg?: boolean;
   onSkeletonShowLeftLegChange?: (v: boolean) => void;
+  /** When true, skeleton pose still runs but overlay is hidden */
+  skeletonOverlayPaused?: boolean;
+  onSkeletonOverlayPausedChange?: () => void;
   ballSampleMode?: boolean;
   onBallSampleModeChange?: (v: boolean) => void;
   onResetCropZoom?: () => void;
@@ -232,6 +235,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onSkeletonShowRightLegChange,
     skeletonShowLeftLeg,
     onSkeletonShowLeftLegChange,
+    skeletonOverlayPaused = false,
+    onSkeletonOverlayPausedChange,
     ballSampleMode,
     onBallSampleModeChange,
     precisionDrawEnabled = false,
@@ -553,10 +558,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shell}>
         <div style={scrollAreaFor(io)}>
           <BackHeader title="Draw & annotate" icon={<Pen size={18} />} />
-          <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Freehand" onPress={() => { setTool('pen'); resetNav(); }} />
-          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Straight line" onPress={() => { setTool('line'); resetNav(); }} />
-          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => { setTool('arrow'); resetNav(); }} />
-          <Row k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} label="Eraser" onPress={() => { setTool('erase'); resetNav(); }} />
+          <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Freehand" onPress={() => { setTool('pen'); }} />
+          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Straight line" onPress={() => { setTool('line'); }} />
+          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => { setTool('arrow'); }} />
+          <Row k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} label="Eraser" onPress={() => { setTool('erase'); }} />
           <Row
             k="circle"
             active={activeTool === 'circle' || activeTool === 'bodyCircle'}
@@ -588,10 +593,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
               push('shapeOpts');
             }}
           />
-          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => { setTool('text'); resetNav(); }} />
-          <Row k="angle" active={activeTool === 'angle'} icon={<Triangle size={18} />} label="Angle measure" onPress={() => { setTool('angle'); resetNav(); }} />
-          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<Activity size={18} />} label="Arrow + angle" onPress={() => { setTool('arrowAngle'); resetNav(); }} />
-          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => { setTool('manualSwing'); resetNav(); }} />
+          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => { setTool('text'); }} />
+          <Row k="angle" active={activeTool === 'angle'} icon={<Triangle size={18} />} label="Angle measure" onPress={() => { setTool('angle'); }} />
+          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<Activity size={18} />} label="Arrow + angle" onPress={() => { setTool('arrowAngle'); }} />
+          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => { setTool('manualSwing'); }} />
         </div>
       </div>
     );
@@ -647,6 +652,42 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shell}>
         <div style={scrollAreaFor(io)}>
           <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
+          {onSkeletonOverlayPausedChange !== undefined && (
+            <label
+              key="sov"
+              aria-label="Show skeleton on video"
+              style={{
+                ...rowBase(!skeletonOverlayPaused, io),
+                cursor: 'pointer',
+                transform: pressedKey === 'sov' ? 'scale(0.95)' : undefined,
+              }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                fire('sov', () => onSkeletonOverlayPausedChange());
+              }}
+            >
+              <input type="checkbox" readOnly checked={!skeletonOverlayPaused} style={{ width: 18, height: 18 }} />
+              {io ? (
+                <span
+                  style={{
+                    position: 'absolute',
+                    width: 1,
+                    height: 1,
+                    padding: 0,
+                    margin: -1,
+                    overflow: 'hidden',
+                    clip: 'rect(0,0,0,0)',
+                    whiteSpace: 'nowrap',
+                    border: 0,
+                  }}
+                >
+                  Show skeleton on video
+                </span>
+              ) : (
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Show skeleton on video</span>
+              )}
+            </label>
+          )}
           <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
             AI pose overlay follows the player. Keep the video playing for best results.
           </p>
@@ -686,10 +727,59 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shell}>
         <div style={scrollAreaFor(io)}>
           <BackHeader title="View" icon={<ZoomIn size={18} />} />
-          <Row k="zoom" active={activeTool === 'zoom'} icon={<ZoomIn size={18} />} label="Zoom & pan" onPress={() => { setTool('zoom'); resetNav(); }} />
           {onResetCropZoom ? (
-            <Row k="rz" icon={<RefreshCw size={18} />} label="Reset zoom" onPress={() => { onResetCropZoom(); resetNav(); }} />
+            <Row k="rz" icon={<RefreshCw size={18} />} label="Reset zoom" onPress={() => { onResetCropZoom(); }} />
           ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  /* V2 — overflow / unfinished tools (ball trail, auto swing, racket); keep code, hide from coach UI.
+  if (top === 'more') {
+    return (
+      <div style={shell}>
+        <div style={scrollAreaFor(io)}>
+          <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
+          {onAutoSwing ? (
+            <Row k="as" icon={<TrendingUp size={18} />} label="Auto swing path" onPress={() => { onAutoSwing(); resetNav(); }} />
+          ) : null}
+          {onRacketMultiplier ? (
+            <Row k="rm" icon={<Video size={18} />} label="Racket trail" onPress={() => { onRacketMultiplier(); resetNav(); }} />
+          ) : null}
+          <Row k="ball" active={activeTool === 'ballShadow'} icon={<Circle size={18} />} label="Ball shadow / trail" onPress={() => { setTool('ballShadow'); resetNav(); }} />
+          {activeTool === 'ballShadow' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
+              {(['comet', 'arc', 'strobe'] as BallTrailMode[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  style={rowBase(ballTrailMode === m, io)}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    fire(`bt-${m}`, () => onBallTrailModeChange(m));
+                  }}
+                >
+                  Trail: {m}
+                </button>
+              ))}
+              <Row k="rbt" icon={<RefreshCw size={16} />} label="Reset ball trail" onPress={() => onResetBallTrail()} />
+            </div>
+          )}
+          {onBallSampleModeChange !== undefined &&
+            chk('bsm', 'Ball sample mode', !!ballSampleMode, onBallSampleModeChange)}
+        </div>
+      </div>
+    );
+  }
+  */
+
+  if (top === 'more') {
+    return (
+      <div style={shell}>
+        <div style={scrollAreaFor(io)}>
+          <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
+          <p style={{ margin: '0 4px 8px', fontSize: 12, color: '#6B7280' }}>More tools will return in a future update.</p>
         </div>
       </div>
     );
@@ -740,43 +830,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
           ) : null}
           <Row k="cap" icon={<Layers size={18} />} label="Capture frames" onPress={() => onObjMultiplierCapture?.()} />
           <Row k="clr" icon={<RefreshCw size={18} />} label="Clear overlay" onPress={() => onObjMultiplierClear?.()} />
-        </div>
-      </div>
-    );
-  }
-
-  if (top === 'more') {
-    return (
-      <div style={shell}>
-        <div style={scrollAreaFor(io)}>
-          <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
-          {onAutoSwing ? (
-            <Row k="as" icon={<TrendingUp size={18} />} label="Auto swing path" onPress={() => { onAutoSwing(); resetNav(); }} />
-          ) : null}
-          {onRacketMultiplier ? (
-            <Row k="rm" icon={<Video size={18} />} label="Racket trail" onPress={() => { onRacketMultiplier(); resetNav(); }} />
-          ) : null}
-          <Row k="ball" active={activeTool === 'ballShadow'} icon={<Circle size={18} />} label="Ball shadow / trail" onPress={() => { setTool('ballShadow'); resetNav(); }} />
-          {activeTool === 'ballShadow' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
-              {(['comet', 'arc', 'strobe'] as BallTrailMode[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  style={rowBase(ballTrailMode === m, io)}
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    fire(`bt-${m}`, () => onBallTrailModeChange(m));
-                  }}
-                >
-                  Trail: {m}
-                </button>
-              ))}
-              <Row k="rbt" icon={<RefreshCw size={16} />} label="Reset ball trail" onPress={() => onResetBallTrail()} />
-            </div>
-          )}
-          {onBallSampleModeChange !== undefined &&
-            chk('bsm', 'Ball sample mode', !!ballSampleMode, onBallSampleModeChange)}
         </div>
       </div>
     );
@@ -835,7 +888,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
         {isShapeTool && (
           <Row k="sho" icon={<Shapes size={20} />} label="Shape options" sub="Outline, 3D, animation" onPress={() => push('shapeOpts')} />
         )}
+        {/* V2: More tools menu — hidden until next release
         <Row k="more" icon={<LayoutGrid size={20} />} label="More" sub="Swing, racket, ball" onPress={() => push('more')} />
+        */}
 
         <div style={{ height: 1, background: '#E8E6E1', margin: '8px 0' }} />
 

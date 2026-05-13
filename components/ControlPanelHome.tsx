@@ -55,9 +55,10 @@ export default function ControlPanelHome() {
         Primary tools
       </h2>
       <div
+        className="coachlab-control-grid-primary"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))',
           gap: 14,
           marginBottom: 28,
         }}
@@ -93,9 +94,10 @@ export default function ControlPanelHome() {
         Match intelligence
       </h2>
       <div
+        className="coachlab-control-grid-match"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))',
           gap: 14,
           marginBottom: 28,
         }}
@@ -178,6 +180,12 @@ export default function ControlPanelHome() {
           border-color: rgba(53, 103, 154, 0.45);
           box-shadow: 0 8px 28px rgba(53, 103, 154, 0.12);
           transform: translateY(-1px);
+        }
+        @media (max-width: 640px) {
+          .coachlab-control-grid-primary,
+          .coachlab-control-grid-match {
+            grid-template-columns: 1fr !important;
+          }
         }
       `}</style>
     </div>

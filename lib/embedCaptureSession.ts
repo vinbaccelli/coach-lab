@@ -119,3 +119,36 @@ export function isolateYouTubePlayerSync(player: any | null): YoutubeIsolationSy
 export function flushCaptureIsolationMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+/**
+ * Fully tear down the YT.Player instance before tab capture so nothing in the
+ * capture pipeline touches the iframe API (avoids WebKit "player conflict" errors).
+ * Returns last playback time (seconds) when readable.
+ */
+export function destroyYouTubeEmbedHard(player: any | null): number {
+  let t = 0;
+  if (!player) return t;
+  try {
+    t = Number(player.getCurrentTime?.() ?? 0);
+    if (!Number.isFinite(t)) t = 0;
+  } catch {
+    t = 0;
+  }
+  let iframe: HTMLIFrameElement | null = null;
+  try {
+    iframe = player.getIframe?.() ?? null;
+  } catch {
+    iframe = null;
+  }
+  try {
+    player.destroy?.();
+  } catch (e) {
+    console.warn('[Capture] player.destroy:', e);
+  }
+  try {
+    iframe?.remove?.();
+  } catch (e) {
+    console.warn('[Capture] iframe.remove:', e);
+  }
+  return t;
+}

@@ -289,17 +289,41 @@ export async function runEmbedTabCaptureFlow(args: {
         ytPlayer.pauseVideo?.();
       }
     } else if (isYoutube && !ytPlayer) {
-      // YouTube without player API — wait for track to end
-      let pulse = 0;
-      const pulseIv = window.setInterval(() => {
-        pulse = Math.min(0.92, pulse + 0.015);
-        onProgress?.(pulse);
-      }, 400);
-      await new Promise<void>((resolve) => {
-        track.addEventListener('ended', () => resolve(), { once: true });
-      });
-      window.clearInterval(pulseIv);
-      onProgress?.(1);
+      // YouTube embed after hard destroy: no iframe API — drive progress by wall clock only.
+      if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
+        const span = Math.max(0.001, opts.endSec - opts.startSec);
+        const ms = Math.max(300, (span + 2) * 1000);
+        const t0 = performance.now();
+        const iv = window.setInterval(() => {
+          onProgress?.(Math.min(1, (performance.now() - t0) / ms));
+        }, 120);
+        await sleep(ms);
+        window.clearInterval(iv);
+        onProgress?.(1);
+      } else {
+        const hint = videoDurationHintSec;
+        if (hint != null && hint > 0.5 && Number.isFinite(hint)) {
+          const durMs = (hint + 2) * 1000;
+          const t0 = performance.now();
+          const iv = window.setInterval(() => {
+            onProgress?.(Math.min(1, (performance.now() - t0) / durMs));
+          }, 200);
+          await sleep(durMs);
+          window.clearInterval(iv);
+          onProgress?.(1);
+        } else {
+          let pulse = 0;
+          const pulseIv = window.setInterval(() => {
+            pulse = Math.min(0.92, pulse + 0.015);
+            onProgress?.(pulse);
+          }, 400);
+          await new Promise<void>((resolve) => {
+            track.addEventListener('ended', () => resolve(), { once: true });
+          });
+          window.clearInterval(pulseIv);
+          onProgress?.(1);
+        }
+      }
     } else {
       // Non-YouTube embed
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {

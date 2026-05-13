@@ -35,6 +35,7 @@ import { resolveYoutubeForAnalysis } from '@/app/actions/youtubeResolve';
 import { runEmbedTabCaptureFlow } from '@/lib/embedTabCaptureFlow';
 import {
   captureLog,
+  destroyYouTubeEmbedHard,
   flushCaptureIsolationMs,
   handleCaptureError,
   isolateYouTubePlayerSync,
@@ -114,6 +115,9 @@ export default function Home() {
     ytSnap: any;
     nulledYtRef: boolean;
     isYt: boolean;
+    /** YouTube iframe was destroyed before capture — never pass ytSnap to the recorder. */
+    ytHardDestroyed: boolean;
+    youtubeDurationHintSec: number | null;
   };
   const embedCaptureShareBundleRef = useRef<EmbedCaptureShareBundle | null>(null);
 
@@ -244,6 +248,11 @@ export default function Home() {
   const [captureFallbackStreamUrl, setCaptureFallbackStreamUrl] = useState<string | null>(null);
   /** Step 2 of embed capture: isolation done; coach must tap Share Screen (Safari gesture) */
   const [embedCaptureAwaitingShare, setEmbedCaptureAwaitingShare] = useState<'A' | 'B' | null>(null);
+  /** YouTube embed removed for capture — show placeholder until cancel (remount) or success (blob). */
+  const [embedYtKilledA, setEmbedYtKilledA] = useState(false);
+  const [embedYtKilledB, setEmbedYtKilledB] = useState(false);
+  const [ytPlayerRemountNonceA, setYtPlayerRemountNonceA] = useState(0);
+  const [ytPlayerRemountNonceB, setYtPlayerRemountNonceB] = useState(0);
   /** Panel that started capture (isolation / GDM) before embedCapturePanelId is set for live canvas */
   const [capturePrepPanel, setCapturePrepPanel] = useState<'A' | 'B' | null>(null);
 
@@ -305,6 +314,8 @@ export default function Home() {
 
   // Derived: skeleton / ball trail enabled when their tool is active
   const skeletonEnabled  = activeTool === 'skeleton';
+  /** When false, pose still runs but overlay is hidden (coach can turn off drawing without Clear All). */
+  const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const ballTrailEnabled = activeTool === 'ballShadow';
 
   const skeletonParts = useMemo(() => ({
@@ -566,6 +577,8 @@ export default function Home() {
     setEmbedCapturePanelId(null);
     setCapturePrepPanel(null);
     setEmbedCaptureAwaitingShare(null);
+    setEmbedYtKilledA(false);
+    setEmbedYtKilledB(false);
     embedCaptureShareBundleRef.current = null;
     setCaptureFullBleedOverlay(false);
     setEmbedCaptureConsecutiveFailures(0);
@@ -1242,6 +1255,8 @@ export default function Home() {
       let isoRestore: (() => void) | null = null;
       let ytSnap: any = null;
       let nulledYtRef = false;
+      let youtubeDurationHintSec: number | null = null;
+      let ytHardDestroyed = false;
 
       const restoreYouTubeIsolation = () => {
         try {
@@ -1250,7 +1265,16 @@ export default function Home() {
           console.warn('[Capture] restore pointer-events:', e);
         }
         isoRestore = null;
-        if (nulledYtRef && ytSnap) {
+        if (ytHardDestroyed) {
+          ytHardDestroyed = false;
+          if (panel === 'A') {
+            setEmbedYtKilledA(false);
+            setYtPlayerRemountNonceA((n) => n + 1);
+          } else {
+            setEmbedYtKilledB(false);
+            setYtPlayerRemountNonceB((n) => n + 1);
+          }
+        } else if (nulledYtRef && ytSnap) {
           if (panel === 'A') ytPlayerARef.current = ytSnap;
           else ytPlayerBRef.current = ytSnap;
         }
@@ -1265,6 +1289,8 @@ export default function Home() {
         setEmbedCapturePanelId(null);
         setCapturePrepPanel(null);
         setEmbedCaptureAwaitingShare(null);
+        setEmbedYtKilledA(false);
+        setEmbedYtKilledB(false);
         embedCaptureShareBundleRef.current = null;
         setCaptureProgress01(0);
         setCaptureCountdown(null);
@@ -1372,19 +1398,38 @@ export default function Home() {
 
         setCaptureError(null);
         setCaptureCountdown(null);
-        setCaptureStepStatus('Pausing external player…');
+        setCaptureStepStatus('Preparing capture…');
         setCapturePrepPanel(panel);
         captureLog('isolate-begin');
 
         const ytRef = panel === 'A' ? ytPlayerARef.current : ytPlayerBRef.current;
         const isYt = panel === 'A' ? !!youtubeVideoIdA : !!youtubeVideoIdB;
-        const iso = isolateYouTubePlayerSync(isYt ? ytRef : null);
-        isoRestore = iso.restore;
-        ytSnap = ytRef;
+
         if (isYt && ytRef) {
-          if (panel === 'A') ytPlayerARef.current = null;
-          else ytPlayerBRef.current = null;
-          nulledYtRef = true;
+          youtubeDurationHintSec = safeYoutubePlayerDuration(ytRef);
+          destroyYouTubeEmbedHard(ytRef);
+          ytHardDestroyed = true;
+          if (panel === 'A') {
+            ytPlayerARef.current = null;
+            setEmbedYtKilledA(true);
+          } else {
+            ytPlayerBRef.current = null;
+            setEmbedYtKilledB(true);
+          }
+          nulledYtRef = false;
+          ytSnap = null;
+          isoRestore = null;
+        } else {
+          const iso = isolateYouTubePlayerSync(null);
+          isoRestore = iso.restore;
+          ytSnap = ytRef;
+          if (isYt && ytRef) {
+            if (panel === 'A') ytPlayerARef.current = null;
+            else ytPlayerBRef.current = null;
+            nulledYtRef = true;
+          } else {
+            nulledYtRef = false;
+          }
         }
         captureLog('isolate-sync-done');
 
@@ -1398,6 +1443,8 @@ export default function Home() {
           ytSnap,
           nulledYtRef,
           isYt,
+          ytHardDestroyed,
+          youtubeDurationHintSec,
         };
         setCapturePrepPanel(null);
         setEmbedCaptureAwaitingShare(panel);
@@ -1439,7 +1486,7 @@ export default function Home() {
         );
         return;
       }
-      const { panel, opts, ytSnap, isYt } = bundle;
+      const { panel, opts, ytSnap, isYt, ytHardDestroyed, youtubeDurationHintSec } = bundle;
 
       const restoreYouTubeFromBundle = () => {
         try {
@@ -1447,7 +1494,15 @@ export default function Home() {
         } catch (e) {
           console.warn('[Capture] restore pointer-events:', e);
         }
-        if (bundle.nulledYtRef && bundle.ytSnap) {
+        if (bundle.ytHardDestroyed) {
+          if (bundle.panel === 'A') {
+            setEmbedYtKilledA(false);
+            setYtPlayerRemountNonceA((n) => n + 1);
+          } else {
+            setEmbedYtKilledB(false);
+            setYtPlayerRemountNonceB((n) => n + 1);
+          }
+        } else if (bundle.nulledYtRef && bundle.ytSnap) {
           if (bundle.panel === 'A') ytPlayerARef.current = bundle.ytSnap;
           else ytPlayerBRef.current = bundle.ytSnap;
         }
@@ -1461,6 +1516,8 @@ export default function Home() {
         setEmbedCapturePanelId(null);
         setCapturePrepPanel(null);
         setEmbedCaptureAwaitingShare(null);
+        setEmbedYtKilledA(false);
+        setEmbedYtKilledB(false);
         embedCaptureShareBundleRef.current = null;
         setCaptureProgress01(0);
         setCaptureCountdown(null);
@@ -1522,18 +1579,23 @@ export default function Home() {
 
       const shell = panel === 'A' ? captureShellRef.current : captureShellRefB.current;
       const durHint =
-        !isYt &&
-        typeof videoEl.duration === 'number' &&
-        Number.isFinite(videoEl.duration) &&
-        videoEl.duration > 0.25
-          ? videoEl.duration
-          : null;
+        bundle.ytHardDestroyed &&
+        youtubeDurationHintSec != null &&
+        Number.isFinite(youtubeDurationHintSec) &&
+        youtubeDurationHintSec > 0.25
+          ? youtubeDurationHintSec
+          : !isYt &&
+              typeof videoEl.duration === 'number' &&
+              Number.isFinite(videoEl.duration) &&
+              videoEl.duration > 0.25
+            ? videoEl.duration
+            : null;
 
       try {
         const result = await runEmbedTabCaptureFlow({
           opts,
           videoEl,
-          ytPlayer: isYt ? ytSnap : null,
+          ytPlayer: bundle.ytHardDestroyed ? null : isYt ? ytSnap : null,
           isYoutube: isYt,
           captureShellEl: shell,
           onProgress: setCaptureProgress01,
@@ -1671,13 +1733,23 @@ export default function Home() {
           } catch (err) {
             console.warn('[Capture] restore after share cancel:', err);
           }
-          if (b.nulledYtRef && b.ytSnap) {
+          if (b.ytHardDestroyed) {
+            if (b.panel === 'A') {
+              setEmbedYtKilledA(false);
+              setYtPlayerRemountNonceA((n) => n + 1);
+            } else {
+              setEmbedYtKilledB(false);
+              setYtPlayerRemountNonceB((n) => n + 1);
+            }
+          } else if (b.nulledYtRef && b.ytSnap) {
             if (b.panel === 'A') ytPlayerARef.current = b.ytSnap;
             else ytPlayerBRef.current = b.ytSnap;
           }
         }
         embedCaptureShareBundleRef.current = null;
         setEmbedCaptureAwaitingShare(null);
+        setEmbedYtKilledA(false);
+        setEmbedYtKilledB(false);
         setCapturePrepPanel(null);
         setCaptureBusy(false);
         setEmbedCaptureRecording(false);
@@ -1848,7 +1920,7 @@ export default function Home() {
         </div>
       )}
 
-      {!(capturePrepPanel || (captureBusy && embedCaptureRecording)) && (hasVideoBContent ? (
+      {!(capturePrepPanel || (captureBusy && embedCaptureRecording)) && !isMobile && (hasVideoBContent ? (
         playbackTarget === 'B'
           ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
               <PreciseTimeline
@@ -2346,6 +2418,8 @@ export default function Home() {
               onSkeletonShowRightLegChange={setSkeletonShowRightLeg}
               skeletonShowLeftLeg={skeletonShowLeftLeg}
               onSkeletonShowLeftLegChange={setSkeletonShowLeftLeg}
+              skeletonOverlayPaused={skeletonOverlayPaused}
+              onSkeletonOverlayPausedChange={() => setSkeletonOverlayPaused((p) => !p)}
               ballSampleMode={ballSampleMode}
               onBallSampleModeChange={setBallSampleMode}
               onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
@@ -2656,6 +2730,8 @@ export default function Home() {
                   onSkeletonShowRightLegChange={setSkeletonShowRightLeg}
                   skeletonShowLeftLeg={skeletonShowLeftLeg}
                   onSkeletonShowLeftLegChange={setSkeletonShowLeftLeg}
+                  skeletonOverlayPaused={skeletonOverlayPaused}
+                  onSkeletonOverlayPausedChange={() => setSkeletonOverlayPaused((p) => !p)}
                   ballSampleMode={ballSampleMode}
                   onBallSampleModeChange={setBallSampleMode}
                   onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
@@ -2742,6 +2818,8 @@ export default function Home() {
                     onSkeletonShowRightLegChange={setSkeletonShowRightLeg}
                     skeletonShowLeftLeg={skeletonShowLeftLeg}
                     onSkeletonShowLeftLegChange={setSkeletonShowLeftLeg}
+                    skeletonOverlayPaused={skeletonOverlayPaused}
+                    onSkeletonOverlayPausedChange={() => setSkeletonOverlayPaused((p) => !p)}
                     ballSampleMode={ballSampleMode}
                     onBallSampleModeChange={setBallSampleMode}
                     onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
@@ -2877,10 +2955,35 @@ export default function Home() {
                             opacity: lockEmbedInteractionA ? 0.96 : 1,
                           }}
                         >
-                          <YouTubeEmbed
-                            videoId={youtubeVideoIdA}
-                            onPlayer={(p) => { ytPlayerARef.current = p; }}
-                          />
+                          {embedYtKilledA ? (
+                            <div
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: '#e5e5e5',
+                                padding: 16,
+                                textAlign: 'center',
+                                fontSize: 14,
+                                fontWeight: 600,
+                                gap: 8,
+                              }}
+                            >
+                              <div>Video paused for capture</div>
+                              <div style={{ fontSize: 12, fontWeight: 500, opacity: 0.88, maxWidth: 280 }}>
+                                Tap Share Screen when you are ready. The YouTube player reloads if you cancel.
+                              </div>
+                            </div>
+                          ) : (
+                            <YouTubeEmbed
+                              key={`yt-a-${youtubeVideoIdA}-${ytPlayerRemountNonceA}`}
+                              videoId={youtubeVideoIdA}
+                              onPlayer={(p) => { ytPlayerARef.current = p; }}
+                            />
+                          )}
                         </div>
                         {showUrlLoadingOverlayA ? (
                           <div
@@ -2987,6 +3090,7 @@ export default function Home() {
                       containerHeight={canvasSize.height}
                       ballTrailMode={ballTrailMode}
                       skeletonEnabled={skeletonEnabled}
+                      skeletonDrawEnabled={skeletonEnabled && !skeletonOverlayPaused}
                       ballTrailEnabled={ballTrailEnabled}
                       onProcessingStatus={setProcessingStatus}
                       isRecording={isRecording}
@@ -3198,10 +3302,35 @@ export default function Home() {
                             opacity: lockEmbedInteractionB ? 0.96 : 1,
                           }}
                         >
-                          <YouTubeEmbed
-                            videoId={youtubeVideoIdB}
-                            onPlayer={(p) => { ytPlayerBRef.current = p; }}
-                          />
+                          {embedYtKilledB ? (
+                            <div
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: '#e5e5e5',
+                                padding: 16,
+                                textAlign: 'center',
+                                fontSize: 14,
+                                fontWeight: 600,
+                                gap: 8,
+                              }}
+                            >
+                              <div>Video paused for capture</div>
+                              <div style={{ fontSize: 12, fontWeight: 500, opacity: 0.88, maxWidth: 280 }}>
+                                Tap Share Screen when you are ready. The YouTube player reloads if you cancel.
+                              </div>
+                            </div>
+                          ) : (
+                            <YouTubeEmbed
+                              key={`yt-b-${youtubeVideoIdB}-${ytPlayerRemountNonceB}`}
+                              videoId={youtubeVideoIdB}
+                              onPlayer={(p) => { ytPlayerBRef.current = p; }}
+                            />
+                          )}
                         </div>
                         {showUrlLoadingOverlayB ? (
                           <div
@@ -3308,6 +3437,7 @@ export default function Home() {
                       containerHeight={canvasSizeB.height}
                       ballTrailMode={ballTrailMode}
                       skeletonEnabled={skeletonEnabled}
+                      skeletonDrawEnabled={skeletonEnabled && !skeletonOverlayPaused}
                       ballTrailEnabled={ballTrailEnabled}
                       onProcessingStatus={setProcessingStatus}
                       isRecording={isRecording}

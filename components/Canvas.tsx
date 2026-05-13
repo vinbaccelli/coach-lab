@@ -24,6 +24,7 @@ import {
 } from '@/lib/youtubeThumbnailPose';
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
+import { Hand } from 'lucide-react';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -150,6 +151,8 @@ export interface CanvasProps {
   ballTrailMode?: BallTrailMode;
   skeletonEnabled?: boolean;
   ballTrailEnabled?: boolean;
+  /** When false, skeleton pose may still run but overlay is not drawn. */
+  skeletonDrawEnabled?: boolean;
   onProcessingStatus?: (msg: string | null) => void;
   isRecording?: boolean;
   circleSpinning?: boolean;
@@ -262,11 +265,18 @@ const LEFT_ARM_JOINTS  = new Set([5, 7, 9]);
 const RIGHT_LEG_JOINTS = new Set([12, 14, 16]);
 const LEFT_LEG_JOINTS  = new Set([11, 13, 15]);
 
-function isJointVisible(idx: number, parts: SkeletonPartVisibility): boolean {
+function isJointVisible(idx: number, parts: SkeletonPartVisibility, jointName?: string): boolean {
+  const n = (jointName ?? '').toLowerCase();
+  if (n) {
+    if (/right_(shoulder|elbow|wrist)/.test(n) && parts.rightArm === false) return false;
+    if (/left_(shoulder|elbow|wrist)/.test(n) && parts.leftArm === false) return false;
+    if (/right_(hip|knee|ankle)/.test(n) && parts.rightLeg === false) return false;
+    if (/left_(hip|knee|ankle)/.test(n) && parts.leftLeg === false) return false;
+  }
   if (RIGHT_ARM_JOINTS.has(idx) && parts.rightArm === false) return false;
-  if (LEFT_ARM_JOINTS.has(idx)  && parts.leftArm  === false) return false;
+  if (LEFT_ARM_JOINTS.has(idx) && parts.leftArm === false) return false;
   if (RIGHT_LEG_JOINTS.has(idx) && parts.rightLeg === false) return false;
-  if (LEFT_LEG_JOINTS.has(idx)  && parts.leftLeg  === false) return false;
+  if (LEFT_LEG_JOINTS.has(idx) && parts.leftLeg === false) return false;
   return true;
 }
 
@@ -316,7 +326,7 @@ function drawSkeletonOverlay(
   ctx.lineWidth = classicColors ? 2 : 1.5;
 
   for (const [a, b] of [...LIMB_BONES, ...STRUCT_BONES]) {
-    if (!isJointVisible(a, parts) || !isJointVisible(b, parts)) continue;
+    if (!isJointVisible(a, parts, keypoints[a]?.name) || !isJointVisible(b, parts, keypoints[b]?.name)) continue;
     const ka = keypoints[a];
     const kb = keypoints[b];
     if (!ka || !kb || ka.score < 0.3 || kb.score < 0.3) continue;
@@ -375,7 +385,7 @@ function drawSkeletonOverlay(
   // Foot direction lines
   if (showFootLine) {
     for (const [kneeIdx, ankleIdx] of [[13, 15], [14, 16]] as [number, number][]) {
-      if (!isJointVisible(kneeIdx, parts) || !isJointVisible(ankleIdx, parts)) continue;
+      if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
       const knee  = keypoints[kneeIdx];
       const ankle = keypoints[ankleIdx];
       if (!knee || !ankle || knee.score < 0.3 || ankle.score < 0.3) continue;
@@ -401,7 +411,7 @@ function drawSkeletonOverlay(
 
   // Joint dots — skip head keypoints (0-4), respect body-part visibility
   for (let i = 5; i < keypoints.length; i++) {
-    if (!isJointVisible(i, parts)) continue;
+    if (!isJointVisible(i, parts, keypoints[i]?.name)) continue;
     const kp = keypoints[i];
     if (!kp || kp.score < 0.3) continue;
     ctx.beginPath();
@@ -427,7 +437,7 @@ function drawSkeletonOverlay(
     ctx.shadowBlur = 3;
 
     for (const [vi, ai, bi] of ANGLES) {
-      if (!isJointVisible(vi, parts) || !isJointVisible(ai, parts) || !isJointVisible(bi, parts)) continue;
+      if (!isJointVisible(vi, parts, keypoints[vi]?.name) || !isJointVisible(ai, parts, keypoints[ai]?.name) || !isJointVisible(bi, parts, keypoints[bi]?.name)) continue;
       const v = keypoints[vi];
       const a = keypoints[ai];
       const b = keypoints[bi];
@@ -1195,6 +1205,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       containerHeight,
       ballTrailMode = 'comet',
       skeletonEnabled = false,
+      skeletonDrawEnabled = true,
       ballTrailEnabled = false,
       onProcessingStatus,
       isRecording = false,
@@ -1275,6 +1286,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const [textEditing, setTextEditing] = useState<{
       idx: number; left: number; top: number; width: number; fontSize: number; value: string; color: string;
     } | null>(null);
+    /** CSS-pixel selection rect on the object-multiplier overlay (relative to overlay box). */
+    const [objMultOverlayPx, setObjMultOverlayPx] = useState<{ l: number; t: number; w: number; h: number } | null>(null);
+    const objMultOverlayDownRef = useRef<{ cx: number; cy: number } | null>(null);
+    const [showFinePointerPanBtn, setShowFinePointerPanBtn] = useState(true);
+    const lastTextTapRef = useRef<{ idx: number; t: number; x: number; y: number } | null>(null);
 
     // Outline eraser: tracks which shape is being erased and the cursor position
     const outlineErasingIdxRef = useRef<number>(-1);
@@ -1312,6 +1328,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const drawingOptsRef      = useRef(drawingOptions);
     const activeToolRef       = useRef(activeTool);
     const skeletonEnabledRef  = useRef(skeletonEnabled);
+    const skeletonDrawEnabledRef = useRef(skeletonDrawEnabled);
     const ballTrailEnabledRef = useRef(ballTrailEnabled);
     const ballTrailModeRef    = useRef(ballTrailMode);
     const isRecordingRef      = useRef(isRecording);
@@ -1341,6 +1358,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const poseScheduleRef = useRef<{ kind: 'rvfc' | 'raf'; id: number } | null>(null);
     const poseFrameSkipRef = useRef(poseFrameSkip);
     useEffect(() => { poseFrameSkipRef.current = poseFrameSkip; }, [poseFrameSkip]);
+
+    useEffect(() => {
+      if (typeof window === 'undefined' || !window.matchMedia) return;
+      const mq = window.matchMedia('(pointer: fine)');
+      const fn = () => setShowFinePointerPanBtn(!!mq.matches);
+      fn();
+      mq.addEventListener?.('change', fn);
+      return () => mq.removeEventListener?.('change', fn);
+    }, []);
+
+    useEffect(() => {
+      if (activeTool !== 'objectMultiplier') {
+        setObjMultOverlayPx(null);
+        objMultOverlayDownRef.current = null;
+      }
+    }, [activeTool]);
+
     const webcamCutoutRef = useRef(false);
     const webcamSegmenterRef = useRef<{ dispose: () => void } | null>(null);
     const webcamMaskRef = useRef<HTMLCanvasElement | null>(null);
@@ -1395,6 +1429,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { drawingOptsRef.current      = drawingOptions; },  [drawingOptions]);
     useEffect(() => { activeToolRef.current        = activeTool; },      [activeTool]);
     useEffect(() => { skeletonEnabledRef.current   = skeletonEnabled; }, [skeletonEnabled]);
+    useEffect(() => { skeletonDrawEnabledRef.current = skeletonDrawEnabled; }, [skeletonDrawEnabled]);
     useEffect(() => { ballTrailEnabledRef.current  = ballTrailEnabled; }, [ballTrailEnabled]);
     useEffect(() => { ballTrailModeRef.current     = ballTrailMode; },   [ballTrailMode]);
     useEffect(() => { isRecordingRef.current       = isRecording; },     [isRecording]);
@@ -1769,7 +1804,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       ensurePoseRender();
       if (typeof window === 'undefined') return;
-      if (youtubePoseRef.current) return;
+      if (youtubePoseRef.current) {
+        poseBridgeRef.current?.dispose();
+        poseBridgeRef.current = null;
+        poseLoopActiveRef.current = false;
+        return;
+      }
 
       const bridge = new PoseWorkerBridge({
         frameSkip: poseFrameSkipRef.current,
@@ -2350,7 +2390,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           (video && video.readyState >= 2 && video.videoWidth > 0) ||
           (yt && ytDim.w > 0 && ytDim.h > 0);
 
-        if (skeletonEnabledRef.current && !skeletonSuppressedRef.current && skeletonDimsOk) {
+        if (
+          skeletonEnabledRef.current &&
+          skeletonDrawEnabledRef.current &&
+          !skeletonSuppressedRef.current &&
+          skeletonDimsOk
+        ) {
           if (latestKeypointsRef.current && latestKeypointsRef.current.length > 0 && vW > 0 && vH > 0) {
             ctx.save();
             ctx.translate(dx, dy);
@@ -2627,23 +2672,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // ── Object Multiplier rubber-band region selection ──────────────
-        if (isSelectingObjMultRegionRef.current && objMultRegionStartRef.current && objMultRegionCurrentRef.current) {
-          const p1 = objMultRegionStartRef.current;
-          const p2 = objMultRegionCurrentRef.current;
-          const rx = Math.min(p1.x, p2.x), ry = Math.min(p1.y, p2.y);
-          const rw = Math.abs(p2.x - p1.x), rh = Math.abs(p2.y - p1.y);
-          ctx.save();
-          ctx.strokeStyle = '#9333EA';
-          ctx.lineWidth = 2;
-          ctx.setLineDash([5, 5]);
-          ctx.strokeRect(rx, ry, rw, rh);
-          ctx.fillStyle = 'rgba(147,51,234,0.12)';
-          ctx.fillRect(rx, ry, rw, rh);
-          ctx.setLineDash([]);
-          ctx.restore();
-        }
-
         // ── Active crop region (for export/recording) ─────────────────────
         if (cropRegionRef.current) {
           const cr = cropRegionRef.current;
@@ -2821,6 +2849,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         y: (sy - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
       };
     };
+
+    const commitObjectMultiplierFromPts = useCallback((p1: Pt, p2: Pt) => {
+      const { dx, dy, dw, dh } = videoBoundsRef.current;
+      if (dw > 0 && dh > 0) {
+        const x = Math.max(0, Math.min(1, (Math.min(p1.x, p2.x) - dx) / dw));
+        const y = Math.max(0, Math.min(1, (Math.min(p1.y, p2.y) - dy) / dh));
+        const w = Math.max(0, Math.min(1 - x, Math.abs(p2.x - p1.x) / dw));
+        const h = Math.max(0, Math.min(1 - y, Math.abs(p2.y - p1.y) / dh));
+        if (w > 0.01 && h > 0.01) {
+          objMultRegionRef.current = { x, y, w, h };
+          onObjMultRegionSelectedRef.current?.();
+        }
+      }
+      isSelectingObjMultRegionRef.current = false;
+      objMultRegionStartRef.current = null;
+      objMultRegionCurrentRef.current = null;
+      isDraggingRef.current = false;
+      setObjMultOverlayPx(null);
+      objMultOverlayDownRef.current = null;
+      renderDirtyRef.current = true;
+    }, []);
 
     const logicalPtToClient = (pt: Pt): { clientX: number; clientY: number } => {
       const canvas = canvasRef.current!;
@@ -3080,15 +3129,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvasEl = e.target as HTMLCanvasElement;
       const toolEarly = activeToolRef.current;
-      if (toolEarly === 'objectMultiplier' || isSelectingObjMultRegionRef.current) {
-        console.log('[ObjectMultiplier] pointerdown', {
-          pointerType: e.pointerType,
-          button: e.button,
-          pointerId: e.pointerId,
-          clientX: e.clientX,
-          clientY: e.clientY,
-        });
-      }
       const precisionEligible =
         precisionTouchDrawRef.current &&
         e.pointerType === 'touch' &&
@@ -3142,14 +3182,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // ── Object Multiplier rubber-band region selection ──────────────────
-      if (isSelectingObjMultRegionRef.current || tool === 'objectMultiplier') {
-        isSelectingObjMultRegionRef.current = true;
-        objMultRegionStartRef.current = pos;
-        objMultRegionCurrentRef.current = pos;
-        isDraggingRef.current = true;
-        return;
-      }
+      // Object multiplier selection is handled by a dedicated overlay (see JSX).
 
       // ── Pan: activates immediately on pointer-down with no delay ────────
       // Triggers: middle-click, Space+drag, zoom tool while zoomed,
@@ -3236,6 +3269,43 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         if (best && bestDist <= HIT_T) {
+          if (best.kind === 'stroke' && strokesRef.current[best.idx]?.tool === 'text' && e.pointerType === 'touch') {
+            const now = performance.now();
+            const lt = lastTextTapRef.current;
+            if (
+              lt &&
+              lt.idx === best.idx &&
+              now - lt.t < 420 &&
+              Math.hypot(pos.x - lt.x, pos.y - lt.y) < 48
+            ) {
+              lastTextTapRef.current = null;
+              const tx = strokesRef.current[best.idx] as StrokeText;
+              const bb = getTextBBox(tx);
+              const canvas = canvasRef.current!;
+              const rect = canvas.getBoundingClientRect();
+              const W = canvas.width;
+              const H = canvas.height;
+              const logX = bb.x0;
+              const logY = bb.y0;
+              const screenX = ((logX - W / 2) * zoomRef.current + W / 2 + panXRef.current) * (rect.width / canvas.width);
+              const screenY = ((logY - H / 2) * zoomRef.current + H / 2 + panYRef.current) * (rect.height / canvas.height);
+              const scaledFontSize = tx.fontSize * zoomRef.current * (rect.height / canvas.height);
+              const bbW = (bb.x1 - bb.x0) * zoomRef.current * (rect.width / canvas.width);
+              textEditingIdxRef.current = best.idx;
+              setTextEditing({
+                idx: best.idx,
+                left: screenX,
+                top: screenY,
+                width: Math.max(100, bbW + 20),
+                fontSize: scaledFontSize,
+                value: tx.text,
+                color: tx.color,
+              });
+              e.preventDefault();
+              return;
+            }
+            lastTextTapRef.current = { idx: best.idx, t: now, x: pos.x, y: pos.y };
+          }
           selectionRef.current = best;
           isDraggingRef.current = true;
           return;
@@ -3248,18 +3318,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // Check if clicking near an existing draggable shape
       if (tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle') {
-        const idx = strokesRef.current.findIndex((s) => {
-          if (s.tool !== 'circle' && s.tool !== 'bodyCircle' && s.tool !== 'rect' && s.tool !== 'triangle') return false;
-          const el = s as StrokeEllipse;
-          const rx = Math.max(el.rx, 1) + CIRCLE_DRAG_THRESHOLD;
-          const ry = Math.max(el.ry, 1) + CIRCLE_DRAG_THRESHOLD;
-          const dx2 = pos.x - el.cx;
-          const dy2 = pos.y - el.cy;
-          return (dx2 * dx2) / (rx * rx) + (dy2 * dy2) / (ry * ry) <= 1;
-        });
+        const eraserR = outlineEraserSizeRef.current;
+        const touchShapePad =
+          e.pointerType === 'touch' && eraserR > 0 ? Math.max(36, eraserR * 1.35) : 0;
+        const hitShape = (pad: number) =>
+          strokesRef.current.findIndex((s) => {
+            if (s.tool !== 'circle' && s.tool !== 'bodyCircle' && s.tool !== 'rect' && s.tool !== 'triangle') return false;
+            const el = s as StrokeEllipse;
+            const rx = Math.max(el.rx, 1) + CIRCLE_DRAG_THRESHOLD + pad;
+            const ry = Math.max(el.ry, 1) + CIRCLE_DRAG_THRESHOLD + pad;
+            const dx2 = pos.x - el.cx;
+            const dy2 = pos.y - el.cy;
+            return (dx2 * dx2) / (rx * rx) + (dy2 * dy2) / (ry * ry) <= 1;
+          });
+        let idx = hitShape(0);
+        if (idx < 0 && touchShapePad > 0) idx = hitShape(touchShapePad);
 
         // Outline eraser: start dragging to erase outline segments
-        const eraserR = outlineEraserSizeRef.current;
         if (idx >= 0 && eraserR > 0) {
           const hitStroke = strokesRef.current[idx];
           const isEligible =
@@ -3486,14 +3561,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer move ───────────────────────────────────────────────────────
 
     const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (activeToolRef.current === 'objectMultiplier' || isSelectingObjMultRegionRef.current) {
-        console.log('[ObjectMultiplier] pointermove', {
-          pointerType: e.pointerType,
-          pointerId: e.pointerId,
-          clientX: e.clientX,
-          clientY: e.clientY,
-        });
-      }
       let pos = getPos(e);
       if (
         precisionTouchDrawRef.current &&
@@ -3568,13 +3635,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         stroRegionCurrentRef.current = pos;
         return;
       }
-
-      // ── Object Multiplier rubber-band drag ────────────────────────────
-      if (isSelectingObjMultRegionRef.current && isDraggingRef.current && objMultRegionStartRef.current) {
-        objMultRegionCurrentRef.current = pos;
-        return;
-      }
-
 
       // Select dragging
       if (tool === 'select' && isDraggingRef.current && selectionRef.current) {
@@ -3707,14 +3767,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer up ─────────────────────────────────────────────────────────
 
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (activeToolRef.current === 'objectMultiplier' || isSelectingObjMultRegionRef.current) {
-        console.log('[ObjectMultiplier] pointerup', {
-          pointerType: e.pointerType,
-          pointerId: e.pointerId,
-          clientX: e.clientX,
-          clientY: e.clientY,
-        });
-      }
       if (
         precisionTouchDrawRef.current &&
         precisionAnchorPointerIdRef.current === e.pointerId &&
@@ -3790,30 +3842,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         stroRegionCallbackRef.current = null;
         stroRegionStartRef.current = null;
         stroRegionCurrentRef.current = null;
-        isDraggingRef.current = false;
-        return;
-      }
-
-      // ── Finalize Object Multiplier region selection ────────────────────
-      if (isSelectingObjMultRegionRef.current) {
-        const p1 = objMultRegionStartRef.current;
-        const p2 = objMultRegionCurrentRef.current;
-        if (p1 && p2) {
-          const { dx, dy, dw, dh } = videoBoundsRef.current;
-          if (dw > 0 && dh > 0) {
-            const x = Math.max(0, Math.min(1, (Math.min(p1.x, p2.x) - dx) / dw));
-            const y = Math.max(0, Math.min(1, (Math.min(p1.y, p2.y) - dy) / dh));
-            const w = Math.max(0, Math.min(1 - x, Math.abs(p2.x - p1.x) / dw));
-            const h = Math.max(0, Math.min(1 - y, Math.abs(p2.y - p1.y) / dh));
-            if (w > 0.01 && h > 0.01) {
-              objMultRegionRef.current = { x, y, w, h };
-              onObjMultRegionSelectedRef.current?.();
-            }
-          }
-        }
-        isSelectingObjMultRegionRef.current = false;
-        objMultRegionStartRef.current = null;
-        objMultRegionCurrentRef.current = null;
         isDraggingRef.current = false;
         return;
       }
@@ -3996,7 +4024,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     };
 
     return (
-      <>
+      <div style={{ position: 'absolute', inset: 0 }}>
         <canvas
           ref={canvasRef}
           width={containerWidth}
@@ -4010,7 +4038,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             touchAction: 'none',
             cursor:
               activeTool === 'objectMultiplier'
-                ? 'crosshair'
+                ? 'default'
                 : panModeEnabled && zoomRef.current > 1
                   ? (isPanningRef.current ? 'grabbing' : 'grab')
                   : (cursorFor[activeTool] ?? 'default'),
@@ -4022,6 +4050,93 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           onDoubleClick={onDoubleClick}
           onWheel={onWheelCanvas}
         />
+
+        {activeTool === 'objectMultiplier' ? (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 25,
+              touchAction: 'none',
+              cursor: 'crosshair',
+              pointerEvents: 'auto',
+            }}
+            onPointerDown={(e) => {
+              if (activeToolRef.current !== 'objectMultiplier' && !isSelectingObjMultRegionRef.current) return;
+              console.log('[ObjectMultiplierOverlay] pointerdown', e.pointerType, e.clientX, e.clientY);
+              isSelectingObjMultRegionRef.current = true;
+              objMultOverlayDownRef.current = { cx: e.clientX, cy: e.clientY };
+              (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+              const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+              setObjMultOverlayPx({
+                l: e.clientX - r.left,
+                t: e.clientY - r.top,
+                w: 0,
+                h: 0,
+              });
+              isDraggingRef.current = true;
+            }}
+            onPointerMove={(e) => {
+              if (!isDraggingRef.current || !objMultOverlayDownRef.current) return;
+              console.log('[ObjectMultiplierOverlay] pointermove', e.clientX, e.clientY);
+              const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+              const xd = objMultOverlayDownRef.current.cx - r.left;
+              const yd = objMultOverlayDownRef.current.cy - r.top;
+              const xn = e.clientX - r.left;
+              const yn = e.clientY - r.top;
+              setObjMultOverlayPx({
+                l: Math.min(xd, xn),
+                t: Math.min(yd, yn),
+                w: Math.abs(xn - xd),
+                h: Math.abs(yn - yd),
+              });
+            }}
+            onPointerUp={(e) => {
+              if (!objMultOverlayDownRef.current) {
+                setObjMultOverlayPx(null);
+                return;
+              }
+              console.log('[ObjectMultiplierOverlay] pointerup', e.pointerType, e.clientX, e.clientY);
+              try {
+                (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+              } catch {
+                /* noop */
+              }
+              const s = objMultOverlayDownRef.current;
+              objMultOverlayDownRef.current = null;
+              setObjMultOverlayPx(null);
+              const p1 = getPosFromClientXY(s.cx, s.cy);
+              const p2 = getPosFromClientXY(e.clientX, e.clientY);
+              commitObjectMultiplierFromPts(p1, p2);
+            }}
+            onPointerCancel={(e) => {
+              objMultOverlayDownRef.current = null;
+              setObjMultOverlayPx(null);
+              isDraggingRef.current = false;
+              try {
+                (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+              } catch {
+                /* noop */
+              }
+            }}
+          >
+            {objMultOverlayPx && objMultOverlayPx.w > 1 && objMultOverlayPx.h > 1 ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: objMultOverlayPx.l,
+                  top: objMultOverlayPx.t,
+                  width: objMultOverlayPx.w,
+                  height: objMultOverlayPx.h,
+                  border: '2px dashed rgba(147,51,234,0.95)',
+                  background: 'rgba(147,51,234,0.1)',
+                  boxSizing: 'border-box',
+                  pointerEvents: 'none',
+                }}
+              />
+            ) : null}
+          </div>
+        ) : null}
 
         {/* Zoom / Pan controls — bottom-right corner above playback */}
         <div
@@ -4073,7 +4188,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           >
             ⌂
           </button>
-          {onPanModeToggle && (
+          {onPanModeToggle && showFinePointerPanBtn && (
             <button
               type="button"
               onClick={onPanModeToggle}
@@ -4083,9 +4198,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 background: panModeEnabled ? 'rgba(53,103,154,0.85)' : 'rgba(0,0,0,0.55)',
                 border: panModeEnabled ? '2px solid #5ba3e0' : 'none',
               }}
-              title={panModeEnabled ? 'Pan mode ON — tap to draw' : 'Pan mode OFF — tap to pan'}
+              title={panModeEnabled ? 'Pan mode on — click to use drawing tools' : 'Pan mode — drag the video while zoomed'}
             >
-              ✥
+              <Hand size={20} strokeWidth={2.25} />
             </button>
           )}
         </div>
@@ -4111,14 +4226,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               outline: 'none',
               resize: 'none',
               zIndex: 9999,
-              lineHeight: 1.2,
-              overflow: 'hidden',
+              lineHeight: 1.25,
+              whiteSpace: 'pre-wrap',
+              overflow: 'auto',
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                commitTextEdit();
-              }
               if (e.key === 'Escape') {
                 textEditingIdxRef.current = -1;
                 setTextEditing(null);
@@ -4127,7 +4239,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             onBlur={commitTextEdit}
           />
         )}
-      </>
+      </div>
     );
   },
 );
