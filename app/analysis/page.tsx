@@ -33,7 +33,13 @@ import {
 } from '@/lib/videoController';
 import { resolveYoutubeForAnalysis } from '@/app/actions/youtubeResolve';
 import { runEmbedTabCaptureFlow } from '@/lib/embedTabCaptureFlow';
-import { stopAllTracks } from '@/lib/tabCaptureRecording';
+import {
+  captureLog,
+  flushCaptureIsolationMs,
+  handleCaptureError,
+  isolateYouTubePlayerSync,
+} from '@/lib/embedCaptureSession';
+import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 import SaveReportModal from '@/components/shared/SaveReportModal';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
@@ -67,10 +73,6 @@ function safeYoutubePlayerDuration(player: unknown): number | null {
 }
 
 export default function Home() {
-  const LEFT_TOOLBAR_W = 208;
-  /** Reels floating toolbar — fits vertical drill-down palette */
-  const REELS_TOOLBAR_W = 200;
-
   // ── Refs that must never unmount ─────────────────────────────────────────
   const videoRef      = useRef<HTMLVideoElement>(null);
   const videoRefB     = useRef<HTMLVideoElement>(null);
@@ -100,6 +102,20 @@ export default function Home() {
   /** Converted MP4 for download (original WebM stays in sessionCaptureBlobRef for playback). */
   const sessionMp4BlobRef = useRef<Blob | null>(null);
   const captureMp4ConversionGenRef = useRef(0);
+  const embedCaptureRetryPayloadRef = useRef<{
+    panel: 'A' | 'B';
+    opts: { mode: 'full' | 'section'; startSec: number | null; endSec: number | null };
+  } | null>(null);
+
+  type EmbedCaptureShareBundle = {
+    panel: 'A' | 'B';
+    opts: { mode: 'full' | 'section'; startSec: number | null; endSec: number | null };
+    isoRestore: (() => void) | null;
+    ytSnap: any;
+    nulledYtRef: boolean;
+    isYt: boolean;
+  };
+  const embedCaptureShareBundleRef = useRef<EmbedCaptureShareBundle | null>(null);
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeTool, setActiveTool]       = useState<ToolType>('pen');
@@ -221,6 +237,15 @@ export default function Home() {
   const [captureRecordingElapsedSec, setCaptureRecordingElapsedSec] = useState(0);
   const [captureCountdown, setCaptureCountdown] = useState<number | null>(null);
   const [captureStepStatus, setCaptureStepStatus] = useState<string | null>(null);
+  /** Full-screen "Recording in progress" once display-capture track is live */
+  const [captureFullBleedOverlay, setCaptureFullBleedOverlay] = useState(false);
+  const [captureOverlayElapsedSec, setCaptureOverlayElapsedSec] = useState(0);
+  const [embedCaptureConsecutiveFailures, setEmbedCaptureConsecutiveFailures] = useState(0);
+  const [captureFallbackStreamUrl, setCaptureFallbackStreamUrl] = useState<string | null>(null);
+  /** Step 2 of embed capture: isolation done; coach must tap Share Screen (Safari gesture) */
+  const [embedCaptureAwaitingShare, setEmbedCaptureAwaitingShare] = useState<'A' | 'B' | null>(null);
+  /** Panel that started capture (isolation / GDM) before embedCapturePanelId is set for live canvas */
+  const [capturePrepPanel, setCapturePrepPanel] = useState<'A' | 'B' | null>(null);
 
   useEffect(() => {
     if (!captureBusy || !embedCaptureRecording) {
@@ -233,6 +258,18 @@ export default function Home() {
     }, 250);
     return () => window.clearInterval(iv);
   }, [captureBusy, embedCaptureRecording]);
+
+  useEffect(() => {
+    if (!captureFullBleedOverlay) {
+      setCaptureOverlayElapsedSec(0);
+      return;
+    }
+    const t0 = Date.now();
+    const iv = window.setInterval(() => {
+      setCaptureOverlayElapsedSec(Math.floor((Date.now() - t0) / 1000));
+    }, 250);
+    return () => window.clearInterval(iv);
+  }, [captureFullBleedOverlay]);
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
   /** Drag-over state for the two video panels */
@@ -363,6 +400,18 @@ export default function Home() {
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, []);
+
+  /** Icon-only tool rail below 768px (narrow width); desktop keeps labels */
+  const [toolbarIconOnlyLayout, setToolbarIconOnlyLayout] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const fn = () => setToolbarIconOnlyLayout(mq.matches);
+    fn();
+    mq.addEventListener('change', fn);
+    return () => mq.removeEventListener('change', fn);
+  }, []);
+  const leftToolbarWidthPx = toolbarIconOnlyLayout ? 56 : 208;
+  const reelsToolbarWidthPx = toolbarIconOnlyLayout ? 56 : 200;
 
   /** Mobile + tablet: floating tool strip (precision toggle lives here; hidden on desktop). */
   const [showMobileToolStrip, setShowMobileToolStrip] = useState(false);
@@ -515,6 +564,12 @@ export default function Home() {
     setGenericEmbedSrcB(null);
     setEmbedCaptureRecording(false);
     setEmbedCapturePanelId(null);
+    setCapturePrepPanel(null);
+    setEmbedCaptureAwaitingShare(null);
+    embedCaptureShareBundleRef.current = null;
+    setCaptureFullBleedOverlay(false);
+    setEmbedCaptureConsecutiveFailures(0);
+    setCaptureFallbackStreamUrl(null);
     setCaptureProgress01(0);
     setShowCaptureSaveToast(false);
     sessionCaptureBlobRef.current = null;
@@ -1174,242 +1229,189 @@ export default function Home() {
     );
   }, [applyVideoStream, cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, urlTarget, videoBDuration]);
 
-  const handleEmbedCaptureRequest = useCallback(
+  const prepareEmbedCapturePhase = useCallback(
     async (
       panel: 'A' | 'B',
       opts: { mode: 'full' | 'section'; startSec: number | null; endSec: number | null },
     ) => {
-      // Acquire the screen-share stream IMMEDIATELY from the user gesture.
-      // This MUST be the first await — no state updates, no checks before it.
-      // Safari revokes the gesture token after any microtask boundary.
-      let preAcquiredStream: MediaStream | null = null;
-      try {
-        preAcquiredStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: false,
-        });
-      } catch (e: unknown) {
-        const name = (e as DOMException)?.name;
-        const msg =
-          name === 'NotAllowedError' || name === 'PermissionDeniedError'
-            ? 'Screen sharing was cancelled or blocked. Tap Capture and choose your browser tab when asked.'
-            : `Screen sharing failed: ${(e as Error)?.message || 'Unknown error'}. Try refreshing the page.`;
-        setCaptureError(msg);
-        return;
-      }
+      embedCaptureRetryPayloadRef.current = { panel, opts };
+      captureLog('flow-handler-start', panel);
+      embedCaptureShareBundleRef.current = null;
+      setEmbedCaptureAwaitingShare(null);
 
-      if (!preAcquiredStream || preAcquiredStream.getVideoTracks().length === 0) {
-        stopAllTracks(preAcquiredStream);
-        setCaptureError(
-          'No video track was received. On Safari choose Entire Screen or pick this browser window (not a random app window). In Chrome, choose This tab.',
-        );
-        return;
-      }
+      let isoRestore: (() => void) | null = null;
+      let ytSnap: any = null;
+      let nulledYtRef = false;
 
-      // Wrap everything after stream acquisition in try-catch to handle minified library errors
-      // (e.g. "null is not an object evaluating this.g.src" from YouTube/TF.js internals).
-      try {
-      const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
-      if (!videoEl) {
-        stopAllTracks(preAcquiredStream);
-        setCaptureError(
-          'The video player is not ready yet. Wait until the clip appears, then open Capture again.',
-        );
-        return;
-      }
-
-      const yid = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
-      if (yid) {
+      const restoreYouTubeIsolation = () => {
         try {
-          setProcessingStatus('Preparing a playable copy (no tab share)…');
-          const r = await resolveYoutubeForAnalysis(
-            `https://www.youtube.com/watch?v=${encodeURIComponent(yid)}`,
-          );
-          if (r.ok && r.directUrl) {
-            stopAllTracks(preAcquiredStream);
-            const streamUrl = `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`;
-            setProcessingStatus(null);
-            const freshEl = panel === 'A' ? videoRef.current : videoRefB.current;
-            if (panel === 'A') {
-              setYoutubeVideoIdA(null);
-              setGenericEmbedSrcA(null);
-              setVideoSrc(streamUrl);
-              if (freshEl) {
-                cleanupVideoEl(freshEl);
-                freshEl.src = streamUrl;
-                freshEl.load();
-                await freshEl.play().catch(() => {});
-              }
-            } else {
-              setYoutubeVideoIdB(null);
-              setGenericEmbedSrcB(null);
-              setVideoSrcB(streamUrl);
-              if (freshEl) {
-                cleanupVideoEl(freshEl);
-                freshEl.src = streamUrl;
-                freshEl.load();
-                await freshEl.play().catch(() => {});
-              }
-              setVideoBLoaded(false);
-            }
-            setShowCaptureSaveToast(true);
-            setShowTapToPlay(false);
-            return;
-          }
+          isoRestore?.();
         } catch (e) {
-          if (typeof console !== 'undefined') console.warn('[analysis] YouTube import failed, try tab capture', e);
+          console.warn('[Capture] restore pointer-events:', e);
         }
-        setProcessingStatus(null);
-      }
-
-      const ready = panel === 'A' ? embedReadyA : embedReadyB;
-      const hasEmbedOnly =
-        panel === 'A'
-          ? !!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc
-          : !!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB;
-      if (hasEmbedOnly && !ready) {
-        stopAllTracks(preAcquiredStream);
-        setCaptureError('The video is still loading. Wait until it appears, then try Capture again.');
-        return;
-      }
-
-      setCaptureError(null);
-      setCaptureCountdown(null);
-      setCaptureStepStatus(null);
-      setEmbedCapturePanelId(panel);
-      setCaptureBusy(true);
-      setEmbedCaptureRecording(true);
-      setCaptureProgress01(0);
-
-      const yt = panel === 'A' ? ytPlayerARef.current : ytPlayerBRef.current;
-      const isYt = panel === 'A' ? !!youtubeVideoIdA : !!youtubeVideoIdB;
-      const shell = panel === 'A' ? captureShellRef.current : captureShellRefB.current;
-
-      const durHint =
-        !isYt &&
-        videoEl &&
-        typeof videoEl.duration === 'number' &&
-        Number.isFinite(videoEl.duration) &&
-        videoEl.duration > 0.25
-          ? videoEl.duration
-          : null;
-
-      const result = await runEmbedTabCaptureFlow({
-        opts,
-        videoEl,
-        ytPlayer: yt,
-        isYoutube: isYt,
-        captureShellEl: shell,
-        onProgress: setCaptureProgress01,
-        onCountdown: setCaptureCountdown,
-        onStepStatus: setCaptureStepStatus,
-        videoDurationHintSec: durHint,
-        preAcquiredStream: preAcquiredStream,
-      });
-
-      setCaptureBusy(false);
-      setEmbedCaptureRecording(false);
-      setEmbedCapturePanelId(null);
-      setCaptureProgress01(0);
-      setCaptureCountdown(null);
-      setCaptureStepStatus(null);
-
-      if (!result.ok) {
-        setCaptureError(result.message);
-        return;
-      }
-
-      sessionCaptureBlobRef.current = result.blob;
-      sessionMp4BlobRef.current = null;
-      setCaptureDownloadStatus('preparing');
-      const conversionGen = ++captureMp4ConversionGenRef.current;
-      const capturedBlob = result.blob;
-      void (async () => {
-        try {
-          const conv = await convertWebmBlobToMp4(capturedBlob);
-          if (conversionGen !== captureMp4ConversionGenRef.current) return;
-          if (conv.ok) {
-            sessionMp4BlobRef.current = conv.blob;
-            setCaptureDownloadStatus('ready_mp4');
-          } else {
-            sessionMp4BlobRef.current = null;
-            setCaptureDownloadStatus('ready_webm');
-          }
-        } catch (convErr) {
-          console.warn('[CoachLab capture] MP4 conversion failed:', convErr);
-          if (conversionGen !== captureMp4ConversionGenRef.current) return;
-          sessionMp4BlobRef.current = null;
-          setCaptureDownloadStatus('ready_webm');
+        isoRestore = null;
+        if (nulledYtRef && ytSnap) {
+          if (panel === 'A') ytPlayerARef.current = ytSnap;
+          else ytPlayerBRef.current = ytSnap;
         }
-      })();
+        nulledYtRef = false;
+        ytSnap = null;
+        setCaptureFullBleedOverlay(false);
+      };
 
-      // Drop iframe player refs before state swap so nothing calls a half-destroyed YT.Player.
-      if (panel === 'A') ytPlayerARef.current = null;
-      else ytPlayerBRef.current = null;
-
-      const url = URL.createObjectURL(result.blob);
-      const postEl = panel === 'A' ? videoRef.current : videoRefB.current;
-
-      if (panel === 'A') {
-        revokeBlobUrl(lastBlobUrlARef.current);
-        lastBlobUrlARef.current = url;
-        setGenericEmbedSrcA(null);
-        setYoutubeVideoIdA(null);
-        setVideoSrc(url);
-        if (postEl) {
-          cleanupVideoEl(postEl);
-          postEl.src = url;
-          postEl.load();
-          await new Promise<void>((resolve) => {
-            if (postEl.readyState >= 2) {
-              resolve();
-              return;
-            }
-            const done = () => resolve();
-            postEl.addEventListener('loadeddata', done, { once: true });
-            window.setTimeout(done, 2500);
-          });
-          await postEl.play().catch(() => {});
-        }
-      } else {
-        revokeBlobUrl(lastBlobUrlBRef.current);
-        lastBlobUrlBRef.current = url;
-        setGenericEmbedSrcB(null);
-        setYoutubeVideoIdB(null);
-        setVideoSrcB(url);
-        if (postEl) {
-          cleanupVideoEl(postEl);
-          postEl.src = url;
-          postEl.load();
-          await new Promise<void>((resolve) => {
-            if (postEl.readyState >= 2) {
-              resolve();
-              return;
-            }
-            const done = () => resolve();
-            postEl.addEventListener('loadeddata', done, { once: true });
-            window.setTimeout(done, 2500);
-          });
-          await postEl.play().catch(() => {});
-        }
-        setVideoBLoaded(false);
-      }
-
-      setShowCaptureSaveToast(true);
-      setShowTapToPlay(false);
-      } catch (outerErr: unknown) {
-        // Catch minified library crashes (YouTube API, TF.js) that throw e.g. "this.g.src"
-        console.error('[CoachLab capture] unexpected error:', outerErr);
-        stopAllTracks(preAcquiredStream);
+      const clearCaptureUi = () => {
         setCaptureBusy(false);
         setEmbedCaptureRecording(false);
         setEmbedCapturePanelId(null);
+        setCapturePrepPanel(null);
+        setEmbedCaptureAwaitingShare(null);
+        embedCaptureShareBundleRef.current = null;
         setCaptureProgress01(0);
         setCaptureCountdown(null);
         setCaptureStepStatus(null);
-        setCaptureError(
-          `Something went wrong after recording: ${(outerErr as Error)?.message || 'Unknown error'}. If the clip still won’t play, refresh and try again — on Safari use Entire Screen or this app’s window when sharing.`,
-        );
+        setCaptureFullBleedOverlay(false);
+      };
+
+      const bumpFailuresIfNeeded = () => {
+        const yidAtFail = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
+        setEmbedCaptureConsecutiveFailures((n) => {
+          const next = n + 1;
+          if (next >= 3 && yidAtFail) {
+            void (async () => {
+              try {
+                const r = await resolveYoutubeForAnalysis(
+                  `https://www.youtube.com/watch?v=${encodeURIComponent(yidAtFail)}`,
+                );
+                if (r.ok && r.directUrl) {
+                  setCaptureFallbackStreamUrl(
+                    `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`,
+                  );
+                }
+              } catch {
+                /* noop */
+              }
+            })();
+          }
+          return next;
+        });
+      };
+
+      const onFailure = (error: unknown, step: string) => {
+        const { friendly } = handleCaptureError(error, step);
+        stopAllTracks(null);
+        restoreYouTubeIsolation();
+        clearCaptureUi();
+        setCaptureError(friendly);
+        bumpFailuresIfNeeded();
+      };
+
+      try {
+        const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
+        const yid = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
+
+        if (yid && videoEl) {
+          try {
+            setProcessingStatus('Preparing a playable copy (no tab share)…');
+            captureLog('try-direct-resolve');
+            const r = await resolveYoutubeForAnalysis(
+              `https://www.youtube.com/watch?v=${encodeURIComponent(yid)}`,
+            );
+            if (r.ok && r.directUrl) {
+              setProcessingStatus(null);
+              const streamUrl = `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`;
+              const freshEl = panel === 'A' ? videoRef.current : videoRefB.current;
+              if (panel === 'A') {
+                setYoutubeVideoIdA(null);
+                setGenericEmbedSrcA(null);
+                setVideoSrc(streamUrl);
+                if (freshEl) {
+                  cleanupVideoEl(freshEl);
+                  freshEl.src = streamUrl;
+                  freshEl.load();
+                  await freshEl.play().catch(() => {});
+                }
+              } else {
+                setYoutubeVideoIdB(null);
+                setGenericEmbedSrcB(null);
+                setVideoSrcB(streamUrl);
+                if (freshEl) {
+                  cleanupVideoEl(freshEl);
+                  freshEl.src = streamUrl;
+                  freshEl.load();
+                  await freshEl.play().catch(() => {});
+                }
+                setVideoBLoaded(false);
+              }
+              setShowCaptureSaveToast(true);
+              setShowTapToPlay(false);
+              captureLog('direct-resolve-ok');
+              return;
+            }
+          } catch (e) {
+            if (typeof console !== 'undefined') {
+              console.warn('[analysis] YouTube import failed, continuing with tab capture', e);
+            }
+          }
+          setProcessingStatus(null);
+        }
+
+        if (!videoEl) {
+          onFailure(new Error('video element missing'), 'video-element');
+          return;
+        }
+
+        const ready = panel === 'A' ? embedReadyA : embedReadyB;
+        const hasEmbedOnly =
+          panel === 'A'
+            ? !!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc
+            : !!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB;
+        if (hasEmbedOnly && !ready) {
+          onFailure(new Error('embed not ready'), 'embed-ready');
+          return;
+        }
+
+        setCaptureError(null);
+        setCaptureCountdown(null);
+        setCaptureStepStatus('Pausing external player…');
+        setCapturePrepPanel(panel);
+        captureLog('isolate-begin');
+
+        const ytRef = panel === 'A' ? ytPlayerARef.current : ytPlayerBRef.current;
+        const isYt = panel === 'A' ? !!youtubeVideoIdA : !!youtubeVideoIdB;
+        const iso = isolateYouTubePlayerSync(isYt ? ytRef : null);
+        isoRestore = iso.restore;
+        ytSnap = ytRef;
+        if (isYt && ytRef) {
+          if (panel === 'A') ytPlayerARef.current = null;
+          else ytPlayerBRef.current = null;
+          nulledYtRef = true;
+        }
+        captureLog('isolate-sync-done');
+
+        await flushCaptureIsolationMs(500);
+        captureLog('isolate-flush-500ms');
+
+        embedCaptureShareBundleRef.current = {
+          panel,
+          opts,
+          isoRestore,
+          ytSnap,
+          nulledYtRef,
+          isYt,
+        };
+        setCapturePrepPanel(null);
+        setEmbedCaptureAwaitingShare(panel);
+        setCaptureStepStatus(null);
+        captureLog('prepare-complete-await-share');
+      } catch (outerErr: unknown) {
+        const { friendly } = handleCaptureError(outerErr, 'capture-handler');
+        stopAllTracks(null);
+        restoreYouTubeIsolation();
+        clearCaptureUi();
+        setEmbedCaptureAwaitingShare(null);
+        embedCaptureShareBundleRef.current = null;
+        setCaptureError(friendly);
+        bumpFailuresIfNeeded();
       }
     },
     [
@@ -1426,6 +1428,294 @@ export default function Home() {
       setProcessingStatus,
     ],
   );
+
+  const completeEmbedCaptureAfterStream = useCallback(
+    async (preAcquiredStream: MediaStream) => {
+      const bundle = embedCaptureShareBundleRef.current;
+      if (!bundle) {
+        stopAllTracks(preAcquiredStream);
+        setCaptureError(
+          handleCaptureError(new Error('Prepare again before sharing'), 'share-step').friendly,
+        );
+        return;
+      }
+      const { panel, opts, ytSnap, isYt } = bundle;
+
+      const restoreYouTubeFromBundle = () => {
+        try {
+          bundle.isoRestore?.();
+        } catch (e) {
+          console.warn('[Capture] restore pointer-events:', e);
+        }
+        if (bundle.nulledYtRef && bundle.ytSnap) {
+          if (bundle.panel === 'A') ytPlayerARef.current = bundle.ytSnap;
+          else ytPlayerBRef.current = bundle.ytSnap;
+        }
+        embedCaptureShareBundleRef.current = null;
+        setCaptureFullBleedOverlay(false);
+      };
+
+      const clearCaptureUi = () => {
+        setCaptureBusy(false);
+        setEmbedCaptureRecording(false);
+        setEmbedCapturePanelId(null);
+        setCapturePrepPanel(null);
+        setEmbedCaptureAwaitingShare(null);
+        embedCaptureShareBundleRef.current = null;
+        setCaptureProgress01(0);
+        setCaptureCountdown(null);
+        setCaptureStepStatus(null);
+        setCaptureFullBleedOverlay(false);
+      };
+
+      const bumpFailures = () => {
+        const yidAtFail = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
+        setEmbedCaptureConsecutiveFailures((n) => {
+          const next = n + 1;
+          if (next >= 3 && yidAtFail) {
+            void (async () => {
+              try {
+                const r = await resolveYoutubeForAnalysis(
+                  `https://www.youtube.com/watch?v=${encodeURIComponent(yidAtFail)}`,
+                );
+                if (r.ok && r.directUrl) {
+                  setCaptureFallbackStreamUrl(
+                    `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`,
+                  );
+                }
+              } catch {
+                /* noop */
+              }
+            })();
+          }
+          return next;
+        });
+      };
+
+      const vtracks = preAcquiredStream.getVideoTracks();
+      if (!vtracks || vtracks.length === 0) {
+        stopAllTracks(preAcquiredStream);
+        restoreYouTubeFromBundle();
+        clearCaptureUi();
+        setCaptureError(handleCaptureError(new Error('no video tracks in stream'), 'stream-tracks').friendly);
+        bumpFailures();
+        return;
+      }
+      captureLog('getDisplayMedia-ok');
+
+      setCaptureError(null);
+      setEmbedCapturePanelId(panel);
+      setCaptureBusy(true);
+      setEmbedCaptureRecording(true);
+      setCaptureProgress01(0);
+      setCaptureFullBleedOverlay(false);
+
+      const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
+      if (!videoEl) {
+        stopAllTracks(preAcquiredStream);
+        restoreYouTubeFromBundle();
+        clearCaptureUi();
+        setCaptureError(handleCaptureError(new Error('video element missing'), 'video-element').friendly);
+        bumpFailures();
+        return;
+      }
+
+      const shell = panel === 'A' ? captureShellRef.current : captureShellRefB.current;
+      const durHint =
+        !isYt &&
+        typeof videoEl.duration === 'number' &&
+        Number.isFinite(videoEl.duration) &&
+        videoEl.duration > 0.25
+          ? videoEl.duration
+          : null;
+
+      try {
+        const result = await runEmbedTabCaptureFlow({
+          opts,
+          videoEl,
+          ytPlayer: isYt ? ytSnap : null,
+          isYoutube: isYt,
+          captureShellEl: shell,
+          onProgress: setCaptureProgress01,
+          onCountdown: setCaptureCountdown,
+          onStepStatus: setCaptureStepStatus,
+          videoDurationHintSec: durHint,
+          preAcquiredStream,
+          onPostStreamReady: () => {
+            captureLog('ui-overlay-shown');
+            setCaptureFullBleedOverlay(true);
+          },
+        });
+
+        restoreYouTubeFromBundle();
+        clearCaptureUi();
+
+        if (!result.ok) {
+          setCaptureError(result.message);
+          bumpFailures();
+          return;
+        }
+
+        setEmbedCaptureConsecutiveFailures(0);
+        setCaptureFallbackStreamUrl(null);
+        captureLog('flow-handler-success-recording');
+
+        try {
+          sessionCaptureBlobRef.current = result.blob;
+          sessionMp4BlobRef.current = null;
+          setCaptureDownloadStatus('preparing');
+          const conversionGen = ++captureMp4ConversionGenRef.current;
+          const capturedBlob = result.blob;
+          void (async () => {
+            try {
+              const conv = await convertWebmBlobToMp4(capturedBlob);
+              if (conversionGen !== captureMp4ConversionGenRef.current) return;
+              if (conv.ok) {
+                sessionMp4BlobRef.current = conv.blob;
+                setCaptureDownloadStatus('ready_mp4');
+              } else {
+                sessionMp4BlobRef.current = null;
+                setCaptureDownloadStatus('ready_webm');
+              }
+            } catch (convErr) {
+              console.warn('[CoachLab capture] MP4 conversion failed:', convErr);
+              if (conversionGen !== captureMp4ConversionGenRef.current) return;
+              sessionMp4BlobRef.current = null;
+              setCaptureDownloadStatus('ready_webm');
+            }
+          })();
+
+          if (panel === 'A') ytPlayerARef.current = null;
+          else ytPlayerBRef.current = null;
+
+          const url = URL.createObjectURL(result.blob);
+          const postEl = panel === 'A' ? videoRef.current : videoRefB.current;
+
+          if (panel === 'A') {
+            revokeBlobUrl(lastBlobUrlARef.current);
+            lastBlobUrlARef.current = url;
+            setGenericEmbedSrcA(null);
+            setYoutubeVideoIdA(null);
+            setVideoSrc(url);
+            if (postEl) {
+              cleanupVideoEl(postEl);
+              postEl.src = url;
+              postEl.load();
+              await new Promise<void>((resolve) => {
+                if (postEl.readyState >= 2) {
+                  resolve();
+                  return;
+                }
+                const done = () => resolve();
+                postEl.addEventListener('loadeddata', done, { once: true });
+                window.setTimeout(done, 2500);
+              });
+              await postEl.play().catch(() => {});
+            }
+          } else {
+            revokeBlobUrl(lastBlobUrlBRef.current);
+            lastBlobUrlBRef.current = url;
+            setGenericEmbedSrcB(null);
+            setYoutubeVideoIdB(null);
+            setVideoSrcB(url);
+            if (postEl) {
+              cleanupVideoEl(postEl);
+              postEl.src = url;
+              postEl.load();
+              await new Promise<void>((resolve) => {
+                if (postEl.readyState >= 2) {
+                  resolve();
+                  return;
+                }
+                const done = () => resolve();
+                postEl.addEventListener('loadeddata', done, { once: true });
+                window.setTimeout(done, 2500);
+              });
+              await postEl.play().catch(() => {});
+            }
+            setVideoBLoaded(false);
+          }
+
+          setShowCaptureSaveToast(true);
+          setShowTapToPlay(false);
+          captureLog('flow-handler-complete');
+        } catch (postErr: unknown) {
+          const { friendly } = handleCaptureError(postErr, 'apply-captured-video');
+          setCaptureError(friendly);
+          bumpFailures();
+        }
+      } catch (outerErr: unknown) {
+        stopAllTracks(preAcquiredStream);
+        restoreYouTubeFromBundle();
+        clearCaptureUi();
+        setCaptureError(handleCaptureError(outerErr, 'recording').friendly);
+        bumpFailures();
+      }
+    },
+    [cleanupVideoEl, revokeBlobUrl, youtubeVideoIdA, youtubeVideoIdB],
+  );
+
+  const shareEmbedDisplayMediaFromUserGesture = useCallback(() => {
+    captureLog('share-screen-click');
+    if (!embedCaptureShareBundleRef.current) return;
+    getTabCaptureStream()
+      .then((stream) => {
+        void completeEmbedCaptureAfterStream(stream);
+      })
+      .catch((e: unknown) => {
+        const b = embedCaptureShareBundleRef.current;
+        const { friendly } = handleCaptureError(e, 'getDisplayMedia');
+        if (b) {
+          try {
+            b.isoRestore?.();
+          } catch (err) {
+            console.warn('[Capture] restore after share cancel:', err);
+          }
+          if (b.nulledYtRef && b.ytSnap) {
+            if (b.panel === 'A') ytPlayerARef.current = b.ytSnap;
+            else ytPlayerBRef.current = b.ytSnap;
+          }
+        }
+        embedCaptureShareBundleRef.current = null;
+        setEmbedCaptureAwaitingShare(null);
+        setCapturePrepPanel(null);
+        setCaptureBusy(false);
+        setEmbedCaptureRecording(false);
+        setEmbedCapturePanelId(null);
+        setCaptureError(friendly);
+        const panel = b?.panel ?? 'A';
+        const yidAtFail = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
+        setEmbedCaptureConsecutiveFailures((n) => {
+          const next = n + 1;
+          if (next >= 3 && yidAtFail) {
+            void (async () => {
+              try {
+                const r = await resolveYoutubeForAnalysis(
+                  `https://www.youtube.com/watch?v=${encodeURIComponent(yidAtFail)}`,
+                );
+                if (r.ok && r.directUrl) {
+                  setCaptureFallbackStreamUrl(
+                    `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`,
+                  );
+                }
+              } catch {
+                /* noop */
+              }
+            })();
+          }
+          return next;
+        });
+      });
+  }, [completeEmbedCaptureAfterStream, youtubeVideoIdA, youtubeVideoIdB]);
+
+  const retryLastEmbedCapture = useCallback(() => {
+    const p = embedCaptureRetryPayloadRef.current;
+    setCaptureError(null);
+    setEmbedCaptureAwaitingShare(null);
+    embedCaptureShareBundleRef.current = null;
+    if (!p) return;
+    void prepareEmbedCapturePhase(p.panel, p.opts);
+  }, [prepareEmbedCapturePhase]);
 
   const handleDownloadCaptureBlob = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -1490,15 +1780,13 @@ export default function Home() {
 
   const lockEmbedInteractionA =
     Boolean(
-      captureBusy &&
-        embedCapturePanelId === 'A' &&
+      (capturePrepPanel === 'A' || (captureBusy && embedCapturePanelId === 'A')) &&
         (youtubeVideoIdA || genericEmbedSrcA) &&
         !videoSrc,
     );
   const lockEmbedInteractionB =
     Boolean(
-      captureBusy &&
-        embedCapturePanelId === 'B' &&
+      (capturePrepPanel === 'B' || (captureBusy && embedCapturePanelId === 'B')) &&
         (youtubeVideoIdB || genericEmbedSrcB) &&
         !videoSrcB,
     );
@@ -1514,12 +1802,12 @@ export default function Home() {
 
   const panelToolbarInset =
     !isMobile && layoutMode === 'reels'
-      ? REELS_TOOLBAR_W + 8
+      ? reelsToolbarWidthPx + 8
       : !isMobile
-        ? LEFT_TOOLBAR_W + 8
+        ? leftToolbarWidthPx + 8
         : 0;
   const timelineLeadingInset =
-    layoutMode === 'reels' && !isMobile ? REELS_TOOLBAR_W + 12 : LEFT_TOOLBAR_W + 16;
+    layoutMode === 'reels' && !isMobile ? reelsToolbarWidthPx + 12 : leftToolbarWidthPx + 16;
 
   const reelsDesktop = !isMobile && layoutMode === 'reels';
 
@@ -1560,7 +1848,7 @@ export default function Home() {
         </div>
       )}
 
-      {hasVideoBContent ? (
+      {!(capturePrepPanel || (captureBusy && embedCaptureRecording)) && (hasVideoBContent ? (
         playbackTarget === 'B'
           ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
               <PreciseTimeline
@@ -1606,7 +1894,7 @@ export default function Home() {
             overlay
           />
         )
-      )}
+      ))}
     </div>
   );
 
@@ -1662,7 +1950,7 @@ export default function Home() {
         paddingTop: 'calc(env(safe-area-inset-top, 0px) + 10px)',
         paddingRight: 12,
         paddingBottom: 10,
-        paddingLeft: isMobile ? 12 : layoutMode === 'reels' ? 12 : LEFT_TOOLBAR_W + 24,
+        paddingLeft: isMobile ? 12 : layoutMode === 'reels' ? 12 : leftToolbarWidthPx + 24,
         pointerEvents: 'none',
       }}>
         {isMobile ? (
@@ -2003,7 +2291,7 @@ export default function Home() {
         <aside
           className="coachlab-video-toolbar"
           style={{
-          width: LEFT_TOOLBAR_W,
+          width: leftToolbarWidthPx,
           display: 'flex',
           flexDirection: 'column',
           background: 'rgba(255,255,255,0.92)',
@@ -2069,6 +2357,7 @@ export default function Home() {
               onObjMultiplierClear={handleObjMultiplierClear}
               objMultiplierActive={objMultiplierHasRegion}
               objMultiplierProgress={objMultiplierProgress}
+              iconOnlyLayout={toolbarIconOnlyLayout}
             />
           </div>
 
@@ -2317,9 +2606,11 @@ export default function Home() {
                 left: 8,
                 top: 8,
                 bottom: toolbarBottomReservePx,
-                width: LEFT_TOOLBAR_W,
+                width: leftToolbarWidthPx,
                 zIndex: 60,
-                overflow: 'hidden',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                WebkitOverflowScrolling: 'touch',
                 borderRadius: 14,
                 boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
                 border: '1px solid rgba(0,0,0,0.08)',
@@ -2379,6 +2670,7 @@ export default function Home() {
                   precisionDrawEnabled={precisionDrawEnabled}
                   onPrecisionDrawToggle={handlePrecisionDrawToggle}
                   onShowPrecisionInstructions={showPrecisionInstructionsAgain}
+                  iconOnlyLayout={toolbarIconOnlyLayout}
                 />
               </div>
             )}
@@ -2390,7 +2682,7 @@ export default function Home() {
                   left: 4,
                   top: reelsDesktop ? 8 : 40,
                   bottom: toolbarBottomReservePx,
-                  width: REELS_TOOLBAR_W,
+                  width: reelsToolbarWidthPx,
                   zIndex: 84,
                   display: 'flex',
                   flexDirection: 'column',
@@ -2461,6 +2753,7 @@ export default function Home() {
                     onObjMultiplierClear={handleObjMultiplierClear}
                     objMultiplierActive={objMultiplierHasRegion}
                     objMultiplierProgress={objMultiplierProgress}
+                    iconOnlyLayout={toolbarIconOnlyLayout}
                   />
                 </div>
               </aside>
@@ -2731,15 +3024,27 @@ export default function Home() {
                           ? 'If you don’t see the video, it may be blocked from embedding — keep it playing in this tab, tap Capture, then choose This tab when your browser asks what to share.'
                           : undefined
                       }
-                      busy={captureBusy && embedCapturePanelId === 'A'}
+                      busy={capturePrepPanel === 'A' || (captureBusy && embedCapturePanelId === 'A')}
                       progress01={embedCapturePanelId === 'A' ? captureProgress01 : 0}
                       recordingElapsedSec={embedCapturePanelId === 'A' ? captureRecordingElapsedSec : 0}
-                      errorMessage={embedCapturePanelId === 'A' || !embedCapturePanelId ? captureError : null}
+                      errorMessage={
+                        embedCapturePanelId === 'A' ||
+                        capturePrepPanel === 'A' ||
+                        (!embedCapturePanelId && !capturePrepPanel)
+                          ? captureError
+                          : null
+                      }
                       countdown={embedCapturePanelId === 'A' ? captureCountdown : null}
-                      stepStatus={embedCapturePanelId === 'A' ? captureStepStatus : null}
+                      stepStatus={
+                        capturePrepPanel === 'A' || embedCapturePanelId === 'A' ? captureStepStatus : null
+                      }
                       videoDurationSec={safeYoutubePlayerDuration(ytPlayerARef.current)}
-                      onRetry={() => setCaptureError(null)}
-                      onCapture={(o) => void handleEmbedCaptureRequest('A', o)}
+                      onRetry={retryLastEmbedCapture}
+                      showCaptureDownloadFallback={embedCaptureConsecutiveFailures >= 3}
+                      captureFallbackDownloadHref={captureFallbackStreamUrl}
+                      onPrepareCapture={(o) => void prepareEmbedCapturePhase('A', o)}
+                      onShareScreen={shareEmbedDisplayMediaFromUserGesture}
+                      awaitingScreenShare={embedCaptureAwaitingShare === 'A'}
                       onUploadInstead={() => fileInputRef.current?.click()}
                     />
                     <button
@@ -3036,15 +3341,27 @@ export default function Home() {
                           ? 'If you don’t see the video, it may be blocked from embedding — keep it playing in this tab, tap Capture, then choose This tab when your browser asks what to share.'
                           : undefined
                       }
-                      busy={captureBusy && embedCapturePanelId === 'B'}
+                      busy={capturePrepPanel === 'B' || (captureBusy && embedCapturePanelId === 'B')}
                       progress01={embedCapturePanelId === 'B' ? captureProgress01 : 0}
                       recordingElapsedSec={embedCapturePanelId === 'B' ? captureRecordingElapsedSec : 0}
-                      errorMessage={embedCapturePanelId === 'B' || !embedCapturePanelId ? captureError : null}
+                      errorMessage={
+                        embedCapturePanelId === 'B' ||
+                        capturePrepPanel === 'B' ||
+                        (!embedCapturePanelId && !capturePrepPanel)
+                          ? captureError
+                          : null
+                      }
                       countdown={embedCapturePanelId === 'B' ? captureCountdown : null}
-                      stepStatus={embedCapturePanelId === 'B' ? captureStepStatus : null}
+                      stepStatus={
+                        capturePrepPanel === 'B' || embedCapturePanelId === 'B' ? captureStepStatus : null
+                      }
                       videoDurationSec={safeYoutubePlayerDuration(ytPlayerBRef.current)}
-                      onRetry={() => setCaptureError(null)}
-                      onCapture={(o) => void handleEmbedCaptureRequest('B', o)}
+                      onRetry={retryLastEmbedCapture}
+                      showCaptureDownloadFallback={embedCaptureConsecutiveFailures >= 3}
+                      captureFallbackDownloadHref={captureFallbackStreamUrl}
+                      onPrepareCapture={(o) => void prepareEmbedCapturePhase('B', o)}
+                      onShareScreen={shareEmbedDisplayMediaFromUserGesture}
+                      awaitingScreenShare={embedCaptureAwaitingShare === 'B'}
                       onUploadInstead={() => fileInputRefB.current?.click()}
                     />
                     <button
@@ -3201,10 +3518,30 @@ export default function Home() {
             WebkitBackdropFilter: 'blur(18px)',
           }}
         >
-          <span style={{ flex: '1 1 220px' }}>{captureError}</span>
+          <span style={{ flex: '1 1 220px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <span>{captureError}</span>
+            {embedCaptureConsecutiveFailures >= 3 ? (
+              <span style={{ fontSize: 12, color: '#57534e', lineHeight: 1.5 }}>
+                Having trouble with screen capture? You can download this video directly and upload it to
+                CoachLab — it only takes a moment.
+                {captureFallbackStreamUrl ? (
+                  <>
+                    {' '}
+                    <a
+                      href={captureFallbackStreamUrl}
+                      download
+                      style={{ color: '#007AFF', fontWeight: 600 }}
+                    >
+                      Get a playable copy
+                    </a>
+                  </>
+                ) : null}
+              </span>
+            ) : null}
+          </span>
           <button
             type="button"
-            onClick={() => setCaptureError(null)}
+            onClick={() => retryLastEmbedCapture()}
             style={{
               padding: '10px 16px',
               borderRadius: 10,
@@ -3221,7 +3558,52 @@ export default function Home() {
         </div>
       ) : null}
 
-      {embedCaptureRecording && (
+      {captureFullBleedOverlay ? (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 240,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 16,
+            background: 'rgba(0,0,0,0.72)',
+            color: '#FFFFFF',
+            pointerEvents: 'none',
+            padding: 24,
+          }}
+        >
+          <div style={{ fontSize: 20, fontWeight: 700, textAlign: 'center' }}>Recording in progress…</div>
+          <div
+            style={{
+              fontVariantNumeric: 'tabular-nums',
+              fontSize: 28,
+              fontWeight: 800,
+              letterSpacing: 0.5,
+            }}
+          >
+            {Math.floor(captureOverlayElapsedSec / 60)}:
+            {String(captureOverlayElapsedSec % 60).padStart(2, '0')}
+          </div>
+          <div style={{ width: 'min(360px, 85vw)', height: 8, borderRadius: 6, background: 'rgba(255,255,255,0.2)' }}>
+            <div
+              style={{
+                height: '100%',
+                width: `${Math.round(Math.min(1, Math.max(0, captureProgress01)) * 100)}%`,
+                background: '#34C759',
+                borderRadius: 6,
+                transition: 'width 0.15s ease-out',
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {embedCaptureRecording && !captureFullBleedOverlay && (
         <div
           style={{
             position: 'fixed',

@@ -92,6 +92,8 @@ interface ToolPaletteProps {
   precisionDrawEnabled?: boolean;
   onPrecisionDrawToggle?: () => void;
   onShowPrecisionInstructions?: () => void;
+  /** Below 768px: icon-only rail (narrow); desktop keeps labels */
+  iconOnlyLayout?: boolean;
 }
 
 const PRESET_COLORS = [
@@ -154,25 +156,34 @@ const scrollArea: React.CSSProperties = {
   padding: '8px 10px 12px',
 };
 
-function rowBase(active: boolean): React.CSSProperties {
-  return {
+function scrollAreaFor(io: boolean): React.CSSProperties {
+  if (!io) return scrollArea;
+  return { ...scrollArea, padding: '6px 4px 10px', gap: 4 };
+}
+
+function rowBase(active: boolean, io?: boolean): React.CSSProperties {
+  const base: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
+    gap: io ? 0 : 10,
     width: '100%',
     minHeight: 44,
-    padding: '10px 12px',
+    padding: io ? '8px 6px' : '10px 12px',
     borderRadius: 10,
     border: active ? '1px solid #35679A' : '1px solid #E8E6E1',
     background: active ? 'rgba(53,103,154,0.08)' : '#FAF8F5',
     color: '#1A1A1A',
     cursor: 'pointer',
-    textAlign: 'left' as const,
+    textAlign: io ? 'center' : 'left',
     fontSize: 14,
     fontWeight: 600,
     touchAction: 'manipulation',
     transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease',
   };
+  if (io) {
+    return { ...base, justifyContent: 'center' };
+  }
+  return base;
 }
 
 export default function ToolPalette(props: ToolPaletteProps) {
@@ -226,7 +237,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
     precisionDrawEnabled = false,
     onPrecisionDrawToggle,
     onShowPrecisionInstructions,
+    iconOnlyLayout = false,
   } = props;
+
+  const io = iconOnlyLayout;
 
   const [navStack, setNavStack] = useState<NavScreen[]>(['home']);
   const top = navStack[navStack.length - 1];
@@ -270,11 +284,40 @@ export default function ToolPalette(props: ToolPaletteProps) {
     sub?: string;
   }) => {
     const pressed = pressedKey === k;
+    if (io) {
+      return (
+        <button
+          type="button"
+          aria-label={sub ? `${label} — ${sub}` : label}
+          style={{
+            ...rowBase(!!active, true),
+            transform: pressed ? 'scale(0.92)' : undefined,
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire(k, onPress);
+          }}
+        >
+          <span
+            style={{
+              display: 'flex',
+              width: 28,
+              height: 28,
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#4B5563',
+            }}
+          >
+            {icon}
+          </span>
+        </button>
+      );
+    }
     return (
       <button
         type="button"
         style={{
-          ...rowBase(!!active),
+          ...rowBase(!!active, false),
           transform: pressed ? 'scale(0.95)' : undefined,
         }}
         onPointerDown={(e) => {
@@ -301,34 +344,60 @@ export default function ToolPalette(props: ToolPaletteProps) {
     <>
       <button
         type="button"
+        aria-label="Back"
         style={{
-          ...rowBase(false),
+          ...rowBase(false, io),
           background: '#fff',
           borderColor: '#E8E6E1',
           fontWeight: 700,
           color: '#35679A',
+          ...(io ? { minHeight: 40, padding: '6px 4px' } : {}),
         }}
         onPointerDown={(e) => {
           e.preventDefault();
           fire(`back-${title}`, pop);
         }}
       >
-        <ChevronLeft size={20} />
-        Back
+        {io ? <ChevronLeft size={22} strokeWidth={2.25} /> : (
+          <>
+            <ChevronLeft size={20} />
+            Back
+          </>
+        )}
       </button>
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
-          padding: '10px 4px 4px',
+          justifyContent: io ? 'center' : 'flex-start',
+          gap: io ? 6 : 10,
+          padding: io ? '6px 2px 4px' : '10px 4px 4px',
           color: '#111827',
           fontWeight: 800,
-          fontSize: 15,
+          fontSize: io ? 0 : 15,
+          position: 'relative',
         }}
       >
-        <span style={{ color: '#35679A' }}>{icon}</span>
-        {title}
+        <span style={{ color: '#35679A', display: 'flex', alignItems: 'center' }}>{icon}</span>
+        {io ? (
+          <span
+            style={{
+              position: 'absolute',
+              width: 1,
+              height: 1,
+              padding: 0,
+              margin: -1,
+              overflow: 'hidden',
+              clip: 'rect(0,0,0,0)',
+              whiteSpace: 'nowrap',
+              border: 0,
+            }}
+          >
+            {title}
+          </span>
+        ) : (
+          title
+        )}
       </div>
     </>
   );
@@ -341,8 +410,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
   ) => (
     <label
       key={key}
+      aria-label={label}
       style={{
-        ...rowBase(checked),
+        ...rowBase(checked, io),
         cursor: 'pointer',
         transform: pressedKey === key ? 'scale(0.95)' : undefined,
       }}
@@ -352,7 +422,25 @@ export default function ToolPalette(props: ToolPaletteProps) {
       }}
     >
       <input type="checkbox" readOnly checked={checked} style={{ width: 18, height: 18 }} />
-      <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+      {io ? (
+        <span
+          style={{
+            position: 'absolute',
+            width: 1,
+            height: 1,
+            padding: 0,
+            margin: -1,
+            overflow: 'hidden',
+            clip: 'rect(0,0,0,0)',
+            whiteSpace: 'nowrap',
+            border: 0,
+          }}
+        >
+          {label}
+        </span>
+      ) : (
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+      )}
     </label>
   );
 
@@ -361,7 +449,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'style') {
     return (
       <div style={shell}>
-        <div style={scrollArea}>
+        <div style={scrollAreaFor(io)}>
           <BackHeader title="Style" icon={<Palette size={18} />} />
           <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
             Preset colors
@@ -370,9 +458,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <button
               key={c}
               type="button"
+              aria-label={`Color ${c}`}
               style={{
-                ...rowBase(drawingOptions.color === c),
-                justifyContent: 'flex-start',
+                ...rowBase(drawingOptions.color === c, io),
+                justifyContent: io ? 'center' : 'flex-start',
                 transform: pressedKey === `c-${c}` ? 'scale(0.95)' : undefined,
               }}
               onPointerDown={(e) => {
@@ -382,17 +471,17 @@ export default function ToolPalette(props: ToolPaletteProps) {
             >
               <span
                 style={{
-                  width: 22,
-                  height: 22,
+                  width: io ? 26 : 22,
+                  height: io ? 26 : 22,
                   borderRadius: 6,
                   background: c,
                   border: drawingOptions.color === c ? '2px solid #35679A' : '1px solid #E5E5E5',
                 }}
               />
-              {c}
+              {io ? null : c}
             </button>
           ))}
-          <label style={{ ...rowBase(false), cursor: 'pointer' }}>
+          <label style={{ ...rowBase(false, io), cursor: 'pointer' }}>
             <span style={{ fontSize: 13, fontWeight: 600 }}>Custom</span>
             <input
               type="color"
@@ -416,23 +505,25 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
             <button
               type="button"
-              style={{ ...rowBase(!drawingOptions.dashed), flex: 1, justifyContent: 'center' }}
+              aria-label="Solid line"
+              style={{ ...rowBase(!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('solid', () => onOptionsChange({ dashed: false }));
               }}
             >
-              Solid line
+              {io ? '━' : 'Solid line'}
             </button>
             <button
               type="button"
-              style={{ ...rowBase(!!drawingOptions.dashed), flex: 1, justifyContent: 'center' }}
+              aria-label="Dashed line"
+              style={{ ...rowBase(!!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('dash', () => onOptionsChange({ dashed: true }));
               }}
             >
-              Dashed
+              {io ? '┅' : 'Dashed'}
             </button>
           </div>
           {(activeTool === 'manualSwing' || activeTool === 'swingPath') &&
@@ -460,7 +551,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'draw') {
     return (
       <div style={shell}>
-        <div style={scrollArea}>
+        <div style={scrollAreaFor(io)}>
           <BackHeader title="Draw & annotate" icon={<Pen size={18} />} />
           <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Freehand" onPress={() => { setTool('pen'); resetNav(); }} />
           <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Straight line" onPress={() => { setTool('line'); resetNav(); }} />
@@ -519,7 +610,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               : 'Shape';
     return (
       <div style={shell}>
-        <div style={scrollArea}>
+        <div style={scrollAreaFor(io)}>
           <BackHeader title={shapeLabel} icon={<Shapes size={18} />} />
           {onCircleSpinningChange && (activeTool === 'circle' || activeTool === 'bodyCircle') &&
             chk('spin', 'Animated outline', !!circleSpinning, onCircleSpinningChange)}
@@ -554,14 +645,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'skeleton') {
     return (
       <div style={shell}>
-        <div style={scrollArea}>
+        <div style={scrollAreaFor(io)}>
           <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
           <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
             AI pose overlay follows the player. Keep the video playing for best results.
           </p>
           <button
             type="button"
-            style={{ ...rowBase(false), color: '#C2410C', borderColor: '#FED7AA', background: '#FFF7ED' }}
+            style={{ ...rowBase(false, io), color: '#C2410C', borderColor: '#FED7AA', background: '#FFF7ED' }}
             onPointerDown={(e) => {
               e.preventDefault();
               fire('reskel', () => onResetSkeleton());
@@ -593,7 +684,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'view') {
     return (
       <div style={shell}>
-        <div style={scrollArea}>
+        <div style={scrollAreaFor(io)}>
           <BackHeader title="View" icon={<ZoomIn size={18} />} />
           <Row k="zoom" active={activeTool === 'zoom'} icon={<ZoomIn size={18} />} label="Zoom & pan" onPress={() => { setTool('zoom'); resetNav(); }} />
           {onResetCropZoom ? (
@@ -607,7 +698,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'multiplier') {
     return (
       <div style={shell}>
-        <div style={scrollArea}>
+        <div style={scrollAreaFor(io)}>
           <BackHeader title="Object multiplier" icon={<Layers size={18} />} />
           <p style={{ margin: '0 4px 8px', fontSize: 13, fontWeight: 600, color: '#7C3AED', lineHeight: 1.4 }}>
             Drag to select the object you want to multiply
@@ -657,7 +748,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'more') {
     return (
       <div style={shell}>
-        <div style={scrollArea}>
+        <div style={scrollAreaFor(io)}>
           <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
           {onAutoSwing ? (
             <Row k="as" icon={<TrendingUp size={18} />} label="Auto swing path" onPress={() => { onAutoSwing(); resetNav(); }} />
@@ -672,7 +763,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 <button
                   key={m}
                   type="button"
-                  style={rowBase(ballTrailMode === m)}
+                  style={rowBase(ballTrailMode === m, io)}
                   onPointerDown={(e) => {
                     e.preventDefault();
                     fire(`bt-${m}`, () => onBallTrailModeChange(m));
@@ -694,7 +785,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   /* ── Home ─────────────────────────────────────────────────────────── */
   return (
     <div style={shell}>
-      <div style={scrollArea}>
+      <div style={scrollAreaFor(io)}>
         <Row k="sel" active={activeTool === 'select'} icon={<MousePointer2 size={20} />} label="Select" onPress={() => setTool('select')} />
         {onPrecisionDrawToggle ? (
           <Row
@@ -709,7 +800,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         {onShowPrecisionInstructions && precisionDrawEnabled ? (
           <button
             type="button"
-            style={{ ...rowBase(false), fontSize: 12, fontWeight: 600, color: '#35679A', borderStyle: 'dashed' }}
+            style={{ ...rowBase(false, io), fontSize: 12, fontWeight: 600, color: '#35679A', borderStyle: 'dashed' }}
             onPointerDown={(e) => {
               e.preventDefault();
               fire('pinst', () => onShowPrecisionInstructions());

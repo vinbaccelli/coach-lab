@@ -2320,7 +2320,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.translate(dx, dy);
           const msg = isSelectingObjMultRegionRef.current
             ? 'Release to confirm selection'
-            : 'Drag to select the object you want to multiply';
+            : 'Drag to select the object you want to multiply across frames';
           ctx.font = '600 15px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
           const tw = ctx.measureText(msg).width;
           const padX = 14;
@@ -3080,6 +3080,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvasEl = e.target as HTMLCanvasElement;
       const toolEarly = activeToolRef.current;
+      if (toolEarly === 'objectMultiplier' || isSelectingObjMultRegionRef.current) {
+        console.log('[ObjectMultiplier] pointerdown', {
+          pointerType: e.pointerType,
+          button: e.button,
+          pointerId: e.pointerId,
+          clientX: e.clientX,
+          clientY: e.clientY,
+        });
+      }
       const precisionEligible =
         precisionTouchDrawRef.current &&
         e.pointerType === 'touch' &&
@@ -3477,6 +3486,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer move ───────────────────────────────────────────────────────
 
     const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (activeToolRef.current === 'objectMultiplier' || isSelectingObjMultRegionRef.current) {
+        console.log('[ObjectMultiplier] pointermove', {
+          pointerType: e.pointerType,
+          pointerId: e.pointerId,
+          clientX: e.clientX,
+          clientY: e.clientY,
+        });
+      }
       let pos = getPos(e);
       if (
         precisionTouchDrawRef.current &&
@@ -3690,6 +3707,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer up ─────────────────────────────────────────────────────────
 
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (activeToolRef.current === 'objectMultiplier' || isSelectingObjMultRegionRef.current) {
+        console.log('[ObjectMultiplier] pointerup', {
+          pointerType: e.pointerType,
+          pointerId: e.pointerId,
+          clientX: e.clientX,
+          clientY: e.clientY,
+        });
+      }
       if (
         precisionTouchDrawRef.current &&
         precisionAnchorPointerIdRef.current === e.pointerId &&
@@ -3916,7 +3941,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       select: zoomRef.current > 1 ? (isPanningRef.current ? 'grabbing' : 'grab') : 'default',
     };
     if (panModeEnabled && zoomRef.current > 1) {
-      Object.keys(cursorFor).forEach((k) => { (cursorFor as Record<string, string>)[k] = isPanningRef.current ? 'grabbing' : 'grab'; });
+      Object.keys(cursorFor).forEach((k) => {
+        if (k === 'objectMultiplier') return;
+        (cursorFor as Record<string, string>)[k] = isPanningRef.current ? 'grabbing' : 'grab';
+      });
     }
     if (outlineEraserSizeRef.current > 0) {
       cursorFor.circle = 'none';
@@ -3980,9 +4008,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             height: '100%',
             display: 'block',
             touchAction: 'none',
-            cursor: panModeEnabled && zoomRef.current > 1
-              ? (isPanningRef.current ? 'grabbing' : 'grab')
-              : (cursorFor[activeTool] ?? 'default'),
+            cursor:
+              activeTool === 'objectMultiplier'
+                ? 'crosshair'
+                : panModeEnabled && zoomRef.current > 1
+                  ? (isPanningRef.current ? 'grabbing' : 'grab')
+                  : (cursorFor[activeTool] ?? 'default'),
           }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}

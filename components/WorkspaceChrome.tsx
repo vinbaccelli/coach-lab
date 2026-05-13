@@ -156,7 +156,16 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
         )}
       </header>
 
-      <main style={{ flex: 1, minHeight: 0 }}>{children}</main>
+      <main
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          WebkitOverflowScrolling: 'touch',
+        }}
+      >
+        {children}
+      </main>
     </div>
   );
 }

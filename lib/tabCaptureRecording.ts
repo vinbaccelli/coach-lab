@@ -62,7 +62,10 @@ export class TabCaptureRecorder {
   private recorder: MediaRecorder | null = null;
   private chunks: Blob[] = [];
 
-  start(stream: MediaStream, _cb?: RecordingCallbacks) {
+  /**
+   * Create MediaRecorder for the stream without starting — call startCapture() after countdown.
+   */
+  prepare(stream: MediaStream, _cb?: RecordingCallbacks) {
     try {
       const mimeType = pickRecorderMimeType();
       const opts: MediaRecorderOptions = { mimeType };
@@ -75,23 +78,41 @@ export class TabCaptureRecorder {
       this.recorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) this.chunks.push(e.data);
       };
-      try {
-        this.recorder.start(250);
-      } catch (e) {
-        try {
-          this.recorder?.stop();
-        } catch {
-          /* noop */
-        }
-        this.recorder = null;
-        throw e;
-      }
     } catch (e) {
+      this.recorder = null;
+      this.chunks = [];
       throw new Error(
-        `Could not start the recorder: ${e instanceof Error ? e.message : String(e)}. ` +
-        'Close other apps using the camera or screen, then try again.',
+        `Could not prepare the recorder: ${e instanceof Error ? e.message : String(e)}. ` +
+          'Close other apps using the camera or screen, then try again.',
       );
     }
+  }
+
+  startCapture(timesliceMs = 250) {
+    if (!this.recorder) {
+      throw new Error('Recorder not prepared. Call prepare(stream) first.');
+    }
+    try {
+      this.recorder.start(timesliceMs);
+    } catch (e) {
+      try {
+        this.recorder?.stop();
+      } catch {
+        /* noop */
+      }
+      this.recorder = null;
+      throw e instanceof Error
+        ? e
+        : new Error(
+            `Could not start the recorder: ${String(e)}. Close other apps using the screen, then try again.`,
+          );
+    }
+  }
+
+  /** @deprecated Prefer prepare() + startCapture() so countdown can run between them */
+  start(stream: MediaStream, cb?: RecordingCallbacks) {
+    this.prepare(stream, cb);
+    this.startCapture(250);
   }
 
   async stop(): Promise<Blob> {

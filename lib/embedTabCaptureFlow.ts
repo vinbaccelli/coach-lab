@@ -3,6 +3,7 @@ import {
   stopAllTracks,
   TabCaptureRecorder,
 } from '@/lib/tabCaptureRecording';
+import { captureLog, handleCaptureError } from '@/lib/embedCaptureSession';
 
 export type EmbedCaptureOpts = {
   mode: 'full' | 'section';
@@ -56,6 +57,8 @@ export async function runEmbedTabCaptureFlow(args: {
   onStepStatus?: (msg: string) => void;
   videoDurationHintSec?: number | null;
   preAcquiredStream?: MediaStream;
+  /** Fires once the display-capture video track is live (within ~100ms for UI overlay). */
+  onPostStreamReady?: () => void;
 }): Promise<{ ok: true; blob: Blob } | { ok: false; message: string }> {
   const {
     opts,
@@ -66,18 +69,21 @@ export async function runEmbedTabCaptureFlow(args: {
     onStepStatus,
     videoDurationHintSec,
     preAcquiredStream,
+    onPostStreamReady,
   } = args;
 
   let recorder: TabCaptureRecorder | null = null;
   let stream: MediaStream | null = null;
 
   try {
+    captureLog('flow-start');
     if (preAcquiredStream) {
       // Stream already acquired from user gesture in the caller
       stream = preAcquiredStream;
     } else {
       // ── 1. Check getDisplayMedia availability ──────────────────────────
       onStepStatus?.('Checking browser support…');
+      captureLog('pre-gdm-check');
 
       if (
         typeof navigator === 'undefined' ||
@@ -99,53 +105,15 @@ export async function runEmbedTabCaptureFlow(args: {
 
       try {
         stream = await getTabCaptureStream();
+        captureLog('getDisplayMedia-ok');
       } catch (e: unknown) {
-        const name = (e as DOMException)?.name;
-        switch (name) {
-          case 'NotAllowedError':
-          case 'PermissionDeniedError':
-            return fail(
-              'getDisplayMedia',
-              e,
-              'Screen sharing was cancelled or blocked by the browser. Tap Capture and choose your browser tab when asked.',
-            );
-          case 'NotFoundError':
-            return fail(
-              'getDisplayMedia',
-              e,
-              'No screen or tab could be shared. Check your browser settings and try again.',
-            );
-          case 'NotReadableError':
-          case 'AbortError':
-            return fail(
-              'getDisplayMedia',
-              e,
-              'Could not access the shared tab. Close other apps using screen share if needed, then try again.',
-            );
-          case 'NotSupportedError':
-            return fail(
-              'getDisplayMedia',
-              e,
-              'This browser cannot record from a tab. Try Chrome or Edge on a desktop computer.',
-            );
-          case 'SecurityError':
-            return fail(
-              'getDisplayMedia',
-              e,
-              'Recording needs a secure connection (HTTPS). Open CoachLab from https:// and try again.',
-            );
-          default:
-            return fail(
-              'getDisplayMedia',
-              e,
-              `Screen sharing failed: ${(e as Error)?.message || 'Unknown error'}. Try refreshing the page.`,
-            );
-        }
+        const { friendly } = handleCaptureError(e, 'getDisplayMedia');
+        return fail('getDisplayMedia', e, friendly);
       }
     }
 
-    // ── 3. Validate stream exists and has video tracks ────────────────
     onStepStatus?.('Verifying video stream…');
+    captureLog('stream-validate');
 
     if (!stream) {
       return fail(
@@ -207,33 +175,62 @@ export async function runEmbedTabCaptureFlow(args: {
       );
     }
 
+    captureLog('track-live');
+    try {
+      onPostStreamReady?.();
+    } catch (e) {
+      console.warn('[CoachLab capture] onPostStreamReady:', e);
+    }
+
     onStepStatus?.('Starting recording…');
 
-    // ── 5. Start MediaRecorder on the stream ──────────────────────────
-    await sleep(100);
-
+    // ── 5. Prepare MediaRecorder, countdown, then start timeslices ───────
     try {
       recorder = new TabCaptureRecorder();
       try {
-        recorder.start(stream);
-      } catch (startErr) {
-        console.error('[CoachLab capture] first recorder.start() failed:', startErr);
-        await sleep(300);
-        recorder = new TabCaptureRecorder();
-        recorder.start(stream);
+        recorder.prepare(stream);
+        captureLog('mediaRecorder-prepared');
+      } catch (prepErr) {
+        stopAllTracks(stream);
+        const { friendly } = handleCaptureError(prepErr, 'MediaRecorder.prepare');
+        return fail('MediaRecorder.prepare', prepErr, friendly);
+      }
+
+      for (let n = 3; n >= 1; n--) {
+        onCountdown?.(n);
+        captureLog(`countdown-${n}`);
+        await sleep(1000);
+      }
+      onCountdown?.(null);
+      captureLog('countdown-done');
+
+      try {
+        try {
+          recorder.startCapture();
+          captureLog('mediaRecorder-started');
+        } catch (startErr) {
+          console.error('[CoachLab capture] first recorder.startCapture() failed:', startErr);
+          await sleep(300);
+          recorder = new TabCaptureRecorder();
+          recorder.prepare(stream);
+          recorder.startCapture();
+          captureLog('mediaRecorder-started-retry');
+        }
+      } catch (startOuter) {
+        stopAllTracks(stream);
+        const { friendly } = handleCaptureError(startOuter, 'MediaRecorder.startCapture');
+        return fail('MediaRecorder.startCapture', startOuter, friendly);
       }
     } catch (recErr) {
       stopAllTracks(stream);
-      return fail(
-        'MediaRecorder.start',
-        recErr,
-        'Could not start the recorder. Close any other screen recordings, refresh the page, and try Capture again.',
-      );
+      const { friendly } = handleCaptureError(recErr, 'MediaRecorder');
+      return fail('MediaRecorder', recErr, friendly);
     }
 
     onProgress?.(0.04);
+    captureLog('recording-loop-begin');
 
-    // ── 7. Run the recording for the requested duration ───────────────
+    // ── 6. Run the recording for the requested duration ───────────────
     const ytEnded = () => ytPlayer?.getPlayerState?.() === 0;
 
     if (isYoutube && ytPlayer && typeof ytPlayer.seekTo === 'function') {
@@ -341,9 +338,9 @@ export async function runEmbedTabCaptureFlow(args: {
       }
     }
 
-    // ── 8. Stop recorder, get blob, stop tracks ──────────────────────
+    // ── 7. Stop recorder, get blob, stop tracks ──────────────────────
     onStepStatus?.('Processing recording…');
-
+    captureLog('recorder-stop-begin');
     let blob: Blob;
     try {
       blob = await recorder.stop();
@@ -372,7 +369,8 @@ export async function runEmbedTabCaptureFlow(args: {
       );
     }
 
-    // ── 9. Success ────────────────────────────────────────────────────
+    // ── 8. Success ────────────────────────────────────────────────────
+    captureLog('flow-success');
     return { ok: true, blob };
   } catch (e: unknown) {
     // Top-level safety net
@@ -385,7 +383,7 @@ export async function runEmbedTabCaptureFlow(args: {
     return fail(
       'unexpected top-level',
       e,
-      `Something went wrong during recording: ${(e as Error)?.message || 'Unknown error'}. Please refresh the page and try Capture again.`,
+      handleCaptureError(e, 'recording-flow').friendly,
     );
   }
 }

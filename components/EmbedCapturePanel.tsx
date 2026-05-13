@@ -35,8 +35,12 @@ export default function EmbedCapturePanel({
   stepStatus,
   videoDurationSec,
   onRetry,
-  onCapture,
+  onPrepareCapture,
+  onShareScreen,
+  awaitingScreenShare = false,
   onUploadInstead,
+  showCaptureDownloadFallback,
+  captureFallbackDownloadHref,
 }: {
   visible: boolean;
   embedReady: boolean;
@@ -50,12 +54,17 @@ export default function EmbedCapturePanel({
   stepStatus?: string | null;
   videoDurationSec?: number | null;
   onRetry?: () => void;
-  onCapture: (opts: {
+  onPrepareCapture: (opts: {
     mode: CaptureModeChoice;
     startSec: number | null;
     endSec: number | null;
   }) => void;
+  /** Second tap: must call getDisplayMedia synchronously from this handler (Safari gesture) */
+  onShareScreen: () => void;
+  awaitingScreenShare?: boolean;
   onUploadInstead?: () => void;
+  showCaptureDownloadFallback?: boolean;
+  captureFallbackDownloadHref?: string | null;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [mode, setMode] = useState<CaptureModeChoice>('full');
@@ -93,18 +102,18 @@ export default function EmbedCapturePanel({
   const captureAllowed =
     embedReady && !busy && !sectionInvalid && !(mode === 'section' && (parsed.start === null || parsed.end === null));
 
-  const handleCapture = useCallback(() => {
+  const handlePrepare = useCallback(() => {
     if (!captureAllowed) return;
     if (mode === 'full') {
-      onCapture({ mode: 'full', startSec: null, endSec: null });
+      onPrepareCapture({ mode: 'full', startSec: null, endSec: null });
       return;
     }
-    onCapture({
+    onPrepareCapture({
       mode: 'section',
       startSec: parsed.start,
       endSec: parsed.end,
     });
-  }, [captureAllowed, mode, onCapture, parsed.end, parsed.start]);
+  }, [captureAllowed, mode, onPrepareCapture, parsed.end, parsed.start]);
 
   if (!visible) return null;
 
@@ -112,6 +121,9 @@ export default function EmbedCapturePanel({
   const showCountdown = countdown != null && countdown > 0;
   const preparingCapture = busy && !showCountdown && progress01 < 0.04 && recordingElapsedSec < 3;
   const recording = busy && !showCountdown && !preparingCapture;
+
+  const shareAllowed =
+    awaitingScreenShare && !busy && embedReady && !showCountdown && !recording;
 
   const estimatedTotalSec = mode === 'section' && parsed.start != null && parsed.end != null
     ? parsed.end - parsed.start
@@ -213,6 +225,24 @@ export default function EmbedCapturePanel({
           <p style={{ margin: '0 0 14px', fontSize: 13, color: '#991b1b', lineHeight: 1.5 }}>
             {errorMessage}
           </p>
+          {showCaptureDownloadFallback ? (
+            <p style={{ margin: '0 0 14px', fontSize: 12, color: '#44403c', lineHeight: 1.55 }}>
+              Having trouble with screen capture? You can download this video directly and upload it to
+              CoachLab — it only takes a moment.
+              {captureFallbackDownloadHref ? (
+                <>
+                  {' '}
+                  <a
+                    href={captureFallbackDownloadHref}
+                    download
+                    style={{ color: '#007AFF', fontWeight: 600 }}
+                  >
+                    Get a playable copy
+                  </a>
+                </>
+              ) : null}
+            </p>
+          ) : null}
           <div style={{ display: 'flex', gap: 10 }}>
             {onRetry && (
               <button
@@ -341,7 +371,7 @@ export default function EmbedCapturePanel({
         /* ── Ready state: simple one-button UI ────────────────────────── */
         <>
           <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>
-            Record this video for analysis
+            Capture this video for analysis
           </p>
 
           <div style={{
@@ -356,16 +386,17 @@ export default function EmbedCapturePanel({
           }}>
             {looksLikeDesktopSafari ? (
               <>
-                When you tap <strong style={{ color: '#1A1A1A' }}>Record</strong>, Safari will ask what to share.
-                There is no &quot;tab only&quot; option — choose <strong style={{ color: '#1A1A1A' }}>Entire Screen</strong> or{' '}
-                <strong style={{ color: '#1A1A1A' }}>Window</strong> and pick <strong style={{ color: '#1A1A1A' }}>this browser window</strong> so the YouTube player is visible.
-                (&quot;Window&quot; alone often fails if the picker targets the wrong surface; Entire Screen is more reliable.)
+                First tap <strong style={{ color: '#1A1A1A' }}>Prepare Video</strong>. When it says ready, tap{' '}
+                <strong style={{ color: '#1A1A1A' }}>Share Screen</strong> — Safari will ask what to share.
+                Choose <strong style={{ color: '#1A1A1A' }}>Entire Screen</strong> or{' '}
+                <strong style={{ color: '#1A1A1A' }}>Window</strong> and pick <strong style={{ color: '#1A1A1A' }}>this browser window</strong>.
               </>
             ) : (
               <>
-                When you tap <strong style={{ color: '#1A1A1A' }}>Record</strong>, your browser will ask what to share.
-                In Chrome or Edge, choose <strong style={{ color: '#1A1A1A' }}>This tab</strong> so only this page is recorded.
-                In Safari on Mac, choose <strong style={{ color: '#1A1A1A' }}>Window</strong> (this browser) or <strong style={{ color: '#1A1A1A' }}>Entire Screen</strong>.
+                First tap <strong style={{ color: '#1A1A1A' }}>Prepare Video</strong>. When it says ready, tap{' '}
+                <strong style={{ color: '#1A1A1A' }}>Share Screen</strong>. In Chrome or Edge, pick{' '}
+                <strong style={{ color: '#1A1A1A' }}>This tab</strong> (the picker may already highlight this tab). In Safari on Mac, choose{' '}
+                <strong style={{ color: '#1A1A1A' }}>Window</strong> or <strong style={{ color: '#1A1A1A' }}>Entire Screen</strong>.
               </>
             )}
           </div>
@@ -442,10 +473,44 @@ export default function EmbedCapturePanel({
             <p style={{ margin: '0 0 12px', fontSize: 11, color: '#6B6B6B' }}>{genericIframeNote}</p>
           )}
 
+          {awaitingScreenShare ? (
+            <>
+              <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 14, color: '#166534', lineHeight: 1.45 }}>
+                Video is ready — tap Share Screen to begin capture
+              </p>
+              <p style={{ margin: '0 0 14px', fontSize: 12, color: '#3C3C3C', lineHeight: 1.5 }}>
+                When prompted, choose this browser tab (Chrome may pre-select the current tab). Keep the video visible until recording finishes.
+              </p>
+              <button
+                type="button"
+                disabled={!shareAllowed}
+                onClick={() => onShareScreen()}
+                style={{
+                  width: '100%',
+                  padding: '16px 18px',
+                  borderRadius: 14,
+                  border: 'none',
+                  background: shareAllowed ? '#2563EB' : 'rgba(26,26,26,0.12)',
+                  color: shareAllowed ? '#FFFFFF' : 'rgba(26,26,26,0.5)',
+                  fontWeight: 800,
+                  fontSize: 17,
+                  cursor: shareAllowed ? 'pointer' : 'not-allowed',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 10,
+                  minHeight: 52,
+                }}
+              >
+                Share Screen
+              </button>
+            </>
+          ) : (
+            <>
           <button
             type="button"
             disabled={!captureAllowed}
-            onClick={handleCapture}
+            onClick={handlePrepare}
             style={{
               width: '100%',
               padding: '13px 16px',
@@ -463,8 +528,10 @@ export default function EmbedCapturePanel({
             }}
           >
             <span style={{ width: 10, height: 10, borderRadius: '50%', background: captureAllowed ? '#fff' : 'rgba(26,26,26,0.3)' }} />
-            {!embedReady ? 'Waiting for video\u2026' : 'Record'}
+            {!embedReady ? 'Waiting for video\u2026' : 'Prepare Video'}
           </button>
+            </>
+          )}
         </>
       )}
     </div>

@@ -11,13 +11,14 @@ import {
 } from 'lucide-react';
 
 const shell: CSSProperties = {
-  minHeight: '100vh',
-  overflowY: 'auto',
-  WebkitOverflowScrolling: 'touch',
-  padding: '24px 16px calc(80px + env(safe-area-inset-bottom, 0px))',
+  width: '100%',
   maxWidth: 1120,
   margin: '0 auto',
-  width: '100%',
+  minHeight: 'auto',
+  height: 'auto',
+  overflowY: 'visible',
+  WebkitOverflowScrolling: 'touch',
+  padding: '24px 16px calc(100px + env(safe-area-inset-bottom, 0px))',
   background: 'linear-gradient(180deg, #FFFFFF 0%, #FAF8F5 45%, #F5F0E8 100%)',
   color: '#1A1A1A',
 };
