@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   MousePointer2,
   Pen,
@@ -13,7 +13,6 @@ import {
   Redo2,
   Trash2,
   PersonStanding,
-  Footprints,
   TrendingUp,
   Eraser,
   RefreshCw,
@@ -23,6 +22,11 @@ import {
   ZoomIn,
   Shapes,
   Layers,
+  ChevronLeft,
+  Palette,
+  LayoutGrid,
+  Video,
+  Crosshair,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -32,7 +36,6 @@ export type WebcamPipMode = 'rectangle' | 'circle' | 'hidden';
 interface ToolPaletteProps {
   activeTool: ToolType;
   onToolChange: (tool: ToolType) => void;
-  /** If true, renders a slim icon-first toolbar for narrow sidebars. */
   compact?: boolean;
   drawingOptions: DrawingOptions;
   onOptionsChange: (opts: Partial<DrawingOptions>) => void;
@@ -66,7 +69,6 @@ interface ToolPaletteProps {
   webcamOpacity?: number;
   onWebcamOpacityChange?: (v: number) => void;
   webcamActive?: boolean;
-  /** Selfie cutout (transparent background) for PiP */
   webcamCutout?: boolean;
   onWebcamCutoutChange?: (v: boolean) => void;
   skeletonShowAngles?: boolean;
@@ -86,589 +88,669 @@ interface ToolPaletteProps {
   ballSampleMode?: boolean;
   onBallSampleModeChange?: (v: boolean) => void;
   onResetCropZoom?: () => void;
+  /** Mobile: Coach Now–style precision draw (optional) */
+  precisionDrawEnabled?: boolean;
+  onPrecisionDrawToggle?: () => void;
+  onShowPrecisionInstructions?: () => void;
 }
-
-type Panel = null | 'draw' | 'angle' | 'style' | 'swing' | 'view' | 'skeleton-opts' | 'multiplier-opts';
 
 const PRESET_COLORS = [
   '#1E40AF', '#DC2626', '#16A34A', '#D97706', '#7C3AED',
   '#0891B2', '#EC4899', '#111827', '#FFFFFF',
 ];
 
-/* ---------- Coach Now compact style system (4-point grid) ---------- */
-
-const SS = {
-  toolBtn: (active: boolean): React.CSSProperties => ({
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    border: active ? 'none' : '1px solid #E5E5E5',
-    background: active ? '#1A1A1A' : '#fff',
-    color: active ? '#fff' : '#6e6e73',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 0,
-    flexShrink: 0,
-    touchAction: 'manipulation',
-    transition: 'background 0.12s, color 0.12s, border-color 0.12s',
-  }),
-  actionBtn: (destructive = false): React.CSSProperties => ({
-    width: 28,
-    height: 28,
-    borderRadius: 6,
-    border: '1px solid #E5E5E5',
-    background: '#FAFAFA',
-    color: destructive ? '#DC2626' : '#6e6e73',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 0,
-    flexShrink: 0,
-    transition: 'background 0.12s, color 0.12s',
-  }),
-  dropdown: {
-    position: 'absolute' as const,
-    left: 'calc(100% + 8px)',
-    top: 0,
-    background: '#fff',
-    border: '1px solid #E5E5E5',
-    borderRadius: 10,
-    boxShadow: '0 4px 16px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.06)',
-    padding: 8,
-    width: 200,
-    minWidth: 160,
-    maxHeight: 'min(75vh, 520px)',
-    overflowY: 'auto' as const,
-    overflowX: 'hidden' as const,
-    zIndex: 50,
-  } as React.CSSProperties,
-  dropdownItem: (active: boolean): React.CSSProperties => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    width: '100%',
-    padding: '6px 8px',
-    borderRadius: 6,
-    border: 'none',
-    background: active ? '#F0F0F0' : 'transparent',
-    color: active ? '#1A1A1A' : '#3a3a3a',
-    cursor: 'pointer',
-    fontSize: 11,
-    fontWeight: active ? 600 : 500,
-    transition: 'background 0.1s',
-  }),
-  sectionLabel: {
-    fontSize: 9,
-    fontWeight: 700,
-    color: '#999',
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.05em',
-    padding: '4px 8px 2px',
-  } as React.CSSProperties,
-  hint: {
-    fontSize: 9,
-    color: '#888',
-    padding: '2px 8px 4px',
-    lineHeight: 1.3,
-  } as React.CSSProperties,
-  divider: {
-    height: 1,
-    background: '#E5E5E5',
-    margin: '4px 0',
-  } as React.CSSProperties,
-};
+type NavScreen =
+  | 'home'
+  | 'style'
+  | 'draw'
+  | 'shapeOpts'
+  | 'skeleton'
+  | 'view'
+  | 'multiplier'
+  | 'more';
 
 function haptic() {
-  try { navigator?.vibrate?.(10); } catch { /* noop */ }
+  try {
+    navigator?.vibrate?.(10);
+  } catch {
+    /* noop */
+  }
 }
 
-export default function ToolPalette({
-  activeTool,
-  onToolChange,
-  compact: _compact = false,
-  drawingOptions,
-  onOptionsChange,
-  onUndo,
-  onRedo,
-  onClear,
-  onResetSkeleton,
-  onResetBallTrail,
-  ballTrailMode,
-  onBallTrailModeChange,
-  onAutoSwing,
-  onRacketMultiplier,
-  circleSpinning,
-  objMultiplierFrameCount = 6,
-  onObjMultiplierFrameCountChange,
-  objMultiplierDuration = 2,
-  onObjMultiplierDurationChange,
-  onObjMultiplierCapture,
-  onObjMultiplierClear,
-  objMultiplierActive = false,
-  objMultiplierProgress,
-  onCircleSpinningChange,
-  outlineEraserSize = 0,
-  onOutlineEraserSizeChange,
-  rect3d,
-  onRect3dChange,
-  triangle3d,
-  onTriangle3dChange,
-  webcamPipMode,
-  onWebcamPipModeChange,
-  webcamOpacity = 1,
-  onWebcamOpacityChange,
-  webcamActive,
-  webcamCutout = false,
-  onWebcamCutoutChange,
-  skeletonShowAngles,
-  onSkeletonShowAnglesChange,
-  skeletonShowHeadLine,
-  onSkeletonShowHeadLineChange,
-  skeletonClassicColors,
-  onSkeletonClassicColorsChange,
-  skeletonShowRightArm,
-  onSkeletonShowRightArmChange,
-  skeletonShowLeftArm,
-  onSkeletonShowLeftArmChange,
-  skeletonShowRightLeg,
-  onSkeletonShowRightLegChange,
-  skeletonShowLeftLeg,
-  onSkeletonShowLeftLegChange,
-  ballSampleMode,
-  onBallSampleModeChange,
-  onResetCropZoom,
-}: ToolPaletteProps) {
-  const [openPanel, setOpenPanel] = useState<Panel>(null);
-  const togglePanel = (p: Exclude<Panel, null>) => { haptic(); setOpenPanel((cur) => (cur === p ? null : p)); };
+function useTapScale() {
+  const [id, setId] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fire = useCallback((key: string, action: () => void) => {
+    haptic();
+    if (timer.current) clearTimeout(timer.current);
+    setId(key);
+    action();
+    timer.current = setTimeout(() => setId(null), 150);
+  }, []);
+  return { pressedKey: id, fire };
+}
+
+const shell: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  height: '100%',
+  width: '100%',
+  minHeight: 0,
+  userSelect: 'none',
+  background: 'rgba(255,255,255,0.98)',
+  borderRadius: 12,
+  overflow: 'hidden',
+};
+
+const scrollArea: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  overflowX: 'hidden',
+  WebkitOverflowScrolling: 'touch',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '8px 10px 12px',
+};
+
+function rowBase(active: boolean): React.CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+    minHeight: 44,
+    padding: '10px 12px',
+    borderRadius: 10,
+    border: active ? '1px solid #35679A' : '1px solid #E8E6E1',
+    background: active ? 'rgba(53,103,154,0.08)' : '#FAF8F5',
+    color: '#1A1A1A',
+    cursor: 'pointer',
+    textAlign: 'left' as const,
+    fontSize: 14,
+    fontWeight: 600,
+    touchAction: 'manipulation',
+    transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease',
+  };
+}
+
+export default function ToolPalette(props: ToolPaletteProps) {
+  const {
+    activeTool,
+    onToolChange,
+    drawingOptions,
+    onOptionsChange,
+    onUndo,
+    onRedo,
+    onClear,
+    onResetSkeleton,
+    onResetBallTrail,
+    ballTrailMode,
+    onBallTrailModeChange,
+    onAutoSwing,
+    onRacketMultiplier,
+    circleSpinning,
+    objMultiplierFrameCount = 6,
+    onObjMultiplierFrameCountChange,
+    objMultiplierDuration = 2,
+    onObjMultiplierDurationChange,
+    onObjMultiplierCapture,
+    onObjMultiplierClear,
+    objMultiplierActive = false,
+    objMultiplierProgress,
+    onCircleSpinningChange,
+    outlineEraserSize = 0,
+    onOutlineEraserSizeChange,
+    rect3d,
+    onRect3dChange,
+    triangle3d,
+    onTriangle3dChange,
+    onResetCropZoom,
+    skeletonShowAngles,
+    onSkeletonShowAnglesChange,
+    skeletonShowHeadLine,
+    onSkeletonShowHeadLineChange,
+    skeletonClassicColors,
+    onSkeletonClassicColorsChange,
+    skeletonShowRightArm,
+    onSkeletonShowRightArmChange,
+    skeletonShowLeftArm,
+    onSkeletonShowLeftArmChange,
+    skeletonShowRightLeg,
+    onSkeletonShowRightLegChange,
+    skeletonShowLeftLeg,
+    onSkeletonShowLeftLegChange,
+    ballSampleMode,
+    onBallSampleModeChange,
+    precisionDrawEnabled = false,
+    onPrecisionDrawToggle,
+    onShowPrecisionInstructions,
+  } = props;
+
+  const [navStack, setNavStack] = useState<NavScreen[]>(['home']);
+  const top = navStack[navStack.length - 1];
+  const { pressedKey, fire } = useTapScale();
+
+  const pop = useCallback(() => {
+    setNavStack((s) => (s.length > 1 ? s.slice(0, -1) : ['home']));
+  }, []);
+  const push = useCallback((x: NavScreen) => {
+    setNavStack((s) => [...s, x]);
+  }, []);
+  const resetNav = useCallback(() => setNavStack(['home']), []);
 
   const isCircle3d = activeTool === 'bodyCircle';
-  const isShapeTool = activeTool === 'circle' || activeTool === 'bodyCircle' || activeTool === 'rect' || activeTool === 'triangle';
-  const isDrawTool =
-    activeTool === 'pen' ||
-    activeTool === 'line' ||
-    activeTool === 'arrow' ||
-    activeTool === 'erase' ||
-    isShapeTool ||
-    activeTool === 'text' ||
-    activeTool === 'angle' ||
-    activeTool === 'arrowAngle' ||
-    activeTool === 'manualSwing';
+  const isShapeTool =
+    activeTool === 'circle' ||
+    activeTool === 'bodyCircle' ||
+    activeTool === 'rect' ||
+    activeTool === 'triangle';
   const shapeEraserEligible =
     activeTool === 'circle' ||
     activeTool === 'bodyCircle' ||
     (activeTool === 'rect' && !!rect3d) ||
     (activeTool === 'triangle' && !!triangle3d);
 
-  const setTool = (t: ToolType) => {
-    haptic();
-    onToolChange(t);
+  const setTool = (t: ToolType) => onToolChange(t);
+
+  const Row = ({
+    k,
+    active,
+    icon,
+    label,
+    onPress,
+    sub,
+  }: {
+    k: string;
+    active?: boolean;
+    icon: React.ReactNode;
+    label: string;
+    onPress: () => void;
+    sub?: string;
+  }) => {
+    const pressed = pressedKey === k;
+    return (
+      <button
+        type="button"
+        style={{
+          ...rowBase(!!active),
+          transform: pressed ? 'scale(0.95)' : undefined,
+        }}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          fire(k, onPress);
+        }}
+      >
+        <span style={{ display: 'flex', width: 26, justifyContent: 'center', color: '#4B5563' }}>{icon}</span>
+        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
+          <span style={{ lineHeight: 1.2 }}>{label}</span>
+          {sub ? <span style={{ fontSize: 11, fontWeight: 500, color: '#6B7280' }}>{sub}</span> : null}
+        </span>
+      </button>
+    );
   };
 
-  const paletteRef = useRef<HTMLDivElement>(null);
+  const BackHeader = ({
+    title,
+    icon,
+  }: {
+    title: string;
+    icon: React.ReactNode;
+  }) => (
+    <>
+      <button
+        type="button"
+        style={{
+          ...rowBase(false),
+          background: '#fff',
+          borderColor: '#E8E6E1',
+          fontWeight: 700,
+          color: '#35679A',
+        }}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          fire(`back-${title}`, pop);
+        }}
+      >
+        <ChevronLeft size={20} />
+        Back
+      </button>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 4px 4px',
+          color: '#111827',
+          fontWeight: 800,
+          fontSize: 15,
+        }}
+      >
+        <span style={{ color: '#35679A' }}>{icon}</span>
+        {title}
+      </div>
+    </>
+  );
 
-  useEffect(() => {
-    if (!openPanel) return;
-    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
-      if (paletteRef.current && !paletteRef.current.contains(e.target as Node)) {
-        setOpenPanel(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('touchstart', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('touchstart', handleClickOutside);
-    };
-  }, [openPanel]);
-
-  const chk = (label: string, checked: boolean, onChange: (v: boolean) => void): React.ReactNode => (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#555', padding: '3px 8px', cursor: 'pointer' }}>
-      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} /> {label}
+  const chk = (
+    key: string,
+    label: string,
+    checked: boolean,
+    onChange: (v: boolean) => void,
+  ) => (
+    <label
+      key={key}
+      style={{
+        ...rowBase(checked),
+        cursor: 'pointer',
+        transform: pressedKey === key ? 'scale(0.95)' : undefined,
+      }}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        fire(key, () => onChange(!checked));
+      }}
+    >
+      <input type="checkbox" readOnly checked={checked} style={{ width: 18, height: 18 }} />
+      <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
     </label>
   );
 
-  return (
-    <div
-      ref={paletteRef}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: 4,
-        padding: '8px 4px',
-        userSelect: 'none',
-        height: '100%',
-      }}
-    >
-      {/* ── Main tool buttons ── */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
-        {/* Select */}
-        <button
-          onClick={() => { setTool('select'); setOpenPanel(null); }}
-          style={SS.toolBtn(activeTool === 'select')}
-          title="Select"
-        >
-          <MousePointer2 size={16} />
-        </button>
+  /* ── Screens ───────────────────────────────────────────────────────── */
 
-        {/* Style */}
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => togglePanel('style')}
-            style={SS.toolBtn(openPanel === 'style')}
-            title="Style"
-          >
-            <Shapes size={16} />
-          </button>
-          {openPanel === 'style' && (
-            <div style={SS.dropdown}>
-              <div style={SS.sectionLabel}>Color</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4, padding: '4px 8px' }}>
-                {PRESET_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => onOptionsChange({ color: c })}
-                    title={c}
-                    style={{
-                      width: 22,
-                      height: 22,
-                      borderRadius: 4,
-                      border: drawingOptions.color === c ? '2px solid #35679A' : '1px solid #E5E5E5',
-                      background: c,
-                      cursor: 'pointer',
-                      padding: 0,
-                      transform: drawingOptions.color === c ? 'scale(1.1)' : 'none',
-                      transition: 'transform 0.1s',
-                    }}
-                  />
-                ))}
-                <label style={{ width: 22, height: 22, borderRadius: 4, border: '1px solid #E5E5E5', overflow: 'hidden', cursor: 'pointer', position: 'relative' }} title="Custom color">
-                  <input
-                    type="color"
-                    value={drawingOptions.color}
-                    onChange={(e) => onOptionsChange({ color: e.target.value })}
-                    style={{ position: 'absolute', inset: -4, width: 30, height: 30, cursor: 'pointer', opacity: 0 }}
-                  />
-                  <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', background: drawingOptions.color, color: '#fff', textShadow: '0 0 2px rgba(0,0,0,0.5)' }}>+</span>
-                </label>
-              </div>
-              <div style={SS.sectionLabel}>Thickness</div>
-              <div style={{ padding: '2px 8px 4px' }}>
-                <input
-                  type="range" min={1} max={12} step={1}
-                  value={drawingOptions.lineWidth}
-                  onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })}
-                  style={{ width: '100%' }}
-                />
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999' }}>
-                  <span>1</span>
-                  <span style={{ fontWeight: 600, color: '#555' }}>{drawingOptions.lineWidth}px</span>
-                  <span>12</span>
-                </div>
-              </div>
-              <div style={SS.sectionLabel}>Line Style</div>
-              <div style={{ display: 'flex', gap: 4, padding: '2px 8px 4px' }}>
-                <button
-                  onClick={() => onOptionsChange({ dashed: false })}
-                  style={{ ...SS.dropdownItem(!drawingOptions.dashed), flex: 1, justifyContent: 'center' }}
-                  title="Solid"
-                >
-                  —
-                </button>
-                <button
-                  onClick={() => onOptionsChange({ dashed: true })}
-                  style={{ ...SS.dropdownItem(!!drawingOptions.dashed), flex: 1, justifyContent: 'center' }}
-                  title="Dashed"
-                >
-                  ╌
-                </button>
-              </div>
-              {(activeTool === 'manualSwing' || activeTool === 'swingPath') && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#555', padding: '4px 8px', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={!!drawingOptions.arrowAtEnd}
-                    onChange={(e) => onOptionsChange({ arrowAtEnd: e.target.checked })}
-                  />
-                  Arrow at end
-                </label>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Draw */}
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => togglePanel('draw')}
-            style={SS.toolBtn(isDrawTool || openPanel === 'draw')}
-            title="Draw"
-          >
-            <Pen size={16} />
-          </button>
-          {openPanel === 'draw' && (
-            <div style={{ ...SS.dropdown, maxHeight: 'min(75vh, 520px)' }}>
-              <div style={SS.sectionLabel}>Shapes & Lines</div>
-              <button onClick={() => setTool('pen')} style={SS.dropdownItem(activeTool === 'pen')} title="Freehand draw">
-                <Pen size={14} /> Freehand
-              </button>
-              <button onClick={() => setTool('line')} style={SS.dropdownItem(activeTool === 'line')} title="Straight line">
-                <Minus size={14} /> Line
-              </button>
-              <button onClick={() => setTool('arrow')} style={SS.dropdownItem(activeTool === 'arrow')} title="Arrow">
-                <ArrowRight size={14} /> Arrow
-              </button>
-              <button onClick={() => setTool('erase')} style={SS.dropdownItem(activeTool === 'erase')} title="Eraser">
-                <Eraser size={14} /> Eraser
-              </button>
-              <button onClick={() => setTool(isCircle3d ? 'bodyCircle' : 'circle')} style={SS.dropdownItem(activeTool === 'circle' || activeTool === 'bodyCircle')} title="Circle">
-                <Circle size={14} /> Circle
-              </button>
-              <button onClick={() => setTool('rect')} style={SS.dropdownItem(activeTool === 'rect')} title="Rectangle">
-                <Square size={14} /> Rectangle
-              </button>
-              <button onClick={() => setTool('triangle')} style={SS.dropdownItem(activeTool === 'triangle')} title="Triangle">
-                <Triangle size={14} /> Triangle
-              </button>
-
-              <div style={SS.divider} />
-              <div style={SS.sectionLabel}>Annotate</div>
-              <button onClick={() => setTool('text')} style={SS.dropdownItem(activeTool === 'text')} title="Text">
-                <Type size={14} /> Text
-              </button>
-              <button onClick={() => setTool('angle')} style={SS.dropdownItem(activeTool === 'angle')} title="Angle measure">
-                <Triangle size={14} /> Angle
-              </button>
-              <button onClick={() => setTool('arrowAngle')} style={SS.dropdownItem(activeTool === 'arrowAngle')} title="Arrow + angle">
-                <Activity size={14} /> Arrow + angle
-              </button>
-              <button onClick={() => setTool('manualSwing')} style={SS.dropdownItem(activeTool === 'manualSwing')} title="Swing path">
-                <Zap size={14} /> Swing path
-              </button>
-
-              {/* Shape options */}
-              {(activeTool === 'circle' || activeTool === 'bodyCircle' || activeTool === 'rect' || activeTool === 'triangle') && (
-                <>
-                  <div style={SS.divider} />
-                  <div style={SS.sectionLabel}>Shape Options</div>
-                  {onCircleSpinningChange &&
-                    chk('Animation', !!circleSpinning, onCircleSpinningChange)}
-                  {onOutlineEraserSizeChange && shapeEraserEligible && (
-                    <div>
-                      {chk('Outline eraser', outlineEraserSize > 0, (v) => onOutlineEraserSizeChange(v ? 15 : 0))}
-                      {outlineEraserSize > 0 && (
-                        <div style={{ padding: '2px 8px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999', marginBottom: 2 }}>
-                            <span>Size</span>
-                            <span style={{ fontWeight: 600, color: '#555' }}>{outlineEraserSize}px</span>
-                          </div>
-                          <input
-                            type="range" min={5} max={50} step={1}
-                            value={outlineEraserSize}
-                            onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
-                            style={{ width: '100%' }}
-                          />
-                          <p style={{ ...SS.hint, color: '#DC2626', padding: '2px 0' }}>Drag over outline to erase.</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Font size inline when text tool */}
-              {activeTool === 'text' && (
-                <>
-                  <div style={SS.divider} />
-                  <div style={SS.sectionLabel}>Font Size</div>
-                  <div style={{ padding: '2px 8px 4px' }}>
-                    <input
-                      type="range" min={10} max={72} step={2}
-                      value={drawingOptions.fontSize}
-                      onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
-                      style={{ width: '100%' }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999' }}>
-                      <span>10</span>
-                      <span style={{ fontWeight: 600, color: '#555' }}>{drawingOptions.fontSize}px</span>
-                      <span>72</span>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Skeleton */}
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => { setTool('skeleton'); togglePanel('skeleton-opts'); }}
-            style={SS.toolBtn(activeTool === 'skeleton')}
-            title="Skeleton"
-          >
-            <PersonStanding size={16} />
-          </button>
-          {openPanel === 'skeleton-opts' && activeTool === 'skeleton' && (
-            <div style={SS.dropdown}>
-              <div style={SS.sectionLabel}>Skeleton</div>
-              <p style={{ ...SS.hint, color: '#0891B2' }}>AI auto-detects pose from video.</p>
-              <button onClick={onResetSkeleton} style={{ ...SS.dropdownItem(false), color: '#EA580C' }} title="Reset skeleton">
-                <RefreshCw size={13} /> Reset & Re-analyze
-              </button>
-              {onSkeletonShowAnglesChange !== undefined && chk('Show angles', skeletonShowAngles ?? true, onSkeletonShowAnglesChange)}
-              {onSkeletonShowHeadLineChange !== undefined && chk('Show head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange)}
-              {onSkeletonClassicColorsChange !== undefined && chk('Neon colors', skeletonClassicColors ?? true, onSkeletonClassicColorsChange)}
-              <div style={SS.sectionLabel}>Body Parts</div>
-              {onSkeletonShowRightArmChange !== undefined && chk('Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange)}
-              {onSkeletonShowLeftArmChange !== undefined && chk('Left arm', skeletonShowLeftArm ?? true, onSkeletonShowLeftArmChange)}
-              {onSkeletonShowRightLegChange !== undefined && chk('Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange)}
-              {onSkeletonShowLeftLegChange !== undefined && chk('Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange)}
-            </div>
-          )}
-        </div>
-
-        {/* View (Zoom) */}
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => togglePanel('view')}
-            style={SS.toolBtn(openPanel === 'view' || activeTool === 'zoom')}
-            title="View"
-          >
-            <ZoomIn size={16} />
-          </button>
-          {openPanel === 'view' && (
-            <div style={SS.dropdown}>
-              <button onClick={() => setTool('zoom')} style={SS.dropdownItem(activeTool === 'zoom')} title="Zoom & pan">
-                <ZoomIn size={14} /> Zoom & pan
-              </button>
-              {onResetCropZoom && (
-                <button onClick={onResetCropZoom} style={SS.dropdownItem(false)} title="Reset zoom">
-                  <RefreshCw size={14} /> Reset zoom
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Object Multiplier */}
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => { setTool('objectMultiplier'); togglePanel('multiplier-opts'); }}
-            style={SS.toolBtn(activeTool === 'objectMultiplier')}
-            title="Multiplier"
-          >
-            <Layers size={16} />
-          </button>
-          {openPanel === 'multiplier-opts' && activeTool === 'objectMultiplier' && (
-            <div style={SS.dropdown}>
-              <div style={SS.sectionLabel}>Object Multiplier</div>
-              {!objMultiplierActive ? (
-                <div style={{ padding: '6px 8px' }}>
-                  <p style={{ fontSize: 11, color: '#7C3AED', fontWeight: 600, margin: '0 0 4px' }}>
-                    Drag to select the object you want to multiply across frames
-                  </p>
-                  <p style={{ ...SS.hint, margin: 0 }}>
-                    Click and drag a rectangle on the video around the player or object.
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div style={{ padding: '4px 8px' }}>
-                    <div style={{ fontSize: 9, fontWeight: 600, color: '#777', textTransform: 'uppercase' }}>
-                      Frames: {objMultiplierFrameCount}
-                    </div>
-                    <input
-                      type="range" min={3} max={12} step={1}
-                      value={objMultiplierFrameCount}
-                      onChange={(e) => onObjMultiplierFrameCountChange?.(Number(e.target.value))}
-                      style={{ width: '100%', marginTop: 2 }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999' }}>
-                      <span>3</span><span>12</span>
-                    </div>
-                  </div>
-                  <div style={{ padding: '4px 8px' }}>
-                    <div style={{ fontSize: 9, fontWeight: 600, color: '#777', textTransform: 'uppercase' }}>
-                      Duration: {objMultiplierDuration}s
-                    </div>
-                    <input
-                      type="range" min={0.5} max={10} step={0.5}
-                      value={objMultiplierDuration}
-                      onChange={(e) => onObjMultiplierDurationChange?.(Number(e.target.value))}
-                      style={{ width: '100%', marginTop: 2 }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#999' }}>
-                      <span>0.5s</span><span>10s</span>
-                    </div>
-                  </div>
-                  {objMultiplierProgress && (
-                    <p style={{ ...SS.hint, color: '#7C3AED', fontWeight: 600 }}>{objMultiplierProgress}</p>
-                  )}
-                  <button onClick={onObjMultiplierCapture} style={{ ...SS.dropdownItem(false), color: '#7C3AED' }} title="Capture">
-                    <Layers size={13} /> Capture
-                  </button>
-                  <button onClick={onObjMultiplierClear} style={SS.dropdownItem(false)} title="Clear overlay">
-                    <RefreshCw size={13} /> Clear overlay
-                  </button>
-                </>
-              )}
+  if (top === 'style') {
+    return (
+      <div style={shell}>
+        <div style={scrollArea}>
+          <BackHeader title="Style" icon={<Palette size={18} />} />
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
+            Preset colors
+          </div>
+          {PRESET_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              style={{
+                ...rowBase(drawingOptions.color === c),
+                justifyContent: 'flex-start',
+                transform: pressedKey === `c-${c}` ? 'scale(0.95)' : undefined,
+              }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                fire(`c-${c}`, () => onOptionsChange({ color: c }));
+              }}
+            >
+              <span
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 6,
+                  background: c,
+                  border: drawingOptions.color === c ? '2px solid #35679A' : '1px solid #E5E5E5',
+                }}
+              />
+              {c}
+            </button>
+          ))}
+          <label style={{ ...rowBase(false), cursor: 'pointer' }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Custom</span>
+            <input
+              type="color"
+              value={drawingOptions.color}
+              onChange={(e) => onOptionsChange({ color: e.target.value })}
+              style={{ marginLeft: 'auto', width: 44, height: 32, border: 'none', background: 'transparent' }}
+            />
+          </label>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 0' }}>
+            Thickness ({drawingOptions.lineWidth}px)
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={12}
+            step={1}
+            value={drawingOptions.lineWidth}
+            onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })}
+            style={{ width: '100%', marginTop: 4 }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+            <button
+              type="button"
+              style={{ ...rowBase(!drawingOptions.dashed), flex: 1, justifyContent: 'center' }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                fire('solid', () => onOptionsChange({ dashed: false }));
+              }}
+            >
+              Solid line
+            </button>
+            <button
+              type="button"
+              style={{ ...rowBase(!!drawingOptions.dashed), flex: 1, justifyContent: 'center' }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                fire('dash', () => onOptionsChange({ dashed: true }));
+              }}
+            >
+              Dashed
+            </button>
+          </div>
+          {(activeTool === 'manualSwing' || activeTool === 'swingPath') &&
+            chk('arrowEnd', 'Arrow at end of swing path', !!drawingOptions.arrowAtEnd, (v) => onOptionsChange({ arrowAtEnd: v }))}
+          {activeTool === 'text' && (
+            <div style={{ padding: '4px 8px 0' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', marginBottom: 4 }}>Text size</div>
+              <input
+                type="range"
+                min={10}
+                max={72}
+                step={2}
+                value={drawingOptions.fontSize}
+                onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
+                style={{ width: '100%' }}
+              />
+              <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>{drawingOptions.fontSize}px</div>
             </div>
           )}
         </div>
       </div>
+    );
+  }
 
-      {/* Context hints for active tools */}
-      {activeTool === 'swingPath' && openPanel !== 'draw' && (
-        <div style={{ textAlign: 'center', maxWidth: 48, marginTop: 4 }}>
-          <p style={{ ...SS.hint, color: '#7C3AED' }}>Click points, dbl-click to end.</p>
-          {onAutoSwing && (
-            <button onClick={onAutoSwing} style={SS.actionBtn()} title="Auto Swing">
-              <TrendingUp size={13} />
-            </button>
+  if (top === 'draw') {
+    return (
+      <div style={shell}>
+        <div style={scrollArea}>
+          <BackHeader title="Draw & annotate" icon={<Pen size={18} />} />
+          <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Freehand" onPress={() => { setTool('pen'); resetNav(); }} />
+          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Straight line" onPress={() => { setTool('line'); resetNav(); }} />
+          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => { setTool('arrow'); resetNav(); }} />
+          <Row k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} label="Eraser" onPress={() => { setTool('erase'); resetNav(); }} />
+          <Row
+            k="circle"
+            active={activeTool === 'circle' || activeTool === 'bodyCircle'}
+            icon={<Circle size={18} />}
+            label="Circle"
+            sub={isCircle3d ? '3D body circle' : '2D circle'}
+            onPress={() => {
+              setTool(isCircle3d ? 'bodyCircle' : 'circle');
+              push('shapeOpts');
+            }}
+          />
+          <Row
+            k="rect"
+            active={activeTool === 'rect'}
+            icon={<Square size={18} />}
+            label="Rectangle"
+            onPress={() => {
+              setTool('rect');
+              push('shapeOpts');
+            }}
+          />
+          <Row
+            k="tri"
+            active={activeTool === 'triangle'}
+            icon={<Triangle size={18} />}
+            label="Triangle"
+            onPress={() => {
+              setTool('triangle');
+              push('shapeOpts');
+            }}
+          />
+          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => { setTool('text'); resetNav(); }} />
+          <Row k="angle" active={activeTool === 'angle'} icon={<Triangle size={18} />} label="Angle measure" onPress={() => { setTool('angle'); resetNav(); }} />
+          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<Activity size={18} />} label="Arrow + angle" onPress={() => { setTool('arrowAngle'); resetNav(); }} />
+          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => { setTool('manualSwing'); resetNav(); }} />
+        </div>
+      </div>
+    );
+  }
+
+  if (top === 'shapeOpts') {
+    const shapeLabel =
+      activeTool === 'bodyCircle'
+        ? '3D Circle'
+        : activeTool === 'circle'
+          ? 'Circle'
+          : activeTool === 'rect'
+            ? 'Rectangle'
+            : activeTool === 'triangle'
+              ? 'Triangle'
+              : 'Shape';
+    return (
+      <div style={shell}>
+        <div style={scrollArea}>
+          <BackHeader title={shapeLabel} icon={<Shapes size={18} />} />
+          {onCircleSpinningChange && (activeTool === 'circle' || activeTool === 'bodyCircle') &&
+            chk('spin', 'Animated outline', !!circleSpinning, onCircleSpinningChange)}
+          {activeTool === 'rect' && onRect3dChange &&
+            chk('r3d', '3D / perspective rectangle', !!rect3d, onRect3dChange)}
+          {activeTool === 'triangle' && onTriangle3dChange &&
+            chk('t3d', '3D / perspective triangle', !!triangle3d, onTriangle3dChange)}
+          {onOutlineEraserSizeChange && shapeEraserEligible && (
+            <>
+              {chk('oe', 'Outline eraser', outlineEraserSize > 0, (v) => onOutlineEraserSizeChange(v ? 15 : 0))}
+              {outlineEraserSize > 0 && (
+                <div style={{ padding: '0 8px' }}>
+                  <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={50}
+                    step={1}
+                    value={outlineEraserSize}
+                    onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+            </>
           )}
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {activeTool === 'manualSwing' && openPanel !== 'draw' && (
-        <div style={{ ...SS.hint, textAlign: 'center', marginTop: 4, maxWidth: 48 }}>
-          <span style={{ color: '#2563EB' }}>Click to add points</span>
+  if (top === 'skeleton') {
+    return (
+      <div style={shell}>
+        <div style={scrollArea}>
+          <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
+          <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
+            AI pose overlay follows the player. Keep the video playing for best results.
+          </p>
+          <button
+            type="button"
+            style={{ ...rowBase(false), color: '#C2410C', borderColor: '#FED7AA', background: '#FFF7ED' }}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              fire('reskel', () => onResetSkeleton());
+            }}
+          >
+            <RefreshCw size={18} />
+            Reset &amp; re-analyze
+          </button>
+          {onSkeletonShowAnglesChange !== undefined &&
+            chk('sa', 'Show joint angles', skeletonShowAngles ?? true, onSkeletonShowAnglesChange)}
+          {onSkeletonShowHeadLineChange !== undefined &&
+            chk('sh', 'Show head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange)}
+          {onSkeletonClassicColorsChange !== undefined &&
+            chk('sc', 'Neon colors', skeletonClassicColors ?? true, onSkeletonClassicColorsChange)}
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', padding: '8px 4px 0' }}>Body parts</div>
+          {onSkeletonShowRightArmChange !== undefined &&
+            chk('ra', 'Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange)}
+          {onSkeletonShowLeftArmChange !== undefined &&
+            chk('la', 'Left arm', skeletonShowLeftArm ?? true, onSkeletonShowLeftArmChange)}
+          {onSkeletonShowRightLegChange !== undefined &&
+            chk('rl', 'Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange)}
+          {onSkeletonShowLeftLegChange !== undefined &&
+            chk('ll', 'Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange)}
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {activeTool === 'angle' && openPanel !== 'draw' && (
-        <div style={{ ...SS.hint, textAlign: 'center', marginTop: 4, maxWidth: 48 }}>
-          <span style={{ color: '#D97706' }}>Click 3 points</span>
+  if (top === 'view') {
+    return (
+      <div style={shell}>
+        <div style={scrollArea}>
+          <BackHeader title="View" icon={<ZoomIn size={18} />} />
+          <Row k="zoom" active={activeTool === 'zoom'} icon={<ZoomIn size={18} />} label="Zoom & pan" onPress={() => { setTool('zoom'); resetNav(); }} />
+          {onResetCropZoom ? (
+            <Row k="rz" icon={<RefreshCw size={18} />} label="Reset zoom" onPress={() => { onResetCropZoom(); resetNav(); }} />
+          ) : null}
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {activeTool === 'zoom' && openPanel !== 'view' && (
-        <div style={{ ...SS.hint, textAlign: 'center', marginTop: 4, maxWidth: 48 }}>
-          <span style={{ color: '#2563EB' }}>Scroll to zoom</span>
+  if (top === 'multiplier') {
+    return (
+      <div style={shell}>
+        <div style={scrollArea}>
+          <BackHeader title="Object multiplier" icon={<Layers size={18} />} />
+          <p style={{ margin: '0 4px 8px', fontSize: 13, fontWeight: 600, color: '#7C3AED', lineHeight: 1.4 }}>
+            Drag to select the object you want to multiply
+          </p>
+          <p style={{ margin: '0 4px 12px', fontSize: 12, color: '#6B7280', lineHeight: 1.45 }}>
+            Draw a dashed rectangle on the video, then tune frames and duration and tap Capture.
+          </p>
+          <div style={{ padding: '4px 8px' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280' }}>Frames: {objMultiplierFrameCount}</div>
+            <input
+              type="range"
+              min={3}
+              max={12}
+              step={1}
+              value={objMultiplierFrameCount}
+              onChange={(e) => onObjMultiplierFrameCountChange?.(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+          </div>
+          <div style={{ padding: '4px 8px' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280' }}>Duration: {objMultiplierDuration}s</div>
+            <input
+              type="range"
+              min={0.5}
+              max={10}
+              step={0.5}
+              value={objMultiplierDuration}
+              onChange={(e) => onObjMultiplierDurationChange?.(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+          </div>
+          {!objMultiplierActive ? (
+            <p style={{ fontSize: 12, color: '#B45309', fontWeight: 600, margin: '4px 8px', lineHeight: 1.4 }}>
+              No region yet — drag on the video to select an area first.
+            </p>
+          ) : null}
+          {objMultiplierProgress ? (
+            <p style={{ fontSize: 12, color: '#7C3AED', fontWeight: 600, margin: '4px 8px' }}>{objMultiplierProgress}</p>
+          ) : null}
+          <Row k="cap" icon={<Layers size={18} />} label="Capture frames" onPress={() => onObjMultiplierCapture?.()} />
+          <Row k="clr" icon={<RefreshCw size={18} />} label="Clear overlay" onPress={() => onObjMultiplierClear?.()} />
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {/* V2 feature: Ball Trail controls intentionally hidden */}
-      {false && activeTool === 'ballShadow' && <div />}
+  if (top === 'more') {
+    return (
+      <div style={shell}>
+        <div style={scrollArea}>
+          <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
+          {onAutoSwing ? (
+            <Row k="as" icon={<TrendingUp size={18} />} label="Auto swing path" onPress={() => { onAutoSwing(); resetNav(); }} />
+          ) : null}
+          {onRacketMultiplier ? (
+            <Row k="rm" icon={<Video size={18} />} label="Racket trail" onPress={() => { onRacketMultiplier(); resetNav(); }} />
+          ) : null}
+          <Row k="ball" active={activeTool === 'ballShadow'} icon={<Circle size={18} />} label="Ball shadow / trail" onPress={() => { setTool('ballShadow'); resetNav(); }} />
+          {activeTool === 'ballShadow' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
+              {(['comet', 'arc', 'strobe'] as BallTrailMode[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  style={rowBase(ballTrailMode === m)}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    fire(`bt-${m}`, () => onBallTrailModeChange(m));
+                  }}
+                >
+                  Trail: {m}
+                </button>
+              ))}
+              <Row k="rbt" icon={<RefreshCw size={16} />} label="Reset ball trail" onPress={() => onResetBallTrail()} />
+            </div>
+          )}
+          {onBallSampleModeChange !== undefined &&
+            chk('bsm', 'Ball sample mode', !!ballSampleMode, onBallSampleModeChange)}
+        </div>
+      </div>
+    );
+  }
 
-      {/* ── Spacer ── */}
-      <div style={{ flex: 1 }} />
+  /* ── Home ─────────────────────────────────────────────────────────── */
+  return (
+    <div style={shell}>
+      <div style={scrollArea}>
+        <Row k="sel" active={activeTool === 'select'} icon={<MousePointer2 size={20} />} label="Select" onPress={() => setTool('select')} />
+        {onPrecisionDrawToggle ? (
+          <Row
+            k="prec"
+            active={precisionDrawEnabled}
+            icon={<Crosshair size={20} />}
+            label="Precision draw"
+            sub="Crosshair + second finger to tap"
+            onPress={() => onPrecisionDrawToggle()}
+          />
+        ) : null}
+        {onShowPrecisionInstructions && precisionDrawEnabled ? (
+          <button
+            type="button"
+            style={{ ...rowBase(false), fontSize: 12, fontWeight: 600, color: '#35679A', borderStyle: 'dashed' }}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              fire('pinst', () => onShowPrecisionInstructions());
+            }}
+          >
+            How precision draw works
+          </button>
+        ) : null}
+        <Row k="st" icon={<Palette size={20} />} label="Style" sub="Color, thickness, line" onPress={() => push('style')} />
+        <Row k="dr" icon={<Pen size={20} />} label="Draw & annotate" onPress={() => push('draw')} />
+        <Row
+          k="sk"
+          active={activeTool === 'skeleton'}
+          icon={<PersonStanding size={20} />}
+          label="Skeleton"
+          onPress={() => {
+            setTool('skeleton');
+            push('skeleton');
+          }}
+        />
+        <Row k="vw" icon={<ZoomIn size={20} />} label="View & zoom" onPress={() => push('view')} />
+        <Row
+          k="mul"
+          active={activeTool === 'objectMultiplier'}
+          icon={<Layers size={20} />}
+          label="Object multiplier"
+          onPress={() => {
+            setTool('objectMultiplier');
+            push('multiplier');
+          }}
+        />
+        {isShapeTool && (
+          <Row k="sho" icon={<Shapes size={20} />} label="Shape options" sub="Outline, 3D, animation" onPress={() => push('shapeOpts')} />
+        )}
+        <Row k="more" icon={<LayoutGrid size={20} />} label="More" sub="Swing, racket, ball" onPress={() => push('more')} />
 
-      {/* ── Action buttons (bottom) ── */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center', paddingBottom: 8 }}>
-        <div style={{ width: 24, height: 1, background: '#E5E5E5', borderRadius: 1, marginBottom: 4 }} />
-        <button onClick={onUndo} style={SS.actionBtn()} title="Undo (Ctrl+Z)">
-          <Undo2 size={14} />
-        </button>
-        <button onClick={onRedo} style={SS.actionBtn()} title="Redo (Ctrl+Y)">
-          <Redo2 size={14} />
-        </button>
-        <button onClick={onClear} style={SS.actionBtn(true)} title="Clear all">
-          <Trash2 size={14} />
-        </button>
+        <div style={{ height: 1, background: '#E8E6E1', margin: '8px 0' }} />
+
+        <Row k="u" icon={<Undo2 size={20} />} label="Undo" onPress={onUndo} />
+        <Row k="r" icon={<Redo2 size={20} />} label="Redo" onPress={onRedo} />
+        <Row k="cl" icon={<Trash2 size={20} />} label="Clear all" onPress={onClear} />
       </div>
     </div>
   );

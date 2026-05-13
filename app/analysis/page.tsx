@@ -14,8 +14,8 @@ import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 import ScreenRecorder from '@/components/ScreenRecorder';
-import MobileToolStrip from '@/components/MobileToolStrip';
 import WebcamDropdown from '@/components/WebcamDropdown';
+import { terminateGlobalPoseWorker, warmupMoveNetWorker } from '@/lib/poseWorkerBridge';
 import PrecisionDrawInstructions, {
   hasSeenPrecisionInstructions,
   markPrecisionInstructionsSeen,
@@ -67,9 +67,9 @@ function safeYoutubePlayerDuration(player: unknown): number | null {
 }
 
 export default function Home() {
-  const LEFT_TOOLBAR_W = 68;
-  /** Narrower floating rail in 9:16 preview so more pixels stay on the “phone” */
-  const REELS_TOOLBAR_W = 46;
+  const LEFT_TOOLBAR_W = 208;
+  /** Reels floating toolbar — fits vertical drill-down palette */
+  const REELS_TOOLBAR_W = 200;
 
   // ── Refs that must never unmount ─────────────────────────────────────────
   const videoRef      = useRef<HTMLVideoElement>(null);
@@ -333,13 +333,28 @@ export default function Home() {
 
   /** Drop FFmpeg WASM when leaving the page so memory does not linger after tab close. */
   useEffect(() => {
-    const onBeforeUnload = () => disposeFfmpegWasm();
+    const onBeforeUnload = () => {
+      disposeFfmpegWasm();
+      terminateGlobalPoseWorker();
+    };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
       window.removeEventListener('beforeunload', onBeforeUnload);
       disposeFfmpegWasm();
+      terminateGlobalPoseWorker();
     };
   }, []);
+
+  /** Preload MoveNet in a worker once per analysis session (no UI toggle required). */
+  useEffect(() => {
+    warmupMoveNetWorker();
+  }, []);
+
+  useEffect(() => {
+    if (activeTool === 'objectMultiplier') {
+      canvasRef.current?.startObjMultiplierRegionSelect?.();
+    }
+  }, [activeTool]);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
@@ -2302,20 +2317,32 @@ export default function Home() {
                 left: 8,
                 top: 8,
                 bottom: toolbarBottomReservePx,
+                width: LEFT_TOOLBAR_W,
                 zIndex: 60,
-                overflow: 'visible',
+                overflow: 'hidden',
+                borderRadius: 14,
+                boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
+                border: '1px solid rgba(0,0,0,0.08)',
+                background: 'rgba(255,255,255,0.96)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
               }}
               >
-                <MobileToolStrip
+                <ToolPalette
                   activeTool={activeTool}
                   onToolChange={handleToolChange}
+                  compact
                   drawingOptions={drawingOptions}
                   onOptionsChange={handleOptionsChange}
                   onUndo={() => canvasRef.current?.undo()}
                   onRedo={() => canvasRef.current?.redo()}
                   onClear={() => canvasRef.current?.clearAll()}
+                  onResetSkeleton={() => canvasRef.current?.resetSkeleton()}
+                  onResetBallTrail={() => canvasRef.current?.resetBallTrail()}
                   ballTrailMode={ballTrailMode}
                   onBallTrailModeChange={setBallTrailMode}
+                  onAutoSwing={handleAutoSwing}
+                  onRacketMultiplier={handleRacketMultiplier}
                   circleSpinning={circleSpinning}
                   onCircleSpinningChange={setCircleSpinning}
                   outlineEraserSize={outlineEraserSize}
@@ -2324,7 +2351,31 @@ export default function Home() {
                   onRect3dChange={setRect3d}
                   triangle3d={triangle3d}
                   onTriangle3dChange={setTriangle3d}
+                  skeletonShowAngles={skeletonShowAngles}
+                  onSkeletonShowAnglesChange={setSkeletonShowAngles}
+                  skeletonShowHeadLine={skeletonShowHeadLine}
+                  onSkeletonShowHeadLineChange={setSkeletonShowHeadLine}
+                  skeletonClassicColors={skeletonClassicColors}
+                  onSkeletonClassicColorsChange={setSkeletonClassicColors}
+                  skeletonShowRightArm={skeletonShowRightArm}
+                  onSkeletonShowRightArmChange={setSkeletonShowRightArm}
+                  skeletonShowLeftArm={skeletonShowLeftArm}
+                  onSkeletonShowLeftArmChange={setSkeletonShowLeftArm}
+                  skeletonShowRightLeg={skeletonShowRightLeg}
+                  onSkeletonShowRightLegChange={setSkeletonShowRightLeg}
+                  skeletonShowLeftLeg={skeletonShowLeftLeg}
+                  onSkeletonShowLeftLegChange={setSkeletonShowLeftLeg}
+                  ballSampleMode={ballSampleMode}
+                  onBallSampleModeChange={setBallSampleMode}
                   onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
+                  objMultiplierFrameCount={objMultiplierFrameCount}
+                  onObjMultiplierFrameCountChange={setObjMultiplierFrameCount}
+                  objMultiplierDuration={objMultiplierDuration}
+                  onObjMultiplierDurationChange={setObjMultiplierDuration}
+                  onObjMultiplierCapture={handleObjMultiplierCapture}
+                  onObjMultiplierClear={handleObjMultiplierClear}
+                  objMultiplierActive={objMultiplierHasRegion}
+                  objMultiplierProgress={objMultiplierProgress}
                   precisionDrawEnabled={precisionDrawEnabled}
                   onPrecisionDrawToggle={handlePrecisionDrawToggle}
                   onShowPrecisionInstructions={showPrecisionInstructionsAgain}
@@ -2354,12 +2405,12 @@ export default function Home() {
               >
                 <div
                   style={{
-                    padding: 4,
-                    transform: 'scale(0.88)',
-                    transformOrigin: 'top left',
-                    width: `${100 / 0.88}%`,
-                    maxHeight: 'calc(100% / 0.88)',
+                    padding: 6,
+                    width: '100%',
+                    height: '100%',
+                    minHeight: 0,
                     overflowY: 'auto',
+                    WebkitOverflowScrolling: 'touch',
                   }}
                 >
                   <ToolPalette
@@ -2666,7 +2717,7 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
-                      poseFrameSkip={hasVideoBContent ? 4 : 0}
+                      poseFrameSkip={hasVideoBContent ? 1 : 0}
                       panModeEnabled={panModeEnabled}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
                       onObjMultiplierRegionSelected={() => setObjMultiplierHasRegion(true)}
@@ -2972,7 +3023,7 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
-                      poseFrameSkip={4}
+                      poseFrameSkip={1}
                       panModeEnabled={panModeEnabled}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
                     />

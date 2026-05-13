@@ -58,10 +58,17 @@ export default function PreciseTimeline({
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
+  const STORAGE_SCRUB_KEY = 'coachlab.timeline.scrubSensitivity';
 
   const [fpsMode, setFpsMode] = useState<'auto' | '30' | '60' | '120' | 'custom'>('30');
   const [customFps, setCustomFps] = useState(defaultFps);
   const [autoFps, setAutoFps] = useState<number | null>(null);
+  /** 0.35 = very precise scrub, 1 = linear, 2.5 = large jumps per small drag */
+  const [scrubSensitivity, setScrubSensitivity] = useState(1);
+  const scrubSensRef = useRef(1);
+  useEffect(() => {
+    scrubSensRef.current = scrubSensitivity;
+  }, [scrubSensitivity]);
 
   // Load persisted FPS choice (once)
   useEffect(() => {
@@ -80,6 +87,10 @@ export default function PreciseTimeline({
 
       if (Number.isFinite(parsedCustom)) setCustomFps(parsedCustom);
       else setCustomFps(defaultFps);
+
+      const rawSens = window.localStorage.getItem(STORAGE_SCRUB_KEY);
+      const s = rawSens ? Number(rawSens) : NaN;
+      if (Number.isFinite(s) && s >= 0.25 && s <= 3) setScrubSensitivity(s);
     } catch {
       // ignore
     }
@@ -95,6 +106,14 @@ export default function PreciseTimeline({
       // ignore
     }
   }, [customFps, fpsMode]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_SCRUB_KEY, String(scrubSensitivity));
+    } catch {
+      // ignore
+    }
+  }, [scrubSensitivity]);
 
   useEffect(() => {
     if (source.kind !== 'html') { setAutoFps(null); return; }
@@ -247,8 +266,10 @@ export default function PreciseTimeline({
     const dur = dRef.current;
     if (!el || !dur) return;
     const r = el.getBoundingClientRect();
-    const pct = clamp((clientX - r.left) / Math.max(1, r.width), 0, 1);
-    seekTo(pct * dur);
+    const raw = clamp((clientX - r.left) / Math.max(1, r.width), 0, 1);
+    const sens = scrubSensRef.current;
+    const adj = clamp(0.5 + (raw - 0.5) * sens, 0, 1);
+    seekTo(adj * dur);
   }, [seekTo]);
 
   useEffect(() => {
@@ -545,6 +566,49 @@ export default function PreciseTimeline({
             </div>
           </>
         )}
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          width: '100%',
+          flexShrink: 0,
+          padding: phoneChrome ? '4px 0 2px' : '2px 0 0',
+        }}
+      >
+        <span style={{ fontSize: 11, fontWeight: 700, color: phoneChrome ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.65)', whiteSpace: 'nowrap' }}>
+          Scrub
+        </span>
+        <input
+          type="range"
+          min={35}
+          max={250}
+          step={5}
+          value={Math.round(scrubSensitivity * 100)}
+          onChange={(e) => setScrubSensitivity(Number(e.target.value) / 100)}
+          aria-label="Timeline scrub sensitivity"
+          title="Low = precise small adjustments. High = faster scrub across the video."
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: phoneChrome ? 36 : 32,
+            accentColor: accent,
+            touchAction: 'none',
+          }}
+        />
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            color: phoneChrome ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.5)',
+            width: 52,
+            textAlign: 'right',
+          }}
+        >
+          {scrubSensitivity < 0.85 ? 'Precise' : scrubSensitivity > 1.35 ? 'Fast' : 'Normal'}
+        </span>
       </div>
 
       {/* Full-width touch scrub bar */}

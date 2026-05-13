@@ -33,7 +33,7 @@ async function init() {
     const pd = await import('@tensorflow-models/pose-detection');
     detector = await pd.createDetector(pd.SupportedModels.MoveNet, {
       modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
-      enableSmoothing: true,
+      enableSmoothing: false,
     });
 
     ready = true;

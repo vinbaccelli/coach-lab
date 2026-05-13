@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useRef, useEffect, useState } from 'react';
+import { ChevronLeft, Camera } from 'lucide-react';
 import type { WebcamPipMode } from '@/components/ToolPalette';
 
 interface WebcamDropdownProps {
@@ -12,10 +13,16 @@ interface WebcamDropdownProps {
   onWebcamOpacityChange: (v: number) => void;
   webcamCutout: boolean;
   onWebcamCutoutChange: (v: boolean) => void;
-  /** Optional style overrides for the trigger button */
   triggerStyle?: React.CSSProperties;
-  /** Compact label for narrow layouts (e.g. reels) */
   compact?: boolean;
+}
+
+function haptic() {
+  try {
+    navigator?.vibrate?.(10);
+  } catch {
+    /* noop */
+  }
 }
 
 export default function WebcamDropdown({
@@ -35,36 +42,90 @@ export default function WebcamDropdown({
 
   useEffect(() => {
     if (!open) return;
-    const onClick = (e: MouseEvent | TouchEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
     };
-    document.addEventListener('mousedown', onClick);
-    document.addEventListener('touchstart', onClick);
-    return () => {
-      document.removeEventListener('mousedown', onClick);
-      document.removeEventListener('touchstart', onClick);
-    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [open]);
 
-  const pillBtn = (active: boolean): React.CSSProperties => ({
-    padding: '4px 10px',
-    borderRadius: 8,
-    border: `1px solid ${active ? '#35679A' : '#E5E5EA'}`,
-    background: active ? '#35679A' : '#fff',
-    color: active ? '#fff' : '#1D1D1F',
-    cursor: 'pointer',
-    fontSize: 11,
-    fontWeight: 600,
-    whiteSpace: 'nowrap',
-  });
+  const close = () => setOpen(false);
+
+  const row = (opts: { onPress: () => void; children: React.ReactNode }) => (
+    <button
+      type="button"
+      onPointerDown={(e) => {
+        e.preventDefault();
+        haptic();
+        opts.onPress();
+      }}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        width: '100%',
+        minHeight: 48,
+        padding: '12px 14px',
+        borderRadius: 12,
+        border: '1px solid #E8E6E1',
+        background: '#FAF8F5',
+        color: '#1A1A1A',
+        fontSize: 14,
+        fontWeight: 600,
+        cursor: 'pointer',
+        textAlign: 'left' as const,
+        touchAction: 'manipulation',
+        transition: 'transform 0.12s ease',
+      }}
+    >
+      {opts.children}
+    </button>
+  );
+
+  const toggleRow = (label: string, on: boolean, flip: () => void) =>
+    row({
+      onPress: flip,
+      children: (
+        <>
+          <span>{label}</span>
+          <span
+            aria-hidden
+            style={{
+              width: 44,
+              height: 26,
+              borderRadius: 13,
+              background: on ? '#34C759' : '#E5E5EA',
+              position: 'relative',
+              flexShrink: 0,
+            }}
+          >
+            <span
+              style={{
+                position: 'absolute',
+                top: 3,
+                left: on ? 22 : 3,
+                width: 20,
+                height: 20,
+                borderRadius: '50%',
+                background: '#fff',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
+                transition: 'left 0.2s',
+              }}
+            />
+          </span>
+        </>
+      ),
+    });
 
   return (
     <div ref={wrapperRef} style={{ position: 'relative', display: 'inline-block' }}>
       <button
         type="button"
-        onClick={() => setOpen((p) => !p)}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          haptic();
+          setOpen((p) => !p);
+        }}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -78,141 +139,170 @@ export default function WebcamDropdown({
           fontWeight: 600,
           cursor: 'pointer',
           whiteSpace: 'nowrap',
+          touchAction: 'manipulation',
           ...triggerStyle,
         }}
-        title="Webcam settings"
+        title="Webcam"
       >
         {webcamActive && <span style={{ fontSize: 8 }}>●</span>}
-        {compact ? 'Cam ▾' : 'Webcam ▾'}
+        {compact ? 'Cam' : 'Webcam'}
       </button>
 
       {open && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 6px)',
-            right: 0,
-            minWidth: 220,
-            background: '#fff',
-            borderRadius: 14,
-            boxShadow: '0 4px 24px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.06)',
-            padding: '14px 16px',
-            zIndex: 200,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* On / Off */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#1D1D1F' }}>Camera</span>
-            <button
-              type="button"
-              onClick={() => { onToggleWebcam(); }}
+        <>
+          <div
+            role="presentation"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              close();
+            }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.35)',
+              zIndex: 280,
+              touchAction: 'none',
+            }}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              left: 0,
+              top: 'calc(44px + env(safe-area-inset-top, 0px))',
+              bottom: 0,
+              width: 'min(100vw, 300px)',
+              maxWidth: '100%',
+              zIndex: 300,
+              display: 'flex',
+              flexDirection: 'column',
+              background: '#FDFCF9',
+              borderRight: '1px solid #E8E6E1',
+              boxShadow: '8px 0 32px rgba(0,0,0,0.12)',
+              overflow: 'hidden',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
               style={{
-                width: 44,
-                height: 24,
-                borderRadius: 12,
-                border: 'none',
-                background: webcamActive ? '#34C759' : '#E5E5EA',
-                cursor: 'pointer',
-                position: 'relative',
-                transition: 'background 0.2s',
+                flexShrink: 0,
+                padding: '10px 12px',
+                borderBottom: '1px solid #E8E6E1',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
               }}
             >
-              <span
-                style={{
-                  position: 'absolute',
-                  top: 2,
-                  left: webcamActive ? 22 : 2,
-                  width: 20,
-                  height: 20,
-                  borderRadius: '50%',
-                  background: '#fff',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
-                  transition: 'left 0.2s',
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  haptic();
+                  close();
                 }}
-              />
-            </button>
-          </div>
-
-          {/* Background removal */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 12, fontWeight: 500, color: '#3C3C43' }}>Background removal</span>
-            <button
-              type="button"
-              onClick={() => onWebcamCutoutChange(!webcamCutout)}
-              style={{
-                width: 44,
-                height: 24,
-                borderRadius: 12,
-                border: 'none',
-                background: webcamCutout ? '#34C759' : '#E5E5EA',
-                cursor: 'pointer',
-                position: 'relative',
-                transition: 'background 0.2s',
-              }}
-            >
-              <span
                 style={{
-                  position: 'absolute',
-                  top: 2,
-                  left: webcamCutout ? 22 : 2,
-                  width: 20,
-                  height: 20,
-                  borderRadius: '50%',
-                  background: '#fff',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
-                  transition: 'left 0.2s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  minHeight: 44,
+                  padding: '0 4px',
+                  border: 'none',
+                  background: 'none',
+                  color: '#35679A',
+                  fontWeight: 700,
+                  fontSize: 15,
+                  cursor: 'pointer',
+                  touchAction: 'manipulation',
                 }}
-              />
-            </button>
-          </div>
-
-          {/* Opacity */}
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-              <span style={{ fontSize: 12, fontWeight: 500, color: '#3C3C43' }}>Opacity</span>
-              <span style={{ fontSize: 11, color: '#8E8E93', fontWeight: 600 }}>
-                {Math.round(webcamOpacity * 100)}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={Math.round(webcamOpacity * 100)}
-              onChange={(e) => onWebcamOpacityChange(Number(e.target.value) / 100)}
-              style={{ width: '100%', accentColor: '#35679A' }}
-            />
-          </div>
-
-          {/* PiP mode */}
-          <div>
-            <span style={{ fontSize: 12, fontWeight: 500, color: '#3C3C43', display: 'block', marginBottom: 6 }}>
-              PiP shape
-            </span>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {(['rectangle', 'circle'] as WebcamPipMode[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  style={pillBtn(webcamPipMode === m)}
-                  onClick={() => onWebcamPipModeChange(m)}
+              >
+                <ChevronLeft size={22} />
+                Back
+              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 4 }}>
+                <span
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 10,
+                    background: '#1A1A1A',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
                 >
-                  {m.charAt(0).toUpperCase() + m.slice(1)}
-                </button>
-              ))}
+                  <Camera size={18} color="#fff" />
+                </span>
+                <div style={{ fontWeight: 800, fontSize: 16, color: '#111827' }}>Webcam</div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                WebkitOverflowScrolling: 'touch',
+                padding: '12px 14px calc(24px + env(safe-area-inset-bottom, 0px))',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}
+            >
+              {toggleRow('Camera on', webcamActive, () => {
+                onToggleWebcam();
+              })}
+              {toggleRow('Background removal', webcamCutout, () => onWebcamCutoutChange(!webcamCutout))}
+
+              <div style={{ padding: '4px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13, fontWeight: 600 }}>
+                  <span>Opacity</span>
+                  <span style={{ color: '#6B7280' }}>{Math.round(webcamOpacity * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(webcamOpacity * 100)}
+                  onChange={(e) => onWebcamOpacityChange(Number(e.target.value) / 100)}
+                  style={{ width: '100%', accentColor: '#35679A' }}
+                />
+              </div>
+
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                PiP shape
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {(['rectangle', 'circle'] as WebcamPipMode[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      haptic();
+                      onWebcamPipModeChange(m);
+                    }}
+                    style={{
+                      minHeight: 46,
+                      borderRadius: 12,
+                      border: webcamPipMode === m ? '2px solid #35679A' : '1px solid #E8E6E1',
+                      background: webcamPipMode === m ? 'rgba(53,103,154,0.08)' : '#FAF8F5',
+                      fontWeight: 600,
+                      fontSize: 14,
+                      cursor: 'pointer',
+                      touchAction: 'manipulation',
+                    }}
+                  >
+                    {m.charAt(0).toUpperCase() + m.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              <p style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.45, margin: '8px 0 0' }}>
+                Drag the PiP on the canvas to move it. Use the corner handle to resize.
+              </p>
             </div>
           </div>
-
-          {/* Hint */}
-          <p style={{ fontSize: 10, color: '#8E8E93', lineHeight: 1.4, margin: 0 }}>
-            Drag the PiP window on canvas to reposition. Pinch or corner-drag to resize.
-          </p>
-        </div>
+        </>
       )}
     </div>
   );

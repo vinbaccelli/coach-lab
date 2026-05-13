@@ -2310,6 +2310,36 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
+        if (
+          activeToolRef.current === 'objectMultiplier' &&
+          dw > 0 &&
+          dh > 0 &&
+          (!objMultiplierRef.current || objMultiplierRef.current.getFrameCount() === 0)
+        ) {
+          ctx.save();
+          ctx.translate(dx, dy);
+          const msg = isSelectingObjMultRegionRef.current
+            ? 'Release to confirm selection'
+            : 'Drag to select the object you want to multiply';
+          ctx.font = '600 15px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
+          const tw = ctx.measureText(msg).width;
+          const padX = 14;
+          const padY = 10;
+          const bx = (dw - tw - padX * 2) / 2;
+          const by = dh - 52;
+          ctx.fillStyle = 'rgba(0,0,0,0.62)';
+          ctx.beginPath();
+          if (typeof (ctx as CanvasRenderingContext2D & { roundRect?: (x: number, y: number, w: number, h: number, r: number) => void }).roundRect === 'function') {
+            (ctx as CanvasRenderingContext2D & { roundRect: (x: number, y: number, w: number, h: number, r: number) => void }).roundRect(bx, by, tw + padX * 2, 40, 10);
+          } else {
+            ctx.rect(bx, by, tw + padX * 2, 40);
+          }
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.fillText(msg, bx + padX, by + 26);
+          ctx.restore();
+        }
+
         const playbackT =
           yt?.controllerRef.current?.getCurrentTime?.() ??
           video?.currentTime ??
@@ -3053,7 +3083,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const precisionEligible =
         precisionTouchDrawRef.current &&
         e.pointerType === 'touch' &&
-        toolEarly !== 'zoom';
+        toolEarly !== 'zoom' &&
+        toolEarly !== 'objectMultiplier';
 
       if (precisionEligible) {
         const anchor = precisionAnchorPointerIdRef.current;
