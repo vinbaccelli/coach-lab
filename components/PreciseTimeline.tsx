@@ -357,8 +357,8 @@ export default function PreciseTimeline({
   }), [compact, leadingInsetPx, overlay, phoneChrome]);
 
   const btnStyle: React.CSSProperties = useMemo(() => ({
-    minWidth: phoneChrome ? 44 : 40,
-    height: phoneChrome ? 44 : 40,
+    minWidth: phoneChrome || overlay ? 44 : 40,
+    height: phoneChrome || overlay ? 44 : 40,
     borderRadius: 10,
     border: '1px solid rgba(255,255,255,0.18)',
     background: 'rgba(255,255,255,0.08)',
@@ -370,7 +370,7 @@ export default function PreciseTimeline({
     justifyContent: 'center',
     userSelect: 'none',
     flexShrink: 0,
-  }), [phoneChrome]);
+  }), [phoneChrome, overlay]);
 
   const selectStyle: React.CSSProperties = useMemo(() => ({
     height: 40,

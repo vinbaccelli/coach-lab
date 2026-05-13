@@ -3,6 +3,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -83,6 +84,8 @@ export default function Home() {
   const playbackControllerBRef = useRef<VideoController | null>(null);
   const captureShellRef = useRef<HTMLDivElement | null>(null);
   const captureShellRefB = useRef<HTMLDivElement | null>(null);
+  /** Measured height of the pinned playback dock — toolbars sit above this + gap. */
+  const playbackDockRef = useRef<HTMLDivElement | null>(null);
   const sessionCaptureBlobRef = useRef<Blob | null>(null);
   /** Converted MP4 for download (original WebM stays in sessionCaptureBlobRef for playback). */
   const sessionMp4BlobRef = useRef<Blob | null>(null);
@@ -132,6 +135,8 @@ export default function Home() {
   const [desktopReelsMenuOpen, setDesktopReelsMenuOpen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Distance from bottom of video stage to reserve for playback UI + 16px gap (px). */
+  const [toolbarBottomReservePx, setToolbarBottomReservePx] = useState(166);
   /** Selfie-segmentation cutout for webcam PiP */
   const [webcamCutout, setWebcamCutout]     = useState(false);
   const [panModeEnabled, setPanModeEnabled] = useState(false);
@@ -439,6 +444,21 @@ export default function Home() {
     return () => { if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current); };
   }, [showControls]);
 
+  const TOOLBAR_PLAYBACK_GAP_PX = 16;
+
+  useLayoutEffect(() => {
+    const el = playbackDockRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      const h = el.offsetHeight;
+      setToolbarBottomReservePx(Math.max(120, h + TOOLBAR_PLAYBACK_GAP_PX));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const cleanupVideoEl = useCallback((v: HTMLVideoElement | null) => {
     if (!v) return;
     try { v.pause(); } catch {}
@@ -629,9 +649,10 @@ export default function Home() {
     if (!vA || !vB || !videoBLoaded) return;
     if (!playBothEnabled) return;
 
-    const DRIFT_THRESHOLD = 0.1;
+    const DRIFT_THRESHOLD = 0.1; // 100 ms — seek B if skew exceeds this
     let playPendingB = false;
     let rafId: number;
+    let intervalId: number | undefined;
 
     const bTarget = () => vA.currentTime - videoBOffset;
     const bInRange = (t: number) => t >= 0 && t <= videoBDuration;
@@ -711,7 +732,19 @@ export default function Home() {
 
     rafId = requestAnimationFrame(correctDrift);
 
+    intervalId = window.setInterval(() => {
+      if (!vA.paused && bInRange(bTarget())) {
+        const t = bTarget();
+        const drift = Math.abs(vB.currentTime - t);
+        if (drift > DRIFT_THRESHOLD) vB.currentTime = t;
+      }
+      if (vB.playbackRate !== vA.playbackRate) {
+        vB.playbackRate = vA.playbackRate;
+      }
+    }, 500);
+
     return () => {
+      if (intervalId != null) window.clearInterval(intervalId);
       cancelAnimationFrame(rafId);
       vA.removeEventListener('play', onPlayA);
       vA.removeEventListener('pause', onPauseA);
@@ -1922,7 +1955,7 @@ export default function Home() {
           position: 'absolute',
           left: 12,
           top: 12,
-          bottom: 'calc(150px + env(safe-area-inset-bottom, 0px))',
+          bottom: toolbarBottomReservePx,
           zIndex: 80,
           borderRadius: 14,
           boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
@@ -2227,7 +2260,7 @@ export default function Home() {
                 position: 'absolute',
                 left: 8,
                 top: 8,
-                bottom: 'calc(150px + env(safe-area-inset-bottom, 0px))',
+                bottom: toolbarBottomReservePx,
                 zIndex: 60,
                 overflow: 'visible',
               }}
@@ -2264,7 +2297,7 @@ export default function Home() {
                   position: 'absolute',
                   left: 4,
                   top: reelsDesktop ? 8 : 40,
-                  bottom: 'calc(150px + env(safe-area-inset-bottom, 0px))',
+                  bottom: toolbarBottomReservePx,
                   width: REELS_TOOLBAR_W,
                   zIndex: 84,
                   display: 'flex',
@@ -2977,6 +3010,7 @@ export default function Home() {
             </div>
             {/* Playback controls overlay — positioned inside the video container */}
             <div
+              ref={playbackDockRef}
               onPointerMove={showControls}
               onPointerDown={showControls}
               onTouchStart={showControls}
