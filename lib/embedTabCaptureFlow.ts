@@ -91,7 +91,11 @@ export async function runEmbedTabCaptureFlow(args: {
       }
 
       // ── 2. Call getDisplayMedia IMMEDIATELY and store stream ───────────
-      onStepStatus?.('Requesting screen share — choose "This tab"…');
+      onStepStatus?.(
+        typeof navigator !== 'undefined' && /Safari/i.test(navigator.userAgent) && !/Chrome|CriOS|FxiOS/i.test(navigator.userAgent)
+          ? 'Requesting screen share — on Safari choose Entire Screen or Window (not “tab”)…'
+          : 'Requesting screen share — choose “This tab” in Chrome, or Window / Screen in Safari…',
+      );
 
       try {
         stream = await getTabCaptureStream();

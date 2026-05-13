@@ -56,6 +56,16 @@ const btnStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+/** YouTube iframe API getDuration can throw minified errors (e.g. this.g.src) during teardown. */
+function safeYoutubePlayerDuration(player: unknown): number | null {
+  try {
+    const d = (player as { getDuration?: () => unknown })?.getDuration?.();
+    return typeof d === 'number' && Number.isFinite(d) ? d : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Home() {
   const LEFT_TOOLBAR_W = 68;
   /** Narrower floating rail in 9:16 preview so more pixels stay on the “phone” */
@@ -1175,7 +1185,9 @@ export default function Home() {
 
       if (!preAcquiredStream || preAcquiredStream.getVideoTracks().length === 0) {
         stopAllTracks(preAcquiredStream);
-        setCaptureError('No video track received. Try Capture again and choose "This tab".');
+        setCaptureError(
+          'No video track was received. On Safari choose Entire Screen or pick this browser window (not a random app window). In Chrome, choose This tab.',
+        );
         return;
       }
 
@@ -1298,16 +1310,27 @@ export default function Home() {
       const conversionGen = ++captureMp4ConversionGenRef.current;
       const capturedBlob = result.blob;
       void (async () => {
-        const conv = await convertWebmBlobToMp4(capturedBlob);
-        if (conversionGen !== captureMp4ConversionGenRef.current) return;
-        if (conv.ok) {
-          sessionMp4BlobRef.current = conv.blob;
-          setCaptureDownloadStatus('ready_mp4');
-        } else {
+        try {
+          const conv = await convertWebmBlobToMp4(capturedBlob);
+          if (conversionGen !== captureMp4ConversionGenRef.current) return;
+          if (conv.ok) {
+            sessionMp4BlobRef.current = conv.blob;
+            setCaptureDownloadStatus('ready_mp4');
+          } else {
+            sessionMp4BlobRef.current = null;
+            setCaptureDownloadStatus('ready_webm');
+          }
+        } catch (convErr) {
+          console.warn('[CoachLab capture] MP4 conversion failed:', convErr);
+          if (conversionGen !== captureMp4ConversionGenRef.current) return;
           sessionMp4BlobRef.current = null;
           setCaptureDownloadStatus('ready_webm');
         }
       })();
+
+      // Drop iframe player refs before state swap so nothing calls a half-destroyed YT.Player.
+      if (panel === 'A') ytPlayerARef.current = null;
+      else ytPlayerBRef.current = null;
 
       const url = URL.createObjectURL(result.blob);
       const postEl = panel === 'A' ? videoRef.current : videoRefB.current;
@@ -1315,25 +1338,43 @@ export default function Home() {
       if (panel === 'A') {
         revokeBlobUrl(lastBlobUrlARef.current);
         lastBlobUrlARef.current = url;
-        setYoutubeVideoIdA(null);
         setGenericEmbedSrcA(null);
+        setYoutubeVideoIdA(null);
         setVideoSrc(url);
         if (postEl) {
           cleanupVideoEl(postEl);
           postEl.src = url;
           postEl.load();
+          await new Promise<void>((resolve) => {
+            if (postEl.readyState >= 2) {
+              resolve();
+              return;
+            }
+            const done = () => resolve();
+            postEl.addEventListener('loadeddata', done, { once: true });
+            window.setTimeout(done, 2500);
+          });
           await postEl.play().catch(() => {});
         }
       } else {
         revokeBlobUrl(lastBlobUrlBRef.current);
         lastBlobUrlBRef.current = url;
-        setYoutubeVideoIdB(null);
         setGenericEmbedSrcB(null);
+        setYoutubeVideoIdB(null);
         setVideoSrcB(url);
         if (postEl) {
           cleanupVideoEl(postEl);
           postEl.src = url;
           postEl.load();
+          await new Promise<void>((resolve) => {
+            if (postEl.readyState >= 2) {
+              resolve();
+              return;
+            }
+            const done = () => resolve();
+            postEl.addEventListener('loadeddata', done, { once: true });
+            window.setTimeout(done, 2500);
+          });
           await postEl.play().catch(() => {});
         }
         setVideoBLoaded(false);
@@ -1352,7 +1393,7 @@ export default function Home() {
         setCaptureCountdown(null);
         setCaptureStepStatus(null);
         setCaptureError(
-          `Something went wrong during recording: ${(outerErr as Error)?.message || 'Unknown error'}. Please refresh the page and try Capture again.`,
+          `Something went wrong after recording: ${(outerErr as Error)?.message || 'Unknown error'}. If the clip still won’t play, refresh and try again — on Safari use Entire Screen or this app’s window when sharing.`,
         );
       }
     },
@@ -2645,7 +2686,7 @@ export default function Home() {
                       errorMessage={embedCapturePanelId === 'A' || !embedCapturePanelId ? captureError : null}
                       countdown={embedCapturePanelId === 'A' ? captureCountdown : null}
                       stepStatus={embedCapturePanelId === 'A' ? captureStepStatus : null}
-                      videoDurationSec={ytPlayerARef.current?.getDuration?.() ?? null}
+                      videoDurationSec={safeYoutubePlayerDuration(ytPlayerARef.current)}
                       onRetry={() => setCaptureError(null)}
                       onCapture={(o) => void handleEmbedCaptureRequest('A', o)}
                       onUploadInstead={() => fileInputRef.current?.click()}
@@ -2950,7 +2991,7 @@ export default function Home() {
                       errorMessage={embedCapturePanelId === 'B' || !embedCapturePanelId ? captureError : null}
                       countdown={embedCapturePanelId === 'B' ? captureCountdown : null}
                       stepStatus={embedCapturePanelId === 'B' ? captureStepStatus : null}
-                      videoDurationSec={ytPlayerBRef.current?.getDuration?.() ?? null}
+                      videoDurationSec={safeYoutubePlayerDuration(ytPlayerBRef.current)}
                       onRetry={() => setCaptureError(null)}
                       onCapture={(o) => void handleEmbedCaptureRequest('B', o)}
                       onUploadInstead={() => fileInputRefB.current?.click()}

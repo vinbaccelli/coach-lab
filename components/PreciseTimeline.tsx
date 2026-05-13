@@ -233,7 +233,11 @@ export default function PreciseTimeline({
     }
     const p = source.playerRef.current;
     if (!p) return;
-    p.seekTo?.(nextClamped, true);
+    try {
+      p.seekTo?.(nextClamped, true);
+    } catch {
+      /* YT iframe can throw internal errors (e.g. this.g.src) while tearing down */
+    }
     setT(nextClamped);
     tRef.current = nextClamped;
   }, [source]);
@@ -303,8 +307,12 @@ export default function PreciseTimeline({
     }
     const p = source.playerRef.current;
     if (!p) return;
-    if (isPlaying) p.pauseVideo?.();
-    else p.playVideo?.();
+    try {
+      if (isPlaying) p.pauseVideo?.();
+      else p.playVideo?.();
+    } catch {
+      /* YT player may be mid-destroy during embed → file swap */
+    }
   }, [isPlaying, source]);
 
   const stepFrame = useCallback((dir: 1 | -1, mult = 1) => {
@@ -313,7 +321,11 @@ export default function PreciseTimeline({
       const v = source.videoRef.current;
       if (v) v.pause();
     } else {
-      source.playerRef.current?.pauseVideo?.();
+      try {
+        source.playerRef.current?.pauseVideo?.();
+      } catch {
+        /* ignore */
+      }
     }
     // Use a ref so rapid clicks remain responsive without waiting for re-render.
     const next = tRef.current + dir * frameStepRef.current * mult;

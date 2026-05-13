@@ -70,6 +70,12 @@ export default function EmbedCapturePanel({
     );
   }, []);
 
+  const looksLikeDesktopSafari = useMemo(() => {
+    if (typeof navigator === 'undefined') return false;
+    const ua = navigator.userAgent;
+    return /Safari/i.test(ua) && !/Chrome|CriOS|FxiOS|Edg/i.test(ua) && !/iPhone|iPad|iPod/.test(ua);
+  }, []);
+
   const parsed = useMemo(
     () => ({
       start: parseTimeToSeconds(startStr),
@@ -287,7 +293,7 @@ export default function EmbedCapturePanel({
             </div>
           </div>
           <p style={{ margin: 0, fontSize: 12, color: '#6B6B6B', textAlign: 'center' }}>
-            Keep this tab visible until the recording finishes.
+            Keep the shared window or screen visible until recording finishes.
           </p>
         </>
       ) : showCountdown ? (
@@ -348,8 +354,20 @@ export default function EmbedCapturePanel({
             color: '#3C3C3C',
             lineHeight: 1.55,
           }}>
-            When you tap <strong style={{ color: '#1A1A1A' }}>Record</strong>, your browser will ask what to share.
-            Select <strong style={{ color: '#1A1A1A' }}>&quot;This Tab&quot;</strong> and the video will record automatically.
+            {looksLikeDesktopSafari ? (
+              <>
+                When you tap <strong style={{ color: '#1A1A1A' }}>Record</strong>, Safari will ask what to share.
+                There is no &quot;tab only&quot; option — choose <strong style={{ color: '#1A1A1A' }}>Entire Screen</strong> or{' '}
+                <strong style={{ color: '#1A1A1A' }}>Window</strong> and pick <strong style={{ color: '#1A1A1A' }}>this browser window</strong> so the YouTube player is visible.
+                (&quot;Window&quot; alone often fails if the picker targets the wrong surface; Entire Screen is more reliable.)
+              </>
+            ) : (
+              <>
+                When you tap <strong style={{ color: '#1A1A1A' }}>Record</strong>, your browser will ask what to share.
+                In Chrome or Edge, choose <strong style={{ color: '#1A1A1A' }}>This tab</strong> so only this page is recorded.
+                In Safari on Mac, choose <strong style={{ color: '#1A1A1A' }}>Window</strong> (this browser) or <strong style={{ color: '#1A1A1A' }}>Entire Screen</strong>.
+              </>
+            )}
           </div>
 
           {/* Advanced: section recording */}
