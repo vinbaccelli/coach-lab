@@ -81,7 +81,7 @@ export class ObjectMultiplier {
     ctx: CanvasRenderingContext2D,
     canvasW: number,
     canvasH: number,
-    opacity = 0.6,
+    opacity = 0.52,
   ): void {
     if (this.frames.length === 0) return;
 

@@ -8,6 +8,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { flushSync } from 'react-dom';
 import dynamic from 'next/dynamic';
 import { Camera, MoreHorizontal, Upload, Menu } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
@@ -97,6 +98,11 @@ export default function Home() {
   const playbackControllerBRef = useRef<VideoController | null>(null);
   const captureShellRef = useRef<HTMLDivElement | null>(null);
   const captureShellRefB = useRef<HTMLDivElement | null>(null);
+  /** Black embed frame (YouTube or generic iframe) — used to crop tab capture to video pixels only. */
+  const embedCaptureCropTargetRefA = useRef<HTMLDivElement | null>(null);
+  const embedCaptureCropTargetRefB = useRef<HTMLDivElement | null>(null);
+  const genericEmbedIframeRefA = useRef<HTMLIFrameElement | null>(null);
+  const genericEmbedIframeRefB = useRef<HTMLIFrameElement | null>(null);
   /** Measured height of the pinned playback dock — toolbars sit above this + gap. */
   const playbackDockRef = useRef<HTMLDivElement | null>(null);
   const sessionCaptureBlobRef = useRef<Blob | null>(null);
@@ -146,8 +152,6 @@ export default function Home() {
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
   const [circleSpinning, setCircleSpinning] = useState(false);
   const [outlineEraserSize, setOutlineEraserSize] = useState(0);
-  const [rect3d, setRect3d]                 = useState(false);
-  const [triangle3d, setTriangle3d]         = useState(false);
   const [skeletonShowAngles, setSkeletonShowAngles] = useState(true);
   const [skeletonShowHeadLine, setSkeletonShowHeadLine] = useState(false);
   const [skeletonClassicColors, setSkeletonClassicColors] = useState(true);
@@ -307,7 +311,7 @@ export default function Home() {
   const [stroMotionRegion, setStroMotionRegion]   = useState<{ x: number; y: number; w: number; h: number } | undefined>(undefined);
 
   // Object Multiplier state
-  const [objMultiplierFrameCount, setObjMultiplierFrameCount] = useState(6);
+  const [objMultiplierFrameCount, setObjMultiplierFrameCount] = useState(5);
   const [objMultiplierDuration, setObjMultiplierDuration] = useState(2);
   const [objMultiplierHasRegion, setObjMultiplierHasRegion] = useState(false);
   const [objMultiplierProgress, setObjMultiplierProgress] = useState<string | null>(null);
@@ -1577,7 +1581,21 @@ export default function Home() {
         return;
       }
 
+      if (bundle.ytHardDestroyed && isYt) {
+        flushSync(() => {
+          if (panel === 'A') {
+            setEmbedYtKilledA(false);
+            setYtPlayerRemountNonceA((n) => n + 1);
+          } else {
+            setEmbedYtKilledB(false);
+            setYtPlayerRemountNonceB((n) => n + 1);
+          }
+        });
+      }
+
       const shell = panel === 'A' ? captureShellRef.current : captureShellRefB.current;
+      const hasGenericEmbed =
+        panel === 'A' ? !!genericEmbedSrcA && !youtubeVideoIdA : !!genericEmbedSrcB && !youtubeVideoIdB;
       const durHint =
         bundle.ytHardDestroyed &&
         youtubeDurationHintSec != null &&
@@ -1598,6 +1616,14 @@ export default function Home() {
           ytPlayer: bundle.ytHardDestroyed ? null : isYt ? ytSnap : null,
           isYoutube: isYt,
           captureShellEl: shell,
+          getYtPlayer: () => (panel === 'A' ? ytPlayerARef.current : ytPlayerBRef.current),
+          getCropTargetEl: () =>
+            (panel === 'A' ? embedCaptureCropTargetRefA.current : embedCaptureCropTargetRefB.current) ??
+            shell,
+          getGenericIframe: () =>
+            panel === 'A' ? genericEmbedIframeRefA.current : genericEmbedIframeRefB.current,
+          genericEmbedReady: panel === 'A' ? embedReadyA : embedReadyB,
+          hasGenericEmbed,
           onProgress: setCaptureProgress01,
           onCountdown: setCaptureCountdown,
           onStepStatus: setCaptureStepStatus,
@@ -1714,7 +1740,7 @@ export default function Home() {
         bumpFailures();
       }
     },
-    [cleanupVideoEl, revokeBlobUrl, youtubeVideoIdA, youtubeVideoIdB],
+    [cleanupVideoEl, revokeBlobUrl, youtubeVideoIdA, youtubeVideoIdB, genericEmbedSrcA, genericEmbedSrcB, embedReadyA, embedReadyB],
   );
 
   const shareEmbedDisplayMediaFromUserGesture = useCallback(() => {
@@ -2400,10 +2426,6 @@ export default function Home() {
               onCircleSpinningChange={setCircleSpinning}
               outlineEraserSize={outlineEraserSize}
               onOutlineEraserSizeChange={setOutlineEraserSize}
-              rect3d={rect3d}
-              onRect3dChange={setRect3d}
-              triangle3d={triangle3d}
-              onTriangle3dChange={setTriangle3d}
               skeletonShowAngles={skeletonShowAngles}
               onSkeletonShowAnglesChange={setSkeletonShowAngles}
               skeletonShowHeadLine={skeletonShowHeadLine}
@@ -2423,6 +2445,14 @@ export default function Home() {
               ballSampleMode={ballSampleMode}
               onBallSampleModeChange={setBallSampleMode}
               onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
+              webcamPipMode={webcamPipMode}
+              onWebcamPipModeChange={setWebcamPipMode}
+              webcamOpacity={webcamOpacity}
+              onWebcamOpacityChange={setWebcamOpacity}
+              webcamActive={webcamActive}
+              webcamCutout={webcamCutout}
+              onWebcamCutoutChange={setWebcamCutout}
+              onToggleWebcam={() => void toggleWebcam()}
               objMultiplierFrameCount={objMultiplierFrameCount}
               onObjMultiplierFrameCountChange={setObjMultiplierFrameCount}
               objMultiplierDuration={objMultiplierDuration}
@@ -2712,10 +2742,6 @@ export default function Home() {
                   onCircleSpinningChange={setCircleSpinning}
                   outlineEraserSize={outlineEraserSize}
                   onOutlineEraserSizeChange={setOutlineEraserSize}
-                  rect3d={rect3d}
-                  onRect3dChange={setRect3d}
-                  triangle3d={triangle3d}
-                  onTriangle3dChange={setTriangle3d}
                   skeletonShowAngles={skeletonShowAngles}
                   onSkeletonShowAnglesChange={setSkeletonShowAngles}
                   skeletonShowHeadLine={skeletonShowHeadLine}
@@ -2735,6 +2761,14 @@ export default function Home() {
                   ballSampleMode={ballSampleMode}
                   onBallSampleModeChange={setBallSampleMode}
                   onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
+                  webcamPipMode={webcamPipMode}
+                  onWebcamPipModeChange={setWebcamPipMode}
+                  webcamOpacity={webcamOpacity}
+                  onWebcamOpacityChange={setWebcamOpacity}
+                  webcamActive={webcamActive}
+                  webcamCutout={webcamCutout}
+                  onWebcamCutoutChange={setWebcamCutout}
+                  onToggleWebcam={() => void toggleWebcam()}
                   objMultiplierFrameCount={objMultiplierFrameCount}
                   onObjMultiplierFrameCountChange={setObjMultiplierFrameCount}
                   objMultiplierDuration={objMultiplierDuration}
@@ -2800,10 +2834,6 @@ export default function Home() {
                     onCircleSpinningChange={setCircleSpinning}
                     outlineEraserSize={outlineEraserSize}
                     onOutlineEraserSizeChange={setOutlineEraserSize}
-                    rect3d={rect3d}
-                    onRect3dChange={setRect3d}
-                    triangle3d={triangle3d}
-                    onTriangle3dChange={setTriangle3d}
                     skeletonShowAngles={skeletonShowAngles}
                     onSkeletonShowAnglesChange={setSkeletonShowAngles}
                     skeletonShowHeadLine={skeletonShowHeadLine}
@@ -2823,6 +2853,14 @@ export default function Home() {
                     ballSampleMode={ballSampleMode}
                     onBallSampleModeChange={setBallSampleMode}
                     onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
+                    webcamPipMode={webcamPipMode}
+                    onWebcamPipModeChange={setWebcamPipMode}
+                    webcamOpacity={webcamOpacity}
+                    onWebcamOpacityChange={setWebcamOpacity}
+                    webcamActive={webcamActive}
+                    webcamCutout={webcamCutout}
+                    onWebcamCutoutChange={setWebcamCutout}
+                    onToggleWebcam={() => void toggleWebcam()}
                     objMultiplierFrameCount={objMultiplierFrameCount}
                     onObjMultiplierFrameCountChange={setObjMultiplierFrameCount}
                     objMultiplierDuration={objMultiplierDuration}
@@ -2940,6 +2978,7 @@ export default function Home() {
                   <>
                     {youtubeVideoIdA ? (
                       <div
+                        ref={embedCaptureCropTargetRefA}
                         style={{
                           position: 'absolute',
                           inset: 0,
@@ -3020,6 +3059,7 @@ export default function Home() {
                     ) : null}
                     {genericEmbedSrcA && !youtubeVideoIdA ? (
                       <div
+                        ref={embedCaptureCropTargetRefA}
                         style={{
                           position: 'absolute',
                           inset: 0,
@@ -3028,6 +3068,7 @@ export default function Home() {
                         }}
                       >
                         <iframe
+                          ref={genericEmbedIframeRefA}
                           title="Embedded video"
                           src={genericEmbedSrcA}
                           onLoad={onGenericEmbedIframeLoadA}
@@ -3107,8 +3148,6 @@ export default function Home() {
                       skeletonClassicColors={skeletonClassicColors}
                       skeletonParts={skeletonParts}
                       ballSampleMode={ballSampleMode}
-                      rect3d={rect3d}
-                      triangle3d={triangle3d}
                       suppressTabCaptureMirror={
                         embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)
                       }
@@ -3287,6 +3326,7 @@ export default function Home() {
                   >
                     {youtubeVideoIdB ? (
                       <div
+                        ref={embedCaptureCropTargetRefB}
                         style={{
                           position: 'absolute',
                           inset: 0,
@@ -3367,6 +3407,7 @@ export default function Home() {
                     ) : null}
                     {genericEmbedSrcB && !youtubeVideoIdB ? (
                       <div
+                        ref={embedCaptureCropTargetRefB}
                         style={{
                           position: 'absolute',
                           inset: 0,
@@ -3375,6 +3416,7 @@ export default function Home() {
                         }}
                       >
                         <iframe
+                          ref={genericEmbedIframeRefB}
                           title="Embedded video B"
                           src={genericEmbedSrcB}
                           onLoad={onGenericEmbedIframeLoadB}
@@ -3451,8 +3493,6 @@ export default function Home() {
                       skeletonClassicColors={skeletonClassicColors}
                       skeletonParts={skeletonParts}
                       ballSampleMode={ballSampleMode}
-                      rect3d={rect3d}
-                      triangle3d={triangle3d}
                       suppressTabCaptureMirror={
                         embedLiveVideoB && (!!youtubeVideoIdB || !!genericEmbedSrcB)
                       }

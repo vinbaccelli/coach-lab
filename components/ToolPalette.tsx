@@ -19,7 +19,6 @@ import {
   Minus,
   Square,
   Zap,
-  ZoomIn,
   Shapes,
   Layers,
   ChevronLeft,
@@ -27,6 +26,7 @@ import {
   LayoutGrid,
   Video,
   Crosshair,
+  Camera,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -60,10 +60,6 @@ interface ToolPaletteProps {
   onCircleSpinningChange?: (spinning: boolean) => void;
   outlineEraserSize?: number;
   onOutlineEraserSizeChange?: (size: number) => void;
-  rect3d?: boolean;
-  onRect3dChange?: (v: boolean) => void;
-  triangle3d?: boolean;
-  onTriangle3dChange?: (v: boolean) => void;
   webcamPipMode?: WebcamPipMode;
   onWebcamPipModeChange?: (mode: WebcamPipMode) => void;
   webcamOpacity?: number;
@@ -91,6 +87,8 @@ interface ToolPaletteProps {
   ballSampleMode?: boolean;
   onBallSampleModeChange?: (v: boolean) => void;
   onResetCropZoom?: () => void;
+  /** Webcam PiP: turn camera on/off (must be synchronous-friendly for Safari). */
+  onToggleWebcam?: () => void;
   /** Mobile: Coach Now–style precision draw (optional) */
   precisionDrawEnabled?: boolean;
   onPrecisionDrawToggle?: () => void;
@@ -110,7 +108,7 @@ type NavScreen =
   | 'draw'
   | 'shapeOpts'
   | 'skeleton'
-  | 'view'
+  | 'webcam'
   | 'multiplier'
   | 'more';
 
@@ -216,10 +214,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onCircleSpinningChange,
     outlineEraserSize = 0,
     onOutlineEraserSizeChange,
-    rect3d,
-    onRect3dChange,
-    triangle3d,
-    onTriangle3dChange,
+    webcamPipMode,
+    onWebcamPipModeChange,
+    webcamOpacity,
+    onWebcamOpacityChange,
+    webcamActive,
+    webcamCutout,
+    onWebcamCutoutChange,
+    onToggleWebcam,
     onResetCropZoom,
     skeletonShowAngles,
     onSkeletonShowAnglesChange,
@@ -264,12 +266,18 @@ export default function ToolPalette(props: ToolPaletteProps) {
     activeTool === 'circle' ||
     activeTool === 'bodyCircle' ||
     activeTool === 'rect' ||
-    activeTool === 'triangle';
+    activeTool === 'triangle' ||
+    activeTool === 'line' ||
+    activeTool === 'arrow' ||
+    activeTool === 'arrowAngle';
   const shapeEraserEligible =
     activeTool === 'circle' ||
     activeTool === 'bodyCircle' ||
-    (activeTool === 'rect' && !!rect3d) ||
-    (activeTool === 'triangle' && !!triangle3d);
+    activeTool === 'rect' ||
+    activeTool === 'triangle' ||
+    activeTool === 'line' ||
+    activeTool === 'arrow' ||
+    activeTool === 'arrowAngle';
 
   const setTool = (t: ToolType) => onToolChange(t);
 
@@ -612,17 +620,26 @@ export default function ToolPalette(props: ToolPaletteProps) {
             ? 'Rectangle'
             : activeTool === 'triangle'
               ? 'Triangle'
-              : 'Shape';
+              : activeTool === 'line'
+                ? 'Line'
+                : activeTool === 'arrow' || activeTool === 'arrowAngle'
+                  ? 'Arrow'
+                  : 'Shape';
+    const showAnim =
+      onCircleSpinningChange &&
+      (activeTool === 'circle' ||
+        activeTool === 'bodyCircle' ||
+        activeTool === 'rect' ||
+        activeTool === 'triangle' ||
+        activeTool === 'line' ||
+        activeTool === 'arrow' ||
+        activeTool === 'arrowAngle');
     return (
       <div style={shell}>
         <div style={scrollAreaFor(io)}>
           <BackHeader title={shapeLabel} icon={<Shapes size={18} />} />
-          {onCircleSpinningChange && (activeTool === 'circle' || activeTool === 'bodyCircle') &&
+          {showAnim &&
             chk('spin', 'Animated outline', !!circleSpinning, onCircleSpinningChange)}
-          {activeTool === 'rect' && onRect3dChange &&
-            chk('r3d', '3D / perspective rectangle', !!rect3d, onRect3dChange)}
-          {activeTool === 'triangle' && onTriangle3dChange &&
-            chk('t3d', '3D / perspective triangle', !!triangle3d, onTriangle3dChange)}
           {onOutlineEraserSizeChange && shapeEraserEligible && (
             <>
               {chk('oe', 'Outline eraser', outlineEraserSize > 0, (v) => onOutlineEraserSizeChange(v ? 15 : 0))}
@@ -722,57 +739,65 @@ export default function ToolPalette(props: ToolPaletteProps) {
     );
   }
 
-  if (top === 'view') {
+  if (top === 'webcam') {
     return (
       <div style={shell}>
         <div style={scrollAreaFor(io)}>
-          <BackHeader title="View" icon={<ZoomIn size={18} />} />
-          {onResetCropZoom ? (
-            <Row k="rz" icon={<RefreshCw size={18} />} label="Reset zoom" onPress={() => { onResetCropZoom(); }} />
+          <BackHeader title="Webcam" icon={<Camera size={18} />} />
+          {onToggleWebcam ? (
+            <Row
+              k="wct"
+              icon={<Camera size={18} />}
+              label={webcamActive ? 'Turn camera off' : 'Turn camera on'}
+              onPress={() => {
+                fire('wct', () => onToggleWebcam());
+              }}
+            />
           ) : null}
-        </div>
-      </div>
-    );
-  }
-
-  /* V2 — overflow / unfinished tools (ball trail, auto swing, racket); keep code, hide from coach UI.
-  if (top === 'more') {
-    return (
-      <div style={shell}>
-        <div style={scrollAreaFor(io)}>
-          <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
-          {onAutoSwing ? (
-            <Row k="as" icon={<TrendingUp size={18} />} label="Auto swing path" onPress={() => { onAutoSwing(); resetNav(); }} />
-          ) : null}
-          {onRacketMultiplier ? (
-            <Row k="rm" icon={<Video size={18} />} label="Racket trail" onPress={() => { onRacketMultiplier(); resetNav(); }} />
-          ) : null}
-          <Row k="ball" active={activeTool === 'ballShadow'} icon={<Circle size={18} />} label="Ball shadow / trail" onPress={() => { setTool('ballShadow'); resetNav(); }} />
-          {activeTool === 'ballShadow' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
-              {(['comet', 'arc', 'strobe'] as BallTrailMode[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  style={rowBase(ballTrailMode === m, io)}
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    fire(`bt-${m}`, () => onBallTrailModeChange(m));
-                  }}
-                >
-                  Trail: {m}
-                </button>
-              ))}
-              <Row k="rbt" icon={<RefreshCw size={16} />} label="Reset ball trail" onPress={() => onResetBallTrail()} />
+          {onWebcamCutoutChange !== undefined &&
+            chk('wcbg', 'Background removal', !!webcamCutout, (v) => onWebcamCutoutChange(v))}
+          {onWebcamOpacityChange !== undefined && (
+            <div style={{ padding: '4px 8px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280' }}>
+                Opacity ({Math.round((webcamOpacity ?? 1) * 100)}%)
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={Math.round((webcamOpacity ?? 1) * 100)}
+                onChange={(e) => onWebcamOpacityChange(Number(e.target.value) / 100)}
+                style={{ width: '100%', accentColor: '#35679A' }}
+              />
             </div>
           )}
-          {onBallSampleModeChange !== undefined &&
-            chk('bsm', 'Ball sample mode', !!ballSampleMode, onBallSampleModeChange)}
+          {onWebcamPipModeChange !== undefined && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', padding: '6px 4px 0' }}>
+                PiP shape
+              </div>
+              {(['rectangle', 'circle'] as WebcamPipMode[]).map((m) => (
+                <Row
+                  key={m}
+                  k={`wcp-${m}`}
+                  active={webcamPipMode === m}
+                  icon={<Camera size={16} />}
+                  label={m.charAt(0).toUpperCase() + m.slice(1)}
+                  onPress={() => {
+                    fire(`wcp-${m}`, () => onWebcamPipModeChange(m));
+                  }}
+                />
+              ))}
+            </>
+          )}
+          <p style={{ margin: '4px 4px 0', fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
+            Drag the PiP on the canvas to move it. Safari: choose Window or Screen and pick this browser window when sharing for capture.
+          </p>
         </div>
       </div>
     );
   }
-  */
 
   if (top === 'more') {
     return (
@@ -786,27 +811,39 @@ export default function ToolPalette(props: ToolPaletteProps) {
   }
 
   if (top === 'multiplier') {
+    const frameChoices = [3, 5, 8, 10] as const;
     return (
       <div style={shell}>
         <div style={scrollAreaFor(io)}>
-          <BackHeader title="Object multiplier" icon={<Layers size={18} />} />
+          <BackHeader title="Racket multiplier" icon={<Layers size={18} />} />
           <p style={{ margin: '0 4px 8px', fontSize: 13, fontWeight: 600, color: '#7C3AED', lineHeight: 1.4 }}>
-            Drag to select the object you want to multiply
+            Highlight the racket region across frames
           </p>
           <p style={{ margin: '0 4px 12px', fontSize: 12, color: '#6B7280', lineHeight: 1.45 }}>
-            Draw a dashed rectangle on the video, then tune frames and duration and tap Capture.
+            Drag a rectangle on the video to select the racket (or auto-detect when available). Choose frames and duration, then Capture.
           </p>
           <div style={{ padding: '4px 8px' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280' }}>Frames: {objMultiplierFrameCount}</div>
-            <input
-              type="range"
-              min={3}
-              max={12}
-              step={1}
-              value={objMultiplierFrameCount}
-              onChange={(e) => onObjMultiplierFrameCountChange?.(Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Frames to overlay</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {frameChoices.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  style={{
+                    ...rowBase(objMultiplierFrameCount === n, io),
+                    flex: '1 1 40%',
+                    justifyContent: 'center',
+                    minHeight: 40,
+                  }}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    fire(`frm-${n}`, () => onObjMultiplierFrameCountChange?.(n));
+                  }}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
           </div>
           <div style={{ padding: '4px 8px' }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280' }}>Duration: {objMultiplierDuration}s</div>
@@ -822,7 +859,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           </div>
           {!objMultiplierActive ? (
             <p style={{ fontSize: 12, color: '#B45309', fontWeight: 600, margin: '4px 8px', lineHeight: 1.4 }}>
-              No region yet — drag on the video to select an area first.
+              No region yet — drag on the video to select the racket area first.
             </p>
           ) : null}
           {objMultiplierProgress ? (
@@ -874,19 +911,27 @@ export default function ToolPalette(props: ToolPaletteProps) {
             push('skeleton');
           }}
         />
-        <Row k="vw" icon={<ZoomIn size={20} />} label="View & zoom" onPress={() => push('view')} />
+        <Row
+          k="wc"
+          icon={<Camera size={20} />}
+          label="Webcam"
+          sub="PiP, opacity, cutout"
+          onPress={() => {
+            push('webcam');
+          }}
+        />
         <Row
           k="mul"
           active={activeTool === 'objectMultiplier'}
           icon={<Layers size={20} />}
-          label="Object multiplier"
+          label="Racket multiplier"
           onPress={() => {
             setTool('objectMultiplier');
             push('multiplier');
           }}
         />
         {isShapeTool && (
-          <Row k="sho" icon={<Shapes size={20} />} label="Shape options" sub="Outline, 3D, animation" onPress={() => push('shapeOpts')} />
+          <Row k="sho" icon={<Shapes size={20} />} label="Shape options" sub="Animation, outline eraser" onPress={() => push('shapeOpts')} />
         )}
         {/* V2: More tools menu — hidden until next release
         <Row k="more" icon={<LayoutGrid size={20} />} label="More" sub="Swing, racket, ball" onPress={() => push('more')} />

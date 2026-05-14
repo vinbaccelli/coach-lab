@@ -9,7 +9,6 @@ import React, {
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg } from '@/lib/drawingTools';
-import type { CachedPoseFrame } from '@/lib/poseDetection';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
@@ -63,9 +62,9 @@ const PRECISION_RIPPLE_MS = 420;
 
 type Pt = { x: number; y: number };
 
-interface StrokePen     { tool: 'pen';                              pts: Pt[]; color: string; lw: number; dashed?: boolean }
-interface StrokeLine    { tool: 'line';                             p1: Pt; p2: Pt; color: string; lw: number; dashed?: boolean }
-interface StrokeArrow   { tool: 'arrow' | 'arrowAngle';             p1: Pt; p2: Pt; color: string; lw: number; dashed?: boolean }
+interface StrokePen     { tool: 'pen';                              pts: Pt[]; color: string; lw: number; dashed?: boolean; spinning?: boolean; eraserStrokes?: EraserDot[] }
+interface StrokeLine    { tool: 'line';                             p1: Pt; p2: Pt; color: string; lw: number; dashed?: boolean; spinning?: boolean; eraserStrokes?: EraserDot[] }
+interface StrokeArrow   { tool: 'arrow' | 'arrowAngle';             p1: Pt; p2: Pt; color: string; lw: number; dashed?: boolean; spinning?: boolean; eraserStrokes?: EraserDot[] }
 type EraserDot = { x: number; y: number; radius: number };
 interface StrokeEllipse {
   tool: 'circle' | 'bodyCircle';
@@ -80,7 +79,6 @@ interface StrokeRect {
   cx: number; cy: number; rx: number; ry: number;
   color: string; lw: number; dashed?: boolean;
   spinning?: boolean;
-  is3d?: boolean;
   eraserStrokes?: EraserDot[];
 }
 interface StrokeTriangle {
@@ -88,10 +86,9 @@ interface StrokeTriangle {
   cx: number; cy: number; rx: number; ry: number;
   color: string; lw: number; dashed?: boolean;
   spinning?: boolean;
-  is3d?: boolean;
   eraserStrokes?: EraserDot[];
 }
-interface StrokeSwing   { tool: 'swingPath' | 'manualSwing';        pts: Pt[]; color: string; lw: number; dashed?: boolean; arrowAtEnd?: boolean }
+interface StrokeSwing   { tool: 'swingPath' | 'manualSwing';        pts: Pt[]; color: string; lw: number; dashed?: boolean; arrowAtEnd?: boolean; spinning?: boolean }
 interface StrokeText    { tool: 'text';                             pos: Pt; text: string; color: string; fontSize: number }
 
 type Stroke = StrokePen | StrokeLine | StrokeArrow | StrokeEllipse | StrokeRect | StrokeTriangle | StrokeSwing | StrokeText;
@@ -168,8 +165,6 @@ export interface CanvasProps {
   skeletonClassicColors?: boolean;
   skeletonParts?: SkeletonPartVisibility;
   ballSampleMode?: boolean;
-  rect3d?: boolean;
-  triangle3d?: boolean;
   /** When videoRef has no playable video (e.g. YouTube embed), keep canvas transparent */
   transparentWhenNoVideo?: boolean;
   /**
@@ -229,25 +224,6 @@ function defaultWebcamPipRect(cw: number, ch: number) {
   const w = Math.round(cw * 0.18);
   const h = Math.round(w / WEBCAM_PIP_ASPECT);
   return clampWebcamPip({ x: cw - w - margin, y: ch - h - margin, w, h }, cw, ch);
-}
-
-// ── Module-level pose render cache ─────────────────────────────────────────
-
-let poseRenderFns: {
-  getPoseAtTime: (typeof import('@/lib/poseDetection'))['getPoseAtTime'];
-  drawPoseSkeleton: (typeof import('@/lib/poseDetection'))['drawPoseSkeleton'];
-  drawSkeletonFrame: (typeof import('@/lib/poseDetection'))['drawSkeletonFrame'];
-} | null = null;
-
-function ensurePoseRender(): void {
-  if (poseRenderFns) return;
-  import('@/lib/poseDetection').then((mod) => {
-    poseRenderFns = {
-      getPoseAtTime: mod.getPoseAtTime,
-      drawPoseSkeleton: mod.drawPoseSkeleton,
-      drawSkeletonFrame: mod.drawSkeletonFrame,
-    };
-  }).catch((err) => console.error('[Canvas] poseRender load error:', err));
 }
 
 // ── Standalone skeleton renderer ───────────────────────────────────────────
@@ -419,10 +395,14 @@ function drawSkeletonOverlay(
     if (classicColors) {
       ctx.fillStyle = i % 2 === 0 ? '#FF4444' : '#4488FF';
     } else {
-      ctx.fillStyle = '#F8F8F8';
+      ctx.fillStyle = '#35679A';
     }
     ctx.fill();
-    ctx.strokeStyle = classicColors ? (i % 2 === 0 ? '#FF4444' : '#4488FF') : '#35679A';
+    if (classicColors) {
+      ctx.strokeStyle = i % 2 === 0 ? '#FF4444' : '#4488FF';
+    } else {
+      ctx.strokeStyle = '#234978';
+    }
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
@@ -458,9 +438,9 @@ function drawSkeletonOverlay(
       const m = ctx.measureText(label);
       const lx = vx + 8, ly = vy - 8;
 
-      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillStyle = classicColors ? 'rgba(0,0,0,0.7)' : 'rgba(0,0,0,0.65)';
       ctx.fillRect(lx - 2, ly - 13, m.width + 4, 16);
-      ctx.fillStyle = '#FFD700';
+      ctx.fillStyle = classicColors ? '#FFD700' : '#93C5FD';
       ctx.fillText(label, lx, ly);
     }
 
@@ -549,6 +529,7 @@ function drawSmoothPath(
   opacity: number,
   dashed: boolean,
   arrowAtEnd = false,
+  spinning = false,
 ): void {
   if (points.length < 2) return;
 
@@ -558,7 +539,10 @@ function drawSmoothPath(
   ctx.lineWidth = width;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  if (dashed) ctx.setLineDash([8, 6]);
+  if (spinning) {
+    ctx.setLineDash([3, 10]);
+    ctx.lineDashOffset = -((Date.now() / 20) % 1000);
+  } else if (dashed) ctx.setLineDash([8, 6]);
 
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
@@ -599,6 +583,92 @@ function isErasedAt(px: number, py: number, eraserStrokes: EraserDot[]): boolean
     if (dx * dx + dy * dy <= d.radius * d.radius) return true;
   }
   return false;
+}
+
+function drawThickSegmentWithEraser(
+  ctx: CanvasRenderingContext2D,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  eraser: EraserDot[] | undefined,
+): void {
+  const len = Math.hypot(bx - ax, by - ay);
+  if (len < 0.25) return;
+  if (!eraser?.length) {
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+    return;
+  }
+  const steps = Math.max(16, Math.ceil(len / 2));
+  let inStroke = false;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const px = ax + (bx - ax) * t;
+    const py = ay + (by - ay) * t;
+    if (isErasedAt(px, py, eraser)) {
+      if (inStroke) {
+        ctx.stroke();
+        inStroke = false;
+      }
+    } else if (!inStroke) {
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      inStroke = true;
+    } else {
+      ctx.lineTo(px, py);
+    }
+  }
+  if (inStroke) ctx.stroke();
+}
+
+function strokeHasSpinning(s: Stroke | null | undefined): boolean {
+  if (!s) return false;
+  return (s as { spinning?: boolean }).spinning === true;
+}
+
+/** Keep letterboxed video from panning so far that empty margins dominate the view. */
+function clampPanToLetterbox(
+  panX: number,
+  panY: number,
+  zoom: number,
+  W: number,
+  H: number,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+): { x: number; y: number } {
+  if (zoom <= 1 || dw <= 1 || dh <= 1) {
+    return { x: panX, y: panY };
+  }
+  let px = panX;
+  let py = panY;
+  for (let iter = 0; iter < 10; iter++) {
+    const left = (dx - W / 2) * zoom + W / 2 + px;
+    const right = (dx + dw - W / 2) * zoom + W / 2 + px;
+    const top = (dy - H / 2) * zoom + H / 2 + py;
+    const bottom = (dy + dh - H / 2) * zoom + H / 2 + py;
+    let moved = false;
+    if (left > 0.5) {
+      px -= left;
+      moved = true;
+    } else if (right < W - 0.5) {
+      px += W - right;
+      moved = true;
+    }
+    if (top > 0.5) {
+      py -= top;
+      moved = true;
+    } else if (bottom < H - 0.5) {
+      py += H - bottom;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  return { x: px, y: py };
 }
 
 function drawCircleStroke(
@@ -737,22 +807,6 @@ function drawRectStroke(
     drawRectAt(s.cx, s.cy);
   }
 
-  if (s.is3d && !s.spinning) {
-    const off = Math.max(8, s.lw * 2);
-    ctx.globalAlpha = 0.65;
-    drawRectAt(s.cx + off, s.cy - off);
-    ctx.globalAlpha = 1;
-    ctx.beginPath();
-    ctx.moveTo(s.cx - s.rx, s.cy - s.ry);
-    ctx.lineTo(s.cx - s.rx + off, s.cy - s.ry - off);
-    ctx.moveTo(s.cx + s.rx, s.cy - s.ry);
-    ctx.lineTo(s.cx + s.rx + off, s.cy - s.ry - off);
-    ctx.moveTo(s.cx - s.rx, s.cy + s.ry);
-    ctx.lineTo(s.cx - s.rx + off, s.cy + s.ry - off);
-    ctx.moveTo(s.cx + s.rx, s.cy + s.ry);
-    ctx.lineTo(s.cx + s.rx + off, s.cy + s.ry - off);
-    ctx.stroke();
-  }
   ctx.restore();
 }
 
@@ -803,20 +857,6 @@ function drawTriangleStroke(
     drawTri(0, 0);
   }
 
-  if (s.is3d && !s.spinning) {
-    const off = Math.max(8, s.lw * 2);
-    ctx.globalAlpha = 0.65;
-    drawTri(off, -off);
-    ctx.globalAlpha = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, -s.ry);
-    ctx.lineTo(off, -off - s.ry);
-    ctx.moveTo(s.rx, s.ry);
-    ctx.lineTo(off + s.rx, -off + s.ry);
-    ctx.moveTo(-s.rx, s.ry);
-    ctx.lineTo(off - s.rx, -off + s.ry);
-    ctx.stroke();
-  }
   ctx.restore();
 }
 
@@ -826,9 +866,9 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
   ctx.lineJoin = 'round';
 
   if (s.tool === 'pen') {
-    const { pts, color, lw, dashed } = s;
+    const sp = s as StrokePen;
+    const { pts, color, lw, dashed, spinning, eraserStrokes } = sp;
     if (pts.length === 0) { ctx.restore(); return; }
-    if (dashed) ctx.setLineDash([8, 6]);
     if (pts.length === 1) {
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -837,36 +877,44 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
     } else {
       ctx.strokeStyle = color;
       ctx.lineWidth = lw;
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.stroke();
+      if (spinning) {
+        ctx.setLineDash([3, 10]);
+        ctx.lineDashOffset = -((Date.now() / 20) % 1000);
+      } else if (dashed) ctx.setLineDash([8, 6]);
+      for (let i = 0; i < pts.length - 1; i++) {
+        drawThickSegmentWithEraser(ctx, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, eraserStrokes);
+      }
+      ctx.setLineDash([]);
     }
 
   } else if (s.tool === 'line') {
-    const { p1, p2, color, lw, dashed } = s;
+    const sl = s as StrokeLine;
+    const { p1, p2, color, lw, dashed, spinning, eraserStrokes } = sl;
     ctx.strokeStyle = color;
     ctx.lineWidth = lw;
-    if (dashed) ctx.setLineDash([8, 6]);
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
+    if (spinning) {
+      ctx.setLineDash([3, 10]);
+      ctx.lineDashOffset = -((Date.now() / 20) % 1000);
+    } else if (dashed) ctx.setLineDash([8, 6]);
+    drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
+    ctx.setLineDash([]);
 
   } else if (s.tool === 'swingPath' || s.tool === 'manualSwing') {
-    drawSmoothPath(ctx, s.pts, s.color, s.lw, 1, s.dashed ?? false, s.arrowAtEnd === true);
+    const sw = s as StrokeSwing;
+    drawSmoothPath(ctx, sw.pts, sw.color, sw.lw, 1, sw.dashed ?? false, sw.arrowAtEnd === true, sw.spinning === true);
     ctx.restore();
     return;
 
   } else if (s.tool === 'arrow' || s.tool === 'arrowAngle') {
-    const { p1, p2, color, lw, dashed } = s;
+    const sa = s as StrokeArrow;
+    const { p1, p2, color, lw, dashed, spinning, eraserStrokes } = sa;
     ctx.strokeStyle = color;
     ctx.lineWidth = lw;
-    if (dashed) ctx.setLineDash([8, 6]);
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
+    if (spinning) {
+      ctx.setLineDash([3, 10]);
+      ctx.lineDashOffset = -((Date.now() / 20) % 1000);
+    } else if (dashed) ctx.setLineDash([8, 6]);
+    drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
     ctx.setLineDash([]);
     ctx.fillStyle = color;
     drawArrowHead(ctx, p1, p2);
@@ -1221,8 +1269,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       skeletonClassicColors = true,
       skeletonParts,
       ballSampleMode = false,
-      rect3d = false,
-      triangle3d = false,
       transparentWhenNoVideo = false,
       youtubePose,
       suppressTabCaptureMirror = false,
@@ -1319,8 +1365,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const ballColorRef = useRef<{ hMin: number; hMax: number } | null>(null);
 
     // Legacy AI detection caches (for manual ball shadow tool)
-    const cachedPosesRef    = useRef<CachedPoseFrame[]>([]);
-    const poseProcessingRef = useRef(false);
     const cachedBallRef     = useRef<BallPosition[]>([]);
     const ballProcessingRef = useRef(false);
 
@@ -1344,8 +1388,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
     const skeletonPartsRef = useRef(skeletonParts);
     const ballSampleModeRef = useRef(ballSampleMode);
-    const rect3dRef = useRef(rect3d);
-    const triangle3dRef = useRef(triangle3d);
     const transparentWhenNoVideoRef = useRef(transparentWhenNoVideo);
     const renderVideoRef = useRef(renderVideo);
     const youtubePoseRef = useRef(youtubePose);
@@ -1417,6 +1459,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const objMultRegionRef            = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
     const objMultiplierRef            = useRef<import('@/lib/objectMultiplier').ObjectMultiplier | null>(null);
     const onObjMultRegionSelectedRef  = useRef(onObjMultiplierRegionSelected);
+    /** COCO-SSD suggested racket box (video-normalized); cleared after confirm or manual draw */
+    const racketSuggestNormRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+    const racketSuggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [racketHudOpen, setRacketHudOpen] = useState(false);
 
     const cropRegionRef         = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
@@ -1445,8 +1491,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; }, [skeletonClassicColors]);
     useEffect(() => { skeletonPartsRef.current = skeletonParts; }, [skeletonParts]);
     useEffect(() => { ballSampleModeRef.current = ballSampleMode; }, [ballSampleMode]);
-    useEffect(() => { rect3dRef.current = rect3d; }, [rect3d]);
-    useEffect(() => { triangle3dRef.current = triangle3d; }, [triangle3d]);
     useEffect(() => { transparentWhenNoVideoRef.current = transparentWhenNoVideo; }, [transparentWhenNoVideo]);
     useEffect(() => { renderVideoRef.current = renderVideo; }, [renderVideo]);
     useEffect(() => { youtubePoseRef.current = youtubePose; }, [youtubePose]);
@@ -1455,6 +1499,85 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { webcamActiveRef.current = webcamActive; }, [webcamActive]);
     useEffect(() => { panModeEnabledRef.current = panModeEnabled; }, [panModeEnabled]);
     useEffect(() => { onObjMultRegionSelectedRef.current = onObjMultiplierRegionSelected; }, [onObjMultiplierRegionSelected]);
+
+    useEffect(() => {
+      if (!skeletonDrawEnabled) {
+        latestKeypointsRef.current = null;
+        renderDirtyRef.current = true;
+      }
+    }, [skeletonDrawEnabled]);
+
+    useEffect(() => {
+      renderDirtyRef.current = true;
+    }, [skeletonClassicColors]);
+
+    /** Racket multiplier: auto-detect tennis racket (COCO-SSD) once per tool activation */
+    useEffect(() => {
+      if (racketSuggestTimerRef.current) {
+        clearTimeout(racketSuggestTimerRef.current);
+        racketSuggestTimerRef.current = null;
+      }
+      racketSuggestNormRef.current = null;
+      setRacketHudOpen(false);
+
+      if (activeTool !== 'objectMultiplier') return;
+      if (objMultRegionRef.current) return;
+
+      let cancelled = false;
+      const v0 = videoRef.current;
+
+      const run = async () => {
+        const v = videoRef.current;
+        if (!v || v.readyState < 2 || v.videoWidth < 32) return;
+        if (cancelled || activeToolRef.current !== 'objectMultiplier' || objMultRegionRef.current) return;
+        onProcessingStatus?.('Scanning for racket…');
+        try {
+          const { detectTennisRacketNorm } = await import('@/lib/racketCocoDetect');
+          const r = await detectTennisRacketNorm(v);
+          if (cancelled || activeToolRef.current !== 'objectMultiplier' || objMultRegionRef.current) return;
+          if (r) {
+            racketSuggestNormRef.current = r;
+            setRacketHudOpen(true);
+            renderDirtyRef.current = true;
+            racketSuggestTimerRef.current = setTimeout(() => {
+              racketSuggestTimerRef.current = null;
+              if (
+                cancelled ||
+                activeToolRef.current !== 'objectMultiplier' ||
+                objMultRegionRef.current ||
+                !racketSuggestNormRef.current
+              ) {
+                return;
+              }
+              const picked = racketSuggestNormRef.current;
+              objMultRegionRef.current = { ...picked };
+              racketSuggestNormRef.current = null;
+              setRacketHudOpen(false);
+              onObjMultRegionSelectedRef.current?.();
+              renderDirtyRef.current = true;
+            }, 2000);
+          }
+        } catch {
+          onProcessingStatus?.('Racket auto-detect unavailable — drag a box on the video.');
+        } finally {
+          if (!cancelled) onProcessingStatus?.(null);
+        }
+      };
+
+      const kick = window.setTimeout(() => void run(), 140);
+      const onLoaded = () => void run();
+      v0?.addEventListener('loadeddata', onLoaded);
+
+      return () => {
+        cancelled = true;
+        clearTimeout(kick);
+        v0?.removeEventListener('loadeddata', onLoaded);
+        if (racketSuggestTimerRef.current) {
+          clearTimeout(racketSuggestTimerRef.current);
+          racketSuggestTimerRef.current = null;
+        }
+      };
+    }, [activeTool, onProcessingStatus, renderVideo, videoRef]);
 
     useEffect(() => {
       if (!webcamActive) {
@@ -1620,8 +1743,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         angleP1Ref.current = null;
         // ClearAll should remove *everything* including AI overlays.
         skeletonSuppressedRef.current = true;
-        cachedPosesRef.current = [];
-        poseProcessingRef.current = false;
         skeletonFramesRef.current = [];
         latestKeypointsRef.current = null;
         poseSmoothPrevRef.current = null;
@@ -1637,8 +1758,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       },
       resetSkeleton: () => {
         skeletonSuppressedRef.current = false;
-        cachedPosesRef.current = [];
-        poseProcessingRef.current = false;
         skeletonFramesRef.current = [];
         latestKeypointsRef.current = null;
         poseSmoothPrevRef.current = null;
@@ -1663,8 +1782,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       },
       undo: () => {
         skeletonSuppressedRef.current = true;
-        cachedPosesRef.current = [];
-        poseProcessingRef.current = false;
         skeletonFramesRef.current = [];
         latestKeypointsRef.current = null;
         cachedBallRef.current = [];
@@ -1719,6 +1836,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           lw: 4,
           dashed: false,
           arrowAtEnd: drawingOptsRef.current.arrowAtEnd === true,
+          spinning: circleSpinningRef.current || undefined,
         });
         pushHistory();
       },
@@ -1784,6 +1902,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         objMultiplierRef.current?.clear();
         objMultiplierRef.current = null;
         objMultRegionRef.current = null;
+        if (racketSuggestTimerRef.current) {
+          clearTimeout(racketSuggestTimerRef.current);
+          racketSuggestTimerRef.current = null;
+        }
+        racketSuggestNormRef.current = null;
+        setRacketHudOpen(false);
       },
       getObjMultiplierFrameCount: () => objMultiplierRef.current?.getFrameCount() ?? 0,
     }), [onProcessingStatus, pushHistory, videoRef]);
@@ -1802,7 +1926,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         poseBridgeRef.current = null;
         return;
       }
-      ensurePoseRender();
       if (typeof window === 'undefined') return;
       if (youtubePoseRef.current) {
         poseBridgeRef.current?.dispose();
@@ -1819,7 +1942,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       poseLoopActiveRef.current = true;
 
       bridge.onResult((keypoints) => {
-        if (skeletonSuppressedRef.current) {
+        if (skeletonSuppressedRef.current || !skeletonDrawEnabledRef.current) {
           latestKeypointsRef.current = null;
           return;
         }
@@ -2015,7 +2138,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const poseLoop = async () => {
         if (!poseLoopActiveRef.current) return;
         if (skeletonSuppressedRef.current) {
-          if (lastGood?.length) latestKeypointsRef.current = lastGood;
+          latestKeypointsRef.current = null;
+          rafId = requestAnimationFrame(poseLoop);
+          return;
+        }
+        if (!skeletonDrawEnabledRef.current) {
+          latestKeypointsRef.current = null;
           rafId = requestAnimationFrame(poseLoop);
           return;
         }
@@ -2185,7 +2313,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           precisionAnchorPointerIdRef.current !== null ||
           precisionFadeStartRef.current !== null ||
           circleSpinningRef.current ||
-          outlineErasingIdxRef.current >= 0;
+          outlineErasingIdxRef.current >= 0 ||
+          isPanningRef.current ||
+          racketHudOpen ||
+          strokesRef.current.some((st) => strokeHasSpinning(st)) ||
+          strokeHasSpinning(activeStrokeRef.current);
 
         const needsRender =
           videoTimeChanged ||
@@ -2360,7 +2492,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.translate(dx, dy);
           const msg = isSelectingObjMultRegionRef.current
             ? 'Release to confirm selection'
-            : 'Drag to select the object you want to multiply across frames';
+            : 'Auto-detect runs first — or drag a box around the racket';
           ctx.font = '600 15px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
           const tw = ctx.measureText(msg).width;
           const padX = 14;
@@ -2380,12 +2512,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        const playbackT =
-          yt?.controllerRef.current?.getCurrentTime?.() ??
-          video?.currentTime ??
-          0;
-
-        // ── Skeleton overlay ─────────────────────────────────────────────
+        // ── Skeleton overlay (single path: drawSkeletonOverlay only) ─────
         const skeletonDimsOk =
           (video && video.readyState >= 2 && video.videoWidth > 0) ||
           (yt && ytDim.w > 0 && ytDim.h > 0);
@@ -2406,17 +2533,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               parts: skeletonPartsRef.current,
             });
             ctx.restore();
-          } else if (cachedPosesRef.current.length > 0 && poseRenderFns && video) {
-            // Fallback to legacy cached poses
-            const pf = poseRenderFns.getPoseAtTime(cachedPosesRef.current, playbackT);
-            if (pf && pf.poses.length > 0) {
-              const scaleXY = dw / vW;
-              ctx.save();
-              ctx.translate(dx, dy);
-              poseRenderFns.drawPoseSkeleton(ctx, pf.poses, dw, dh, scaleXY, scaleXY);
-              ctx.restore();
-            }
           }
+        }
+
+        // ── Racket auto-detect preview (green dashed = suggested region) ─
+        const rsNorm = racketSuggestNormRef.current;
+        if (
+          rsNorm &&
+          activeToolRef.current === 'objectMultiplier' &&
+          !objMultRegionRef.current &&
+          dw > 0 &&
+          dh > 0
+        ) {
+          ctx.save();
+          ctx.translate(dx, dy);
+          ctx.strokeStyle = 'rgba(34,197,94,0.95)';
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([10, 5]);
+          ctx.strokeRect(rsNorm.x * dw, rsNorm.y * dh, rsNorm.w * dw, rsNorm.h * dh);
+          ctx.setLineDash([]);
+          ctx.restore();
         }
 
         // ── Ball trail overlay ───────────────────────────────────────────
@@ -2519,14 +2655,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
           const pts = swingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true);
+          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Manual swing path being drawn
         if (manualSwingActiveRef.current && manualSwingPtsRef.current.length > 0) {
           const pts = manualSwingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true);
+          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Locked angle measurements
@@ -2851,6 +2987,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     };
 
     const commitObjectMultiplierFromPts = useCallback((p1: Pt, p2: Pt) => {
+      if (racketSuggestTimerRef.current) {
+        clearTimeout(racketSuggestTimerRef.current);
+        racketSuggestTimerRef.current = null;
+      }
+      racketSuggestNormRef.current = null;
+      setRacketHudOpen(false);
       const { dx, dy, dw, dh } = videoBoundsRef.current;
       if (dw > 0 && dh > 0) {
         const x = Math.max(0, Math.min(1, (Math.min(p1.x, p2.x) - dx) / dw));
@@ -2935,6 +3077,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             lw: opts.lineWidth,
             dashed: opts.dashed ?? false,
             arrowAtEnd: opts.arrowAtEnd === true,
+            spinning: circleSpinningRef.current || undefined,
           },
         ];
         pushHistory();
@@ -2956,6 +3099,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             lw: opts.lineWidth,
             dashed: opts.dashed ?? false,
             arrowAtEnd: opts.arrowAtEnd === true,
+            spinning: circleSpinningRef.current || undefined,
           },
         ];
         pushHistory();
@@ -3199,7 +3343,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         spaceHeldRef.current ||
         (tool === 'zoom' && e.button === 0 && zoomed) ||
         (zoomed && panModeEnabledRef.current) ||
-        (zoomed && !isDrawingTool);
+        (zoomed && !isDrawingTool) ||
+        (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current);
       if (shouldPan) {
         isPanningRef.current = true;
         panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
@@ -3316,6 +3461,39 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // Outline eraser: line / arrow / pen
+      {
+        const eraserR = outlineEraserSizeRef.current;
+        if (eraserR > 0 && (tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' || tool === 'pen')) {
+          let bestIdx = -1;
+          let bestD = Infinity;
+          strokesRef.current.forEach((s, i) => {
+            if (s.tool !== 'line' && s.tool !== 'arrow' && s.tool !== 'arrowAngle' && s.tool !== 'pen') return;
+            const d = hitTestStroke(s, pos);
+            const strokeLw = (s as { lw?: number }).lw ?? 2;
+            if (d < bestD && d < 36 + strokeLw * 0.75) {
+              bestD = d;
+              bestIdx = i;
+            }
+          });
+          if (bestIdx >= 0) {
+            const hitStroke = strokesRef.current[bestIdx];
+            const dot: EraserDot = { x: pos.x, y: pos.y, radius: eraserR };
+            const prev = (hitStroke as StrokeLine | StrokeArrow | StrokePen).eraserStrokes ?? [];
+            const updated = { ...hitStroke, eraserStrokes: [...prev, dot] };
+            strokesRef.current = [
+              ...strokesRef.current.slice(0, bestIdx),
+              updated,
+              ...strokesRef.current.slice(bestIdx + 1),
+            ];
+            outlineErasingIdxRef.current = bestIdx;
+            outlineEraserPosRef.current = pos;
+            isDraggingRef.current = true;
+            return;
+          }
+        }
+      }
+
       // Check if clicking near an existing draggable shape
       if (tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle') {
         const eraserR = outlineEraserSizeRef.current;
@@ -3338,9 +3516,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (idx >= 0 && eraserR > 0) {
           const hitStroke = strokesRef.current[idx];
           const isEligible =
-            (hitStroke.tool === 'circle' || hitStroke.tool === 'bodyCircle') ||
-            (hitStroke.tool === 'rect' && (hitStroke as StrokeRect).is3d) ||
-            (hitStroke.tool === 'triangle' && (hitStroke as StrokeTriangle).is3d);
+            hitStroke.tool === 'circle' ||
+            hitStroke.tool === 'bodyCircle' ||
+            hitStroke.tool === 'rect' ||
+            hitStroke.tool === 'triangle';
           if (isEligible) {
             const dot: EraserDot = { x: pos.x, y: pos.y, radius: eraserR };
             const prev = (hitStroke as StrokeEllipse | StrokeRect | StrokeTriangle).eraserStrokes ?? [];
@@ -3368,20 +3547,43 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       switch (tool) {
         case 'pen':
-          activeStrokeRef.current = { tool: 'pen', pts: [pos], color: opts.color, lw, dashed: opts.dashed ?? false };
+          activeStrokeRef.current = {
+            tool: 'pen',
+            pts: [pos],
+            color: opts.color,
+            lw,
+            dashed: opts.dashed ?? false,
+            spinning: circleSpinningRef.current || undefined,
+          };
           isDraggingRef.current = true;
           break;
 
         case 'line':
           dragStartRef.current = pos;
-          activeStrokeRef.current = { tool: 'line', p1: pos, p2: pos, color: opts.color, lw, dashed: opts.dashed ?? false };
+          activeStrokeRef.current = {
+            tool: 'line',
+            p1: pos,
+            p2: pos,
+            color: opts.color,
+            lw,
+            dashed: opts.dashed ?? false,
+            spinning: circleSpinningRef.current || undefined,
+          };
           isDraggingRef.current = true;
           break;
 
         case 'arrow':
         case 'arrowAngle':
           dragStartRef.current = pos;
-          activeStrokeRef.current = { tool, p1: pos, p2: pos, color: opts.color, lw, dashed: opts.dashed ?? false };
+          activeStrokeRef.current = {
+            tool,
+            p1: pos,
+            p2: pos,
+            color: opts.color,
+            lw,
+            dashed: opts.dashed ?? false,
+            spinning: circleSpinningRef.current || undefined,
+          };
           isDraggingRef.current = true;
           break;
 
@@ -3406,7 +3608,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             color: opts.color, lw,
             dashed: opts.dashed ?? false,
             spinning: circleSpinningRef.current || undefined,
-            is3d: rect3dRef.current || undefined,
           };
           isDraggingRef.current = true;
           break;
@@ -3419,7 +3620,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             color: opts.color, lw,
             dashed: opts.dashed ?? false,
             spinning: circleSpinningRef.current || undefined,
-            is3d: triangle3dRef.current || undefined,
           };
           isDraggingRef.current = true;
           break;
@@ -3583,6 +3783,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const scaleY = canvas.height / rect.height;
           panXRef.current = panStartRef.current.px + (e.clientX - panStartRef.current.x) * scaleX;
           panYRef.current = panStartRef.current.py + (e.clientY - panStartRef.current.y) * scaleY;
+          const { dx, dy, dw, dh } = videoBoundsRef.current;
+          const c = clampPanToLetterbox(
+            panXRef.current,
+            panYRef.current,
+            zoomRef.current,
+            canvas.width,
+            canvas.height,
+            dx,
+            dy,
+            dw,
+            dh,
+          );
+          panXRef.current = c.x;
+          panYRef.current = c.y;
         }
         return;
       }
@@ -3695,10 +3909,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (outlineErasingIdxRef.current >= 0 && isDraggingRef.current) {
         const idx = outlineErasingIdxRef.current;
         const s = strokesRef.current[idx];
-        if (s && (s.tool === 'circle' || s.tool === 'bodyCircle' || s.tool === 'rect' || s.tool === 'triangle')) {
+        if (s && (
+          s.tool === 'circle' || s.tool === 'bodyCircle' || s.tool === 'rect' || s.tool === 'triangle' ||
+          s.tool === 'line' || s.tool === 'arrow' || s.tool === 'arrowAngle' || s.tool === 'pen'
+        )) {
           const eraserR = outlineEraserSizeRef.current;
           const dot: EraserDot = { x: pos.x, y: pos.y, radius: eraserR };
-          const prev = (s as StrokeEllipse | StrokeRect | StrokeTriangle).eraserStrokes ?? [];
+          const prev = (s as StrokeEllipse | StrokeRect | StrokeTriangle | StrokeLine | StrokeArrow | StrokePen).eraserStrokes ?? [];
           const updated = { ...s, eraserStrokes: [...prev, dot] };
           strokesRef.current = [
             ...strokesRef.current.slice(0, idx),
@@ -3737,7 +3954,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // Track cursor position for outline eraser preview (even when not dragging)
-      if (outlineEraserSizeRef.current > 0 && (tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle')) {
+      if (outlineEraserSizeRef.current > 0 && (
+        tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle' ||
+        tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' || tool === 'pen'
+      )) {
         outlineEraserPosRef.current = pos;
         renderDirtyRef.current = true;
       }
@@ -3979,6 +4199,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       cursorFor.bodyCircle = 'none';
       cursorFor.rect = 'none';
       cursorFor.triangle = 'none';
+      cursorFor.line = 'none';
+      cursorFor.arrow = 'none';
+      cursorFor.arrowAngle = 'none';
+      cursorFor.pen = 'none';
     }
 
     const onWheelCanvas = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -4052,7 +4276,90 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         />
 
         {activeTool === 'objectMultiplier' ? (
-          <div
+          <>
+            {racketHudOpen ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 10,
+                  left: 0,
+                  right: 0,
+                  zIndex: 35,
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  gap: 8,
+                  pointerEvents: 'auto',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: '#fff',
+                    background: 'rgba(0,0,0,0.55)',
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                  }}
+                >
+                  Racket detected — use it or draw a box
+                </span>
+                <button
+                  type="button"
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: '#22C55E',
+                    color: '#fff',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    const r = racketSuggestNormRef.current;
+                    if (!r) return;
+                    if (racketSuggestTimerRef.current) {
+                      clearTimeout(racketSuggestTimerRef.current);
+                      racketSuggestTimerRef.current = null;
+                    }
+                    objMultRegionRef.current = { ...r };
+                    racketSuggestNormRef.current = null;
+                    setRacketHudOpen(false);
+                    onObjMultRegionSelectedRef.current?.();
+                    renderDirtyRef.current = true;
+                  }}
+                >
+                  Use detection
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.5)',
+                    background: 'rgba(0,0,0,0.45)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    if (racketSuggestTimerRef.current) {
+                      clearTimeout(racketSuggestTimerRef.current);
+                      racketSuggestTimerRef.current = null;
+                    }
+                    racketSuggestNormRef.current = null;
+                    setRacketHudOpen(false);
+                    renderDirtyRef.current = true;
+                  }}
+                >
+                  Draw manually
+                </button>
+              </div>
+            ) : null}
+            <div
             style={{
               position: 'absolute',
               inset: 0,
@@ -4063,7 +4370,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }}
             onPointerDown={(e) => {
               if (activeToolRef.current !== 'objectMultiplier' && !isSelectingObjMultRegionRef.current) return;
-              console.log('[ObjectMultiplierOverlay] pointerdown', e.pointerType, e.clientX, e.clientY);
+              if (racketSuggestTimerRef.current) {
+                clearTimeout(racketSuggestTimerRef.current);
+                racketSuggestTimerRef.current = null;
+              }
+              racketSuggestNormRef.current = null;
+              setRacketHudOpen(false);
+              renderDirtyRef.current = true;
               isSelectingObjMultRegionRef.current = true;
               objMultOverlayDownRef.current = { cx: e.clientX, cy: e.clientY };
               (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
@@ -4078,7 +4391,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }}
             onPointerMove={(e) => {
               if (!isDraggingRef.current || !objMultOverlayDownRef.current) return;
-              console.log('[ObjectMultiplierOverlay] pointermove', e.clientX, e.clientY);
               const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
               const xd = objMultOverlayDownRef.current.cx - r.left;
               const yd = objMultOverlayDownRef.current.cy - r.top;
@@ -4096,7 +4408,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 setObjMultOverlayPx(null);
                 return;
               }
-              console.log('[ObjectMultiplierOverlay] pointerup', e.pointerType, e.clientX, e.clientY);
               try {
                 (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
               } catch {
@@ -4136,6 +4447,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               />
             ) : null}
           </div>
+          </>
         ) : null}
 
         {/* Zoom / Pan controls — bottom-right corner above playback */}

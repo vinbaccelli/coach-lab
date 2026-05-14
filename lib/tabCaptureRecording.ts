@@ -2,14 +2,42 @@
  * Screen/tab capture via getDisplayMedia + MediaRecorder for session-local recordings.
  */
 
+function isSafariLike(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  return /Safari/i.test(ua) && !/Chrome|CriOS|FxiOS|Edg/i.test(ua);
+}
+
+/**
+ * Safari prefers MP4/H.264 when supported; Chrome prefers WebM/VP9.
+ */
 export function pickRecorderMimeType(): string {
-  const candidates = [
+  const MR = typeof MediaRecorder !== 'undefined' ? MediaRecorder : null;
+  if (!MR?.isTypeSupported) return 'video/webm';
+
+  if (isSafariLike()) {
+    const safariFirst = [
+      'video/mp4;codecs=avc1.42E01E',
+      'video/mp4;codecs=avc1',
+      'video/mp4',
+      'video/webm;codecs=vp8',
+      'video/webm',
+    ];
+    for (const c of safariFirst) {
+      if (MR.isTypeSupported(c)) return c;
+    }
+    return 'video/webm';
+  }
+
+  const chromeFirst = [
     'video/webm;codecs=vp9',
     'video/webm;codecs=vp8',
     'video/webm',
+    'video/mp4;codecs=avc1.42E01E',
+    'video/mp4',
   ];
-  for (const c of candidates) {
-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c)) return c;
+  for (const c of chromeFirst) {
+    if (MR.isTypeSupported(c)) return c;
   }
   return 'video/webm';
 }
