@@ -4,8 +4,33 @@
  */
 
 export function captureLog(step: string, detail?: string): void {
+  if (process.env.NODE_ENV === 'production') return;
   if (typeof console === 'undefined' || !console.log) return;
   console.log('[Capture] Step', step, Date.now(), detail ?? '');
+}
+
+/**
+ * Run a YouTube IFrame API call without ever throwing into the capture flow.
+ * WebKit can throw minified errors (e.g. "this.g.src") during teardown/remount,
+ * so any `getCurrentTime / getPlayerState / playVideo / seekTo` must go through
+ * this helper before being trusted.
+ */
+export function safeYtCall<T>(fn: () => T | null | undefined, fallback: T): T {
+  try {
+    const v = fn();
+    return v == null ? fallback : v;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Fire-and-forget YT IFrame API call (e.g. pauseVideo, unMute) — never throws. */
+export function safeYtVoid(fn: () => unknown): void {
+  try {
+    fn();
+  } catch {
+    /* noop */
+  }
 }
 
 export type CaptureErrorResult = {

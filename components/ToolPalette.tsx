@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   MousePointer2,
   Pen,
@@ -19,7 +19,6 @@ import {
   Minus,
   Square,
   Zap,
-  Shapes,
   Layers,
   ChevronLeft,
   Palette,
@@ -51,8 +50,6 @@ interface ToolPaletteProps {
   circleSpinning?: boolean;
   objMultiplierFrameCount?: number;
   onObjMultiplierFrameCountChange?: (v: number) => void;
-  objMultiplierDuration?: number;
-  onObjMultiplierDurationChange?: (v: number) => void;
   onObjMultiplierCapture?: () => void;
   onObjMultiplierClear?: () => void;
   objMultiplierActive?: boolean;
@@ -97,16 +94,12 @@ interface ToolPaletteProps {
   iconOnlyLayout?: boolean;
 }
 
-const PRESET_COLORS = [
-  '#1E40AF', '#DC2626', '#16A34A', '#D97706', '#7C3AED',
-  '#0891B2', '#EC4899', '#111827', '#FFFFFF',
-];
+const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
 
 type NavScreen =
   | 'home'
   | 'style'
   | 'draw'
-  | 'shapeOpts'
   | 'skeleton'
   | 'webcam'
   | 'multiplier'
@@ -143,6 +136,7 @@ const shell: React.CSSProperties = {
   background: 'rgba(255,255,255,0.98)',
   borderRadius: 12,
   overflow: 'hidden',
+  animation: 'coachlabToolbarScreenIn 200ms ease-out',
 };
 
 const scrollArea: React.CSSProperties = {
@@ -205,8 +199,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
     circleSpinning,
     objMultiplierFrameCount = 6,
     onObjMultiplierFrameCountChange,
-    objMultiplierDuration = 2,
-    onObjMultiplierDurationChange,
     onObjMultiplierCapture,
     onObjMultiplierClear,
     objMultiplierActive = false,
@@ -259,25 +251,24 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const push = useCallback((x: NavScreen) => {
     setNavStack((s) => [...s, x]);
   }, []);
+  useEffect(() => {
+    const id = 'coachlab-toolbar-keyframes';
+    if (typeof document === 'undefined' || document.getElementById(id)) return;
+    const el = document.createElement('style');
+    el.id = id;
+    el.textContent =
+      '@keyframes coachlabToolbarScreenIn{from{opacity:.92;transform:translateX(8px)}to{opacity:1;transform:none}}';
+    document.head.appendChild(el);
+  }, []);
   const resetNav = useCallback(() => setNavStack(['home']), []);
 
-  const isCircle3d = activeTool === 'bodyCircle';
-  const isShapeTool =
-    activeTool === 'circle' ||
-    activeTool === 'bodyCircle' ||
-    activeTool === 'rect' ||
-    activeTool === 'triangle' ||
-    activeTool === 'line' ||
-    activeTool === 'arrow' ||
-    activeTool === 'arrowAngle';
-  const shapeEraserEligible =
-    activeTool === 'circle' ||
-    activeTool === 'bodyCircle' ||
-    activeTool === 'rect' ||
-    activeTool === 'triangle' ||
-    activeTool === 'line' ||
-    activeTool === 'arrow' ||
-    activeTool === 'arrowAngle';
+  const outlineEraserEligible =
+    activeTool !== 'select' &&
+    activeTool !== 'zoom' &&
+    activeTool !== 'skeleton' &&
+    activeTool !== 'ballShadow' &&
+    activeTool !== 'objectMultiplier';
+  const animatedOutlineEligible = outlineEraserEligible;
 
   const setTool = (t: ToolType) => onToolChange(t);
 
@@ -539,6 +530,27 @@ export default function ToolPalette(props: ToolPaletteProps) {
               {io ? '┅' : 'Dashed'}
             </button>
           </div>
+          {onCircleSpinningChange && animatedOutlineEligible &&
+            chk('spin', 'Animated outline', !!circleSpinning, onCircleSpinningChange)}
+          {onOutlineEraserSizeChange && outlineEraserEligible && (
+            <>
+              {chk('oe', 'Outline eraser', outlineEraserSize > 0, (v) => onOutlineEraserSizeChange(v ? 15 : 0))}
+              {outlineEraserSize > 0 && (
+                <div style={{ padding: '0 8px' }}>
+                  <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={50}
+                    step={1}
+                    value={outlineEraserSize}
+                    onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+            </>
+          )}
           {(activeTool === 'manualSwing' || activeTool === 'swingPath') &&
             chk('arrowEnd', 'Arrow at end of swing path', !!drawingOptions.arrowAtEnd, (v) => onOptionsChange({ arrowAtEnd: v }))}
           {activeTool === 'text' && (
@@ -572,13 +584,21 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} label="Eraser" onPress={() => { setTool('erase'); }} />
           <Row
             k="circle"
-            active={activeTool === 'circle' || activeTool === 'bodyCircle'}
+            active={activeTool === 'circle'}
             icon={<Circle size={18} />}
             label="Circle"
-            sub={isCircle3d ? '3D body circle' : '2D circle'}
             onPress={() => {
-              setTool(isCircle3d ? 'bodyCircle' : 'circle');
-              push('shapeOpts');
+              setTool('circle');
+            }}
+          />
+          <Row
+            k="bodycirc"
+            active={activeTool === 'bodyCircle'}
+            icon={<Circle size={18} />}
+            label="Body circle"
+            sub="3D"
+            onPress={() => {
+              setTool('bodyCircle');
             }}
           />
           <Row
@@ -588,7 +608,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
             label="Rectangle"
             onPress={() => {
               setTool('rect');
-              push('shapeOpts');
             }}
           />
           <Row
@@ -598,67 +617,12 @@ export default function ToolPalette(props: ToolPaletteProps) {
             label="Triangle"
             onPress={() => {
               setTool('triangle');
-              push('shapeOpts');
             }}
           />
           <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => { setTool('text'); }} />
           <Row k="angle" active={activeTool === 'angle'} icon={<Triangle size={18} />} label="Angle measure" onPress={() => { setTool('angle'); }} />
           <Row k="aa" active={activeTool === 'arrowAngle'} icon={<Activity size={18} />} label="Arrow + angle" onPress={() => { setTool('arrowAngle'); }} />
           <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => { setTool('manualSwing'); }} />
-        </div>
-      </div>
-    );
-  }
-
-  if (top === 'shapeOpts') {
-    const shapeLabel =
-      activeTool === 'bodyCircle'
-        ? '3D Circle'
-        : activeTool === 'circle'
-          ? 'Circle'
-          : activeTool === 'rect'
-            ? 'Rectangle'
-            : activeTool === 'triangle'
-              ? 'Triangle'
-              : activeTool === 'line'
-                ? 'Line'
-                : activeTool === 'arrow' || activeTool === 'arrowAngle'
-                  ? 'Arrow'
-                  : 'Shape';
-    const showAnim =
-      onCircleSpinningChange &&
-      (activeTool === 'circle' ||
-        activeTool === 'bodyCircle' ||
-        activeTool === 'rect' ||
-        activeTool === 'triangle' ||
-        activeTool === 'line' ||
-        activeTool === 'arrow' ||
-        activeTool === 'arrowAngle');
-    return (
-      <div style={shell}>
-        <div style={scrollAreaFor(io)}>
-          <BackHeader title={shapeLabel} icon={<Shapes size={18} />} />
-          {showAnim &&
-            chk('spin', 'Animated outline', !!circleSpinning, onCircleSpinningChange)}
-          {onOutlineEraserSizeChange && shapeEraserEligible && (
-            <>
-              {chk('oe', 'Outline eraser', outlineEraserSize > 0, (v) => onOutlineEraserSizeChange(v ? 15 : 0))}
-              {outlineEraserSize > 0 && (
-                <div style={{ padding: '0 8px' }}>
-                  <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
-                  <input
-                    type="range"
-                    min={5}
-                    max={50}
-                    step={1}
-                    value={outlineEraserSize}
-                    onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              )}
-            </>
-          )}
         </div>
       </div>
     );
@@ -820,7 +784,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             Highlight the racket region across frames
           </p>
           <p style={{ margin: '0 4px 12px', fontSize: 12, color: '#6B7280', lineHeight: 1.45 }}>
-            Drag a rectangle on the video to select the racket (or auto-detect when available). Choose frames and duration, then Capture.
+            Drag a rectangle on the video to select the racket area. Frames are captured at 10 fps from the current time, with background softened on each frame.
           </p>
           <div style={{ padding: '4px 8px' }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Frames to overlay</div>
@@ -844,18 +808,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 </button>
               ))}
             </div>
-          </div>
-          <div style={{ padding: '4px 8px' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280' }}>Duration: {objMultiplierDuration}s</div>
-            <input
-              type="range"
-              min={0.5}
-              max={10}
-              step={0.5}
-              value={objMultiplierDuration}
-              onChange={(e) => onObjMultiplierDurationChange?.(Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
           </div>
           {!objMultiplierActive ? (
             <p style={{ fontSize: 12, color: '#B45309', fontWeight: 600, margin: '4px 8px', lineHeight: 1.4 }}>
@@ -930,12 +882,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
             push('multiplier');
           }}
         />
-        {isShapeTool && (
-          <Row k="sho" icon={<Shapes size={20} />} label="Shape options" sub="Animation, outline eraser" onPress={() => push('shapeOpts')} />
-        )}
-        {/* V2: More tools menu — hidden until next release
-        <Row k="more" icon={<LayoutGrid size={20} />} label="More" sub="Swing, racket, ball" onPress={() => push('more')} />
-        */}
 
         <div style={{ height: 1, background: '#E8E6E1', margin: '8px 0' }} />
 

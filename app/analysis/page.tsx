@@ -14,8 +14,7 @@ import { Camera, MoreHorizontal, Upload, Menu } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
-import ScreenRecorder from '@/components/ScreenRecorder';
-import WebcamDropdown from '@/components/WebcamDropdown';
+import RecordingHub from '@/components/RecordingHub';
 import { terminateGlobalPoseWorker, warmupMoveNetWorker } from '@/lib/poseWorkerBridge';
 import PrecisionDrawInstructions, {
   hasSeenPrecisionInstructions,
@@ -126,6 +125,28 @@ export default function Home() {
     youtubeDurationHintSec: number | null;
   };
   const embedCaptureShareBundleRef = useRef<EmbedCaptureShareBundle | null>(null);
+  /**
+   * Capture cancellation flag. Set to `true` from `resetSession()` or any other
+   * intentional teardown path; the flow polls this at every await checkpoint and
+   * exits cleanly with `cancelled: true`. Reset to `false` at the start of each
+   * new capture attempt. Avoids a stale-error toast after the user pressed "New".
+   */
+  const embedCaptureCancelRef = useRef(false);
+  /**
+   * Guard against double-firing of `shareEmbedDisplayMediaFromUserGesture`.
+   * Without this, a double-tap on the share button can spawn two
+   * `getTabCaptureStream()` calls, only one of which we can clean up.
+   */
+  const embedShareInFlightRef = useRef(false);
+  /**
+   * When the RecordingHub "Alternative — Screen Record" section loads a URL,
+   * this ref stores the pending capture request. The watcher useEffect calls
+   * prepareEmbedCapturePhase once the embed reports ready (~3 s after mount).
+   */
+  const hubCapturePendingRef = useRef<{
+    target: 'A' | 'B';
+    opts: { mode: 'full'; startSec: null; endSec: null };
+  } | null>(null);
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeTool, setActiveTool]       = useState<ToolType>('pen');
@@ -245,9 +266,20 @@ export default function Home() {
   const [captureRecordingElapsedSec, setCaptureRecordingElapsedSec] = useState(0);
   const [captureCountdown, setCaptureCountdown] = useState<number | null>(null);
   const [captureStepStatus, setCaptureStepStatus] = useState<string | null>(null);
-  /** Full-screen "Recording in progress" once display-capture track is live */
-  const [captureFullBleedOverlay, setCaptureFullBleedOverlay] = useState(false);
-  const [captureOverlayElapsedSec, setCaptureOverlayElapsedSec] = useState(0);
+  /** Non-blocking coach banner during embed capture (countdown + record) — video stays visible */
+  const [captureCoachBanner, setCaptureCoachBanner] = useState(false);
+  /** True only from the moment MediaRecorder.startCapture() fires — drives the recording timer. */
+  const [captureActuallyRecording, setCaptureActuallyRecording] = useState(false);
+  /**
+   * Post-recording banner phase so the coach sees "Processing your video…" and
+   * "Your video is ready" without abruptly switching to just the download toast.
+   * 'hidden'     → banner not shown (before capture or after dismiss)
+   * 'processing' → recording finished, MP4 conversion in flight
+   * 'ready'      → blob available, transitioning to download toast
+   */
+  const [capturePostPhase, setCapturePostPhase] = useState<'hidden' | 'processing' | 'ready'>('hidden');
+  /** Recording Studio side panel open/closed. */
+  const [hubOpen, setHubOpen] = useState(false);
   const [embedCaptureConsecutiveFailures, setEmbedCaptureConsecutiveFailures] = useState(0);
   const [captureFallbackStreamUrl, setCaptureFallbackStreamUrl] = useState<string | null>(null);
   /** Step 2 of embed capture: isolation done; coach must tap Share Screen (Safari gesture) */
@@ -259,9 +291,13 @@ export default function Home() {
   const [ytPlayerRemountNonceB, setYtPlayerRemountNonceB] = useState(0);
   /** Panel that started capture (isolation / GDM) before embedCapturePanelId is set for live canvas */
   const [capturePrepPanel, setCapturePrepPanel] = useState<'A' | 'B' | null>(null);
+  /** True while the hub is waiting for the embed to mount after loading a URL. */
+  const [hubCaptureLoading, setHubCaptureLoading] = useState(false);
+  /** Which slot the hub's screen-record flow is targeting. */
+  const [hubCaptureTarget, setHubCaptureTarget] = useState<'A' | 'B' | null>(null);
 
   useEffect(() => {
-    if (!captureBusy || !embedCaptureRecording) {
+    if (!captureActuallyRecording) {
       setCaptureRecordingElapsedSec(0);
       return;
     }
@@ -270,19 +306,23 @@ export default function Home() {
       setCaptureRecordingElapsedSec(Math.floor((Date.now() - t0) / 1000));
     }, 250);
     return () => window.clearInterval(iv);
-  }, [captureBusy, embedCaptureRecording]);
+  }, [captureActuallyRecording]);
 
+  // Transition banner from "processing" → "ready" once the blob is prepared.
   useEffect(() => {
-    if (!captureFullBleedOverlay) {
-      setCaptureOverlayElapsedSec(0);
-      return;
+    if (captureDownloadStatus === 'ready_mp4' || captureDownloadStatus === 'ready_webm') {
+      setCapturePostPhase((p) => (p === 'processing' ? 'ready' : p));
     }
-    const t0 = Date.now();
-    const iv = window.setInterval(() => {
-      setCaptureOverlayElapsedSec(Math.floor((Date.now() - t0) / 1000));
-    }, 250);
-    return () => window.clearInterval(iv);
-  }, [captureFullBleedOverlay]);
+  }, [captureDownloadStatus]);
+
+  // Auto-dismiss the "Your video is ready" banner after 4 s so the download toast
+  // (showCaptureSaveToast) takes over without needing an explicit dismiss tap.
+  useEffect(() => {
+    if (capturePostPhase !== 'ready') return;
+    const id = window.setTimeout(() => setCapturePostPhase('hidden'), 4_000);
+    return () => window.clearTimeout(id);
+  }, [capturePostPhase]);
+
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
   /** Drag-over state for the two video panels */
@@ -312,7 +352,6 @@ export default function Home() {
 
   // Object Multiplier state
   const [objMultiplierFrameCount, setObjMultiplierFrameCount] = useState(5);
-  const [objMultiplierDuration, setObjMultiplierDuration] = useState(2);
   const [objMultiplierHasRegion, setObjMultiplierHasRegion] = useState(false);
   const [objMultiplierProgress, setObjMultiplierProgress] = useState<string | null>(null);
 
@@ -481,6 +520,36 @@ export default function Home() {
     return () => ro.disconnect();
   }, [updateSizeB, videoSrcB]);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoSrc) return;
+    const bump = () => {
+      try {
+        if (video.readyState >= 1) video.currentTime = 0.001;
+      } catch {
+        /* noop */
+      }
+    };
+    video.addEventListener('loadeddata', bump, { once: true });
+    bump();
+    return () => video.removeEventListener('loadeddata', bump);
+  }, [videoSrc]);
+
+  useEffect(() => {
+    const video = videoRefB.current;
+    if (!video || !videoSrcB) return;
+    const bump = () => {
+      try {
+        if (video.readyState >= 1) video.currentTime = 0.001;
+      } catch {
+        /* noop */
+      }
+    };
+    video.addEventListener('loadeddata', bump, { once: true });
+    bump();
+    return () => video.removeEventListener('loadeddata', bump);
+  }, [videoSrcB]);
+
   // ── Keyboard shortcuts (undo / redo) ──────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -563,6 +632,11 @@ export default function Home() {
   }, []);
 
   const resetSession = useCallback(() => {
+    // Signal any in-flight embed capture to abort cleanly. Even if the flow is
+    // mid-countdown, mid-await, or mid-recording loop, the cancel check at each
+    // await point will catch this and run the cleaner before exiting.
+    embedCaptureCancelRef.current = true;
+    embedShareInFlightRef.current = false;
     disposeFfmpegWasm();
     setCaptureBusy(false);
     ytPlayerARef.current = null;
@@ -578,17 +652,23 @@ export default function Home() {
     setGenericEmbedSrcA(null);
     setGenericEmbedSrcB(null);
     setEmbedCaptureRecording(false);
+    setCaptureActuallyRecording(false);
     setEmbedCapturePanelId(null);
     setCapturePrepPanel(null);
     setEmbedCaptureAwaitingShare(null);
     setEmbedYtKilledA(false);
     setEmbedYtKilledB(false);
     embedCaptureShareBundleRef.current = null;
-    setCaptureFullBleedOverlay(false);
+    setCaptureCoachBanner(false);
     setEmbedCaptureConsecutiveFailures(0);
     setCaptureFallbackStreamUrl(null);
     setCaptureProgress01(0);
     setShowCaptureSaveToast(false);
+    setCapturePostPhase('hidden');
+    // Hub screen-record flow reset
+    hubCapturePendingRef.current = null;
+    setHubCaptureLoading(false);
+    setHubCaptureTarget(null);
     sessionCaptureBlobRef.current = null;
     sessionMp4BlobRef.current = null;
     captureMp4ConversionGenRef.current += 1;
@@ -678,6 +758,120 @@ export default function Home() {
     e.target.value = '';
   }, [cleanupVideoEl, revokeBlobUrl]);
 
+  /**
+   * Direct-file handler for the RecordingHub Publer drop zone.
+   * Mirrors handleVideoUpload / handleVideoUploadB but accepts a File object
+   * directly (no synthetic input event) so the drop zone in RecordingHub
+   * can hand the file straight here without rewriting the existing upload path.
+   */
+  const handleVideoFile = useCallback((file: File, target: 'A' | 'B') => {
+    if (target === 'A') {
+      revokeBlobUrl(lastBlobUrlARef.current);
+      const url = URL.createObjectURL(file);
+      lastBlobUrlARef.current = url;
+      setVideoSrc(url);
+      setYoutubeVideoIdA(null);
+      setGenericEmbedSrcA(null);
+      setShowTapToPlay(false);
+      if (videoRef.current) {
+        cleanupVideoEl(videoRef.current);
+        videoRef.current.src = url;
+        videoRef.current.load();
+      }
+      setProcessingStatus(null);
+      setStroMotionEnabled(false);
+      setStroMotionRegion(undefined);
+      clearGhosts();
+      canvasRef.current?.clearAll();
+    } else {
+      revokeBlobUrl(lastBlobUrlBRef.current);
+      const url = URL.createObjectURL(file);
+      lastBlobUrlBRef.current = url;
+      setVideoSrcB(url);
+      setYoutubeVideoIdB(null);
+      setGenericEmbedSrcB(null);
+      if (videoRefB.current) {
+        cleanupVideoEl(videoRefB.current);
+        videoRefB.current.src = url;
+        videoRefB.current.load();
+      }
+      setVideoBLoaded(false);
+      canvasRefB.current?.clearAll();
+    }
+  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl]);
+
+  // ── Hub "Alternative — Screen Record" flow ────────────────────────────────
+
+  /**
+   * Load a URL into the target slot as an embed and arm the watcher effect so
+   * prepareEmbedCapturePhase fires automatically once the embed is ready.
+   * This must NOT be called from a user-gesture-sensitive context; the actual
+   * getDisplayMedia call happens later via shareEmbedDisplayMediaFromUserGesture.
+   */
+  const handleHubCaptureLoad = useCallback((url: string, target: 'A' | 'B') => {
+    const raw = normalizeWebUrlInput(url);
+    if (!raw) return;
+
+    // Reset all capture flags so a previous failed/cancelled attempt never
+    // poisons the new one.
+    embedCaptureCancelRef.current = false;
+    embedShareInFlightRef.current = false;
+    embedCaptureShareBundleRef.current = null;
+
+    setHubCaptureLoading(true);
+    setHubCaptureTarget(target);
+    setCaptureError(null);
+
+    // Clear existing video source for the target slot.
+    if (target === 'A') {
+      revokeBlobUrl(lastBlobUrlARef.current);
+      lastBlobUrlARef.current = null;
+      setVideoSrc(null);
+      setGenericEmbedSrcA(null);
+      setYoutubeVideoIdA(null);
+      if (videoRef.current) cleanupVideoEl(videoRef.current);
+    } else {
+      revokeBlobUrl(lastBlobUrlBRef.current);
+      lastBlobUrlBRef.current = null;
+      setVideoSrcB(null);
+      setGenericEmbedSrcB(null);
+      setYoutubeVideoIdB(null);
+      if (videoRefB.current) cleanupVideoEl(videoRefB.current);
+      setVideoBLoaded(false);
+    }
+
+    // Determine embed type and set source — the existing useEffect hooks will
+    // start the 3-second readiness timer automatically.
+    const resolved = resolveEmbedTarget(raw);
+    if (resolved?.kind === 'youtube') {
+      if (target === 'A') setYoutubeVideoIdA(resolved.videoId);
+      else setYoutubeVideoIdB(resolved.videoId);
+    } else if (resolved?.kind === 'iframe') {
+      if (target === 'A') setGenericEmbedSrcA(resolved.src);
+      else setGenericEmbedSrcB(resolved.src);
+    } else {
+      // Unrecognised URL — try as a raw iframe fallback.
+      if (target === 'A') setGenericEmbedSrcA(raw);
+      else setGenericEmbedSrcB(raw);
+    }
+
+    // Arm the watcher effect defined near the top of the component.
+    hubCapturePendingRef.current = { target, opts: { mode: 'full', startSec: null, endSec: null } };
+  }, [cleanupVideoEl, revokeBlobUrl]);
+
+  /** Cancel a hub-initiated capture before or during the share step. */
+  const handleHubCaptureCancel = useCallback(() => {
+    hubCapturePendingRef.current = null;
+    setHubCaptureLoading(false);
+    setHubCaptureTarget(null);
+    embedCaptureCancelRef.current = true;
+    setEmbedCaptureAwaitingShare(null);
+    embedCaptureShareBundleRef.current = null;
+    setCaptureBusy(false);
+    setEmbedCaptureRecording(false);
+    setEmbedCapturePanelId(null);
+  }, []);
+
   // ── Drag-and-drop handlers ─────────────────────────────────────────────────
   const handleDragOverA = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -759,6 +953,7 @@ export default function Home() {
     const onPlayA = () => {
       const t = bTarget();
       if (bInRange(t) && vB.paused && !playPendingB) {
+        vB.currentTime = t;
         playPendingB = true;
         vB.play()
           .then(() => { playPendingB = false; })
@@ -895,6 +1090,11 @@ export default function Home() {
     micStreamRef.current = null;
     setMicActive(false);
   }, []);
+
+  const toggleMic = useCallback(() => {
+    if (micActive) stopMic();
+    else void startMic();
+  }, [micActive, startMic, stopMic]);
 
   // ── Screenshot ────────────────────────────────────────────────────────────
   const handleScreenshot = useCallback(() => {
@@ -1049,11 +1249,10 @@ export default function Home() {
     setObjMultiplierProgress('Capturing…');
     const count = await canvasRef.current?.runObjMultiplierCapture(
       objMultiplierFrameCount,
-      objMultiplierDuration,
       (done, total) => setObjMultiplierProgress(`Capturing ${done}/${total}…`),
     );
     setObjMultiplierProgress(count ? `${count} frames captured` : null);
-  }, [objMultiplierFrameCount, objMultiplierDuration]);
+  }, [objMultiplierFrameCount]);
 
   const handleObjMultiplierClear = useCallback(() => {
     canvasRef.current?.clearObjMultiplier();
@@ -1253,6 +1452,10 @@ export default function Home() {
     ) => {
       embedCaptureRetryPayloadRef.current = { panel, opts };
       captureLog('flow-handler-start', panel);
+      // Fresh attempt — clear the cancel flag and the share-in-flight guard so
+      // a previous cancelled run doesn't poison this one.
+      embedCaptureCancelRef.current = false;
+      embedShareInFlightRef.current = false;
       embedCaptureShareBundleRef.current = null;
       setEmbedCaptureAwaitingShare(null);
 
@@ -1284,10 +1487,10 @@ export default function Home() {
         }
         nulledYtRef = false;
         ytSnap = null;
-        setCaptureFullBleedOverlay(false);
+        setCaptureCoachBanner(false);
       };
 
-      const clearCaptureUi = () => {
+      const clearCaptureUi = (resetPostPhase = false) => {
         setCaptureBusy(false);
         setEmbedCaptureRecording(false);
         setEmbedCapturePanelId(null);
@@ -1299,7 +1502,9 @@ export default function Home() {
         setCaptureProgress01(0);
         setCaptureCountdown(null);
         setCaptureStepStatus(null);
-        setCaptureFullBleedOverlay(false);
+        setCaptureCoachBanner(false);
+        setCaptureActuallyRecording(false);
+        if (resetPostPhase) setCapturePostPhase('hidden');
       };
 
       const bumpFailuresIfNeeded = () => {
@@ -1330,7 +1535,7 @@ export default function Home() {
         const { friendly } = handleCaptureError(error, step);
         stopAllTracks(null);
         restoreYouTubeIsolation();
-        clearCaptureUi();
+        clearCaptureUi(true);
         setCaptureError(friendly);
         bumpFailuresIfNeeded();
       };
@@ -1440,6 +1645,15 @@ export default function Home() {
         await flushCaptureIsolationMs(500);
         captureLog('isolate-flush-500ms');
 
+        // If the user pressed "New" (or otherwise cancelled) during the isolation
+        // window, do not advance to the "awaiting share" state. Restore and bail.
+        if (embedCaptureCancelRef.current) {
+          captureLog('prepare-cancelled-before-bundle');
+          restoreYouTubeIsolation();
+          clearCaptureUi(true);
+          return;
+        }
+
         embedCaptureShareBundleRef.current = {
           panel,
           opts,
@@ -1458,7 +1672,7 @@ export default function Home() {
         const { friendly } = handleCaptureError(outerErr, 'capture-handler');
         stopAllTracks(null);
         restoreYouTubeIsolation();
-        clearCaptureUi();
+        clearCaptureUi(true);
         setEmbedCaptureAwaitingShare(null);
         embedCaptureShareBundleRef.current = null;
         setCaptureError(friendly);
@@ -1479,6 +1693,20 @@ export default function Home() {
       setProcessingStatus,
     ],
   );
+
+  // When the hub's "Alternative — Screen Record" section loads a URL, this
+  // effect fires once the embed becomes ready (~3 s after mount) and kicks off
+  // the capture-preparation phase. Placed here so prepareEmbedCapturePhase is
+  // already declared in the same temporal dead zone scope.
+  useEffect(() => {
+    const pending = hubCapturePendingRef.current;
+    if (!pending) return;
+    const ready = pending.target === 'A' ? embedReadyA : embedReadyB;
+    if (!ready) return;
+    hubCapturePendingRef.current = null;
+    setHubCaptureLoading(false);
+    void prepareEmbedCapturePhase(pending.target, pending.opts);
+  }, [embedReadyA, embedReadyB, prepareEmbedCapturePhase]);
 
   const completeEmbedCaptureAfterStream = useCallback(
     async (preAcquiredStream: MediaStream) => {
@@ -1511,10 +1739,10 @@ export default function Home() {
           else ytPlayerBRef.current = bundle.ytSnap;
         }
         embedCaptureShareBundleRef.current = null;
-        setCaptureFullBleedOverlay(false);
+        setCaptureCoachBanner(false);
       };
 
-      const clearCaptureUi = () => {
+      const clearCaptureUi = (resetPostPhase = false) => {
         setCaptureBusy(false);
         setEmbedCaptureRecording(false);
         setEmbedCapturePanelId(null);
@@ -1526,7 +1754,11 @@ export default function Home() {
         setCaptureProgress01(0);
         setCaptureCountdown(null);
         setCaptureStepStatus(null);
-        setCaptureFullBleedOverlay(false);
+        setCaptureCoachBanner(false);
+        setCaptureActuallyRecording(false);
+        // On error/cancel paths pass resetPostPhase=true so the banner disappears.
+        // The success path calls clearCaptureUi(true) then immediately sets 'processing'.
+        if (resetPostPhase) setCapturePostPhase('hidden');
       };
 
       const bumpFailures = () => {
@@ -1557,7 +1789,7 @@ export default function Home() {
       if (!vtracks || vtracks.length === 0) {
         stopAllTracks(preAcquiredStream);
         restoreYouTubeFromBundle();
-        clearCaptureUi();
+        clearCaptureUi(true);
         setCaptureError(handleCaptureError(new Error('no video tracks in stream'), 'stream-tracks').friendly);
         bumpFailures();
         return;
@@ -1569,13 +1801,13 @@ export default function Home() {
       setCaptureBusy(true);
       setEmbedCaptureRecording(true);
       setCaptureProgress01(0);
-      setCaptureFullBleedOverlay(false);
+      setCaptureCoachBanner(false);
 
       const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
       if (!videoEl) {
         stopAllTracks(preAcquiredStream);
         restoreYouTubeFromBundle();
-        clearCaptureUi();
+        clearCaptureUi(true);
         setCaptureError(handleCaptureError(new Error('video element missing'), 'video-element').friendly);
         bumpFailures();
         return;
@@ -1631,18 +1863,30 @@ export default function Home() {
           preAcquiredStream,
           onPostStreamReady: () => {
             captureLog('ui-overlay-shown');
-            setCaptureFullBleedOverlay(true);
+            setCaptureCoachBanner(true);
           },
+          onRecordingStarted: () => {
+            captureLog('recorder-started');
+            setCaptureActuallyRecording(true);
+          },
+          getCancelled: () => embedCaptureCancelRef.current,
         });
 
         restoreYouTubeFromBundle();
-        clearCaptureUi();
+        clearCaptureUi(true);
 
         if (!result.ok) {
-          setCaptureError(result.message);
-          bumpFailures();
+          // Silent dismissal when the user pressed New / otherwise cancelled.
+          if (!result.cancelled) {
+            setCaptureError(result.message);
+            bumpFailures();
+          }
           return;
         }
+
+        // Recording succeeded — transition the banner to "Processing your video…"
+        // before any async blob work begins, so the coach has continuous feedback.
+        setCapturePostPhase('processing');
 
         setEmbedCaptureConsecutiveFailures(0);
         setCaptureFallbackStreamUrl(null);
@@ -1735,9 +1979,13 @@ export default function Home() {
       } catch (outerErr: unknown) {
         stopAllTracks(preAcquiredStream);
         restoreYouTubeFromBundle();
-        clearCaptureUi();
-        setCaptureError(handleCaptureError(outerErr, 'recording').friendly);
-        bumpFailures();
+        clearCaptureUi(true);
+        // If a thrown error reaches here while the cancel flag is set, treat as
+        // a clean dismissal rather than surfacing a confusing toast.
+        if (!embedCaptureCancelRef.current) {
+          setCaptureError(handleCaptureError(outerErr, 'recording').friendly);
+          bumpFailures();
+        }
       }
     },
     [cleanupVideoEl, revokeBlobUrl, youtubeVideoIdA, youtubeVideoIdB, genericEmbedSrcA, genericEmbedSrcB, embedReadyA, embedReadyB],
@@ -1745,32 +1993,50 @@ export default function Home() {
 
   const shareEmbedDisplayMediaFromUserGesture = useCallback(() => {
     captureLog('share-screen-click');
-    if (!embedCaptureShareBundleRef.current) return;
+    // Atomic guard: a double-tap on the share button must not spawn two
+    // getDisplayMedia calls. On Safari this would also consume the user-gesture
+    // token twice and reliably fail the second call with a confusing error.
+    if (embedShareInFlightRef.current) {
+      captureLog('share-screen-click-ignored-duplicate');
+      return;
+    }
+    const bundleSnap = embedCaptureShareBundleRef.current;
+    if (!bundleSnap) return;
+    embedShareInFlightRef.current = true;
+
+    // IMPORTANT: getTabCaptureStream() MUST be the first await after a user click
+    // on Safari/WebKit. Do not insert any awaits before this line.
     getTabCaptureStream()
       .then((stream) => {
+        embedShareInFlightRef.current = false;
+        // If the user cancelled (pressed New) between the click and the GDM
+        // resolution, stop the freshly acquired stream and bail.
+        if (embedCaptureCancelRef.current) {
+          stopAllTracks(stream);
+          return;
+        }
         void completeEmbedCaptureAfterStream(stream);
       })
       .catch((e: unknown) => {
-        const b = embedCaptureShareBundleRef.current;
+        embedShareInFlightRef.current = false;
+        const b = bundleSnap;
         const { friendly } = handleCaptureError(e, 'getDisplayMedia');
-        if (b) {
-          try {
-            b.isoRestore?.();
-          } catch (err) {
-            console.warn('[Capture] restore after share cancel:', err);
+        try {
+          b.isoRestore?.();
+        } catch (err) {
+          console.warn('[Capture] restore after share cancel:', err);
+        }
+        if (b.ytHardDestroyed) {
+          if (b.panel === 'A') {
+            setEmbedYtKilledA(false);
+            setYtPlayerRemountNonceA((n) => n + 1);
+          } else {
+            setEmbedYtKilledB(false);
+            setYtPlayerRemountNonceB((n) => n + 1);
           }
-          if (b.ytHardDestroyed) {
-            if (b.panel === 'A') {
-              setEmbedYtKilledA(false);
-              setYtPlayerRemountNonceA((n) => n + 1);
-            } else {
-              setEmbedYtKilledB(false);
-              setYtPlayerRemountNonceB((n) => n + 1);
-            }
-          } else if (b.nulledYtRef && b.ytSnap) {
-            if (b.panel === 'A') ytPlayerARef.current = b.ytSnap;
-            else ytPlayerBRef.current = b.ytSnap;
-          }
+        } else if (b.nulledYtRef && b.ytSnap) {
+          if (b.panel === 'A') ytPlayerARef.current = b.ytSnap;
+          else ytPlayerBRef.current = b.ytSnap;
         }
         embedCaptureShareBundleRef.current = null;
         setEmbedCaptureAwaitingShare(null);
@@ -1780,8 +2046,11 @@ export default function Home() {
         setCaptureBusy(false);
         setEmbedCaptureRecording(false);
         setEmbedCapturePanelId(null);
-        setCaptureError(friendly);
-        const panel = b?.panel ?? 'A';
+        // Suppress error toast if the cancellation came from us (e.g. New button).
+        if (!embedCaptureCancelRef.current) {
+          setCaptureError(friendly);
+        }
+        const panel = b.panel;
         const yidAtFail = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
         setEmbedCaptureConsecutiveFailures((n) => {
           const next = n + 1;
@@ -1898,14 +2167,17 @@ export default function Home() {
   playbackControllerARef.current = youtubeVideoIdA ? ytIframeControllerA : html5ControllerA;
   playbackControllerBRef.current = youtubeVideoIdB ? ytIframeControllerB : html5ControllerB;
 
+  // 9:16 desktop toolbar is always icon-only (56 px); 16:9 desktop uses the
+  // dynamic leftToolbarWidthPx (208 expanded / 56 collapsed).
+  const REELS_DESKTOP_TB = 56;
   const panelToolbarInset =
     !isMobile && layoutMode === 'reels'
-      ? reelsToolbarWidthPx + 8
+      ? REELS_DESKTOP_TB + 8
       : !isMobile
         ? leftToolbarWidthPx + 8
         : 0;
   const timelineLeadingInset =
-    layoutMode === 'reels' && !isMobile ? reelsToolbarWidthPx + 12 : leftToolbarWidthPx + 16;
+    layoutMode === 'reels' && !isMobile ? REELS_DESKTOP_TB + 12 : leftToolbarWidthPx + 16;
 
   const reelsDesktop = !isMobile && layoutMode === 'reels';
 
@@ -1946,7 +2218,7 @@ export default function Home() {
         </div>
       )}
 
-      {!(capturePrepPanel || (captureBusy && embedCaptureRecording)) && !isMobile && (hasVideoBContent ? (
+      {!(capturePrepPanel || (captureBusy && embedCaptureRecording)) && (hasVideoBContent ? (
         playbackTarget === 'B'
           ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
               <PreciseTimeline
@@ -1960,6 +2232,7 @@ export default function Home() {
                 leadingInsetPx={0}
                 compact
                 overlay
+                phoneChrome={isMobile}
               />
             )
           : ((videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc)) && (
@@ -1974,6 +2247,7 @@ export default function Home() {
                 leadingInsetPx={0}
                 compact
                 overlay
+                phoneChrome={isMobile}
               />
             )
       ) : (
@@ -1990,11 +2264,129 @@ export default function Home() {
             leadingInsetPx={0}
             compact
             overlay
+            phoneChrome={isMobile}
           />
         )
       ))}
     </div>
   );
+
+  // ── Centralized ToolPalette prop assembly ──────────────────────────────
+  // Single source of truth: edit here and all three toolbar instances
+  // (desktop left, mobile strip, desktop-reels) pick up the change.
+  const toolPaletteBaseProps = {
+    activeTool,
+    onToolChange:                    handleToolChange,
+    compact:                         true as const,
+    drawingOptions,
+    onOptionsChange:                 handleOptionsChange,
+    onUndo:                          () => canvasRef.current?.undo(),
+    onRedo:                          () => canvasRef.current?.redo(),
+    onClear:                         () => canvasRef.current?.clearAll(),
+    onResetSkeleton:                 () => canvasRef.current?.resetSkeleton(),
+    onResetBallTrail:                () => canvasRef.current?.resetBallTrail(),
+    ballTrailMode,
+    onBallTrailModeChange:           setBallTrailMode,
+    onAutoSwing:                     handleAutoSwing,
+    onRacketMultiplier:              handleRacketMultiplier,
+    circleSpinning,
+    onCircleSpinningChange:          setCircleSpinning,
+    outlineEraserSize,
+    onOutlineEraserSizeChange:       setOutlineEraserSize,
+    skeletonShowAngles,
+    onSkeletonShowAnglesChange:      setSkeletonShowAngles,
+    skeletonShowHeadLine,
+    onSkeletonShowHeadLineChange:    setSkeletonShowHeadLine,
+    skeletonClassicColors,
+    onSkeletonClassicColorsChange:   setSkeletonClassicColors,
+    skeletonShowRightArm,
+    onSkeletonShowRightArmChange:    setSkeletonShowRightArm,
+    skeletonShowLeftArm,
+    onSkeletonShowLeftArmChange:     setSkeletonShowLeftArm,
+    skeletonShowRightLeg,
+    onSkeletonShowRightLegChange:    setSkeletonShowRightLeg,
+    skeletonShowLeftLeg,
+    onSkeletonShowLeftLegChange:     setSkeletonShowLeftLeg,
+    skeletonOverlayPaused,
+    onSkeletonOverlayPausedChange:   () => setSkeletonOverlayPaused((p) => !p),
+    ballSampleMode,
+    onBallSampleModeChange:          setBallSampleMode,
+    onResetCropZoom:                 () => canvasRef.current?.resetCropZoom(),
+    webcamPipMode,
+    onWebcamPipModeChange:           setWebcamPipMode,
+    webcamOpacity,
+    onWebcamOpacityChange:           setWebcamOpacity,
+    webcamActive,
+    webcamCutout,
+    onWebcamCutoutChange:            setWebcamCutout,
+    onToggleWebcam:                  () => void toggleWebcam(),
+    objMultiplierFrameCount,
+    onObjMultiplierFrameCountChange: setObjMultiplierFrameCount,
+    onObjMultiplierCapture:          handleObjMultiplierCapture,
+    onObjMultiplierClear:            handleObjMultiplierClear,
+    objMultiplierActive:             objMultiplierHasRegion,
+    objMultiplierProgress,
+    iconOnlyLayout:                  toolbarIconOnlyLayout,
+  } satisfies React.ComponentProps<typeof ToolPalette>;
+
+  // Mobile strip adds precision-draw controls on top of the base set.
+  const toolPaletteMobileProps = {
+    ...toolPaletteBaseProps,
+    precisionDrawEnabled,
+    onPrecisionDrawToggle:       handlePrecisionDrawToggle,
+    onShowPrecisionInstructions: showPrecisionInstructionsAgain,
+  } satisfies React.ComponentProps<typeof ToolPalette>;
+
+  // ── Centralized RecordingHub prop assembly ─────────────────────────────
+  // Single source of truth for all recording / media controls.
+  const recordingHubProps = {
+    isOpen:             hubOpen,
+    onToggle:           () => setHubOpen((v) => !v),
+    isMobile,
+    darkChrome:         layoutMode === 'reels',
+    compact:            layoutMode === 'reels',
+    isRecording,
+    onRecordingChange:  handleRecordingChange,
+    getCanvas,
+    getWebcamStream,
+    getMicStream,
+    getCropRegion,
+    layoutMode:         layoutMode as 'youtube' | 'reels',
+    webcamActive,
+    onWebcamToggle:     () => void toggleWebcam(),
+    webcamCutout,
+    onWebcamCutoutChange:    setWebcamCutout,
+    webcamOpacity,
+    onWebcamOpacityChange:   setWebcamOpacity,
+    webcamPipMode,
+    onWebcamPipModeChange:   setWebcamPipMode,
+    micActive,
+    onMicToggle:         toggleMic,
+    onLayoutChange:      setLayoutMode,
+    onScreenshot:        handleScreenshot,
+    urlInput,
+    onUrlInputChange:    setUrlInput,
+    urlTarget,
+    onUrlTargetChange:   setUrlTarget,
+    onUrlSubmit:         handleUrlSubmit,
+    urlLoadPhase,
+    urlLoadError,
+    onClearUrlError:     () => setUrlLoadError(null),
+    onUploadA:           () => fileInputRef.current?.click(),
+    onUploadB:           () => fileInputRefB.current?.click(),
+    onFileDropped:       handleVideoFile,
+    // Alternative — Screen Record
+    onHubCaptureLoad:    handleHubCaptureLoad,
+    hubCaptureLoading,
+    hubCaptureTarget,
+    hubCaptureAwaitingShare:
+      embedCaptureAwaitingShare !== null && embedCaptureAwaitingShare === hubCaptureTarget,
+    hubCaptureIsActive:  captureBusy && embedCapturePanelId === hubCaptureTarget,
+    onHubCaptureShare:   shareEmbedDisplayMediaFromUserGesture,
+    onHubCaptureCancel:  handleHubCaptureCancel,
+    captureDownloadStatus,
+    onDownloadCapture:   handleDownloadCaptureBlob,
+  } satisfies React.ComponentProps<typeof RecordingHub>;
 
   return (
     <div
@@ -2013,12 +2405,14 @@ export default function Home() {
       <video
         ref={videoRef}
         playsInline
+        preload="auto"
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
       />
       <video
         ref={videoRefB}
         playsInline
         muted
+        preload="auto"
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
         onLoadedMetadata={() => {
           const v = videoRefB.current;
@@ -2155,23 +2549,6 @@ export default function Home() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                   <button onClick={() => fileInputRef.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video A</button>
                   <button onClick={() => fileInputRefB.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video B</button>
-                  <WebcamDropdown
-                    webcamActive={webcamActive}
-                    onToggleWebcam={() => void toggleWebcam()}
-                    webcamPipMode={webcamPipMode}
-                    onWebcamPipModeChange={setWebcamPipMode}
-                    webcamOpacity={webcamOpacity}
-                    onWebcamOpacityChange={setWebcamOpacity}
-                    webcamCutout={webcamCutout}
-                    onWebcamCutoutChange={setWebcamCutout}
-                    triggerStyle={headerBtnStyle}
-                  />
-                  {!micActive ? (
-                    <button onClick={startMic} style={headerBtnStyle}>Mic</button>
-                  ) : (
-                    <button onClick={stopMic} style={headerBtnStyle}>Mic off</button>
-                  )}
-                  <button onClick={handleScreenshot} style={headerBtnStyle}>Screenshot</button>
                   <button type="button" onClick={resetSession} style={headerBtnStyle} title="Start fresh — clears videos and recordings">
                     New
                   </button>
@@ -2180,21 +2557,23 @@ export default function Home() {
                   </button>
                 </div>
 
-                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 11, color: '#6e6e73', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Layout</span>
-                  <button type="button" onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, background: layoutMode === 'youtube' ? '#1A1A1A' : '#FFFFFF', color: layoutMode === 'youtube' ? '#FFFFFF' : '#1A1A1A', border: layoutMode === 'youtube' ? '1px solid #1A1A1A' : '1px solid #E5E5E5' }}>16:9</button>
-                  <button type="button" onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, background: layoutMode === 'reels' ? '#1A1A1A' : '#FFFFFF', color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A', border: layoutMode === 'reels' ? '1px solid #1A1A1A' : '1px solid #E5E5E5' }}>9:16</button>
-                </div>
-
+                {/* Recording Studio — opens the hub panel for all media/recording controls */}
                 <div style={{ marginTop: 10 }}>
-                  <ScreenRecorder
-                    getCanvas={getCanvas}
-                    getWebcamStream={getWebcamStream}
-                    getMicStream={getMicStream}
-                    getCropRegion={getCropRegion}
-                    layoutMode={layoutMode === 'reels' ? 'reels' : 'youtube'}
-                    onRecordingChange={handleRecordingChange}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => { setHubOpen(true); setMobileMenuOpen(false); }}
+                    style={{
+                      ...headerBtnStyle,
+                      width: '100%',
+                      justifyContent: 'center',
+                      background: isRecording ? 'rgba(255,59,48,0.08)' : '#1A1A1A',
+                      color: isRecording ? '#FF3B30' : '#FFFFFF',
+                      border: isRecording ? '1px solid rgba(255,59,48,0.4)' : 'none',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {isRecording ? '● Recording…' : 'Recording Studio'}
+                  </button>
                 </div>
 
                 {processingStatus && (
@@ -2324,26 +2703,6 @@ export default function Home() {
                   : (videoSrcB ? 'Replace B' : 'Upload B')}
               </button>
 
-              <WebcamDropdown
-                webcamActive={webcamActive}
-                onToggleWebcam={() => void toggleWebcam()}
-                webcamPipMode={webcamPipMode}
-                onWebcamPipModeChange={setWebcamPipMode}
-                webcamOpacity={webcamOpacity}
-                onWebcamOpacityChange={setWebcamOpacity}
-                webcamCutout={webcamCutout}
-                onWebcamCutoutChange={setWebcamCutout}
-                triggerStyle={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }}
-                compact={layoutMode === 'reels'}
-              />
-
-              {!micActive ? (
-                <button onClick={startMic} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Enable microphone (audio in recordings)">Mic</button>
-              ) : (
-                <button onClick={stopMic} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}), color: '#EF4444' }} title="Disable microphone">{layoutMode === 'reels' ? 'Mic on' : 'Mic on'}</button>
-              )}
-
-              <button onClick={handleScreenshot} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Save screenshot">{layoutMode === 'reels' ? 'Shot' : 'Screenshot'}</button>
               <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Start fresh — clears videos and recordings">New</button>
               <button
                 type="button"
@@ -2354,19 +2713,7 @@ export default function Home() {
                 Clear all
               </button>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: layoutMode === 'reels' ? 4 : 6 }} title="Layout">
-                <button type="button" onClick={() => setLayoutMode('youtube')} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 26 : 30, padding: layoutMode === 'reels' ? '0 8px' : '0 10px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12, background: layoutMode === 'youtube' ? '#1A1A1A' : '#FFFFFF', color: layoutMode === 'youtube' ? '#FFFFFF' : '#1A1A1A', border: layoutMode === 'youtube' ? '1px solid #1A1A1A' : '1px solid #E5E5E5' }}>16:9</button>
-                <button type="button" onClick={() => setLayoutMode('reels')} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 26 : 30, padding: layoutMode === 'reels' ? '0 8px' : '0 10px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12, background: layoutMode === 'reels' ? '#1A1A1A' : '#FFFFFF', color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A', border: layoutMode === 'reels' ? '1px solid #1A1A1A' : '1px solid #E5E5E5' }}>9:16</button>
-              </div>
-
-              <ScreenRecorder
-                getCanvas={getCanvas}
-                getWebcamStream={getWebcamStream}
-                getMicStream={getMicStream}
-                getCropRegion={getCropRegion}
-                layoutMode={layoutMode === 'reels' ? 'reels' : 'youtube'}
-                onRecordingChange={handleRecordingChange}
-              />
+              <RecordingHub {...recordingHubProps} />
             </div>
           </div>
         )}
@@ -2407,62 +2754,7 @@ export default function Home() {
         }}
         >
           <div style={{ padding: 6 }}>
-            <ToolPalette
-              activeTool={activeTool}
-              onToolChange={handleToolChange}
-              compact
-              drawingOptions={drawingOptions}
-              onOptionsChange={handleOptionsChange}
-              onUndo={() => canvasRef.current?.undo()}
-              onRedo={() => canvasRef.current?.redo()}
-              onClear={() => canvasRef.current?.clearAll()}
-              onResetSkeleton={() => canvasRef.current?.resetSkeleton()}
-              onResetBallTrail={() => canvasRef.current?.resetBallTrail()}
-              ballTrailMode={ballTrailMode}
-              onBallTrailModeChange={setBallTrailMode}
-              onAutoSwing={handleAutoSwing}
-              onRacketMultiplier={handleRacketMultiplier}
-              circleSpinning={circleSpinning}
-              onCircleSpinningChange={setCircleSpinning}
-              outlineEraserSize={outlineEraserSize}
-              onOutlineEraserSizeChange={setOutlineEraserSize}
-              skeletonShowAngles={skeletonShowAngles}
-              onSkeletonShowAnglesChange={setSkeletonShowAngles}
-              skeletonShowHeadLine={skeletonShowHeadLine}
-              onSkeletonShowHeadLineChange={setSkeletonShowHeadLine}
-              skeletonClassicColors={skeletonClassicColors}
-              onSkeletonClassicColorsChange={setSkeletonClassicColors}
-              skeletonShowRightArm={skeletonShowRightArm}
-              onSkeletonShowRightArmChange={setSkeletonShowRightArm}
-              skeletonShowLeftArm={skeletonShowLeftArm}
-              onSkeletonShowLeftArmChange={setSkeletonShowLeftArm}
-              skeletonShowRightLeg={skeletonShowRightLeg}
-              onSkeletonShowRightLegChange={setSkeletonShowRightLeg}
-              skeletonShowLeftLeg={skeletonShowLeftLeg}
-              onSkeletonShowLeftLegChange={setSkeletonShowLeftLeg}
-              skeletonOverlayPaused={skeletonOverlayPaused}
-              onSkeletonOverlayPausedChange={() => setSkeletonOverlayPaused((p) => !p)}
-              ballSampleMode={ballSampleMode}
-              onBallSampleModeChange={setBallSampleMode}
-              onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
-              webcamPipMode={webcamPipMode}
-              onWebcamPipModeChange={setWebcamPipMode}
-              webcamOpacity={webcamOpacity}
-              onWebcamOpacityChange={setWebcamOpacity}
-              webcamActive={webcamActive}
-              webcamCutout={webcamCutout}
-              onWebcamCutoutChange={setWebcamCutout}
-              onToggleWebcam={() => void toggleWebcam()}
-              objMultiplierFrameCount={objMultiplierFrameCount}
-              onObjMultiplierFrameCountChange={setObjMultiplierFrameCount}
-              objMultiplierDuration={objMultiplierDuration}
-              onObjMultiplierDurationChange={setObjMultiplierDuration}
-              onObjMultiplierCapture={handleObjMultiplierCapture}
-              onObjMultiplierClear={handleObjMultiplierClear}
-              objMultiplierActive={objMultiplierHasRegion}
-              objMultiplierProgress={objMultiplierProgress}
-              iconOnlyLayout={toolbarIconOnlyLayout}
-            />
+            <ToolPalette {...toolPaletteBaseProps} />
           </div>
 
           {/* Resize handle removed in compact mode */}
@@ -2636,55 +2928,10 @@ export default function Home() {
                         <Upload size={12} />
                         {videoSrcB ? 'B' : '+B'}
                       </button>
-                      <WebcamDropdown
-                        webcamActive={webcamActive}
-                        onToggleWebcam={() => void toggleWebcam()}
-                        webcamPipMode={webcamPipMode}
-                        onWebcamPipModeChange={setWebcamPipMode}
-                        webcamOpacity={webcamOpacity}
-                        onWebcamOpacityChange={setWebcamOpacity}
-                        webcamCutout={webcamCutout}
-                        onWebcamCutoutChange={setWebcamCutout}
-                        triggerStyle={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
-                        compact
-                      />
-                      {!micActive ? (
-                        <button type="button" onClick={startMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="Mic">
-                          Mic
-                        </button>
-                      ) : (
-                        <button type="button" onClick={stopMic} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, color: '#f87171', borderColor: 'rgba(248,113,113,0.4)', background: 'rgba(248,113,113,0.15)' }} title="Stop mic">
-                          Mic on
-                        </button>
-                      )}
-                      <button type="button" onClick={handleScreenshot} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="Screenshot">
-                        Shot
-                      </button>
                       <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="New session">
                         New
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => { setLayoutMode('youtube'); setDesktopReelsMenuOpen(false); }}
-                        style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
-                      >
-                        16:9
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { setLayoutMode('reels'); }}
-                        style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, height: 28, borderRadius: 0, background: 'rgba(255,255,255,0.3)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.4)' }}
-                      >
-                        9:16
-                      </button>
-                      <ScreenRecorder
-                        getCanvas={getCanvas}
-                        getWebcamStream={getWebcamStream}
-                        getMicStream={getMicStream}
-                        getCropRegion={getCropRegion}
-                        layoutMode="reels"
-                        onRecordingChange={handleRecordingChange}
-                      />
+                      <RecordingHub {...recordingHubProps} compact />
                     </div>
                   </div>
                 )}
@@ -2723,65 +2970,7 @@ export default function Home() {
                 WebkitBackdropFilter: 'blur(10px)',
               }}
               >
-                <ToolPalette
-                  activeTool={activeTool}
-                  onToolChange={handleToolChange}
-                  compact
-                  drawingOptions={drawingOptions}
-                  onOptionsChange={handleOptionsChange}
-                  onUndo={() => canvasRef.current?.undo()}
-                  onRedo={() => canvasRef.current?.redo()}
-                  onClear={() => canvasRef.current?.clearAll()}
-                  onResetSkeleton={() => canvasRef.current?.resetSkeleton()}
-                  onResetBallTrail={() => canvasRef.current?.resetBallTrail()}
-                  ballTrailMode={ballTrailMode}
-                  onBallTrailModeChange={setBallTrailMode}
-                  onAutoSwing={handleAutoSwing}
-                  onRacketMultiplier={handleRacketMultiplier}
-                  circleSpinning={circleSpinning}
-                  onCircleSpinningChange={setCircleSpinning}
-                  outlineEraserSize={outlineEraserSize}
-                  onOutlineEraserSizeChange={setOutlineEraserSize}
-                  skeletonShowAngles={skeletonShowAngles}
-                  onSkeletonShowAnglesChange={setSkeletonShowAngles}
-                  skeletonShowHeadLine={skeletonShowHeadLine}
-                  onSkeletonShowHeadLineChange={setSkeletonShowHeadLine}
-                  skeletonClassicColors={skeletonClassicColors}
-                  onSkeletonClassicColorsChange={setSkeletonClassicColors}
-                  skeletonShowRightArm={skeletonShowRightArm}
-                  onSkeletonShowRightArmChange={setSkeletonShowRightArm}
-                  skeletonShowLeftArm={skeletonShowLeftArm}
-                  onSkeletonShowLeftArmChange={setSkeletonShowLeftArm}
-                  skeletonShowRightLeg={skeletonShowRightLeg}
-                  onSkeletonShowRightLegChange={setSkeletonShowRightLeg}
-                  skeletonShowLeftLeg={skeletonShowLeftLeg}
-                  onSkeletonShowLeftLegChange={setSkeletonShowLeftLeg}
-                  skeletonOverlayPaused={skeletonOverlayPaused}
-                  onSkeletonOverlayPausedChange={() => setSkeletonOverlayPaused((p) => !p)}
-                  ballSampleMode={ballSampleMode}
-                  onBallSampleModeChange={setBallSampleMode}
-                  onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
-                  webcamPipMode={webcamPipMode}
-                  onWebcamPipModeChange={setWebcamPipMode}
-                  webcamOpacity={webcamOpacity}
-                  onWebcamOpacityChange={setWebcamOpacity}
-                  webcamActive={webcamActive}
-                  webcamCutout={webcamCutout}
-                  onWebcamCutoutChange={setWebcamCutout}
-                  onToggleWebcam={() => void toggleWebcam()}
-                  objMultiplierFrameCount={objMultiplierFrameCount}
-                  onObjMultiplierFrameCountChange={setObjMultiplierFrameCount}
-                  objMultiplierDuration={objMultiplierDuration}
-                  onObjMultiplierDurationChange={setObjMultiplierDuration}
-                  onObjMultiplierCapture={handleObjMultiplierCapture}
-                  onObjMultiplierClear={handleObjMultiplierClear}
-                  objMultiplierActive={objMultiplierHasRegion}
-                  objMultiplierProgress={objMultiplierProgress}
-                  precisionDrawEnabled={precisionDrawEnabled}
-                  onPrecisionDrawToggle={handlePrecisionDrawToggle}
-                  onShowPrecisionInstructions={showPrecisionInstructionsAgain}
-                  iconOnlyLayout={toolbarIconOnlyLayout}
-                />
+                <ToolPalette {...toolPaletteMobileProps} />
               </div>
             )}
             {!isMobile && layoutMode === 'reels' && (
@@ -2789,20 +2978,20 @@ export default function Home() {
                 className="coachlab-video-toolbar"
                 style={{
                   position: 'absolute',
-                  left: 4,
-                  top: reelsDesktop ? 8 : 40,
+                  left: 12,
+                  top: 12,
                   bottom: toolbarBottomReservePx,
-                  width: reelsToolbarWidthPx,
+                  width: REELS_DESKTOP_TB,
                   zIndex: 84,
                   display: 'flex',
                   flexDirection: 'column',
-                  background: 'rgba(0,0,0,0.3)',
+                  background: 'rgba(255,255,255,0.92)',
                   overflow: 'hidden',
-                  borderRadius: 0,
-                  border: 'none',
-                  backdropFilter: 'blur(20px) saturate(1.15)',
-                  WebkitBackdropFilter: 'blur(20px) saturate(1.15)',
-                  boxShadow: 'none',
+                  borderRadius: 14,
+                  border: '1px solid rgba(0,0,0,0.08)',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
+                  boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
                 }}
               >
                 <div
@@ -2815,62 +3004,7 @@ export default function Home() {
                     WebkitOverflowScrolling: 'touch',
                   }}
                 >
-                  <ToolPalette
-                    activeTool={activeTool}
-                    onToolChange={handleToolChange}
-                    compact
-                    drawingOptions={drawingOptions}
-                    onOptionsChange={handleOptionsChange}
-                    onUndo={() => canvasRef.current?.undo()}
-                    onRedo={() => canvasRef.current?.redo()}
-                    onClear={() => canvasRef.current?.clearAll()}
-                    onResetSkeleton={() => canvasRef.current?.resetSkeleton()}
-                    onResetBallTrail={() => canvasRef.current?.resetBallTrail()}
-                    ballTrailMode={ballTrailMode}
-                    onBallTrailModeChange={setBallTrailMode}
-                    onAutoSwing={handleAutoSwing}
-                    onRacketMultiplier={handleRacketMultiplier}
-                    circleSpinning={circleSpinning}
-                    onCircleSpinningChange={setCircleSpinning}
-                    outlineEraserSize={outlineEraserSize}
-                    onOutlineEraserSizeChange={setOutlineEraserSize}
-                    skeletonShowAngles={skeletonShowAngles}
-                    onSkeletonShowAnglesChange={setSkeletonShowAngles}
-                    skeletonShowHeadLine={skeletonShowHeadLine}
-                    onSkeletonShowHeadLineChange={setSkeletonShowHeadLine}
-                    skeletonClassicColors={skeletonClassicColors}
-                    onSkeletonClassicColorsChange={setSkeletonClassicColors}
-                    skeletonShowRightArm={skeletonShowRightArm}
-                    onSkeletonShowRightArmChange={setSkeletonShowRightArm}
-                    skeletonShowLeftArm={skeletonShowLeftArm}
-                    onSkeletonShowLeftArmChange={setSkeletonShowLeftArm}
-                    skeletonShowRightLeg={skeletonShowRightLeg}
-                    onSkeletonShowRightLegChange={setSkeletonShowRightLeg}
-                    skeletonShowLeftLeg={skeletonShowLeftLeg}
-                    onSkeletonShowLeftLegChange={setSkeletonShowLeftLeg}
-                    skeletonOverlayPaused={skeletonOverlayPaused}
-                    onSkeletonOverlayPausedChange={() => setSkeletonOverlayPaused((p) => !p)}
-                    ballSampleMode={ballSampleMode}
-                    onBallSampleModeChange={setBallSampleMode}
-                    onResetCropZoom={() => canvasRef.current?.resetCropZoom()}
-                    webcamPipMode={webcamPipMode}
-                    onWebcamPipModeChange={setWebcamPipMode}
-                    webcamOpacity={webcamOpacity}
-                    onWebcamOpacityChange={setWebcamOpacity}
-                    webcamActive={webcamActive}
-                    webcamCutout={webcamCutout}
-                    onWebcamCutoutChange={setWebcamCutout}
-                    onToggleWebcam={() => void toggleWebcam()}
-                    objMultiplierFrameCount={objMultiplierFrameCount}
-                    onObjMultiplierFrameCountChange={setObjMultiplierFrameCount}
-                    objMultiplierDuration={objMultiplierDuration}
-                    onObjMultiplierDurationChange={setObjMultiplierDuration}
-                    onObjMultiplierCapture={handleObjMultiplierCapture}
-                    onObjMultiplierClear={handleObjMultiplierClear}
-                    objMultiplierActive={objMultiplierHasRegion}
-                    objMultiplierProgress={objMultiplierProgress}
-                    iconOnlyLayout={toolbarIconOnlyLayout}
-                  />
+                  <ToolPalette {...toolPaletteBaseProps} iconOnlyLayout={true} />
                 </div>
               </aside>
             )}
@@ -3728,92 +3862,154 @@ export default function Home() {
         </div>
       ) : null}
 
-      {captureFullBleedOverlay ? (
+      {/* ── Capture coach banner — visible across all 5 states ─────────────────
+           State 1: "Preparing…"         captureBusy && captureCoachBanner && !captureCountdown && !captureActuallyRecording
+           State 2: "Starting video…"    captureStepStatus contains 'Starting video'
+           State 3: "Recording…"         captureActuallyRecording
+           State 4: "Processing…"        capturePostPhase === 'processing'
+           State 5: "Your video is ready" capturePostPhase === 'ready'
+      ────────────────────────────────────────────────────────────────────────── */}
+      {((embedCaptureRecording && captureCoachBanner) || capturePostPhase !== 'hidden') ? (
         <div
           role="status"
           aria-live="polite"
           style={{
             position: 'fixed',
-            inset: 0,
-            zIndex: 240,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 16,
-            background: 'rgba(0,0,0,0.72)',
-            color: '#FFFFFF',
-            pointerEvents: 'none',
-            padding: 24,
-          }}
-        >
-          <div style={{ fontSize: 20, fontWeight: 700, textAlign: 'center' }}>Recording in progress…</div>
-          <div
-            style={{
-              fontVariantNumeric: 'tabular-nums',
-              fontSize: 28,
-              fontWeight: 800,
-              letterSpacing: 0.5,
-            }}
-          >
-            {Math.floor(captureOverlayElapsedSec / 60)}:
-            {String(captureOverlayElapsedSec % 60).padStart(2, '0')}
-          </div>
-          <div style={{ width: 'min(360px, 85vw)', height: 8, borderRadius: 6, background: 'rgba(255,255,255,0.2)' }}>
-            <div
-              style={{
-                height: '100%',
-                width: `${Math.round(Math.min(1, Math.max(0, captureProgress01)) * 100)}%`,
-                background: '#34C759',
-                borderRadius: 6,
-                transition: 'width 0.15s ease-out',
-              }}
-            />
-          </div>
-        </div>
-      ) : null}
-
-      {embedCaptureRecording && !captureFullBleedOverlay && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: 132,
             left: '50%',
             transform: 'translateX(-50%)',
-            zIndex: 200,
-            width: 'min(420px, calc(100vw - 32px))',
+            bottom: 'calc(24px + env(safe-area-inset-bottom, 0px))',
+            zIndex: 240,
+            width: 'min(520px, calc(100vw - 24px))',
             pointerEvents: 'none',
-            padding: '12px 14px',
-            borderRadius: 14,
-            background: 'rgba(250, 249, 247, 0.96)',
-            border: '1px solid #E5E5E5',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            boxShadow: '0 12px 36px rgba(0,0,0,0.1)',
+            padding: '14px 18px',
+            borderRadius: 16,
+            background: capturePostPhase === 'ready'
+              ? 'rgba(22,101,52,0.92)'         // dark green for "ready"
+              : 'rgba(0,0,0,0.82)',
+            color: '#FFFFFF',
+            boxShadow: '0 14px 40px rgba(0,0,0,0.35)',
+            backdropFilter: 'blur(14px)',
+            WebkitBackdropFilter: 'blur(14px)',
+            transition: 'background 0.3s ease',
           }}
         >
-          <div
-            style={{
-              height: 8,
-              borderRadius: 6,
-              background: '#E5E5E5',
-              overflow: 'hidden',
-            }}
-          >
-            <div
-              style={{
-                height: '100%',
-                width: `${Math.round(Math.min(1, Math.max(0, captureProgress01)) * 100)}%`,
-                background: '#1A1A1A',
-                transition: 'width 0.15s ease-out',
-              }}
-            />
-          </div>
-          <div style={{ marginTop: 10, fontSize: 12, color: '#1A1A1A', textAlign: 'center', fontWeight: 600 }}>
-            Recording your clip… {Math.round(Math.min(1, Math.max(0, captureProgress01)) * 100)}%
-          </div>
+          <style>{`
+            @keyframes cl-rec-dot  { 0%,100%{opacity:1}  50%{opacity:0.25} }
+            @keyframes cl-proc-spin { to { transform: rotate(360deg); } }
+          `}</style>
+
+          {/* ── Post-recording: "Processing your video…" or "Your video is ready" ── */}
+          {capturePostPhase !== 'hidden' ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              {capturePostPhase === 'processing' ? (
+                <>
+                  <span style={{
+                    width: 14, height: 14,
+                    border: '2px solid rgba(255,255,255,0.3)',
+                    borderTopColor: '#FFFFFF',
+                    borderRadius: '50%',
+                    animation: 'cl-proc-spin 0.8s linear infinite',
+                    flexShrink: 0,
+                  }} />
+                  <span style={{ fontSize: 14, fontWeight: 650, lineHeight: 1.35 }}>
+                    Processing your video…
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: 18, lineHeight: 1 }}>✓</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.35 }}>
+                    Your video is ready
+                  </span>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* ── Active recording headline ── */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 }}>
+                {captureActuallyRecording ? (
+                  <>
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        background: '#FF3B30',
+                        animation: 'cl-rec-dot 1.2s ease-in-out infinite',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span style={{ fontSize: 14, fontWeight: 650, lineHeight: 1.35 }}>
+                      Recording — do not switch tabs
+                    </span>
+                  </>
+                ) : captureCountdown != null ? (
+                  <span style={{ fontSize: 14, fontWeight: 650, lineHeight: 1.35 }}>
+                    Video is playing — starting in {captureCountdown}…
+                  </span>
+                ) : captureStepStatus?.startsWith('Starting video') ? (
+                  <span style={{ fontSize: 14, fontWeight: 650, lineHeight: 1.35 }}>
+                    Starting video…
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 14, fontWeight: 650, lineHeight: 1.35 }}>
+                    Preparing…
+                  </span>
+                )}
+              </div>
+
+              {/* Timer: only shown once recorder has actually started */}
+              {captureActuallyRecording && (
+                <div
+                  style={{
+                    fontVariantNumeric: 'tabular-nums',
+                    fontSize: 26,
+                    fontWeight: 800,
+                    letterSpacing: 0.5,
+                    textAlign: 'center',
+                    marginBottom: 10,
+                  }}
+                >
+                  {Math.floor(captureRecordingElapsedSec / 60)}:
+                  {String(captureRecordingElapsedSec % 60).padStart(2, '0')}
+                </div>
+              )}
+
+              {/* Countdown big number during 3-2-1 */}
+              {!captureActuallyRecording && captureCountdown != null && (
+                <div
+                  style={{
+                    fontVariantNumeric: 'tabular-nums',
+                    fontSize: 52,
+                    fontWeight: 900,
+                    textAlign: 'center',
+                    lineHeight: 1,
+                    marginBottom: 10,
+                    opacity: 0.95,
+                  }}
+                >
+                  {captureCountdown}
+                </div>
+              )}
+
+              {/* Progress bar */}
+              <div style={{ width: '100%', height: 8, borderRadius: 6, background: 'rgba(255,255,255,0.25)' }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${Math.round(Math.min(1, Math.max(0, captureProgress01)) * 100)}%`,
+                    background: captureActuallyRecording ? '#34C759' : 'rgba(255,255,255,0.55)',
+                    borderRadius: 6,
+                    transition: 'width 0.15s ease-out',
+                  }}
+                />
+              </div>
+            </>
+          )}
         </div>
-      )}
+      ) : null}
 
       {showCaptureSaveToast && (
         <div

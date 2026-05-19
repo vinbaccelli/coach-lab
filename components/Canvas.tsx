@@ -50,7 +50,7 @@ const SHAPE_SPIN_SPEED = 0.025;
 /** Minimum alpha applied to any StroMotion ghost frame */
 const MIN_GHOST_OPACITY = 0.02;
 /** Vertical offset (screen px) from finger to precision crosshair — tuned for one-handed phones */
-const PRECISION_CURSOR_OFFSET_Y = 38;
+const PRECISION_CURSOR_OFFSET_Y = 120;
 /** Synthetic pointer id for injected precision clicks */
 const PRECISION_SYNTHETIC_POINTER_ID = 91001;
 /** Fade-out duration when anchor finger lifts (ms) */
@@ -129,7 +129,7 @@ export interface CanvasHandle {
   resetZoomPan: () => void;
   startObjMultiplierRegionSelect: () => void;
   getObjMultiplierRegion: () => { x: number; y: number; w: number; h: number } | null;
-  runObjMultiplierCapture: (frameCount: number, duration: number, onProgress?: (done: number, total: number) => void) => Promise<number>;
+  runObjMultiplierCapture: (frameCount: number, onProgress?: (done: number, total: number) => void) => Promise<number>;
   clearObjMultiplier: () => void;
   getObjMultiplierFrameCount: () => number;
 }
@@ -1320,6 +1320,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const precisionCrosshairDisplayRef = useRef<Pt | null>(null);
     const precisionFadeStartRef = useRef<number | null>(null);
     const precisionRippleRef = useRef<{ x: number; y: number; t0: number } | null>(null);
+    const precisionSyntheticDispatchRef = useRef<
+      ((type: 'pointerdown' | 'pointerup', logicalPt: Pt) => void) | null
+    >(null);
 
     // Dragging circle
     const dragCircleIdxRef = useRef<number>(-1);
@@ -1619,12 +1622,50 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       let cy0 = 0;
 
       const onTouchStart = (e: TouchEvent) => {
+        // Once the anchor finger is established, we own ALL multi-touch gestures.
+        // Calling preventDefault() here prevents pinch-zoom, Safari viewport zoom,
+        // and the browser from trying to interpret the second finger as a scroll.
+        // Single-touch touchstart (anchor-setting moment) must NOT call
+        // preventDefault() because that suppresses the subsequent pointerdown
+        // event that sets precisionAnchorPointerIdRef via onPointerDown.
         if (
           precisionTouchDrawRef.current &&
-          precisionAnchorPointerIdRef.current !== null &&
-          e.touches.length >= 2
+          precisionAnchorPointerIdRef.current !== null
         ) {
           e.preventDefault();
+          if (e.touches.length === 2) {
+            // Two-finger tap → inject click at first-touch + 120 px upward offset.
+            const t0touch = e.touches[0];
+            const canvasEl = canvasRef.current;
+            if (!canvasEl || !t0touch) return;
+            const rect = canvasEl.getBoundingClientRect();
+            const W = canvasEl.width;
+            const H = canvasEl.height;
+            const sx = (t0touch.clientX - rect.left) * (W / rect.width);
+            const sy = (t0touch.clientY - PRECISION_CURSOR_OFFSET_Y - rect.top) * (H / rect.height);
+            const ch: Pt = {
+              x: (sx - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
+              y: (sy - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
+            };
+            precisionRippleRef.current = { x: ch.x, y: ch.y, t0: performance.now() };
+            const toolEarly = activeToolRef.current;
+            const useToggle =
+              toolEarly === 'pen' ||
+              toolEarly === 'erase' ||
+              toolEarly === 'line' ||
+              toolEarly === 'arrow' ||
+              toolEarly === 'arrowAngle' ||
+              toolEarly === 'circle' ||
+              toolEarly === 'bodyCircle' ||
+              toolEarly === 'rect' ||
+              toolEarly === 'triangle';
+            const dragging = isDraggingRef.current && activeStrokeRef.current !== null;
+            const dispatch = precisionSyntheticDispatchRef.current;
+            if (dispatch) {
+              if (useToggle && dragging) dispatch('pointerup', ch);
+              else dispatch('pointerdown', ch);
+            }
+          }
           return;
         }
         if (e.touches.length === 2) {
@@ -1654,10 +1695,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       };
       const onTouchMove = (e: TouchEvent) => {
+        // In precision mode with an active anchor, prevent all browser-default
+        // touch handling (scroll, viewport zoom) on every touchmove regardless
+        // of touch count.  The pointer-event system handles the actual crosshair
+        // update via onPointerMove; this handler's only job in precision mode is
+        // to block the browser.
         if (
           precisionTouchDrawRef.current &&
-          precisionAnchorPointerIdRef.current !== null &&
-          e.touches.length >= 2
+          precisionAnchorPointerIdRef.current !== null
         ) {
           e.preventDefault();
           return;
@@ -1698,7 +1743,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
       };
-      const onTouchEnd = () => {
+      const onTouchEnd = (e: TouchEvent) => {
+        // Block Safari from re-enabling scroll or triggering a viewport-zoom
+        // snap-back animation when the anchor finger lifts in precision mode.
+        if (precisionTouchDrawRef.current && precisionAnchorPointerIdRef.current !== null) {
+          e.preventDefault();
+        }
         lastDist = 0;
         pinchWebcam = false;
         baseDist = 0;
@@ -1706,11 +1756,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       canvas.addEventListener('touchstart', onTouchStart, { passive: false });
       canvas.addEventListener('touchmove', onTouchMove, { passive: false });
-      canvas.addEventListener('touchend', onTouchEnd);
+      canvas.addEventListener('touchend', onTouchEnd, { passive: false });
+      // touchcancel fires when the OS interrupts the gesture (e.g. incoming call).
+      // Treat it identically to touchend to ensure state is cleaned up.
+      canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
       return () => {
         canvas.removeEventListener('touchstart', onTouchStart);
         canvas.removeEventListener('touchmove', onTouchMove);
         canvas.removeEventListener('touchend', onTouchEnd);
+        canvas.removeEventListener('touchcancel', onTouchEnd);
       };
     }, []);
 
@@ -1881,7 +1935,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         objMultRegionCurrentRef.current = null;
       },
       getObjMultiplierRegion: () => objMultRegionRef.current,
-      runObjMultiplierCapture: async (frameCount, duration, onProgress) => {
+      runObjMultiplierCapture: async (frameCount, onProgress) => {
         const video = videoRef.current;
         if (!video || !objMultRegionRef.current) return 0;
         const { ObjectMultiplier } = await import('@/lib/objectMultiplier');
@@ -1893,7 +1947,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           video,
           objMultRegionRef.current,
           frameCount,
-          duration,
+          0,
           onProgress,
         );
         return objMultiplierRef.current.getFrameCount();
@@ -2860,25 +2914,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const py = drawPt.y;
             ctx.save();
             ctx.globalAlpha = cursorAlpha;
-            ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+            ctx.lineWidth = 2.5;
             ctx.beginPath();
-            ctx.arc(px, py, 14, 0, Math.PI * 2);
+            ctx.arc(px, py, 10, 0, Math.PI * 2);
             ctx.stroke();
-            ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+            ctx.strokeStyle = 'rgba(255,255,255,0.98)';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.arc(px, py, 14, 0, Math.PI * 2);
+            ctx.arc(px, py, 10, 0, Math.PI * 2);
             ctx.stroke();
             ctx.beginPath();
-            ctx.moveTo(px - 22, py);
-            ctx.lineTo(px + 22, py);
-            ctx.moveTo(px, py - 22);
-            ctx.lineTo(px, py + 22);
+            ctx.moveTo(px - 12, py);
+            ctx.lineTo(px + 12, py);
+            ctx.moveTo(px, py - 12);
+            ctx.lineTo(px, py + 12);
             ctx.stroke();
-            ctx.fillStyle = 'rgba(255,255,255,0.95)';
+            ctx.fillStyle = 'rgba(255,255,255,0.96)';
             ctx.beginPath();
-            ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+            ctx.arc(px, py, 2, 0, Math.PI * 2);
             ctx.fill();
             ctx.restore();
           }
@@ -3060,6 +3114,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         /* noop */
       }
     };
+    precisionSyntheticDispatchRef.current = dispatchPrecisionSynthetic;
 
     // ── Finish swing path ──────────────────────────────────────────────────
 

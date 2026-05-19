@@ -19,7 +19,7 @@ export default function InstallPrompt() {
       !(window.navigator as Navigator & { standalone?: boolean }).standalone;
 
     if (isIOS) {
-      const dismissed = sessionStorage.getItem('pwa-ios-dismissed');
+      const dismissed = localStorage.getItem('coachlab-pwa-ios-dismissed');
       if (!dismissed) setShowIOS(true);
     }
 
@@ -42,7 +42,7 @@ export default function InstallPrompt() {
   };
 
   const dismissIOS = () => {
-    sessionStorage.setItem('pwa-ios-dismissed', '1');
+    localStorage.setItem('coachlab-pwa-ios-dismissed', '1');
     setShowIOS(false);
   };
 
@@ -52,7 +52,7 @@ export default function InstallPrompt() {
     <div
       role="dialog"
       aria-live="polite"
-      className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-32px)] max-w-sm"
+      className="fixed left-1/2 -translate-x-1/2 z-40 w-[calc(100%-32px)] max-w-sm bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))]"
     >
       <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200 p-4 flex items-start gap-3">
         {/* Icon */}

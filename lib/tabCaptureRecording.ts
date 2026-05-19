@@ -156,22 +156,57 @@ export class TabCaptureRecorder {
       this.chunks = [];
       return fallback;
     }
-    return new Promise((resolve, reject) => {
-      rec.onerror = (ev) => {
+
+    /**
+     * Hard outer timeout: if MediaRecorder gets stuck (Safari is known to delay
+     * `onstop` when the source canvas track ends abruptly), we resolve with the
+     * chunks we already have so the capture flow can clean up the stream
+     * instead of leaking it forever.
+     */
+    const HARD_TIMEOUT_MS = 10_000;
+
+    return new Promise<Blob>((resolve, reject) => {
+      let settled = false;
+      let hardTimer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (blob: Blob | null, err?: unknown) => {
+        if (settled) return;
+        settled = true;
+        if (hardTimer !== null) {
+          clearTimeout(hardTimer);
+          hardTimer = null;
+        }
         this.recorder = null;
+        const chunks = this.chunks;
+        this.chunks = [];
+        try {
+          rec.onerror = null;
+          rec.onstop = null;
+        } catch {
+          /* noop */
+        }
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+        if (err) {
+          reject(
+            err instanceof Error
+              ? err
+              : new Error('Recording stopped unexpectedly. Try again or use a shorter clip.'),
+          );
+          return;
+        }
+        resolve(new Blob(chunks, { type: rec.mimeType || pickRecorderMimeType() }));
+      };
+
+      rec.onerror = (ev) => {
         const inner = (ev as { error?: DOMException }).error;
-        reject(
-          inner instanceof Error
-            ? inner
-            : new Error('Recording stopped unexpectedly. Try again or use a shorter clip.'),
-        );
+        finish(null, inner);
       };
       rec.onstop = () => {
-        const blob = new Blob(this.chunks, { type: rec.mimeType || pickRecorderMimeType() });
-        this.recorder = null;
-        this.chunks = [];
-        resolve(blob);
+        finish(new Blob(this.chunks, { type: rec.mimeType || pickRecorderMimeType() }));
       };
+
       try {
         rec.requestData?.();
       } catch {
@@ -181,10 +216,19 @@ export class TabCaptureRecorder {
         try {
           if (rec.state !== 'inactive') rec.stop();
         } catch (err) {
-          this.recorder = null;
-          reject(err instanceof Error ? err : new Error(String(err)));
+          finish(null, err);
         }
       }, 40);
+
+      hardTimer = setTimeout(() => {
+        if (settled) return;
+        try {
+          if (rec.state !== 'inactive') rec.stop();
+        } catch {
+          /* noop */
+        }
+        finish(null);
+      }, HARD_TIMEOUT_MS);
     });
   }
 }

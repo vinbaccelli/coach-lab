@@ -185,6 +185,7 @@ export default function PreciseTimeline({
   const scrubbingRef = useRef(false);
 
   const readState = useCallback(() => {
+    if (scrubbingRef.current) return;
     if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (!v) return;
@@ -674,11 +675,11 @@ export default function PreciseTimeline({
         <div
           style={{
             position: 'absolute',
-            left: `calc(${pct}% - ${phoneChrome ? 11 : 10}px)`,
+            left: `calc(${pct}% - ${phoneChrome ? 15 : 10}px)`,
             top: '50%',
             transform: 'translateY(-50%)',
-            width: phoneChrome ? 22 : 20,
-            height: phoneChrome ? 22 : 20,
+            width: phoneChrome ? 30 : 20,
+            height: phoneChrome ? 30 : 20,
             borderRadius: '50%',
             background: '#fff',
             boxShadow: `0 0 0 2px ${accent}`,

@@ -6,12 +6,80 @@ export interface MultiplierFrame {
   region: { x: number; y: number; w: number; h: number };
 }
 
+const FPS = 10;
+const FRAME_DT = 1 / FPS;
+
+function colorDist(r1: number, g1: number, b1: number, r2: number, g2: number, b2: number): number {
+  return Math.hypot(r1 - r2, g1 - g2, b1 - b2);
+}
+
+/**
+ * Lightweight background suppression from border colour — yields a premultiplied-style
+ * cutout without blocking the UI (chunked on the main thread via await between frames).
+ */
+async function matteRacketFrame(bitmap: ImageBitmap): Promise<ImageBitmap> {
+  const w = bitmap.width;
+  const h = bitmap.height;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    const copy = await createImageBitmap(bitmap);
+    return copy;
+  }
+  ctx.drawImage(bitmap, 0, 0);
+  const { data } = ctx.getImageData(0, 0, w, h);
+  let rs = 0;
+  let gs = 0;
+  let bs = 0;
+  let n = 0;
+  const sample = (x: number, y: number) => {
+    const i = (Math.max(0, Math.min(h - 1, y)) * w + Math.max(0, Math.min(w - 1, x))) * 4;
+    rs += data[i];
+    gs += data[i + 1];
+    bs += data[i + 2];
+    n++;
+  };
+  const step = Math.max(1, Math.floor(Math.min(w, h) / 28));
+  for (let x = 0; x < w; x += step) {
+    sample(x, 0);
+    sample(x, h - 1);
+  }
+  for (let y = 0; y < h; y += step) {
+    sample(0, y);
+    sample(w - 1, y);
+  }
+  const br = rs / Math.max(1, n);
+  const bg = gs / Math.max(1, n);
+  const bb = bs / Math.max(1, n);
+  const T0 = 26;
+  const T1 = 78;
+  const out = ctx.createImageData(w, h);
+  for (let i = 0; i < data.length; i += 4) {
+    const d = colorDist(data[i], data[i + 1], data[i + 2], br, bg, bb);
+    let a = 255;
+    if (d < T1) {
+      a = d <= T0 ? 0 : Math.round(((d - T0) / (T1 - T0)) * 255);
+    }
+    out.data[i] = data[i];
+    out.data[i + 1] = data[i + 1];
+    out.data[i + 2] = data[i + 2];
+    out.data[i + 3] = a;
+  }
+  ctx.putImageData(out, 0, 0);
+  const result = await createImageBitmap(c);
+  bitmap.close();
+  return result;
+}
+
 export class ObjectMultiplier {
   private frames: MultiplierFrame[] = [];
 
   async captureFrame(
     video: HTMLVideoElement,
     region: { x: number; y: number; w: number; h: number },
+    matte = true,
   ): Promise<MultiplierFrame> {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
@@ -20,7 +88,10 @@ export class ObjectMultiplier {
     const sw = Math.round(region.w * vw);
     const sh = Math.round(region.h * vh);
 
-    const bitmap = await createImageBitmap(video, sx, sy, sw, sh);
+    let bitmap = await createImageBitmap(video, sx, sy, sw, sh);
+    if (matte) {
+      bitmap = await matteRacketFrame(bitmap);
+    }
     const frame: MultiplierFrame = {
       imageData: bitmap,
       timestamp: video.currentTime,
@@ -30,26 +101,36 @@ export class ObjectMultiplier {
     return frame;
   }
 
+  /**
+   * Samples `frameCount` frames at exactly `FPS` (10fps) forward from the current video time.
+   */
   async autoCaptureSequence(
     video: HTMLVideoElement,
     region: { x: number; y: number; w: number; h: number },
     frameCount: number,
-    spanSeconds: number,
+    _spanSecondsUnused: number,
     onProgress?: (done: number, total: number) => void,
   ): Promise<MultiplierFrame[]> {
-    const clampedCount = Math.max(2, Math.min(12, frameCount));
-    const startTime = video.currentTime;
-    const endTime = Math.min(video.duration, startTime + spanSeconds);
-    const actualSpan = endTime - startTime;
-    const interval = actualSpan / (clampedCount - 1);
+    const choices = [3, 5, 8, 10] as const;
+    const clampedCount = choices.includes(frameCount as 3 | 5 | 8 | 10)
+      ? (frameCount as 3 | 5 | 8 | 10)
+      : 5;
 
     const wasPaused = video.paused;
+    const startTime = video.currentTime;
+    const span = (clampedCount - 1) * FRAME_DT;
+    const endBoundary = startTime + span;
+    const endTime =
+      Number.isFinite(video.duration) && video.duration > 0
+        ? Math.min(video.duration, endBoundary)
+        : endBoundary;
+
     if (!wasPaused) video.pause();
 
     const captured: MultiplierFrame[] = [];
 
     for (let i = 0; i < clampedCount; i++) {
-      const targetTime = startTime + i * interval;
+      const targetTime = Math.min(endTime, startTime + i * FRAME_DT);
       video.currentTime = targetTime;
 
       await new Promise<void>((resolve) => {
@@ -60,7 +141,8 @@ export class ObjectMultiplier {
         video.addEventListener('seeked', onSeeked);
       });
 
-      const frame = await this.captureFrame(video, region);
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      const frame = await this.captureFrame(video, region, true);
       captured.push(frame);
       onProgress?.(i + 1, clampedCount);
     }
@@ -73,6 +155,10 @@ export class ObjectMultiplier {
       };
       video.addEventListener('seeked', onSeeked);
     });
+
+    if (!wasPaused) {
+      void video.play().catch(() => {});
+    }
 
     return captured;
   }
@@ -94,8 +180,8 @@ export class ObjectMultiplier {
           : ((i + 1) / this.frames.length) * opacity;
       ctx.globalAlpha = Math.max(0.08, alpha);
 
-      const dx = frame.region.x * canvasW;
-      const dy = frame.region.y * canvasH;
+      const dx = frame.region.x * canvasW + i * 1.5;
+      const dy = frame.region.y * canvasH - i * 0.8;
       const dw = frame.region.w * canvasW;
       const dh = frame.region.h * canvasH;
       ctx.drawImage(frame.imageData, dx, dy, dw, dh);

@@ -211,7 +211,9 @@ export class PoseWorkerBridge {
               br.readyCb?.();
               br.readyCb = null;
             }
-            console.log('[PoseWorkerBridge] Worker mode active (shared)');
+            if (process.env.NODE_ENV !== 'production') {
+              console.log('[PoseWorkerBridge] Worker mode active (shared)');
+            }
           } else if (data.type === 'error') {
             if (globalInitTimeout) {
               clearTimeout(globalInitTimeout);
@@ -273,7 +275,9 @@ export class PoseWorkerBridge {
       if (this.disposed) return;
       this.fallbackDetector = det;
       this.mode = 'main-thread';
-      console.log('[PoseWorkerBridge] Main-thread fallback active (WebGL)');
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[PoseWorkerBridge] Main-thread fallback active (WebGL)');
+      }
       this.statusCb?.('Skeleton ready');
       this.readyCb?.();
       this.readyCb = null;

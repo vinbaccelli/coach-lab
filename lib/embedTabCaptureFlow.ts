@@ -3,7 +3,12 @@ import {
   stopAllTracks,
   TabCaptureRecorder,
 } from '@/lib/tabCaptureRecording';
-import { captureLog, handleCaptureError } from '@/lib/embedCaptureSession';
+import {
+  captureLog,
+  handleCaptureError,
+  safeYtCall,
+  safeYtVoid,
+} from '@/lib/embedCaptureSession';
 
 export type EmbedCaptureOpts = {
   mode: 'full' | 'section';
@@ -11,8 +16,109 @@ export type EmbedCaptureOpts = {
   endSec: number | null;
 };
 
+/** Sentinel error: thrown internally when caller-supplied cancel callback flips to true. */
+class CaptureCancelled extends Error {
+  constructor() {
+    super('Capture cancelled');
+    this.name = 'CaptureCancelled';
+  }
+}
+
+/**
+ * Tracks every disposable resource (interval, RAF, listener, recorder, stream).
+ * `runAll()` is idempotent and safe to call from success, error, AND cancel paths,
+ * so we can never leak a timer or a stream regardless of how the flow exits.
+ */
+class CaptureCleaner {
+  private items: Array<() => void> = [];
+  private done = false;
+
+  add(fn: () => void): void {
+    if (this.done) {
+      try {
+        fn();
+      } catch {
+        /* noop */
+      }
+      return;
+    }
+    this.items.push(fn);
+  }
+
+  /** Accepts both DOM (number) and Node (Timeout) interval IDs. */
+  addInterval(id: number | ReturnType<typeof setInterval>): void {
+    this.add(() => {
+      try {
+        clearInterval(id as unknown as number);
+      } catch {
+        /* noop */
+      }
+    });
+  }
+
+  addTimeout(id: number | ReturnType<typeof setTimeout>): void {
+    this.add(() => {
+      try {
+        clearTimeout(id as unknown as number);
+      } catch {
+        /* noop */
+      }
+    });
+  }
+
+  addRaf(id: number): void {
+    this.add(() => {
+      try {
+        cancelAnimationFrame(id);
+      } catch {
+        /* noop */
+      }
+    });
+  }
+
+  addListener<K extends keyof MediaStreamTrackEventMap>(
+    target: MediaStreamTrack,
+    type: K,
+    handler: (ev: MediaStreamTrackEventMap[K]) => void,
+  ): void {
+    this.add(() => {
+      try {
+        target.removeEventListener(type, handler);
+      } catch {
+        /* noop */
+      }
+    });
+  }
+
+  runAll(): void {
+    if (this.done) return;
+    this.done = true;
+    const items = this.items.slice();
+    this.items = [];
+    for (const fn of items) {
+      try {
+        fn();
+      } catch {
+        /* noop */
+      }
+    }
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Sleep that bails immediately when `getCancelled()` returns true. */
+async function cancellableSleep(ms: number, getCancelled?: () => boolean): Promise<void> {
+  if (ms <= 0) return;
+  const t0 = performance.now();
+  const STEP = 80;
+  while (performance.now() - t0 < ms) {
+    if (getCancelled?.()) throw new CaptureCancelled();
+    const remaining = ms - (performance.now() - t0);
+    await sleep(Math.min(STEP, remaining));
+  }
 }
 
 function fail(step: string, raw: unknown, friendly: string): { ok: false; message: string } {
@@ -24,11 +130,18 @@ async function waitUntilOk(
   pred: () => boolean,
   intervalMs: number,
   timeoutMs = 3_600_000,
+  getCancelled?: () => boolean,
+  cleaner?: CaptureCleaner,
 ): Promise<void> {
   const start = performance.now();
   return new Promise<void>((resolve, reject) => {
     const iv = window.setInterval(() => {
       try {
+        if (getCancelled?.()) {
+          window.clearInterval(iv);
+          reject(new CaptureCancelled());
+          return;
+        }
         if (performance.now() - start > timeoutMs) {
           window.clearInterval(iv);
           reject(new Error('Capture timed out.'));
@@ -43,16 +156,23 @@ async function waitUntilOk(
         reject(e);
       }
     }, intervalMs);
+    cleaner?.addInterval(iv);
   });
 }
 
-/** YouTube IFrame API: PlayerState.PLAYING === 1 */
+/** YouTube IFrame API: PlayerState.PLAYING === 1, ENDED === 0 */
 const YT_PLAYING = 1;
+const YT_ENDED = 0;
 
-async function waitForYoutubePlaying(getPlayer: () => any | null, timeoutMs = 120_000): Promise<void> {
+async function waitForYoutubePlaying(
+  getPlayer: () => any | null,
+  timeoutMs = 120_000,
+  getCancelled?: () => boolean,
+): Promise<void> {
   const t0 = performance.now();
   const playerDeadline = t0 + Math.min(90_000, timeoutMs);
   while (performance.now() < playerDeadline) {
+    if (getCancelled?.()) throw new CaptureCancelled();
     const p = getPlayer();
     if (p && typeof p.getPlayerState === 'function') break;
     await sleep(100);
@@ -63,22 +183,16 @@ async function waitForYoutubePlaying(getPlayer: () => any | null, timeoutMs = 12
   }
   const playingDeadline = t0 + timeoutMs;
   while (performance.now() < playingDeadline) {
+    if (getCancelled?.()) throw new CaptureCancelled();
     const p = getPlayer();
     if (!p || typeof p.getPlayerState !== 'function') {
       await sleep(100);
       continue;
     }
-    try {
-      p.mute?.();
-    } catch {
-      /* noop */
-    }
-    try {
-      p.playVideo?.();
-    } catch {
-      /* noop */
-    }
-    if (p.getPlayerState() === YT_PLAYING) return;
+    safeYtVoid(() => p.unMute?.());
+    safeYtVoid(() => p.playVideo?.());
+    const state = safeYtCall<number>(() => p.getPlayerState?.(), -1);
+    if (state === YT_PLAYING) return;
     await sleep(80);
   }
   throw new Error('YouTube did not reach PLAYING in time.');
@@ -87,21 +201,32 @@ async function waitForYoutubePlaying(getPlayer: () => any | null, timeoutMs = 12
 async function waitForGenericEmbedAfterLoad(
   getIframe: () => HTMLIFrameElement | null,
   embedAlreadyReady: boolean,
+  getCancelled?: () => boolean,
 ): Promise<void> {
   const el = getIframe();
   if (!el) {
-    await sleep(2000);
+    await cancellableSleep(2000, getCancelled);
     return;
   }
   if (!embedAlreadyReady) {
+    let onLoad: (() => void) | null = null;
     await Promise.race([
       new Promise<void>((resolve) => {
-        el.addEventListener('load', () => resolve(), { once: true });
+        onLoad = () => resolve();
+        el.addEventListener('load', onLoad, { once: true });
       }),
-      sleep(10_000),
-    ]);
+      cancellableSleep(10_000, getCancelled),
+    ]).finally(() => {
+      if (onLoad) {
+        try {
+          el.removeEventListener('load', onLoad);
+        } catch {
+          /* noop */
+        }
+      }
+    });
   }
-  await sleep(2000);
+  await cancellableSleep(2000, getCancelled);
 }
 
 type CroppedPipeline = {
@@ -134,6 +259,22 @@ async function startCroppedDisplayPipeline(
       /* noop */
     }
     return null;
+  }
+
+  // Safari sometimes resolves play() without actually starting playback when the
+  // source is a getDisplayMedia track. Give the stream up to 2s to deliver a frame.
+  if (video.paused || video.videoWidth === 0) {
+    const waitDeadline = performance.now() + 2000;
+    while (performance.now() < waitDeadline && (video.paused || video.videoWidth === 0)) {
+      await sleep(50);
+      if (video.paused) {
+        try {
+          await video.play();
+        } catch {
+          /* noop */
+        }
+      }
+    }
   }
 
   const w = Math.max(2, Math.floor(outW));
@@ -192,15 +333,33 @@ async function startCroppedDisplayPipeline(
     const vh = video.videoHeight;
     if (target && vw > 0 && vh > 0 && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
       const rect = target.getBoundingClientRect();
-      const basisW =
-        basisCss && basisCss.w > 0 ? basisCss.w : window.innerWidth;
-      const basisH =
-        basisCss && basisCss.h > 0 ? basisCss.h : window.innerHeight;
+      const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+
+      // CSS viewport dimensions (always in CSS pixels, DPR-independent).
+      const vvW = vv && vv.width > 0 ? vv.width : window.innerWidth;
+      const vvH = vv && vv.height > 0 ? vv.height : window.innerHeight;
+
+      // Stream frame dimensions from getSettings() — may be at CSS pixels (Chrome tab
+      // capture) OR at native/Retina pixels (Safari window/screen capture).
+      const basisW = basisCss && basisCss.w > 0 ? basisCss.w : vvW;
+      const basisH = basisCss && basisCss.h > 0 ? basisCss.h : vvH;
+
+      // Detect Retina/HiDPI capture: if the reported stream width is significantly
+      // larger than the CSS viewport width, the stream is at native pixel density.
+      // getBoundingClientRect() always returns CSS pixels, so we must scale them up
+      // to match the stream's native coordinate space before computing the crop region.
+      const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+      const coordScale = basisCss && basisCss.w > 0 && (basisCss.w / vvW) > 1.25 ? dpr : 1;
+
+      // visualViewport offsets are in CSS pixels; scale to match stream coordinate space.
+      const ox = (vv?.offsetLeft ?? 0) * coordScale;
+      const oy = (vv?.offsetTop ?? 0) * coordScale;
+
       if (basisW > 0 && basisH > 0) {
-        let sx = (rect.left / basisW) * vw;
-        let sy = (rect.top / basisH) * vh;
-        let sw = (rect.width / basisW) * vw;
-        let sh = (rect.height / basisH) * vh;
+        let sx = ((rect.left * coordScale - ox) / basisW) * vw;
+        let sy = ((rect.top * coordScale - oy) / basisH) * vh;
+        let sw = (rect.width * coordScale / basisW) * vw;
+        let sh = (rect.height * coordScale / basisH) * vh;
         sx = Math.max(0, Math.min(vw - 1, sx));
         sy = Math.max(0, Math.min(vh - 1, sy));
         sw = Math.max(1, Math.min(vw - sx, sw));
@@ -216,12 +375,33 @@ async function startCroppedDisplayPipeline(
   };
   raf = requestAnimationFrame(tick);
 
+  let disposed = false;
   const dispose = () => {
+    if (disposed) return;
+    disposed = true;
     stopped = true;
-    cancelAnimationFrame(raf);
-    stopAllTracks(croppedStream);
+    try {
+      cancelAnimationFrame(raf);
+    } catch {
+      /* noop */
+    }
+    try {
+      stopAllTracks(croppedStream);
+    } catch {
+      /* noop */
+    }
+    try {
+      video.pause();
+    } catch {
+      /* noop */
+    }
     try {
       video.srcObject = null;
+    } catch {
+      /* noop */
+    }
+    try {
+      video.removeAttribute('src');
     } catch {
       /* noop */
     }
@@ -229,6 +409,10 @@ async function startCroppedDisplayPipeline(
 
   return { stream: croppedStream, dispose };
 }
+
+export type EmbedCaptureResult =
+  | { ok: true; blob: Blob }
+  | { ok: false; message: string; cancelled?: boolean };
 
 export async function runEmbedTabCaptureFlow(args: {
   opts: EmbedCaptureOpts;
@@ -249,7 +433,15 @@ export async function runEmbedTabCaptureFlow(args: {
   preAcquiredStream?: MediaStream;
   /** Fires once the display-capture video track is live (within ~100ms for UI overlay). */
   onPostStreamReady?: () => void;
-}): Promise<{ ok: true; blob: Blob } | { ok: false; message: string }> {
+  /** Fires at the exact moment MediaRecorder.startCapture() succeeds — use to start the recording timer. */
+  onRecordingStarted?: () => void;
+  /**
+   * Opt-in cancellation: if this callback returns true at any await checkpoint,
+   * the flow tears down all resources and returns `{ ok: false, cancelled: true }`.
+   * Existing callers that don't pass it behave exactly as before.
+   */
+  getCancelled?: () => boolean;
+}): Promise<EmbedCaptureResult> {
   const {
     opts,
     ytPlayer,
@@ -266,20 +458,50 @@ export async function runEmbedTabCaptureFlow(args: {
     videoDurationHintSec,
     preAcquiredStream,
     onPostStreamReady,
+    onRecordingStarted,
+    getCancelled,
   } = args;
 
   const effectiveYt = () => (typeof getYtPlayer === 'function' ? getYtPlayer() ?? ytPlayer : ytPlayer);
+  const ytState = (): number => safeYtCall<number>(() => effectiveYt()?.getPlayerState?.(), -1);
+  const ytTime = (): number => safeYtCall<number>(() => Number(effectiveYt()?.getCurrentTime?.()), 0);
+  const ytDuration = (): number => safeYtCall<number>(() => Number(effectiveYt()?.getDuration?.()), 0);
 
+  const cleaner = new CaptureCleaner();
   let recorder: TabCaptureRecorder | null = null;
   let stream: MediaStream | null = null;
   let cropDispose: (() => void) | null = null;
+
+  /** Bail-out helper: shared by every error path so cleanup is guaranteed. */
+  const teardown = (alsoStopStream: boolean): void => {
+    cleaner.runAll();
+    if (cropDispose) {
+      try {
+        cropDispose();
+      } catch {
+        /* noop */
+      }
+      cropDispose = null;
+    }
+    if (alsoStopStream && stream) {
+      try {
+        stopAllTracks(stream);
+      } catch {
+        /* noop */
+      }
+    }
+  };
+
+  const checkCancel = () => {
+    if (getCancelled?.()) throw new CaptureCancelled();
+  };
 
   try {
     captureLog('flow-start');
     if (preAcquiredStream) {
       stream = preAcquiredStream;
     } else {
-      onStepStatus?.('Checking browser support…');
+      onStepStatus?.('Preparing…');
       captureLog('pre-gdm-check');
 
       if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
@@ -290,11 +512,8 @@ export async function runEmbedTabCaptureFlow(args: {
         );
       }
 
-      onStepStatus?.(
-        typeof navigator !== 'undefined' && /Safari/i.test(navigator.userAgent) && !/Chrome|CriOS|FxiOS/i.test(navigator.userAgent)
-          ? 'Requesting screen share — on Safari choose Entire Screen or Window (not “tab”)…'
-          : 'Requesting screen share — choose “This tab” in Chrome, or Window / Screen in Safari…',
-      );
+      // Browser-native picker is self-explanatory; keep the status message terse.
+      onStepStatus?.('Preparing…');
 
       try {
         stream = await getTabCaptureStream();
@@ -318,7 +537,7 @@ export async function runEmbedTabCaptureFlow(args: {
 
     const videoTracks = stream.getVideoTracks();
     if (!videoTracks) {
-      stopAllTracks(stream);
+      teardown(true);
       return fail(
         'video track list check',
         'getVideoTracks() returned null/undefined',
@@ -326,7 +545,7 @@ export async function runEmbedTabCaptureFlow(args: {
       );
     }
     if (videoTracks.length === 0) {
-      stopAllTracks(stream);
+      teardown(true);
       return fail(
         'video track check',
         `getVideoTracks() returned ${videoTracks.length} tracks`,
@@ -337,7 +556,7 @@ export async function runEmbedTabCaptureFlow(args: {
     const track = videoTracks[0];
 
     if (track.readyState === 'ended') {
-      stopAllTracks(stream);
+      teardown(true);
       return fail(
         'track readyState',
         `readyState=${track.readyState} immediately after getDisplayMedia`,
@@ -345,10 +564,23 @@ export async function runEmbedTabCaptureFlow(args: {
       );
     }
 
+    /**
+     * If the user stops sharing mid-flow (via the browser's "Stop sharing" UI),
+     * the track fires "ended". We flag it here and check at every await checkpoint
+     * so we can short-circuit cleanly instead of waiting for downstream timeouts.
+     */
+    let trackEnded = false;
+    const onTrackEnded = () => {
+      trackEnded = true;
+    };
+    track.addEventListener('ended', onTrackEnded);
+    cleaner.addListener(track, 'ended', onTrackEnded);
+
     const trackDeadline = performance.now() + 8_000;
     while (track.readyState !== 'live' && performance.now() < trackDeadline) {
+      checkCancel();
       if (track.readyState === 'ended') {
-        stopAllTracks(stream);
+        teardown(true);
         return fail(
           'track readyState wait',
           `readyState transitioned to "ended" while waiting`,
@@ -359,7 +591,7 @@ export async function runEmbedTabCaptureFlow(args: {
     }
 
     if (track.readyState !== 'live') {
-      stopAllTracks(stream);
+      teardown(true);
       return fail(
         'track readyState timeout',
         `readyState=${track.readyState} after 8 s`,
@@ -368,38 +600,126 @@ export async function runEmbedTabCaptureFlow(args: {
     }
 
     captureLog('track-live');
+
+    onStepStatus?.('Starting video…');
+    try {
+      checkCancel();
+      if (isYoutube) {
+        await waitForYoutubePlaying(() => effectiveYt(), 120_000, getCancelled);
+      } else if (hasGenericEmbed && typeof getGenericIframe === 'function') {
+        await waitForGenericEmbedAfterLoad(getGenericIframe, !!genericEmbedReady, getCancelled);
+      }
+    } catch (e: unknown) {
+      teardown(true);
+      if (e instanceof CaptureCancelled) throw e;
+      const { friendly } = handleCaptureError(e, 'wait-playback');
+      return fail('wait-playback', e, friendly);
+    }
+
+    onStepStatus?.('Video is playing — starting in 3…');
+
+    if (trackEnded) {
+      teardown(true);
+      return fail(
+        'track ended after playback wait',
+        'track.readyState=ended',
+        'The shared tab stopped sending video before recording started. Try Capture again.',
+      );
+    }
+
     try {
       onPostStreamReady?.();
     } catch (e) {
       console.warn('[CoachLab capture] onPostStreamReady:', e);
     }
 
-    onStepStatus?.('Waiting for video to start...');
-    try {
-      if (isYoutube) {
-        await waitForYoutubePlaying(() => effectiveYt(), 120_000);
-      } else if (hasGenericEmbed && typeof getGenericIframe === 'function') {
-        await waitForGenericEmbedAfterLoad(getGenericIframe, !!genericEmbedReady);
+    for (let n = 3; n >= 1; n--) {
+      checkCancel();
+      if (trackEnded) {
+        onCountdown?.(null);
+        teardown(true);
+        return fail(
+          'track ended during countdown',
+          'track.readyState=ended',
+          'The shared tab stopped sending video during the countdown. Try Capture again.',
+        );
       }
-    } catch (e: unknown) {
-      stopAllTracks(stream);
-      const { friendly } = handleCaptureError(e, 'wait-playback');
-      return fail('wait-playback', e, friendly);
-    }
 
+      // Guard: if the YouTube player paused or started buffering during the countdown
+      // (e.g. the coach tapped pause, or the network stalled), attempt a brief recovery
+      // before aborting. MediaRecorder must NEVER start before PLAYING state.
+      if (isYoutube && ytState() !== YT_PLAYING) {
+        safeYtVoid(() => effectiveYt()?.playVideo?.());
+        const recoveryDeadline = performance.now() + 2_000;
+        while (performance.now() < recoveryDeadline) {
+          checkCancel();
+          if (ytState() === YT_PLAYING) break;
+          await sleep(80);
+        }
+        if (ytState() !== YT_PLAYING) {
+          onCountdown?.(null);
+          teardown(true);
+          return fail(
+            'playback-not-playing-during-countdown',
+            `ytState=${ytState()}`,
+            'The video paused or buffered during the countdown. Press play on the video and try Capture again.',
+          );
+        }
+      }
+
+      onCountdown?.(n);
+      onStepStatus?.(`Video is playing — starting in ${n}…`);
+      captureLog(`countdown-${n}`);
+      await cancellableSleep(1000, getCancelled);
+    }
+    onCountdown?.(null);
+    captureLog('countdown-done');
+
+    // Measure crop target HERE (after countdown) so output dimensions reflect
+    // the exact iframe bounds at the moment recording actually starts.
     const cropTarget = (typeof getCropTargetEl === 'function' ? getCropTargetEl() : null) ?? captureShellEl;
     const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
     const rect0 = cropTarget?.getBoundingClientRect();
     const outW = Math.max(2, Math.round((rect0?.width ?? 640) * dpr));
     const outH = Math.max(2, Math.round((rect0?.height ?? 360) * dpr));
 
-    for (let n = 3; n >= 1; n--) {
-      onCountdown?.(n);
-      captureLog(`countdown-${n}`);
-      await sleep(1000);
+    if (isYoutube) {
+      const p = effectiveYt();
+      if (!p || typeof p.getPlayerState !== 'function') {
+        teardown(true);
+        return fail(
+          'youtube-player-missing-before-record',
+          'no player',
+          'YouTube player disappeared before recording started. Try Capture again.',
+        );
+      }
+      if (ytState() !== YT_PLAYING) {
+        safeYtVoid(() => p.playVideo?.());
+        const okBy = performance.now() + 12_000;
+        while (performance.now() < okBy) {
+          checkCancel();
+          if (ytState() === YT_PLAYING) break;
+          await sleep(50);
+        }
+        if (ytState() !== YT_PLAYING) {
+          teardown(true);
+          return fail(
+            'youtube-not-playing-before-record',
+            `state=${ytState()}`,
+            'The video was not playing when recording started. Press play on the video and try Capture again.',
+          );
+        }
+      }
     }
-    onCountdown?.(null);
-    captureLog('countdown-done');
+
+    if (trackEnded) {
+      teardown(true);
+      return fail(
+        'track ended before recorder start',
+        'track.readyState=ended',
+        'The shared tab stopped sending video. Try Capture again.',
+      );
+    }
 
     const vt = stream.getVideoTracks()[0];
     let basisCss: { w: number; h: number } | null = null;
@@ -427,7 +747,8 @@ export async function runEmbedTabCaptureFlow(args: {
       }
     }
 
-    onStepStatus?.('Starting recording…');
+    checkCancel();
+    onStepStatus?.('Preparing recording…');
 
     try {
       recorder = new TabCaptureRecorder();
@@ -435,9 +756,8 @@ export async function runEmbedTabCaptureFlow(args: {
         recorder.prepare(streamToRecord);
         captureLog('mediaRecorder-prepared');
       } catch (prepErr) {
-        cropDispose?.();
-        cropDispose = null;
-        stopAllTracks(stream);
+        recorder = null;
+        teardown(true);
         const { friendly } = handleCaptureError(prepErr, 'MediaRecorder.prepare');
         return fail('MediaRecorder.prepare', prepErr, friendly);
       }
@@ -446,25 +766,50 @@ export async function runEmbedTabCaptureFlow(args: {
         try {
           recorder.startCapture();
           captureLog('mediaRecorder-started');
+          try { onRecordingStarted?.(); } catch { /* noop */ }
+          onStepStatus?.('Recording — do not switch tabs');
         } catch (startErr) {
           console.error('[CoachLab capture] first recorder.startCapture() failed:', startErr);
+          // Tear down the first recorder before swapping in a new one to avoid
+          // leaving two MediaRecorder instances attached to the same stream.
+          try {
+            await recorder.stop();
+          } catch {
+            /* noop */
+          }
+          recorder = null;
           await sleep(300);
+          checkCancel();
           recorder = new TabCaptureRecorder();
           recorder.prepare(streamToRecord);
           recorder.startCapture();
           captureLog('mediaRecorder-started-retry');
+          try { onRecordingStarted?.(); } catch { /* noop */ }
+          onStepStatus?.('Recording — do not switch tabs');
         }
       } catch (startOuter) {
-        cropDispose?.();
-        cropDispose = null;
-        stopAllTracks(stream);
+        if (recorder) {
+          try {
+            await recorder.stop();
+          } catch {
+            /* noop */
+          }
+        }
+        recorder = null;
+        teardown(true);
         const { friendly } = handleCaptureError(startOuter, 'MediaRecorder.startCapture');
         return fail('MediaRecorder.startCapture', startOuter, friendly);
       }
     } catch (recErr) {
-      cropDispose?.();
-      cropDispose = null;
-      stopAllTracks(stream);
+      if (recorder) {
+        try {
+          await recorder.stop();
+        } catch {
+          /* noop */
+        }
+      }
+      recorder = null;
+      teardown(true);
       const { friendly } = handleCaptureError(recErr, 'MediaRecorder');
       return fail('MediaRecorder', recErr, friendly);
     }
@@ -472,46 +817,62 @@ export async function runEmbedTabCaptureFlow(args: {
     onProgress?.(0.04);
     captureLog('recording-loop-begin');
 
-    const ytEnded = () => effectiveYt()?.getPlayerState?.() === 0;
+    const ytEnded = () => ytState() === YT_ENDED;
+
+    /**
+     * Wait for the display-capture track to end (user stops sharing, or stream dies).
+     * The handler is registered through the cleaner so it can't leak.
+     */
+    const trackEndedPromise = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        if (track.readyState === 'ended') {
+          resolve();
+          return;
+        }
+        const onEnd = () => resolve();
+        track.addEventListener('ended', onEnd, { once: true });
+        cleaner.addListener(track, 'ended', onEnd);
+      });
 
     const ytRec = effectiveYt();
-    if (isYoutube && ytRec && typeof ytRec.seekTo === 'function') {
+    if (isYoutube && ytRec && safeYtCall<boolean>(() => typeof ytRec.seekTo === 'function', false)) {
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
         const startSec = opts.startSec;
         const endSec = opts.endSec;
-        ytRec.seekTo(startSec, true);
-        ytRec.playVideo?.();
+        safeYtVoid(() => ytRec.seekTo(startSec, true));
+        safeYtVoid(() => ytRec.playVideo?.());
         const span = Math.max(0.001, endSec - startSec);
         const timeoutMs = (span + 30) * 1000;
         const progIv = window.setInterval(() => {
-          const y = effectiveYt();
-          const t = Number(y?.getCurrentTime?.() ?? 0);
-          onProgress?.(Math.min(1, Math.max(0, (t - startSec) / span)));
+          onProgress?.(Math.min(1, Math.max(0, (ytTime() - startSec) / span)));
         }, 80);
+        cleaner.addInterval(progIv);
         await waitUntilOk(
-          () =>
-            ytEnded() || Number(effectiveYt()?.getCurrentTime?.() ?? 0) >= endSec - 0.5,
+          () => ytEnded() || trackEnded || ytTime() >= endSec - 0.5,
           80,
           timeoutMs,
+          getCancelled,
+          cleaner,
         );
         window.clearInterval(progIv);
-        effectiveYt()?.pauseVideo?.();
+        safeYtVoid(() => effectiveYt()?.pauseVideo?.());
         onProgress?.(1);
       } else {
-        ytRec.seekTo(0, true);
-        ytRec.playVideo?.();
-        const dur = Number(ytRec.getDuration?.() ?? 0);
+        safeYtVoid(() => ytRec.seekTo(0, true));
+        safeYtVoid(() => ytRec.playVideo?.());
+        const dur = ytDuration();
         if (dur > 0) {
           const timeoutMs = (dur + 30) * 1000;
           const iv = window.setInterval(() => {
-            const y = effectiveYt();
-            const t = Number(y?.getCurrentTime?.() ?? 0);
-            onProgress?.(Math.min(1, t / dur));
+            onProgress?.(Math.min(1, ytTime() / dur));
           }, 250);
+          cleaner.addInterval(iv);
           await waitUntilOk(
-            () => ytEnded() || Number(effectiveYt()?.getCurrentTime?.() ?? 0) >= dur - 0.5,
+            () => ytEnded() || trackEnded || ytTime() >= dur - 0.5,
             200,
             timeoutMs,
+            getCancelled,
+            cleaner,
           );
           window.clearInterval(iv);
           onProgress?.(1);
@@ -521,16 +882,15 @@ export async function runEmbedTabCaptureFlow(args: {
             pulse = Math.min(0.94, pulse + 0.012);
             onProgress?.(pulse);
           }, 320);
+          cleaner.addInterval(pulseIv);
           await Promise.race([
-            new Promise<void>((resolve) => {
-              track.addEventListener('ended', () => resolve(), { once: true });
-            }),
-            waitUntilOk(() => ytEnded(), 500, 600_000),
+            trackEndedPromise(),
+            waitUntilOk(() => ytEnded() || trackEnded, 500, 600_000, getCancelled, cleaner),
           ]);
           window.clearInterval(pulseIv);
           onProgress?.(1);
         }
-        effectiveYt()?.pauseVideo?.();
+        safeYtVoid(() => effectiveYt()?.pauseVideo?.());
       }
     } else if (isYoutube && !effectiveYt()) {
       if (opts.mode === 'section' && opts.startSec != null && opts.endSec != null) {
@@ -540,7 +900,8 @@ export async function runEmbedTabCaptureFlow(args: {
         const iv = window.setInterval(() => {
           onProgress?.(Math.min(1, (performance.now() - t0) / ms));
         }, 120);
-        await sleep(ms);
+        cleaner.addInterval(iv);
+        await cancellableSleep(ms, getCancelled);
         window.clearInterval(iv);
         onProgress?.(1);
       } else {
@@ -551,7 +912,8 @@ export async function runEmbedTabCaptureFlow(args: {
           const iv = window.setInterval(() => {
             onProgress?.(Math.min(1, (performance.now() - t0) / durMs));
           }, 200);
-          await sleep(durMs);
+          cleaner.addInterval(iv);
+          await cancellableSleep(durMs, getCancelled);
           window.clearInterval(iv);
           onProgress?.(1);
         } else {
@@ -560,9 +922,8 @@ export async function runEmbedTabCaptureFlow(args: {
             pulse = Math.min(0.92, pulse + 0.015);
             onProgress?.(pulse);
           }, 400);
-          await new Promise<void>((resolve) => {
-            track.addEventListener('ended', () => resolve(), { once: true });
-          });
+          cleaner.addInterval(pulseIv);
+          await trackEndedPromise();
           window.clearInterval(pulseIv);
           onProgress?.(1);
         }
@@ -574,7 +935,8 @@ export async function runEmbedTabCaptureFlow(args: {
         const iv = window.setInterval(() => {
           onProgress?.(Math.min(1, (performance.now() - t0) / ms));
         }, 120);
-        await sleep(ms);
+        cleaner.addInterval(iv);
+        await cancellableSleep(ms, getCancelled);
         window.clearInterval(iv);
         onProgress?.(1);
       } else {
@@ -585,7 +947,8 @@ export async function runEmbedTabCaptureFlow(args: {
           const iv = window.setInterval(() => {
             onProgress?.(Math.min(1, (performance.now() - t0) / durMs));
           }, 100);
-          await sleep(durMs);
+          cleaner.addInterval(iv);
+          await cancellableSleep(durMs, getCancelled);
           window.clearInterval(iv);
           onProgress?.(1);
         } else {
@@ -594,24 +957,22 @@ export async function runEmbedTabCaptureFlow(args: {
             pulse = Math.min(0.92, pulse + 0.013);
             onProgress?.(pulse);
           }, 280);
-          await new Promise<void>((resolve) => {
-            track.addEventListener('ended', () => resolve(), { once: true });
-          });
+          cleaner.addInterval(pulseIv);
+          await trackEndedPromise();
           window.clearInterval(pulseIv);
           onProgress?.(1);
         }
       }
     }
 
-    onStepStatus?.('Processing recording…');
+    onStepStatus?.('Processing your video…');
     captureLog('recorder-stop-begin');
     let blob: Blob;
     try {
       blob = await recorder.stop();
     } catch (stopErr) {
-      cropDispose?.();
-      cropDispose = null;
-      stopAllTracks(stream);
+      recorder = null;
+      teardown(true);
       return fail(
         'recorder.stop',
         stopErr,
@@ -619,9 +980,7 @@ export async function runEmbedTabCaptureFlow(args: {
       );
     }
     recorder = null;
-    cropDispose?.();
-    cropDispose = null;
-    stopAllTracks(stream);
+    teardown(true);
     stream = null;
 
     try {
@@ -648,16 +1007,19 @@ export async function runEmbedTabCaptureFlow(args: {
       } catch {
         /* noop */
       }
+      recorder = null;
     }
-    cropDispose?.();
-    cropDispose = null;
-    stopAllTracks(stream);
+    teardown(true);
     try {
       await document.exitFullscreen?.();
     } catch {
       /* noop */
     }
 
+    if (e instanceof CaptureCancelled) {
+      captureLog('flow-cancelled');
+      return { ok: false, cancelled: true, message: 'Capture cancelled.' };
+    }
     return fail(
       'unexpected top-level',
       e,
