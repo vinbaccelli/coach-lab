@@ -1323,6 +1323,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const precisionSyntheticDispatchRef = useRef<
       ((type: 'pointerdown' | 'pointerup', logicalPt: Pt) => void) | null
     >(null);
+    /** Second-finger / two-touch precision tap — ripple + same pointer path as desktop. */
+    const precisionInjectClickRef = useRef<(() => void) | null>(null);
+    const onPointerDownRef = useRef<(e: React.PointerEvent<HTMLCanvasElement>) => void>(() => {});
+    const onPointerUpRef = useRef<(e: React.PointerEvent<HTMLCanvasElement>) => void>(() => {});
 
     // Dragging circle
     const dragCircleIdxRef = useRef<number>(-1);
@@ -1634,37 +1638,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         ) {
           e.preventDefault();
           if (e.touches.length === 2) {
-            // Two-finger tap → inject click at first-touch + 120 px upward offset.
-            const t0touch = e.touches[0];
-            const canvasEl = canvasRef.current;
-            if (!canvasEl || !t0touch) return;
-            const rect = canvasEl.getBoundingClientRect();
-            const W = canvasEl.width;
-            const H = canvasEl.height;
-            const sx = (t0touch.clientX - rect.left) * (W / rect.width);
-            const sy = (t0touch.clientY - PRECISION_CURSOR_OFFSET_Y - rect.top) * (H / rect.height);
-            const ch: Pt = {
-              x: (sx - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
-              y: (sy - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
-            };
-            precisionRippleRef.current = { x: ch.x, y: ch.y, t0: performance.now() };
-            const toolEarly = activeToolRef.current;
-            const useToggle =
-              toolEarly === 'pen' ||
-              toolEarly === 'erase' ||
-              toolEarly === 'line' ||
-              toolEarly === 'arrow' ||
-              toolEarly === 'arrowAngle' ||
-              toolEarly === 'circle' ||
-              toolEarly === 'bodyCircle' ||
-              toolEarly === 'rect' ||
-              toolEarly === 'triangle';
-            const dragging = isDraggingRef.current && activeStrokeRef.current !== null;
-            const dispatch = precisionSyntheticDispatchRef.current;
-            if (dispatch) {
-              if (useToggle && dragging) dispatch('pointerup', ch);
-              else dispatch('pointerdown', ch);
-            }
+            // Safari often suppresses the second finger's pointerdown after preventDefault —
+            // inject at the crosshair via the same handler chain as desktop.
+            precisionInjectClickRef.current?.();
           }
           return;
         }
@@ -3091,31 +3067,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       t === 'rect' ||
       t === 'triangle';
 
-    const dispatchPrecisionSynthetic = (type: 'pointerdown' | 'pointerup', logicalPt: Pt) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const { clientX, clientY } = logicalPtToClient(logicalPt);
-      try {
-        canvas.dispatchEvent(
-          new PointerEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            clientX,
-            clientY,
-            pointerId: PRECISION_SYNTHETIC_POINTER_ID,
-            pointerType: 'mouse',
-            isPrimary: true,
-            button: 0,
-            buttons: type === 'pointerup' ? 0 : 1,
-            pressure: 0.5,
-          }),
-        );
-      } catch {
-        /* noop */
-      }
-    };
-    precisionSyntheticDispatchRef.current = dispatchPrecisionSynthetic;
-
     // ── Finish swing path ──────────────────────────────────────────────────
 
     const finishSwingPath = useCallback(() => {
@@ -3347,22 +3298,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           return;
         }
         if (e.pointerId !== anchor) {
-          const ch =
-            precisionCrosshairDisplayRef.current ??
-            precisionCrosshairTargetRef.current;
-          if (!ch) {
-            e.preventDefault();
-            return;
-          }
-          precisionRippleRef.current = { x: ch.x, y: ch.y, t0: performance.now() };
-          const useToggle = precisionToolUsesToggleDownUp(toolEarly);
-          const dragging = isDraggingRef.current && activeStrokeRef.current !== null;
-          if (useToggle && dragging) {
-            dispatchPrecisionSynthetic('pointerup', ch);
-          } else {
-            dispatchPrecisionSynthetic('pointerdown', ch);
-          }
           e.preventDefault();
+          precisionInjectClickRef.current?.();
           return;
         }
       }
@@ -4070,7 +4007,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           isDraggingRef.current &&
           activeStrokeRef.current !== null
         ) {
-          dispatchPrecisionSynthetic('pointerup', ch);
+          precisionSyntheticDispatchRef.current?.('pointerup', ch);
         }
         precisionAnchorPointerIdRef.current = null;
         precisionFadeStartRef.current = performance.now();
@@ -4165,6 +4102,45 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       strokesRef.current = [...strokesRef.current, active];
       pushHistory();
     }, [pushHistory]);
+
+    onPointerDownRef.current = onPointerDown;
+    onPointerUpRef.current = onPointerUp;
+
+    const firePrecisionPointer = (type: 'pointerdown' | 'pointerup', logicalPt: Pt) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const { clientX, clientY } = logicalPtToClient(logicalPt);
+      const ev = {
+        clientX,
+        clientY,
+        pointerId: PRECISION_SYNTHETIC_POINTER_ID,
+        pointerType: 'mouse',
+        button: 0,
+        buttons: type === 'pointerup' ? 0 : 1,
+        pressure: 0.5,
+        preventDefault: () => {},
+        stopPropagation: () => {},
+        target: canvas,
+        currentTarget: canvas,
+      } as unknown as React.PointerEvent<HTMLCanvasElement>;
+      if (type === 'pointerdown') onPointerDownRef.current(ev);
+      else onPointerUpRef.current(ev);
+    };
+
+    precisionSyntheticDispatchRef.current = firePrecisionPointer;
+
+    precisionInjectClickRef.current = () => {
+      const ch =
+        precisionCrosshairDisplayRef.current ?? precisionCrosshairTargetRef.current;
+      if (!ch) return;
+      precisionRippleRef.current = { x: ch.x, y: ch.y, t0: performance.now() };
+      renderDirtyRef.current = true;
+      const tool = activeToolRef.current;
+      const useToggle = precisionToolUsesToggleDownUp(tool);
+      const dragging = isDraggingRef.current && activeStrokeRef.current !== null;
+      if (useToggle && dragging) firePrecisionPointer('pointerup', ch);
+      else firePrecisionPointer('pointerdown', ch);
+    };
 
     // Commit text editing changes
     const commitTextEdit = useCallback(() => {

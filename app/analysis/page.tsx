@@ -10,7 +10,8 @@ import React, {
 } from 'react';
 import { flushSync } from 'react-dom';
 import dynamic from 'next/dynamic';
-import { Camera, MoreHorizontal, Upload, Menu } from 'lucide-react';
+import { Camera, Menu, Settings, Upload } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
@@ -139,15 +140,9 @@ export default function Home() {
    * `getTabCaptureStream()` calls, only one of which we can clean up.
    */
   const embedShareInFlightRef = useRef(false);
-  /**
-   * When the RecordingHub "Alternative — Screen Record" section loads a URL,
-   * this ref stores the pending capture request. The watcher useEffect calls
-   * prepareEmbedCapturePhase once the embed reports ready (~3 s after mount).
-   */
-  const hubCapturePendingRef = useRef<{
-    target: 'A' | 'B';
-    opts: { mode: 'full'; startSec: null; endSec: null };
-  } | null>(null);
+  /** Fallback embed-ready timer (ms) when onReady / iframe onLoad does not fire. */
+  const EMBED_READY_FALLBACK_MS = 1200;
+  const HUB_EMBED_READY_MS = 100;
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeTool, setActiveTool]       = useState<ToolType>('pen');
@@ -167,6 +162,10 @@ export default function Home() {
   const [layoutMode, setLayoutMode]       = useState<'youtube' | 'reels'>('youtube');
   const [webcamActive, setWebcamActive]   = useState(false);
   const [micActive, setMicActive]         = useState(false);
+  const [micMuted, setMicMuted]           = useState(false);
+  const screenRecordBlobRef               = useRef<{ blob: Blob; ext: string } | null>(null);
+  const [screenRecordDownloadPending, setScreenRecordDownloadPending] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [isRecording, setIsRecording]     = useState(false);
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBOffset, setVideoBOffset]   = useState(0);
@@ -232,7 +231,7 @@ export default function Home() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (!cancelled) setEmbedReadyA(true);
-    }, 3000);
+    }, EMBED_READY_FALLBACK_MS);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [youtubeVideoIdA, genericEmbedSrcA, videoSrc]);
 
@@ -245,7 +244,7 @@ export default function Home() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (!cancelled) setEmbedReadyB(true);
-    }, 3000);
+    }, EMBED_READY_FALLBACK_MS);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [youtubeVideoIdB, genericEmbedSrcB, videoSrcB]);
 
@@ -682,7 +681,6 @@ export default function Home() {
     setShowCaptureSaveToast(false);
     setCapturePostPhase('hidden');
     // Hub screen-record flow reset
-    hubCapturePendingRef.current = null;
     setHubCaptureLoading(false);
     setHubCaptureTarget(null);
     sessionCaptureBlobRef.current = null;
@@ -819,27 +817,26 @@ export default function Home() {
   // ── Hub "Alternative — Screen Record" flow ────────────────────────────────
 
   /**
-   * Load a URL into the target slot as an embed and arm the watcher effect so
-   * prepareEmbedCapturePhase fires automatically once the embed is ready.
-   * This must NOT be called from a user-gesture-sensitive context; the actual
-   * getDisplayMedia call happens later via shareEmbedDisplayMediaFromUserGesture.
+   * Load a URL into the target slot as an embed (Recording Hub alt flow).
+   * Shows loading feedback immediately; coach picks record options on the video panel.
    */
   const handleHubCaptureLoad = useCallback((url: string, target: 'A' | 'B') => {
     const raw = normalizeWebUrlInput(url);
     if (!raw) return;
 
-    // Reset all capture flags so a previous failed/cancelled attempt never
-    // poisons the new one.
     embedCaptureCancelRef.current = false;
     embedShareInFlightRef.current = false;
     embedCaptureShareBundleRef.current = null;
+    setEmbedCaptureAwaitingShare(null);
 
-    setHubCaptureLoading(true);
-    setHubCaptureTarget(target);
-    setCaptureError(null);
+    flushSync(() => {
+      setHubCaptureLoading(true);
+      setHubCaptureTarget(target);
+      setCaptureError(null);
+    });
 
-    // Clear existing video source for the target slot.
     if (target === 'A') {
+      setEmbedReadyA(false);
       revokeBlobUrl(lastBlobUrlARef.current);
       lastBlobUrlARef.current = null;
       setVideoSrc(null);
@@ -847,6 +844,7 @@ export default function Home() {
       setYoutubeVideoIdA(null);
       if (videoRef.current) cleanupVideoEl(videoRef.current);
     } else {
+      setEmbedReadyB(false);
       revokeBlobUrl(lastBlobUrlBRef.current);
       lastBlobUrlBRef.current = null;
       setVideoSrcB(null);
@@ -856,28 +854,27 @@ export default function Home() {
       setVideoBLoaded(false);
     }
 
-    // Determine embed type and set source — the existing useEffect hooks will
-    // start the 3-second readiness timer automatically.
     const resolved = resolveEmbedTarget(raw);
     if (resolved?.kind === 'youtube') {
-      if (target === 'A') setYoutubeVideoIdA(resolved.videoId);
-      else setYoutubeVideoIdB(resolved.videoId);
+      if (target === 'A') {
+        setYtPlayerRemountNonceA((n) => n + 1);
+        setYoutubeVideoIdA(resolved.videoId);
+      } else {
+        setYtPlayerRemountNonceB((n) => n + 1);
+        setYoutubeVideoIdB(resolved.videoId);
+      }
     } else if (resolved?.kind === 'iframe') {
       if (target === 'A') setGenericEmbedSrcA(resolved.src);
       else setGenericEmbedSrcB(resolved.src);
+    } else if (target === 'A') {
+      setGenericEmbedSrcA(raw);
     } else {
-      // Unrecognised URL — try as a raw iframe fallback.
-      if (target === 'A') setGenericEmbedSrcA(raw);
-      else setGenericEmbedSrcB(raw);
+      setGenericEmbedSrcB(raw);
     }
-
-    // Arm the watcher effect defined near the top of the component.
-    hubCapturePendingRef.current = { target, opts: { mode: 'full', startSec: null, endSec: null } };
   }, [cleanupVideoEl, revokeBlobUrl]);
 
   /** Cancel a hub-initiated capture before or during the share step. */
   const handleHubCaptureCancel = useCallback(() => {
-    hubCapturePendingRef.current = null;
     setHubCaptureLoading(false);
     setHubCaptureTarget(null);
     embedCaptureCancelRef.current = true;
@@ -1063,11 +1060,25 @@ export default function Home() {
   }, [videoBLoaded, videoBOffset, videoBDuration, playBothEnabled, youtubeVideoIdA, genericEmbedSrcA]);
 
   // ── Webcam ────────────────────────────────────────────────────────────────
+  const setAudioMuted = useCallback((muted: boolean) => {
+    setMicMuted(muted);
+    micStreamRef.current?.getAudioTracks().forEach((t) => {
+      t.enabled = !muted;
+    });
+    webcamStreamRef.current?.getAudioTracks().forEach((t) => {
+      t.enabled = !muted;
+    });
+  }, []);
+
   const stopWebcam = useCallback(() => {
     webcamStreamRef.current?.getTracks().forEach((t) => t.stop());
     webcamStreamRef.current = null;
     if (webcamVideoRef.current) webcamVideoRef.current.srcObject = null;
     setWebcamActive(false);
+    if (!micStreamRef.current) {
+      setMicActive(false);
+      setMicMuted(false);
+    }
   }, []);
 
   const startWebcam = useCallback(async () => {
@@ -1079,6 +1090,11 @@ export default function Home() {
         await webcamVideoRef.current.play().catch(() => {});
       }
       setWebcamActive(true);
+      setMicActive(true);
+      setMicMuted(false);
+      stream.getAudioTracks().forEach((t) => {
+        t.enabled = true;
+      });
     } catch (err) {
       console.error('[page] Webcam access denied:', err);
       alert('Could not access webcam. Please check browser permissions.');
@@ -1095,6 +1111,7 @@ export default function Home() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream;
       setMicActive(true);
+      setMicMuted(false);
     } catch (err) {
       console.error('[page] Mic access denied:', err);
       alert('Could not access microphone. Please check browser permissions.');
@@ -1104,19 +1121,84 @@ export default function Home() {
   const stopMic = useCallback(() => {
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current = null;
-    setMicActive(false);
-  }, []);
+    if (!webcamActive) {
+      setMicActive(false);
+      setMicMuted(false);
+    }
+  }, [webcamActive]);
 
   const toggleMic = useCallback(() => {
-    if (micActive) stopMic();
-    else void startMic();
-  }, [micActive, startMic, stopMic]);
+    if (!micActive && !webcamActive) {
+      void startMic();
+      return;
+    }
+    setAudioMuted(!micMuted);
+  }, [micActive, micMuted, webcamActive, startMic, setAudioMuted]);
 
   // ── Screenshot ────────────────────────────────────────────────────────────
-  const handleScreenshot = useCallback(() => {
+  const handleScreenshotVideoOnly = useCallback(() => {
     const canvas = canvasRef.current?.getCanvas();
     if (!canvas) return;
-    downloadDataURL(canvas.toDataURL('image/png'), `coach-lab-${Date.now()}.png`);
+    downloadDataURL(canvas.toDataURL('image/png'), `coach-lab-video-${Date.now()}.png`);
+  }, []);
+
+  const handleScreenshotEntireScreen = useCallback(async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
+      alert('Screen capture is not supported in this browser.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+      });
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      await video.play();
+      await new Promise<void>((r) => window.setTimeout(r, 250));
+      const w = video.videoWidth || 1280;
+      const h = video.videoHeight || 720;
+      const snap = document.createElement('canvas');
+      snap.width = w;
+      snap.height = h;
+      snap.getContext('2d')?.drawImage(video, 0, 0, w, h);
+      stopAllTracks(stream);
+      downloadDataURL(snap.toDataURL('image/png'), `coach-lab-screen-${Date.now()}.png`);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'NotAllowedError') return;
+      alert('Could not capture screenshot.');
+    }
+  }, []);
+
+  const handleScreenRecordComplete = useCallback((blob: Blob, ext: string) => {
+    screenRecordBlobRef.current = { blob, ext };
+    setScreenRecordDownloadPending(true);
+  }, []);
+
+  const handleScreenRecordDownloadYes = useCallback(() => {
+    const pack = screenRecordBlobRef.current;
+    if (!pack) return;
+    const url = URL.createObjectURL(pack.blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `coach-lab-recording-${Date.now()}.${pack.ext}`;
+    a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    screenRecordBlobRef.current = null;
+    setScreenRecordDownloadPending(false);
+  }, []);
+
+  const handleScreenRecordDownloadNo = useCallback(() => {
+    screenRecordBlobRef.current = null;
+    setScreenRecordDownloadPending(false);
+  }, []);
+
+  const handleDismissCaptureDownload = useCallback(() => {
+    setCaptureDownloadStatus('idle');
+    sessionCaptureBlobRef.current = null;
+    sessionMp4BlobRef.current = null;
   }, []);
 
   // ── getCanvas / getWebcamStream for ScreenRecorder ────────────────────────
@@ -1159,21 +1241,39 @@ export default function Home() {
     setCaptureError(null);
   }, [cleanupVideoEl, revokeBlobUrl]);
 
+  const markEmbedReadyA = useCallback(() => {
+    if (iframeLoadTimerARef.current) {
+      clearTimeout(iframeLoadTimerARef.current);
+      iframeLoadTimerARef.current = null;
+    }
+    setEmbedReadyA(true);
+  }, []);
+
+  const markEmbedReadyB = useCallback(() => {
+    if (iframeLoadTimerBRef.current) {
+      clearTimeout(iframeLoadTimerBRef.current);
+      iframeLoadTimerBRef.current = null;
+    }
+    setEmbedReadyB(true);
+  }, []);
+
   const iframeLoadTimerARef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onGenericEmbedIframeLoadA = useCallback(() => {
     if (!youtubeVideoIdA && genericEmbedSrcA) {
       if (iframeLoadTimerARef.current) clearTimeout(iframeLoadTimerARef.current);
-      iframeLoadTimerARef.current = setTimeout(() => setEmbedReadyA(true), 3000);
+      const delay = hubCaptureTarget === 'A' ? HUB_EMBED_READY_MS : 200;
+      iframeLoadTimerARef.current = setTimeout(() => markEmbedReadyA(), delay);
     }
-  }, [youtubeVideoIdA, genericEmbedSrcA]);
+  }, [youtubeVideoIdA, genericEmbedSrcA, hubCaptureTarget, markEmbedReadyA]);
 
   const iframeLoadTimerBRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onGenericEmbedIframeLoadB = useCallback(() => {
     if (!youtubeVideoIdB && genericEmbedSrcB) {
       if (iframeLoadTimerBRef.current) clearTimeout(iframeLoadTimerBRef.current);
-      iframeLoadTimerBRef.current = setTimeout(() => setEmbedReadyB(true), 3000);
+      const delay = hubCaptureTarget === 'B' ? HUB_EMBED_READY_MS : 200;
+      iframeLoadTimerBRef.current = setTimeout(() => markEmbedReadyB(), delay);
     }
-  }, [youtubeVideoIdB, genericEmbedSrcB]);
+  }, [youtubeVideoIdB, genericEmbedSrcB, hubCaptureTarget, markEmbedReadyB]);
 
   const handleOptionsChange = useCallback((opts: Partial<DrawingOptions>) => {
     setDrawingOptions(prev => ({ ...prev, ...opts }));
@@ -1344,7 +1444,7 @@ export default function Home() {
     setCaptureBusy(false);
     disposeFfmpegWasm();
     setUrlLoadError(null);
-    setUrlLoadPhase('We are loading your video \u2014 this may take a moment\u2026');
+    setUrlLoadPhase('Loading video\u2026');
     setProcessingStatus(null);
     setStroMotionEnabled(false);
     setStroMotionRegion(undefined);
@@ -1461,19 +1561,24 @@ export default function Home() {
     );
   }, [applyVideoStream, cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, urlTarget, videoBDuration]);
 
-  const prepareEmbedCapturePhase = useCallback(
+  const buildEmbedCaptureBundle = useCallback(
     async (
       panel: 'A' | 'B',
       opts: { mode: 'full' | 'section'; startSec: number | null; endSec: number | null },
-    ) => {
-      embedCaptureRetryPayloadRef.current = { panel, opts };
-      captureLog('flow-handler-start', panel);
-      // Fresh attempt — clear the cancel flag and the share-in-flight guard so
-      // a previous cancelled run doesn't poison this one.
-      embedCaptureCancelRef.current = false;
-      embedShareInFlightRef.current = false;
-      embedCaptureShareBundleRef.current = null;
-      setEmbedCaptureAwaitingShare(null);
+    ): Promise<EmbedCaptureShareBundle | null> => {
+      const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
+      if (!videoEl) {
+        throw new Error('video element missing');
+      }
+
+      const ready = panel === 'A' ? embedReadyA : embedReadyB;
+      const hasEmbedOnly =
+        panel === 'A'
+          ? !!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc
+          : !!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB;
+      if (hasEmbedOnly && !ready) {
+        throw new Error('embed not ready');
+      }
 
       let isoRestore: (() => void) | null = null;
       let ytSnap: any = null;
@@ -1481,223 +1586,51 @@ export default function Home() {
       let youtubeDurationHintSec: number | null = null;
       let ytHardDestroyed = false;
 
-      const restoreYouTubeIsolation = () => {
-        try {
-          isoRestore?.();
-        } catch (e) {
-          console.warn('[Capture] restore pointer-events:', e);
-        }
-        isoRestore = null;
-        if (ytHardDestroyed) {
-          ytHardDestroyed = false;
-          if (panel === 'A') {
-            setEmbedYtKilledA(false);
-            setYtPlayerRemountNonceA((n) => n + 1);
-          } else {
-            setEmbedYtKilledB(false);
-            setYtPlayerRemountNonceB((n) => n + 1);
-          }
-        } else if (nulledYtRef && ytSnap) {
-          if (panel === 'A') ytPlayerARef.current = ytSnap;
-          else ytPlayerBRef.current = ytSnap;
-        }
-        nulledYtRef = false;
-        ytSnap = null;
-        setCaptureCoachBanner(false);
-      };
+      const ytRef = panel === 'A' ? ytPlayerARef.current : ytPlayerBRef.current;
+      const isYt = panel === 'A' ? !!youtubeVideoIdA : !!youtubeVideoIdB;
 
-      const clearCaptureUi = (resetPostPhase = false) => {
-        setCaptureBusy(false);
-        setEmbedCaptureRecording(false);
-        setEmbedCapturePanelId(null);
-        setCapturePrepPanel(null);
-        setEmbedCaptureAwaitingShare(null);
-        setEmbedYtKilledA(false);
-        setEmbedYtKilledB(false);
-        embedCaptureShareBundleRef.current = null;
-        setCaptureProgress01(0);
-        setCaptureCountdown(null);
-        setCaptureStepStatus(null);
-        setCaptureCoachBanner(false);
-        setCaptureActuallyRecording(false);
-        if (resetPostPhase) setCapturePostPhase('hidden');
-      };
+      captureLog('isolate-begin', panel);
 
-      const bumpFailuresIfNeeded = () => {
-        const yidAtFail = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
-        setEmbedCaptureConsecutiveFailures((n) => {
-          const next = n + 1;
-          if (next >= 3 && yidAtFail) {
-            void (async () => {
-              try {
-                const r = await resolveYoutubeForAnalysis(
-                  `https://www.youtube.com/watch?v=${encodeURIComponent(yidAtFail)}`,
-                );
-                if (r.ok && r.directUrl) {
-                  setCaptureFallbackStreamUrl(
-                    `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`,
-                  );
-                }
-              } catch {
-                /* noop */
-              }
-            })();
-          }
-          return next;
-        });
-      };
-
-      const onFailure = (error: unknown, step: string) => {
-        const { friendly } = handleCaptureError(error, step);
-        stopAllTracks(null);
-        restoreYouTubeIsolation();
-        clearCaptureUi(true);
-        setCaptureError(friendly);
-        bumpFailuresIfNeeded();
-      };
-
-      try {
-        const videoEl = panel === 'A' ? videoRef.current : videoRefB.current;
-        const yid = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
-
-        if (yid && videoEl) {
-          try {
-            setProcessingStatus('Preparing a playable copy (no tab share)…');
-            captureLog('try-direct-resolve');
-            const r = await resolveYoutubeForAnalysis(
-              `https://www.youtube.com/watch?v=${encodeURIComponent(yid)}`,
-            );
-            if (r.ok && r.directUrl) {
-              setProcessingStatus(null);
-              const streamUrl = `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`;
-              const freshEl = panel === 'A' ? videoRef.current : videoRefB.current;
-              if (panel === 'A') {
-                setYoutubeVideoIdA(null);
-                setGenericEmbedSrcA(null);
-                setVideoSrc(streamUrl);
-                if (freshEl) {
-                  cleanupVideoEl(freshEl);
-                  freshEl.src = streamUrl;
-                  freshEl.load();
-                  await freshEl.play().catch(() => {});
-                }
-              } else {
-                setYoutubeVideoIdB(null);
-                setGenericEmbedSrcB(null);
-                setVideoSrcB(streamUrl);
-                if (freshEl) {
-                  cleanupVideoEl(freshEl);
-                  freshEl.src = streamUrl;
-                  freshEl.load();
-                  await freshEl.play().catch(() => {});
-                }
-                setVideoBLoaded(false);
-              }
-              setShowCaptureSaveToast(true);
-              setShowTapToPlay(false);
-              captureLog('direct-resolve-ok');
-              return;
-            }
-          } catch (e) {
-            if (typeof console !== 'undefined') {
-              console.warn('[analysis] YouTube import failed, continuing with tab capture', e);
-            }
-          }
-          setProcessingStatus(null);
-        }
-
-        if (!videoEl) {
-          onFailure(new Error('video element missing'), 'video-element');
-          return;
-        }
-
-        const ready = panel === 'A' ? embedReadyA : embedReadyB;
-        const hasEmbedOnly =
-          panel === 'A'
-            ? !!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc
-            : !!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB;
-        if (hasEmbedOnly && !ready) {
-          onFailure(new Error('embed not ready'), 'embed-ready');
-          return;
-        }
-
-        setCaptureError(null);
-        setCaptureCountdown(null);
-        setCaptureStepStatus('Preparing capture…');
-        setCapturePrepPanel(panel);
-        captureLog('isolate-begin');
-
-        const ytRef = panel === 'A' ? ytPlayerARef.current : ytPlayerBRef.current;
-        const isYt = panel === 'A' ? !!youtubeVideoIdA : !!youtubeVideoIdB;
-
-        if (isYt && ytRef) {
-          youtubeDurationHintSec = safeYoutubePlayerDuration(ytRef);
-          destroyYouTubeEmbedHard(ytRef);
-          ytHardDestroyed = true;
-          if (panel === 'A') {
-            ytPlayerARef.current = null;
-            setEmbedYtKilledA(true);
-          } else {
-            ytPlayerBRef.current = null;
-            setEmbedYtKilledB(true);
-          }
-          nulledYtRef = false;
-          ytSnap = null;
-          isoRestore = null;
+      if (isYt && ytRef) {
+        youtubeDurationHintSec = safeYoutubePlayerDuration(ytRef);
+        destroyYouTubeEmbedHard(ytRef);
+        ytHardDestroyed = true;
+        if (panel === 'A') {
+          ytPlayerARef.current = null;
+          setEmbedYtKilledA(true);
         } else {
-          const iso = isolateYouTubePlayerSync(null);
-          isoRestore = iso.restore;
-          ytSnap = ytRef;
-          if (isYt && ytRef) {
-            if (panel === 'A') ytPlayerARef.current = null;
-            else ytPlayerBRef.current = null;
-            nulledYtRef = true;
-          } else {
-            nulledYtRef = false;
-          }
+          ytPlayerBRef.current = null;
+          setEmbedYtKilledB(true);
         }
-        captureLog('isolate-sync-done');
-
-        await flushCaptureIsolationMs(500);
-        captureLog('isolate-flush-500ms');
-
-        // If the user pressed "New" (or otherwise cancelled) during the isolation
-        // window, do not advance to the "awaiting share" state. Restore and bail.
-        if (embedCaptureCancelRef.current) {
-          captureLog('prepare-cancelled-before-bundle');
-          restoreYouTubeIsolation();
-          clearCaptureUi(true);
-          return;
+      } else {
+        const iso = isolateYouTubePlayerSync(null);
+        isoRestore = iso.restore;
+        ytSnap = ytRef;
+        if (isYt && ytRef) {
+          if (panel === 'A') ytPlayerARef.current = null;
+          else ytPlayerBRef.current = null;
+          nulledYtRef = true;
         }
-
-        embedCaptureShareBundleRef.current = {
-          panel,
-          opts,
-          isoRestore,
-          ytSnap,
-          nulledYtRef,
-          isYt,
-          ytHardDestroyed,
-          youtubeDurationHintSec,
-        };
-        setCapturePrepPanel(null);
-        setEmbedCaptureAwaitingShare(panel);
-        setCaptureStepStatus(null);
-        captureLog('prepare-complete-await-share');
-      } catch (outerErr: unknown) {
-        const { friendly } = handleCaptureError(outerErr, 'capture-handler');
-        stopAllTracks(null);
-        restoreYouTubeIsolation();
-        clearCaptureUi(true);
-        setEmbedCaptureAwaitingShare(null);
-        embedCaptureShareBundleRef.current = null;
-        setCaptureError(friendly);
-        bumpFailuresIfNeeded();
       }
+
+      await flushCaptureIsolationMs(80);
+
+      if (embedCaptureCancelRef.current) {
+        return null;
+      }
+
+      return {
+        panel,
+        opts,
+        isoRestore,
+        ytSnap,
+        nulledYtRef,
+        isYt,
+        ytHardDestroyed,
+        youtubeDurationHintSec,
+      };
     },
     [
-      cleanupVideoEl,
-      revokeBlobUrl,
       youtubeVideoIdA,
       youtubeVideoIdB,
       genericEmbedSrcA,
@@ -1706,23 +1639,77 @@ export default function Home() {
       videoSrcB,
       embedReadyA,
       embedReadyB,
-      setProcessingStatus,
     ],
   );
 
-  // When the hub's "Alternative — Screen Record" section loads a URL, this
-  // effect fires once the embed becomes ready (~3 s after mount) and kicks off
-  // the capture-preparation phase. Placed here so prepareEmbedCapturePhase is
-  // already declared in the same temporal dead zone scope.
+  const restoreBundleYouTube = useCallback((bundle: EmbedCaptureShareBundle) => {
+    try {
+      bundle.isoRestore?.();
+    } catch (e) {
+      console.warn('[Capture] restore pointer-events:', e);
+    }
+    if (bundle.ytHardDestroyed) {
+      if (bundle.panel === 'A') {
+        setEmbedYtKilledA(false);
+        setYtPlayerRemountNonceA((n) => n + 1);
+      } else {
+        setEmbedYtKilledB(false);
+        setYtPlayerRemountNonceB((n) => n + 1);
+      }
+    } else if (bundle.nulledYtRef && bundle.ytSnap) {
+      if (bundle.panel === 'A') ytPlayerARef.current = bundle.ytSnap;
+      else ytPlayerBRef.current = bundle.ytSnap;
+    }
+  }, []);
+
+  const clearCapturePrepUi = useCallback((resetPostPhase = false) => {
+    setCaptureBusy(false);
+    setEmbedCaptureRecording(false);
+    setEmbedCapturePanelId(null);
+    setCapturePrepPanel(null);
+    setEmbedCaptureAwaitingShare(null);
+    setEmbedYtKilledA(false);
+    setEmbedYtKilledB(false);
+    embedCaptureShareBundleRef.current = null;
+    setCaptureProgress01(0);
+    setCaptureCountdown(null);
+    setCaptureStepStatus(null);
+    setCaptureCoachBanner(false);
+    setCaptureActuallyRecording(false);
+    if (resetPostPhase) setCapturePostPhase('hidden');
+  }, []);
+
+  const bumpCaptureFailures = useCallback((panel: 'A' | 'B') => {
+    const yidAtFail = panel === 'A' ? youtubeVideoIdA : youtubeVideoIdB;
+    setEmbedCaptureConsecutiveFailures((n) => {
+      const next = n + 1;
+      if (next >= 3 && yidAtFail) {
+        void (async () => {
+          try {
+            const r = await resolveYoutubeForAnalysis(
+              `https://www.youtube.com/watch?v=${encodeURIComponent(yidAtFail)}`,
+            );
+            if (r.ok && r.directUrl) {
+              setCaptureFallbackStreamUrl(
+                `/api/video/stream?url=${encodeURIComponent(r.directUrl)}`,
+              );
+            }
+          } catch {
+            /* noop */
+          }
+        })();
+      }
+      return next;
+    });
+  }, [youtubeVideoIdA, youtubeVideoIdB]);
+
+  // Hub alt URL load: clear hub spinner once the embed is ready (coach uses video panel).
   useEffect(() => {
-    const pending = hubCapturePendingRef.current;
-    if (!pending) return;
-    const ready = pending.target === 'A' ? embedReadyA : embedReadyB;
+    if (!hubCaptureTarget) return;
+    const ready = hubCaptureTarget === 'A' ? embedReadyA : embedReadyB;
     if (!ready) return;
-    hubCapturePendingRef.current = null;
     setHubCaptureLoading(false);
-    void prepareEmbedCapturePhase(pending.target, pending.opts);
-  }, [embedReadyA, embedReadyB, prepareEmbedCapturePhase]);
+  }, [embedReadyA, embedReadyB, hubCaptureTarget]);
 
   const completeEmbedCaptureAfterStream = useCallback(
     async (preAcquiredStream: MediaStream) => {
@@ -2007,6 +1994,75 @@ export default function Home() {
     [cleanupVideoEl, revokeBlobUrl, youtubeVideoIdA, youtubeVideoIdB, genericEmbedSrcA, genericEmbedSrcB, embedReadyA, embedReadyB],
   );
 
+  const startEmbedCaptureRecording = useCallback(
+    (panel: 'A' | 'B', opts: { mode: 'full' | 'section'; startSec: number | null; endSec: number | null }) => {
+      embedCaptureRetryPayloadRef.current = { panel, opts };
+      captureLog('start-recording-click', panel);
+
+      if (embedShareInFlightRef.current) return;
+      embedShareInFlightRef.current = true;
+      embedCaptureCancelRef.current = false;
+      embedCaptureShareBundleRef.current = null;
+      setEmbedCaptureAwaitingShare(null);
+      setCaptureError(null);
+
+      setCaptureStepStatus(
+        'Please wait — turn your volume up and remove your headphones if you want audio recorded in the final video.',
+      );
+      setCapturePrepPanel(panel);
+      setCaptureBusy(true);
+
+      getTabCaptureStream()
+        .then((stream) => {
+          embedShareInFlightRef.current = false;
+          if (embedCaptureCancelRef.current) {
+            stopAllTracks(stream);
+            clearCapturePrepUi(true);
+            return;
+          }
+
+          void (async () => {
+            try {
+              const bundle = await buildEmbedCaptureBundle(panel, opts);
+              if (embedCaptureCancelRef.current || !bundle) {
+                stopAllTracks(stream);
+                if (bundle) restoreBundleYouTube(bundle);
+                clearCapturePrepUi(true);
+                return;
+              }
+              embedCaptureShareBundleRef.current = bundle;
+              setCapturePrepPanel(null);
+              await completeEmbedCaptureAfterStream(stream);
+            } catch (err: unknown) {
+              stopAllTracks(stream);
+              const partial = embedCaptureShareBundleRef.current;
+              if (partial) restoreBundleYouTube(partial);
+              clearCapturePrepUi(true);
+              if (!embedCaptureCancelRef.current) {
+                setCaptureError(handleCaptureError(err, 'capture-prepare').friendly);
+                bumpCaptureFailures(panel);
+              }
+            }
+          })();
+        })
+        .catch((e: unknown) => {
+          embedShareInFlightRef.current = false;
+          clearCapturePrepUi(true);
+          if (!embedCaptureCancelRef.current) {
+            setCaptureError(handleCaptureError(e, 'getDisplayMedia').friendly);
+            bumpCaptureFailures(panel);
+          }
+        });
+    },
+    [
+      buildEmbedCaptureBundle,
+      bumpCaptureFailures,
+      clearCapturePrepUi,
+      completeEmbedCaptureAfterStream,
+      restoreBundleYouTube,
+    ],
+  );
+
   const shareEmbedDisplayMediaFromUserGesture = useCallback(() => {
     captureLog('share-screen-click');
     // Atomic guard: a double-tap on the share button must not spawn two
@@ -2097,8 +2153,8 @@ export default function Home() {
     setEmbedCaptureAwaitingShare(null);
     embedCaptureShareBundleRef.current = null;
     if (!p) return;
-    void prepareEmbedCapturePhase(p.panel, p.opts);
-  }, [prepareEmbedCapturePhase]);
+    startEmbedCaptureRecording(p.panel, p.opts);
+  }, [startEmbedCaptureRecording]);
 
   const handleDownloadCaptureBlob = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -2196,6 +2252,10 @@ export default function Home() {
     layoutMode === 'reels' && !isMobile ? REELS_DESKTOP_TB + 12 : leftToolbarWidthPx + 16;
 
   const reelsDesktop = !isMobile && layoutMode === 'reels';
+
+  const hubToolbarLeftInset = !isMobile
+    ? 12 + (layoutMode === 'reels' ? REELS_DESKTOP_TB : leftToolbarWidthPx) + 8
+    : 0;
 
   const renderTimelineDock = () => (
     <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -2343,11 +2403,14 @@ export default function Home() {
     objMultiplierActive:             objMultiplierHasRegion,
     objMultiplierProgress,
     iconOnlyLayout:                  toolbarIconOnlyLayout,
+    recordingHubOpen:                hubOpen,
+    onRecordingHubToggle:            () => setHubOpen((v) => !v),
   } satisfies React.ComponentProps<typeof ToolPalette>;
 
   // Mobile strip adds precision-draw controls on top of the base set.
   const toolPaletteMobileProps = {
     ...toolPaletteBaseProps,
+    mobileChrome: true,
     precisionDrawEnabled,
     onPrecisionDrawToggle:       handlePrecisionDrawToggle,
     onShowPrecisionInstructions: showPrecisionInstructionsAgain,
@@ -2357,10 +2420,9 @@ export default function Home() {
   // Single source of truth for all recording / media controls.
   const recordingHubProps = {
     isOpen:             hubOpen,
-    onToggle:           () => setHubOpen((v) => !v),
+    onClose:            () => setHubOpen(false),
     isMobile,
-    darkChrome:         layoutMode === 'reels',
-    compact:            layoutMode === 'reels',
+    toolbarLeftInset:   hubToolbarLeftInset,
     isRecording,
     onRecordingChange:  handleRecordingChange,
     getCanvas,
@@ -2368,40 +2430,32 @@ export default function Home() {
     getMicStream,
     getCropRegion,
     layoutMode:         layoutMode as 'youtube' | 'reels',
+    onScreenRecordComplete: handleScreenRecordComplete,
     webcamActive,
     onWebcamToggle:     () => void toggleWebcam(),
-    webcamCutout,
-    onWebcamCutoutChange:    setWebcamCutout,
-    webcamOpacity,
-    onWebcamOpacityChange:   setWebcamOpacity,
-    webcamPipMode,
-    onWebcamPipModeChange:   setWebcamPipMode,
     micActive,
-    onMicToggle:         toggleMic,
-    onLayoutChange:      setLayoutMode,
-    onScreenshot:        handleScreenshot,
-    urlInput,
-    onUrlInputChange:    setUrlInput,
+    micMuted,
+    onMicToggle:        toggleMic,
+    onLayoutChange:     setLayoutMode,
+    onScreenshotEntireScreen: handleScreenshotEntireScreen,
+    onScreenshotVideoOnly:    handleScreenshotVideoOnly,
     urlTarget,
-    onUrlTargetChange:   setUrlTarget,
-    onUrlSubmit:         handleUrlSubmit,
-    urlLoadPhase,
-    urlLoadError,
-    onClearUrlError:     () => setUrlLoadError(null),
-    onUploadA:           () => fileInputRef.current?.click(),
-    onUploadB:           () => fileInputRefB.current?.click(),
-    onFileDropped:       handleVideoFile,
-    // Alternative — Screen Record
-    onHubCaptureLoad:    handleHubCaptureLoad,
+    onUrlTargetChange:  setUrlTarget,
+    onFileDropped:      handleVideoFile,
+    onHubCaptureLoad:   handleHubCaptureLoad,
     hubCaptureLoading,
     hubCaptureTarget,
     hubCaptureAwaitingShare:
       embedCaptureAwaitingShare !== null && embedCaptureAwaitingShare === hubCaptureTarget,
-    hubCaptureIsActive:  captureBusy && embedCapturePanelId === hubCaptureTarget,
-    onHubCaptureShare:   shareEmbedDisplayMediaFromUserGesture,
-    onHubCaptureCancel:  handleHubCaptureCancel,
+    hubCaptureIsActive: captureBusy && embedCapturePanelId === hubCaptureTarget,
+    onHubCaptureShare:  shareEmbedDisplayMediaFromUserGesture,
+    onHubCaptureCancel: handleHubCaptureCancel,
     captureDownloadStatus,
-    onDownloadCapture:   handleDownloadCaptureBlob,
+    onDownloadCapture:  handleDownloadCaptureBlob,
+    onDismissCaptureDownload: handleDismissCaptureDownload,
+    screenRecordDownloadPending,
+    onScreenRecordDownloadYes: handleScreenRecordDownloadYes,
+    onScreenRecordDownloadNo: handleScreenRecordDownloadNo,
   } satisfies React.ComponentProps<typeof RecordingHub>;
 
   return (
@@ -2462,177 +2516,34 @@ export default function Home() {
         pointerEvents: 'none',
       }}>
         {isMobile ? (
-          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
-            <button
-              onClick={() => setMobileMenuOpen((v) => !v)}
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: layoutMode === 'reels' ? 0 : 14,
-                border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
-                background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(255, 255, 255, 0.85)',
-                color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
-                backdropFilter: 'blur(18px) saturate(1.1)',
-                WebkitBackdropFilter: 'blur(18px) saturate(1.1)',
-                boxShadow: layoutMode === 'reels' ? 'none' : '0 8px 28px rgba(0,0,0,0.08)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-              }}
-              title="Menu"
-              aria-label="Menu"
-            >
-              <Menu size={20} strokeWidth={1.75} />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              pointerEvents: 'auto',
+              padding: '6px 8px',
+              borderRadius: layoutMode === 'reels' ? 0 : 12,
+              background: layoutMode === 'reels' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.85)',
+            }}
+          >
+            <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, fontSize: 11, padding: '4px 8px' }} title="New analysis">
+              New
             </button>
-
-            {mobileMenuOpen && (
-              <div style={{
-                position: 'absolute',
-                right: 0,
-                top: 52,
-                width: 'min(92vw, 360px)',
-                maxHeight: 'min(72dvh, 560px)',
-                overflowY: 'auto',
-                overflowX: 'hidden',
-                WebkitOverflowScrolling: 'touch',
-                borderRadius: layoutMode === 'reels' ? 0 : 16,
-                padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
-                background: layoutMode === 'reels' ? 'rgba(0,0,0,0.75)' : 'rgba(250, 249, 247, 0.97)',
-                border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
-                color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
-                backdropFilter: 'blur(20px) saturate(1.1)',
-                WebkitBackdropFilter: 'blur(20px) saturate(1.1)',
-                boxShadow: layoutMode === 'reels' ? 'none' : '0 18px 48px rgba(0,0,0,0.1)',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-                  <div style={{
-                    width: 28, height: 28, borderRadius: 8,
-                    background: '#1A1A1A', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}>
-                    <Camera size={14} color="#fff" />
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: 15 }}>Coach Lab</div>
-                  <span style={{ flex: 1 }} />
-                  <button onClick={() => setMobileMenuOpen(false)} style={{ ...headerBtnStyle, width: 44, padding: 0 }}>✕</button>
-                </div>
-
-                <div data-tour-id="load-video" style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                  <select
-                    value={urlTarget}
-                    onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
-                    style={{
-                      height: 40,
-                      borderRadius: 10,
-                      border: '1px solid #E5E5E5',
-                      background: '#FFFFFF',
-                      color: '#1A1A1A',
-                      padding: '0 10px',
-                      fontSize: 13,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                    title="Load URL into Video A or B"
-                    aria-label="URL target"
-                  >
-                    <option value="A">A</option>
-                    <option value="B">B</option>
-                  </select>
-                  <input
-                    type="text"
-                    placeholder="Paste video URL…"
-                    value={urlInput}
-                    onChange={(e) => setUrlInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
-                    style={{
-                      flex: 1,
-                      height: 40,
-                      padding: '0 10px',
-                      borderRadius: 10,
-                      border: '1px solid #E5E5E5',
-                      fontSize: 14,
-                      outline: 'none',
-                      background: '#FFFFFF',
-                      color: '#1A1A1A',
-                      minWidth: 0,
-                    }}
-                  />
-                  <button onClick={handleUrlSubmit} style={{ ...headerBtnStyle, height: 40, padding: '0 14px', width: 'auto' }}>
-                    Load
-                  </button>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <button onClick={() => fileInputRef.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video A</button>
-                  <button onClick={() => fileInputRefB.current?.click()} style={headerBtnStyle}><Upload size={18} /> Video B</button>
-                  <button type="button" onClick={resetSession} style={headerBtnStyle} title="Start fresh — clears videos and recordings">
-                    New
-                  </button>
-                  <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, borderColor: '#fca5a5', color: '#b91c1c', background: '#fff7f7' }} title="Remove all videos">
-                    Clear all
-                  </button>
-                </div>
-
-                {/* Recording Studio — opens the hub panel for all media/recording controls */}
-                <div style={{ marginTop: 10 }}>
-                  <button
-                    type="button"
-                    onClick={() => { setHubOpen(true); setMobileMenuOpen(false); }}
-                    style={{
-                      ...headerBtnStyle,
-                      width: '100%',
-                      justifyContent: 'center',
-                      background: isRecording ? 'rgba(255,59,48,0.08)' : '#1A1A1A',
-                      color: isRecording ? '#FF3B30' : '#FFFFFF',
-                      border: isRecording ? '1px solid rgba(255,59,48,0.4)' : 'none',
-                      fontWeight: 700,
-                    }}
-                  >
-                    {isRecording ? '● Recording…' : 'Recording Studio'}
-                  </button>
-                </div>
-
-                {processingStatus && (
-                  <div style={{ marginTop: 10, fontSize: 12, color: '#6e6e73', lineHeight: 1.45 }}>
-                    {processingStatus}
-                  </div>
-                )}
-
-                {urlLoadPhase && (
-                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#6e6e73' }}>
-                    <svg width="16" height="16" viewBox="0 0 16 16" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
-                      <circle cx="8" cy="8" r="6" fill="none" stroke="#007AFF" strokeWidth="2" strokeDasharray="28" strokeDashoffset="8" strokeLinecap="round" />
-                    </svg>
-                    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-                    {urlLoadPhase}
-                  </div>
-                )}
-
-                {urlLoadError && (
-                  <div style={{ marginTop: 10, padding: 12, borderRadius: 10, background: '#FFF5F5', border: '1px solid #FFD0D0' }}>
-                    <div style={{ fontSize: 13, color: '#CC3333', lineHeight: 1.45, marginBottom: 8 }}>
-                      {urlLoadError}
-                    </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button
-                        onClick={() => { setUrlLoadError(null); handleUrlSubmit(); }}
-                        style={{ ...headerBtnStyle, height: 32, padding: '0 12px', fontSize: 12, background: '#007AFF', color: '#fff', border: 'none' }}
-                      >
-                        Retry
-                      </button>
-                      <button
-                        onClick={() => { setUrlLoadError(null); fileInputRef.current?.click(); }}
-                        style={{ ...headerBtnStyle, height: 32, padding: '0 12px', fontSize: 12 }}
-                      >
-                        Upload instead
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+            <select
+              value={urlTarget}
+              onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
+              aria-label="Player selector"
+              style={{ height: 32, borderRadius: 8, border: '1px solid #E5E5E5', fontSize: 11, fontWeight: 700, padding: '0 6px' }}
+            >
+              <option value="A">A</option>
+              <option value="B">B</option>
+            </select>
+            <button type="button" onClick={() => setSettingsMenuOpen((o) => !o)} style={{ ...headerBtnStyle, fontSize: 11, padding: '4px 8px' }} aria-expanded={settingsMenuOpen}>
+              <Settings size={14} />
+            </button>
           </div>
-        ) : reelsDesktop ? null : (
+        ) : (
           <div
             style={{
               width: '100%',
@@ -2653,87 +2564,71 @@ export default function Home() {
           >
             {/* Actions (desktop) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: layoutMode === 'reels' ? '5px' : '8px', flexWrap: 'nowrap', overflowX: 'auto' }}>
-              <div data-tour-id="load-video" style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                <select
-                  value={urlTarget}
-                  onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
-                  style={{
-                    height: 30,
-                    borderRadius: 8,
-                    border: '1px solid #E5E5E5',
-                    background: '#FFFFFF',
-                    color: '#1A1A1A',
-                    padding: '0 8px',
-                    fontSize: 12,
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                  }}
-                  title="Load URL into Video A or B"
-                  aria-label="URL target"
+              <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, fontSize: 12 }} title="New analysis">
+                New analysis
+              </button>
+              <select
+                value={urlTarget}
+                onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
+                aria-label="Player selector"
+                style={{
+                  height: 30,
+                  borderRadius: 8,
+                  border: '1px solid #E5E5E5',
+                  background: '#FFFFFF',
+                  padding: '0 8px',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="A">Video A</option>
+                <option value="B">Video B</option>
+              </select>
+              <div style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  onClick={() => setSettingsMenuOpen((o) => !o)}
+                  style={{ ...headerBtnStyle, fontSize: 12 }}
+                  aria-expanded={settingsMenuOpen}
                 >
-                  <option value="A">A</option>
-                  <option value="B">B</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="Paste video URL…"
-                  value={urlInput}
-                  onChange={(e) => setUrlInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
-                  style={{
-                    height: 30,
-                    padding: '0 10px',
-                    borderRadius: 8,
-                    border: '1px solid #E8E8ED',
-                    fontSize: 12,
-                    width: layoutMode === 'reels' ? 148 : 240,
-                    outline: 'none',
-                    minWidth: 0,
-                  }}
-                />
-                <button onClick={handleUrlSubmit} style={{ ...headerBtnStyle, height: layoutMode === 'reels' ? 28 : 30, padding: layoutMode === 'reels' ? '0 10px' : '0 14px', width: 'auto', fontSize: layoutMode === 'reels' ? 11 : 12 }}>
-                  Load
+                  <Settings size={14} />
+                  Settings
                 </button>
+                {settingsMenuOpen && (
+                  <>
+                    <div role="presentation" onClick={() => setSettingsMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 98 }} />
+                    <div
+                      style={{
+                        position: 'absolute',
+                        right: 0,
+                        top: 'calc(100% + 6px)',
+                        zIndex: 99,
+                        minWidth: 180,
+                        padding: 6,
+                        borderRadius: 12,
+                        background: 'rgba(250, 249, 247, 0.98)',
+                        border: '1px solid #E5E5E5',
+                        boxShadow: '0 12px 32px rgba(0,0,0,0.12)',
+                      }}
+                    >
+                      <button type="button" onClick={() => { setHubOpen(true); setSettingsMenuOpen(false); }} style={{ ...headerBtnStyle, width: '100%', marginBottom: 4 }}>
+                        Open Recording Hub
+                      </button>
+                      <button type="button" onClick={() => { resetSession(); setSettingsMenuOpen(false); }} style={{ ...headerBtnStyle, width: '100%', color: '#9a3412', borderColor: '#fca5a5' }}>
+                        Clear session
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
 
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }}
-                title={videoSrc ? 'Replace Video A' : 'Upload Video A'}
-              >
-                <Upload size={layoutMode === 'reels' ? 12 : 14} />
-                {layoutMode === 'reels'
-                  ? (videoSrc ? 'A' : '+A')
-                  : (videoSrc ? 'Replace A' : 'Upload A')}
-              </button>
-              <button
-                type="button"
-                onClick={() => fileInputRefB.current?.click()}
-                style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }}
-                title={videoSrcB ? 'Replace Video B' : 'Upload Video B'}
-              >
-                <Upload size={layoutMode === 'reels' ? 12 : 14} />
-                {layoutMode === 'reels'
-                  ? (videoSrcB ? 'B' : '+B')
-                  : (videoSrcB ? 'Replace B' : 'Upload B')}
-              </button>
-
-              <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}) }} title="Start fresh — clears videos and recordings">New</button>
-              <button
-                type="button"
-                onClick={resetSession}
-                style={{ ...headerBtnStyle, ...(layoutMode === 'reels' ? { padding: '4px 8px', fontSize: 11 } : {}), borderColor: '#c2410c', color: '#9a3412' }}
-                title="Remove all videos and return to the upload screen"
-              >
-                Clear all
-              </button>
-
-              <RecordingHub {...recordingHubProps} />
             </div>
           </div>
         )}
       </header>
+
+      <RecordingHub {...recordingHubProps} />
 
       {/* ── Main layout ── */}
       <div
@@ -2832,128 +2727,6 @@ export default function Home() {
                 : { width: '100%' }),
             }}
           >
-            {reelsDesktop && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setDesktopReelsMenuOpen((o) => !o)}
-                  style={{
-                    position: 'absolute',
-                    top: 8,
-                    right: 8,
-                    zIndex: 92,
-                    width: 34,
-                    height: 34,
-                    borderRadius: 0,
-                    border: 'none',
-                    background: 'rgba(0,0,0,0.4)',
-                    color: '#FFFFFF',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    backdropFilter: 'blur(8px)',
-                    WebkitBackdropFilter: 'blur(8px)',
-                  }}
-                  aria-expanded={desktopReelsMenuOpen}
-                  aria-label="Open actions menu"
-                >
-                  <MoreHorizontal size={18} strokeWidth={1.5} />
-                </button>
-                {desktopReelsMenuOpen && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 46,
-                      right: 8,
-                      zIndex: 92,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 4,
-                      padding: 8,
-                      background: 'rgba(0,0,0,0.6)',
-                      backdropFilter: 'blur(18px) saturate(1.12)',
-                      WebkitBackdropFilter: 'blur(18px) saturate(1.12)',
-                      borderRadius: 0,
-                      minWidth: 180,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                      <select
-                        value={urlTarget}
-                        onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
-                        style={{
-                          height: 28,
-                          borderRadius: 0,
-                          border: '1px solid rgba(255,255,255,0.2)',
-                          background: 'rgba(255,255,255,0.1)',
-                          color: '#FFFFFF',
-                          padding: '0 6px',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                        title="Load URL into Video A or B"
-                        aria-label="URL target"
-                      >
-                        <option value="A">A</option>
-                        <option value="B">B</option>
-                      </select>
-                      <input
-                        type="text"
-                        placeholder="Paste URL…"
-                        value={urlInput}
-                        onChange={(e) => setUrlInput(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
-                        style={{
-                          height: 28,
-                          width: 120,
-                          padding: '0 8px',
-                          borderRadius: 0,
-                          border: '1px solid rgba(255,255,255,0.2)',
-                          fontSize: 11,
-                          outline: 'none',
-                          background: 'rgba(255,255,255,0.1)',
-                          color: '#FFFFFF',
-                          minWidth: 0,
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={handleUrlSubmit}
-                        style={{ ...headerBtnStyle, height: 28, padding: '0 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
-                      >
-                        Load
-                      </button>
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
-                        title={videoSrc ? 'Replace Video A' : 'Upload Video A'}
-                      >
-                        <Upload size={12} />
-                        {videoSrc ? 'A' : '+A'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => fileInputRefB.current?.click()}
-                        style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }}
-                        title={videoSrcB ? 'Replace Video B' : 'Upload Video B'}
-                      >
-                        <Upload size={12} />
-                        {videoSrcB ? 'B' : '+B'}
-                      </button>
-                      <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, padding: '4px 8px', fontSize: 11, borderRadius: 0, background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.2)' }} title="New session">
-                        New
-                      </button>
-                      <RecordingHub {...recordingHubProps} compact />
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
             <div
               style={{
                 flex: 1,
@@ -2980,10 +2753,11 @@ export default function Home() {
                 overflowY: 'auto',
                 overflowX: 'hidden',
                 WebkitOverflowScrolling: 'touch',
+                paddingBottom: 'calc(100px + env(safe-area-inset-bottom, 0px))',
                 borderRadius: 14,
                 boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
                 border: '1px solid rgba(0,0,0,0.08)',
-                background: 'rgba(255,255,255,0.96)',
+                background: 'rgba(255,255,255,0.15)',
                 backdropFilter: 'blur(10px)',
                 WebkitBackdropFilter: 'blur(10px)',
               }}
@@ -3174,6 +2948,7 @@ export default function Home() {
                               key={`yt-a-${youtubeVideoIdA}-${ytPlayerRemountNonceA}`}
                               videoId={youtubeVideoIdA}
                               onPlayer={(p) => { ytPlayerARef.current = p; }}
+                              onEmbedReady={markEmbedReadyA}
                             />
                           )}
                         </div>
@@ -3338,9 +3113,7 @@ export default function Home() {
                       onRetry={retryLastEmbedCapture}
                       showCaptureDownloadFallback={embedCaptureConsecutiveFailures >= 3}
                       captureFallbackDownloadHref={captureFallbackStreamUrl}
-                      onPrepareCapture={(o) => void prepareEmbedCapturePhase('A', o)}
-                      onShareScreen={shareEmbedDisplayMediaFromUserGesture}
-                      awaitingScreenShare={embedCaptureAwaitingShare === 'A'}
+                      onStartRecording={(o) => startEmbedCaptureRecording('A', o)}
                       onUploadInstead={() => fileInputRef.current?.click()}
                     />
                     <button
@@ -3522,6 +3295,7 @@ export default function Home() {
                               key={`yt-b-${youtubeVideoIdB}-${ytPlayerRemountNonceB}`}
                               videoId={youtubeVideoIdB}
                               onPlayer={(p) => { ytPlayerBRef.current = p; }}
+                              onEmbedReady={markEmbedReadyB}
                             />
                           )}
                         </div>
@@ -3682,9 +3456,7 @@ export default function Home() {
                       onRetry={retryLastEmbedCapture}
                       showCaptureDownloadFallback={embedCaptureConsecutiveFailures >= 3}
                       captureFallbackDownloadHref={captureFallbackStreamUrl}
-                      onPrepareCapture={(o) => void prepareEmbedCapturePhase('B', o)}
-                      onShareScreen={shareEmbedDisplayMediaFromUserGesture}
-                      awaitingScreenShare={embedCaptureAwaitingShare === 'B'}
+                      onStartRecording={(o) => startEmbedCaptureRecording('B', o)}
                       onUploadInstead={() => fileInputRefB.current?.click()}
                     />
                     <button
@@ -3962,7 +3734,7 @@ export default function Home() {
                       }}
                     />
                     <span style={{ fontSize: 14, fontWeight: 650, lineHeight: 1.35 }}>
-                      Recording — do not switch tabs
+                      Recording in progress — do not switch tabs
                     </span>
                   </>
                 ) : captureCountdown != null ? (
@@ -4161,6 +3933,45 @@ export default function Home() {
       />
 
       {/* Guided tour: floating "?" + spotlight overlay (portaled to body). */}
+      {isRecording &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: 'fixed',
+              top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 250,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 14px',
+              borderRadius: 999,
+              background: 'rgba(255, 59, 48, 0.95)',
+              color: '#FFFFFF',
+              fontSize: 13,
+              fontWeight: 700,
+              boxShadow: '0 8px 28px rgba(255,59,48,0.35)',
+              pointerEvents: 'none',
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: '#FFFFFF',
+                animation: 'hubRecPulse 1.2s ease-in-out infinite',
+              }}
+            />
+            Recording
+          </div>,
+          document.body,
+        )}
+
       <GuidedTour />
     </div>
   );

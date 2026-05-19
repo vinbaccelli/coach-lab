@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
+import { stopAllTracks } from '@/lib/tabCaptureRecording';
 
 interface ScreenRecorderProps {
   getCanvas: () => HTMLCanvasElement | null;
@@ -10,6 +11,11 @@ interface ScreenRecorderProps {
   getMicStream?: () => MediaStream | null;
   getCropRegion?: () => { x: number; y: number; w: number; h: number } | null;
   layoutMode?: 'youtube' | 'reels';
+  /** `display` uses getDisplayMedia (screen/window/tab). Default `canvas` records the analysis canvas. */
+  mode?: 'canvas' | 'display';
+  /** When true, parent handles download via onRecordingComplete instead of auto-downloading. */
+  promptDownload?: boolean;
+  onRecordingComplete?: (blob: Blob, ext: string) => void;
   onRecordingChange?: (recording: boolean) => void;
 }
 
@@ -45,6 +51,9 @@ export default function ScreenRecorder({
   getMicStream,
   getCropRegion,
   layoutMode = 'youtube',
+  mode = 'canvas',
+  promptDownload = false,
+  onRecordingComplete,
   onRecordingChange,
 }: ScreenRecorderProps) {
   const [recState, setRecState] = useState<RecState>('idle');
@@ -65,19 +74,288 @@ export default function ScreenRecorder({
   const recStateRef     = useRef<RecState>('idle');
   const saveFinishedRef = useRef(false);
   const stopFailsafeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const displayStreamRef = useRef<MediaStream | null>(null);
+  const displayVideoRef = useRef<HTMLVideoElement | null>(null);
+  const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
+  const docPipWindowRef = useRef<Window | null>(null);
   useEffect(() => { recStateRef.current = recState; }, [recState]);
+
+  const cleanupDisplayAux = useCallback(() => {
+    if (rafPaintRef.current) {
+      cancelAnimationFrame(rafPaintRef.current);
+      rafPaintRef.current = null;
+    }
+    if (displayVideoRef.current) {
+      displayVideoRef.current.srcObject = null;
+      displayVideoRef.current = null;
+    }
+    if (webcamVideoRef.current) {
+      webcamVideoRef.current.srcObject = null;
+      webcamVideoRef.current = null;
+    }
+    stopAllTracks(displayStreamRef.current);
+    displayStreamRef.current = null;
+    try {
+      docPipWindowRef.current?.close();
+    } catch { /* noop */ }
+    docPipWindowRef.current = null;
+  }, []);
 
   // Clean up timer on unmount
   useEffect(() => () => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (paintTimerRef.current) clearInterval(paintTimerRef.current);
-    if (rafPaintRef.current) cancelAnimationFrame(rafPaintRef.current);
-  }, []);
+    cleanupDisplayAux();
+  }, [cleanupDisplayAux]);
+
+  const deliverRecording = useCallback(
+    async (rawBlob: Blob, duration: number) => {
+      if (rawBlob.size === 0) {
+        setError('Recording produced an empty file. Try again.');
+        setRecState('idle');
+        onRecordingChange?.(false);
+        saveFinishedRef.current = true;
+        return;
+      }
+
+      let finalBlob: Blob = rawBlob;
+      try {
+        finalBlob = await webmFixDuration(rawBlob, duration, mimeTypeRef.current || 'video/webm');
+      } catch (fixErr) {
+        console.warn('[ScreenRecorder] webmFixDuration skipped:', fixErr);
+      }
+
+      let outBlob: Blob = finalBlob;
+      let outExt = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
+      const blobLooksMp4 =
+        outBlob.type.includes('mp4') || /mp4/i.test(mimeTypeRef.current);
+
+      if (!blobLooksMp4) {
+        try {
+          setProgress('Converting to MP4…');
+          const conv = await convertWebmToMp4ForScreenRecord(finalBlob);
+          if (conv.ok) {
+            setProgress(null);
+            outBlob = conv.blob;
+            outExt = 'mp4';
+          } else {
+            setProgress(null);
+            outExt = 'webm';
+          }
+        } catch {
+          setProgress(null);
+          outExt = 'webm';
+        }
+      }
+
+      if (promptDownload && onRecordingComplete) {
+        onRecordingComplete(outBlob, outExt);
+      } else {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const suggestedName = `coach-lab-${ts}.${outExt}`;
+        const handle = saveHandleRef.current;
+        if (handle && typeof handle.createWritable === 'function') {
+          try {
+            const writable = await handle.createWritable();
+            await writable.write(outBlob);
+            await writable.close();
+          } catch {
+            const url = URL.createObjectURL(outBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = suggestedName;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10_000);
+          }
+        } else {
+          const url = URL.createObjectURL(outBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = suggestedName;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        }
+        saveHandleRef.current = null;
+      }
+
+      try {
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+      } catch { /* noop */ }
+      streamRef.current = null;
+      recCanvasRef.current = null;
+      cleanupDisplayAux();
+      setRecState('idle');
+      onRecordingChange?.(false);
+      saveFinishedRef.current = true;
+    },
+    [cleanupDisplayAux, onRecordingChange, onRecordingComplete, promptDownload],
+  );
+
+  const startDisplayRecording = useCallback(async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
+      setError('Screen recording is not supported in this browser.');
+      return;
+    }
+
+    let displayStream: MediaStream;
+    try {
+      displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30, max: 60 } } as MediaTrackConstraints,
+        audio: false,
+      });
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'NotAllowedError') return;
+      setError('Could not start screen capture.');
+      return;
+    }
+    displayStreamRef.current = displayStream;
+
+    const displayVideo = document.createElement('video');
+    displayVideo.muted = true;
+    displayVideo.playsInline = true;
+    displayVideo.srcObject = displayStream;
+    displayVideoRef.current = displayVideo;
+    await displayVideo.play().catch(() => {});
+
+    const webcamStream = getWebcamStream();
+    let webcamVideo: HTMLVideoElement | null = null;
+    if (webcamStream) {
+      webcamVideo = document.createElement('video');
+      webcamVideo.muted = true;
+      webcamVideo.playsInline = true;
+      webcamVideo.srcObject = webcamStream;
+      webcamVideoRef.current = webcamVideo;
+      await webcamVideo.play().catch(() => {});
+
+      const docPip = (window as Window & { documentPictureInPicture?: { requestWindow: (opts?: { width?: number; height?: number }) => Promise<Window> } }).documentPictureInPicture;
+      if (docPip?.requestWindow) {
+        try {
+          const pipWin = await docPip.requestWindow({ width: 320, height: 180 });
+          docPipWindowRef.current = pipWin;
+          const pipVid = pipWin.document.createElement('video');
+          pipVid.srcObject = webcamStream;
+          pipVid.style.width = '100%';
+          pipVid.style.height = '100%';
+          pipVid.style.objectFit = 'cover';
+          pipWin.document.body.style.margin = '0';
+          pipWin.document.body.appendChild(pipVid);
+          void pipVid.play();
+        } catch {
+          /* PiP optional */
+        }
+      }
+    }
+
+    const outW = Math.max(640, displayVideo.videoWidth || 1920);
+    const outH = Math.max(360, displayVideo.videoHeight || 1080);
+    const recCanvas = document.createElement('canvas');
+    recCanvas.width = outW;
+    recCanvas.height = outH;
+    recCanvasRef.current = recCanvas;
+    const ctx = recCanvas.getContext('2d')!;
+
+    const paintOnce = () => {
+      if (displayVideo.readyState >= 2) {
+        ctx.drawImage(displayVideo, 0, 0, outW, outH);
+      }
+      if (webcamVideo && webcamVideo.readyState >= 2) {
+        const pipW = Math.round(outW * 0.22);
+        const pipH = Math.round(pipW * (9 / 16));
+        const margin = Math.round(outW * 0.02);
+        const px = outW - pipW - margin;
+        const py = outH - pipH - margin;
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fillRect(px - 4, py - 4, pipW + 8, pipH + 8);
+        ctx.drawImage(webcamVideo, px, py, pipW, pipH);
+      }
+    };
+
+    const paintLoop = () => {
+      paintOnce();
+      rafPaintRef.current = requestAnimationFrame(paintLoop);
+    };
+    paintOnce();
+    rafPaintRef.current = requestAnimationFrame(paintLoop);
+
+    streamRef.current = (recCanvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(30);
+    const tracks: MediaStreamTrack[] = [...streamRef.current.getTracks()];
+    const micStream = getMicStream?.();
+    if (micStream) {
+      micStream.getAudioTracks().forEach((t) => {
+        if (t.enabled) tracks.push(t);
+      });
+    } else if (webcamStream) {
+      webcamStream.getAudioTracks().forEach((t) => {
+        if (t.enabled) tracks.push(t);
+      });
+    }
+
+    const combined = new MediaStream(tracks);
+    const mimeType = getBestMimeType();
+    mimeTypeRef.current = mimeType;
+
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(combined, {
+        mimeType: mimeType || undefined,
+        videoBitsPerSecond: 5_000_000,
+      });
+    } catch {
+      cleanupDisplayAux();
+      setError('MediaRecorder not supported in this browser.');
+      return;
+    }
+
+    displayStream.getVideoTracks()[0]?.addEventListener('ended', () => {
+      const rec = recorderRef.current;
+      if (rec && rec.state !== 'inactive') {
+        try { rec.requestData(); } catch { /* noop */ }
+        rec.stop();
+      }
+    });
+
+    chunksRef.current = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data?.size) chunksRef.current.push(e.data);
+    };
+    recorder.onstop = async () => {
+      try {
+        if (stopFailsafeRef.current) {
+          clearTimeout(stopFailsafeRef.current);
+          stopFailsafeRef.current = null;
+        }
+        saveFinishedRef.current = false;
+        const duration = Date.now() - startTimeRef.current;
+        const rawBlob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
+        await deliverRecording(rawBlob, duration);
+      } catch (fatal: unknown) {
+        console.error('[ScreenRecorder] display onstop:', fatal);
+        cleanupDisplayAux();
+        setRecState('idle');
+        onRecordingChange?.(false);
+        saveFinishedRef.current = true;
+      }
+    };
+
+    recorder.start(250);
+    recorderRef.current = recorder;
+    startTimeRef.current = Date.now();
+    setRecState('recording');
+    onRecordingChange?.(true);
+    timerRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
+    }, 1000);
+  }, [cleanupDisplayAux, deliverRecording, getMicStream, getWebcamStream, onRecordingChange]);
 
   const startRecording = useCallback(async () => {
     setError(null);
     setElapsed(0);
     setProgress(null);
+
+    if (mode === 'display') {
+      await startDisplayRecording();
+      return;
+    }
 
     const srcCanvas = getCanvas();
     if (!srcCanvas) {
@@ -177,116 +455,15 @@ export default function ScreenRecorder({
           stopFailsafeRef.current = null;
         }
         saveFinishedRef.current = false;
-
         if (paintTimerRef.current) { clearInterval(paintTimerRef.current); paintTimerRef.current = null; }
         if (rafPaintRef.current) { cancelAnimationFrame(rafPaintRef.current); rafPaintRef.current = null; }
         const duration = Date.now() - startTimeRef.current;
         const rawBlob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'video/webm' });
-        if (rawBlob.size === 0) {
-          setError('Recording produced an empty file. Try again (and ensure the video/canvas is playing).');
-          try {
-            streamRef.current?.getTracks().forEach((t) => t.stop());
-          } catch { /* noop */ }
-          streamRef.current = null;
-          recCanvasRef.current = null;
-          setRecState('idle');
-          onRecordingChange?.(false);
-          saveFinishedRef.current = true;
-          return;
-        }
-
-        let finalBlob: Blob = rawBlob;
-        try {
-          finalBlob = await webmFixDuration(rawBlob, duration, mimeTypeRef.current || 'video/webm');
-        } catch (fixErr) {
-          console.warn('[ScreenRecorder] webmFixDuration skipped:', fixErr);
-          finalBlob = rawBlob;
-        }
-
-        let outBlob: Blob = finalBlob;
-        let outExt = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
-
-        const nameLooksMp4 = typeof mimeTypeRef.current === 'string' && /mp4/i.test(mimeTypeRef.current);
-        const blobLooksMp4 = outBlob.type.includes('mp4') || nameLooksMp4;
-
-        if (!blobLooksMp4) {
-          try {
-            setProgress('Converting to MP4…');
-            const conv = await convertWebmToMp4ForScreenRecord(finalBlob);
-            if (conv.ok) {
-              setProgress(null);
-              outBlob = conv.blob;
-              outExt = 'mp4';
-            } else {
-              console.warn('[ScreenRecorder] MP4 conversion failed; keeping WebM:', conv.error);
-              setProgress('Saved as WebM — MP4 was not available in this session.');
-              window.setTimeout(() => setProgress(null), 6000);
-              outBlob = finalBlob;
-              outExt = 'webm';
-            }
-          } catch (convErr: unknown) {
-            console.warn('[ScreenRecorder] MP4 conversion threw; falling back to WebM:', convErr);
-            setProgress(null);
-            outBlob = finalBlob;
-            outExt = 'webm';
-            const msg = convErr instanceof Error ? convErr.message : String(convErr);
-            if (msg && !/cancel/i.test(msg)) {
-              setError(`Conversion interrupted (${msg}). WebM download will still run if data exists.`);
-            }
-          }
-        }
-
-        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const suggestedName = `coach-lab-${ts}.${outExt}`;
-
-        const handle = saveHandleRef.current;
-        if (handle && typeof handle.createWritable === 'function') {
-          try {
-            const writable = await handle.createWritable();
-            await writable.write(outBlob);
-            await writable.close();
-          } catch (err) {
-            console.warn('[ScreenRecorder] Failed writing via file picker; falling back to download:', err);
-            const url = URL.createObjectURL(outBlob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = suggestedName;
-            a.click();
-            setTimeout(() => URL.revokeObjectURL(url), 10_000);
-          }
-        } else {
-          const url = URL.createObjectURL(outBlob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = suggestedName;
-          a.click();
-          setTimeout(() => URL.revokeObjectURL(url), 10_000);
-        }
-        saveHandleRef.current = null;
-
-        try {
-          streamRef.current?.getTracks().forEach((t) => t.stop());
-        } catch { /* noop */ }
-        streamRef.current = null;
-        recCanvasRef.current = null;
-
-        setRecState('idle');
-        onRecordingChange?.(false);
-        saveFinishedRef.current = true;
+        await deliverRecording(rawBlob, duration);
       } catch (fatal: unknown) {
         console.error('[ScreenRecorder] onstop failed:', fatal);
         setProgress(null);
-        const msg = fatal instanceof Error ? fatal.message : String(fatal);
-        setError(
-          msg
-            ? `Recording finished but saving failed (${msg}). You can try Record again without refreshing.`
-            : 'Recording finished but saving failed. Try again.',
-        );
-        try {
-          streamRef.current?.getTracks().forEach((t) => t.stop());
-        } catch { /* noop */ }
-        streamRef.current = null;
-        recCanvasRef.current = null;
+        cleanupDisplayAux();
         chunksRef.current = [];
         setRecState('idle');
         onRecordingChange?.(false);
@@ -303,7 +480,7 @@ export default function ScreenRecorder({
     timerRef.current = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
     }, 1000);
-  }, [getCanvas, getCropRegion, getMicStream, getWebcamStream, layoutMode, onRecordingChange]);
+  }, [getCanvas, getCropRegion, getMicStream, getWebcamStream, layoutMode, mode, onRecordingChange, startDisplayRecording, deliverRecording]);
 
   const stopRecording = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }

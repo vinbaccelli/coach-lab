@@ -35,9 +35,7 @@ export default function EmbedCapturePanel({
   stepStatus,
   videoDurationSec,
   onRetry,
-  onPrepareCapture,
-  onShareScreen,
-  awaitingScreenShare = false,
+  onStartRecording,
   onUploadInstead,
   showCaptureDownloadFallback,
   captureFallbackDownloadHref,
@@ -54,19 +52,15 @@ export default function EmbedCapturePanel({
   stepStatus?: string | null;
   videoDurationSec?: number | null;
   onRetry?: () => void;
-  onPrepareCapture: (opts: {
+  onStartRecording: (opts: {
     mode: CaptureModeChoice;
     startSec: number | null;
     endSec: number | null;
   }) => void;
-  /** Second tap: must call getDisplayMedia synchronously from this handler (Safari gesture) */
-  onShareScreen: () => void;
-  awaitingScreenShare?: boolean;
   onUploadInstead?: () => void;
   showCaptureDownloadFallback?: boolean;
   captureFallbackDownloadHref?: string | null;
 }) {
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [mode, setMode] = useState<CaptureModeChoice>('full');
   const [startStr, setStartStr] = useState('0:00');
   const [endStr, setEndStr] = useState('0:30');
@@ -77,12 +71,6 @@ export default function EmbedCapturePanel({
       /iPad|iPhone|iPod/.test(navigator.userAgent) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1),
     );
-  }, []);
-
-  const looksLikeDesktopSafari = useMemo(() => {
-    if (typeof navigator === 'undefined') return false;
-    const ua = navigator.userAgent;
-    return /Safari/i.test(ua) && !/Chrome|CriOS|FxiOS|Edg/i.test(ua) && !/iPhone|iPad|iPod/.test(ua);
   }, []);
 
   const parsed = useMemo(
@@ -102,28 +90,25 @@ export default function EmbedCapturePanel({
   const captureAllowed =
     embedReady && !busy && !sectionInvalid && !(mode === 'section' && (parsed.start === null || parsed.end === null));
 
-  const handlePrepare = useCallback(() => {
+  const handleStart = useCallback(() => {
     if (!captureAllowed) return;
     if (mode === 'full') {
-      onPrepareCapture({ mode: 'full', startSec: null, endSec: null });
+      onStartRecording({ mode: 'full', startSec: null, endSec: null });
       return;
     }
-    onPrepareCapture({
+    onStartRecording({
       mode: 'section',
       startSec: parsed.start,
       endSec: parsed.end,
     });
-  }, [captureAllowed, mode, onPrepareCapture, parsed.end, parsed.start]);
+  }, [captureAllowed, mode, onStartRecording, parsed.end, parsed.start]);
 
   if (!visible) return null;
 
   const loadingVideo = !embedReady && !busy;
   const showCountdown = countdown != null && countdown > 0;
   const preparingCapture = busy && !showCountdown && progress01 < 0.04 && recordingElapsedSec < 3;
-  const recording = busy && !showCountdown && !preparingCapture;
-
-  const shareAllowed =
-    awaitingScreenShare && !busy && embedReady && !showCountdown && !recording;
+  const recording = busy && !showCountdown && !preparingCapture && (progress01 > 0.02 || recordingElapsedSec > 0);
 
   const estimatedTotalSec = mode === 'section' && parsed.start != null && parsed.end != null
     ? parsed.end - parsed.start
@@ -298,7 +283,7 @@ export default function EmbedCapturePanel({
               }}
             />
             <span style={{ fontWeight: 700, fontSize: 15, color: '#1A1A1A' }}>
-              Recording
+              Recording in progress
             </span>
           </div>
           <div style={{ marginBottom: 12 }}>
@@ -323,7 +308,7 @@ export default function EmbedCapturePanel({
             </div>
           </div>
           <p style={{ margin: 0, fontSize: 12, color: '#6B6B6B', textAlign: 'center' }}>
-            Keep the shared window or screen visible until recording finishes.
+            Recording in progress — do not switch tabs
           </p>
         </>
       ) : showCountdown ? (
@@ -352,7 +337,7 @@ export default function EmbedCapturePanel({
             animation: 'coachlab-spin 0.7s linear infinite',
           }} />
           <span style={{ fontWeight: 600, color: '#1A1A1A' }}>
-            {stepStatus || 'Preparing video for capture\u2026'}
+            {stepStatus || 'Processing your video\u2026'}
           </span>
         </div>
       ) : loadingVideo ? (
@@ -368,170 +353,89 @@ export default function EmbedCapturePanel({
           <span style={{ fontWeight: 600, color: '#1A1A1A' }}>Loading video\u2026</span>
         </div>
       ) : (
-        /* ── Ready state: simple one-button UI ────────────────────────── */
+        /* ── Ready: record options + Start Recording ───────────────────── */
         <>
-          <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>
-            Capture this video for analysis
+          <p style={{ margin: '0 0 14px', fontWeight: 600, fontSize: 15 }}>
+            What would you like to record?
           </p>
 
-          <div style={{
-            margin: '0 0 14px',
-            padding: '12px 14px',
-            borderRadius: 12,
-            background: 'rgba(26,26,26,0.05)',
-            border: '1px solid #E5E5E5',
-            fontSize: 12,
-            color: '#3C3C3C',
-            lineHeight: 1.55,
-          }}>
-            {looksLikeDesktopSafari ? (
-              <>
-                First tap <strong style={{ color: '#1A1A1A' }}>Prepare Video</strong>. When it says ready, tap{' '}
-                <strong style={{ color: '#1A1A1A' }}>Share Screen</strong> — Safari will ask what to share.
-                Choose <strong style={{ color: '#1A1A1A' }}>Entire Screen</strong> or{' '}
-                <strong style={{ color: '#1A1A1A' }}>Window</strong> and pick <strong style={{ color: '#1A1A1A' }}>this browser window</strong>.
-              </>
-            ) : (
-              <>
-                First tap <strong style={{ color: '#1A1A1A' }}>Prepare Video</strong>. When it says ready, tap{' '}
-                <strong style={{ color: '#1A1A1A' }}>Share Screen</strong>. In Chrome or Edge, pick{' '}
-                <strong style={{ color: '#1A1A1A' }}>This tab</strong> (the picker may already highlight this tab). In Safari on Mac, choose{' '}
-                <strong style={{ color: '#1A1A1A' }}>Window</strong> or <strong style={{ color: '#1A1A1A' }}>Entire Screen</strong>.
-              </>
-            )}
-          </div>
-
-          {/* Advanced: section recording */}
-          {!showAdvanced ? (
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(true)}
-              style={{
-                display: 'block',
-                marginBottom: 14,
-                padding: 0,
-                border: 'none',
-                background: 'none',
-                color: '#007AFF',
-                fontSize: 12,
-                cursor: 'pointer',
-                textDecoration: 'underline',
-              }}
-            >
-              Record only part of the video
-            </button>
-          ) : (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="radio" name="capmode"
-                    checked={mode === 'full'}
-                    onChange={() => setMode('full')}
-                  />
-                  <span>Full video</span>
-                </label>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="radio" name="capmode"
-                    checked={mode === 'section'}
-                    onChange={() => setMode('section')}
-                    style={{ marginTop: 3 }}
-                  />
-                  <span style={{ flex: 1 }}>
-                    Part of the video
-                    {mode === 'section' && (
-                      <span style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 6, fontWeight: 400, color: '#3C3C3C' }}>
-                        <span>From</span>
-                        <input
-                          type="text" value={startStr}
-                          onChange={(e) => setStartStr(e.target.value)}
-                          placeholder="0:00"
-                          style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
-                        />
-                        <span>to</span>
-                        <input
-                          type="text" value={endStr}
-                          onChange={(e) => setEndStr(e.target.value)}
-                          placeholder="0:30"
-                          style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
-                        />
-                        {sectionInvalid && (
-                          <span style={{ display: 'block', width: '100%', fontSize: 11, color: '#B45309' }}>
-                            End time must be after start time.
-                          </span>
-                        )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input type="radio" name="capmode" checked={mode === 'full'} onChange={() => setMode('full')} />
+              <span>Record full video</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name="capmode"
+                checked={mode === 'section'}
+                onChange={() => setMode('section')}
+                style={{ marginTop: 3 }}
+              />
+              <span style={{ flex: 1 }}>
+                Record a section
+                {mode === 'section' && (
+                  <span style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 8, fontWeight: 400, color: '#3C3C3C' }}>
+                    <span>From</span>
+                    <input
+                      type="text"
+                      value={startStr}
+                      onChange={(e) => setStartStr(e.target.value)}
+                      placeholder="1:20"
+                      style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
+                    />
+                    <span>to</span>
+                    <input
+                      type="text"
+                      value={endStr}
+                      onChange={(e) => setEndStr(e.target.value)}
+                      placeholder="1:25"
+                      style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
+                    />
+                    {sectionInvalid && (
+                      <span style={{ display: 'block', width: '100%', fontSize: 11, color: '#B45309' }}>
+                        End time must be after start time.
+                      </span>
+                    )}
+                    {!sectionSeekSupported && (
+                      <span style={{ display: 'block', width: '100%', fontSize: 11, color: '#6B6B6B' }}>
+                        Section timing works best with YouTube links.
                       </span>
                     )}
                   </span>
-                </label>
-              </div>
-            </div>
-          )}
+                )}
+              </span>
+            </label>
+          </div>
 
           {genericIframeNote && (
             <p style={{ margin: '0 0 12px', fontSize: 11, color: '#6B6B6B' }}>{genericIframeNote}</p>
           )}
 
-          {awaitingScreenShare ? (
-            <>
-              <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 14, color: '#166534', lineHeight: 1.45 }}>
-                Video is ready — tap Share Screen to begin capture
-              </p>
-              <p style={{ margin: '0 0 14px', fontSize: 12, color: '#3C3C3C', lineHeight: 1.5 }}>
-                When prompted, choose this browser tab (Chrome may pre-select the current tab). Keep the video visible until recording finishes.
-              </p>
-              <button
-                type="button"
-                disabled={!shareAllowed}
-                onClick={() => onShareScreen()}
-                style={{
-                  width: '100%',
-                  padding: '16px 18px',
-                  borderRadius: 14,
-                  border: 'none',
-                  background: shareAllowed ? '#2563EB' : 'rgba(26,26,26,0.12)',
-                  color: shareAllowed ? '#FFFFFF' : 'rgba(26,26,26,0.5)',
-                  fontWeight: 800,
-                  fontSize: 17,
-                  cursor: shareAllowed ? 'pointer' : 'not-allowed',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 10,
-                  minHeight: 52,
-                }}
-              >
-                Share Screen
-              </button>
-            </>
-          ) : (
-            <>
           <button
             type="button"
             disabled={!captureAllowed}
-            onClick={handlePrepare}
+            onClick={handleStart}
             style={{
               width: '100%',
-              padding: '13px 16px',
-              borderRadius: 12,
+              padding: '16px 18px',
+              borderRadius: 14,
               border: 'none',
               background: captureAllowed ? '#EF4444' : 'rgba(26,26,26,0.12)',
               color: captureAllowed ? '#FFFFFF' : 'rgba(26,26,26,0.5)',
-              fontWeight: 700,
-              fontSize: 15,
+              fontWeight: 800,
+              fontSize: 17,
               cursor: captureAllowed ? 'pointer' : 'not-allowed',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: 8,
+              gap: 10,
+              minHeight: 52,
             }}
           >
             <span style={{ width: 10, height: 10, borderRadius: '50%', background: captureAllowed ? '#fff' : 'rgba(26,26,26,0.3)' }} />
-            {!embedReady ? 'Waiting for video\u2026' : 'Prepare Video'}
+            Start Recording
           </button>
-            </>
-          )}
         </>
       )}
     </div>

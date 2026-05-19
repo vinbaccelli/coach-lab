@@ -26,6 +26,7 @@ import {
   Video,
   Crosshair,
   Camera,
+  Sparkles,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -92,6 +93,11 @@ interface ToolPaletteProps {
   onShowPrecisionInstructions?: () => void;
   /** Below 768px: icon-only rail (narrow); desktop keeps labels */
   iconOnlyLayout?: boolean;
+  /** Mobile floating toolbar: transparent shell over video */
+  mobileChrome?: boolean;
+  /** Recording Hub panel (opened from left toolbar). */
+  recordingHubOpen?: boolean;
+  onRecordingHubToggle?: () => void;
 }
 
 const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
@@ -151,9 +157,16 @@ const scrollArea: React.CSSProperties = {
   padding: '8px 10px 12px',
 };
 
-function scrollAreaFor(io: boolean): React.CSSProperties {
-  if (!io) return scrollArea;
-  return { ...scrollArea, padding: '6px 4px 10px', gap: 4 };
+function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties {
+  let base = scrollArea;
+  if (io) base = { ...scrollArea, padding: '6px 4px 10px', gap: 4 };
+  if (mobileChrome) {
+    return {
+      ...base,
+      paddingBottom: 'calc(100px + env(safe-area-inset-bottom, 0px))',
+    };
+  }
+  return base;
 }
 
 function rowBase(active: boolean, io?: boolean): React.CSSProperties {
@@ -237,9 +250,15 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onPrecisionDrawToggle,
     onShowPrecisionInstructions,
     iconOnlyLayout = false,
+    mobileChrome = false,
+    recordingHubOpen = false,
+    onRecordingHubToggle,
   } = props;
 
   const io = iconOnlyLayout;
+  const shellStyle: React.CSSProperties = mobileChrome
+    ? { ...shell, background: 'transparent', boxShadow: 'none', border: 'none' }
+    : shell;
 
   const [navStack, setNavStack] = useState<NavScreen[]>(['home']);
   const top = navStack[navStack.length - 1];
@@ -411,39 +430,79 @@ export default function ToolPalette(props: ToolPaletteProps) {
     label: string,
     checked: boolean,
     onChange: (v: boolean) => void,
+    icon?: React.ReactNode,
   ) => (
     <label
       key={key}
       aria-label={label}
+      aria-checked={checked}
+      role="checkbox"
       style={{
         ...rowBase(checked, io),
         cursor: 'pointer',
         transform: pressedKey === key ? 'scale(0.95)' : undefined,
+        position: 'relative',
       }}
       onPointerDown={(e) => {
         e.preventDefault();
         fire(key, () => onChange(!checked));
       }}
     >
-      <input type="checkbox" readOnly checked={checked} style={{ width: 18, height: 18 }} />
-      {io ? (
+      {io && icon ? (
         <span
           style={{
-            position: 'absolute',
-            width: 1,
-            height: 1,
-            padding: 0,
-            margin: -1,
-            overflow: 'hidden',
-            clip: 'rect(0,0,0,0)',
-            whiteSpace: 'nowrap',
-            border: 0,
+            display: 'flex',
+            width: 28,
+            height: 28,
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: checked ? '#35679A' : '#4B5563',
           }}
         >
-          {label}
+          {icon}
         </span>
       ) : (
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+        <>
+          <input
+            type="checkbox"
+            readOnly
+            checked={checked}
+            tabIndex={-1}
+            aria-hidden
+            style={{ width: 18, height: 18, accentColor: '#35679A' }}
+          />
+          {icon ? (
+            <span
+              style={{
+                display: 'flex',
+                width: 26,
+                justifyContent: 'center',
+                color: checked ? '#35679A' : '#4B5563',
+              }}
+            >
+              {icon}
+            </span>
+          ) : null}
+          {io ? (
+            <span
+              style={{
+                position: 'absolute',
+                width: 1,
+                height: 1,
+                padding: 0,
+                margin: -1,
+                overflow: 'hidden',
+                clip: 'rect(0,0,0,0)',
+                whiteSpace: 'nowrap',
+                border: 0,
+              }}
+            >
+              {label}
+            </span>
+          ) : (
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+          )}
+        </>
       )}
     </label>
   );
@@ -452,8 +511,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'style') {
     return (
-      <div style={shell}>
-        <div style={scrollAreaFor(io)}>
+      <div style={shellStyle}>
+        <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Style" icon={<Palette size={18} />} />
           <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
             Preset colors
@@ -531,10 +590,22 @@ export default function ToolPalette(props: ToolPaletteProps) {
             </button>
           </div>
           {onCircleSpinningChange && animatedOutlineEligible &&
-            chk('spin', 'Animated outline', !!circleSpinning, onCircleSpinningChange)}
+            chk(
+              'spin',
+              'Animated outline',
+              !!circleSpinning,
+              onCircleSpinningChange,
+              <Sparkles size={18} strokeWidth={2} />,
+            )}
           {onOutlineEraserSizeChange && outlineEraserEligible && (
             <>
-              {chk('oe', 'Outline eraser', outlineEraserSize > 0, (v) => onOutlineEraserSizeChange(v ? 15 : 0))}
+              {chk(
+                'oe',
+                'Outline eraser',
+                outlineEraserSize > 0,
+                (v) => onOutlineEraserSizeChange(v ? 15 : 0),
+                <Eraser size={18} strokeWidth={2} />,
+              )}
               {outlineEraserSize > 0 && (
                 <div style={{ padding: '0 8px' }}>
                   <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
@@ -575,8 +646,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'draw') {
     return (
-      <div style={shell}>
-        <div style={scrollAreaFor(io)}>
+      <div style={shellStyle}>
+        <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Draw & annotate" icon={<Pen size={18} />} />
           <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Freehand" onPress={() => { setTool('pen'); }} />
           <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Straight line" onPress={() => { setTool('line'); }} />
@@ -630,8 +701,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'skeleton') {
     return (
-      <div style={shell}>
-        <div style={scrollAreaFor(io)}>
+      <div style={shellStyle}>
+        <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
           {onSkeletonOverlayPausedChange !== undefined && (
             <label
@@ -705,8 +776,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'webcam') {
     return (
-      <div style={shell}>
-        <div style={scrollAreaFor(io)}>
+      <div style={shellStyle}>
+        <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Webcam" icon={<Camera size={18} />} />
           {onToggleWebcam ? (
             <Row
@@ -765,8 +836,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'more') {
     return (
-      <div style={shell}>
-        <div style={scrollAreaFor(io)}>
+      <div style={shellStyle}>
+        <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
           <p style={{ margin: '0 4px 8px', fontSize: 12, color: '#6B7280' }}>More tools will return in a future update.</p>
         </div>
@@ -778,8 +849,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
   // if (top === 'multiplier') {
   //   const frameChoices = [3, 5, 8, 10] as const;
   //   return (
-  //     <div style={shell}>
-  //       <div style={scrollAreaFor(io)}>
+  //     <div style={shellStyle}>
+  //       <div style={scrollAreaFor(io, mobileChrome)}>
   //         <BackHeader title="Racket multiplier" icon={<Layers size={18} />} />
   //         <p style={{ margin: '0 4px 8px', fontSize: 13, fontWeight: 600, color: '#7C3AED', lineHeight: 1.4 }}>
   //           Highlight the racket region across frames
@@ -827,9 +898,21 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   /* ── Home ─────────────────────────────────────────────────────────── */
   return (
-    <div style={shell}>
-      <div style={scrollAreaFor(io)}>
+    <div style={shellStyle}>
+      <div style={scrollAreaFor(io, mobileChrome)}>
         <Row k="sel" active={activeTool === 'select'} icon={<MousePointer2 size={20} />} label="Select" onPress={() => setTool('select')} />
+        {onRecordingHubToggle ? (
+          <div data-tour-id="recording-hub">
+            <Row
+              k="hub"
+              active={recordingHubOpen}
+              icon={<Video size={20} />}
+              label="Recording Hub"
+              sub="Record, screenshot, load video"
+              onPress={() => onRecordingHubToggle()}
+            />
+          </div>
+        ) : null}
         {onPrecisionDrawToggle ? (
           <Row
             k="prec"

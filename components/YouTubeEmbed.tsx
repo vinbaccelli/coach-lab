@@ -41,9 +41,12 @@ function loadYouTubeIframeAPI(): Promise<any> {
 export default function YouTubeEmbed({
   videoId,
   onPlayer,
+  onEmbedReady,
 }: {
   videoId: string;
   onPlayer: (player: any | null) => void;
+  /** Fires when the player is ready — use to mark embed loaded and show first frame. */
+  onEmbedReady?: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
@@ -72,9 +75,18 @@ export default function YouTubeEmbed({
             ...(origin ? { origin } : {}),
           },
           events: {
-            onReady: () => {
+            onReady: (ev: { target: any }) => {
               if (cancelled) return;
-              onPlayer(playerRef.current);
+              const player = ev?.target ?? playerRef.current;
+              playerRef.current = player;
+              try {
+                player?.seekTo?.(0, true);
+                player?.pauseVideo?.();
+              } catch {
+                /* first-frame cue is best-effort */
+              }
+              onEmbedReady?.();
+              onPlayer(player);
             },
           },
         });
@@ -92,7 +104,7 @@ export default function YouTubeEmbed({
       playerRef.current = null;
       onPlayer(null);
     };
-  }, [videoId, onPlayer]);
+  }, [videoId, onPlayer, onEmbedReady]);
 
   return (
     <div

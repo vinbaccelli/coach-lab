@@ -68,9 +68,9 @@ const STEPS: ReadonlyArray<TourStep> = [
   },
   {
     target: 'recording-hub',
-    title: 'Recording Studio',
+    title: 'Recording Hub',
     description:
-      'One place to start a session recording, toggle the webcam and mic, switch layout (16:9 / 9:16), or load videos via Publer or Screen Record.',
+      'Open Recording Hub from the left toolbar for layout, screenshots, screen recording, webcam, mic, and loading videos via Publer or screen record.',
     placement: 'bottom',
   },
   {
