@@ -15,6 +15,7 @@ import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 import RecordingHub from '@/components/RecordingHub';
+import GuidedTour from '@/components/GuidedTour';
 import { terminateGlobalPoseWorker, warmupMoveNetWorker } from '@/lib/poseWorkerBridge';
 import PrecisionDrawInstructions, {
   hasSeenPrecisionInstructions,
@@ -616,6 +617,21 @@ export default function Home() {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Expose the playback-dock clearance as a CSS custom property so that the
+  // global InstallPrompt banner (rendered in app/layout.tsx) can position
+  // itself above the controls without any prop drilling or context.
+  // The measured value already includes env(safe-area-inset-bottom) because
+  // the dock's padding-bottom on mobile contains that env() value.
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--coachlab-banner-bottom',
+      `${toolbarBottomReservePx}px`,
+    );
+    return () => {
+      document.documentElement.style.removeProperty('--coachlab-banner-bottom');
+    };
+  }, [toolbarBottomReservePx]);
 
   const cleanupVideoEl = useCallback((v: HTMLVideoElement | null) => {
     if (!v) return;
@@ -2501,7 +2517,7 @@ export default function Home() {
                   <button onClick={() => setMobileMenuOpen(false)} style={{ ...headerBtnStyle, width: 44, padding: 0 }}>✕</button>
                 </div>
 
-                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <div data-tour-id="load-video" style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                   <select
                     value={urlTarget}
                     onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
@@ -2637,7 +2653,7 @@ export default function Home() {
           >
             {/* Actions (desktop) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: layoutMode === 'reels' ? '5px' : '8px', flexWrap: 'nowrap', overflowX: 'auto' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+              <div data-tour-id="load-video" style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                 <select
                   value={urlTarget}
                   onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
@@ -2734,6 +2750,7 @@ export default function Home() {
         {/* Left toolbar (desktop) — 16:9 layout only; Reels uses floating toolbar on the stage */}
         {!isMobile && layoutMode !== 'reels' && (
         <aside
+          data-tour-id="video-toolbar"
           className="coachlab-video-toolbar"
           style={{
           width: leftToolbarWidthPx,
@@ -2951,6 +2968,7 @@ export default function Home() {
             >
             {showMobileToolStrip && (
               <div
+                data-tour-id="video-toolbar"
                 className="coachlab-video-toolbar"
                 style={{
                 position: 'absolute',
@@ -2975,6 +2993,7 @@ export default function Home() {
             )}
             {!isMobile && layoutMode === 'reels' && (
               <aside
+                data-tour-id="video-toolbar"
                 className="coachlab-video-toolbar"
                 style={{
                   position: 'absolute',
@@ -3724,6 +3743,7 @@ export default function Home() {
             {/* Playback controls overlay — positioned inside the video container */}
             <div
               ref={playbackDockRef}
+              data-tour-id="playback-dock"
               onPointerMove={showControls}
               onPointerDown={showControls}
               onTouchStart={showControls}
@@ -4139,6 +4159,9 @@ export default function Home() {
         style={{ display: 'none' }}
         onChange={handleVideoUploadB}
       />
+
+      {/* Guided tour: floating "?" + spotlight overlay (portaled to body). */}
+      <GuidedTour />
     </div>
   );
 }

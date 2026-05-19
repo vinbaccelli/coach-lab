@@ -7,23 +7,27 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
 
+const LS_IOS_KEY     = 'coachlab-pwa-ios-dismissed';
+const LS_ANDROID_KEY = 'coachlab-pwa-android-dismissed';
+
 export default function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showAndroid, setShowAndroid] = useState(false);
-  const [showIOS, setShowIOS] = useState(false);
+  const [showIOS, setShowIOS]         = useState(false);
 
   useEffect(() => {
-    // Detect iOS Safari (no beforeinstallprompt support)
+    // iOS Safari: no beforeinstallprompt; guide the user manually.
     const isIOS =
       /iphone|ipad|ipod/i.test(navigator.userAgent) &&
       !(window.navigator as Navigator & { standalone?: boolean }).standalone;
 
-    if (isIOS) {
-      const dismissed = localStorage.getItem('coachlab-pwa-ios-dismissed');
-      if (!dismissed) setShowIOS(true);
+    if (isIOS && !localStorage.getItem(LS_IOS_KEY)) {
+      setShowIOS(true);
     }
 
+    // Android/Chrome: capture the native install prompt.
     const handler = (e: Event) => {
+      if (localStorage.getItem(LS_ANDROID_KEY)) return;
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
       setShowAndroid(true);
@@ -36,13 +40,20 @@ export default function InstallPrompt() {
   const handleAndroidInstall = async () => {
     if (!deferredPrompt) return;
     await deferredPrompt.prompt();
-    await deferredPrompt.userChoice;
+    const { outcome } = await deferredPrompt.userChoice;
+    // Persist regardless of outcome so the banner never re-appears.
+    localStorage.setItem(LS_ANDROID_KEY, outcome);
     setShowAndroid(false);
     setDeferredPrompt(null);
   };
 
+  const dismissAndroid = () => {
+    localStorage.setItem(LS_ANDROID_KEY, 'dismissed');
+    setShowAndroid(false);
+  };
+
   const dismissIOS = () => {
-    localStorage.setItem('coachlab-pwa-ios-dismissed', '1');
+    localStorage.setItem(LS_IOS_KEY, '1');
     setShowIOS(false);
   };
 
@@ -52,7 +63,21 @@ export default function InstallPrompt() {
     <div
       role="dialog"
       aria-live="polite"
-      className="fixed left-1/2 -translate-x-1/2 z-40 w-[calc(100%-32px)] max-w-sm bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))]"
+      style={{
+        position: 'fixed',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 40,
+        width: 'calc(100% - 32px)',
+        maxWidth: '384px',
+        // --coachlab-banner-bottom is set by app/analysis/page.tsx via a
+        // useEffect that mirrors toolbarBottomReservePx.  That value is
+        // measured from the ResizeObserver on the playback dock and already
+        // includes env(safe-area-inset-bottom) via the dock's padding.
+        // Fallback of 100px keeps the banner visible on other pages where
+        // the CSS variable is not set.
+        bottom: 'var(--coachlab-banner-bottom, 100px)',
+      }}
     >
       <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200 p-4 flex items-start gap-3">
         {/* Icon */}
@@ -91,7 +116,7 @@ export default function InstallPrompt() {
 
         {/* Dismiss */}
         <button
-          onClick={showIOS ? dismissIOS : () => setShowAndroid(false)}
+          onClick={showIOS ? dismissIOS : dismissAndroid}
           aria-label="Dismiss"
           className="shrink-0 text-gray-400 hover:text-gray-600 text-xl leading-none"
         >

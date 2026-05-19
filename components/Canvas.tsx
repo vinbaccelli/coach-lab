@@ -1729,7 +1729,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           e.preventDefault();
         } else if (
           e.touches.length === 1 &&
-          zoomRef.current > 1 &&
+          (zoomRef.current > 1 || panModeEnabledRef.current) &&
           !pinchWebcam
         ) {
           const t = activeToolRef.current;
@@ -3385,21 +3385,34 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // ── Pan: activates immediately on pointer-down with no delay ────────
       // Triggers: middle-click, Space+drag, zoom tool while zoomed,
-      // select/skeleton tool while zoomed, or panMode enabled while zoomed.
-      // When panMode is on and zoomed, ALL tools become pan (drawing is suppressed).
+      // select/skeleton tool while zoomed, touch while zoomed, or panMode
+      // enabled at ANY zoom level (no prior zoom-in required).
       const zoomed = zoomRef.current > 1;
       const isDrawingTool =
         tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' ||
         tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle' ||
         tool === 'angle' || tool === 'text' || tool === 'erase' || tool === 'ballShadow' ||
         tool === 'swingPath' || tool === 'manualSwing';
+
+      // If the pointer lands on the webcam PiP, preserve PiP drag/resize even
+      // when pan mode is active.  We pre-check here so the PiP hit can veto
+      // the pan-mode condition inside shouldPan.
+      const pipVeto =
+        webcamActiveRef.current &&
+        tool === 'select' &&
+        webcamPipHitTest(getPos(e)) !== 'miss';
+
       const shouldPan =
-        e.button === 1 ||
-        spaceHeldRef.current ||
-        (tool === 'zoom' && e.button === 0 && zoomed) ||
-        (zoomed && panModeEnabledRef.current) ||
-        (zoomed && !isDrawingTool) ||
-        (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current);
+        !pipVeto && (
+          e.button === 1 ||
+          spaceHeldRef.current ||
+          (tool === 'zoom' && e.button === 0 && zoomed) ||
+          // Pan mode works at ANY zoom level — no prior zoom-in required.
+          panModeEnabledRef.current ||
+          (zoomed && !isDrawingTool) ||
+          // Touch one-finger drag while zoomed always pans (no activation needed).
+          (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current)
+        );
       if (shouldPan) {
         isPanningRef.current = true;
         panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
@@ -4243,7 +4256,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           : zoomRef.current > 1.0 ? 'zoom-out' : 'zoom-in',
       select: zoomRef.current > 1 ? (isPanningRef.current ? 'grabbing' : 'grab') : 'default',
     };
-    if (panModeEnabled && zoomRef.current > 1) {
+    if (panModeEnabled) {
       Object.keys(cursorFor).forEach((k) => {
         if (k === 'objectMultiplier') return;
         (cursorFor as Record<string, string>)[k] = isPanningRef.current ? 'grabbing' : 'grab';
@@ -4318,7 +4331,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             cursor:
               activeTool === 'objectMultiplier'
                 ? 'default'
-                : panModeEnabled && zoomRef.current > 1
+                : panModeEnabled
                   ? (isPanningRef.current ? 'grabbing' : 'grab')
                   : (cursorFor[activeTool] ?? 'default'),
           }}

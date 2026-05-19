@@ -774,55 +774,56 @@ export default function ToolPalette(props: ToolPaletteProps) {
     );
   }
 
-  if (top === 'multiplier') {
-    const frameChoices = [3, 5, 8, 10] as const;
-    return (
-      <div style={shell}>
-        <div style={scrollAreaFor(io)}>
-          <BackHeader title="Racket multiplier" icon={<Layers size={18} />} />
-          <p style={{ margin: '0 4px 8px', fontSize: 13, fontWeight: 600, color: '#7C3AED', lineHeight: 1.4 }}>
-            Highlight the racket region across frames
-          </p>
-          <p style={{ margin: '0 4px 12px', fontSize: 12, color: '#6B7280', lineHeight: 1.45 }}>
-            Drag a rectangle on the video to select the racket area. Frames are captured at 10 fps from the current time, with background softened on each frame.
-          </p>
-          <div style={{ padding: '4px 8px' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Frames to overlay</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {frameChoices.map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  style={{
-                    ...rowBase(objMultiplierFrameCount === n, io),
-                    flex: '1 1 40%',
-                    justifyContent: 'center',
-                    minHeight: 40,
-                  }}
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    fire(`frm-${n}`, () => onObjMultiplierFrameCountChange?.(n));
-                  }}
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
-          </div>
-          {!objMultiplierActive ? (
-            <p style={{ fontSize: 12, color: '#B45309', fontWeight: 600, margin: '4px 8px', lineHeight: 1.4 }}>
-              No region yet — drag on the video to select the racket area first.
-            </p>
-          ) : null}
-          {objMultiplierProgress ? (
-            <p style={{ fontSize: 12, color: '#7C3AED', fontWeight: 600, margin: '4px 8px' }}>{objMultiplierProgress}</p>
-          ) : null}
-          <Row k="cap" icon={<Layers size={18} />} label="Capture frames" onPress={() => onObjMultiplierCapture?.()} />
-          <Row k="clr" icon={<RefreshCw size={18} />} label="Clear overlay" onPress={() => onObjMultiplierClear?.()} />
-        </div>
-      </div>
-    );
-  }
+  // V2 — Racket Multiplier
+  // if (top === 'multiplier') {
+  //   const frameChoices = [3, 5, 8, 10] as const;
+  //   return (
+  //     <div style={shell}>
+  //       <div style={scrollAreaFor(io)}>
+  //         <BackHeader title="Racket multiplier" icon={<Layers size={18} />} />
+  //         <p style={{ margin: '0 4px 8px', fontSize: 13, fontWeight: 600, color: '#7C3AED', lineHeight: 1.4 }}>
+  //           Highlight the racket region across frames
+  //         </p>
+  //         <p style={{ margin: '0 4px 12px', fontSize: 12, color: '#6B7280', lineHeight: 1.45 }}>
+  //           Drag a rectangle on the video to select the racket area. Frames are captured at 10 fps from the current time, with background softened on each frame.
+  //         </p>
+  //         <div style={{ padding: '4px 8px' }}>
+  //           <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Frames to overlay</div>
+  //           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+  //             {frameChoices.map((n) => (
+  //               <button
+  //                 key={n}
+  //                 type="button"
+  //                 style={{
+  //                   ...rowBase(objMultiplierFrameCount === n, io),
+  //                   flex: '1 1 40%',
+  //                   justifyContent: 'center',
+  //                   minHeight: 40,
+  //                 }}
+  //                 onPointerDown={(e) => {
+  //                   e.preventDefault();
+  //                   fire(`frm-${n}`, () => onObjMultiplierFrameCountChange?.(n));
+  //                 }}
+  //               >
+  //                 {n}
+  //               </button>
+  //             ))}
+  //           </div>
+  //         </div>
+  //         {!objMultiplierActive ? (
+  //           <p style={{ fontSize: 12, color: '#B45309', fontWeight: 600, margin: '4px 8px', lineHeight: 1.4 }}>
+  //             No region yet — drag on the video to select the racket area first.
+  //           </p>
+  //         ) : null}
+  //         {objMultiplierProgress ? (
+  //           <p style={{ fontSize: 12, color: '#7C3AED', fontWeight: 600, margin: '4px 8px' }}>{objMultiplierProgress}</p>
+  //         ) : null}
+  //         <Row k="cap" icon={<Layers size={18} />} label="Capture frames" onPress={() => onObjMultiplierCapture?.()} />
+  //         <Row k="clr" icon={<RefreshCw size={18} />} label="Clear overlay" onPress={() => onObjMultiplierClear?.()} />
+  //       </div>
+  //     </div>
+  //   );
+  // }
 
   /* ── Home ─────────────────────────────────────────────────────────── */
   return (
@@ -872,16 +873,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             push('webcam');
           }}
         />
-        <Row
-          k="mul"
-          active={activeTool === 'objectMultiplier'}
-          icon={<Layers size={20} />}
-          label="Racket multiplier"
-          onPress={() => {
-            setTool('objectMultiplier');
-            push('multiplier');
-          }}
-        />
+        {/* V2 — Racket Multiplier */}
 
         <div style={{ height: 1, background: '#E8E6E1', margin: '8px 0' }} />
 

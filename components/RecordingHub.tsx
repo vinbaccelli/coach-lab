@@ -245,6 +245,7 @@ export default function RecordingHub({
       onClick={onToggle}
       title="Recording Studio"
       aria-label="Recording Studio"
+      data-tour-id="recording-hub"
       style={{
         ...triggerBtnBase,
         border: isRecording
