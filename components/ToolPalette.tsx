@@ -21,6 +21,7 @@ import {
   Zap,
   Layers,
   ChevronLeft,
+  ChevronRight,
   Palette,
   LayoutGrid,
   Video,
@@ -97,6 +98,14 @@ interface ToolPaletteProps {
   mobileChrome?: boolean;
   /** Recording Hub body (embedded in toolbar navigation). */
   recordingHubContent?: React.ReactNode;
+  /** Desktop: toolbar rail is icon-only when collapsed. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+  showCollapseControl?: boolean;
+  /** Full session reset (moved from top settings menu). */
+  onCleanSession?: () => void;
+  /** Mobile: denser icon targets to maximize canvas. */
+  denseMobile?: boolean;
 }
 
 const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
@@ -170,14 +179,14 @@ function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties
   return base;
 }
 
-function rowBase(active: boolean, io?: boolean): React.CSSProperties {
+function rowBase(active: boolean, io?: boolean, dense?: boolean): React.CSSProperties {
   const base: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: io ? 0 : 10,
     width: '100%',
-    minHeight: 44,
-    padding: io ? '8px 6px' : '10px 12px',
+    minHeight: dense ? 34 : io ? 40 : 44,
+    padding: dense ? '4px 2px' : io ? '6px 4px' : '10px 12px',
     borderRadius: 10,
     border: active ? '1px solid #35679A' : '1px solid rgba(255,255,255,0.25)',
     background: active ? 'rgba(53,103,154,0.2)' : 'rgba(255,255,255,0.12)',
@@ -253,9 +262,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
     iconOnlyLayout = false,
     mobileChrome = false,
     recordingHubContent,
+    collapsed = false,
+    onToggleCollapsed,
+    showCollapseControl = false,
+    onCleanSession,
+    denseMobile = false,
   } = props;
 
-  const io = Boolean(iconOnlyLayout || mobileChrome);
+  const io = Boolean(iconOnlyLayout || mobileChrome || collapsed);
   const shellStyle: React.CSSProperties = {
     ...shell,
     background: mobileChrome ? 'rgba(255,255,255,0.15)' : 'transparent',
@@ -296,6 +310,38 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   const setTool = (t: ToolType) => onToolChange(t);
 
+  const iconBox = denseMobile ? 20 : io ? 24 : 26;
+
+  const CollapseControl = () =>
+    showCollapseControl && onToggleCollapsed ? (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          padding: denseMobile ? '2px 2px 4px' : '4px 4px 6px',
+          flexShrink: 0,
+        }}
+      >
+        <button
+          type="button"
+          aria-label={collapsed ? 'Expand toolbar' : 'Collapse toolbar'}
+          style={{
+            ...rowBase(false, true, denseMobile),
+            width: denseMobile ? 32 : 36,
+            minHeight: denseMobile ? 28 : 32,
+            padding: 0,
+            justifyContent: 'center',
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire('collapse', onToggleCollapsed);
+          }}
+        >
+          {collapsed ? <ChevronRight size={denseMobile ? 16 : 18} /> : <ChevronLeft size={denseMobile ? 16 : 18} />}
+        </button>
+      </div>
+    ) : null;
+
   const Row = ({
     k,
     active,
@@ -318,7 +364,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           type="button"
           aria-label={sub ? `${label} — ${sub}` : label}
           style={{
-            ...rowBase(!!active, true),
+            ...rowBase(!!active, true, denseMobile),
             transform: pressed ? 'scale(0.95)' : undefined,
           }}
           onPointerDown={(e) => {
@@ -329,8 +375,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <span
             style={{
               display: 'flex',
-              width: 28,
-              height: 28,
+              width: iconBox,
+              height: iconBox,
               alignItems: 'center',
               justifyContent: 'center',
               color: '#4B5563',
@@ -345,7 +391,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <button
         type="button"
         style={{
-          ...rowBase(!!active, false),
+          ...rowBase(!!active, false, denseMobile),
           transform: pressed ? 'scale(0.95)' : undefined,
         }}
         onPointerDown={(e) => {
@@ -517,8 +563,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'recording' && recordingHubContent) {
     return (
       <div style={shellStyle}>
+        <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
-          <BackHeader title="Recording Hub" icon={<Video size={18} />} />
+          <BackHeader title="Control Panel" icon={<LayoutGrid size={18} />} />
           {recordingHubContent}
         </div>
       </div>
@@ -528,6 +575,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'style') {
     return (
       <div style={shellStyle}>
+        <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Style" icon={<Palette size={18} />} />
           <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
@@ -671,6 +719,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'draw') {
     return (
       <div style={shellStyle}>
+        <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Draw" icon={<Pen size={18} />} />
           <Row k="sel" active={activeTool === 'select'} icon={<MousePointer2 size={18} />} label="Select" onPress={() => setTool('select')} />
@@ -709,6 +758,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'angle') {
     return (
       <div style={shellStyle}>
+        <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Angle" icon={<Activity size={18} />} />
           <Row k="angle" active={activeTool === 'angle'} icon={<Triangle size={18} />} label="Angle" onPress={() => setTool('angle')} />
@@ -721,6 +771,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'skeleton') {
     return (
       <div style={shellStyle}>
+        <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
           {onSkeletonOverlayPausedChange !== undefined && (
@@ -801,6 +852,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'webcam') {
     return (
       <div style={shellStyle}>
+        <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Webcam" icon={<Camera size={18} />} />
           {onToggleWebcam ? (
@@ -861,6 +913,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'more') {
     return (
       <div style={shellStyle}>
+        <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
           <p style={{ margin: '0 4px 8px', fontSize: 12, color: '#6B7280' }}>More tools will return in a future update.</p>
@@ -923,10 +976,16 @@ export default function ToolPalette(props: ToolPaletteProps) {
   /* ── Home ─────────────────────────────────────────────────────────── */
   return (
     <div style={shellStyle}>
+      <CollapseControl />
       <div style={scrollAreaFor(io, mobileChrome)}>
         {recordingHubContent ? (
           <div data-tour-id="recording-hub">
-            <Row k="hub" icon={<Video size={20} />} label="Recording Hub" onPress={() => push('recording')} />
+            <Row
+              k="cp"
+              icon={<LayoutGrid size={denseMobile ? 16 : 20} />}
+              label="Control Panel"
+              onPress={() => push('recording')}
+            />
           </div>
         ) : null}
         <div data-tour-id="tour-draw-tools">
@@ -944,9 +1003,47 @@ export default function ToolPalette(props: ToolPaletteProps) {
           />
         </div>
         <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '8px 0' }} />
-        <Row k="u" icon={<Undo2 size={20} />} label="Undo" onPress={onUndo} />
-        <Row k="r" icon={<Redo2 size={20} />} label="Redo" onPress={onRedo} />
-        <Row k="cl" icon={<Trash2 size={20} />} label="Clear all" onPress={onClear} />
+        <Row k="u" icon={<Undo2 size={denseMobile ? 16 : 20} />} label="Undo" onPress={onUndo} />
+        <Row k="r" icon={<Redo2 size={denseMobile ? 16 : 20} />} label="Redo" onPress={onRedo} />
+        <Row k="cl" icon={<Trash2 size={denseMobile ? 16 : 20} />} label="Clear all" onPress={onClear} />
+        {onCleanSession ? (
+          <button
+            type="button"
+            aria-label="Clean session"
+            style={{
+              ...rowBase(false, io, denseMobile),
+              color: '#9a3412',
+              borderColor: '#fca5a5',
+              background: io ? 'rgba(254,226,226,0.35)' : '#FFF7ED',
+              transform: pressedKey === 'clean' ? 'scale(0.95)' : undefined,
+            }}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              fire('clean', onCleanSession);
+            }}
+          >
+            {io ? (
+              <span
+                style={{
+                  display: 'flex',
+                  width: iconBox,
+                  height: iconBox,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <RefreshCw size={denseMobile ? 16 : 18} />
+              </span>
+            ) : (
+              <>
+                <span style={{ display: 'flex', width: 26, justifyContent: 'center', color: '#9a3412' }}>
+                  <RefreshCw size={18} />
+                </span>
+                <span style={{ fontSize: 14, fontWeight: 600 }}>Clean session</span>
+              </>
+            )}
+          </button>
+        ) : null}
       </div>
     </div>
   );

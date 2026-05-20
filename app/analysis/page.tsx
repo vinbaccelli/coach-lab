@@ -10,7 +10,7 @@ import React, {
 } from 'react';
 import { flushSync } from 'react-dom';
 import dynamic from 'next/dynamic';
-import { Camera, Menu, Settings, Upload } from 'lucide-react';
+import { Camera, Plus, Trash2, Upload } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
@@ -165,7 +165,6 @@ export default function Home() {
   const [micMuted, setMicMuted]           = useState(false);
   const screenRecordBlobRef               = useRef<{ blob: Blob; ext: string } | null>(null);
   const [screenRecordDownloadPending, setScreenRecordDownloadPending] = useState(false);
-  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [isRecording, setIsRecording]     = useState(false);
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBOffset, setVideoBOffset]   = useState(0);
@@ -187,7 +186,6 @@ export default function Home() {
   const [urlTarget, setUrlTarget]           = useState<'A' | 'B'>('A');
   /** Which stream the unified timeline controls (AB = sync both for uploaded HTML5 pairs). */
   const [playbackTarget, setPlaybackTarget] = useState<'A' | 'B' | 'AB'>('A');
-  const [desktopReelsMenuOpen, setDesktopReelsMenuOpen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Distance from bottom of video stage to reserve for playback UI + 16px gap (px). */
@@ -333,16 +331,6 @@ export default function Home() {
   const [isMobile, setIsMobile]             = useState(false);
   /** Large tap targets only on real phones — desktop 9:16 preview keeps compact UI */
   const touchChrome                         = isMobile;
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  const headerBtnStyle = useMemo((): React.CSSProperties => ({
-    ...btnStyle,
-    minHeight: touchChrome ? 44 : 36,
-    minWidth: touchChrome ? 44 : undefined,
-    padding: touchChrome ? '10px 14px' : btnStyle.padding,
-    fontSize: touchChrome ? 14 : 13,
-    touchAction: 'manipulation',
-  }), [touchChrome]);
 
   // StroMotion state
   const [stroMotionEnabled, setStroMotionEnabled] = useState(false);
@@ -466,10 +454,7 @@ export default function Home() {
     mq.addEventListener('change', fn);
     return () => mq.removeEventListener('change', fn);
   }, []);
-  const leftToolbarWidthPx = 220;
-  const reelsToolbarWidthPx = toolbarIconOnlyLayout ? 56 : 200;
-
-  /** Mobile + tablet: floating tool strip (precision toggle lives here; hidden on desktop). */
+  /** Mobile + tablet: in-flow tool rail (precision toggle lives here). */
   const [showMobileToolStrip, setShowMobileToolStrip] = useState(false);
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1024px)');
@@ -478,6 +463,41 @@ export default function Home() {
     mq.addEventListener('change', fn);
     return () => mq.removeEventListener('change', fn);
   }, []);
+
+  const TOOLBAR_EXPANDED_W = 208;
+  const TOOLBAR_COLLAPSED_W = 56;
+  const TOOLBAR_MOBILE_W = 40;
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem('coachlab-toolbar-collapsed') === '1') {
+        setToolbarCollapsed(true);
+      }
+    } catch {
+      /* noop */
+    }
+  }, []);
+
+  const toggleToolbarCollapsed = useCallback(() => {
+    setToolbarCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem('coachlab-toolbar-collapsed', next ? '1' : '0');
+      } catch {
+        /* noop */
+      }
+      return next;
+    });
+  }, []);
+
+  const toolbarWidthPx = useMemo(() => {
+    if (isMobile || showMobileToolStrip) return TOOLBAR_MOBILE_W;
+    if (toolbarCollapsed) return TOOLBAR_COLLAPSED_W;
+    return TOOLBAR_EXPANDED_W;
+  }, [isMobile, showMobileToolStrip, toolbarCollapsed]);
+
+  const showToolbarRail = isMobile ? showMobileToolStrip : true;
 
   const [precisionDrawEnabled, setPrecisionDrawEnabled] = useState(false);
   const [precisionInstructionsOpen, setPrecisionInstructionsOpen] = useState(false);
@@ -1270,6 +1290,11 @@ export default function Home() {
     canvasRef.current?.clearAll();
     setCaptureError(null);
   }, [cleanupVideoEl, revokeBlobUrl]);
+
+  const handleAddVideoB = useCallback(() => {
+    setUrlTarget('B');
+    fileInputRefB.current?.click();
+  }, []);
 
   const removeVideoB = useCallback(() => {
     revokeBlobUrl(lastBlobUrlBRef.current);
@@ -2282,23 +2307,11 @@ export default function Home() {
   playbackControllerARef.current = youtubeVideoIdA ? ytIframeControllerA : html5ControllerA;
   playbackControllerBRef.current = youtubeVideoIdB ? ytIframeControllerB : html5ControllerB;
 
-  // 9:16 desktop toolbar is always icon-only (56 px); 16:9 desktop uses the
-  // dynamic leftToolbarWidthPx (208 expanded / 56 collapsed).
-  const REELS_DESKTOP_TB = 56;
-  const panelToolbarInset =
-    !isMobile && layoutMode === 'reels'
-      ? REELS_DESKTOP_TB + 8
-      : !isMobile
-        ? leftToolbarWidthPx + 8
-        : 0;
-  const timelineLeadingInset =
-    layoutMode === 'reels' && !isMobile ? REELS_DESKTOP_TB + 12 : leftToolbarWidthPx + 16;
+  /** Canvas-first layout: toolbar is a flex sibling, not an overlay — no inset padding. */
+  const panelToolbarInset = 0;
+  const timelineLeadingInset = 16;
 
   const reelsDesktop = !isMobile && layoutMode === 'reels';
-
-  const hubToolbarLeftInset = !isMobile
-    ? 12 + (layoutMode === 'reels' ? REELS_DESKTOP_TB : leftToolbarWidthPx) + 8
-    : 0;
 
   const renderTimelineDock = () => (
     <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -2450,6 +2463,10 @@ export default function Home() {
     objMultiplierActive:             objMultiplierHasRegion,
     objMultiplierProgress,
     iconOnlyLayout:                  toolbarIconOnlyLayout,
+    collapsed:                       !isMobile && toolbarCollapsed,
+    onToggleCollapsed:               !isMobile ? toggleToolbarCollapsed : undefined,
+    showCollapseControl:             !isMobile,
+    onCleanSession:                  resetSession,
     recordingHubContent: (
       <RecordingHubContent
         isRecording={isRecording}
@@ -2490,6 +2507,9 @@ export default function Home() {
     ...toolPaletteBaseProps,
     mobileChrome: true,
     iconOnlyLayout: true,
+    denseMobile: true,
+    collapsed: true,
+    showCollapseControl: false,
     precisionDrawEnabled,
     onPrecisionDrawToggle:       handlePrecisionDrawToggle,
     onShowPrecisionInstructions: showPrecisionInstructionsAgain,
@@ -2499,6 +2519,160 @@ export default function Home() {
     () => !!(videoSrc || youtubeVideoIdA || genericEmbedSrcA),
     [videoSrc, youtubeVideoIdA, genericEmbedSrcA],
   );
+
+  /** Enter AB sync as soon as slot B is filled so compare mode is obvious. */
+  useEffect(() => {
+    if (hasVideoAContent && hasVideoBContent) {
+      setPlaybackTarget('AB');
+    }
+  }, [hasVideoAContent, hasVideoBContent]);
+
+  const slotActionsOnDark = layoutMode === 'reels';
+
+  const renderVideoASlotActions = () => {
+    if (!hasVideoAContent || hasVideoBContent) return null;
+
+    const btnBase: React.CSSProperties = {
+      flex: '1 1 0',
+      minWidth: 0,
+      minHeight: touchChrome ? 48 : 44,
+      padding: '12px 16px',
+      borderRadius: 12,
+      fontSize: 14,
+      fontWeight: 700,
+      cursor: 'pointer',
+      touchAction: 'manipulation',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      transition: 'background 0.15s ease, border-color 0.15s ease, transform 0.12s ease',
+    };
+
+    return (
+      <div
+        role="group"
+        aria-label="Video slot actions"
+        data-tour-id="tour-video-ab"
+        style={{
+          flexShrink: 0,
+          width: '100%',
+          maxWidth: layoutMode === 'reels' ? '100%' : 'min(520px, 100%)',
+          margin: '0 auto',
+          padding: layoutMode === 'reels' ? '12px 16px' : '14px 16px 16px',
+          pointerEvents: 'auto',
+          zIndex: 45,
+          boxSizing: 'border-box',
+        }}
+      >
+        <p
+          style={{
+            margin: '0 0 10px',
+            fontSize: 12,
+            fontWeight: 600,
+            textAlign: 'center',
+            color: slotActionsOnDark ? 'rgba(255,255,255,0.55)' : '#6B7280',
+            lineHeight: 1.4,
+          }}
+        >
+          Compare technique — add a second video side by side
+        </p>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: isMobile ? 'column' : 'row',
+            gap: 10,
+            width: '100%',
+          }}
+        >
+          <button
+            type="button"
+            onClick={removeVideoA}
+            title="Remove Video A from this session"
+            style={{
+              ...btnBase,
+              border: slotActionsOnDark
+                ? '1px solid rgba(255,255,255,0.28)'
+                : '1px solid #E5E5E5',
+              background: slotActionsOnDark
+                ? 'rgba(255,255,255,0.1)'
+                : 'rgba(250, 249, 247, 0.96)',
+              color: slotActionsOnDark ? '#FFFFFF' : '#1A1A1A',
+              backdropFilter: 'blur(8px)',
+              WebkitBackdropFilter: 'blur(8px)',
+            }}
+          >
+            <Trash2 size={18} strokeWidth={2.25} aria-hidden />
+            Remove Video A
+          </button>
+          <button
+            type="button"
+            onClick={handleAddVideoB}
+            title="Add Video B to compare"
+            style={{
+              ...btnBase,
+              border: slotActionsOnDark
+                ? '1px solid rgba(52,199,89,0.55)'
+                : '1px solid rgba(52,199,89,0.45)',
+              background: slotActionsOnDark
+                ? 'rgba(52,199,89,0.22)'
+                : 'rgba(52,199,89,0.12)',
+              color: slotActionsOnDark ? '#FFFFFF' : '#166534',
+              backdropFilter: 'blur(8px)',
+              WebkitBackdropFilter: 'blur(8px)',
+              boxShadow: slotActionsOnDark
+                ? '0 4px 20px rgba(52,199,89,0.15)'
+                : '0 4px 16px rgba(52,199,89,0.1)',
+            }}
+          >
+            <Plus size={18} strokeWidth={2.5} aria-hidden />
+            Add Video B
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderToolbarRail = () => {
+    if (!showToolbarRail) return null;
+    const paletteProps = isMobile ? toolPaletteMobileProps : toolPaletteBaseProps;
+    return (
+      <aside
+        data-tour-id="video-toolbar"
+        className="coachlab-video-toolbar"
+        style={{
+          flexShrink: 0,
+          width: toolbarWidthPx,
+          transition: 'width 200ms ease',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+          overflow: 'hidden',
+          zIndex: 80,
+          background: isMobile ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.15)',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
+          borderRight: isMobile ? 'none' : '1px solid rgba(255,255,255,0.2)',
+          boxShadow: isMobile ? 'none' : '2px 0 24px rgba(0,0,0,0.06)',
+        }}
+      >
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            WebkitOverflowScrolling: 'touch',
+            padding: isMobile ? '4px 2px' : 6,
+            paddingBottom:
+              'calc(12px + var(--coachlab-install-banner-height, 0px) + env(safe-area-inset-bottom, 0px))',
+          }}
+        >
+          <ToolPalette {...paletteProps} />
+        </div>
+      </aside>
+    );
+  };
 
   return (
     <div
@@ -2541,129 +2715,18 @@ export default function Home() {
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
       />
 
-      {/* ── Header: logo left, settings right only ── */}
-      <header
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          top: 0,
-          zIndex: 90,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 10px)',
-          paddingRight: 12,
-          paddingBottom: 10,
-          paddingLeft: 12,
-          pointerEvents: 'none',
-        }}
-      >
-        <span
-          style={{
-            pointerEvents: 'auto',
-            fontSize: 15,
-            fontWeight: 800,
-            letterSpacing: '-0.02em',
-            color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
-            padding: '6px 4px',
-          }}
-        >
-          CoachLab
-        </span>
-        <div style={{ position: 'relative', pointerEvents: 'auto' }}>
-          <button
-            type="button"
-            onClick={() => setSettingsMenuOpen((o) => !o)}
-            style={{
-              ...headerBtnStyle,
-              width: 40,
-              height: 40,
-              padding: 0,
-              justifyContent: 'center',
-              borderRadius: '50%',
-              background: layoutMode === 'reels' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.85)',
-            }}
-            aria-label="Settings"
-            aria-expanded={settingsMenuOpen}
-          >
-            <Settings size={18} />
-          </button>
-          {settingsMenuOpen && (
-            <>
-              <div role="presentation" onClick={() => setSettingsMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 98 }} />
-              <div
-                style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: 'calc(100% + 6px)',
-                  zIndex: 99,
-                  minWidth: 180,
-                  padding: 6,
-                  borderRadius: 12,
-                  background: 'rgba(250, 249, 247, 0.98)',
-                  border: '1px solid #E5E5E5',
-                  boxShadow: '0 12px 32px rgba(0,0,0,0.12)',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => { resetSession(); setSettingsMenuOpen(false); }}
-                  style={{ ...headerBtnStyle, width: '100%', color: '#9a3412', borderColor: '#fca5a5' }}
-                >
-                  Clear session
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </header>
-
-
-      {/* ── Main layout ── */}
+      {/* ── Main layout: toolbar rail + canvas (no overlay) ── */}
       <div
         style={{
           display: 'flex',
           flex: 1,
+          minHeight: 0,
           overflow: 'hidden',
-          justifyContent: layoutMode === 'reels' ? 'center' : undefined,
-          background: layoutMode === 'reels' ? '#FFFFFF' : undefined,
-          position: 'relative',
+          background: layoutMode === 'reels' ? '#000' : '#0b0b0c',
         }}
       >
+        {renderToolbarRail()}
 
-        {/* Left toolbar (desktop) — 16:9 layout only; Reels uses floating toolbar on the stage */}
-        {!isMobile && layoutMode !== 'reels' && (
-        <aside
-          data-tour-id="video-toolbar"
-          className="coachlab-video-toolbar"
-          style={{
-          width: leftToolbarWidthPx,
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'rgba(255,255,255,0.15)',
-          overflowY: 'auto',
-          position: 'absolute',
-          left: 12,
-          top: 12,
-          bottom: toolbarBottomReservePx,
-          zIndex: 80,
-          borderRadius: 14,
-          boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
-          border: '1px solid rgba(255,255,255,0.2)',
-          backdropFilter: 'blur(10px)',
-          WebkitBackdropFilter: 'blur(10px)',
-        }}
-        >
-          <div style={{ padding: 6 }}>
-            <ToolPalette {...toolPaletteBaseProps} />
-          </div>
-
-          {/* Resize handle removed in compact mode */}
-        </aside>
-        )}
-
-        {/* Canvas area */}
         <main
           style={{
             flex: 1,
@@ -2671,11 +2734,9 @@ export default function Home() {
             flexDirection: 'column',
             overflow: 'hidden',
             minWidth: 0,
-            alignItems: layoutMode === 'reels' ? 'center' : undefined,
-            paddingTop:
-              layoutMode === 'reels'
-                ? 0
-                : 'calc(env(safe-area-inset-top, 0px) + 52px)',
+            alignItems: layoutMode === 'reels' && !isMobile ? 'center' : undefined,
+            justifyContent: layoutMode === 'reels' && !isMobile ? 'center' : undefined,
+            paddingTop: 'env(safe-area-inset-top, 0px)',
             width: '100%',
           }}
         >
@@ -2729,76 +2790,23 @@ export default function Home() {
                 position: 'relative',
               }}
             >
-            {showMobileToolStrip && (
-              <div
-                data-tour-id="video-toolbar"
-                className="coachlab-video-toolbar"
-                style={{
-                position: 'absolute',
-                left: 8,
-                top: 8,
-                bottom: toolbarBottomReservePx,
-                width: leftToolbarWidthPx,
-                zIndex: 60,
-                overflowY: 'auto',
-                overflowX: 'hidden',
-                WebkitOverflowScrolling: 'touch',
-                paddingBottom:
-                  'calc(100px + var(--coachlab-install-banner-height, 0px) + env(safe-area-inset-bottom, 0px))',
-                borderRadius: 14,
-                boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
-                border: '1px solid rgba(0,0,0,0.08)',
-                background: 'rgba(255,255,255,0.15)',
-                backdropFilter: 'blur(10px)',
-                WebkitBackdropFilter: 'blur(10px)',
-              }}
-              >
-                <ToolPalette {...toolPaletteMobileProps} />
-              </div>
-            )}
-            {!isMobile && layoutMode === 'reels' && (
-              <aside
-                data-tour-id="video-toolbar"
-                className="coachlab-video-toolbar"
-                style={{
-                  position: 'absolute',
-                  left: 12,
-                  top: 12,
-                  bottom: toolbarBottomReservePx,
-                  width: REELS_DESKTOP_TB,
-                  zIndex: 84,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  background: 'rgba(255,255,255,0.92)',
-                  overflow: 'hidden',
-                  borderRadius: 14,
-                  border: '1px solid rgba(0,0,0,0.08)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
-                }}
-              >
-                <div
-                  style={{
-                    padding: 6,
-                    width: '100%',
-                    height: '100%',
-                    minHeight: 0,
-                    overflowY: 'auto',
-                    WebkitOverflowScrolling: 'touch',
-                  }}
-                >
-                  <ToolPalette {...toolPaletteBaseProps} iconOnlyLayout={true} />
-                </div>
-              </aside>
-            )}
-            {/* Video A */}
+            {/* Slot A: video panel + side-by-side actions when B is empty */}
             <div
               style={{
                 flex: layoutMode === 'reels' ? (hasVideoBContent ? '1 1 50%' : '1 1 auto') : 1,
-                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
                 minWidth: 0,
                 minHeight: layoutMode === 'reels' ? 0 : undefined,
+                overflow: 'hidden',
+              }}
+            >
+            <div
+              style={{
+                flex: 1,
+                position: 'relative',
+                minWidth: 0,
+                minHeight: 0,
                 overflow: 'hidden',
               }}
             >
@@ -3102,30 +3110,32 @@ export default function Home() {
                       onStartRecording={(o) => startEmbedCaptureRecording('A', o)}
                       onUploadInstead={() => fileInputRef.current?.click()}
                     />
-                    <button
-                      type="button"
-                      onClick={removeVideoA}
-                      title="Remove Video A from this session"
-                      style={{
-                        position: 'absolute',
-                        top: reelsDesktop ? 48 : 8,
-                        right: 8,
-                        zIndex: 92,
-                        padding: '6px 10px',
-                        borderRadius: layoutMode === 'reels' ? 0 : 10,
-                        border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
-                        background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250, 249, 247, 0.94)',
-                        color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        backdropFilter: 'blur(14px)',
-                        WebkitBackdropFilter: 'blur(14px)',
-                        boxShadow: layoutMode === 'reels' ? 'none' : '0 6px 20px rgba(0,0,0,0.08)',
-                      }}
-                    >
-                      Remove Video A
-                    </button>
+                    {hasVideoBContent ? (
+                      <button
+                        type="button"
+                        onClick={removeVideoA}
+                        title="Remove Video A from this session"
+                        style={{
+                          position: 'absolute',
+                          top: reelsDesktop ? 48 : 8,
+                          right: 8,
+                          zIndex: 92,
+                          padding: '6px 10px',
+                          borderRadius: layoutMode === 'reels' ? 0 : 10,
+                          border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                          background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250, 249, 247, 0.94)',
+                          color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          backdropFilter: 'blur(14px)',
+                          WebkitBackdropFilter: 'blur(14px)',
+                          boxShadow: layoutMode === 'reels' ? 'none' : '0 6px 20px rgba(0,0,0,0.08)',
+                        }}
+                      >
+                        Remove Video A
+                      </button>
+                    ) : null}
                   </>
                 )}
                 {/* Drag-over overlay for Video A */}
@@ -3201,41 +3211,8 @@ export default function Home() {
                 )}
               </div>
             </div>
-
-            {hasVideoAContent && !hasVideoBContent && (
-              <div
-                style={{
-                  flexShrink: 0,
-                  display: 'flex',
-                  justifyContent: 'center',
-                  padding: layoutMode === 'reels' ? '12px 16px' : '16px',
-                  pointerEvents: 'auto',
-                  zIndex: 45,
-                }}
-              >
-                <button
-                  type="button"
-                  data-tour-id="tour-video-ab"
-                  onClick={() => {
-                    setUrlTarget('B');
-                    fileInputRefB.current?.click();
-                  }}
-                  style={{
-                    padding: '12px 24px',
-                    borderRadius: 12,
-                    border: '1px solid rgba(255,255,255,0.35)',
-                    background: layoutMode === 'reels' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.92)',
-                    color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
-                    fontSize: 14,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    backdropFilter: 'blur(8px)',
-                  }}
-                >
-                  Add Video B
-                </button>
-              </div>
-            )}
+            {renderVideoASlotActions()}
+            </div>
 
             {layoutMode === 'reels' && hasVideoBContent && (
               <div
@@ -3613,7 +3590,7 @@ export default function Home() {
           role="alert"
           style={{
             position: 'fixed',
-            top: 'calc(env(safe-area-inset-top, 0px) + 52px)',
+            top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 205,
