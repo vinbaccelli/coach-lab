@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   MousePointer2,
   Pen,
@@ -29,6 +30,9 @@ import {
   Camera,
   Sparkles,
   Link2,
+  Home,
+  PanelLeftOpen,
+  PanelLeftClose,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -116,6 +120,10 @@ interface ToolPaletteProps {
   onExitDrawContext?: () => void;
   /** Desktop 9:16 — same compact icon-only rail as phone. */
   phoneLayout?: boolean;
+  /** Mobile + desktop 9:16 compact toolbar with expand/collapse labels. */
+  compactToolbarChrome?: boolean;
+  toolbarLabelsExpanded?: boolean;
+  onToggleToolbarLabels?: () => void;
 }
 
 const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
@@ -143,6 +151,62 @@ function ToolbarIcon({ children, size = 18 }: { children: React.ReactElement; si
     size,
     ...TOOLBAR_ICON_PROPS,
   });
+}
+
+function ThicknessPxBar({
+  value,
+  onChange,
+  vertical,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  vertical?: boolean;
+}) {
+  if (!vertical) {
+    return (
+      <input
+        type="range"
+        min={1}
+        max={12}
+        step={1}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ width: '100%', marginTop: 4 }}
+      />
+    );
+  }
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 2,
+        padding: '4px 0 8px',
+      }}
+    >
+      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', color: '#6B7280' }}>PX</span>
+      <input
+        type="range"
+        min={1}
+        max={12}
+        step={1}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label="Line thickness"
+        style={{
+          width: 28,
+          height: 96,
+          margin: 0,
+          accentColor: '#35679A',
+          WebkitAppearance: 'slider-vertical' as React.CSSProperties['WebkitAppearance'],
+          writingMode: 'vertical-lr',
+          direction: 'rtl',
+        }}
+      />
+      <span style={{ fontSize: 9, fontWeight: 600, color: '#9CA3AF', lineHeight: 1 }}>{value}</span>
+    </div>
+  );
 }
 
 function haptic() {
@@ -297,9 +361,16 @@ export default function ToolPalette(props: ToolPaletteProps) {
     drawContextActive = false,
     onExitDrawContext,
     phoneLayout = false,
+    compactToolbarChrome = false,
+    toolbarLabelsExpanded = false,
+    onToggleToolbarLabels,
   } = props;
 
-  const io = Boolean(iconOnlyLayout || mobileChrome || collapsed || phoneLayout);
+  const useVerticalThickness = Boolean(compactToolbarChrome || mobileChrome || phoneLayout);
+  const iconOnlyMode = compactToolbarChrome
+    ? !toolbarLabelsExpanded
+    : Boolean(iconOnlyLayout || mobileChrome || collapsed || phoneLayout);
+  const io = iconOnlyMode;
   const shellStyle: React.CSSProperties = {
     ...shell,
     background: mobileChrome ? 'rgba(255,255,255,0.15)' : 'transparent',
@@ -349,6 +420,54 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const setTool = (t: ToolType) => onToolChange(t);
 
   const iconBox = denseMobile ? 20 : io ? 24 : 26;
+
+  const ToolbarLead = () => (
+    <>
+      {compactToolbarChrome && onToggleToolbarLabels ? (
+        <button
+          type="button"
+          aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
+          style={{
+            ...rowBase(false, true, denseMobile),
+            transform: pressedKey === 'expand' ? 'scale(0.95)' : undefined,
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire('expand', onToggleToolbarLabels);
+          }}
+        >
+          <ToolbarIcon size={denseMobile ? 18 : 20}>
+            {toolbarLabelsExpanded ? <PanelLeftClose /> : <PanelLeftOpen />}
+          </ToolbarIcon>
+        </button>
+      ) : null}
+      <Link
+        href="/"
+        aria-label="Back to Control Panel"
+        style={{
+          ...rowBase(false, io, denseMobile),
+          textDecoration: 'none',
+          color: 'inherit',
+        }}
+        onPointerDown={() => haptic()}
+      >
+        <span
+          style={{
+            display: 'flex',
+            width: iconBox,
+            height: iconBox,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <ToolbarIcon size={denseMobile ? 16 : 18}>
+            <Home />
+          </ToolbarIcon>
+        </span>
+        {io ? null : <span style={{ fontSize: 14, fontWeight: 700, color: '#35679A' }}>Control Panel</span>}
+      </Link>
+    </>
+  );
 
   const CollapseControl = () =>
     showCollapseControl && onToggleCollapsed ? (
@@ -471,7 +590,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         onPointerDown={(e) => {
           e.preventDefault();
           fire(`back-${title}`, () => {
-            if (top === 'drawContext') onExitDrawContext?.();
+            onBack?.();
             pop();
           });
         }}
@@ -609,6 +728,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
+          <ToolbarLead />
           <BackHeader title="Session & record" icon={<LayoutGrid size={18} />} />
           {recordingHubContent}
         </div>
@@ -621,6 +741,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
+          <ToolbarLead />
           <BackHeader title="Default style" icon={<Palette size={18} />} />
           <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: '#6B7280' }}>
             Sets the look for your next mark. Tap a finished shape on the video to edit it there.
@@ -664,17 +785,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
               style={{ marginLeft: 'auto', width: 44, height: 32, border: 'none', background: 'transparent' }}
             />
           </label>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 0' }}>
-            Thickness ({drawingOptions.lineWidth}px)
-          </div>
-          <input
-            type="range"
-            min={1}
-            max={12}
-            step={1}
+          <ThicknessPxBar
             value={drawingOptions.lineWidth}
-            onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })}
-            style={{ width: '100%', marginTop: 4 }}
+            onChange={(v) => onOptionsChange({ lineWidth: v })}
+            vertical={useVerticalThickness}
           />
           <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
             <button
@@ -768,13 +882,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
+          <ToolbarLead />
           <BackHeader
-            title="Mark style"
+            title="Draw style"
             icon={<Palette size={18} />}
             onBack={() => onExitDrawContext?.()}
           />
           <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: '#6B7280' }}>
-            Adjust the mark you just drew. Back or another tool exits this mode.
+            Style for your next mark. Pick another tool or Back to leave.
           </p>
           {PRESET_COLORS.map((c) => (
             <button
@@ -803,17 +918,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
               {io ? null : c}
             </button>
           ))}
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 0' }}>
-            Thickness ({drawingOptions.lineWidth}px)
-          </div>
-          <input
-            type="range"
-            min={1}
-            max={12}
-            step={1}
+          <ThicknessPxBar
             value={drawingOptions.lineWidth}
-            onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })}
-            style={{ width: '100%', marginTop: 4 }}
+            onChange={(v) => onOptionsChange({ lineWidth: v })}
+            vertical={useVerticalThickness}
           />
           <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
             <button
@@ -882,6 +990,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
+          <ToolbarLead />
           <BackHeader title="Draw" icon={<Pen size={18} />} />
           <Row k="st-d" icon={<Palette size={18} />} label="Style" onPress={() => push('style')} />
           <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '6px 4px 0' }}>
@@ -1133,6 +1242,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     <div style={shellStyle}>
       <CollapseControl />
       <div style={scrollAreaFor(io, mobileChrome)}>
+        <ToolbarLead />
         {recordingHubContent ? (
           <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
             <Row
@@ -1145,7 +1255,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         ) : null}
         <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
         <div data-tour-id="tour-draw-tools">
-          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => push('draw')} />
+          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { setTool('pen'); push('draw'); }} />
         </div>
         <div data-tour-id="tour-skeleton">
           <Row

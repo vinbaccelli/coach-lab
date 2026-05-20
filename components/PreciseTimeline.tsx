@@ -46,6 +46,9 @@ export default function PreciseTimeline({
   phoneChrome = false,
   /** Render as a transparent overlay (no background/border/radius) */
   overlay = false,
+  compareSlot,
+  onCompareSlotChange,
+  compareAbDisabled = false,
 }: {
   source: Source;
   defaultFps?: number;
@@ -55,6 +58,9 @@ export default function PreciseTimeline({
   compact?: boolean;
   phoneChrome?: boolean;
   overlay?: boolean;
+  compareSlot?: 'A' | 'B' | 'AB';
+  onCompareSlotChange?: (v: 'A' | 'B' | 'AB') => void;
+  compareAbDisabled?: boolean;
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
@@ -374,11 +380,11 @@ export default function PreciseTimeline({
     pointerEvents: 'auto',
     display: 'flex',
     flexDirection: 'column',
-    gap: phoneChrome ? 8 : compact ? 6 : 10,
+    gap: phoneChrome ? 4 : compact ? 6 : 10,
     width: '100%',
     padding: overlay
       ? '0'
-      : `${phoneChrome ? 8 : compact ? 6 : 10}px 12px calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 20 : compact ? 16 : 18}px) calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 8 : compact ? 6 : 10}px)`,
+      : `${phoneChrome ? 4 : compact ? 6 : 10}px 12px calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 10 : compact ? 16 : 18}px) calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 4 : compact ? 6 : 10}px)`,
     paddingLeft: overlay ? 0 : Math.max(12, leadingInsetPx),
     borderRadius: overlay ? 0 : phoneChrome ? 0 : '14px 14px 0 0',
     background: overlay ? 'transparent' : phoneChrome ? 'rgba(255,255,255,0.06)' : 'rgba(15, 15, 18, 0.58)',
@@ -433,7 +439,26 @@ export default function PreciseTimeline({
           paddingBottom: 2,
         }}
       >
-        <button onClick={togglePlay} style={{ ...btnStyle, minWidth: 52, background: isPlaying ? accent : 'rgba(255,255,255,0.08)' }} title="Play/Pause (Space)">
+        {compareSlot && onCompareSlotChange ? (
+          <select
+            aria-label="Video slot"
+            value={compareSlot}
+            onChange={(e) => onCompareSlotChange(e.target.value as 'A' | 'B' | 'AB')}
+            style={{
+              ...selectStyle,
+              height: phoneChrome ? 34 : 40,
+              minWidth: phoneChrome ? 52 : 72,
+              flexShrink: 0,
+            }}
+          >
+            <option value="A">A</option>
+            <option value="B">B</option>
+            <option value="AB" disabled={compareAbDisabled}>
+              AB
+            </option>
+          </select>
+        ) : null}
+        <button onClick={togglePlay} style={{ ...btnStyle, minWidth: phoneChrome ? 40 : 52, background: isPlaying ? accent : 'rgba(255,255,255,0.08)' }} title="Play/Pause (Space)">
           {isPlaying ? '⏸' : '▶'}
         </button>
         <button onClick={() => stepFrame(-1)} style={btnStyle} title={`Back 1 frame (←) @ ${selectedFps}fps`}>◀</button>
@@ -653,7 +678,7 @@ export default function PreciseTimeline({
             left: 0,
             top: '50%',
             transform: 'translateY(-50%)',
-            height: phoneChrome ? 10 : 8,
+            height: phoneChrome ? 6 : 8,
             width: '100%',
             borderRadius: 4,
             background: 'rgba(255,255,255,0.2)',
@@ -666,7 +691,7 @@ export default function PreciseTimeline({
             left: 0,
             top: '50%',
             transform: 'translateY(-50%)',
-            height: phoneChrome ? 10 : 8,
+            height: phoneChrome ? 6 : 8,
             width: `${pct}%`,
             borderRadius: 4,
             background: accent,
@@ -676,11 +701,11 @@ export default function PreciseTimeline({
         <div
           style={{
             position: 'absolute',
-            left: `calc(${pct}% - ${phoneChrome ? 15 : 10}px)`,
+            left: `calc(${pct}% - ${phoneChrome ? 11 : 10}px)`,
             top: '50%',
             transform: 'translateY(-50%)',
-            width: phoneChrome ? 30 : 20,
-            height: phoneChrome ? 30 : 20,
+            width: phoneChrome ? 22 : 20,
+            height: phoneChrome ? 22 : 20,
             borderRadius: '50%',
             background: '#fff',
             boxShadow: `0 0 0 2px ${accent}`,

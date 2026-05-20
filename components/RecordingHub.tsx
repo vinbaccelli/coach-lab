@@ -53,7 +53,8 @@ export interface RecordingHubContentProps {
   screenRecordDownloadPending?: boolean;
   onScreenRecordDownloadYes?: () => void;
   onScreenRecordDownloadNo?: () => void;
-
+  /** Compact toolbar: icons only until labels expanded. */
+  hubIconOnly?: boolean;
 }
 
 /** @deprecated Overlay panel — use RecordingHubContent inside ToolPalette instead. */
@@ -103,8 +104,43 @@ function rowStyle(active?: boolean): React.CSSProperties {
   };
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+function SectionLabel({ children, hidden }: { children: React.ReactNode; hidden?: boolean }) {
+  if (hidden) return null;
   return <div style={SECTION_LABEL}>{children}</div>;
+}
+
+function HubRow({
+  active,
+  onClick,
+  icon,
+  label,
+  iconOnly,
+  title,
+}: {
+  active?: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  iconOnly?: boolean;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      title={title ?? label}
+      aria-label={label}
+      style={{
+        ...rowStyle(active),
+        justifyContent: iconOnly ? 'center' : undefined,
+        minHeight: iconOnly ? 36 : undefined,
+        padding: iconOnly ? '8px 6px' : undefined,
+      }}
+      onClick={onClick}
+    >
+      {icon}
+      {iconOnly ? null : label}
+    </button>
+  );
 }
 
 export function RecordingHubContent(props: RecordingHubContentProps) {
@@ -135,6 +171,7 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     screenRecordDownloadPending,
     onScreenRecordDownloadYes,
     onScreenRecordDownloadNo,
+    hubIconOnly = false,
   } = props;
 
   const [isDragOver, setIsDragOver] = useState(false);
@@ -162,54 +199,54 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
         }
       `}</style>
     <div data-tour-id="recording-hub">
-      <SectionLabel>Layout</SectionLabel>
+      <SectionLabel hidden={hubIconOnly}>Layout</SectionLabel>
       <div style={{ display: 'flex', gap: 6 }}>
-        <button
-          type="button"
-          style={{ ...rowStyle(layoutMode === 'youtube'), flex: 1, justifyContent: 'center' }}
-          onClick={() => onLayoutChange('youtube')}
-        >
-          <LayoutGrid size={16} />
-          16:9
-        </button>
-        <button
-          type="button"
-          style={{ ...rowStyle(layoutMode === 'reels'), flex: 1, justifyContent: 'center' }}
-          onClick={() => onLayoutChange('reels')}
-        >
-          <LayoutGrid size={16} />
-          9:16
-        </button>
+        <div style={{ flex: 1 }}>
+          <HubRow
+            active={layoutMode === 'youtube'}
+            iconOnly={hubIconOnly}
+            icon={<LayoutGrid size={16} />}
+            label="16:9"
+            title="16:9 layout"
+            onClick={() => onLayoutChange('youtube')}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <HubRow
+            active={layoutMode === 'reels'}
+            iconOnly={hubIconOnly}
+            icon={<LayoutGrid size={16} />}
+            label="9:16"
+            title="9:16 layout"
+            onClick={() => onLayoutChange('reels')}
+          />
+        </div>
       </div>
 
       <div style={DIVIDER} />
 
-      <SectionLabel>Screenshot</SectionLabel>
-      <button type="button" style={rowStyle()} onClick={onScreenshotEntireScreen}>
-        <Monitor size={16} />
-        Entire screen
-      </button>
-      <button type="button" style={{ ...rowStyle(), marginTop: 6 }} onClick={onScreenshotVideoOnly}>
-        <ImageIcon size={16} />
-        Video frame only
-      </button>
+      <SectionLabel hidden={hubIconOnly}>Screenshot</SectionLabel>
+      <HubRow iconOnly={hubIconOnly} icon={<Monitor size={16} />} label="Entire screen" onClick={onScreenshotEntireScreen} />
+      <HubRow iconOnly={hubIconOnly} icon={<ImageIcon size={16} />} label="Video frame" onClick={onScreenshotVideoOnly} />
 
       <div style={DIVIDER} />
 
-      <SectionLabel>Record Screen</SectionLabel>
+      <SectionLabel hidden={hubIconOnly}>Record Screen</SectionLabel>
       <div
         data-tour-id="tour-record-screen"
         style={{
-          padding: 12,
+          padding: hubIconOnly ? 8 : 12,
           borderRadius: 12,
           border: '1px solid rgba(255,255,255,0.25)',
           background: 'rgba(255,255,255,0.08)',
           marginBottom: 8,
         }}
       >
-        <p style={{ margin: '0 0 10px', fontSize: 12, color: '#4B5563', lineHeight: 1.45 }}>
-          Share your screen, window, or tab. Webcam and mic are included when enabled below.
-        </p>
+        {hubIconOnly ? null : (
+          <p style={{ margin: '0 0 10px', fontSize: 12, color: '#4B5563', lineHeight: 1.45 }}>
+            Share your screen, window, or tab. Webcam and mic are included when enabled below.
+          </p>
+        )}
         <ScreenRecorder
           mode="display"
           getCanvas={getCanvas}
@@ -257,23 +294,31 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
 
       <div style={DIVIDER} />
 
-      <SectionLabel>Webcam</SectionLabel>
-      <button type="button" data-tour-id="tour-webcam" style={rowStyle(webcamActive)} onClick={onWebcamToggle}>
-        {webcamActive ? <CameraOff size={16} /> : <Camera size={16} />}
-        {webcamActive ? 'Webcam on' : 'Webcam off'}
-      </button>
+      <SectionLabel hidden={hubIconOnly}>Webcam</SectionLabel>
+      <div data-tour-id="tour-webcam">
+        <HubRow
+          active={webcamActive}
+          iconOnly={hubIconOnly}
+          icon={webcamActive ? <CameraOff size={16} /> : <Camera size={16} />}
+          label={webcamActive ? 'Webcam on' : 'Webcam off'}
+          onClick={onWebcamToggle}
+        />
+      </div>
 
       <div style={DIVIDER} />
 
-      <SectionLabel>Microphone</SectionLabel>
-      <button type="button" style={rowStyle(micActive && !micMuted)} onClick={onMicToggle}>
-        {micMuted || !micActive ? <MicOff size={16} /> : <Mic size={16} />}
-        {micMuted ? 'Mic muted' : micActive ? 'Mic on' : 'Mic off'}
-      </button>
+      <SectionLabel hidden={hubIconOnly}>Microphone</SectionLabel>
+      <HubRow
+        active={micActive && !micMuted}
+        iconOnly={hubIconOnly}
+        icon={micMuted || !micActive ? <MicOff size={16} /> : <Mic size={16} />}
+        label={micMuted ? 'Mic muted' : micActive ? 'Mic on' : 'Mic off'}
+        onClick={onMicToggle}
+      />
 
       <div style={DIVIDER} />
 
-      <SectionLabel>Upload video</SectionLabel>
+      <SectionLabel hidden={hubIconOnly}>Upload video</SectionLabel>
 
       <div data-tour-id="tour-upload">
         <p style={{ margin: '0 0 10px', fontSize: 12, color: '#4B5563', lineHeight: 1.5 }}>

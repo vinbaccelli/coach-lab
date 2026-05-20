@@ -1447,6 +1447,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         precisionFadeStartRef.current = null;
         precisionRippleRef.current = null;
         precisionHoverActiveRef.current = false;
+      } else {
+        precisionHoverActiveRef.current = true;
+        precisionFadeStartRef.current = null;
       }
     }, [precisionTouchDraw]);
     const precisionAnchorPointerIdRef = useRef<number | null>(null);
@@ -4240,15 +4243,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           precisionCrosshairTargetRef.current = pos;
           precisionCrosshairDisplayRef.current = { ...pos };
           e.preventDefault();
-        } else if (
-          (e.pointerType === 'mouse' || e.pointerType === 'pen') &&
-          precisionAnchorPointerIdRef.current === null
-        ) {
-          const ch = getPosFromClientXY(e.clientX, e.clientY);
-          precisionCrosshairTargetRef.current = ch;
-          precisionCrosshairDisplayRef.current = { ...ch };
-          precisionHoverActiveRef.current = true;
-          precisionFadeStartRef.current = null;
+          const active = activeStrokeRef.current;
+          if (isDraggingRef.current && active?.tool === 'pen') {
+            (active as StrokePen).pts = [...(active as StrokePen).pts, pos];
+            renderDirtyRef.current = true;
+          }
         }
       }
       const tool = activeToolRef.current;
@@ -4490,17 +4489,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       if (
         precisionTouchDrawRef.current &&
-        (e.pointerType === 'mouse' || e.pointerType === 'pen') &&
-        precisionAnchorPointerIdRef.current === null
-      ) {
-        precisionHoverActiveRef.current = false;
-        if (precisionCrosshairTargetRef.current) {
-          precisionFadeStartRef.current = performance.now();
-        }
-      }
-
-      if (
-        precisionTouchDrawRef.current &&
         precisionAnchorPointerIdRef.current === e.pointerId &&
         e.pointerType === 'touch'
       ) {
@@ -4510,9 +4498,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const toolUp = activeToolRef.current;
         if (
           ch &&
-          precisionToolUsesToggleDownUp(toolUp) &&
           isDraggingRef.current &&
-          activeStrokeRef.current !== null
+          activeStrokeRef.current !== null &&
+          (precisionToolUsesToggleDownUp(toolUp) || toolUp === 'pen')
         ) {
           precisionSyntheticDispatchRef.current?.('pointerup', ch);
         }
@@ -4667,14 +4655,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       } else {
         firePrecisionPointer('pointerdown', ch);
         if (
-          tool === 'pen' ||
-          tool === 'line' ||
-          tool === 'arrow' ||
-          tool === 'angle' ||
-          tool === 'arrowAngle' ||
-          tool === 'jointChain' ||
-          tool === 'text' ||
-          tool === 'erase'
+          tool !== 'pen' &&
+          (tool === 'line' ||
+            tool === 'arrow' ||
+            tool === 'angle' ||
+            tool === 'arrowAngle' ||
+            tool === 'jointChain' ||
+            tool === 'text' ||
+            tool === 'erase')
         ) {
           queueMicrotask(() => firePrecisionPointer('pointerup', ch));
         }

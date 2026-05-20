@@ -366,16 +366,26 @@ export default function Home() {
   const ytIframeControllerB = useMemo(() => createYoutubeIframeController(ytPlayerBRef), []);
 
   const handleToolChange = useCallback((t: ToolType) => {
-    setDrawContextActive(false);
     setActiveTool(t);
+    setDrawContextActive(
+      t === 'pen' ||
+        t === 'line' ||
+        t === 'arrow' ||
+        t === 'arrowAngle' ||
+        t === 'circle' ||
+        t === 'rect' ||
+        t === 'triangle' ||
+        t === 'bodyCircle' ||
+        t === 'text' ||
+        t === 'angle' ||
+        t === 'manualSwing' ||
+        t === 'swingPath' ||
+        t === 'jointChain',
+    );
     if (t === 'objectMultiplier') {
       setObjMultiplierHasRegion(false);
       setObjMultiplierProgress(null);
     }
-  }, []);
-
-  const handleDrawCommitted = useCallback(() => {
-    setDrawContextActive(true);
   }, []);
 
   const exitDrawContext = useCallback(() => {
@@ -515,6 +525,11 @@ export default function Home() {
 
   const [precisionDrawEnabled, setPrecisionDrawEnabled] = useState(false);
   const [precisionInstructionsOpen, setPrecisionInstructionsOpen] = useState(false);
+  const [toolbarLabelsExpanded, setToolbarLabelsExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!isMobile && precisionDrawEnabled) setPrecisionDrawEnabled(false);
+  }, [isMobile, precisionDrawEnabled]);
 
   const handlePrecisionDrawToggle = useCallback(() => {
     setPrecisionDrawEnabled((prev) => {
@@ -2366,12 +2381,10 @@ export default function Home() {
   const handleMarkupClear = useCallback(() => {
     applyMarkupToTargets((c) => {
       c.clearAll();
-      c.resetSkeleton();
+      c.resetBallTrail();
     });
-    if (markupTarget === 'A' || markupTarget === 'both') {
-      setSkeletonOverlayPaused(false);
-    }
-  }, [applyMarkupToTargets, markupTarget]);
+    setSkeletonOverlayPaused(true);
+  }, [applyMarkupToTargets]);
 
   useEffect(() => {
     if (!hasVideoBContent) {
@@ -2382,53 +2395,8 @@ export default function Home() {
     else if (playbackTarget === 'A') setMarkupTarget('A');
   }, [playbackTarget, hasVideoBContent]);
 
-  const playbackSegmentBtn = (
-    value: 'A' | 'B' | 'AB',
-    label: string,
-    disabled?: boolean,
-  ) => (
-    <button
-      key={value}
-      type="button"
-      disabled={disabled}
-      onClick={() => !disabled && setPlaybackTarget(value)}
-      style={{
-        flex: 1,
-        minHeight: 32,
-        borderRadius: 8,
-        border: playbackTarget === value ? '2px solid rgba(255,255,255,0.9)' : '1px solid rgba(255,255,255,0.25)',
-        background: playbackTarget === value ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.08)',
-        color: disabled ? 'rgba(255,255,255,0.35)' : '#FFFFFF',
-        fontSize: 12,
-        fontWeight: 700,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.55 : 1,
-      }}
-    >
-      {label}
-    </button>
-  );
-
   const renderTimelineDock = () => (
-    <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {hasVideoBContent && (
-        <div style={{ padding: '0 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: 600 }}>Watch</span>
-            <div style={{ display: 'flex', flex: 1, gap: 6 }}>
-              {playbackSegmentBtn('A', 'Left')}
-              {playbackSegmentBtn('B', 'Right')}
-              {playbackSegmentBtn('AB', 'Both', !canPlaybackSyncBoth)}
-            </div>
-          </div>
-          <p style={{ margin: 0, fontSize: 11, lineHeight: 1.4, color: 'rgba(255,255,255,0.55)' }}>
-            {canPlaybackSyncBoth
-              ? 'Both videos stay in sync while you coach.'
-              : 'Sync both works with uploaded files on left and right. Link/embed clips play independently.'}
-          </p>
-        </div>
-      )}
-
+    <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: isMobile ? 4 : 8 }}>
       {!(capturePrepPanel || (captureBusy && embedCaptureRecording)) && (hasVideoBContent ? (
         playbackTarget === 'B'
           ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
@@ -2444,6 +2412,9 @@ export default function Home() {
                 compact
                 overlay
                 phoneChrome={isMobile}
+                compareSlot={hasVideoBContent ? playbackTarget : undefined}
+                onCompareSlotChange={hasVideoBContent ? setPlaybackTarget : undefined}
+                compareAbDisabled={!canPlaybackSyncBoth}
               />
             )
           : ((videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc)) && (
@@ -2459,6 +2430,9 @@ export default function Home() {
                 compact
                 overlay
                 phoneChrome={isMobile}
+                compareSlot={hasVideoBContent ? playbackTarget : undefined}
+                onCompareSlotChange={hasVideoBContent ? setPlaybackTarget : undefined}
+                compareAbDisabled={!canPlaybackSyncBoth}
               />
             )
       ) : (
@@ -2476,6 +2450,9 @@ export default function Home() {
             compact
             overlay
             phoneChrome={isMobile}
+            compareSlot={hasVideoBContent ? playbackTarget : undefined}
+            onCompareSlotChange={hasVideoBContent ? setPlaybackTarget : undefined}
+            compareAbDisabled={!canPlaybackSyncBoth}
           />
         )
       ))}
@@ -2547,10 +2524,17 @@ export default function Home() {
     onCleanSession:                  resetSession,
     drawContextActive,
     onExitDrawContext:               exitDrawContext,
-    precisionDrawEnabled,
-    onPrecisionDrawToggle:           handlePrecisionDrawToggle,
-    onShowPrecisionInstructions:     showPrecisionInstructionsAgain,
+    ...(isMobile
+      ? {
+          precisionDrawEnabled,
+          onPrecisionDrawToggle: handlePrecisionDrawToggle,
+          onShowPrecisionInstructions: showPrecisionInstructionsAgain,
+        }
+      : {}),
     phoneLayout:                     reelsDesktopEarly,
+    compactToolbarChrome:            phoneToolbarLayout,
+    toolbarLabelsExpanded,
+    onToggleToolbarLabels:             () => setToolbarLabelsExpanded((v) => !v),
     ...(phoneToolbarLayout
       ? {
           iconOnlyLayout: true,
@@ -2588,6 +2572,7 @@ export default function Home() {
         screenRecordDownloadPending={screenRecordDownloadPending}
         onScreenRecordDownloadYes={handleScreenRecordDownloadYes}
         onScreenRecordDownloadNo={handleScreenRecordDownloadNo}
+        hubIconOnly={phoneToolbarLayout && !toolbarLabelsExpanded}
       />
     ),
   } satisfies React.ComponentProps<typeof ToolPalette>;
@@ -3111,8 +3096,7 @@ export default function Home() {
                         embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)
                       }
                       webcamCutout={webcamCutout}
-                      precisionTouchDraw={precisionDrawEnabled}
-                      onDrawCommitted={handleDrawCommitted}
+                      precisionTouchDraw={isMobile && precisionDrawEnabled}
                       showTourHelpInZoomCluster
                       poseFrameSkip={hasVideoBContent ? 1 : 0}
                       panModeEnabled={panModeEnabled}
@@ -3436,8 +3420,7 @@ export default function Home() {
                         embedLiveVideoB && (!!youtubeVideoIdB || !!genericEmbedSrcB)
                       }
                       webcamCutout={webcamCutout}
-                      precisionTouchDraw={precisionDrawEnabled}
-                      onDrawCommitted={handleDrawCommitted}
+                      precisionTouchDraw={isMobile && precisionDrawEnabled}
                       poseFrameSkip={1}
                       panModeEnabled={panModeEnabled}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
@@ -3539,7 +3522,9 @@ export default function Home() {
                 right: 0,
                 zIndex: 50,
                 background: 'linear-gradient(transparent, rgba(0,0,0,0.6))',
-                padding: isMobile ? `12px 16px calc(16px + env(safe-area-inset-bottom, 0px))` : '12px 16px 16px',
+                padding: isMobile
+                  ? `6px 12px calc(8px + env(safe-area-inset-bottom, 0px))`
+                  : '12px 16px 16px',
                 pointerEvents: 'auto',
                 opacity: controlsVisible ? 1 : 0.3,
                 transition: 'opacity 0.4s ease',
