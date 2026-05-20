@@ -10,7 +10,11 @@ interface ScreenRecorderProps {
   getWebcamStream: () => MediaStream | null;
   getMicStream?: () => MediaStream | null;
   getCropRegion?: () => { x: number; y: number; w: number; h: number } | null;
+  /** Viewport CSS pixels — crops display capture to this region (area record). */
+  getViewportCropRegion?: () => { x: number; y: number; w: number; h: number } | null;
   layoutMode?: 'youtube' | 'reels';
+  /** Icon-only trigger for compact recording hub rows. */
+  compactIcon?: boolean;
   /** `display` uses getDisplayMedia (screen/window/tab). Default `canvas` records the analysis canvas. */
   mode?: 'canvas' | 'display';
   /** When true, parent handles download via onRecordingComplete instead of auto-downloading. */
@@ -50,8 +54,10 @@ export default function ScreenRecorder({
   getWebcamStream,
   getMicStream,
   getCropRegion,
+  getViewportCropRegion,
   layoutMode = 'youtube',
   mode = 'canvas',
+  compactIcon = false,
   promptDownload = false,
   onRecordingComplete,
   onRecordingChange,
@@ -255,15 +261,41 @@ export default function ScreenRecorder({
     const ctx = recCanvas.getContext('2d')!;
 
     const paintOnce = () => {
+      const crop = getViewportCropRegion?.();
+      const useCrop = crop && crop.w > 16 && crop.h > 16;
       if (displayVideo.readyState >= 2) {
-        ctx.drawImage(displayVideo, 0, 0, outW, outH);
+        if (useCrop && typeof window !== 'undefined') {
+          const vw = displayVideo.videoWidth || window.innerWidth;
+          const vh = displayVideo.videoHeight || window.innerHeight;
+          const sx = vw / window.innerWidth;
+          const sy = vh / window.innerHeight;
+          const srcX = crop.x * sx;
+          const srcY = crop.y * sy;
+          const srcW = crop.w * sx;
+          const srcH = crop.h * sy;
+          const cw = Math.max(2, Math.round(srcW));
+          const ch = Math.max(2, Math.round(srcH));
+          if (recCanvas.width !== cw || recCanvas.height !== ch) {
+            recCanvas.width = cw;
+            recCanvas.height = ch;
+          }
+          ctx.drawImage(displayVideo, srcX, srcY, srcW, srcH, 0, 0, cw, ch);
+        } else {
+          if (recCanvas.width !== outW || recCanvas.height !== outH) {
+            recCanvas.width = outW;
+            recCanvas.height = outH;
+          }
+          ctx.drawImage(displayVideo, 0, 0, outW, outH);
+        }
       }
-      if (webcamVideo && webcamVideo.readyState >= 2) {
-        const pipW = Math.round(outW * 0.22);
+      const cw = recCanvas.width;
+      const ch = recCanvas.height;
+      if (webcamVideo && webcamVideo.readyState >= 2 && cw > 0 && ch > 0) {
+        const pipW = Math.round(cw * 0.22);
         const pipH = Math.round(pipW * (9 / 16));
-        const margin = Math.round(outW * 0.02);
-        const px = outW - pipW - margin;
-        const py = outH - pipH - margin;
+        const margin = Math.round(cw * 0.02);
+        const px = cw - pipW - margin;
+        const py = ch - pipH - margin;
         ctx.fillStyle = 'rgba(0,0,0,0.35)';
         ctx.fillRect(px - 4, py - 4, pipW + 8, pipH + 8);
         ctx.drawImage(webcamVideo, px, py, pipW, pipH);
@@ -536,28 +568,44 @@ export default function ScreenRecorder({
     }
   }, []);
 
+  const btnStyle: React.CSSProperties = compactIcon
+    ? {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '100%',
+        minHeight: 36,
+        maxHeight: 36,
+        padding: 0,
+        borderRadius: 10,
+        border: '1px solid #E8E6E1',
+        background: '#FAF8F5',
+        cursor: 'pointer',
+      }
+    : {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '8px 14px',
+        borderRadius: '12px',
+        border: '1px solid #E5E5E5',
+        background: '#FFFFFF',
+        cursor: 'pointer',
+        fontSize: '13px',
+        color: '#1A1A1A',
+        fontWeight: 500,
+      };
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: compactIcon ? 4 : 8, flexDirection: compactIcon ? 'column' : 'row', width: compactIcon ? '100%' : undefined }}>
       {recState === 'idle' && (
         <button
           onClick={startRecording}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '8px 14px',
-            borderRadius: '12px',
-            border: '1px solid #E5E5E5',
-            background: '#FFFFFF',
-            cursor: 'pointer',
-            fontSize: '13px',
-            color: '#1A1A1A',
-            fontWeight: 500,
-          }}
+          style={btnStyle}
           title="Start screen recording"
         >
-          <span style={{ color: '#FF3B30', fontSize: '16px' }}>&#9210;</span>
-          Record
+          <span style={{ color: '#FF3B30', fontSize: compactIcon ? 18 : 16 }}>&#9210;</span>
+          {compactIcon ? null : 'Record'}
         </button>
       )}
 

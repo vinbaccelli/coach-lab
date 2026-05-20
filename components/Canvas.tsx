@@ -3687,14 +3687,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvasEl = e.target as HTMLCanvasElement;
       const toolEarly = activeToolRef.current;
-      const precisionBlocked =
-        !precisionTouchDrawRef.current ||
-        toolEarly === 'zoom' ||
-        toolEarly === 'objectMultiplier' ||
-        e.pointerId === PRECISION_SYNTHETIC_POINTER_ID;
+      const isPrecisionSynthetic = e.pointerId === PRECISION_SYNTHETIC_POINTER_ID;
 
       const precisionTouchEligible =
-        !precisionBlocked && e.pointerType === 'touch';
+        precisionTouchDrawRef.current &&
+        e.pointerType === 'touch' &&
+        !isPrecisionSynthetic &&
+        toolEarly !== 'zoom' &&
+        toolEarly !== 'objectMultiplier';
 
       if (precisionTouchEligible) {
         const anchor = precisionAnchorPointerIdRef.current;
@@ -4591,7 +4591,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const active = activeStrokeRef.current;
       activeStrokeRef.current = null;
       if (!active) return;
-      if (active.tool === 'pen' && (active as StrokePen).pts.length < 2) return;
+      if (active.tool === 'pen' && (active as StrokePen).pts.length < 1) return;
       // Don't commit zero-size shapes — check rx property via type narrowing
       if (active.tool === 'circle' || active.tool === 'bodyCircle') {
         if ((active as StrokeEllipse).rx < 2) return;
@@ -4601,6 +4601,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if ((active as StrokeTriangle).rx < 2) return;
       }
       strokesRef.current = [...strokesRef.current, active];
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('[precision] stroke created', { tool: active.tool });
+      }
       pushHistory();
       if (isContextualStrokeTool(active.tool)) {
         notifyDrawCommitted();
@@ -4613,6 +4616,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const firePrecisionPointer = (type: 'pointerdown' | 'pointerup', logicalPt: Pt) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug(`[precision] ${type} fired`, { tool: activeToolRef.current, pt: logicalPt });
+      }
       const { clientX, clientY } = logicalPtToClient(logicalPt);
       const ev = {
         clientX,
@@ -4626,9 +4632,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         stopPropagation: () => {},
         target: canvas,
         currentTarget: canvas,
+        setPointerCapture: () => {},
+        releasePointerCapture: () => {},
       } as unknown as React.PointerEvent<HTMLCanvasElement>;
-      if (type === 'pointerdown') onPointerDownRef.current(ev);
-      else onPointerUpRef.current(ev);
+      if (type === 'pointerdown') {
+        onPointerDownRef.current(ev);
+      } else {
+        onPointerUpRef.current(ev);
+      }
     };
 
     precisionSyntheticDispatchRef.current = firePrecisionPointer;
@@ -4653,16 +4664,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (useToggle && dragging) {
         firePrecisionPointer('pointerup', ch);
       } else {
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[precision] synthetic draw dispatched', { tool });
+        }
         firePrecisionPointer('pointerdown', ch);
-        if (
-          tool !== 'pen' &&
-          (tool === 'line' ||
-            tool === 'arrow' ||
-            tool === 'angle' ||
-            tool === 'arrowAngle' ||
-            tool === 'jointChain' ||
-            tool === 'text' ||
-            tool === 'erase')
+        if (tool === 'pen') {
+          const pen = activeStrokeRef.current as StrokePen | null;
+          if (pen?.tool === 'pen' && pen.pts.length === 1) {
+            pen.pts.push({ ...ch });
+          }
+          queueMicrotask(() => firePrecisionPointer('pointerup', ch));
+        } else if (
+          tool === 'line' ||
+          tool === 'arrow' ||
+          tool === 'arrowAngle' ||
+          tool === 'circle' ||
+          tool === 'rect' ||
+          tool === 'triangle' ||
+          tool === 'bodyCircle' ||
+          tool === 'jointChain' ||
+          tool === 'text' ||
+          tool === 'erase'
         ) {
           queueMicrotask(() => firePrecisionPointer('pointerup', ch));
         }

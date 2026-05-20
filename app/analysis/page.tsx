@@ -75,6 +75,45 @@ function safeYoutubePlayerDuration(player: unknown): number | null {
   }
 }
 
+/** Desktop reels: letterboxed true 9:16 frame with toolbar inside. */
+function ReelsDesktopShell({
+  enabled,
+  children,
+}: {
+  enabled: boolean;
+  children: React.ReactNode;
+}) {
+  if (!enabled) return <>{children}</>;
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        background: '#000',
+      }}
+    >
+      <div
+        style={{
+          height: '100dvh',
+          width: 'min(calc(100dvh * 9 / 16), 100vw)',
+          maxWidth: '100vw',
+          display: 'flex',
+          flexDirection: 'row',
+          overflow: 'hidden',
+          flexShrink: 0,
+          background: '#000',
+          boxShadow: '0 0 0 1px rgba(255, 255, 255, 0.08)',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   // ── Refs that must never unmount ─────────────────────────────────────────
   const videoRef      = useRef<HTMLVideoElement>(null);
@@ -2524,6 +2563,7 @@ export default function Home() {
     onCleanSession:                  resetSession,
     drawContextActive,
     onExitDrawContext:               exitDrawContext,
+    onOpenDrawContext:               () => setDrawContextActive(true),
     ...(isMobile
       ? {
           precisionDrawEnabled,
@@ -2573,6 +2613,8 @@ export default function Home() {
         onScreenRecordDownloadYes={handleScreenRecordDownloadYes}
         onScreenRecordDownloadNo={handleScreenRecordDownloadNo}
         hubIconOnly={phoneToolbarLayout && !toolbarLabelsExpanded}
+        hubLabelsExpanded={toolbarLabelsExpanded}
+        onToggleHubLabels={() => setToolbarLabelsExpanded((v) => !v)}
       />
     ),
   } satisfies React.ComponentProps<typeof ToolPalette>;
@@ -2755,21 +2797,19 @@ export default function Home() {
           background: layoutMode === 'reels' ? '#000' : '#0b0b0c',
         }}
       >
-        {renderToolbarRail()}
-
-        <main
-          style={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            minWidth: 0,
-            alignItems: layoutMode === 'reels' && !isMobile ? 'center' : undefined,
-            justifyContent: layoutMode === 'reels' && !isMobile ? 'center' : undefined,
-            paddingTop: 'env(safe-area-inset-top, 0px)',
-            width: '100%',
-          }}
-        >
+        <ReelsDesktopShell enabled={reelsDesktop}>
+          {renderToolbarRail()}
+          <main
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              minWidth: 0,
+              paddingTop: 'env(safe-area-inset-top, 0px)',
+              width: '100%',
+            }}
+          >
           <div
             style={{
               flex: layoutMode === 'reels' ? '0 0 auto' : 1,
@@ -2794,17 +2834,27 @@ export default function Home() {
                       boxShadow: 'none',
                       margin: 0,
                     }
-                  : {
-                      width: 'calc(100dvh * 9 / 16)',
-                      maxWidth: '100vw',
-                      height: '100dvh',
-                      maxHeight: '100dvh',
-                      aspectRatio: '9 / 16',
-                      borderRadius: 0,
-                      border: 'none',
-                      boxShadow: 'none',
-                      margin: '0 auto',
-                    }
+                  : reelsDesktop
+                    ? {
+                        width: '100%',
+                        height: '100%',
+                        maxHeight: '100%',
+                        borderRadius: 0,
+                        border: 'none',
+                        boxShadow: 'none',
+                        margin: 0,
+                      }
+                    : {
+                        width: 'calc(100dvh * 9 / 16)',
+                        maxWidth: '100vw',
+                        height: '100dvh',
+                        maxHeight: '100dvh',
+                        aspectRatio: '9 / 16',
+                        borderRadius: 0,
+                        border: 'none',
+                        boxShadow: 'none',
+                        margin: '0 auto',
+                      }
                 : { width: '100%' }),
             }}
           >
@@ -3584,6 +3634,7 @@ export default function Home() {
           {/* Hint bar */}
           {false && <div />}
         </main>
+        </ReelsDesktopShell>
       </div>
 
       {captureError ? (

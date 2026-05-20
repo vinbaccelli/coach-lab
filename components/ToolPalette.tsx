@@ -118,6 +118,7 @@ interface ToolPaletteProps {
   /** After a shape is committed, toolbar shows contextual style controls (no popup). */
   drawContextActive?: boolean;
   onExitDrawContext?: () => void;
+  onOpenDrawContext?: () => void;
   /** Desktop 9:16 — same compact icon-only rail as phone. */
   phoneLayout?: boolean;
   /** Mobile + desktop 9:16 compact toolbar with expand/collapse labels. */
@@ -360,6 +361,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     hasCompareVideo = false,
     drawContextActive = false,
     onExitDrawContext,
+    onOpenDrawContext,
     phoneLayout = false,
     compactToolbarChrome = false,
     toolbarLabelsExpanded = false,
@@ -402,9 +404,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const resetNav = useCallback(() => setNavStack(['home']), []);
 
   useEffect(() => {
-    if (drawContextActive) {
-      setNavStack((s) => (s[s.length - 1] === 'drawContext' ? s : ['home', 'drawContext']));
-    } else {
+    if (!drawContextActive) {
       setNavStack((s) => (s.includes('drawContext') ? s.filter((x) => x !== 'drawContext') : s));
     }
   }, [drawContextActive]);
@@ -869,121 +869,113 @@ export default function ToolPalette(props: ToolPaletteProps) {
     );
   }
 
-  const drawToolActive =
-    activeTool !== 'select' &&
-    activeTool !== 'erase' &&
-    activeTool !== 'zoom' &&
-    activeTool !== 'skeleton' &&
-    activeTool !== 'ballShadow' &&
-    activeTool !== 'objectMultiplier';
-
-  if (top === 'drawContext') {
-    return (
-      <div style={shellStyle}>
-        <CollapseControl />
-        <div style={scrollAreaFor(io, mobileChrome)}>
-          <ToolbarLead />
-          <BackHeader
-            title="Draw style"
-            icon={<Palette size={18} />}
-            onBack={() => onExitDrawContext?.()}
-          />
-          <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: '#6B7280' }}>
-            Style for your next mark. Pick another tool or Back to leave.
-          </p>
-          {PRESET_COLORS.map((c) => (
-            <button
-              key={`dc-${c}`}
-              type="button"
-              aria-label={`Color ${c}`}
-              style={{
-                ...rowBase(drawingOptions.color === c, io),
-                justifyContent: io ? 'center' : 'flex-start',
-                transform: pressedKey === `dc-${c}` ? 'scale(0.95)' : undefined,
-              }}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                fire(`dc-${c}`, () => onOptionsChange({ color: c }));
-              }}
-            >
-              <span
-                style={{
-                  width: io ? 26 : 22,
-                  height: io ? 26 : 22,
-                  borderRadius: 6,
-                  background: c,
-                  border: drawingOptions.color === c ? '2px solid #35679A' : '1px solid #E5E5E5',
-                }}
-              />
-              {io ? null : c}
-            </button>
-          ))}
-          <ThicknessPxBar
-            value={drawingOptions.lineWidth}
-            onChange={(v) => onOptionsChange({ lineWidth: v })}
-            vertical={useVerticalThickness}
-          />
-          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-            <button
-              type="button"
-              aria-label="Solid line"
-              style={{ ...rowBase(!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                fire('dc-solid', () => onOptionsChange({ dashed: false }));
-              }}
-            >
-              {io ? '━' : 'Solid'}
-            </button>
-            <button
-              type="button"
-              aria-label="Dashed line"
-              style={{ ...rowBase(!!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                fire('dc-dash', () => onOptionsChange({ dashed: true }));
-              }}
-            >
-              {io ? '┅' : 'Dashed'}
-            </button>
-          </div>
-          {onCircleSpinningChange &&
-            chk(
-              'dc-spin',
-              'Highlight pulse',
-              !!circleSpinning,
-              onCircleSpinningChange,
-              <Sparkles size={18} strokeWidth={2} />,
-            )}
-          {onOutlineEraserSizeChange && (
-            <>
-              {chk(
-                'dc-oe',
-                'Erase part of line',
-                outlineEraserSize > 0,
-                (v) => onOutlineEraserSizeChange(v ? 15 : 0),
-                <Eraser size={18} strokeWidth={2} />,
-              )}
-              {outlineEraserSize > 0 && (
-                <div style={{ padding: '0 8px' }}>
-                  <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Eraser ({outlineEraserSize}px)</div>
-                  <input
-                    type="range"
-                    min={5}
-                    max={50}
-                    step={1}
-                    value={outlineEraserSize}
-                    onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              )}
-            </>
-          )}
-        </div>
+  const MarkStyleControls = (
+    <>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          color: '#9CA3AF',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          padding: '10px 4px 6px',
+          borderTop: '1px solid #F0EDE8',
+          marginTop: 6,
+        }}
+      >
+        Mark style
       </div>
-    );
-  }
+      {PRESET_COLORS.map((c) => (
+        <button
+          key={`dc-${c}`}
+          type="button"
+          aria-label={`Color ${c}`}
+          style={{
+            ...rowBase(drawingOptions.color === c, io),
+            justifyContent: io ? 'center' : 'flex-start',
+            transform: pressedKey === `dc-${c}` ? 'scale(0.95)' : undefined,
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire(`dc-${c}`, () => onOptionsChange({ color: c }));
+          }}
+        >
+          <span
+            style={{
+              width: io ? 26 : 22,
+              height: io ? 26 : 22,
+              borderRadius: 6,
+              background: c,
+              border: drawingOptions.color === c ? '2px solid #35679A' : '1px solid #E5E5E5',
+            }}
+          />
+          {io ? null : c}
+        </button>
+      ))}
+      <ThicknessPxBar
+        value={drawingOptions.lineWidth}
+        onChange={(v) => onOptionsChange({ lineWidth: v })}
+        vertical={useVerticalThickness}
+      />
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        <button
+          type="button"
+          aria-label="Solid line"
+          style={{ ...rowBase(!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire('dc-solid', () => onOptionsChange({ dashed: false }));
+          }}
+        >
+          {io ? '━' : 'Solid'}
+        </button>
+        <button
+          type="button"
+          aria-label="Dashed line"
+          style={{ ...rowBase(!!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire('dc-dash', () => onOptionsChange({ dashed: true }));
+          }}
+        >
+          {io ? '┅' : 'Dashed'}
+        </button>
+      </div>
+      {onCircleSpinningChange &&
+        chk(
+          'dc-spin',
+          'Highlight pulse',
+          !!circleSpinning,
+          onCircleSpinningChange,
+          <Sparkles size={18} strokeWidth={2} />,
+        )}
+      {onOutlineEraserSizeChange && (
+        <>
+          {chk(
+            'dc-oe',
+            'Erase part of line',
+            outlineEraserSize > 0,
+            (v) => onOutlineEraserSizeChange(v ? 15 : 0),
+            <Eraser size={18} strokeWidth={2} />,
+          )}
+          {outlineEraserSize > 0 && (
+            <div style={{ padding: '0 8px' }}>
+              <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Eraser ({outlineEraserSize}px)</div>
+              <input
+                type="range"
+                min={5}
+                max={50}
+                step={1}
+                value={outlineEraserSize}
+                onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
+                style={{ width: '100%' }}
+              />
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
 
   if (top === 'draw') {
     return (
@@ -992,28 +984,25 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <div style={scrollAreaFor(io, mobileChrome)}>
           <ToolbarLead />
           <BackHeader title="Draw" icon={<Pen size={18} />} />
-          <Row k="st-d" icon={<Palette size={18} />} label="Style" onPress={() => push('style')} />
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '6px 4px 0' }}>
-            Markup
-          </div>
           <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Pen" onPress={() => setTool('pen')} />
-          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Line" onPress={() => setTool('line')} />
           <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => setTool('arrow')} />
-          <Row k="jc" active={activeTool === 'jointChain'} icon={<Link2 size={18} />} label="Body chain" onPress={() => setTool('jointChain')} />
-          <Row k="angle-d" active={activeTool === 'angle'} icon={<Activity size={18} />} label="Angle" onPress={() => setTool('angle')} />
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 0' }}>
-            Shapes & more
-          </div>
-          <Row k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} label="Circle" onPress={() => setTool('circle')} />
-          <Row k="tri" active={activeTool === 'triangle'} icon={<Triangle size={18} />} label="Triangle" onPress={() => setTool('triangle')} />
+          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Line" onPress={() => setTool('line')} />
           <Row k="rect" active={activeTool === 'rect'} icon={<Square size={18} />} label="Rectangle" onPress={() => setTool('rect')} />
-          <Row k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} label="Eraser" onPress={() => setTool('erase')} />
-          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => setTool('text')} />
-          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => setTool('manualSwing')} />
+          <Row k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} label="Circle" onPress={() => setTool('circle')} />
           <div data-tour-id="tour-angle">
             <Row k="angle-d" active={activeTool === 'angle'} icon={<Activity size={18} />} label="Angle" onPress={() => setTool('angle')} />
           </div>
-          <Row k="aa-d" active={activeTool === 'arrowAngle'} icon={<Activity size={18} />} label="Arrow angle" onPress={() => setTool('arrowAngle')} />
+          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => setTool('manualSwing')} />
+          <Row k="jc" active={activeTool === 'jointChain'} icon={<Link2 size={18} />} label="Joint chain" onPress={() => setTool('jointChain')} />
+          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => setTool('text')} />
+          <Row
+            k="st-d"
+            active={drawContextActive}
+            icon={<Palette size={18} />}
+            label="Style"
+            onPress={() => onOpenDrawContext?.()}
+          />
+          {drawContextActive ? MarkStyleControls : null}
         </div>
       </div>
     );
@@ -1255,7 +1244,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         ) : null}
         <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
         <div data-tour-id="tour-draw-tools">
-          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { setTool('pen'); push('draw'); }} />
+          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => push('draw')} />
         </div>
         <div data-tour-id="tour-skeleton">
           <Row

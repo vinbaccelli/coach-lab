@@ -6,6 +6,7 @@
  */
 
 import React, { useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Video,
   Mic,
@@ -17,8 +18,12 @@ import {
   UploadCloud,
   LayoutGrid,
   Image as ImageIcon,
+  PanelLeftOpen,
+  PanelLeftClose,
+  Crop,
 } from 'lucide-react';
 import ScreenRecorder from '@/components/ScreenRecorder';
+import { RegionRecordOverlay, type ViewportRegion } from '@/components/RegionRecordOverlay';
 
 export interface RecordingHubContentProps {
   isRecording: boolean;
@@ -55,6 +60,8 @@ export interface RecordingHubContentProps {
   onScreenRecordDownloadNo?: () => void;
   /** Compact toolbar: icons only until labels expanded. */
   hubIconOnly?: boolean;
+  hubLabelsExpanded?: boolean;
+  onToggleHubLabels?: () => void;
 }
 
 /** @deprecated Overlay panel — use RecordingHubContent inside ToolPalette instead. */
@@ -104,6 +111,27 @@ function rowStyle(active?: boolean): React.CSSProperties {
   };
 }
 
+function iconOnlyRowStyle(active?: boolean): React.CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    minHeight: 36,
+    maxHeight: 36,
+    padding: 0,
+    margin: '0 auto',
+    borderRadius: 10,
+    border: active ? '1px solid #35679A' : '1px solid #E8E6E1',
+    background: active ? 'rgba(53,103,154,0.08)' : '#FAF8F5',
+    color: active ? '#35679A' : '#1A1A1A',
+    cursor: 'pointer',
+    touchAction: 'manipulation',
+    flexShrink: 0,
+  };
+}
+
 function SectionLabel({ children, hidden }: { children: React.ReactNode; hidden?: boolean }) {
   if (hidden) return null;
   return <div style={SECTION_LABEL}>{children}</div>;
@@ -129,12 +157,7 @@ function HubRow({
       type="button"
       title={title ?? label}
       aria-label={label}
-      style={{
-        ...rowStyle(active),
-        justifyContent: iconOnly ? 'center' : undefined,
-        minHeight: iconOnly ? 36 : undefined,
-        padding: iconOnly ? '8px 6px' : undefined,
-      }}
+      style={iconOnly ? iconOnlyRowStyle(active) : rowStyle(active)}
       onClick={onClick}
     >
       {icon}
@@ -172,11 +195,16 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     onScreenRecordDownloadYes,
     onScreenRecordDownloadNo,
     hubIconOnly = false,
+    hubLabelsExpanded = false,
+    onToggleHubLabels,
   } = props;
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dropInputRef = useRef<HTMLInputElement>(null);
   const [pendingDropFile, setPendingDropFile] = useState<File | null>(null);
+  const [regionOverlayOpen, setRegionOverlayOpen] = useState(false);
+  const [regionAspect, setRegionAspect] = useState<'16:9' | '9:16'>(layoutMode === 'reels' ? '9:16' : '16:9');
+  const [viewportRegion, setViewportRegion] = useState<ViewportRegion>({ x: 0, y: 0, w: 320, h: 568 });
 
   const handleDropZoneFile = (file: File | undefined) => {
     if (!file || !file.type.startsWith('video/')) return;
@@ -189,6 +217,143 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     setPendingDropFile(null);
   };
 
+  const compactStackStyle: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 4,
+    width: '100%',
+  };
+
+  const layoutRows = (
+    <>
+      <HubRow
+        active={layoutMode === 'youtube'}
+        iconOnly={hubIconOnly}
+        icon={<LayoutGrid size={16} />}
+        label="16:9"
+        title="16:9 layout"
+        onClick={() => onLayoutChange('youtube')}
+      />
+      <HubRow
+        active={layoutMode === 'reels'}
+        iconOnly={hubIconOnly}
+        icon={<LayoutGrid size={16} />}
+        label="9:16"
+        title="9:16 layout"
+        onClick={() => onLayoutChange('reels')}
+      />
+    </>
+  );
+
+  const recordBlock = (
+    <div
+      data-tour-id="tour-record-screen"
+      style={{
+        padding: hubIconOnly ? 0 : 12,
+        borderRadius: 12,
+        border: hubIconOnly ? 'none' : '1px solid rgba(255,255,255,0.25)',
+        background: hubIconOnly ? 'transparent' : 'rgba(255,255,255,0.08)',
+        marginBottom: hubIconOnly ? 0 : 8,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: hubIconOnly ? 4 : 10,
+        alignItems: hubIconOnly ? 'center' : undefined,
+        width: '100%',
+      }}
+    >
+      {hubIconOnly ? null : (
+        <p style={{ margin: 0, fontSize: 12, color: '#4B5563', lineHeight: 1.45 }}>
+          Full display records your entire screen (like Google Meet). Selected area crops to a movable frame.
+        </p>
+      )}
+      {hubIconOnly ? (
+        <>
+          <ScreenRecorder
+            mode="display"
+            compactIcon
+            getCanvas={getCanvas}
+            getWebcamStream={getWebcamStream}
+            getMicStream={getMicStream}
+            getCropRegion={getCropRegion}
+            layoutMode={layoutMode}
+            onRecordingChange={onRecordingChange}
+            promptDownload
+            onRecordingComplete={onScreenRecordComplete}
+          />
+          <button
+            type="button"
+            title="Select area to record"
+            aria-label="Select area to record"
+            style={{
+              ...iconOnlyRowStyle(regionOverlayOpen),
+            }}
+            onClick={() => setRegionOverlayOpen((v) => !v)}
+          >
+            <Crop size={16} />
+          </button>
+          {regionOverlayOpen ? (
+            <ScreenRecorder
+              mode="display"
+              compactIcon
+              getCanvas={getCanvas}
+              getWebcamStream={getWebcamStream}
+              getMicStream={getMicStream}
+              getCropRegion={getCropRegion}
+              getViewportCropRegion={() => viewportRegion}
+              layoutMode={layoutMode}
+              onRecordingChange={onRecordingChange}
+              promptDownload
+              onRecordingComplete={onScreenRecordComplete}
+            />
+          ) : null}
+        </>
+      ) : (
+        <>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Full screen</div>
+            <ScreenRecorder
+              mode="display"
+              getCanvas={getCanvas}
+              getWebcamStream={getWebcamStream}
+              getMicStream={getMicStream}
+              getCropRegion={getCropRegion}
+              layoutMode={layoutMode}
+              onRecordingChange={onRecordingChange}
+              promptDownload
+              onRecordingComplete={onScreenRecordComplete}
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Selected area</div>
+            <button
+              type="button"
+              style={{ ...rowStyle(regionOverlayOpen), marginBottom: 8 }}
+              onClick={() => setRegionOverlayOpen((v) => !v)}
+            >
+              <Crop size={16} />
+              {regionOverlayOpen ? 'Hide area frame' : 'Set recording area'}
+            </button>
+            {regionOverlayOpen ? (
+              <ScreenRecorder
+                mode="display"
+                getCanvas={getCanvas}
+                getWebcamStream={getWebcamStream}
+                getMicStream={getMicStream}
+                getCropRegion={getCropRegion}
+                getViewportCropRegion={() => viewportRegion}
+                layoutMode={layoutMode}
+                onRecordingChange={onRecordingChange}
+                promptDownload
+                onRecordingComplete={onScreenRecordComplete}
+              />
+            ) : null}
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <>
       <style>{`
@@ -198,138 +363,131 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           50%       { opacity: 0.25; }
         }
       `}</style>
-    <div data-tour-id="recording-hub">
-      <SectionLabel hidden={hubIconOnly}>Layout</SectionLabel>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <div style={{ flex: 1 }}>
-          <HubRow
-            active={layoutMode === 'youtube'}
-            iconOnly={hubIconOnly}
-            icon={<LayoutGrid size={16} />}
-            label="16:9"
-            title="16:9 layout"
-            onClick={() => onLayoutChange('youtube')}
-          />
-        </div>
-        <div style={{ flex: 1 }}>
-          <HubRow
-            active={layoutMode === 'reels'}
-            iconOnly={hubIconOnly}
-            icon={<LayoutGrid size={16} />}
-            label="9:16"
-            title="9:16 layout"
-            onClick={() => onLayoutChange('reels')}
-          />
-        </div>
-      </div>
-
-      <div style={DIVIDER} />
-
-      <SectionLabel hidden={hubIconOnly}>Screenshot</SectionLabel>
-      <HubRow iconOnly={hubIconOnly} icon={<Monitor size={16} />} label="Entire screen" onClick={onScreenshotEntireScreen} />
-      <HubRow iconOnly={hubIconOnly} icon={<ImageIcon size={16} />} label="Video frame" onClick={onScreenshotVideoOnly} />
-
-      <div style={DIVIDER} />
-
-      <SectionLabel hidden={hubIconOnly}>Record Screen</SectionLabel>
-      <div
-        data-tour-id="tour-record-screen"
-        style={{
-          padding: hubIconOnly ? 8 : 12,
-          borderRadius: 12,
-          border: '1px solid rgba(255,255,255,0.25)',
-          background: 'rgba(255,255,255,0.08)',
-          marginBottom: 8,
-        }}
-      >
-        {hubIconOnly ? null : (
-          <p style={{ margin: '0 0 10px', fontSize: 12, color: '#4B5563', lineHeight: 1.45 }}>
-            Share your screen, window, or tab. Webcam and mic are included when enabled below.
-          </p>
+      {regionOverlayOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <RegionRecordOverlay
+            aspect={regionAspect}
+            onAspectChange={setRegionAspect}
+            region={viewportRegion}
+            onRegionChange={setViewportRegion}
+            onClose={() => setRegionOverlayOpen(false)}
+          />,
+          document.body,
         )}
-        <ScreenRecorder
-          mode="display"
-          getCanvas={getCanvas}
-          getWebcamStream={getWebcamStream}
-          getMicStream={getMicStream}
-          getCropRegion={getCropRegion}
-          layoutMode={layoutMode}
-          onRecordingChange={onRecordingChange}
-          promptDownload
-          onRecordingComplete={onScreenRecordComplete}
-        />
-      </div>
-
-      {screenRecordDownloadPending && (
-        <div
-          style={{
-            padding: 12,
-            borderRadius: 12,
-            background: '#F0FDF4',
-            border: '1px solid #BBF7D0',
-            marginBottom: 8,
-          }}
-        >
-          <p style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 600, color: '#166534' }}>
-            Download recording as MP4?
-          </p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              style={{ ...rowStyle(), flex: 1, justifyContent: 'center', background: '#16A34A', color: '#fff', border: 'none' }}
-              onClick={onScreenRecordDownloadYes}
-            >
-              Yes
-            </button>
-            <button
-              type="button"
-              style={{ ...rowStyle(), flex: 1, justifyContent: 'center' }}
-              onClick={onScreenRecordDownloadNo}
-            >
-              No
-            </button>
+      <div data-tour-id="recording-hub">
+        {hubIconOnly ? (
+          <div style={compactStackStyle}>
+            {onToggleHubLabels ? (
+              <HubRow
+                iconOnly
+                icon={hubLabelsExpanded ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+                label={hubLabelsExpanded ? 'Collapse labels' : 'Expand labels'}
+                title={hubLabelsExpanded ? 'Collapse labels' : 'Expand labels'}
+                onClick={onToggleHubLabels}
+              />
+            ) : null}
+            {layoutRows}
+            <HubRow
+              active={webcamActive}
+              iconOnly
+              icon={webcamActive ? <CameraOff size={16} /> : <Camera size={16} />}
+              label={webcamActive ? 'Webcam on' : 'Webcam off'}
+              onClick={onWebcamToggle}
+            />
+            <HubRow
+              active={micActive && !micMuted}
+              iconOnly
+              icon={micMuted || !micActive ? <MicOff size={16} /> : <Mic size={16} />}
+              label={micMuted ? 'Mic muted' : micActive ? 'Mic on' : 'Mic off'}
+              onClick={onMicToggle}
+            />
+            {recordBlock}
           </div>
-        </div>
-      )}
-
-      <div style={DIVIDER} />
-
-      <SectionLabel hidden={hubIconOnly}>Webcam</SectionLabel>
-      <div data-tour-id="tour-webcam">
-        <HubRow
-          active={webcamActive}
-          iconOnly={hubIconOnly}
-          icon={webcamActive ? <CameraOff size={16} /> : <Camera size={16} />}
-          label={webcamActive ? 'Webcam on' : 'Webcam off'}
-          onClick={onWebcamToggle}
-        />
+        ) : (
+          <>
+            <SectionLabel>Layout</SectionLabel>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <div style={{ flex: 1 }}>
+                <HubRow
+                  active={layoutMode === 'youtube'}
+                  icon={<LayoutGrid size={16} />}
+                  label="16:9"
+                  title="16:9 layout"
+                  onClick={() => onLayoutChange('youtube')}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <HubRow
+                  active={layoutMode === 'reels'}
+                  icon={<LayoutGrid size={16} />}
+                  label="9:16"
+                  title="9:16 layout"
+                  onClick={() => onLayoutChange('reels')}
+                />
+              </div>
+            </div>
+            <div style={DIVIDER} />
+            <SectionLabel>Screenshot</SectionLabel>
+            <HubRow icon={<Monitor size={16} />} label="Entire screen" onClick={onScreenshotEntireScreen} />
+            <HubRow icon={<ImageIcon size={16} />} label="Video frame" onClick={onScreenshotVideoOnly} />
+            <div style={DIVIDER} />
+            <SectionLabel>Record screen</SectionLabel>
+            {recordBlock}
+            <div style={DIVIDER} />
+            <SectionLabel>Webcam</SectionLabel>
+            <div data-tour-id="tour-webcam">
+              <HubRow
+                active={webcamActive}
+                icon={webcamActive ? <CameraOff size={16} /> : <Camera size={16} />}
+                label={webcamActive ? 'Webcam on' : 'Webcam off'}
+                onClick={onWebcamToggle}
+              />
+            </div>
+            <div style={DIVIDER} />
+            <SectionLabel>Microphone</SectionLabel>
+            <HubRow
+              active={micActive && !micMuted}
+              icon={micMuted || !micActive ? <MicOff size={16} /> : <Mic size={16} />}
+              label={micMuted ? 'Mic muted' : micActive ? 'Mic on' : 'Mic off'}
+              onClick={onMicToggle}
+            />
+            <div style={DIVIDER} />
+            <SectionLabel>Upload video</SectionLabel>
+            {uploadSection()}
+          </>
+        )}
+        {hubIconOnly ? null : (
+          <>
+            {screenRecordDownloadPending && downloadPrompt()}
+            {hubCaptureLoading && captureLoading()}
+            {!hubCaptureLoading && hubCaptureTarget && !hubCaptureIsActive && (
+              <p style={{ margin: '0 0 8px', fontSize: 12, color: '#166534', lineHeight: 1.45 }}>
+                Video loaded — recording on the video panel.
+              </p>
+            )}
+            {hubCaptureIsActive && captureActive()}
+            {captureDownloadStatus !== 'idle' && captureDownload()}
+          </>
+        )}
       </div>
+    </>
+  );
 
-      <div style={DIVIDER} />
-
-      <SectionLabel hidden={hubIconOnly}>Microphone</SectionLabel>
-      <HubRow
-        active={micActive && !micMuted}
-        iconOnly={hubIconOnly}
-        icon={micMuted || !micActive ? <MicOff size={16} /> : <Mic size={16} />}
-        label={micMuted ? 'Mic muted' : micActive ? 'Mic on' : 'Mic off'}
-        onClick={onMicToggle}
-      />
-
-      <div style={DIVIDER} />
-
-      <SectionLabel hidden={hubIconOnly}>Upload video</SectionLabel>
-
+  function uploadSection() {
+    return (
       <div data-tour-id="tour-upload">
         <p style={{ margin: '0 0 10px', fontSize: 12, color: '#4B5563', lineHeight: 1.5 }}>
           Drop an MP4 from your device, or use Coach Lab Academy for YouTube / Instagram import workflows.
         </p>
-
         <div
           role="button"
           tabIndex={0}
           onClick={() => dropInputRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragOver(true);
+          }}
           onDragLeave={() => setIsDragOver(false)}
           onDrop={(e) => {
             e.preventDefault();
@@ -403,227 +561,147 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           </div>
         ) : null}
       </div>
+    );
+  }
 
-      {hubCaptureLoading && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '10px 12px',
-            borderRadius: 10,
-            background: 'rgba(255,255,255,0.15)',
-            border: '1px solid rgba(255,255,255,0.25)',
-            marginBottom: 8,
-            fontSize: 13,
-            fontWeight: 600,
-          }}
-        >
-          <span
-            style={{
-              width: 18,
-              height: 18,
-              border: '2px solid rgba(26,26,26,0.15)',
-              borderTopColor: '#1A1A1A',
-              borderRadius: '50%',
-              animation: 'hubSpin 0.7s linear infinite',
-              flexShrink: 0,
-            }}
-          />
-          Loading video…
-        </div>
-      )}
-
-      {!hubCaptureLoading && hubCaptureTarget && !hubCaptureIsActive && (
-        <p style={{ margin: '0 0 8px', fontSize: 12, color: '#166534', lineHeight: 1.45 }}>
-          Video loaded — recording on the video panel.
-        </p>
-      )}
-
-      {hubCaptureIsActive && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '10px 12px',
-            borderRadius: 10,
-            background: '#FFF5F5',
-            border: '1px solid #FFD0D0',
-            marginBottom: 8,
-            fontSize: 12,
-            color: '#991B1B',
-          }}
-        >
-          <span
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: '#EF4444',
-              animation: 'hubPulse 1.2s ease-in-out infinite',
-            }}
-          />
-          Recording in progress — do not switch tabs
-          <button
-            type="button"
-            onClick={onHubCaptureCancel}
-            style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer', color: '#991B1B' }}
-          >
-            Cancel
-          </button>
-        </div>
-      )}
-
-      {(captureDownloadStatus === 'ready_mp4' || captureDownloadStatus === 'ready_webm') &&
-        !hubCaptureLoading &&
-        !hubCaptureIsActive && (
-        <div
-          style={{
-            padding: 12,
-            borderRadius: 12,
-            background: '#F0FDF4',
-            border: '1px solid #BBF7D0',
-            marginBottom: 8,
-          }}
-        >
-          <p style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 600, color: '#166534' }}>
-            Would you like to download a copy as MP4?
-          </p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              style={{ ...rowStyle(), flex: 1, justifyContent: 'center', background: '#16A34A', color: '#fff', border: 'none' }}
-              onClick={onDownloadCapture}
-            >
-              Download
-            </button>
-            <button
-              type="button"
-              style={{ ...rowStyle(), flex: 1, justifyContent: 'center' }}
-              onClick={onDismissCaptureDownload}
-            >
-              No thanks
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-    </>
-  );
-}
-
-/** Legacy overlay panel — prefer RecordingHubContent in ToolPalette. */
-export default function RecordingHub(props: RecordingHubProps) {
-  const { isOpen, onClose, isMobile = false, toolbarLeftInset = 220, ...contentProps } = props;
-  if (!isOpen) return null;
-
-  const panelStyle: React.CSSProperties = isMobile
-    ? {
-        position: 'fixed',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        maxHeight: 'min(82dvh, 620px)',
-        borderRadius: '16px 16px 0 0',
-        zIndex: 200,
-        background: 'rgba(250, 249, 247, 0.99)',
-        border: '1px solid rgba(0,0,0,0.06)',
-        borderBottom: 'none',
-        boxShadow: '0 -8px 48px rgba(0,0,0,0.14)',
-        backdropFilter: 'blur(22px) saturate(1.15)',
-        WebkitBackdropFilter: 'blur(22px) saturate(1.15)',
-        display: 'flex',
-        flexDirection: 'column',
-        animation: 'hubSlideUp 200ms ease-out',
-      }
-    : {
-        position: 'fixed',
-        left: toolbarLeftInset,
-        top: 12,
-        bottom: 12,
-        width: 'min(320px, calc(100vw - 24px))',
-        zIndex: 200,
-        background: 'rgba(250, 249, 247, 0.99)',
-        borderRadius: 14,
-        border: '1px solid rgba(0,0,0,0.08)',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.12)',
-        backdropFilter: 'blur(22px) saturate(1.15)',
-        WebkitBackdropFilter: 'blur(22px) saturate(1.15)',
-        display: 'flex',
-        flexDirection: 'column',
-        animation: 'hubSlideIn 200ms ease-out',
-      };
-
-  return (
-    <>
-      <style>{`
-        @keyframes hubSlideIn {
-          from { opacity: 0; transform: translateX(-12px); }
-          to   { opacity: 1; transform: none; }
-        }
-        @keyframes hubSlideUp {
-          from { opacity: 0; transform: translateY(16px); }
-          to   { opacity: 1; transform: none; }
-        }
-        @keyframes hubSpin { to { transform: rotate(360deg); } }
-        @keyframes hubPulse {
-          0%, 100% { opacity: 1; }
-          50%       { opacity: 0.25; }
-        }
-      `}</style>
-
+  function downloadPrompt() {
+    return (
       <div
-        onClick={onClose}
-        aria-hidden
-        style={{ position: 'fixed', inset: 0, zIndex: 199, background: 'rgba(0,0,0,0.18)' }}
-      />
-
-      <div role="dialog" aria-modal="true" aria-label="Recording Hub" data-tour-id="recording-hub" style={panelStyle}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '14px 16px 12px',
-            borderBottom: '1px solid #F0EDE8',
-            flexShrink: 0,
-          }}
-        >
+        style={{
+          padding: 12,
+          borderRadius: 12,
+          background: '#F0FDF4',
+          border: '1px solid #BBF7D0',
+          marginBottom: 8,
+        }}
+      >
+        <p style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 600, color: '#166534' }}>
+          Download recording as MP4?
+        </p>
+        <div style={{ display: 'flex', gap: 8 }}>
           <button
             type="button"
-            onClick={onClose}
-            aria-label="Close Recording Hub"
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              border: '1px solid #E5E5E5',
-              background: '#FFFFFF',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+            style={{ ...rowStyle(), flex: 1, justifyContent: 'center', background: '#16A34A', color: '#fff', border: 'none' }}
+            onClick={onScreenRecordDownloadYes}
           >
-            <ChevronLeft size={18} />
+            Yes
           </button>
-          <Video size={16} style={{ color: '#35679A' }} />
-          <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>Recording Hub</span>
-        </div>
-
-        <div
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            WebkitOverflowScrolling: 'touch',
-            padding: '0 12px',
-            paddingBottom: 'calc(20px + env(safe-area-inset-bottom, 0px))',
-          }}
-        >
-          <RecordingHubContent {...contentProps} />
+          <button
+            type="button"
+            style={{ ...rowStyle(), flex: 1, justifyContent: 'center' }}
+            onClick={onScreenRecordDownloadNo}
+          >
+            No
+          </button>
         </div>
       </div>
-    </>
-  );
+    );
+  }
+
+  function captureLoading() {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 12px',
+          borderRadius: 10,
+          background: 'rgba(255,255,255,0.15)',
+          border: '1px solid rgba(255,255,255,0.25)',
+          marginBottom: 8,
+          fontSize: 13,
+          fontWeight: 600,
+        }}
+      >
+        <span
+          style={{
+            width: 18,
+            height: 18,
+            border: '2px solid rgba(26,26,26,0.15)',
+            borderTopColor: '#1A1A1A',
+            borderRadius: '50%',
+            animation: 'hubSpin 0.7s linear infinite',
+            flexShrink: 0,
+          }}
+        />
+        Loading video…
+      </div>
+    );
+  }
+
+  function captureActive() {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '10px 12px',
+          borderRadius: 10,
+          background: 'rgba(255,59,48,0.12)',
+          border: '1px solid rgba(255,59,48,0.35)',
+          marginBottom: 8,
+        }}
+      >
+        <span
+          style={{
+            width: 10,
+            height: 10,
+            borderRadius: '50%',
+            background: '#FF3B30',
+            animation: 'hubPulse 1.2s ease-in-out infinite',
+          }}
+        />
+        <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: '#FF3B30' }}>Recording…</span>
+        <button
+          type="button"
+          style={{ ...rowStyle(), padding: '6px 10px', fontSize: 12 }}
+          onClick={onHubCaptureCancel}
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  function captureDownload() {
+    return (
+      <div
+        style={{
+          padding: 12,
+          borderRadius: 12,
+          background: '#EFF6FF',
+          border: '1px solid #BFDBFE',
+          marginBottom: 8,
+        }}
+      >
+        <p style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 600, color: '#1E40AF' }}>
+          {captureDownloadStatus === 'preparing' ? 'Preparing download…' : 'Capture ready'}
+        </p>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            style={{ ...rowStyle(), flex: 1, justifyContent: 'center', background: '#2563EB', color: '#fff', border: 'none' }}
+            onClick={onDownloadCapture}
+            disabled={captureDownloadStatus === 'preparing'}
+          >
+            Download
+          </button>
+          <button
+            type="button"
+            style={{ ...rowStyle(), flex: 1, justifyContent: 'center' }}
+            onClick={onDismissCaptureDownload}
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
+/** @deprecated Use RecordingHubContent inside ToolPalette. */
+export default function RecordingHub(_props: RecordingHubProps) {
+  return null;
 }
