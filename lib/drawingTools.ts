@@ -20,6 +20,7 @@ export type ToolType =
   | 'ballShadow'
   | 'swingPath'
   | 'manualSwing'
+  | 'jointChain'
   | 'erase'
   | 'zoom'
   | 'objectMultiplier';

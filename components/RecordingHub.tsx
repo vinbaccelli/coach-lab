@@ -147,11 +147,17 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
   const dropInputRef = useRef<HTMLInputElement>(null);
   const [altUrl, setAltUrl] = useState('');
   const [altTarget, setAltTarget] = useState<'A' | 'B'>('A');
+  const [pendingDropFile, setPendingDropFile] = useState<File | null>(null);
 
   const handleDropZoneFile = (file: File | undefined) => {
     if (!file || !file.type.startsWith('video/')) return;
-    const loadA = window.confirm('Load into Video A?\n\nOK = Video A\nCancel = Video B');
-    onFileDropped(file, loadA ? 'A' : 'B');
+    setPendingDropFile(file);
+  };
+
+  const confirmDropTarget = (slot: 'A' | 'B') => {
+    if (!pendingDropFile) return;
+    onFileDropped(pendingDropFile, slot);
+    setPendingDropFile(null);
   };
 
   const handleStartAltScreenRecord = () => {
@@ -330,6 +336,44 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
             e.target.value = '';
           }}
         />
+        {pendingDropFile ? (
+          <div
+            style={{
+              marginTop: 10,
+              padding: 12,
+              borderRadius: 12,
+              border: '1px solid #E5E5E5',
+              background: '#FAFAFA',
+            }}
+          >
+            <p style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>
+              Load &ldquo;{pendingDropFile.name}&rdquo; into:
+            </p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                style={{ ...rowStyle(), flex: 1, justifyContent: 'center' }}
+                onClick={() => confirmDropTarget('A')}
+              >
+                Left video
+              </button>
+              <button
+                type="button"
+                style={{ ...rowStyle(), flex: 1, justifyContent: 'center' }}
+                onClick={() => confirmDropTarget('B')}
+              >
+                Right video
+              </button>
+            </div>
+            <button
+              type="button"
+              style={{ ...rowStyle(), width: '100%', marginTop: 8, justifyContent: 'center', color: '#6B7280' }}
+              onClick={() => setPendingDropFile(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700, color: '#6B7280' }}>

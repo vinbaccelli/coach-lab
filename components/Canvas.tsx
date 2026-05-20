@@ -23,7 +23,10 @@ import {
 } from '@/lib/youtubeThumbnailPose';
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
-import { Hand } from 'lucide-react';
+import { Hand, HelpCircle } from 'lucide-react';
+import ContextualStyleBar, {
+  type ContextualStyleSnapshot,
+} from '@/components/ContextualStyleBar';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -62,14 +65,14 @@ const PRECISION_RIPPLE_MS = 420;
 
 type Pt = { x: number; y: number };
 
-interface StrokePen     { tool: 'pen';                              pts: Pt[]; color: string; lw: number; dashed?: boolean; spinning?: boolean; eraserStrokes?: EraserDot[] }
-interface StrokeLine    { tool: 'line';                             p1: Pt; p2: Pt; color: string; lw: number; dashed?: boolean; spinning?: boolean; eraserStrokes?: EraserDot[] }
-interface StrokeArrow   { tool: 'arrow' | 'arrowAngle';             p1: Pt; p2: Pt; color: string; lw: number; dashed?: boolean; spinning?: boolean; eraserStrokes?: EraserDot[] }
+interface StrokePen     { tool: 'pen';                              pts: Pt[]; color: string; lw: number; opacity?: number; dashed?: boolean; spinning?: boolean; eraserStrokes?: EraserDot[] }
+interface StrokeLine    { tool: 'line';                             p1: Pt; p2: Pt; color: string; lw: number; opacity?: number; dashed?: boolean; spinning?: boolean; eraserStrokes?: EraserDot[] }
+interface StrokeArrow   { tool: 'arrow' | 'arrowAngle';             p1: Pt; p2: Pt; color: string; lw: number; opacity?: number; dashed?: boolean; spinning?: boolean; eraserStrokes?: EraserDot[] }
 type EraserDot = { x: number; y: number; radius: number };
 interface StrokeEllipse {
   tool: 'circle' | 'bodyCircle';
   cx: number; cy: number; rx: number; ry: number;
-  color: string; lw: number; dashed?: boolean;
+  color: string; lw: number; opacity?: number; dashed?: boolean;
   spinning?: boolean;
   spinSpeed?: number;
   eraserStrokes?: EraserDot[];
@@ -77,28 +80,43 @@ interface StrokeEllipse {
 interface StrokeRect {
   tool: 'rect';
   cx: number; cy: number; rx: number; ry: number;
-  color: string; lw: number; dashed?: boolean;
+  color: string; lw: number; opacity?: number; dashed?: boolean;
   spinning?: boolean;
   eraserStrokes?: EraserDot[];
 }
 interface StrokeTriangle {
   tool: 'triangle';
   cx: number; cy: number; rx: number; ry: number;
-  color: string; lw: number; dashed?: boolean;
+  color: string; lw: number; opacity?: number; dashed?: boolean;
   spinning?: boolean;
   eraserStrokes?: EraserDot[];
 }
 interface StrokeSwing   { tool: 'swingPath' | 'manualSwing';        pts: Pt[]; color: string; lw: number; dashed?: boolean; arrowAtEnd?: boolean; spinning?: boolean }
+interface StrokeJointChain {
+  tool: 'jointChain';
+  nodes: Pt[];
+  color: string;
+  lw: number;
+  opacity?: number;
+  dashed?: boolean;
+  /** Animated kinetic-flow along the chain (dashed flow + pulsing joint balls). */
+  spinning?: boolean;
+}
 interface StrokeText    { tool: 'text';                             pos: Pt; text: string; color: string; fontSize: number }
 
-type Stroke = StrokePen | StrokeLine | StrokeArrow | StrokeEllipse | StrokeRect | StrokeTriangle | StrokeSwing | StrokeText;
+type Stroke = StrokePen | StrokeLine | StrokeArrow | StrokeEllipse | StrokeRect | StrokeTriangle | StrokeSwing | StrokeJointChain | StrokeText;
 
-interface AngleMeas { v: Pt; p1: Pt; p2: Pt; deg: number }
+interface AngleMeas {
+  v: Pt; p1: Pt; p2: Pt; deg: number;
+  color?: string; lw?: number; opacity?: number;
+  dashed?: boolean; spinning?: boolean;
+}
 interface LiveAngle { phase: 1 | 2; v: Pt; p1: Pt; cursor: Pt }
 
 type Selection =
   | { kind: 'stroke'; idx: number; start: Pt; orig: Stroke }
   | { kind: 'angle'; idx: number; start: Pt; orig: AngleMeas }
+  | { kind: 'jointNode'; idx: number; nodeIdx: number; start: Pt; orig: StrokeJointChain }
   | { kind: 'textResize'; idx: number; start: Pt; orig: StrokeText; corner: 'tl' | 'tr' | 'bl' | 'br' }
   | null;
 
@@ -154,6 +172,7 @@ export interface CanvasProps {
   isRecording?: boolean;
   circleSpinning?: boolean;
   outlineEraserSize?: number;
+  onOutlineEraserSizeChange?: (size: number) => void;
   webcamPipMode?: WebcamPipMode;
   webcamOpacity?: number;
   stroMotionGhosts?: ImageBitmap[];
@@ -193,6 +212,8 @@ export interface CanvasProps {
   panModeEnabled?: boolean;
   /** Callback to toggle pan mode from the on-canvas UI */
   onPanModeToggle?: () => void;
+  /** When true, render guided-tour ? at top of zoom cluster (analysis mobile/desktop). */
+  showTourHelpInZoomCluster?: boolean;
   /** Fires when a region is selected in objectMultiplier mode */
   onObjMultiplierRegionSelected?: () => void;
 }
@@ -575,6 +596,60 @@ function drawSmoothPath(
   ctx.restore();
 }
 
+function drawJointChainStroke(
+  ctx: CanvasRenderingContext2D,
+  s: StrokeJointChain,
+  _animFrame: number,
+): void {
+  const { nodes, color, lw, dashed, spinning } = s;
+  if (nodes.length === 0) return;
+
+  ctx.save();
+  const alpha = strokeOpacity(s);
+
+  if (nodes.length >= 2) {
+    drawSmoothPath(ctx, nodes, color, lw, alpha, dashed ?? false, false, spinning === true);
+    if (spinning) {
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.5;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(2, lw * 0.65);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.setLineDash([5, 12]);
+      ctx.lineDashOffset = -((Date.now() / 14) % 1000);
+      ctx.beginPath();
+      ctx.moveTo(nodes[0].x, nodes[0].y);
+      for (let i = 1; i < nodes.length - 1; i++) {
+        const xMid = (nodes[i].x + nodes[i + 1].x) / 2;
+        const yMid = (nodes[i].y + nodes[i + 1].y) / 2;
+        ctx.quadraticCurveTo(nodes[i].x, nodes[i].y, xMid, yMid);
+      }
+      const last = nodes[nodes.length - 1];
+      ctx.lineTo(last.x, last.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  const baseR = Math.max(JOINT_NODE_RADIUS, lw * 1.5 + 4);
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const pulse = spinning ? 1 + 0.1 * Math.sin(Date.now() / 110 + i * 0.75) : 1;
+    const r = baseR * pulse;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
 /** Returns true if point (px,py) falls within any eraser dot */
 function isErasedAt(px: number, py: number, eraserStrokes: EraserDot[]): boolean {
   for (const d of eraserStrokes) {
@@ -629,6 +704,39 @@ function strokeHasSpinning(s: Stroke | null | undefined): boolean {
   return (s as { spinning?: boolean }).spinning === true;
 }
 
+function strokeOpacity(s: { opacity?: number }): number {
+  const o = s.opacity;
+  return o !== undefined && o > 0 ? Math.min(1, o) : 1;
+}
+
+const CONTEXTUAL_STROKE_TOOLS = new Set([
+  'line', 'arrow', 'arrowAngle', 'circle', 'bodyCircle', 'rect', 'triangle', 'jointChain',
+]);
+
+/** Visual radius of a joint ball (logical px). */
+const JOINT_NODE_RADIUS = 8;
+/** Hit target for dragging a joint (touch gets a larger target). */
+const JOINT_NODE_HIT_TOUCH = 24;
+const JOINT_NODE_HIT_POINTER = 16;
+
+function isContextualStrokeTool(tool: string): boolean {
+  return CONTEXTUAL_STROKE_TOOLS.has(tool);
+}
+
+type ContextualTarget =
+  | { kind: 'stroke'; idx: number }
+  | { kind: 'angle'; idx: number };
+
+const DEFAULT_CONTEXTUAL_SNAPSHOT: ContextualStyleSnapshot = {
+  color: '#FFFFFF',
+  lineWidth: 3,
+  opacity: 1,
+  dashed: false,
+  spinning: false,
+  outlineEraserEnabled: false,
+  outlineEraserSize: 0,
+};
+
 /** Keep letterboxed video from panning so far that empty margins dominate the view. */
 function clampPanToLetterbox(
   panX: number,
@@ -677,6 +785,7 @@ function drawCircleStroke(
   _animFrame: number,
 ): void {
   ctx.save();
+  ctx.globalAlpha = strokeOpacity(s);
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
   if (s.spinning) {
@@ -774,6 +883,7 @@ function drawRectStroke(
   _animFrame: number,
 ): void {
   ctx.save();
+  ctx.globalAlpha = strokeOpacity(s);
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
   if (s.spinning) {
@@ -816,6 +926,7 @@ function drawTriangleStroke(
   _animFrame: number,
 ): void {
   ctx.save();
+  ctx.globalAlpha = strokeOpacity(s);
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
   if (s.spinning) {
@@ -864,6 +975,9 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+  if (s.tool !== 'text') {
+    ctx.globalAlpha = strokeOpacity(s as { opacity?: number });
+  }
 
   if (s.tool === 'pen') {
     const sp = s as StrokePen;
@@ -903,6 +1017,11 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
     const sw = s as StrokeSwing;
     drawSmoothPath(ctx, sw.pts, sw.color, sw.lw, 1, sw.dashed ?? false, sw.arrowAtEnd === true, sw.spinning === true);
     ctx.restore();
+    return;
+
+  } else if (s.tool === 'jointChain') {
+    ctx.restore();
+    drawJointChainStroke(ctx, s as StrokeJointChain, animFrame);
     return;
 
   } else if (s.tool === 'arrow' || s.tool === 'arrowAngle') {
@@ -952,17 +1071,28 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
 
 function drawAngleMeas(ctx: CanvasRenderingContext2D, m: AngleMeas): void {
   const { v, p1, p2, deg } = m;
+  const color = m.color ?? '#FFD700';
+  const lw = m.lw ?? 2;
   const a1 = Math.atan2(p1.y - v.y, p1.x - v.x);
   const a2 = Math.atan2(p2.y - v.y, p2.x - v.x);
+  const alpha = strokeOpacity(m);
   ctx.save();
-  ctx.fillStyle = 'rgba(255,215,0,0.12)';
-  ctx.strokeStyle = '#FFD700';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lw;
+  if (m.spinning) {
+    ctx.setLineDash([3, 10]);
+    ctx.lineDashOffset = -((Date.now() / 20) % 1000);
+  } else if (m.dashed) {
+    ctx.setLineDash([8, 6]);
+  }
   ctx.beginPath();
   ctx.moveTo(v.x, v.y);
   ctx.arc(v.x, v.y, 30, a1, a2, false);
   ctx.closePath();
+  ctx.globalAlpha = alpha * 0.12;
+  ctx.fillStyle = color;
   ctx.fill();
+  ctx.globalAlpha = alpha;
   ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(v.x, v.y); ctx.lineTo(p1.x, p1.y);
@@ -1259,6 +1389,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       isRecording = false,
       circleSpinning = false,
       outlineEraserSize = 0,
+      onOutlineEraserSizeChange,
       webcamPipMode = 'rectangle',
       webcamOpacity = 1,
       stroMotionGhosts,
@@ -1279,6 +1410,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       panModeEnabled = false,
       onPanModeToggle,
       onObjMultiplierRegionSelected,
+      showTourHelpInZoomCluster = false,
     },
     ref,
   ) {
@@ -1340,6 +1472,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const [textEditing, setTextEditing] = useState<{
       idx: number; left: number; top: number; width: number; fontSize: number; value: string; color: string;
     } | null>(null);
+    const [newTextDraft, setNewTextDraft] = useState<{
+      pos: Pt; left: number; top: number; fontSize: number; color: string;
+    } | null>(null);
+    const newTextInputRef = useRef<HTMLTextAreaElement | null>(null);
+    const [angleUiPhase, setAngleUiPhase] = useState<0 | 1 | 2>(0);
+    const [jointChainUiActive, setJointChainUiActive] = useState(false);
+
+    const contextualTargetRef = useRef<ContextualTarget | null>(null);
+    const [contextualOpen, setContextualOpen] = useState(false);
+    const [contextualAnchor, setContextualAnchor] = useState({ x: 0, y: 0 });
+    const [contextualSnapshot, setContextualSnapshot] = useState<ContextualStyleSnapshot>(
+      DEFAULT_CONTEXTUAL_SNAPSHOT,
+    );
     /** CSS-pixel selection rect on the object-multiplier overlay (relative to overlay box). */
     const [objMultOverlayPx, setObjMultOverlayPx] = useState<{ l: number; t: number; w: number; h: number } | null>(null);
     const objMultOverlayDownRef = useRef<{ cx: number; cy: number } | null>(null);
@@ -1477,11 +1622,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // Manual swing state
     const manualSwingPtsRef     = useRef<Pt[]>([]);
     const manualSwingActiveRef  = useRef(false);
+    const jointChainPtsRef      = useRef<Pt[]>([]);
+    const jointChainActiveRef   = useRef(false);
+    const jointChainCursorRef   = useRef<Pt | null>(null);
     const lastClickTimeRef      = useRef(0);
     const lastClickPosRef       = useRef<Pt | null>(null);
 
     useEffect(() => { drawingOptsRef.current      = drawingOptions; },  [drawingOptions]);
     useEffect(() => { activeToolRef.current        = activeTool; },      [activeTool]);
+    useEffect(() => {
+      if (activeTool !== 'angle') setAngleUiPhase(0);
+    }, [activeTool]);
+    useEffect(() => {
+      if (newTextDraft && newTextInputRef.current) {
+        newTextInputRef.current.focus();
+      }
+    }, [newTextDraft]);
+    useEffect(() => {
+      if (activeTool !== 'jointChain' && jointChainActiveRef.current) {
+        jointChainPtsRef.current = [];
+        jointChainActiveRef.current = false;
+        jointChainCursorRef.current = null;
+        setJointChainUiActive(false);
+        renderDirtyRef.current = true;
+      }
+    }, [activeTool]);
     useEffect(() => { skeletonEnabledRef.current   = skeletonEnabled; }, [skeletonEnabled]);
     useEffect(() => { skeletonDrawEnabledRef.current = skeletonDrawEnabled; }, [skeletonDrawEnabled]);
     useEffect(() => { ballTrailEnabledRef.current  = ballTrailEnabled; }, [ballTrailEnabled]);
@@ -1628,17 +1793,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       const onTouchStart = (e: TouchEvent) => {
         if (precisionTouchDrawRef.current) {
-          e.preventDefault();
           if (e.touches.length === 2) {
-            const t0 = e.touches[0];
-            const rect = canvas.getBoundingClientRect();
-            const sx = canvas.width / Math.max(1, rect.width);
-            const sy = canvas.height / Math.max(1, rect.height);
-            const logicalPt: Pt = {
-              x: (t0.clientX - rect.left) * sx,
-              y: (t0.clientY - rect.top) * sy - PRECISION_CURSOR_OFFSET_Y,
-            };
-            precisionFireAtLogicalRef.current?.(logicalPt);
+            e.preventDefault();
+            const ch =
+              precisionCrosshairDisplayRef.current ??
+              precisionCrosshairTargetRef.current;
+            if (ch) {
+              precisionFireAtLogicalRef.current?.(ch);
+            }
             return;
           }
           if (precisionAnchorPointerIdRef.current !== null) {
@@ -1674,7 +1836,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
       const onTouchMove = (e: TouchEvent) => {
         if (precisionTouchDrawRef.current) {
-          e.preventDefault();
+          if (precisionAnchorPointerIdRef.current !== null || e.touches.length >= 2) {
+            e.preventDefault();
+          }
           return;
         }
         if (e.touches.length === 2) {
@@ -1751,6 +1915,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     useImperativeHandle(ref, () => ({
       clearAll: () => {
+        contextualTargetRef.current = null;
+        setContextualOpen(false);
         strokesRef.current = [];
         angleMeasRef.current = [];
         activeStrokeRef.current = null;
@@ -1758,6 +1924,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         swingDrawingRef.current = false;
         manualSwingPtsRef.current = [];
         manualSwingActiveRef.current = false;
+        jointChainPtsRef.current = [];
+        jointChainActiveRef.current = false;
+        jointChainCursorRef.current = null;
         liveAngleRef.current = null;
         renderDirtyRef.current = true;
         anglePhaseRef.current = 0;
@@ -2693,6 +2862,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
+        // Joint chain in progress
+        if (jointChainActiveRef.current && jointChainPtsRef.current.length > 0) {
+          const pts = jointChainPtsRef.current;
+          const cursor = jointChainCursorRef.current;
+          const opts = drawingOptsRef.current;
+          const previewNodes = cursor ? [...pts, cursor] : pts;
+          drawJointChainStroke(
+            ctx,
+            {
+              tool: 'jointChain',
+              nodes: previewNodes,
+              color: opts.color,
+              lw: opts.lineWidth,
+              opacity: 0.85,
+              dashed: opts.dashed,
+              spinning: circleSpinningRef.current || undefined,
+            },
+            animTickRef.current,
+          );
+        }
+
         // Locked angle measurements
         for (const m of angleMeasRef.current) drawAngleMeas(ctx, m);
 
@@ -2757,6 +2947,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                   x0 = Math.min(...pts.map(p => p.x)); y0 = Math.min(...pts.map(p => p.y));
                   x1 = Math.max(...pts.map(p => p.x)); y1 = Math.max(...pts.map(p => p.y));
                 }
+              } else if (s.tool === 'jointChain') {
+                const jc = s as StrokeJointChain;
+                if (jc.nodes.length > 0) {
+                  x0 = Math.min(...jc.nodes.map((p) => p.x));
+                  y0 = Math.min(...jc.nodes.map((p) => p.y));
+                  x1 = Math.max(...jc.nodes.map((p) => p.x));
+                  y1 = Math.max(...jc.nodes.map((p) => p.y));
+                }
               } else if (s.tool === 'line' || s.tool === 'arrow' || s.tool === 'arrowAngle') {
                 const l = s as StrokeLine | StrokeArrow;
                 x0 = Math.min(l.p1.x, l.p2.x); y0 = Math.min(l.p1.y, l.p2.y);
@@ -2789,6 +2987,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const bb = getTextBBox(s as StrokeText);
               x0 = bb.x0; y0 = bb.y0;
               x1 = bb.x1; y1 = bb.y1;
+            }
+          } else if (sel.kind === 'jointNode') {
+            const jc = strokesRef.current[sel.idx] as StrokeJointChain | undefined;
+            if (jc && jc.nodes.length > 0) {
+              x0 = Math.min(...jc.nodes.map((p) => p.x));
+              y0 = Math.min(...jc.nodes.map((p) => p.y));
+              x1 = Math.max(...jc.nodes.map((p) => p.x));
+              y1 = Math.max(...jc.nodes.map((p) => p.y));
+              const n = jc.nodes[sel.nodeIdx];
+              if (n) {
+                ctx.save();
+                ctx.strokeStyle = '#FFD700';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, JOINT_NODE_RADIUS + 6, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+              }
             }
           }
           if (x1 > x0 || y1 > y0) {
@@ -3054,6 +3270,168 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
     };
 
+    const boundsCenterForContextual = (target: ContextualTarget): Pt | null => {
+      if (target.kind === 'stroke') {
+        const s = strokesRef.current[target.idx];
+        if (!s) return null;
+        if (s.tool === 'line' || s.tool === 'arrow' || s.tool === 'arrowAngle') {
+          const sl = s as StrokeLine;
+          return { x: (sl.p1.x + sl.p2.x) / 2, y: (sl.p1.y + sl.p2.y) / 2 };
+        }
+        if (
+          s.tool === 'circle' || s.tool === 'bodyCircle' ||
+          s.tool === 'rect' || s.tool === 'triangle'
+        ) {
+          const el = s as StrokeEllipse;
+          return { x: el.cx, y: el.cy };
+        }
+        if (s.tool === 'jointChain') {
+          const jc = s as StrokeJointChain;
+          if (jc.nodes.length === 0) return null;
+          const xs = jc.nodes.map((n) => n.x);
+          const ys = jc.nodes.map((n) => n.y);
+          return {
+            x: (Math.min(...xs) + Math.max(...xs)) / 2,
+            y: (Math.min(...ys) + Math.max(...ys)) / 2,
+          };
+        }
+        return null;
+      }
+      const m = angleMeasRef.current[target.idx];
+      return m ? { x: m.v.x, y: m.v.y } : null;
+    };
+
+    const buildContextualSnapshot = (target: ContextualTarget): ContextualStyleSnapshot => {
+      const opts = drawingOptsRef.current;
+      if (target.kind === 'stroke') {
+        const s = strokesRef.current[target.idx];
+        if (!s || s.tool === 'text' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
+          return DEFAULT_CONTEXTUAL_SNAPSHOT;
+        }
+        const styled = s as StrokeLine;
+        return {
+          color: styled.color,
+          lineWidth: styled.lw,
+          opacity: strokeOpacity(styled),
+          dashed: styled.dashed ?? false,
+          spinning: styled.spinning ?? false,
+          outlineEraserEnabled:
+            outlineEraserSizeRef.current > 0 && outlineErasingIdxRef.current === target.idx,
+          outlineEraserSize: outlineEraserSizeRef.current,
+        };
+      }
+      const m = angleMeasRef.current[target.idx];
+      if (!m) return DEFAULT_CONTEXTUAL_SNAPSHOT;
+      return {
+        color: m.color ?? opts.color,
+        lineWidth: m.lw ?? opts.lineWidth,
+        opacity: strokeOpacity(m),
+        dashed: m.dashed ?? false,
+        spinning: m.spinning ?? false,
+        outlineEraserEnabled: false,
+        outlineEraserSize: outlineEraserSizeRef.current,
+      };
+    };
+
+    const closeContextualStyle = useCallback(() => {
+      if (contextualTargetRef.current) {
+        pushHistory();
+      }
+      contextualTargetRef.current = null;
+      setContextualOpen(false);
+      if (
+        selectionRef.current?.kind === 'stroke' ||
+        selectionRef.current?.kind === 'angle' ||
+        selectionRef.current?.kind === 'jointNode'
+      ) {
+        selectionRef.current = null;
+      }
+      renderDirtyRef.current = true;
+    }, [pushHistory]);
+
+    const openContextualStyle = useCallback((target: ContextualTarget) => {
+      contextualTargetRef.current = target;
+      const center = boundsCenterForContextual(target);
+      if (center) {
+        const { clientX, clientY } = logicalPtToClient(center);
+        setContextualAnchor({ x: clientX, y: clientY });
+      }
+      setContextualSnapshot(buildContextualSnapshot(target));
+      setContextualOpen(true);
+      if (target.kind === 'stroke') {
+        const s = strokesRef.current[target.idx];
+        if (s) {
+          selectionRef.current = {
+            kind: 'stroke',
+            idx: target.idx,
+            start: { x: 0, y: 0 },
+            orig: s,
+          };
+        }
+      } else {
+        const m = angleMeasRef.current[target.idx];
+        if (m) {
+          selectionRef.current = {
+            kind: 'angle',
+            idx: target.idx,
+            start: { x: 0, y: 0 },
+            orig: m,
+          };
+        }
+      }
+      renderDirtyRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const applyContextualChange = useCallback((patch: Partial<ContextualStyleSnapshot>) => {
+      const target = contextualTargetRef.current;
+      if (!target) return;
+
+      if (patch.outlineEraserSize !== undefined) {
+        outlineEraserSizeRef.current = patch.outlineEraserSize;
+        onOutlineEraserSizeChange?.(patch.outlineEraserSize);
+      }
+
+      if (patch.outlineEraserEnabled === false) {
+        outlineErasingIdxRef.current = -1;
+        outlineEraserSizeRef.current = 0;
+        onOutlineEraserSizeChange?.(0);
+      } else if (patch.outlineEraserEnabled === true && target.kind === 'stroke') {
+        const size = patch.outlineEraserSize ?? (outlineEraserSizeRef.current < 5 ? 15 : outlineEraserSizeRef.current);
+        outlineEraserSizeRef.current = size;
+        outlineErasingIdxRef.current = target.idx;
+        onOutlineEraserSizeChange?.(size);
+      }
+
+      if (target.kind === 'stroke') {
+        const strokes = [...strokesRef.current];
+        const raw = strokes[target.idx];
+        if (!raw || raw.tool === 'text' || raw.tool === 'swingPath' || raw.tool === 'manualSwing') return;
+        const s = { ...raw } as StrokeLine;
+        if (patch.color !== undefined) s.color = patch.color;
+        if (patch.lineWidth !== undefined) s.lw = patch.lineWidth;
+        if (patch.opacity !== undefined) s.opacity = patch.opacity;
+        if (patch.dashed !== undefined) s.dashed = patch.dashed;
+        if (patch.spinning !== undefined) s.spinning = patch.spinning || undefined;
+        strokes[target.idx] = s as Stroke;
+        strokesRef.current = strokes;
+      } else {
+        const angles = [...angleMeasRef.current];
+        const m = { ...angles[target.idx] };
+        if (patch.color !== undefined) m.color = patch.color;
+        if (patch.lineWidth !== undefined) m.lw = patch.lineWidth;
+        if (patch.opacity !== undefined) m.opacity = patch.opacity;
+        if (patch.dashed !== undefined) m.dashed = patch.dashed;
+        if (patch.spinning !== undefined) m.spinning = patch.spinning || undefined;
+        angles[target.idx] = m;
+        angleMeasRef.current = angles;
+      }
+
+      setContextualSnapshot(buildContextualSnapshot(target));
+      renderDirtyRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [onOutlineEraserSizeChange]);
+
     const precisionToolUsesToggleDownUp = (t: ToolType): boolean =>
       t === 'pen' ||
       t === 'erase' ||
@@ -3114,6 +3492,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       lastClickPosRef.current = null;
     }, [pushHistory]);
 
+    const finishJointChain = useCallback(() => {
+      const pts = jointChainPtsRef.current;
+      if (pts.length >= 2) {
+        const opts = drawingOptsRef.current;
+        strokesRef.current = [
+          ...strokesRef.current,
+          {
+            tool: 'jointChain',
+            nodes: [...pts],
+            color: opts.color,
+            lw: opts.lineWidth,
+            dashed: opts.dashed ?? false,
+            spinning: circleSpinningRef.current || undefined,
+          },
+        ];
+        pushHistory();
+        openContextualStyle({ kind: 'stroke', idx: strokesRef.current.length - 1 });
+      }
+      jointChainPtsRef.current = [];
+      jointChainActiveRef.current = false;
+      jointChainCursorRef.current = null;
+      setJointChainUiActive(false);
+      lastClickTimeRef.current = 0;
+      lastClickPosRef.current = null;
+    }, [pushHistory, openContextualStyle]);
+
     // ── Select tool: hit-test + drag any object ────────────────────────────
 
     const distToSegment = (p: Pt, a: Pt, b: Pt): number => {
@@ -3155,6 +3559,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     };
 
     const hitTestStroke = (s: Stroke, pos: Pt): number => {
+      if (s.tool === 'jointChain') {
+        const jc = s as StrokeJointChain;
+        if (jc.nodes.length === 0) return Infinity;
+        let best = Infinity;
+        for (let i = 0; i < jc.nodes.length - 1; i++) {
+          best = Math.min(best, distToSegment(pos, jc.nodes[i], jc.nodes[i + 1]));
+        }
+        for (const n of jc.nodes) {
+          best = Math.min(best, Math.hypot(pos.x - n.x, pos.y - n.y) - JOINT_NODE_RADIUS);
+        }
+        return best;
+      }
       if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
         const pts = (s as StrokePen | StrokeSwing).pts;
         if (pts.length === 0) return Infinity;
@@ -3213,6 +3629,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     };
 
     const translateStroke = (s: Stroke, dx: number, dy: number): Stroke => {
+      if (s.tool === 'jointChain') {
+        const jc = s as StrokeJointChain;
+        return {
+          ...jc,
+          nodes: jc.nodes.map((p) => ({ x: p.x + dx, y: p.y + dy })),
+        };
+      }
       if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
         return { ...s, pts: (s as StrokePen | StrokeSwing).pts.map((p) => ({ x: p.x + dx, y: p.y + dy })) } as Stroke;
       }
@@ -3280,6 +3703,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const precisionEligible =
         precisionTouchDrawRef.current &&
         e.pointerType === 'touch' &&
+        e.pointerId !== PRECISION_SYNTHETIC_POINTER_ID &&
         toolEarly !== 'zoom' &&
         toolEarly !== 'objectMultiplier';
 
@@ -3308,6 +3732,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
 
+      if (contextualTargetRef.current && outlineEraserSizeRef.current <= 0) {
+        closeContextualStyle();
+      }
+
       // ── StroMotion rubber-band region selection ──────────────────────────
       if (isSelectingStroRegionRef.current) {
         stroRegionStartRef.current = pos;
@@ -3327,7 +3755,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' ||
         tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle' ||
         tool === 'angle' || tool === 'text' || tool === 'erase' || tool === 'ballShadow' ||
-        tool === 'swingPath' || tool === 'manualSwing';
+        tool === 'swingPath' || tool === 'manualSwing' || tool === 'jointChain';
 
       // If the pointer lands on the webcam PiP, preserve PiP drag/resize even
       // when pan mode is active.  We pre-check here so the PiP hit can veto
@@ -3392,8 +3820,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         const HIT_T = 28;
+        const nodeHitR = e.pointerType === 'touch' ? JOINT_NODE_HIT_TOUCH : JOINT_NODE_HIT_POINTER;
         let best: Selection = null;
         let bestDist = Infinity;
+
+        for (let i = strokesRef.current.length - 1; i >= 0; i--) {
+          const s = strokesRef.current[i];
+          if (s.tool !== 'jointChain') continue;
+          const jc = s as StrokeJointChain;
+          for (let ni = jc.nodes.length - 1; ni >= 0; ni--) {
+            const d = Math.hypot(pos.x - jc.nodes[ni].x, pos.y - jc.nodes[ni].y);
+            if (d < nodeHitR && d < bestDist) {
+              bestDist = d;
+              best = { kind: 'jointNode', idx: i, nodeIdx: ni, start: pos, orig: jc };
+            }
+          }
+        }
 
         for (let i = 0; i < strokesRef.current.length; i++) {
           const d = hitTestStroke(strokesRef.current[i], pos);
@@ -3631,23 +4073,33 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (anglePhaseRef.current === 0) {
             angleVRef.current = pos;
             anglePhaseRef.current = 1;
+            setAngleUiPhase(1);
             liveAngleRef.current = { phase: 1, v: pos, p1: pos, cursor: pos };
           } else if (anglePhaseRef.current === 1) {
             angleP1Ref.current = pos;
             anglePhaseRef.current = 2;
+            setAngleUiPhase(2);
             liveAngleRef.current = { phase: 2, v: angleVRef.current!, p1: pos, cursor: pos };
           } else {
             const v  = angleVRef.current!;
             const p1 = angleP1Ref.current!;
             angleMeasRef.current = [
               ...angleMeasRef.current,
-              { v, p1, p2: pos, deg: calcAngleDeg(p1, v, pos) },
+              {
+                v, p1, p2: pos, deg: calcAngleDeg(p1, v, pos),
+                color: opts.color,
+                lw,
+                dashed: opts.dashed ?? false,
+                spinning: circleSpinningRef.current || undefined,
+              },
             ];
             anglePhaseRef.current = 0;
+            setAngleUiPhase(0);
             angleVRef.current   = null;
             angleP1Ref.current  = null;
             liveAngleRef.current = null;
             pushHistory();
+            openContextualStyle({ kind: 'angle', idx: angleMeasRef.current.length - 1 });
           }
           break;
 
@@ -3684,16 +4136,44 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           break;
         }
 
-        case 'text': {
-          if (typeof window === 'undefined') break;
-          const text = window.prompt('Enter text:');
-          if (text) {
-            strokesRef.current = [
-              ...strokesRef.current,
-              { tool: 'text', pos, text, color: opts.color, fontSize: opts.fontSize },
-            ];
-            pushHistory();
+        case 'jointChain': {
+          const now = Date.now();
+          const last = lastClickPosRef.current;
+          const timeSinceLast = now - lastClickTimeRef.current;
+          const distSinceLast = last ? Math.hypot(pos.x - last.x, pos.y - last.y) : Infinity;
+          const isDoubleClick = timeSinceLast < 400 && distSinceLast < 12;
+
+          if (isDoubleClick && jointChainActiveRef.current) {
+            finishJointChain();
+          } else {
+            if (!jointChainActiveRef.current) {
+              jointChainActiveRef.current = true;
+              setJointChainUiActive(true);
+              jointChainPtsRef.current = [pos];
+            } else {
+              jointChainPtsRef.current = [...jointChainPtsRef.current, pos];
+            }
+            jointChainCursorRef.current = pos;
           }
+          lastClickTimeRef.current = now;
+          lastClickPosRef.current = pos;
+          renderDirtyRef.current = true;
+          break;
+        }
+
+        case 'text': {
+          const canvas = canvasRef.current;
+          if (!canvas) break;
+          const { clientX, clientY } = logicalPtToClient(pos);
+          const rect = canvas.getBoundingClientRect();
+          const scaledFontSize = opts.fontSize * zoomRef.current * (rect.height / canvas.height);
+          setNewTextDraft({
+            pos,
+            left: clientX - rect.left,
+            top: clientY - rect.top,
+            fontSize: scaledFontSize,
+            color: opts.color,
+          });
           break;
         }
 
@@ -3759,7 +4239,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           break;
       }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pushHistory, finishSwingPath, finishManualSwingPath, eraseAt, videoRef, webcamPipHitTest]);
+    }, [pushHistory, finishSwingPath, finishManualSwingPath, finishJointChain, eraseAt, videoRef, webcamPipHitTest]);
 
     // ── Pointer move ───────────────────────────────────────────────────────
 
@@ -3884,7 +4364,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ];
           return;
         }
-        if (sel.kind === 'stroke') {
+        if (sel.kind === 'jointNode') {
+          const jc = sel.orig;
+          const nodes = [...jc.nodes];
+          const origNode = sel.orig.nodes[sel.nodeIdx];
+          if (origNode) {
+            nodes[sel.nodeIdx] = {
+              x: origNode.x + dx,
+              y: origNode.y + dy,
+            };
+            const updated: StrokeJointChain = { ...jc, nodes };
+            strokesRef.current = [
+              ...strokesRef.current.slice(0, sel.idx),
+              updated,
+              ...strokesRef.current.slice(sel.idx + 1),
+            ];
+          }
+        } else if (sel.kind === 'stroke') {
           const updated = translateStroke(sel.orig, dx, dy);
           strokesRef.current = [
             ...strokesRef.current.slice(0, sel.idx),
@@ -3943,6 +4439,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ...strokesRef.current.slice(idx + 1),
           ];
         }
+        return;
+      }
+
+      // Joint chain live preview cursor
+      if (tool === 'jointChain' && jointChainActiveRef.current) {
+        jointChainCursorRef.current = pos;
         return;
       }
 
@@ -4037,6 +4539,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // Keep the text stroke selected so resize handles remain visible
           const s = strokesRef.current[finSel.idx];
           selectionRef.current = s ? { kind: 'stroke', idx: finSel.idx, start: finSel.start, orig: s } : null;
+        } else if (finSel.kind === 'jointNode') {
+          const s = strokesRef.current[finSel.idx] as StrokeJointChain | undefined;
+          selectionRef.current =
+            s && s.tool === 'jointChain'
+              ? { kind: 'jointNode', idx: finSel.idx, nodeIdx: finSel.nodeIdx, start: finSel.start, orig: s }
+              : null;
         } else {
           selectionRef.current = null;
         }
@@ -4099,7 +4607,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       strokesRef.current = [...strokesRef.current, active];
       pushHistory();
-    }, [pushHistory]);
+      if (isContextualStrokeTool(active.tool)) {
+        openContextualStyle({ kind: 'stroke', idx: strokesRef.current.length - 1 });
+      }
+    }, [pushHistory, openContextualStyle]);
 
     onPointerDownRef.current = onPointerDown;
     onPointerUpRef.current = onPointerUp;
@@ -4128,18 +4639,36 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     precisionSyntheticDispatchRef.current = firePrecisionPointer;
 
     const firePrecisionDrawAt = (ch: Pt) => {
+      const tool = activeToolRef.current;
+      if (
+        tool === 'zoom' ||
+        tool === 'skeleton' ||
+        tool === 'select' ||
+        tool === 'ballShadow' ||
+        tool === 'objectMultiplier'
+      ) {
+        return;
+      }
       precisionCrosshairTargetRef.current = ch;
       precisionCrosshairDisplayRef.current = { ...ch };
       precisionRippleRef.current = { x: ch.x, y: ch.y, t0: performance.now() };
       renderDirtyRef.current = true;
-      const tool = activeToolRef.current;
       const useToggle = precisionToolUsesToggleDownUp(tool);
       const dragging = isDraggingRef.current && activeStrokeRef.current !== null;
       if (useToggle && dragging) {
         firePrecisionPointer('pointerup', ch);
       } else {
         firePrecisionPointer('pointerdown', ch);
-        if (tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'angle' || tool === 'arrowAngle' || tool === 'text') {
+        if (
+          tool === 'pen' ||
+          tool === 'line' ||
+          tool === 'arrow' ||
+          tool === 'angle' ||
+          tool === 'arrowAngle' ||
+          tool === 'jointChain' ||
+          tool === 'text' ||
+          tool === 'erase'
+        ) {
           queueMicrotask(() => firePrecisionPointer('pointerup', ch));
         }
       }
@@ -4176,6 +4705,42 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       setTextEditing(null);
     }, [pushHistory]);
 
+    const commitNewTextDraft = useCallback(() => {
+      const draft = newTextDraft;
+      if (!draft) return;
+      const val = (newTextInputRef.current?.value ?? '').trim();
+      if (val) {
+        strokesRef.current = [
+          ...strokesRef.current,
+          {
+            tool: 'text',
+            pos: draft.pos,
+            text: val,
+            color: draft.color,
+            fontSize: drawingOptsRef.current.fontSize,
+          },
+        ];
+        pushHistory();
+      }
+      setNewTextDraft(null);
+    }, [newTextDraft, pushHistory]);
+
+    const coachToolHint = (() => {
+      const t = activeTool;
+      if (t === 'jointChain' && jointChainUiActive) {
+        return 'Tap each joint along the chain · double-tap to finish';
+      }
+      if (t === 'angle') {
+        if (angleUiPhase === 0) return 'Angle: tap the corner (vertex)';
+        if (angleUiPhase === 1) return 'Angle: tap the first side';
+        return 'Angle: tap the second side';
+      }
+      if (t === 'manualSwing') {
+        return 'Tap along the path · double-tap to finish';
+      }
+      return null;
+    })();
+
     // Double-click to finish swing path on desktop OR edit text
     const onDoubleClick = useCallback((e: React.MouseEvent) => {
       if (activeToolRef.current === 'swingPath' && swingDrawingRef.current) {
@@ -4183,6 +4748,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       if (activeToolRef.current === 'manualSwing' && manualSwingActiveRef.current) {
         finishManualSwingPath();
+      }
+      if (activeToolRef.current === 'jointChain' && jointChainActiveRef.current) {
+        finishJointChain();
       }
       if (activeToolRef.current === 'zoom') {
         zoomRef.current = 1.0;
@@ -4233,11 +4801,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
       }
-    }, [finishSwingPath, finishManualSwingPath]);
+    }, [finishSwingPath, finishManualSwingPath, finishJointChain]);
 
     const cursorFor: Partial<Record<ToolType, string>> = {
       pen: 'crosshair', erase: 'cell', text: 'text', line: 'crosshair',
-      angle: 'crosshair', swingPath: 'crosshair', manualSwing: 'crosshair', ballShadow: 'crosshair',
+      angle: 'crosshair', swingPath: 'crosshair', manualSwing: 'crosshair',
+      jointChain: 'crosshair', ballShadow: 'crosshair',
       objectMultiplier: 'crosshair',
       zoom: isPanningRef.current
         ? 'grabbing'
@@ -4286,9 +4855,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       e.stopPropagation();
     }, []);
 
+    const zoomBtnSize = precisionTouchDraw ? 32 : 36;
+
     const zoomControlBtnStyle: React.CSSProperties = {
-      width: 36,
-      height: 36,
+      width: zoomBtnSize,
+      height: zoomBtnSize,
       borderRadius: 8,
       border: 'none',
       background: 'rgba(0,0,0,0.55)',
@@ -4307,6 +4878,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     return (
       <div style={{ position: 'absolute', inset: 0 }}>
+        {coachToolHint ? (
+          <div
+            style={{
+              position: 'absolute',
+              top: 8,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 45,
+              maxWidth: 'calc(100% - 24px)',
+              padding: '6px 12px',
+              borderRadius: 10,
+              background: 'rgba(0,0,0,0.72)',
+              color: '#fff',
+              fontSize: 12,
+              fontWeight: 600,
+              lineHeight: 1.35,
+              textAlign: 'center',
+              pointerEvents: 'none',
+              backdropFilter: 'blur(8px)',
+              WebkitBackdropFilter: 'blur(8px)',
+            }}
+          >
+            {coachToolHint}
+          </div>
+        ) : null}
         <canvas
           ref={canvasRef}
           width={containerWidth}
@@ -4508,13 +5104,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           </>
         ) : null}
 
-        {/* Zoom / Pan controls — bottom-right corner above playback */}
+        {/* Zoom / pan / help utility cluster — above playback, clear of floating FABs */}
         <div
           data-tour-id="tour-zoom"
           style={{
             position: 'absolute',
-            bottom: 80,
-            right: 12,
+            bottom: 'calc(var(--coachlab-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))',
+            right: 'calc(12px + env(safe-area-inset-right, 0px))',
             display: 'flex',
             flexDirection: 'column',
             gap: 6,
@@ -4522,8 +5118,36 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             pointerEvents: 'auto',
           }}
         >
+          {showTourHelpInZoomCluster ? (
+            <button
+              type="button"
+              data-tour-id="tour-help"
+              aria-label="Open guided tour"
+              title="Guided tour"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                try {
+                  navigator?.vibrate?.(10);
+                } catch {
+                  /* noop */
+                }
+                window.dispatchEvent(new CustomEvent('coachlab-open-guided-tour'));
+              }}
+              style={{
+                ...zoomControlBtnStyle,
+                fontSize: 17,
+                fontWeight: 800,
+                background: 'rgba(26,26,26,0.88)',
+                border: '1px solid rgba(255,255,255,0.2)',
+              }}
+            >
+              <HelpCircle size={18} strokeWidth={2.25} aria-hidden />
+            </button>
+          ) : null}
           <button
             type="button"
+            onPointerDown={(e) => e.preventDefault()}
             onClick={() => {
               zoomRef.current = Math.min(5, zoomRef.current + 0.25);
             }}
@@ -4534,6 +5158,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           </button>
           <button
             type="button"
+            onPointerDown={(e) => e.preventDefault()}
             onClick={() => {
               const next = Math.max(1, zoomRef.current - 0.25);
               zoomRef.current = next;
@@ -4546,6 +5171,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           </button>
           <button
             type="button"
+            onPointerDown={(e) => e.preventDefault()}
             onClick={() => {
               zoomRef.current = 1.0;
               panXRef.current = 0;
@@ -4562,6 +5188,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           {onPanModeToggle && showFinePointerPanBtn && (
             <button
               type="button"
+              onPointerDown={(e) => e.preventDefault()}
               onClick={onPanModeToggle}
               style={{
                 ...zoomControlBtnStyle,
@@ -4575,6 +5202,57 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             </button>
           )}
         </div>
+        <ContextualStyleBar
+          open={contextualOpen}
+          anchorX={contextualAnchor.x}
+          anchorY={contextualAnchor.y}
+          mobile={precisionTouchDraw}
+          snapshot={contextualSnapshot}
+          onChange={applyContextualChange}
+          onClose={closeContextualStyle}
+          onBeginOutlineEraser={() => {
+            const t = contextualTargetRef.current;
+            if (t?.kind === 'stroke') {
+              outlineErasingIdxRef.current = t.idx;
+            }
+          }}
+        />
+
+        {newTextDraft && (
+          <textarea
+            ref={newTextInputRef}
+            autoFocus
+            placeholder="Type label…"
+            style={{
+              position: 'absolute',
+              left: newTextDraft.left,
+              top: newTextDraft.top,
+              minWidth: 120,
+              minHeight: newTextDraft.fontSize * 1.4,
+              fontSize: newTextDraft.fontSize,
+              fontWeight: 'bold',
+              fontFamily: 'Inter, sans-serif',
+              color: newTextDraft.color,
+              background: 'rgba(0,0,0,0.65)',
+              border: '2px solid #FFD700',
+              borderRadius: 4,
+              padding: '2px 6px',
+              outline: 'none',
+              resize: 'none',
+              zIndex: 9999,
+              lineHeight: 1.25,
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setNewTextDraft(null);
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commitNewTextDraft();
+              }
+            }}
+            onBlur={commitNewTextDraft}
+          />
+        )}
+
         {textEditing && (
           <textarea
             ref={textEditInputRef}

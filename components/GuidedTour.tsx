@@ -68,20 +68,27 @@ const ALL_STEPS: ReadonlyArray<TourStep> = [
     target: 'tour-draw-tools',
     title: 'Draw tools',
     description:
-      'Draw lines, arrows, circles, and shapes directly on the video to highlight technique.',
+      'Pen, arrows, body chains, and shapes — use Quick markup on the toolbar home for one-tap access.',
+    placement: 'right',
+  },
+  {
+    target: 'tour-joint-chain',
+    title: 'Body chain',
+    description:
+      'Build a manual joint chain for biomechanics: tap each joint, then double-tap to finish. Drag joints later with Select.',
     placement: 'right',
   },
   {
     target: 'tour-angle',
     title: 'Angle tool',
-    description: 'Measure joint and body angles precisely to analyse movement mechanics.',
+    description: 'Tap three points (corner, side, side) to measure an angle on the athlete.',
     placement: 'right',
   },
   {
     target: 'tour-style',
-    title: 'Style',
+    title: 'Default style',
     description:
-      'Change colour, thickness, line style, and add animation effects to your drawings before or after drawing.',
+      'Set colour and thickness for your next mark. After drawing, use the floating card on the video to tweak that shape.',
     placement: 'right',
   },
   {
@@ -282,7 +289,12 @@ function useIsMobileTour() {
   return mobile;
 }
 
-export default function GuidedTour() {
+type GuidedTourProps = {
+  /** When true, ? lives in the canvas zoom cluster (analysis page) — no fixed FAB. */
+  suppressFloatingHelp?: boolean;
+};
+
+export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourProps) {
   const [mounted, setMounted] = useState(false);
   const [welcomeOpen, setWelcomeOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
@@ -342,6 +354,12 @@ export default function GuidedTour() {
     setStepIdx(0);
     setTourOpen(true);
   }, []);
+
+  useEffect(() => {
+    const onExternalOpen = () => openTourFromHelp();
+    window.addEventListener('coachlab-open-guided-tour', onExternalOpen);
+    return () => window.removeEventListener('coachlab-open-guided-tour', onExternalOpen);
+  }, [openTourFromHelp]);
 
   const next = useCallback(() => {
     setStepIdx((i) => {
@@ -702,7 +720,7 @@ export default function GuidedTour() {
         0%, 100% { box-shadow: 0 6px 24px rgba(0,0,0,0.28), 0 0 0 0 rgba(53,103,154,0.55); }
         50%      { box-shadow: 0 6px 24px rgba(0,0,0,0.28), 0 0 0 14px rgba(53,103,154,0); }
       }`}</style>
-      {helpBtn}
+      {!suppressFloatingHelp ? helpBtn : null}
       {welcomeModal}
       {tourOverlay}
     </>,

@@ -186,6 +186,8 @@ export default function Home() {
   const [urlTarget, setUrlTarget]           = useState<'A' | 'B'>('A');
   /** Which stream the unified timeline controls (AB = sync both for uploaded HTML5 pairs). */
   const [playbackTarget, setPlaybackTarget] = useState<'A' | 'B' | 'AB'>('A');
+  /** Which video panel receives undo / clear / new drawings when comparing. */
+  const [markupTarget, setMarkupTarget] = useState<'A' | 'B' | 'both'>('A');
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Distance from bottom of video stage to reserve for playback UI + 16px gap (px). */
@@ -505,12 +507,21 @@ export default function Home() {
   const handlePrecisionDrawToggle = useCallback(() => {
     setPrecisionDrawEnabled((prev) => {
       const next = !prev;
-      if (next && typeof window !== 'undefined' && !hasSeenPrecisionInstructions()) {
-        queueMicrotask(() => setPrecisionInstructionsOpen(true));
+      if (next) {
+        const nonDraw =
+          activeTool === 'zoom' ||
+          activeTool === 'skeleton' ||
+          activeTool === 'select' ||
+          activeTool === 'ballShadow' ||
+          activeTool === 'objectMultiplier';
+        if (nonDraw) setActiveTool('pen');
+        if (typeof window !== 'undefined' && !hasSeenPrecisionInstructions()) {
+          queueMicrotask(() => setPrecisionInstructionsOpen(true));
+        }
       }
       return next;
     });
-  }, []);
+  }, [activeTool]);
 
   const dismissPrecisionInstructions = useCallback(() => {
     markPrecisionInstructionsSeen();
@@ -2313,40 +2324,100 @@ export default function Home() {
 
   const reelsDesktop = !isMobile && layoutMode === 'reels';
 
+  const canPlaybackSyncBoth = Boolean(
+    hasVideoBContent &&
+    videoSrc &&
+    videoSrcB &&
+    !youtubeVideoIdA &&
+    !youtubeVideoIdB &&
+    !genericEmbedSrcA &&
+    !genericEmbedSrcB,
+  );
+
+  const applyMarkupToTargets = useCallback(
+    (op: (handle: CanvasHandle) => void) => {
+      if (markupTarget === 'both') {
+        if (canvasRef.current) op(canvasRef.current);
+        if (canvasRefB.current) op(canvasRefB.current);
+        return;
+      }
+      const ref = markupTarget === 'B' ? canvasRefB : canvasRef;
+      if (ref.current) op(ref.current);
+    },
+    [markupTarget],
+  );
+
+  const handleMarkupUndo = useCallback(() => {
+    applyMarkupToTargets((c) => c.undo());
+  }, [applyMarkupToTargets]);
+
+  const handleMarkupRedo = useCallback(() => {
+    applyMarkupToTargets((c) => c.redo());
+  }, [applyMarkupToTargets]);
+
+  const handleMarkupClear = useCallback(() => {
+    applyMarkupToTargets((c) => {
+      c.clearAll();
+      c.resetSkeleton();
+    });
+    if (markupTarget === 'A' || markupTarget === 'both') {
+      setSkeletonOverlayPaused(false);
+    }
+  }, [applyMarkupToTargets, markupTarget]);
+
+  useEffect(() => {
+    if (!hasVideoBContent) {
+      setMarkupTarget('A');
+      return;
+    }
+    if (playbackTarget === 'B') setMarkupTarget('B');
+    else if (playbackTarget === 'A') setMarkupTarget('A');
+  }, [playbackTarget, hasVideoBContent]);
+
+  const playbackSegmentBtn = (
+    value: 'A' | 'B' | 'AB',
+    label: string,
+    disabled?: boolean,
+  ) => (
+    <button
+      key={value}
+      type="button"
+      disabled={disabled}
+      onClick={() => !disabled && setPlaybackTarget(value)}
+      style={{
+        flex: 1,
+        minHeight: 32,
+        borderRadius: 8,
+        border: playbackTarget === value ? '2px solid rgba(255,255,255,0.9)' : '1px solid rgba(255,255,255,0.25)',
+        background: playbackTarget === value ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.08)',
+        color: disabled ? 'rgba(255,255,255,0.35)' : '#FFFFFF',
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.55 : 1,
+      }}
+    >
+      {label}
+    </button>
+  );
+
   const renderTimelineDock = () => (
     <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
       {hasVideoBContent && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '0 12px',
-            flexWrap: 'wrap',
-          }}
-        >
-          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: 600 }}>Playback</span>
-          <select
-            value={playbackTarget}
-            onChange={(e) => setPlaybackTarget(e.target.value as 'A' | 'B' | 'AB')}
-            style={{
-              height: 32,
-              borderRadius: 8,
-              border: '1px solid rgba(255,255,255,0.2)',
-              background: 'rgba(255,255,255,0.1)',
-              color: '#FFFFFF',
-              padding: '0 10px',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-            aria-label="Playback target"
-            title="AB: sync both clips (uploaded MP4/WebM pairs)"
-          >
-            <option value="A">A</option>
-            <option value="B">B</option>
-            <option value="AB">AB</option>
-          </select>
+        <div style={{ padding: '0 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: 600 }}>Watch</span>
+            <div style={{ display: 'flex', flex: 1, gap: 6 }}>
+              {playbackSegmentBtn('A', 'Left')}
+              {playbackSegmentBtn('B', 'Right')}
+              {playbackSegmentBtn('AB', 'Both', !canPlaybackSyncBoth)}
+            </div>
+          </div>
+          <p style={{ margin: 0, fontSize: 11, lineHeight: 1.4, color: 'rgba(255,255,255,0.55)' }}>
+            {canPlaybackSyncBoth
+              ? 'Both videos stay in sync while you coach.'
+              : 'Sync both works with uploaded files on left and right. Link/embed clips play independently.'}
+          </p>
         </div>
       )}
 
@@ -2412,13 +2483,12 @@ export default function Home() {
     compact:                         true as const,
     drawingOptions,
     onOptionsChange:                 handleOptionsChange,
-    onUndo:                          () => canvasRef.current?.undo(),
-    onRedo:                          () => canvasRef.current?.redo(),
-    onClear:                         () => {
-      canvasRef.current?.clearAll();
-      canvasRef.current?.resetSkeleton();
-      setSkeletonOverlayPaused(false);
-    },
+    onUndo:                          handleMarkupUndo,
+    onRedo:                          handleMarkupRedo,
+    onClear:                         handleMarkupClear,
+    markupTarget,
+    onMarkupTargetChange:            setMarkupTarget,
+    hasCompareVideo:                 hasVideoBContent,
     onResetSkeleton:                 () => canvasRef.current?.resetSkeleton(),
     onResetBallTrail:                () => canvasRef.current?.resetBallTrail(),
     ballTrailMode,
@@ -3059,6 +3129,7 @@ export default function Home() {
                       isRecording={isRecording}
                       circleSpinning={circleSpinning}
                       outlineEraserSize={outlineEraserSize}
+                      onOutlineEraserSizeChange={setOutlineEraserSize}
                       webcamPipMode={webcamPipMode}
                       webcamOpacity={webcamOpacity}
                       webcamActive={webcamActive}
@@ -3075,6 +3146,7 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
+                      showTourHelpInZoomCluster
                       poseFrameSkip={hasVideoBContent ? 1 : 0}
                       panModeEnabled={panModeEnabled}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
@@ -3410,6 +3482,7 @@ export default function Home() {
                       isRecording={isRecording}
                       circleSpinning={circleSpinning}
                       outlineEraserSize={outlineEraserSize}
+                      onOutlineEraserSizeChange={setOutlineEraserSize}
                       webcamPipMode={webcamPipMode}
                       webcamOpacity={webcamOpacity}
                       webcamActive={webcamActive}
@@ -3534,13 +3607,14 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Video B offset control */}
-          {layoutMode !== 'reels' && (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
+          {/* Match timing: shift Video B relative to A */}
+          {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
             <div
               style={{
                 position: 'absolute',
                 right: 12,
-                bottom: (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) ? 260 : 132,
+                top: layoutMode === 'reels' ? 'calc(env(safe-area-inset-top, 0px) + 12px)' : undefined,
+                bottom: layoutMode === 'reels' ? undefined : (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) ? 260 : 132,
                 zIndex: 80,
                 pointerEvents: 'auto',
                 padding: '8px 12px',
@@ -3556,9 +3630,9 @@ export default function Home() {
                 gap: 8,
                 fontSize: 12,
               }}
-              title="Shift Video B start time relative to Video A (seconds)"
+              title="Shift the right video earlier or later to line up with the left clip (seconds)"
             >
-              <span style={{ fontWeight: 700 }}>B offset</span>
+              <span style={{ fontWeight: 700 }}>Match timing</span>
               <input
                 type="number"
                 step="0.1"
@@ -3970,7 +4044,39 @@ export default function Home() {
           document.body,
         )}
 
-      <GuidedTour />
+      {(processingStatus || stroMotionProcessing) && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 240,
+            maxWidth: 'min(420px, calc(100vw - 24px))',
+            padding: '10px 16px',
+            borderRadius: 12,
+            background: 'rgba(250, 249, 247, 0.97)',
+            border: '1px solid #E5E5E5',
+            color: '#1A1A1A',
+            fontSize: 13,
+            fontWeight: 600,
+            lineHeight: 1.45,
+            boxShadow: '0 12px 36px rgba(0,0,0,0.12)',
+            backdropFilter: 'blur(14px)',
+            WebkitBackdropFilter: 'blur(14px)',
+            pointerEvents: 'none',
+            textAlign: 'center',
+          }}
+        >
+          {stroMotionProcessing && stroMotionProgress
+            ? stroMotionProgress
+            : processingStatus}
+        </div>
+      )}
+
+      <GuidedTour suppressFloatingHelp />
     </div>
   );
 }

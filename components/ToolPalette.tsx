@@ -28,6 +28,7 @@ import {
   Crosshair,
   Camera,
   Sparkles,
+  Link2,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -102,10 +103,14 @@ interface ToolPaletteProps {
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   showCollapseControl?: boolean;
-  /** Full session reset (moved from top settings menu). */
+  /** Full workspace reset (videos + drawings). */
   onCleanSession?: () => void;
   /** Mobile: denser icon targets to maximize canvas. */
   denseMobile?: boolean;
+  /** Compare mode: which video panel receives markup / undo / clear. */
+  markupTarget?: 'A' | 'B' | 'both';
+  onMarkupTargetChange?: (t: 'A' | 'B' | 'both') => void;
+  hasCompareVideo?: boolean;
 }
 
 const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
@@ -267,6 +272,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
     showCollapseControl = false,
     onCleanSession,
     denseMobile = false,
+    markupTarget = 'A',
+    onMarkupTargetChange,
+    hasCompareVideo = false,
   } = props;
 
   const io = Boolean(iconOnlyLayout || mobileChrome || collapsed);
@@ -565,7 +573,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
-          <BackHeader title="Control Panel" icon={<LayoutGrid size={18} />} />
+          <BackHeader title="Session & record" icon={<LayoutGrid size={18} />} />
           {recordingHubContent}
         </div>
       </div>
@@ -577,7 +585,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
-          <BackHeader title="Style" icon={<Palette size={18} />} />
+          <BackHeader title="Default style" icon={<Palette size={18} />} />
+          <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: '#6B7280' }}>
+            Sets the look for your next mark. Tap a finished shape on the video to edit it there.
+          </p>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
             Preset colors
           </div>
@@ -656,7 +667,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           {onCircleSpinningChange && animatedOutlineEligible &&
             chk(
               'spin',
-              'Animated outline',
+              'Highlight pulse',
               !!circleSpinning,
               onCircleSpinningChange,
               <Sparkles size={18} strokeWidth={2} />,
@@ -665,7 +676,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <>
               {chk(
                 'oe',
-                'Outline eraser',
+                'Erase part of line',
                 outlineEraserSize > 0,
                 (v) => onOutlineEraserSizeChange(v ? 15 : 0),
                 <Eraser size={18} strokeWidth={2} />,
@@ -722,34 +733,30 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Draw" icon={<Pen size={18} />} />
+          <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: '#6B7280' }}>
+            After you draw a shape, use the floating style card on the video to fine-tune it.
+          </p>
           <Row k="sel" active={activeTool === 'select'} icon={<MousePointer2 size={18} />} label="Select" onPress={() => setTool('select')} />
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '6px 4px 0' }}>
+            Markup
+          </div>
           <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Pen" onPress={() => setTool('pen')} />
           <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Line" onPress={() => setTool('line')} />
           <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => setTool('arrow')} />
+          <Row k="jc" active={activeTool === 'jointChain'} icon={<Link2 size={18} />} label="Body chain" onPress={() => setTool('jointChain')} />
+          <Row k="angle-d" active={activeTool === 'angle'} icon={<Activity size={18} />} label="Angle" onPress={() => setTool('angle')} />
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 0' }}>
+            Shapes & more
+          </div>
           <Row k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} label="Circle" onPress={() => setTool('circle')} />
           <Row k="tri" active={activeTool === 'triangle'} icon={<Triangle size={18} />} label="Triangle" onPress={() => setTool('triangle')} />
           <Row k="rect" active={activeTool === 'rect'} icon={<Square size={18} />} label="Rectangle" onPress={() => setTool('rect')} />
           <Row k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} label="Eraser" onPress={() => setTool('erase')} />
           <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => setTool('text')} />
-          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing — Manual" onPress={() => setTool('manualSwing')} />
+          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => setTool('manualSwing')} />
           <div data-tour-id="tour-angle">
-            <Row k="ang" icon={<Activity size={18} />} label="Angle" onPress={() => push('angle')} />
+            <Row k="aa-nav" icon={<Activity size={18} />} label="Arrow angle" onPress={() => push('angle')} />
           </div>
-          {drawToolActive && onCircleSpinningChange && animatedOutlineEligible &&
-            chk('spin-post', 'Animated', !!circleSpinning, onCircleSpinningChange, <Sparkles size={18} strokeWidth={2} />)}
-          {drawToolActive && onOutlineEraserSizeChange && outlineEraserEligible &&
-            chk('oe-post', 'Section eraser', outlineEraserSize > 0, (v) => onOutlineEraserSizeChange(v ? 15 : 0), <Eraser size={18} strokeWidth={2} />)}
-          {mobileChrome && onPrecisionDrawToggle ? (
-            <div data-tour-id="tour-precision">
-              <Row
-                k="prec"
-                active={precisionDrawEnabled}
-                icon={<Crosshair size={18} />}
-                label="Precision"
-                onPress={() => onPrecisionDrawToggle()}
-              />
-            </div>
-          ) : null}
         </div>
       </div>
     );
@@ -822,16 +829,16 @@ export default function ToolPalette(props: ToolPaletteProps) {
             }}
           >
             <RefreshCw size={18} />
-            Reset &amp; re-analyze
+            Refresh pose overlay
           </button>
           {onSkeletonShowAnglesChange !== undefined &&
-            chk('sa', 'Show joint angles', skeletonShowAngles ?? true, onSkeletonShowAnglesChange)}
+            chk('sa', 'Show angle labels', skeletonShowAngles ?? true, onSkeletonShowAnglesChange)}
           {onSkeletonShowHeadLineChange !== undefined &&
             chk('sh', 'Show head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange)}
           {onSkeletonClassicColorsChange !== undefined &&
             chk(
               'sc',
-              skeletonClassicColors ?? true ? 'Neon colour' : 'Blue monochrome',
+              skeletonClassicColors ?? true ? 'Colourful skeleton' : 'Simple blue skeleton',
               skeletonClassicColors ?? true,
               onSkeletonClassicColorsChange,
             )}
@@ -983,13 +990,22 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <Row
               k="cp"
               icon={<LayoutGrid size={denseMobile ? 16 : 20} />}
-              label="Control Panel"
+              label="Session & record"
               onPress={() => push('recording')}
             />
           </div>
         ) : null}
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
+          Quick markup
+        </div>
+        <Row k="pen-h" active={activeTool === 'pen'} icon={<Pen size={denseMobile ? 16 : 18} />} label="Pen" onPress={() => setTool('pen')} />
+        <Row k="ar-h" active={activeTool === 'arrow'} icon={<ArrowRight size={denseMobile ? 16 : 18} />} label="Arrow" onPress={() => setTool('arrow')} />
+        <div data-tour-id="tour-joint-chain">
+          <Row k="jc-h" active={activeTool === 'jointChain'} icon={<Link2 size={denseMobile ? 16 : 18} />} label="Body chain" onPress={() => setTool('jointChain')} />
+        </div>
+        <Row k="ang-h" active={activeTool === 'angle'} icon={<Activity size={denseMobile ? 16 : 18} />} label="Angle" onPress={() => setTool('angle')} />
         <div data-tour-id="tour-draw-tools">
-          <Row k="dr" icon={<Pen size={20} />} label="Draw" onPress={() => push('draw')} />
+          <Row k="dr" icon={<Pen size={20} />} label="All draw tools" onPress={() => push('draw')} />
         </div>
         <div data-tour-id="tour-style">
           <Row k="st" icon={<Palette size={20} />} label="Style" onPress={() => push('style')} />
@@ -1002,6 +1018,17 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => { setTool('skeleton'); push('skeleton'); }}
           />
         </div>
+        {mobileChrome && onPrecisionDrawToggle ? (
+          <div data-tour-id="tour-precision">
+            <Row
+              k="prec"
+              active={precisionDrawEnabled}
+              icon={<Crosshair size={denseMobile ? 16 : 20} />}
+              label="Precision"
+              onPress={() => onPrecisionDrawToggle()}
+            />
+          </div>
+        ) : null}
         <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '8px 0' }} />
         <Row k="u" icon={<Undo2 size={denseMobile ? 16 : 20} />} label="Undo" onPress={onUndo} />
         <Row k="r" icon={<Redo2 size={denseMobile ? 16 : 20} />} label="Redo" onPress={onRedo} />
@@ -1039,7 +1066,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 <span style={{ display: 'flex', width: 26, justifyContent: 'center', color: '#9a3412' }}>
                   <RefreshCw size={18} />
                 </span>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>Clean session</span>
+                <span style={{ fontSize: 14, fontWeight: 600 }}>New session</span>
               </>
             )}
           </button>
