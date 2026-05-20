@@ -24,9 +24,7 @@ import {
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { Hand, HelpCircle } from 'lucide-react';
-import ContextualStyleBar, {
-  type ContextualStyleSnapshot,
-} from '@/components/ContextualStyleBar';
+import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -203,10 +201,12 @@ export interface CanvasProps {
   /** When true, webcam PiP is drawn whenever the stream is ready (not only while screen-recording). */
   webcamActive?: boolean;
   /**
-   * Mobile/tablet: use crosshair offset from finger and second-finger tap to inject clicks at crosshair.
-   * Ignored for mouse/pen; zoom tool bypasses precision routing.
+   * Precision draw: crosshair offset (touch) and visible cursor; second-finger tap injects at crosshair.
+   * Zoom / object-multiplier bypass precision routing.
    */
   precisionTouchDraw?: boolean;
+  /** Fires after a drawable shape is committed — parent opens toolbar draw-context mode. */
+  onDrawCommitted?: () => void;
   poseFrameSkip?: number;
   /** When true, one-finger touch / click-drag pans the canvas instead of drawing */
   panModeEnabled?: boolean;
@@ -1406,6 +1406,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamCutout = false,
       webcamActive = false,
       precisionTouchDraw = false,
+      onDrawCommitted,
       poseFrameSkip = 0,
       panModeEnabled = false,
       onPanModeToggle,
@@ -1445,6 +1446,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         precisionCrosshairDisplayRef.current = null;
         precisionFadeStartRef.current = null;
         precisionRippleRef.current = null;
+        precisionHoverActiveRef.current = false;
       }
     }, [precisionTouchDraw]);
     const precisionAnchorPointerIdRef = useRef<number | null>(null);
@@ -1452,6 +1454,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const precisionCrosshairDisplayRef = useRef<Pt | null>(null);
     const precisionFadeStartRef = useRef<number | null>(null);
     const precisionRippleRef = useRef<{ x: number; y: number; t0: number } | null>(null);
+    /** Mouse/pen hover: show crosshair without touch anchor. */
+    const precisionHoverActiveRef = useRef(false);
+    const onDrawCommittedRef = useRef(onDrawCommitted);
+    useEffect(() => {
+      onDrawCommittedRef.current = onDrawCommitted;
+    }, [onDrawCommitted]);
     const precisionSyntheticDispatchRef = useRef<
       ((type: 'pointerdown' | 'pointerup', logicalPt: Pt) => void) | null
     >(null);
@@ -3072,7 +3080,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (precisionTouchDrawRef.current) {
           const tgt = precisionCrosshairTargetRef.current;
           let disp = precisionCrosshairDisplayRef.current;
-          if (tgt && precisionAnchorPointerIdRef.current !== null) {
+          if (
+            tgt &&
+            (precisionAnchorPointerIdRef.current !== null || precisionHoverActiveRef.current)
+          ) {
             if (!disp) {
               disp = { ...tgt };
               precisionCrosshairDisplayRef.current = disp;
@@ -3084,7 +3095,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
 
           let cursorAlpha = 0;
-          if (precisionAnchorPointerIdRef.current !== null) {
+          if (precisionAnchorPointerIdRef.current !== null || precisionHoverActiveRef.current) {
             cursorAlpha = 1;
           } else if (precisionFadeStartRef.current !== null) {
             cursorAlpha = Math.max(
@@ -3197,7 +3208,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!canvas) return { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
       /** Match precision crosshair mapping so finger drawing lands where the offset crosshair would. */
-      const yAdj = e.pointerType === 'touch' ? PRECISION_CURSOR_OFFSET_Y : 0;
+      const yAdj =
+        precisionTouchDrawRef.current && e.pointerType === 'touch'
+          ? PRECISION_CURSOR_OFFSET_Y
+          : 0;
       const sx = (e.clientX - rect.left) * (canvas.width / rect.width);
       const sy = (e.clientY - yAdj - rect.top) * (canvas.height / rect.height);
       const W = canvas.width;
@@ -3349,38 +3363,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       renderDirtyRef.current = true;
     }, [pushHistory]);
 
-    const openContextualStyle = useCallback((target: ContextualTarget) => {
-      contextualTargetRef.current = target;
-      const center = boundsCenterForContextual(target);
-      if (center) {
-        const { clientX, clientY } = logicalPtToClient(center);
-        setContextualAnchor({ x: clientX, y: clientY });
-      }
-      setContextualSnapshot(buildContextualSnapshot(target));
-      setContextualOpen(true);
-      if (target.kind === 'stroke') {
-        const s = strokesRef.current[target.idx];
-        if (s) {
-          selectionRef.current = {
-            kind: 'stroke',
-            idx: target.idx,
-            start: { x: 0, y: 0 },
-            orig: s,
-          };
-        }
-      } else {
-        const m = angleMeasRef.current[target.idx];
-        if (m) {
-          selectionRef.current = {
-            kind: 'angle',
-            idx: target.idx,
-            start: { x: 0, y: 0 },
-            orig: m,
-          };
-        }
-      }
-      renderDirtyRef.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const notifyDrawCommitted = useCallback(() => {
+      onDrawCommittedRef.current?.();
     }, []);
 
     const applyContextualChange = useCallback((patch: Partial<ContextualStyleSnapshot>) => {
@@ -3508,7 +3492,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           },
         ];
         pushHistory();
-        openContextualStyle({ kind: 'stroke', idx: strokesRef.current.length - 1 });
+        notifyDrawCommitted();
       }
       jointChainPtsRef.current = [];
       jointChainActiveRef.current = false;
@@ -3516,7 +3500,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       setJointChainUiActive(false);
       lastClickTimeRef.current = 0;
       lastClickPosRef.current = null;
-    }, [pushHistory, openContextualStyle]);
+    }, [pushHistory, notifyDrawCommitted]);
 
     // ── Select tool: hit-test + drag any object ────────────────────────────
 
@@ -3700,14 +3684,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvasEl = e.target as HTMLCanvasElement;
       const toolEarly = activeToolRef.current;
-      const precisionEligible =
-        precisionTouchDrawRef.current &&
-        e.pointerType === 'touch' &&
-        e.pointerId !== PRECISION_SYNTHETIC_POINTER_ID &&
-        toolEarly !== 'zoom' &&
-        toolEarly !== 'objectMultiplier';
+      const precisionBlocked =
+        !precisionTouchDrawRef.current ||
+        toolEarly === 'zoom' ||
+        toolEarly === 'objectMultiplier' ||
+        e.pointerId === PRECISION_SYNTHETIC_POINTER_ID;
 
-      if (precisionEligible) {
+      const precisionTouchEligible =
+        !precisionBlocked && e.pointerType === 'touch';
+
+      if (precisionTouchEligible) {
         const anchor = precisionAnchorPointerIdRef.current;
         if (anchor === null) {
           precisionAnchorPointerIdRef.current = e.pointerId;
@@ -4099,7 +4085,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             angleP1Ref.current  = null;
             liveAngleRef.current = null;
             pushHistory();
-            openContextualStyle({ kind: 'angle', idx: angleMeasRef.current.length - 1 });
+            notifyDrawCommitted();
           }
           break;
 
@@ -4245,15 +4231,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       let pos = getPos(e);
-      if (
-        precisionTouchDrawRef.current &&
-        precisionAnchorPointerIdRef.current === e.pointerId &&
-        e.pointerType === 'touch' &&
-        activeToolRef.current !== 'zoom'
-      ) {
-        pos = getPosFromClientXY(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
-        precisionCrosshairTargetRef.current = pos;
-        e.preventDefault();
+      if (precisionTouchDrawRef.current && activeToolRef.current !== 'zoom') {
+        if (
+          precisionAnchorPointerIdRef.current === e.pointerId &&
+          e.pointerType === 'touch'
+        ) {
+          pos = getPosFromClientXY(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
+          precisionCrosshairTargetRef.current = pos;
+          precisionCrosshairDisplayRef.current = { ...pos };
+          e.preventDefault();
+        } else if (
+          (e.pointerType === 'mouse' || e.pointerType === 'pen') &&
+          precisionAnchorPointerIdRef.current === null
+        ) {
+          const ch = getPosFromClientXY(e.clientX, e.clientY);
+          precisionCrosshairTargetRef.current = ch;
+          precisionCrosshairDisplayRef.current = { ...ch };
+          precisionHoverActiveRef.current = true;
+          precisionFadeStartRef.current = null;
+        }
       }
       const tool = activeToolRef.current;
 
@@ -4494,6 +4490,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       if (
         precisionTouchDrawRef.current &&
+        (e.pointerType === 'mouse' || e.pointerType === 'pen') &&
+        precisionAnchorPointerIdRef.current === null
+      ) {
+        precisionHoverActiveRef.current = false;
+        if (precisionCrosshairTargetRef.current) {
+          precisionFadeStartRef.current = performance.now();
+        }
+      }
+
+      if (
+        precisionTouchDrawRef.current &&
         precisionAnchorPointerIdRef.current === e.pointerId &&
         e.pointerType === 'touch'
       ) {
@@ -4608,9 +4615,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       strokesRef.current = [...strokesRef.current, active];
       pushHistory();
       if (isContextualStrokeTool(active.tool)) {
-        openContextualStyle({ kind: 'stroke', idx: strokesRef.current.length - 1 });
+        notifyDrawCommitted();
       }
-    }, [pushHistory, openContextualStyle]);
+    }, [pushHistory, notifyDrawCommitted]);
 
     onPointerDownRef.current = onPointerDown;
     onPointerUpRef.current = onPointerUp;
@@ -5202,22 +5209,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             </button>
           )}
         </div>
-        <ContextualStyleBar
-          open={contextualOpen}
-          anchorX={contextualAnchor.x}
-          anchorY={contextualAnchor.y}
-          mobile={precisionTouchDraw}
-          snapshot={contextualSnapshot}
-          onChange={applyContextualChange}
-          onClose={closeContextualStyle}
-          onBeginOutlineEraser={() => {
-            const t = contextualTargetRef.current;
-            if (t?.kind === 'stroke') {
-              outlineErasingIdxRef.current = t.idx;
-            }
-          }}
-        />
-
         {newTextDraft && (
           <textarea
             ref={newTextInputRef}

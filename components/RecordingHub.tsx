@@ -6,7 +6,6 @@
  */
 
 import React, { useRef, useState } from 'react';
-import { normalizeWebUrlInput } from '@/lib/embedUrl';
 import {
   Video,
   Mic,
@@ -55,9 +54,6 @@ export interface RecordingHubContentProps {
   onScreenRecordDownloadYes?: () => void;
   onScreenRecordDownloadNo?: () => void;
 
-  /** GDM-first: called from Start Screen Record (no async before getDisplayMedia in page). */
-  onStartAltScreenRecord?: (url: string, target: 'A' | 'B') => void;
-  altScreenRecordMessage?: string | null;
 }
 
 /** @deprecated Overlay panel — use RecordingHubContent inside ToolPalette instead. */
@@ -139,14 +135,10 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     screenRecordDownloadPending,
     onScreenRecordDownloadYes,
     onScreenRecordDownloadNo,
-    onStartAltScreenRecord,
-    altScreenRecordMessage,
   } = props;
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dropInputRef = useRef<HTMLInputElement>(null);
-  const [altUrl, setAltUrl] = useState('');
-  const [altTarget, setAltTarget] = useState<'A' | 'B'>('A');
   const [pendingDropFile, setPendingDropFile] = useState<File | null>(null);
 
   const handleDropZoneFile = (file: File | undefined) => {
@@ -158,12 +150,6 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     if (!pendingDropFile) return;
     onFileDropped(pendingDropFile, slot);
     setPendingDropFile(null);
-  };
-
-  const handleStartAltScreenRecord = () => {
-    const normalized = normalizeWebUrlInput(altUrl);
-    if (!normalized || !onStartAltScreenRecord) return;
-    onStartAltScreenRecord(normalized, altTarget);
   };
 
   return (
@@ -287,14 +273,11 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
 
       <div style={DIVIDER} />
 
-      <SectionLabel>Load Video with URL</SectionLabel>
+      <SectionLabel>Upload video</SectionLabel>
 
-      <div data-tour-id="tour-publer">
-        <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700 }}>
-          Recommended — fastest way to load any video
-        </p>
+      <div data-tour-id="tour-upload">
         <p style={{ margin: '0 0 10px', fontSize: 12, color: '#4B5563', lineHeight: 1.5 }}>
-          Go to publer.com, paste your video link, download it, then drop it here
+          Drop an MP4 from your device, or use Coach Lab Academy for YouTube / Instagram import workflows.
         </p>
 
         <div
@@ -375,53 +358,6 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           </div>
         ) : null}
       </div>
-
-      <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700, color: '#6B7280' }}>
-        Alternative — use if Publer does not work
-      </p>
-
-      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-        <select
-          value={altTarget}
-          onChange={(e) => setAltTarget(e.target.value as 'A' | 'B')}
-          disabled={hubCaptureIsActive}
-          style={{ height: 38, borderRadius: 8, border: '1px solid #E5E5E5', fontSize: 12, fontWeight: 700 }}
-        >
-          <option value="A">Video A</option>
-          <option value="B">Video B</option>
-        </select>
-        <input
-          type="text"
-          placeholder="Paste any video URL…"
-          value={altUrl}
-          onChange={(e) => setAltUrl(e.target.value)}
-          disabled={hubCaptureIsActive}
-          style={{ flex: 1, height: 38, padding: '0 10px', borderRadius: 8, border: '1px solid #E8E8ED', fontSize: 13, outline: 'none', minWidth: 0 }}
-        />
-      </div>
-
-      {altScreenRecordMessage ? (
-        <p style={{ margin: '0 0 8px', fontSize: 12, color: '#1A1A1A', lineHeight: 1.45, fontWeight: 600 }}>
-          {altScreenRecordMessage}
-        </p>
-      ) : null}
-
-      <button
-        type="button"
-        disabled={hubCaptureIsActive || !normalizeWebUrlInput(altUrl) || !onStartAltScreenRecord}
-        onClick={handleStartAltScreenRecord}
-        style={{
-          ...rowStyle(),
-          justifyContent: 'center',
-          background: '#35679A',
-          color: '#fff',
-          border: 'none',
-          marginBottom: 8,
-          opacity: hubCaptureIsActive || !normalizeWebUrlInput(altUrl) ? 0.5 : 1,
-        }}
-      >
-        Start Screen Record
-      </button>
 
       {hubCaptureLoading && (
         <div

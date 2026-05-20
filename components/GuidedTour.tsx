@@ -27,15 +27,9 @@ interface TourStep {
 const ALL_STEPS: ReadonlyArray<TourStep> = [
   {
     target: 'tour-upload',
-    title: 'Upload Video',
-    description: 'Load any video from your device for analysis.',
-    placement: 'bottom',
-  },
-  {
-    target: 'tour-publer',
-    title: 'Load from Publer',
+    title: 'Upload video',
     description:
-      'Use Publer to load videos from YouTube, Instagram, or TikTok without downloading manually.',
+      'Import MP4 files from your device. Coach Lab Academy (Control Panel) explains YouTube, Instagram, and Drive workflows.',
     placement: 'bottom',
   },
   {

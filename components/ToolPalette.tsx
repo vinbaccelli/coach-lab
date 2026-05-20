@@ -111,6 +111,11 @@ interface ToolPaletteProps {
   markupTarget?: 'A' | 'B' | 'both';
   onMarkupTargetChange?: (t: 'A' | 'B' | 'both') => void;
   hasCompareVideo?: boolean;
+  /** After a shape is committed, toolbar shows contextual style controls (no popup). */
+  drawContextActive?: boolean;
+  onExitDrawContext?: () => void;
+  /** Desktop 9:16 — same compact icon-only rail as phone. */
+  phoneLayout?: boolean;
 }
 
 const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
@@ -120,11 +125,25 @@ type NavScreen =
   | 'recording'
   | 'style'
   | 'draw'
+  | 'drawContext'
   | 'angle'
   | 'skeleton'
   | 'webcam'
   | 'multiplier'
   | 'more';
+
+const TOOLBAR_ICON_PROPS = {
+  color: '#FFFFFF',
+  strokeWidth: 2.25,
+  style: { filter: 'drop-shadow(0 0 1px #000) drop-shadow(0 1px 0 #000)' },
+} as const;
+
+function ToolbarIcon({ children, size = 18 }: { children: React.ReactElement; size?: number }) {
+  return React.cloneElement(children, {
+    size,
+    ...TOOLBAR_ICON_PROPS,
+  });
+}
 
 function haptic() {
   try {
@@ -275,9 +294,12 @@ export default function ToolPalette(props: ToolPaletteProps) {
     markupTarget = 'A',
     onMarkupTargetChange,
     hasCompareVideo = false,
+    drawContextActive = false,
+    onExitDrawContext,
+    phoneLayout = false,
   } = props;
 
-  const io = Boolean(iconOnlyLayout || mobileChrome || collapsed);
+  const io = Boolean(iconOnlyLayout || mobileChrome || collapsed || phoneLayout);
   const shellStyle: React.CSSProperties = {
     ...shell,
     background: mobileChrome ? 'rgba(255,255,255,0.15)' : 'transparent',
@@ -307,6 +329,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
     document.head.appendChild(el);
   }, []);
   const resetNav = useCallback(() => setNavStack(['home']), []);
+
+  useEffect(() => {
+    if (drawContextActive) {
+      setNavStack((s) => (s[s.length - 1] === 'drawContext' ? s : ['home', 'drawContext']));
+    } else {
+      setNavStack((s) => (s.includes('drawContext') ? s.filter((x) => x !== 'drawContext') : s));
+    }
+  }, [drawContextActive]);
 
   const outlineEraserEligible =
     activeTool !== 'select' &&
@@ -387,10 +417,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
               height: iconBox,
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#4B5563',
             }}
           >
-            {icon}
+            <ToolbarIcon size={denseMobile ? 16 : io ? 20 : 18}>{icon as React.ReactElement}</ToolbarIcon>
           </span>
         </button>
       );
@@ -407,7 +436,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
           fire(k, onPress);
         }}
       >
-        <span style={{ display: 'flex', width: 26, justifyContent: 'center', color: '#4B5563' }}>{icon}</span>
+        <span style={{ display: 'flex', width: 26, justifyContent: 'center' }}>
+          <ToolbarIcon size={18}>{icon as React.ReactElement}</ToolbarIcon>
+        </span>
         <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
           <span style={{ lineHeight: 1.2 }}>{label}</span>
           {sub ? <span style={{ fontSize: 11, fontWeight: 500, color: '#6B7280' }}>{sub}</span> : null}
@@ -419,9 +450,11 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const BackHeader = ({
     title,
     icon,
+    onBack,
   }: {
     title: string;
     icon: React.ReactNode;
+    onBack?: () => void;
   }) => (
     <>
       <button
@@ -437,7 +470,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
         }}
         onPointerDown={(e) => {
           e.preventDefault();
-          fire(`back-${title}`, pop);
+          fire(`back-${title}`, () => {
+            if (top === 'drawContext') onExitDrawContext?.();
+            pop();
+          });
         }}
       >
         {io ? <ChevronLeft size={22} strokeWidth={2.25} /> : (
@@ -727,16 +763,127 @@ export default function ToolPalette(props: ToolPaletteProps) {
     activeTool !== 'ballShadow' &&
     activeTool !== 'objectMultiplier';
 
+  if (top === 'drawContext') {
+    return (
+      <div style={shellStyle}>
+        <CollapseControl />
+        <div style={scrollAreaFor(io, mobileChrome)}>
+          <BackHeader
+            title="Mark style"
+            icon={<Palette size={18} />}
+            onBack={() => onExitDrawContext?.()}
+          />
+          <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: '#6B7280' }}>
+            Adjust the mark you just drew. Back or another tool exits this mode.
+          </p>
+          {PRESET_COLORS.map((c) => (
+            <button
+              key={`dc-${c}`}
+              type="button"
+              aria-label={`Color ${c}`}
+              style={{
+                ...rowBase(drawingOptions.color === c, io),
+                justifyContent: io ? 'center' : 'flex-start',
+                transform: pressedKey === `dc-${c}` ? 'scale(0.95)' : undefined,
+              }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                fire(`dc-${c}`, () => onOptionsChange({ color: c }));
+              }}
+            >
+              <span
+                style={{
+                  width: io ? 26 : 22,
+                  height: io ? 26 : 22,
+                  borderRadius: 6,
+                  background: c,
+                  border: drawingOptions.color === c ? '2px solid #35679A' : '1px solid #E5E5E5',
+                }}
+              />
+              {io ? null : c}
+            </button>
+          ))}
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 0' }}>
+            Thickness ({drawingOptions.lineWidth}px)
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={12}
+            step={1}
+            value={drawingOptions.lineWidth}
+            onChange={(e) => onOptionsChange({ lineWidth: Number(e.target.value) })}
+            style={{ width: '100%', marginTop: 4 }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+            <button
+              type="button"
+              aria-label="Solid line"
+              style={{ ...rowBase(!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                fire('dc-solid', () => onOptionsChange({ dashed: false }));
+              }}
+            >
+              {io ? '━' : 'Solid'}
+            </button>
+            <button
+              type="button"
+              aria-label="Dashed line"
+              style={{ ...rowBase(!!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                fire('dc-dash', () => onOptionsChange({ dashed: true }));
+              }}
+            >
+              {io ? '┅' : 'Dashed'}
+            </button>
+          </div>
+          {onCircleSpinningChange &&
+            chk(
+              'dc-spin',
+              'Highlight pulse',
+              !!circleSpinning,
+              onCircleSpinningChange,
+              <Sparkles size={18} strokeWidth={2} />,
+            )}
+          {onOutlineEraserSizeChange && (
+            <>
+              {chk(
+                'dc-oe',
+                'Erase part of line',
+                outlineEraserSize > 0,
+                (v) => onOutlineEraserSizeChange(v ? 15 : 0),
+                <Eraser size={18} strokeWidth={2} />,
+              )}
+              {outlineEraserSize > 0 && (
+                <div style={{ padding: '0 8px' }}>
+                  <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Eraser ({outlineEraserSize}px)</div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={50}
+                    step={1}
+                    value={outlineEraserSize}
+                    onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (top === 'draw') {
     return (
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="Draw" icon={<Pen size={18} />} />
-          <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: '#6B7280' }}>
-            After you draw a shape, use the floating style card on the video to fine-tune it.
-          </p>
-          <Row k="sel" active={activeTool === 'select'} icon={<MousePointer2 size={18} />} label="Select" onPress={() => setTool('select')} />
+          <Row k="st-d" icon={<Palette size={18} />} label="Style" onPress={() => push('style')} />
           <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '6px 4px 0' }}>
             Markup
           </div>
@@ -755,8 +902,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => setTool('text')} />
           <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => setTool('manualSwing')} />
           <div data-tour-id="tour-angle">
-            <Row k="aa-nav" icon={<Activity size={18} />} label="Arrow angle" onPress={() => push('angle')} />
+            <Row k="angle-d" active={activeTool === 'angle'} icon={<Activity size={18} />} label="Angle" onPress={() => setTool('angle')} />
           </div>
+          <Row k="aa-d" active={activeTool === 'arrowAngle'} icon={<Activity size={18} />} label="Arrow angle" onPress={() => setTool('arrowAngle')} />
         </div>
       </div>
     );
@@ -986,7 +1134,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <CollapseControl />
       <div style={scrollAreaFor(io, mobileChrome)}>
         {recordingHubContent ? (
-          <div data-tour-id="recording-hub">
+          <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
             <Row
               k="cp"
               icon={<LayoutGrid size={denseMobile ? 16 : 20} />}
@@ -995,30 +1143,19 @@ export default function ToolPalette(props: ToolPaletteProps) {
             />
           </div>
         ) : null}
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
-          Quick markup
-        </div>
-        <Row k="pen-h" active={activeTool === 'pen'} icon={<Pen size={denseMobile ? 16 : 18} />} label="Pen" onPress={() => setTool('pen')} />
-        <Row k="ar-h" active={activeTool === 'arrow'} icon={<ArrowRight size={denseMobile ? 16 : 18} />} label="Arrow" onPress={() => setTool('arrow')} />
-        <div data-tour-id="tour-joint-chain">
-          <Row k="jc-h" active={activeTool === 'jointChain'} icon={<Link2 size={denseMobile ? 16 : 18} />} label="Body chain" onPress={() => setTool('jointChain')} />
-        </div>
-        <Row k="ang-h" active={activeTool === 'angle'} icon={<Activity size={denseMobile ? 16 : 18} />} label="Angle" onPress={() => setTool('angle')} />
+        <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
         <div data-tour-id="tour-draw-tools">
-          <Row k="dr" icon={<Pen size={20} />} label="All draw tools" onPress={() => push('draw')} />
-        </div>
-        <div data-tour-id="tour-style">
-          <Row k="st" icon={<Palette size={20} />} label="Style" onPress={() => push('style')} />
+          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => push('draw')} />
         </div>
         <div data-tour-id="tour-skeleton">
           <Row
             k="sk"
-            icon={<PersonStanding size={20} />}
+            icon={<PersonStanding size={denseMobile ? 16 : 20} />}
             label="Skeleton"
-            onPress={() => { setTool('skeleton'); push('skeleton'); }}
+            onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
           />
         </div>
-        {mobileChrome && onPrecisionDrawToggle ? (
+        {onPrecisionDrawToggle ? (
           <div data-tour-id="tour-precision">
             <Row
               k="prec"

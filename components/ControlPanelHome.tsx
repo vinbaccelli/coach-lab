@@ -8,6 +8,7 @@ import {
   UserCircle,
   Globe,
   CreditCard,
+  GraduationCap,
 } from 'lucide-react';
 
 const shell: CSSProperties = {
@@ -72,7 +73,20 @@ export default function ControlPanelHome() {
           </div>
           <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6B7280' }}>
             Draw, measure angles, skeleton overlay, split-screen compare, zoom, slow motion, frame stepping, record with webcam or mic.
-            Load files or URLs — no upload required.
+            Import videos by file upload.
+          </p>
+        </Link>
+
+        <Link href="/academy" style={cardBase} className="coachlab-card-hover-light">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ color: '#0D9488' }}>
+              <GraduationCap size={22} strokeWidth={2.25} />
+            </span>
+            <span style={{ fontSize: 16, fontWeight: 800 }}>Coach Lab Academy</span>
+          </div>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6B7280' }}>
+            YouTube &amp; Instagram workflows, Drive organization, copyright guidelines, and the recommended
+            CoachLab setup — replace fragile URL pasting with a clear import strategy.
           </p>
         </Link>
 
@@ -172,7 +186,7 @@ export default function ControlPanelHome() {
       </div>
 
       <p style={{ fontSize: 11, color: '#9CA3AF', lineHeight: 1.5, margin: 0, maxWidth: 640 }}>
-        Infrastructure preview: videos live as unlisted YouTube links inside player documents; Google Sign-In powers uploads and future Gemini features.
+        V1 workflow: upload MP4 files into Video Analysis; use Academy guides for YouTube unlisted, Drive folders, and social exports.
       </p>
 
       <style>{`

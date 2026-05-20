@@ -329,7 +329,7 @@ export default function Home() {
   /** Drag-over state for the two video panels */
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
-  const [mainUrlPanelOpen, setMainUrlPanelOpen] = useState(false);
+  const [drawContextActive, setDrawContextActive] = useState(false);
   const [isMobile, setIsMobile]             = useState(false);
   /** Large tap targets only on real phones — desktop 9:16 preview keeps compact UI */
   const touchChrome                         = isMobile;
@@ -366,11 +366,20 @@ export default function Home() {
   const ytIframeControllerB = useMemo(() => createYoutubeIframeController(ytPlayerBRef), []);
 
   const handleToolChange = useCallback((t: ToolType) => {
+    setDrawContextActive(false);
     setActiveTool(t);
     if (t === 'objectMultiplier') {
       setObjMultiplierHasRegion(false);
       setObjMultiplierProgress(null);
     }
+  }, []);
+
+  const handleDrawCommitted = useCallback(() => {
+    setDrawContextActive(true);
+  }, []);
+
+  const exitDrawContext = useCallback(() => {
+    setDrawContextActive(false);
   }, []);
 
   // StroMotion hook
@@ -493,11 +502,14 @@ export default function Home() {
     });
   }, []);
 
+  const reelsDesktopEarly = !isMobile && layoutMode === 'reels';
+  const phoneToolbarLayout = isMobile || showMobileToolStrip || reelsDesktopEarly;
+
   const toolbarWidthPx = useMemo(() => {
-    if (isMobile || showMobileToolStrip) return TOOLBAR_MOBILE_W;
+    if (phoneToolbarLayout) return TOOLBAR_MOBILE_W;
     if (toolbarCollapsed) return TOOLBAR_COLLAPSED_W;
     return TOOLBAR_EXPANDED_W;
-  }, [isMobile, showMobileToolStrip, toolbarCollapsed]);
+  }, [phoneToolbarLayout, toolbarCollapsed]);
 
   const showToolbarRail = isMobile ? showMobileToolStrip : true;
 
@@ -531,10 +543,6 @@ export default function Home() {
   const showPrecisionInstructionsAgain = useCallback(() => {
     setPrecisionInstructionsOpen(true);
   }, []);
-
-  useEffect(() => {
-    if (!showMobileToolStrip) setPrecisionDrawEnabled(false);
-  }, [showMobileToolStrip]);
 
   // Mobile: auto-switch layout based on device orientation (portrait=reels, landscape=youtube)
   useEffect(() => {
@@ -2537,6 +2545,20 @@ export default function Home() {
     onToggleCollapsed:               !isMobile ? toggleToolbarCollapsed : undefined,
     showCollapseControl:             !isMobile,
     onCleanSession:                  resetSession,
+    drawContextActive,
+    onExitDrawContext:               exitDrawContext,
+    precisionDrawEnabled,
+    onPrecisionDrawToggle:           handlePrecisionDrawToggle,
+    onShowPrecisionInstructions:     showPrecisionInstructionsAgain,
+    phoneLayout:                     reelsDesktopEarly,
+    ...(phoneToolbarLayout
+      ? {
+          iconOnlyLayout: true,
+          denseMobile: true,
+          collapsed: true,
+          showCollapseControl: false,
+        }
+      : {}),
     recordingHubContent: (
       <RecordingHubContent
         isRecording={isRecording}
@@ -2566,23 +2588,8 @@ export default function Home() {
         screenRecordDownloadPending={screenRecordDownloadPending}
         onScreenRecordDownloadYes={handleScreenRecordDownloadYes}
         onScreenRecordDownloadNo={handleScreenRecordDownloadNo}
-        onStartAltScreenRecord={handleHubAltScreenRecordStart}
-        altScreenRecordMessage={altScreenRecordMessage}
       />
     ),
-  } satisfies React.ComponentProps<typeof ToolPalette>;
-
-  // Mobile strip adds precision-draw controls on top of the base set.
-  const toolPaletteMobileProps = {
-    ...toolPaletteBaseProps,
-    mobileChrome: true,
-    iconOnlyLayout: true,
-    denseMobile: true,
-    collapsed: true,
-    showCollapseControl: false,
-    precisionDrawEnabled,
-    onPrecisionDrawToggle:       handlePrecisionDrawToggle,
-    onShowPrecisionInstructions: showPrecisionInstructionsAgain,
   } satisfies React.ComponentProps<typeof ToolPalette>;
 
   const hasVideoAContent = useMemo(
@@ -2599,113 +2606,81 @@ export default function Home() {
 
   const slotActionsOnDark = layoutMode === 'reels';
 
-  const renderVideoASlotActions = () => {
-    if (!hasVideoAContent || hasVideoBContent) return null;
+  const slotPillStyle = (variant: 'remove' | 'add'): React.CSSProperties => ({
+    pointerEvents: 'auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    minHeight: 28,
+    padding: '4px 10px',
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: 'pointer',
+    touchAction: 'manipulation',
+    border:
+      variant === 'add'
+        ? '1px solid rgba(52,199,89,0.65)'
+        : '1px solid rgba(255,255,255,0.35)',
+    background:
+      variant === 'add' ? 'rgba(52,199,89,0.35)' : 'rgba(0,0,0,0.55)',
+    color: '#fff',
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
+    boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+  });
 
-    const btnBase: React.CSSProperties = {
-      flex: '1 1 0',
-      minWidth: 0,
-      minHeight: touchChrome ? 48 : 44,
-      padding: '12px 16px',
-      borderRadius: 12,
-      fontSize: 14,
-      fontWeight: 700,
-      cursor: 'pointer',
-      touchAction: 'manipulation',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 8,
-      transition: 'background 0.15s ease, border-color 0.15s ease, transform 0.12s ease',
-    };
-
+  const renderVideoSlotPills = () => {
+    if (!hasVideoAContent) return null;
     return (
       <div
         role="group"
         aria-label="Video slot actions"
         data-tour-id="tour-video-ab"
         style={{
-          flexShrink: 0,
-          width: '100%',
-          maxWidth: layoutMode === 'reels' ? '100%' : 'min(520px, 100%)',
-          margin: '0 auto',
-          padding: layoutMode === 'reels' ? '12px 16px' : '14px 16px 16px',
-          pointerEvents: 'auto',
-          zIndex: 45,
-          boxSizing: 'border-box',
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          zIndex: 110,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6,
+          justifyContent: 'flex-end',
+          pointerEvents: 'none',
+          maxWidth: 'calc(100% - 16px)',
         }}
       >
-        <p
-          style={{
-            margin: '0 0 10px',
-            fontSize: 12,
-            fontWeight: 600,
-            textAlign: 'center',
-            color: slotActionsOnDark ? 'rgba(255,255,255,0.55)' : '#6B7280',
-            lineHeight: 1.4,
-          }}
+        <button
+          type="button"
+          onClick={removeVideoA}
+          title="Remove Video A"
+          style={slotPillStyle('remove')}
         >
-          Compare technique — add a second video side by side
-        </p>
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: isMobile ? 'column' : 'row',
-            gap: 10,
-            width: '100%',
-          }}
-        >
-          <button
-            type="button"
-            onClick={removeVideoA}
-            title="Remove Video A from this session"
-            style={{
-              ...btnBase,
-              border: slotActionsOnDark
-                ? '1px solid rgba(255,255,255,0.28)'
-                : '1px solid #E5E5E5',
-              background: slotActionsOnDark
-                ? 'rgba(255,255,255,0.1)'
-                : 'rgba(250, 249, 247, 0.96)',
-              color: slotActionsOnDark ? '#FFFFFF' : '#1A1A1A',
-              backdropFilter: 'blur(8px)',
-              WebkitBackdropFilter: 'blur(8px)',
-            }}
-          >
-            <Trash2 size={18} strokeWidth={2.25} aria-hidden />
-            Remove Video A
-          </button>
+          <Trash2 size={14} strokeWidth={2.25} aria-hidden />
+          {phoneToolbarLayout ? null : 'Remove A'}
+        </button>
+        {!hasVideoBContent ? (
           <button
             type="button"
             onClick={handleAddVideoB}
-            title="Add Video B to compare"
-            style={{
-              ...btnBase,
-              border: slotActionsOnDark
-                ? '1px solid rgba(52,199,89,0.55)'
-                : '1px solid rgba(52,199,89,0.45)',
-              background: slotActionsOnDark
-                ? 'rgba(52,199,89,0.22)'
-                : 'rgba(52,199,89,0.12)',
-              color: slotActionsOnDark ? '#FFFFFF' : '#166534',
-              backdropFilter: 'blur(8px)',
-              WebkitBackdropFilter: 'blur(8px)',
-              boxShadow: slotActionsOnDark
-                ? '0 4px 20px rgba(52,199,89,0.15)'
-                : '0 4px 16px rgba(52,199,89,0.1)',
-            }}
+            title="Add Video B"
+            style={slotPillStyle('add')}
           >
-            <Plus size={18} strokeWidth={2.5} aria-hidden />
-            Add Video B
+            <Plus size={14} strokeWidth={2.5} aria-hidden />
+            {phoneToolbarLayout ? null : 'Add B'}
           </button>
-        </div>
+        ) : null}
       </div>
     );
   };
 
   const renderToolbarRail = () => {
     if (!showToolbarRail) return null;
-    const paletteProps = isMobile ? toolPaletteMobileProps : toolPaletteBaseProps;
+    const paletteProps = {
+      ...toolPaletteBaseProps,
+      mobileChrome: isMobile && showMobileToolStrip,
+    };
     return (
       <aside
         data-tour-id="video-toolbar"
@@ -2948,21 +2923,12 @@ export default function Home() {
                     background: layoutMode === 'reels' ? '#000' : '#FAFAFA',
                     padding: 24,
                   }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'center', width: '100%', maxWidth: 420 }}>
-                      <button type="button" data-tour-id="tour-upload" onClick={() => fileInputRef.current?.click()} style={{ flex: '1 1 160px', minHeight: 52, borderRadius: 14, border: '1px solid #E5E5E5', background: '#FFFFFF', fontSize: 15, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                        <Upload size={20} /> Upload Video
-                      </button>
-                      <button type="button" data-tour-id="tour-publer" onClick={() => setMainUrlPanelOpen((o) => !o)} style={{ flex: '1 1 160px', minHeight: 52, borderRadius: 14, border: '1px solid #E5E5E5', background: mainUrlPanelOpen ? 'rgba(0,122,255,0.08)' : '#FFFFFF', fontSize: 15, fontWeight: 600, color: '#007AFF', cursor: 'pointer' }}>
-                        Load from URL
-                      </button>
-                    </div>
-                    {mainUrlPanelOpen && (
-                      <div style={{ display: 'flex', gap: 8, width: '100%', maxWidth: 420 }}>
-                        <input type="url" placeholder="Paste video URL…" value={urlInput} onChange={(e) => setUrlInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setUrlTarget('A'); void handleUrlSubmit(); } }} style={{ flex: 1, height: 44, borderRadius: 12, border: '1px solid #E5E5E5', padding: '0 12px', fontSize: 14 }} />
-                        <button type="button" onClick={() => { setUrlTarget('A'); void handleUrlSubmit(); }} style={{ height: 44, padding: '0 18px', borderRadius: 12, border: 'none', background: '#007AFF', color: '#fff', fontWeight: 600, cursor: 'pointer' }}>Load</button>
-                      </div>
-                    )}
-                    <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8e8e93' }}>or drag and drop a video file here</span>
+                    <button type="button" data-tour-id="tour-upload" onClick={() => fileInputRef.current?.click()} style={{ minHeight: 52, minWidth: 200, padding: '0 24px', borderRadius: 14, border: '1px solid #E5E5E5', background: '#FFFFFF', fontSize: 15, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                      <Upload size={20} /> Upload Video
+                    </button>
+                    <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8e8e93', textAlign: 'center', maxWidth: 320 }}>
+                      or drag and drop a video file here. See Coach Lab Academy in the Control Panel for import workflows.
+                    </span>
                   </div>
                   )
                 ) : (
@@ -3145,7 +3111,8 @@ export default function Home() {
                         embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)
                       }
                       webcamCutout={webcamCutout}
-                      precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
+                      precisionTouchDraw={precisionDrawEnabled}
+                      onDrawCommitted={handleDrawCommitted}
                       showTourHelpInZoomCluster
                       poseFrameSkip={hasVideoBContent ? 1 : 0}
                       panModeEnabled={panModeEnabled}
@@ -3182,32 +3149,7 @@ export default function Home() {
                       onStartRecording={(o) => startEmbedCaptureRecording('A', o)}
                       onUploadInstead={() => fileInputRef.current?.click()}
                     />
-                    {hasVideoBContent ? (
-                      <button
-                        type="button"
-                        onClick={removeVideoA}
-                        title="Remove Video A from this session"
-                        style={{
-                          position: 'absolute',
-                          top: reelsDesktop ? 48 : 8,
-                          right: 8,
-                          zIndex: 92,
-                          padding: '6px 10px',
-                          borderRadius: layoutMode === 'reels' ? 0 : 10,
-                          border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
-                          background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250, 249, 247, 0.94)',
-                          color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          backdropFilter: 'blur(14px)',
-                          WebkitBackdropFilter: 'blur(14px)',
-                          boxShadow: layoutMode === 'reels' ? 'none' : '0 6px 20px rgba(0,0,0,0.08)',
-                        }}
-                      >
-                        Remove Video A
-                      </button>
-                    ) : null}
+                    {renderVideoSlotPills()}
                   </>
                 )}
                 {/* Drag-over overlay for Video A */}
@@ -3283,7 +3225,6 @@ export default function Home() {
                 )}
               </div>
             </div>
-            {renderVideoASlotActions()}
             </div>
 
             {layoutMode === 'reels' && hasVideoBContent && (
@@ -3495,7 +3436,8 @@ export default function Home() {
                         embedLiveVideoB && (!!youtubeVideoIdB || !!genericEmbedSrcB)
                       }
                       webcamCutout={webcamCutout}
-                      precisionTouchDraw={precisionDrawEnabled && showMobileToolStrip}
+                      precisionTouchDraw={precisionDrawEnabled}
+                      onDrawCommitted={handleDrawCommitted}
                       poseFrameSkip={1}
                       panModeEnabled={panModeEnabled}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
