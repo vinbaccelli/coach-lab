@@ -419,8 +419,9 @@ export default function PreciseTimeline({
   }), []);
 
   return (
-    <div style={shellStyle} aria-label="Timeline">
+    <div data-tour-id="tour-timeline" style={shellStyle} aria-label="Timeline">
       <div
+        data-tour-id="tour-frame-controls"
         style={{
           display: 'flex',
           flexWrap: 'nowrap',

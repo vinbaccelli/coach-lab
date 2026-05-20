@@ -1325,6 +1325,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     >(null);
     /** Second-finger / two-touch precision tap — ripple + same pointer path as desktop. */
     const precisionInjectClickRef = useRef<(() => void) | null>(null);
+    const precisionFireAtLogicalRef = useRef<((pt: Pt) => void) | null>(null);
     const onPointerDownRef = useRef<(e: React.PointerEvent<HTMLCanvasElement>) => void>(() => {});
     const onPointerUpRef = useRef<(e: React.PointerEvent<HTMLCanvasElement>) => void>(() => {});
 
@@ -1626,23 +1627,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       let cy0 = 0;
 
       const onTouchStart = (e: TouchEvent) => {
-        // Once the anchor finger is established, we own ALL multi-touch gestures.
-        // Calling preventDefault() here prevents pinch-zoom, Safari viewport zoom,
-        // and the browser from trying to interpret the second finger as a scroll.
-        // Single-touch touchstart (anchor-setting moment) must NOT call
-        // preventDefault() because that suppresses the subsequent pointerdown
-        // event that sets precisionAnchorPointerIdRef via onPointerDown.
-        if (
-          precisionTouchDrawRef.current &&
-          precisionAnchorPointerIdRef.current !== null
-        ) {
+        if (precisionTouchDrawRef.current) {
           e.preventDefault();
           if (e.touches.length === 2) {
-            // Safari often suppresses the second finger's pointerdown after preventDefault —
-            // inject at the crosshair via the same handler chain as desktop.
-            precisionInjectClickRef.current?.();
+            const t0 = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            const sx = canvas.width / Math.max(1, rect.width);
+            const sy = canvas.height / Math.max(1, rect.height);
+            const logicalPt: Pt = {
+              x: (t0.clientX - rect.left) * sx,
+              y: (t0.clientY - rect.top) * sy - PRECISION_CURSOR_OFFSET_Y,
+            };
+            precisionFireAtLogicalRef.current?.(logicalPt);
+            return;
           }
-          return;
+          if (precisionAnchorPointerIdRef.current !== null) {
+            e.preventDefault();
+            return;
+          }
         }
         if (e.touches.length === 2) {
           const t1 = e.touches[0], t2 = e.touches[1];
@@ -1671,15 +1673,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       };
       const onTouchMove = (e: TouchEvent) => {
-        // In precision mode with an active anchor, prevent all browser-default
-        // touch handling (scroll, viewport zoom) on every touchmove regardless
-        // of touch count.  The pointer-event system handles the actual crosshair
-        // update via onPointerMove; this handler's only job in precision mode is
-        // to block the browser.
-        if (
-          precisionTouchDrawRef.current &&
-          precisionAnchorPointerIdRef.current !== null
-        ) {
+        if (precisionTouchDrawRef.current) {
           e.preventDefault();
           return;
         }
@@ -1720,9 +1714,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       };
       const onTouchEnd = (e: TouchEvent) => {
-        // Block Safari from re-enabling scroll or triggering a viewport-zoom
-        // snap-back animation when the anchor finger lifts in precision mode.
-        if (precisionTouchDrawRef.current && precisionAnchorPointerIdRef.current !== null) {
+        if (precisionTouchDrawRef.current) {
           e.preventDefault();
         }
         lastDist = 0;
@@ -1950,17 +1942,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => {
       if (!skeletonEnabled) {
         poseLoopActiveRef.current = false;
-        skeletonSuppressedRef.current = false;
         latestKeypointsRef.current = null;
-        poseBridgeRef.current?.dispose();
-        poseBridgeRef.current = null;
+        renderDirtyRef.current = true;
         return;
       }
       if (typeof window === 'undefined') return;
       if (youtubePoseRef.current) {
-        poseBridgeRef.current?.dispose();
-        poseBridgeRef.current = null;
         poseLoopActiveRef.current = false;
+        return;
+      }
+
+      if (poseBridgeRef.current) {
+        poseLoopActiveRef.current = true;
         return;
       }
 
@@ -2001,10 +1994,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       return () => {
         poseLoopActiveRef.current = false;
-        bridge.dispose();
-        poseBridgeRef.current = null;
       };
     }, [skeletonEnabled, onProcessingStatus, videoRef]);
+
+    useEffect(() => {
+      return () => {
+        poseBridgeRef.current?.dispose();
+        poseBridgeRef.current = null;
+      };
+    }, []);
 
     // ── Pose detection scheduling — sends frames to bridge ───────────────
     // Uses requestVideoFrameCallback when playing for frame-accurate sync;
@@ -4129,17 +4127,33 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     precisionSyntheticDispatchRef.current = firePrecisionPointer;
 
-    precisionInjectClickRef.current = () => {
-      const ch =
-        precisionCrosshairDisplayRef.current ?? precisionCrosshairTargetRef.current;
-      if (!ch) return;
+    const firePrecisionDrawAt = (ch: Pt) => {
+      precisionCrosshairTargetRef.current = ch;
+      precisionCrosshairDisplayRef.current = { ...ch };
       precisionRippleRef.current = { x: ch.x, y: ch.y, t0: performance.now() };
       renderDirtyRef.current = true;
       const tool = activeToolRef.current;
       const useToggle = precisionToolUsesToggleDownUp(tool);
       const dragging = isDraggingRef.current && activeStrokeRef.current !== null;
-      if (useToggle && dragging) firePrecisionPointer('pointerup', ch);
-      else firePrecisionPointer('pointerdown', ch);
+      if (useToggle && dragging) {
+        firePrecisionPointer('pointerup', ch);
+      } else {
+        firePrecisionPointer('pointerdown', ch);
+        if (tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'angle' || tool === 'arrowAngle' || tool === 'text') {
+          queueMicrotask(() => firePrecisionPointer('pointerup', ch));
+        }
+      }
+    };
+
+    precisionFireAtLogicalRef.current = (logicalPt: Pt) => {
+      firePrecisionDrawAt(logicalPt);
+    };
+
+    precisionInjectClickRef.current = () => {
+      const ch =
+        precisionCrosshairDisplayRef.current ?? precisionCrosshairTargetRef.current;
+      if (!ch) return;
+      firePrecisionDrawAt(ch);
     };
 
     // Commit text editing changes
@@ -4496,6 +4510,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         {/* Zoom / Pan controls — bottom-right corner above playback */}
         <div
+          data-tour-id="tour-zoom"
           style={{
             position: 'absolute',
             bottom: 80,

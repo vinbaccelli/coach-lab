@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -14,9 +14,9 @@ export default function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showAndroid, setShowAndroid] = useState(false);
   const [showIOS, setShowIOS]         = useState(false);
+  const bannerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    // iOS Safari: no beforeinstallprompt; guide the user manually.
     const isIOS =
       /iphone|ipad|ipod/i.test(navigator.userAgent) &&
       !(window.navigator as Navigator & { standalone?: boolean }).standalone;
@@ -25,7 +25,6 @@ export default function InstallPrompt() {
       setShowIOS(true);
     }
 
-    // Android/Chrome: capture the native install prompt.
     const handler = (e: Event) => {
       if (localStorage.getItem(LS_ANDROID_KEY)) return;
       e.preventDefault();
@@ -37,11 +36,37 @@ export default function InstallPrompt() {
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
 
+  useEffect(() => {
+    const el = bannerRef.current;
+    if (!el || (!showAndroid && !showIOS)) {
+      document.documentElement.style.removeProperty('--coachlab-install-banner-height');
+      return;
+    }
+
+    const apply = () => {
+      const h = el.getBoundingClientRect().height;
+      const gap = 12;
+      document.documentElement.style.setProperty(
+        '--coachlab-install-banner-height',
+        `${Math.ceil(h + gap)}px`,
+      );
+    };
+
+    apply();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(apply) : null;
+    ro?.observe(el);
+    window.addEventListener('resize', apply);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', apply);
+      document.documentElement.style.removeProperty('--coachlab-install-banner-height');
+    };
+  }, [showAndroid, showIOS]);
+
   const handleAndroidInstall = async () => {
     if (!deferredPrompt) return;
     await deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
-    // Persist regardless of outcome so the banner never re-appears.
     localStorage.setItem(LS_ANDROID_KEY, outcome);
     setShowAndroid(false);
     setDeferredPrompt(null);
@@ -61,6 +86,7 @@ export default function InstallPrompt() {
 
   return (
     <div
+      ref={bannerRef}
       role="dialog"
       aria-live="polite"
       style={{
@@ -70,17 +96,10 @@ export default function InstallPrompt() {
         zIndex: 40,
         width: 'calc(100% - 32px)',
         maxWidth: '384px',
-        // --coachlab-banner-bottom is set by app/analysis/page.tsx via a
-        // useEffect that mirrors toolbarBottomReservePx.  That value is
-        // measured from the ResizeObserver on the playback dock and already
-        // includes env(safe-area-inset-bottom) via the dock's padding.
-        // Fallback of 100px keeps the banner visible on other pages where
-        // the CSS variable is not set.
-        bottom: 'var(--coachlab-banner-bottom, 100px)',
+        bottom: 'calc(var(--coachlab-banner-bottom, 100px) + env(safe-area-inset-bottom, 0px))',
       }}
     >
       <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200 p-4 flex items-start gap-3">
-        {/* Icon */}
         <div className="shrink-0 w-10 h-10 rounded-xl bg-[#007AFF] flex items-center justify-center text-white text-lg font-bold">
           CL
         </div>
@@ -95,6 +114,7 @@ export default function InstallPrompt() {
                 Add to your home screen for the best experience.
               </p>
               <button
+                type="button"
                 onClick={handleAndroidInstall}
                 className="mt-2 bg-[#007AFF] text-white text-xs font-semibold px-4 py-1.5 rounded-lg"
               >
@@ -108,14 +128,14 @@ export default function InstallPrompt() {
               </p>
               <p className="text-xs text-gray-500 mt-0.5">
                 Tap <span className="font-medium">Share</span> ↑ then{' '}
-                <span className="font-medium">"Add to Home Screen"</span> to install Coach Lab.
+                <span className="font-medium">&quot;Add to Home Screen&quot;</span> to install Coach Lab.
               </p>
             </>
           )}
         </div>
 
-        {/* Dismiss */}
         <button
+          type="button"
           onClick={showIOS ? dismissIOS : dismissAndroid}
           aria-label="Dismiss"
           className="shrink-0 text-gray-400 hover:text-gray-600 text-xl leading-none"

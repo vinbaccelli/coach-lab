@@ -18,7 +18,6 @@ let ready = false;
 async function init() {
   try {
     if (process.env.NODE_ENV !== 'production') {
-      console.log('[PoseWorker] Initializing TF.js WASM backend…');
     }
 
     const tf = await import('@tensorflow/tfjs-core');
@@ -31,7 +30,6 @@ async function init() {
     await tf.setBackend('wasm');
     await tf.ready();
     if (process.env.NODE_ENV !== 'production') {
-      console.log('[PoseWorker] TF.js WASM backend ready');
     }
 
     const pd = await import('@tensorflow-models/pose-detection');
@@ -43,7 +41,6 @@ async function init() {
     ready = true;
     self.postMessage({ type: 'ready' });
     if (process.env.NODE_ENV !== 'production') {
-      console.log('[PoseWorker] MoveNet SinglePose Lightning loaded');
     }
   } catch (err: any) {
     console.error('[PoseWorker] Init failed:', err);

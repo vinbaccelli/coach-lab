@@ -10,8 +10,8 @@ import { smoothKeypointsEma } from '@/lib/keypointSmooth';
 export type PoseKeypoint = { x: number; y: number; score: number; name: string };
 type ResultCb = (keypoints: PoseKeypoint[] | null) => void;
 
-/** EMA blend: 70% new sample, 30% previous — responsive with low jitter (spec: smoothing 0.3 on previous). */
-const SKELETON_EMA_ALPHA = 0.7;
+/** EMA: 30% new sample, 70% previous — reduces jitter per spec. */
+const SKELETON_EMA_ALPHA = 0.3;
 
 let globalWorker: Worker | null = null;
 let globalWorkerReady = false;

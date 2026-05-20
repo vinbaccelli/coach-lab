@@ -50,7 +50,6 @@ export async function getPoseDetector(): Promise<PoseDetector | null> {
         { modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING },
       );
       if (process.env.NODE_ENV !== 'production') {
-        console.log('[PoseDetection] MoveNet Lightning loaded');
       }
       return detector;
     } catch (err) {

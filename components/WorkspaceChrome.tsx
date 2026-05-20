@@ -162,6 +162,8 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
           minHeight: 0,
           overflowY: 'auto',
           WebkitOverflowScrolling: 'touch',
+          paddingBottom:
+            'calc(var(--coachlab-install-banner-height, 0px) + env(safe-area-inset-bottom, 0px))',
         }}
       >
         {children}

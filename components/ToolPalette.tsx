@@ -95,17 +95,18 @@ interface ToolPaletteProps {
   iconOnlyLayout?: boolean;
   /** Mobile floating toolbar: transparent shell over video */
   mobileChrome?: boolean;
-  /** Recording Hub panel (opened from left toolbar). */
-  recordingHubOpen?: boolean;
-  onRecordingHubToggle?: () => void;
+  /** Recording Hub body (embedded in toolbar navigation). */
+  recordingHubContent?: React.ReactNode;
 }
 
 const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
 
 type NavScreen =
   | 'home'
+  | 'recording'
   | 'style'
   | 'draw'
+  | 'angle'
   | 'skeleton'
   | 'webcam'
   | 'multiplier'
@@ -139,7 +140,7 @@ const shell: React.CSSProperties = {
   width: '100%',
   minHeight: 0,
   userSelect: 'none',
-  background: 'rgba(255,255,255,0.98)',
+  background: 'transparent',
   borderRadius: 12,
   overflow: 'hidden',
   animation: 'coachlabToolbarScreenIn 200ms ease-out',
@@ -178,8 +179,8 @@ function rowBase(active: boolean, io?: boolean): React.CSSProperties {
     minHeight: 44,
     padding: io ? '8px 6px' : '10px 12px',
     borderRadius: 10,
-    border: active ? '1px solid #35679A' : '1px solid #E8E6E1',
-    background: active ? 'rgba(53,103,154,0.08)' : '#FAF8F5',
+    border: active ? '1px solid #35679A' : '1px solid rgba(255,255,255,0.25)',
+    background: active ? 'rgba(53,103,154,0.2)' : 'rgba(255,255,255,0.12)',
     color: '#1A1A1A',
     cursor: 'pointer',
     textAlign: io ? 'center' : 'left',
@@ -251,14 +252,18 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onShowPrecisionInstructions,
     iconOnlyLayout = false,
     mobileChrome = false,
-    recordingHubOpen = false,
-    onRecordingHubToggle,
+    recordingHubContent,
   } = props;
 
-  const io = iconOnlyLayout;
-  const shellStyle: React.CSSProperties = mobileChrome
-    ? { ...shell, background: 'transparent', boxShadow: 'none', border: 'none' }
-    : shell;
+  const io = Boolean(iconOnlyLayout || mobileChrome);
+  const shellStyle: React.CSSProperties = {
+    ...shell,
+    background: mobileChrome ? 'rgba(255,255,255,0.15)' : 'transparent',
+    backdropFilter: mobileChrome ? 'blur(10px)' : undefined,
+    WebkitBackdropFilter: mobileChrome ? 'blur(10px)' : undefined,
+    boxShadow: 'none',
+    border: 'none',
+  };
 
   const [navStack, setNavStack] = useState<NavScreen[]>(['home']);
   const top = navStack[navStack.length - 1];
@@ -314,7 +319,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           aria-label={sub ? `${label} — ${sub}` : label}
           style={{
             ...rowBase(!!active, true),
-            transform: pressed ? 'scale(0.92)' : undefined,
+            transform: pressed ? 'scale(0.95)' : undefined,
           }}
           onPointerDown={(e) => {
             e.preventDefault();
@@ -509,6 +514,17 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   /* ── Screens ───────────────────────────────────────────────────────── */
 
+  if (top === 'recording' && recordingHubContent) {
+    return (
+      <div style={shellStyle}>
+        <div style={scrollAreaFor(io, mobileChrome)}>
+          <BackHeader title="Recording Hub" icon={<Video size={18} />} />
+          {recordingHubContent}
+        </div>
+      </div>
+    );
+  }
+
   if (top === 'style') {
     return (
       <div style={shellStyle}>
@@ -644,56 +660,59 @@ export default function ToolPalette(props: ToolPaletteProps) {
     );
   }
 
+  const drawToolActive =
+    activeTool !== 'select' &&
+    activeTool !== 'erase' &&
+    activeTool !== 'zoom' &&
+    activeTool !== 'skeleton' &&
+    activeTool !== 'ballShadow' &&
+    activeTool !== 'objectMultiplier';
+
   if (top === 'draw') {
     return (
       <div style={shellStyle}>
         <div style={scrollAreaFor(io, mobileChrome)}>
-          <BackHeader title="Draw & annotate" icon={<Pen size={18} />} />
-          <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Freehand" onPress={() => { setTool('pen'); }} />
-          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Straight line" onPress={() => { setTool('line'); }} />
-          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => { setTool('arrow'); }} />
-          <Row k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} label="Eraser" onPress={() => { setTool('erase'); }} />
-          <Row
-            k="circle"
-            active={activeTool === 'circle'}
-            icon={<Circle size={18} />}
-            label="Circle"
-            onPress={() => {
-              setTool('circle');
-            }}
-          />
-          <Row
-            k="bodycirc"
-            active={activeTool === 'bodyCircle'}
-            icon={<Circle size={18} />}
-            label="Body circle"
-            sub="3D"
-            onPress={() => {
-              setTool('bodyCircle');
-            }}
-          />
-          <Row
-            k="rect"
-            active={activeTool === 'rect'}
-            icon={<Square size={18} />}
-            label="Rectangle"
-            onPress={() => {
-              setTool('rect');
-            }}
-          />
-          <Row
-            k="tri"
-            active={activeTool === 'triangle'}
-            icon={<Triangle size={18} />}
-            label="Triangle"
-            onPress={() => {
-              setTool('triangle');
-            }}
-          />
-          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => { setTool('text'); }} />
-          <Row k="angle" active={activeTool === 'angle'} icon={<Triangle size={18} />} label="Angle measure" onPress={() => { setTool('angle'); }} />
-          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<Activity size={18} />} label="Arrow + angle" onPress={() => { setTool('arrowAngle'); }} />
-          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => { setTool('manualSwing'); }} />
+          <BackHeader title="Draw" icon={<Pen size={18} />} />
+          <Row k="sel" active={activeTool === 'select'} icon={<MousePointer2 size={18} />} label="Select" onPress={() => setTool('select')} />
+          <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Pen" onPress={() => setTool('pen')} />
+          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Line" onPress={() => setTool('line')} />
+          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => setTool('arrow')} />
+          <Row k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} label="Circle" onPress={() => setTool('circle')} />
+          <Row k="tri" active={activeTool === 'triangle'} icon={<Triangle size={18} />} label="Triangle" onPress={() => setTool('triangle')} />
+          <Row k="rect" active={activeTool === 'rect'} icon={<Square size={18} />} label="Rectangle" onPress={() => setTool('rect')} />
+          <Row k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} label="Eraser" onPress={() => setTool('erase')} />
+          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => setTool('text')} />
+          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing — Manual" onPress={() => setTool('manualSwing')} />
+          <div data-tour-id="tour-angle">
+            <Row k="ang" icon={<Activity size={18} />} label="Angle" onPress={() => push('angle')} />
+          </div>
+          {drawToolActive && onCircleSpinningChange && animatedOutlineEligible &&
+            chk('spin-post', 'Animated', !!circleSpinning, onCircleSpinningChange, <Sparkles size={18} strokeWidth={2} />)}
+          {drawToolActive && onOutlineEraserSizeChange && outlineEraserEligible &&
+            chk('oe-post', 'Section eraser', outlineEraserSize > 0, (v) => onOutlineEraserSizeChange(v ? 15 : 0), <Eraser size={18} strokeWidth={2} />)}
+          {mobileChrome && onPrecisionDrawToggle ? (
+            <div data-tour-id="tour-precision">
+              <Row
+                k="prec"
+                active={precisionDrawEnabled}
+                icon={<Crosshair size={18} />}
+                label="Precision"
+                onPress={() => onPrecisionDrawToggle()}
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  if (top === 'angle') {
+    return (
+      <div style={shellStyle}>
+        <div style={scrollAreaFor(io, mobileChrome)}>
+          <BackHeader title="Angle" icon={<Activity size={18} />} />
+          <Row k="angle" active={activeTool === 'angle'} icon={<Triangle size={18} />} label="Angle" onPress={() => setTool('angle')} />
+          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<Activity size={18} />} label="Arrow Angle" onPress={() => setTool('arrowAngle')} />
         </div>
       </div>
     );
@@ -707,7 +726,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           {onSkeletonOverlayPausedChange !== undefined && (
             <label
               key="sov"
-              aria-label="Show skeleton on video"
+              aria-label="Skeleton on/off"
               style={{
                 ...rowBase(!skeletonOverlayPaused, io),
                 cursor: 'pointer',
@@ -733,10 +752,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
                     border: 0,
                   }}
                 >
-                  Show skeleton on video
+                  Skeleton on
                 </span>
               ) : (
-                <span style={{ fontSize: 13, fontWeight: 600 }}>Show skeleton on video</span>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Skeleton on/off</span>
               )}
             </label>
           )}
@@ -759,7 +778,12 @@ export default function ToolPalette(props: ToolPaletteProps) {
           {onSkeletonShowHeadLineChange !== undefined &&
             chk('sh', 'Show head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange)}
           {onSkeletonClassicColorsChange !== undefined &&
-            chk('sc', 'Neon colors', skeletonClassicColors ?? true, onSkeletonClassicColorsChange)}
+            chk(
+              'sc',
+              skeletonClassicColors ?? true ? 'Neon colour' : 'Blue monochrome',
+              skeletonClassicColors ?? true,
+              onSkeletonClassicColorsChange,
+            )}
           <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', padding: '8px 4px 0' }}>Body parts</div>
           {onSkeletonShowRightArmChange !== undefined &&
             chk('ra', 'Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange)}
@@ -900,66 +924,26 @@ export default function ToolPalette(props: ToolPaletteProps) {
   return (
     <div style={shellStyle}>
       <div style={scrollAreaFor(io, mobileChrome)}>
-        <Row k="sel" active={activeTool === 'select'} icon={<MousePointer2 size={20} />} label="Select" onPress={() => setTool('select')} />
-        {onRecordingHubToggle ? (
+        {recordingHubContent ? (
           <div data-tour-id="recording-hub">
-            <Row
-              k="hub"
-              active={recordingHubOpen}
-              icon={<Video size={20} />}
-              label="Recording Hub"
-              sub="Record, screenshot, load video"
-              onPress={() => onRecordingHubToggle()}
-            />
+            <Row k="hub" icon={<Video size={20} />} label="Recording Hub" onPress={() => push('recording')} />
           </div>
         ) : null}
-        {onPrecisionDrawToggle ? (
+        <div data-tour-id="tour-draw-tools">
+          <Row k="dr" icon={<Pen size={20} />} label="Draw" onPress={() => push('draw')} />
+        </div>
+        <div data-tour-id="tour-style">
+          <Row k="st" icon={<Palette size={20} />} label="Style" onPress={() => push('style')} />
+        </div>
+        <div data-tour-id="tour-skeleton">
           <Row
-            k="prec"
-            active={precisionDrawEnabled}
-            icon={<Crosshair size={20} />}
-            label="Precision draw"
-            sub="Crosshair + second finger to tap"
-            onPress={() => onPrecisionDrawToggle()}
+            k="sk"
+            icon={<PersonStanding size={20} />}
+            label="Skeleton"
+            onPress={() => { setTool('skeleton'); push('skeleton'); }}
           />
-        ) : null}
-        {onShowPrecisionInstructions && precisionDrawEnabled ? (
-          <button
-            type="button"
-            style={{ ...rowBase(false, io), fontSize: 12, fontWeight: 600, color: '#35679A', borderStyle: 'dashed' }}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              fire('pinst', () => onShowPrecisionInstructions());
-            }}
-          >
-            How precision draw works
-          </button>
-        ) : null}
-        <Row k="st" icon={<Palette size={20} />} label="Style" sub="Color, thickness, line" onPress={() => push('style')} />
-        <Row k="dr" icon={<Pen size={20} />} label="Draw & annotate" onPress={() => push('draw')} />
-        <Row
-          k="sk"
-          active={activeTool === 'skeleton'}
-          icon={<PersonStanding size={20} />}
-          label="Skeleton"
-          onPress={() => {
-            setTool('skeleton');
-            push('skeleton');
-          }}
-        />
-        <Row
-          k="wc"
-          icon={<Camera size={20} />}
-          label="Webcam"
-          sub="PiP, opacity, cutout"
-          onPress={() => {
-            push('webcam');
-          }}
-        />
-        {/* V2 — Racket Multiplier */}
-
-        <div style={{ height: 1, background: '#E8E6E1', margin: '8px 0' }} />
-
+        </div>
+        <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '8px 0' }} />
         <Row k="u" icon={<Undo2 size={20} />} label="Undo" onPress={onUndo} />
         <Row k="r" icon={<Redo2 size={20} />} label="Redo" onPress={onRedo} />
         <Row k="cl" icon={<Trash2 size={20} />} label="Clear all" onPress={onClear} />

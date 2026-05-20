@@ -15,7 +15,7 @@ import { createPortal } from 'react-dom';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
-import RecordingHub from '@/components/RecordingHub';
+import { RecordingHubContent } from '@/components/RecordingHub';
 import GuidedTour from '@/components/GuidedTour';
 import { terminateGlobalPoseWorker, warmupMoveNetWorker } from '@/lib/poseWorkerBridge';
 import PrecisionDrawInstructions, {
@@ -279,7 +279,8 @@ export default function Home() {
    */
   const [capturePostPhase, setCapturePostPhase] = useState<'hidden' | 'processing' | 'ready'>('hidden');
   /** Recording Studio side panel open/closed. */
-  const [hubOpen, setHubOpen] = useState(false);
+  const hubAltStreamRef = useRef<MediaStream | null>(null);
+  const [altScreenRecordMessage, setAltScreenRecordMessage] = useState<string | null>(null);
   const [embedCaptureConsecutiveFailures, setEmbedCaptureConsecutiveFailures] = useState(0);
   const [captureFallbackStreamUrl, setCaptureFallbackStreamUrl] = useState<string | null>(null);
   /** Step 2 of embed capture: isolation done; coach must tap Share Screen (Safari gesture) */
@@ -328,6 +329,7 @@ export default function Home() {
   /** Drag-over state for the two video panels */
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
+  const [mainUrlPanelOpen, setMainUrlPanelOpen] = useState(false);
   const [isMobile, setIsMobile]             = useState(false);
   /** Large tap targets only on real phones — desktop 9:16 preview keeps compact UI */
   const touchChrome                         = isMobile;
@@ -464,7 +466,7 @@ export default function Home() {
     mq.addEventListener('change', fn);
     return () => mq.removeEventListener('change', fn);
   }, []);
-  const leftToolbarWidthPx = toolbarIconOnlyLayout ? 56 : 208;
+  const leftToolbarWidthPx = 220;
   const reelsToolbarWidthPx = toolbarIconOnlyLayout ? 56 : 200;
 
   /** Mobile + tablet: floating tool strip (precision toggle lives here; hidden on desktop). */
@@ -625,7 +627,7 @@ export default function Home() {
   useEffect(() => {
     document.documentElement.style.setProperty(
       '--coachlab-banner-bottom',
-      `${toolbarBottomReservePx}px`,
+      `calc(${toolbarBottomReservePx}px + var(--coachlab-install-banner-height, 0px))`,
     );
     return () => {
       document.documentElement.style.removeProperty('--coachlab-banner-bottom');
@@ -877,6 +879,9 @@ export default function Home() {
   const handleHubCaptureCancel = useCallback(() => {
     setHubCaptureLoading(false);
     setHubCaptureTarget(null);
+    setAltScreenRecordMessage(null);
+    stopAllTracks(hubAltStreamRef.current);
+    hubAltStreamRef.current = null;
     embedCaptureCancelRef.current = true;
     setEmbedCaptureAwaitingShare(null);
     embedCaptureShareBundleRef.current = null;
@@ -884,6 +889,44 @@ export default function Home() {
     setEmbedCaptureRecording(false);
     setEmbedCapturePanelId(null);
   }, []);
+
+  /** Alt URL flow: getDisplayMedia first (Safari), then load embed and auto-record when playing. */
+  const handleHubAltScreenRecordStart = useCallback(
+    (url: string, target: 'A' | 'B') => {
+      const raw = normalizeWebUrlInput(url);
+      if (!raw) return;
+      setAltScreenRecordMessage(
+        'Please wait — turn your volume up and remove headphones if you want audio recorded',
+      );
+      embedCaptureCancelRef.current = false;
+      embedShareInFlightRef.current = true;
+      setHubCaptureLoading(true);
+      setHubCaptureTarget(target);
+      setCaptureError(null);
+
+      getTabCaptureStream()
+        .then((stream) => {
+          embedShareInFlightRef.current = false;
+          if (embedCaptureCancelRef.current) {
+            stopAllTracks(stream);
+            setHubCaptureLoading(false);
+            setAltScreenRecordMessage(null);
+            return;
+          }
+          hubAltStreamRef.current = stream;
+          handleHubCaptureLoad(raw, target);
+        })
+        .catch((e: unknown) => {
+          embedShareInFlightRef.current = false;
+          setHubCaptureLoading(false);
+          setAltScreenRecordMessage(null);
+          if (!embedCaptureCancelRef.current) {
+            setCaptureError(handleCaptureError(e, 'getDisplayMedia').friendly);
+          }
+        });
+    },
+    [handleHubCaptureLoad],
+  );
 
   // ── Drag-and-drop handlers ─────────────────────────────────────────────────
   const handleDragOverA = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -2358,7 +2401,11 @@ export default function Home() {
     onOptionsChange:                 handleOptionsChange,
     onUndo:                          () => canvasRef.current?.undo(),
     onRedo:                          () => canvasRef.current?.redo(),
-    onClear:                         () => canvasRef.current?.clearAll(),
+    onClear:                         () => {
+      canvasRef.current?.clearAll();
+      canvasRef.current?.resetSkeleton();
+      setSkeletonOverlayPaused(false);
+    },
     onResetSkeleton:                 () => canvasRef.current?.resetSkeleton(),
     onResetBallTrail:                () => canvasRef.current?.resetBallTrail(),
     ballTrailMode,
@@ -2403,60 +2450,55 @@ export default function Home() {
     objMultiplierActive:             objMultiplierHasRegion,
     objMultiplierProgress,
     iconOnlyLayout:                  toolbarIconOnlyLayout,
-    recordingHubOpen:                hubOpen,
-    onRecordingHubToggle:            () => setHubOpen((v) => !v),
+    recordingHubContent: (
+      <RecordingHubContent
+        isRecording={isRecording}
+        onRecordingChange={handleRecordingChange}
+        getCanvas={getCanvas}
+        getWebcamStream={getWebcamStream}
+        getMicStream={getMicStream}
+        getCropRegion={getCropRegion}
+        layoutMode={layoutMode as 'youtube' | 'reels'}
+        onScreenRecordComplete={handleScreenRecordComplete}
+        webcamActive={webcamActive}
+        onWebcamToggle={() => void toggleWebcam()}
+        micActive={micActive}
+        micMuted={micMuted}
+        onMicToggle={toggleMic}
+        onLayoutChange={setLayoutMode}
+        onScreenshotEntireScreen={handleScreenshotEntireScreen}
+        onScreenshotVideoOnly={handleScreenshotVideoOnly}
+        onFileDropped={handleVideoFile}
+        hubCaptureLoading={hubCaptureLoading}
+        hubCaptureTarget={hubCaptureTarget}
+        hubCaptureIsActive={captureBusy && embedCapturePanelId === hubCaptureTarget}
+        onHubCaptureCancel={handleHubCaptureCancel}
+        captureDownloadStatus={captureDownloadStatus}
+        onDownloadCapture={handleDownloadCaptureBlob}
+        onDismissCaptureDownload={handleDismissCaptureDownload}
+        screenRecordDownloadPending={screenRecordDownloadPending}
+        onScreenRecordDownloadYes={handleScreenRecordDownloadYes}
+        onScreenRecordDownloadNo={handleScreenRecordDownloadNo}
+        onStartAltScreenRecord={handleHubAltScreenRecordStart}
+        altScreenRecordMessage={altScreenRecordMessage}
+      />
+    ),
   } satisfies React.ComponentProps<typeof ToolPalette>;
 
   // Mobile strip adds precision-draw controls on top of the base set.
   const toolPaletteMobileProps = {
     ...toolPaletteBaseProps,
     mobileChrome: true,
+    iconOnlyLayout: true,
     precisionDrawEnabled,
     onPrecisionDrawToggle:       handlePrecisionDrawToggle,
     onShowPrecisionInstructions: showPrecisionInstructionsAgain,
   } satisfies React.ComponentProps<typeof ToolPalette>;
 
-  // ── Centralized RecordingHub prop assembly ─────────────────────────────
-  // Single source of truth for all recording / media controls.
-  const recordingHubProps = {
-    isOpen:             hubOpen,
-    onClose:            () => setHubOpen(false),
-    isMobile,
-    toolbarLeftInset:   hubToolbarLeftInset,
-    isRecording,
-    onRecordingChange:  handleRecordingChange,
-    getCanvas,
-    getWebcamStream,
-    getMicStream,
-    getCropRegion,
-    layoutMode:         layoutMode as 'youtube' | 'reels',
-    onScreenRecordComplete: handleScreenRecordComplete,
-    webcamActive,
-    onWebcamToggle:     () => void toggleWebcam(),
-    micActive,
-    micMuted,
-    onMicToggle:        toggleMic,
-    onLayoutChange:     setLayoutMode,
-    onScreenshotEntireScreen: handleScreenshotEntireScreen,
-    onScreenshotVideoOnly:    handleScreenshotVideoOnly,
-    urlTarget,
-    onUrlTargetChange:  setUrlTarget,
-    onFileDropped:      handleVideoFile,
-    onHubCaptureLoad:   handleHubCaptureLoad,
-    hubCaptureLoading,
-    hubCaptureTarget,
-    hubCaptureAwaitingShare:
-      embedCaptureAwaitingShare !== null && embedCaptureAwaitingShare === hubCaptureTarget,
-    hubCaptureIsActive: captureBusy && embedCapturePanelId === hubCaptureTarget,
-    onHubCaptureShare:  shareEmbedDisplayMediaFromUserGesture,
-    onHubCaptureCancel: handleHubCaptureCancel,
-    captureDownloadStatus,
-    onDownloadCapture:  handleDownloadCaptureBlob,
-    onDismissCaptureDownload: handleDismissCaptureDownload,
-    screenRecordDownloadPending,
-    onScreenRecordDownloadYes: handleScreenRecordDownloadYes,
-    onScreenRecordDownloadNo: handleScreenRecordDownloadNo,
-  } satisfies React.ComponentProps<typeof RecordingHub>;
+  const hasVideoAContent = useMemo(
+    () => !!(videoSrc || youtubeVideoIdA || genericEmbedSrcA),
+    [videoSrc, youtubeVideoIdA, genericEmbedSrcA],
+  );
 
   return (
     <div
@@ -2499,136 +2541,84 @@ export default function Home() {
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
       />
 
-      {/* ── Header ── */}
-      <header style={{
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        top: 0,
-        zIndex: 90,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: isMobile ? 'flex-end' : 'flex-end',
-        paddingTop: 'calc(env(safe-area-inset-top, 0px) + 10px)',
-        paddingRight: 12,
-        paddingBottom: 10,
-        paddingLeft: isMobile ? 12 : layoutMode === 'reels' ? 12 : leftToolbarWidthPx + 24,
-        pointerEvents: 'none',
-      }}>
-        {isMobile ? (
-          <div
+      {/* ── Header: logo left, settings right only ── */}
+      <header
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: 0,
+          zIndex: 90,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 10px)',
+          paddingRight: 12,
+          paddingBottom: 10,
+          paddingLeft: 12,
+          pointerEvents: 'none',
+        }}
+      >
+        <span
+          style={{
+            pointerEvents: 'auto',
+            fontSize: 15,
+            fontWeight: 800,
+            letterSpacing: '-0.02em',
+            color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
+            padding: '6px 4px',
+          }}
+        >
+          CoachLab
+        </span>
+        <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+          <button
+            type="button"
+            onClick={() => setSettingsMenuOpen((o) => !o)}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              pointerEvents: 'auto',
-              padding: '6px 8px',
-              borderRadius: layoutMode === 'reels' ? 0 : 12,
+              ...headerBtnStyle,
+              width: 40,
+              height: 40,
+              padding: 0,
+              justifyContent: 'center',
+              borderRadius: '50%',
               background: layoutMode === 'reels' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.85)',
             }}
+            aria-label="Settings"
+            aria-expanded={settingsMenuOpen}
           >
-            <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, fontSize: 11, padding: '4px 8px' }} title="New analysis">
-              New
-            </button>
-            <select
-              value={urlTarget}
-              onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
-              aria-label="Player selector"
-              style={{ height: 32, borderRadius: 8, border: '1px solid #E5E5E5', fontSize: 11, fontWeight: 700, padding: '0 6px' }}
-            >
-              <option value="A">A</option>
-              <option value="B">B</option>
-            </select>
-            <button type="button" onClick={() => setSettingsMenuOpen((o) => !o)} style={{ ...headerBtnStyle, fontSize: 11, padding: '4px 8px' }} aria-expanded={settingsMenuOpen}>
-              <Settings size={14} />
-            </button>
-          </div>
-        ) : (
-          <div
-            style={{
-              width: '100%',
-              maxWidth: layoutMode === 'reels' ? 'min(480px, 100%)' : 'min(1100px, 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-end',
-              gap: layoutMode === 'reels' ? '6px' : '12px',
-              pointerEvents: 'auto',
-              padding: layoutMode === 'reels' ? '6px 8px' : '10px 12px',
-              borderRadius: layoutMode === 'reels' ? 0 : 16,
-              background: layoutMode === 'reels' ? 'rgba(0,0,0,0.5)' : 'rgba(255, 255, 255, 0.72)',
-              border: layoutMode === 'reels' ? 'none' : '1px solid rgba(229, 229, 229, 0.95)',
-              backdropFilter: 'blur(18px) saturate(1.15)',
-              WebkitBackdropFilter: 'blur(18px) saturate(1.15)',
-              boxShadow: layoutMode === 'reels' ? 'none' : '0 8px 32px rgba(0,0,0,0.06)',
-            }}
-          >
-            {/* Actions (desktop) */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: layoutMode === 'reels' ? '5px' : '8px', flexWrap: 'nowrap', overflowX: 'auto' }}>
-              <button type="button" onClick={resetSession} style={{ ...headerBtnStyle, fontSize: 12 }} title="New analysis">
-                New analysis
-              </button>
-              <select
-                value={urlTarget}
-                onChange={(e) => setUrlTarget(e.target.value as 'A' | 'B')}
-                aria-label="Player selector"
+            <Settings size={18} />
+          </button>
+          {settingsMenuOpen && (
+            <>
+              <div role="presentation" onClick={() => setSettingsMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 98 }} />
+              <div
                 style={{
-                  height: 30,
-                  borderRadius: 8,
+                  position: 'absolute',
+                  right: 0,
+                  top: 'calc(100% + 6px)',
+                  zIndex: 99,
+                  minWidth: 180,
+                  padding: 6,
+                  borderRadius: 12,
+                  background: 'rgba(250, 249, 247, 0.98)',
                   border: '1px solid #E5E5E5',
-                  background: '#FFFFFF',
-                  padding: '0 8px',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  cursor: 'pointer',
+                  boxShadow: '0 12px 32px rgba(0,0,0,0.12)',
                 }}
               >
-                <option value="A">Video A</option>
-                <option value="B">Video B</option>
-              </select>
-              <div style={{ position: 'relative' }}>
                 <button
                   type="button"
-                  onClick={() => setSettingsMenuOpen((o) => !o)}
-                  style={{ ...headerBtnStyle, fontSize: 12 }}
-                  aria-expanded={settingsMenuOpen}
+                  onClick={() => { resetSession(); setSettingsMenuOpen(false); }}
+                  style={{ ...headerBtnStyle, width: '100%', color: '#9a3412', borderColor: '#fca5a5' }}
                 >
-                  <Settings size={14} />
-                  Settings
+                  Clear session
                 </button>
-                {settingsMenuOpen && (
-                  <>
-                    <div role="presentation" onClick={() => setSettingsMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 98 }} />
-                    <div
-                      style={{
-                        position: 'absolute',
-                        right: 0,
-                        top: 'calc(100% + 6px)',
-                        zIndex: 99,
-                        minWidth: 180,
-                        padding: 6,
-                        borderRadius: 12,
-                        background: 'rgba(250, 249, 247, 0.98)',
-                        border: '1px solid #E5E5E5',
-                        boxShadow: '0 12px 32px rgba(0,0,0,0.12)',
-                      }}
-                    >
-                      <button type="button" onClick={() => { setHubOpen(true); setSettingsMenuOpen(false); }} style={{ ...headerBtnStyle, width: '100%', marginBottom: 4 }}>
-                        Open Recording Hub
-                      </button>
-                      <button type="button" onClick={() => { resetSession(); setSettingsMenuOpen(false); }} style={{ ...headerBtnStyle, width: '100%', color: '#9a3412', borderColor: '#fca5a5' }}>
-                        Clear session
-                      </button>
-                    </div>
-                  </>
-                )}
               </div>
-
-            </div>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </header>
 
-      <RecordingHub {...recordingHubProps} />
 
       {/* ── Main layout ── */}
       <div
@@ -2651,7 +2641,7 @@ export default function Home() {
           width: leftToolbarWidthPx,
           display: 'flex',
           flexDirection: 'column',
-          background: 'rgba(255,255,255,0.92)',
+          background: 'rgba(255,255,255,0.15)',
           overflowY: 'auto',
           position: 'absolute',
           left: 12,
@@ -2660,7 +2650,7 @@ export default function Home() {
           zIndex: 80,
           borderRadius: 14,
           boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
-          border: '1px solid rgba(0,0,0,0.08)',
+          border: '1px solid rgba(255,255,255,0.2)',
           backdropFilter: 'blur(10px)',
           WebkitBackdropFilter: 'blur(10px)',
         }}
@@ -2753,7 +2743,8 @@ export default function Home() {
                 overflowY: 'auto',
                 overflowX: 'hidden',
                 WebkitOverflowScrolling: 'touch',
-                paddingBottom: 'calc(100px + env(safe-area-inset-bottom, 0px))',
+                paddingBottom:
+                  'calc(100px + var(--coachlab-install-banner-height, 0px) + env(safe-area-inset-bottom, 0px))',
                 borderRadius: 14,
                 boxShadow: '0 10px 40px rgba(0,0,0,0.22)',
                 border: '1px solid rgba(0,0,0,0.08)',
@@ -2873,32 +2864,27 @@ export default function Home() {
                     position: 'absolute', inset: layoutMode === 'reels' ? 0 : 16,
                     display: 'flex', flexDirection: 'column',
                     alignItems: 'center', justifyContent: 'center',
-                    gap: '14px',
+                    gap: 16,
                     borderRadius: layoutMode === 'reels' ? 0 : 20,
-                    border: layoutMode === 'reels' ? '2px dashed rgba(255,255,255,0.3)' : '2px dashed #E5E5E5',
-                    background: layoutMode === 'reels' ? '#000' : '#FFFFFF',
-                    color: layoutMode === 'reels' ? 'rgba(255,255,255,0.6)' : '#6e6e73',
+                    border: layoutMode === 'reels' ? 'none' : '1px solid #E8E8ED',
+                    background: layoutMode === 'reels' ? '#000' : '#FAFAFA',
+                    padding: 24,
                   }}>
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      style={{
-                        display: 'flex', flexDirection: 'column', alignItems: 'center',
-                        gap: '14px', background: 'none', border: 'none', cursor: 'pointer', color: '#6e6e73',
-                        padding: '8px 24px',
-                      }}
-                    >
-                      <div style={{
-                        width: '88px', height: '88px', borderRadius: layoutMode === 'reels' ? 0 : '20px',
-                        background: layoutMode === 'reels' ? 'rgba(255,255,255,0.08)' : '#FAF9F7',
-                        border: layoutMode === 'reels' ? '1px solid rgba(255,255,255,0.15)' : '1px solid #E5E5E5',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        <Upload size={36} color={layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A'} strokeWidth={1.5} />
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'center', width: '100%', maxWidth: 420 }}>
+                      <button type="button" data-tour-id="tour-upload" onClick={() => fileInputRef.current?.click()} style={{ flex: '1 1 160px', minHeight: 52, borderRadius: 14, border: '1px solid #E5E5E5', background: '#FFFFFF', fontSize: 15, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                        <Upload size={20} /> Upload Video
+                      </button>
+                      <button type="button" data-tour-id="tour-publer" onClick={() => setMainUrlPanelOpen((o) => !o)} style={{ flex: '1 1 160px', minHeight: 52, borderRadius: 14, border: '1px solid #E5E5E5', background: mainUrlPanelOpen ? 'rgba(0,122,255,0.08)' : '#FFFFFF', fontSize: 15, fontWeight: 600, color: '#007AFF', cursor: 'pointer' }}>
+                        Load from URL
+                      </button>
+                    </div>
+                    {mainUrlPanelOpen && (
+                      <div style={{ display: 'flex', gap: 8, width: '100%', maxWidth: 420 }}>
+                        <input type="url" placeholder="Paste video URL…" value={urlInput} onChange={(e) => setUrlInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setUrlTarget('A'); void handleUrlSubmit(); } }} style={{ flex: 1, height: 44, borderRadius: 12, border: '1px solid #E5E5E5', padding: '0 12px', fontSize: 14 }} />
+                        <button type="button" onClick={() => { setUrlTarget('A'); void handleUrlSubmit(); }} style={{ height: 44, padding: '0 18px', borderRadius: 12, border: 'none', background: '#007AFF', color: '#fff', fontWeight: 600, cursor: 'pointer' }}>Load</button>
                       </div>
-                      <span style={{ fontSize: '15px', fontWeight: 600, color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A' }}>Upload Video A</span>
-                      <span style={{ fontSize: '12px', color: layoutMode === 'reels' ? 'rgba(255,255,255,0.5)' : '#6e6e73' }}>MP4, WebM, MOV supported</span>
-                    </button>
-                    <span style={{ fontSize: '11px', color: '#8e8e93' }}>or drag and drop a video here</span>
+                    )}
+                    <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8e8e93' }}>or drag and drop a video file here</span>
                   </div>
                   )
                 ) : (
@@ -3215,6 +3201,41 @@ export default function Home() {
                 )}
               </div>
             </div>
+
+            {hasVideoAContent && !hasVideoBContent && (
+              <div
+                style={{
+                  flexShrink: 0,
+                  display: 'flex',
+                  justifyContent: 'center',
+                  padding: layoutMode === 'reels' ? '12px 16px' : '16px',
+                  pointerEvents: 'auto',
+                  zIndex: 45,
+                }}
+              >
+                <button
+                  type="button"
+                  data-tour-id="tour-video-ab"
+                  onClick={() => {
+                    setUrlTarget('B');
+                    fileInputRefB.current?.click();
+                  }}
+                  style={{
+                    padding: '12px 24px',
+                    borderRadius: 12,
+                    border: '1px solid rgba(255,255,255,0.35)',
+                    background: layoutMode === 'reels' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.92)',
+                    color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    backdropFilter: 'blur(8px)',
+                  }}
+                >
+                  Add Video B
+                </button>
+              </div>
+            )}
 
             {layoutMode === 'reels' && hasVideoBContent && (
               <div

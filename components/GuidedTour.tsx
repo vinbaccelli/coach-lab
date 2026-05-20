@@ -1,33 +1,7 @@
 'use client';
 
 /**
- * GuidedTour — spotlight-style onboarding tour.
- *
- * Renders three concerns inside a single React portal mounted on document.body:
- *   1. A persistent floating "?" help button (bottom-right, above where zoom
- *      controls would live).  Pulses on first visit until the tour is opened
- *      or dismissed.
- *   2. A full-viewport dark overlay with an SVG mask cutting a spotlight hole
- *      around the current step's target element.
- *   3. A tooltip card showing the step counter, title, description, progress
- *      bar, and Back / Next / Skip controls.
- *
- * Targets are resolved at run time via `[data-tour-id="..."]` selectors so
- * tour authoring does not depend on internal component class names that may
- * change.  Steps whose target is missing degrade gracefully to a centred
- * tooltip with no spotlight cutout (used for the welcome step).
- *
- * Positioning uses ResizeObserver + window resize/scroll listeners so the
- * spotlight and tooltip stay glued to the target even when the layout
- * reflows mid-tour (e.g. orientation change).
- *
- * Public surface:
- *   <GuidedTour />            — drop into the page; reads localStorage to
- *                               auto-open on first visit after 2 s.
- *
- * localStorage:
- *   coachlab-tour-seen        — written when the tour completes, skips, or is
- *                               dismissed.  Presence ⇒ no auto-show.
+ * GuidedTour — 14-step spotlight onboarding with welcome screen on first visit.
  */
 
 import React, {
@@ -41,79 +15,121 @@ import React, {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-// ── Tour content ────────────────────────────────────────────────────────────
-
 interface TourStep {
-  /** Optional `data-tour-id` to spotlight; undefined ⇒ centred welcome card. */
-  target?: string;
+  target: string;
   title: string;
   description: string;
-  /** Tooltip placement preference; falls back automatically if it would clip. */
   placement?: 'top' | 'bottom' | 'left' | 'right' | 'center';
+  /** Omit on desktop (e.g. precision mode). */
+  mobileOnly?: boolean;
 }
 
-const STEPS: ReadonlyArray<TourStep> = [
+const ALL_STEPS: ReadonlyArray<TourStep> = [
   {
-    title: 'Welcome to Coach Lab',
-    description:
-      'A two-minute tour of the studio so you can record, analyse, and share lessons in seconds.',
-    placement: 'center',
-  },
-  {
-    target: 'load-video',
-    title: 'Load a video',
-    description:
-      'Paste a YouTube, Instagram, or TikTok URL, drop an MP4 here, or pick a file. The video appears in slot A by default.',
+    target: 'tour-upload',
+    title: 'Upload Video',
+    description: 'Load any video from your device for analysis.',
     placement: 'bottom',
   },
   {
-    target: 'recording-hub',
-    title: 'Recording Hub',
+    target: 'tour-publer',
+    title: 'Load from Publer',
     description:
-      'Open Recording Hub from the left toolbar for layout, screenshots, screen recording, webcam, mic, and loading videos via Publer or screen record.',
+      'Use Publer to load videos from YouTube, Instagram, or TikTok without downloading manually.',
     placement: 'bottom',
   },
   {
-    target: 'video-toolbar',
-    title: 'Drawing tools',
+    target: 'tour-video-ab',
+    title: 'Video A and B',
     description:
-      'Pen, lines, shapes, angles, skeleton overlay, and ball trail. The toolbar collapses into icons on phone and 9:16 layouts.',
-    placement: 'right',
-  },
-  {
-    target: 'playback-dock',
-    title: 'Timeline & playback',
-    description:
-      'Frame-accurate scrubbing, slow-motion speeds, A/B sync when both slots are loaded, and ⌫ / → keyboard nudges.',
+      'Load two videos side by side to compare technique between sessions or players.',
     placement: 'top',
   },
   {
-    target: 'tour-help',
-    title: 'Need help later?',
+    target: 'playback-dock',
+    title: 'Playback controls',
+    description: 'Play, pause, and control your video with precision.',
+    placement: 'top',
+  },
+  {
+    target: 'tour-timeline',
+    title: 'Timeline and scrubber',
+    description: 'Drag the scrubber to navigate to any moment in the video instantly.',
+    placement: 'top',
+  },
+  {
+    target: 'tour-frame-controls',
+    title: 'Frame by frame',
     description:
-      'This button stays in the corner — tap it any time to replay the tour. You are ready to coach.',
+      'Step through the video one frame at a time for detailed technical analysis.',
+    placement: 'top',
+  },
+  {
+    target: 'tour-draw-tools',
+    title: 'Draw tools',
+    description:
+      'Draw lines, arrows, circles, and shapes directly on the video to highlight technique.',
+    placement: 'right',
+  },
+  {
+    target: 'tour-angle',
+    title: 'Angle tool',
+    description: 'Measure joint and body angles precisely to analyse movement mechanics.',
+    placement: 'right',
+  },
+  {
+    target: 'tour-style',
+    title: 'Style',
+    description:
+      'Change colour, thickness, line style, and add animation effects to your drawings before or after drawing.',
+    placement: 'right',
+  },
+  {
+    target: 'tour-skeleton',
+    title: 'Skeleton overlay',
+    description: 'Overlay a pose skeleton on the athlete to analyse body position and movement.',
+    placement: 'right',
+  },
+  {
+    target: 'tour-zoom',
+    title: 'Zoom and pan',
+    description: 'Zoom into any part of the video and drag to explore the detail.',
     placement: 'left',
+  },
+  {
+    target: 'tour-webcam',
+    title: 'Webcam overlay',
+    description:
+      'Add your webcam for coach commentary with optional background removal.',
+    placement: 'left',
+  },
+  {
+    target: 'tour-record-screen',
+    title: 'Record Screen',
+    description: 'Record your full analysis session as a video to share with your athlete.',
+    placement: 'left',
+  },
+  {
+    target: 'tour-precision',
+    title: 'Precision mode',
+    description:
+      'Hold one finger to position the cursor, then tap with a second finger to draw with pixel precision.',
+    placement: 'right',
+    mobileOnly: true,
   },
 ];
 
-// ── Layout constants ────────────────────────────────────────────────────────
-
-/** Always-on-top stacking band reserved for the tour (above modals/toasts). */
-const Z_OVERLAY  = 2_147_483_640;
-const Z_TOOLTIP  = Z_OVERLAY + 1;
+const Z_OVERLAY = 2_147_483_640;
+const Z_TOOLTIP = Z_OVERLAY + 1;
+const Z_WELCOME = Z_OVERLAY + 2;
 const Z_HELP_BTN = Z_OVERLAY - 1;
 
-/** Padding (CSS px) around the target rectangle inside the spotlight cutout. */
 const SPOTLIGHT_PADDING = 8;
-/** Corner radius on the spotlight cutout. */
-const SPOTLIGHT_RADIUS  = 12;
-/** Gap (CSS px) between target rect and tooltip card. */
-const TOOLTIP_GAP       = 14;
+const SPOTLIGHT_RADIUS = 12;
+const TOOLTIP_GAP = 14;
 
-const LS_KEY            = 'coachlab-tour-seen';
+const LS_KEY = 'coachlab-tour-seen';
 const AUTO_SHOW_DELAY_MS = 2_000;
-
-// ── Geometry helpers ────────────────────────────────────────────────────────
 
 interface Rect {
   x: number;
@@ -129,16 +145,10 @@ function rectFromEl(el: Element): Rect {
 
 function viewport() {
   const w = typeof window === 'undefined' ? 1024 : window.innerWidth;
-  const h = typeof window === 'undefined' ? 768  : window.innerHeight;
+  const h = typeof window === 'undefined' ? 768 : window.innerHeight;
   return { w, h };
 }
 
-/**
- * Pick the actual placement for the tooltip given the target rect and the
- * tooltip's measured size.  We try the requested placement first; if it would
- * clip the viewport on the preferred side we fall back through a fixed order
- * (top → bottom → right → left → center).
- */
 function resolveTooltipPos(
   target: Rect | null,
   tipSize: { w: number; h: number },
@@ -155,8 +165,6 @@ function resolveTooltipPos(
     };
   }
 
-  // `preferred === 'center'` is already handled above, so `preferred` here is
-  // either undefined or a side.
   type Side = 'top' | 'bottom' | 'left' | 'right';
   const order: Side[] = [];
   if (preferred) order.push(preferred);
@@ -165,25 +173,24 @@ function resolveTooltipPos(
   }
 
   const fits = (p: Side) => {
-    if (p === 'top')    return target.y - TOOLTIP_GAP - tipSize.h - MARGIN >= 0;
+    if (p === 'top') return target.y - TOOLTIP_GAP - tipSize.h - MARGIN >= 0;
     if (p === 'bottom') return target.y + target.h + TOOLTIP_GAP + tipSize.h + MARGIN <= vp.h;
-    if (p === 'left')   return target.x - TOOLTIP_GAP - tipSize.w - MARGIN >= 0;
-    if (p === 'right')  return target.x + target.w + TOOLTIP_GAP + tipSize.w + MARGIN <= vp.w;
+    if (p === 'left') return target.x - TOOLTIP_GAP - tipSize.w - MARGIN >= 0;
+    if (p === 'right') return target.x + target.w + TOOLTIP_GAP + tipSize.w + MARGIN <= vp.w;
     return true;
   };
 
-  const fittedSide = order.find(fits);
-  const chosen: NonNullable<TourStep['placement']> = fittedSide ?? 'center';
+  const chosen: NonNullable<TourStep['placement']> = order.find(fits) ?? 'center';
   const cx = target.x + target.w / 2;
   const cy = target.y + target.h / 2;
 
   let x = cx - tipSize.w / 2;
   let y = cy - tipSize.h / 2;
 
-  if (chosen === 'top')    { y = target.y - TOOLTIP_GAP - tipSize.h; }
-  if (chosen === 'bottom') { y = target.y + target.h + TOOLTIP_GAP; }
-  if (chosen === 'left')   { x = target.x - TOOLTIP_GAP - tipSize.w; }
-  if (chosen === 'right')  { x = target.x + target.w + TOOLTIP_GAP; }
+  if (chosen === 'top') y = target.y - TOOLTIP_GAP - tipSize.h;
+  if (chosen === 'bottom') y = target.y + target.h + TOOLTIP_GAP;
+  if (chosen === 'left') x = target.x - TOOLTIP_GAP - tipSize.w;
+  if (chosen === 'right') x = target.x + target.w + TOOLTIP_GAP;
 
   if (chosen === 'top' || chosen === 'bottom') {
     x = Math.min(Math.max(MARGIN, x), vp.w - tipSize.w - MARGIN);
@@ -197,12 +204,6 @@ function resolveTooltipPos(
   return { x, y, placement: chosen };
 }
 
-// ── Target-rect hook ────────────────────────────────────────────────────────
-
-/**
- * Tracks the live bounding rect of the element matched by `[data-tour-id=...]`.
- * Returns null until the element is found (or if `tourId` is undefined).
- */
 function useTargetRect(tourId: string | undefined, active: boolean): Rect | null {
   const [rect, setRect] = useState<Rect | null>(null);
 
@@ -234,19 +235,16 @@ function useTargetRect(tourId: string | undefined, active: boolean): Rect | null
 
     if (typeof ResizeObserver !== 'undefined') {
       ro = new ResizeObserver(() => {
-        raf && cancelAnimationFrame(raf);
+        if (raf) cancelAnimationFrame(raf);
         raf = requestAnimationFrame(update);
       });
     }
 
-    // Initial probe; some targets may mount slightly after the tour opens
-    // (e.g. RecordingHub trigger inside a header that re-renders).  Re-probe
-    // for up to ~1 s before giving up.
     let attempts = 0;
     const probe = () => {
       if (cancelled) return;
       update();
-      if (!observed && attempts < 20) {
+      if (!observed && attempts < 24) {
         attempts += 1;
         raf = requestAnimationFrame(() => window.setTimeout(probe, 50));
       }
@@ -254,7 +252,7 @@ function useTargetRect(tourId: string | undefined, active: boolean): Rect | null
     probe();
 
     const onResize = () => {
-      raf && cancelAnimationFrame(raf);
+      if (raf) cancelAnimationFrame(raf);
       raf = requestAnimationFrame(update);
     };
     window.addEventListener('resize', onResize);
@@ -265,145 +263,180 @@ function useTargetRect(tourId: string | undefined, active: boolean): Rect | null
       if (raf) cancelAnimationFrame(raf);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('scroll', onResize, true);
-      if (ro) ro.disconnect();
+      ro?.disconnect();
     };
   }, [tourId, active]);
 
   return rect;
 }
 
-// ── Component ───────────────────────────────────────────────────────────────
+function useIsMobileTour() {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const fn = () => setMobile(mq.matches);
+    fn();
+    mq.addEventListener('change', fn);
+    return () => mq.removeEventListener('change', fn);
+  }, []);
+  return mobile;
+}
 
 export default function GuidedTour() {
-  const [mounted, setMounted]     = useState(false);
-  const [open, setOpen]           = useState(false);
-  const [stepIdx, setStepIdx]     = useState(0);
+  const [mounted, setMounted] = useState(false);
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
+  const [stepIdx, setStepIdx] = useState(0);
   const [seenBefore, setSeenBefore] = useState(true);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
-  const [tipSize, setTipSize] = useState<{ w: number; h: number }>({ w: 320, h: 200 });
+  const [tipSize, setTipSize] = useState({ w: 320, h: 200 });
   const maskId = useId().replace(/:/g, '_');
+  const isMobile = useIsMobileTour();
 
-  // Mount-only guard so portal+localStorage logic runs after hydration.
+  const steps = useMemo(
+    () => ALL_STEPS.filter((s) => !s.mobileOnly || isMobile),
+    [isMobile],
+  );
+
   useEffect(() => {
     setMounted(true);
     try {
       const seen = window.localStorage.getItem(LS_KEY) === '1';
       setSeenBefore(seen);
       if (!seen) {
-        const id = window.setTimeout(() => {
-          setStepIdx(0);
-          setOpen(true);
-        }, AUTO_SHOW_DELAY_MS);
+        const id = window.setTimeout(() => setWelcomeOpen(true), AUTO_SHOW_DELAY_MS);
         return () => window.clearTimeout(id);
       }
     } catch {
-      /* localStorage may throw in private mode — ignore */
+      /* private mode */
     }
   }, []);
 
-  // ── Persistent dismissal helper ───────────────────────────────────────────
   const markSeen = useCallback(() => {
-    try { window.localStorage.setItem(LS_KEY, '1'); } catch { /* noop */ }
+    try {
+      window.localStorage.setItem(LS_KEY, '1');
+    } catch {
+      /* noop */
+    }
     setSeenBefore(true);
   }, []);
 
-  const closeTour = useCallback((persist: boolean) => {
-    setOpen(false);
-    if (persist) markSeen();
-  }, [markSeen]);
+  const endAll = useCallback(
+    (persist: boolean) => {
+      setWelcomeOpen(false);
+      setTourOpen(false);
+      setStepIdx(0);
+      if (persist) markSeen();
+    },
+    [markSeen],
+  );
 
-  const openTour = useCallback(() => {
+  const startTour = useCallback(() => {
+    setWelcomeOpen(false);
     setStepIdx(0);
-    setOpen(true);
+    setTourOpen(true);
+  }, []);
+
+  const openTourFromHelp = useCallback(() => {
+    setWelcomeOpen(false);
+    setStepIdx(0);
+    setTourOpen(true);
   }, []);
 
   const next = useCallback(() => {
     setStepIdx((i) => {
-      if (i + 1 >= STEPS.length) {
-        // End of tour — close and persist.
-        setOpen(false);
+      if (i + 1 >= steps.length) {
+        setTourOpen(false);
         markSeen();
         return 0;
       }
       return i + 1;
     });
-  }, [markSeen]);
+  }, [markSeen, steps.length]);
 
   const back = useCallback(() => {
     setStepIdx((i) => Math.max(0, i - 1));
   }, []);
 
-  // ── Keyboard shortcuts during the tour ────────────────────────────────────
   useEffect(() => {
-    if (!open) return;
+    if (!tourOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { closeTour(true); }
-      else if (e.key === 'ArrowRight' || e.key === 'Enter') { next(); }
-      else if (e.key === 'ArrowLeft') { back(); }
+      if (e.key === 'Escape') endAll(true);
+      else if (e.key === 'ArrowRight' || e.key === 'Enter') next();
+      else if (e.key === 'ArrowLeft') back();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, next, back, closeTour]);
+  }, [tourOpen, next, back, endAll]);
 
-  const step = STEPS[stepIdx];
-  const targetRect = useTargetRect(step?.target, open);
+  const step = tourOpen ? steps[stepIdx] : null;
+  const targetRect = useTargetRect(step?.target, tourOpen);
 
-  // Re-measure tooltip after content swaps so positioning uses fresh size.
   useLayoutEffect(() => {
-    if (!open || !tooltipRef.current) return;
+    if (!tourOpen || !tooltipRef.current) return;
     const r = tooltipRef.current.getBoundingClientRect();
     if (Math.abs(r.width - tipSize.w) > 0.5 || Math.abs(r.height - tipSize.h) > 0.5) {
       setTipSize({ w: r.width, h: r.height });
     }
-  }, [open, stepIdx, targetRect, tipSize.w, tipSize.h]);
+  }, [tourOpen, stepIdx, targetRect, tipSize.w, tipSize.h]);
 
   const tipPos = useMemo(
     () => resolveTooltipPos(targetRect, tipSize, step?.placement),
     [targetRect, tipSize, step?.placement],
   );
 
-  // ── Mask geometry (SVG mask hole) ─────────────────────────────────────────
   const spotlight = useMemo(() => {
     if (!targetRect) return null;
-    const x = Math.max(0, targetRect.x - SPOTLIGHT_PADDING);
-    const y = Math.max(0, targetRect.y - SPOTLIGHT_PADDING);
-    const w = targetRect.w + SPOTLIGHT_PADDING * 2;
-    const h = targetRect.h + SPOTLIGHT_PADDING * 2;
-    return { x, y, w, h };
+    return {
+      x: Math.max(0, targetRect.x - SPOTLIGHT_PADDING),
+      y: Math.max(0, targetRect.y - SPOTLIGHT_PADDING),
+      w: targetRect.w + SPOTLIGHT_PADDING * 2,
+      h: targetRect.h + SPOTLIGHT_PADDING * 2,
+    };
   }, [targetRect]);
+
+  const helpBottom =
+    'calc(var(--coachlab-banner-bottom, 100px) + var(--coachlab-install-banner-height, 0px) + 12px + env(safe-area-inset-bottom, 0px))';
 
   if (!mounted) return null;
 
-  // ── Help button (always rendered) ─────────────────────────────────────────
   const helpBtn = (
     <button
       type="button"
       data-tour-id="tour-help"
       aria-label="Open guided tour"
       title="Guided tour"
-      onClick={openTour}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        try {
+          navigator?.vibrate?.(10);
+        } catch {
+          /* noop */
+        }
+        openTourFromHelp();
+      }}
       style={{
         position: 'fixed',
         right: 'calc(16px + env(safe-area-inset-right, 0px))',
-        // Sit above where zoom controls would live; keep clear of the playback
-        // dock by reading the same CSS custom property used by InstallPrompt.
-        bottom: 'calc(var(--coachlab-banner-bottom, 100px) + 12px)',
+        bottom: helpBottom,
         width: 44,
         height: 44,
         borderRadius: '50%',
         background: '#1A1A1A',
         color: '#FFFFFF',
-        border: '1px solid rgba(255,255,255,0.08)',
+        border: '1px solid rgba(255,255,255,0.12)',
         boxShadow: '0 6px 24px rgba(0,0,0,0.28)',
         cursor: 'pointer',
         zIndex: Z_HELP_BTN,
-        display: open ? 'none' : 'flex',
+        display: welcomeOpen || tourOpen ? 'none' : 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         fontSize: 20,
         fontWeight: 700,
         fontFamily: 'inherit',
-        animation: !seenBefore && !open ? 'coachlab-tour-pulse 1.6s ease-in-out infinite' : 'none',
+        animation: !seenBefore && !welcomeOpen && !tourOpen
+          ? 'coachlab-tour-pulse 1.6s ease-in-out infinite'
+          : 'none',
         WebkitTapHighlightColor: 'transparent',
       }}
     >
@@ -411,193 +444,257 @@ export default function GuidedTour() {
     </button>
   );
 
-  // ── Overlay + tooltip (only while open) ───────────────────────────────────
-  const overlay = open && step ? (
+  const welcomeModal = welcomeOpen ? (
     <>
-      {/* Dark backdrop with spotlight cutout. */}
-      <svg
-        aria-hidden="true"
-        onClick={() => closeTour(true)}
+      <div
+        role="presentation"
+        aria-hidden
+        onClick={() => endAll(true)}
         style={{
           position: 'fixed',
           inset: 0,
-          width: '100vw',
-          height: '100vh',
-          zIndex: Z_OVERLAY,
-          cursor: 'pointer',
-          pointerEvents: 'auto',
-          transition: 'opacity 300ms ease',
+          background: 'rgba(0,0,0,0.75)',
+          zIndex: Z_WELCOME - 1,
         }}
-      >
-        <defs>
-          <mask id={maskId}>
-            <rect x="0" y="0" width="100%" height="100%" fill="white" />
-            {spotlight && (
-              <rect
-                x={spotlight.x}
-                y={spotlight.y}
-                width={spotlight.w}
-                height={spotlight.h}
-                rx={SPOTLIGHT_RADIUS}
-                ry={SPOTLIGHT_RADIUS}
-                fill="black"
-                style={{ transition: 'all 300ms cubic-bezier(0.4, 0, 0.2, 1)' }}
-              />
-            )}
-          </mask>
-        </defs>
-        <rect
-          x="0"
-          y="0"
-          width="100%"
-          height="100%"
-          fill="rgba(0,0,0,0.75)"
-          mask={`url(#${maskId})`}
-        />
-        {/* Soft glow ring around the spotlight for affordance. */}
-        {spotlight && (
-          <rect
-            x={spotlight.x - 1.5}
-            y={spotlight.y - 1.5}
-            width={spotlight.w + 3}
-            height={spotlight.h + 3}
-            rx={SPOTLIGHT_RADIUS + 1.5}
-            ry={SPOTLIGHT_RADIUS + 1.5}
-            fill="none"
-            stroke="rgba(255,255,255,0.55)"
-            strokeWidth={1.5}
-            style={{
-              pointerEvents: 'none',
-              transition: 'all 300ms cubic-bezier(0.4, 0, 0.2, 1)',
-            }}
-          />
-        )}
-      </svg>
-
-      {/* Tooltip card */}
+      />
       <div
-        ref={tooltipRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={`tour-title-${stepIdx}`}
-        // Stop click-through onto the overlay so taps inside the card don't
-        // close the tour.
+        aria-labelledby="coachlab-welcome-title"
         onClick={(e) => e.stopPropagation()}
         style={{
           position: 'fixed',
-          top: tipPos.y,
-          left: tipPos.x,
-          width: 'min(360px, calc(100vw - 24px))',
-          maxWidth: 'calc(100vw - 24px)',
-          zIndex: Z_TOOLTIP,
+          left: '50%',
+          top: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: Z_WELCOME,
+          width: 'min(400px, calc(100vw - 32px))',
           background: '#FFFFFF',
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
-          border: '1px solid rgba(0,0,0,0.06)',
+          borderRadius: 20,
+          padding: 24,
+          boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
           color: '#1A1A1A',
-          transition: 'top 300ms cubic-bezier(0.4, 0, 0.2, 1), left 300ms cubic-bezier(0.4, 0, 0.2, 1)',
           fontFamily: 'inherit',
         }}
       >
-        {/* Step counter + skip */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', letterSpacing: '0.04em' }}>
-            STEP {stepIdx + 1} OF {STEPS.length}
-          </span>
-          <button
-            type="button"
-            onClick={() => closeTour(true)}
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: 12,
-              fontWeight: 600,
-              color: '#6B7280',
-              cursor: 'pointer',
-              padding: '4px 6px',
-              fontFamily: 'inherit',
-            }}
-          >
-            Skip ×
-          </button>
-        </div>
-
-        <h3
-          id={`tour-title-${stepIdx}`}
-          style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, lineHeight: 1.25 }}
-        >
-          {step.title}
-        </h3>
-        <p style={{ margin: '0 0 14px', fontSize: 14, lineHeight: 1.5, color: '#374151' }}>
-          {step.description}
+        <h2 id="coachlab-welcome-title" style={{ margin: '0 0 10px', fontSize: 22, fontWeight: 800, lineHeight: 1.25 }}>
+          Welcome to CoachLab
+        </h2>
+        <p style={{ margin: '0 0 20px', fontSize: 15, lineHeight: 1.5, color: '#4B5563' }}>
+          Let us show you around.
         </p>
-
-        {/* Progress bar */}
-        <div
-          aria-hidden="true"
-          style={{
-            height: 4,
-            background: '#F3F4F6',
-            borderRadius: 999,
-            overflow: 'hidden',
-            marginBottom: 14,
-          }}
-        >
-          <div
-            style={{
-              height: '100%',
-              width: `${((stepIdx + 1) / STEPS.length) * 100}%`,
-              background: '#1A1A1A',
-              transition: 'width 300ms cubic-bezier(0.4, 0, 0.2, 1)',
-            }}
-          />
-        </div>
-
-        {/* Controls */}
-        <div style={{ display: 'flex', gap: 8 }}>
-          {stepIdx > 0 && (
-            <button
-              type="button"
-              onClick={back}
-              style={{
-                flex: 1,
-                height: 38,
-                borderRadius: 10,
-                background: '#FFFFFF',
-                border: '1px solid #E5E5E5',
-                color: '#1A1A1A',
-                fontWeight: 600,
-                fontSize: 13,
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-              }}
-            >
-              Back
-            </button>
-          )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <button
             type="button"
-            onClick={next}
+            onClick={startTour}
             style={{
-              flex: stepIdx > 0 ? 1 : 2,
-              height: 38,
-              borderRadius: 10,
+              height: 44,
+              borderRadius: 12,
+              border: 'none',
               background: '#1A1A1A',
-              border: '1px solid #1A1A1A',
-              color: '#FFFFFF',
+              color: '#fff',
               fontWeight: 700,
-              fontSize: 13,
+              fontSize: 15,
               cursor: 'pointer',
               fontFamily: 'inherit',
             }}
           >
-            {stepIdx === STEPS.length - 1 ? 'Finish' : 'Next →'}
+            Start Tour
+          </button>
+          <button
+            type="button"
+            onClick={() => endAll(true)}
+            style={{
+              height: 44,
+              borderRadius: 12,
+              border: '1px solid #E5E5E5',
+              background: '#fff',
+              color: '#374151',
+              fontWeight: 600,
+              fontSize: 15,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            Skip for now
           </button>
         </div>
       </div>
     </>
   ) : null;
+
+  const tourOverlay =
+    tourOpen && step ? (
+      <>
+        <svg
+          aria-hidden="true"
+          onClick={() => endAll(true)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            width: '100vw',
+            height: '100vh',
+            zIndex: Z_OVERLAY,
+            cursor: 'pointer',
+          }}
+        >
+          <defs>
+            <mask id={maskId}>
+              <rect x="0" y="0" width="100%" height="100%" fill="white" />
+              {spotlight && (
+                <rect
+                  x={spotlight.x}
+                  y={spotlight.y}
+                  width={spotlight.w}
+                  height={spotlight.h}
+                  rx={SPOTLIGHT_RADIUS}
+                  ry={SPOTLIGHT_RADIUS}
+                  fill="black"
+                  style={{ transition: 'all 300ms cubic-bezier(0.4, 0, 0.2, 1)' }}
+                />
+              )}
+            </mask>
+          </defs>
+          <rect x="0" y="0" width="100%" height="100%" fill="rgba(0,0,0,0.75)" mask={`url(#${maskId})`} />
+          {spotlight && (
+            <rect
+              x={spotlight.x - 1.5}
+              y={spotlight.y - 1.5}
+              width={spotlight.w + 3}
+              height={spotlight.h + 3}
+              rx={SPOTLIGHT_RADIUS + 1.5}
+              ry={SPOTLIGHT_RADIUS + 1.5}
+              fill="none"
+              stroke="rgba(255,255,255,0.55)"
+              strokeWidth={1.5}
+              style={{
+                pointerEvents: 'none',
+                transition: 'all 300ms cubic-bezier(0.4, 0, 0.2, 1)',
+              }}
+            />
+          )}
+        </svg>
+
+        <div
+          ref={tooltipRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={`tour-title-${stepIdx}`}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            top: tipPos.y,
+            left: tipPos.x,
+            width: 'min(360px, calc(100vw - 24px))',
+            zIndex: Z_TOOLTIP,
+            background: '#FFFFFF',
+            borderRadius: 16,
+            padding: 18,
+            boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+            border: '1px solid rgba(0,0,0,0.06)',
+            color: '#1A1A1A',
+            transition:
+              'top 300ms cubic-bezier(0.4, 0, 0.2, 1), left 300ms cubic-bezier(0.4, 0, 0.2, 1)',
+            fontFamily: 'inherit',
+          }}
+        >
+          <div
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}
+          >
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', letterSpacing: '0.04em' }}>
+              Step {stepIdx + 1} of {steps.length}
+            </span>
+            <button
+              type="button"
+              onClick={() => endAll(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#6B7280',
+                cursor: 'pointer',
+                padding: '4px 6px',
+                fontFamily: 'inherit',
+              }}
+            >
+              Skip Tour
+            </button>
+          </div>
+
+          <h3
+            id={`tour-title-${stepIdx}`}
+            style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, lineHeight: 1.25 }}
+          >
+            {step.title}
+          </h3>
+          <p style={{ margin: '0 0 14px', fontSize: 14, lineHeight: 1.5, color: '#374151' }}>
+            {step.description}
+          </p>
+
+          <div
+            aria-hidden
+            style={{
+              height: 4,
+              background: '#F3F4F6',
+              borderRadius: 999,
+              overflow: 'hidden',
+              marginBottom: 14,
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${((stepIdx + 1) / steps.length) * 100}%`,
+                background: '#1A1A1A',
+                transition: 'width 300ms cubic-bezier(0.4, 0, 0.2, 1)',
+              }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              type="button"
+              aria-label="Previous step"
+              disabled={stepIdx === 0}
+              onClick={back}
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 10,
+                border: '1px solid #E5E5E5',
+                background: '#fff',
+                color: stepIdx === 0 ? '#D1D5DB' : '#1A1A1A',
+                fontSize: 18,
+                cursor: stepIdx === 0 ? 'default' : 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              aria-label={stepIdx === steps.length - 1 ? 'Finish tour' : 'Next step'}
+              onClick={next}
+              style={{
+                flex: 1,
+                height: 38,
+                borderRadius: 10,
+                border: '1px solid #1A1A1A',
+                background: '#1A1A1A',
+                color: '#fff',
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              {stepIdx === steps.length - 1 ? 'Finish' : 'Next →'}
+            </button>
+          </div>
+        </div>
+      </>
+    ) : null;
 
   return createPortal(
     <>
@@ -606,7 +703,8 @@ export default function GuidedTour() {
         50%      { box-shadow: 0 6px 24px rgba(0,0,0,0.28), 0 0 0 14px rgba(53,103,154,0); }
       }`}</style>
       {helpBtn}
-      {overlay}
+      {welcomeModal}
+      {tourOverlay}
     </>,
     document.body,
   );
