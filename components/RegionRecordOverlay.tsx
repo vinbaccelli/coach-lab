@@ -26,8 +26,9 @@ function defaultRegion(aspect: '16:9' | '9:16'): ViewportRegion {
 
 export function RegionRecordOverlay({ aspect, onAspectChange, region, onRegionChange, onClose }: Props) {
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
-  const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number } | null>(null);
-  const [hint, setHint] = useState('Drag to move · corner to resize');
+  const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number; ox: number; oy: number } | null>(null);
+  const regionRef = useRef(region);
+  regionRef.current = region;
 
   useEffect(() => {
     onRegionChange(defaultRegion(aspect));
@@ -36,26 +37,28 @@ export function RegionRecordOverlay({ aspect, onAspectChange, region, onRegionCh
 
   const onMove = useCallback(
     (e: PointerEvent) => {
+      const r = regionRef.current;
       if (dragRef.current) {
         const d = dragRef.current;
         onRegionChange({
-          ...region,
-          x: Math.max(0, Math.min(window.innerWidth - region.w, d.ox + (e.clientX - d.sx))),
-          y: Math.max(0, Math.min(window.innerHeight - region.h, d.oy + (e.clientY - d.sy))),
+          ...r,
+          x: Math.max(0, Math.min(window.innerWidth - r.w, d.ox + (e.clientX - d.sx))),
+          y: Math.max(0, Math.min(window.innerHeight - r.h, d.oy + (e.clientY - d.sy))),
         });
       }
       if (resizeRef.current) {
-        const r = resizeRef.current;
-        const nw = Math.max(120, r.ow + (e.clientX - r.sx));
+        const rv = resizeRef.current;
+        const nw = Math.max(120, rv.ow + (e.clientX - rv.sx));
         const nh = aspect === '16:9' ? nw * (9 / 16) : nw * (16 / 9);
         onRegionChange({
-          ...region,
+          x: rv.ox,
+          y: rv.oy,
           w: Math.round(nw),
           h: Math.round(nh),
         });
       }
     },
-    [aspect, onRegionChange, region],
+    [aspect, onRegionChange],
   );
 
   const onUp = useCallback(() => {
@@ -66,9 +69,11 @@ export function RegionRecordOverlay({ aspect, onAspectChange, region, onRegionCh
   useEffect(() => {
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
   }, [onMove, onUp]);
 
@@ -79,6 +84,7 @@ export function RegionRecordOverlay({ aspect, onAspectChange, region, onRegionCh
         inset: 0,
         zIndex: 200000,
         pointerEvents: 'auto',
+        touchAction: 'none',
       }}
     >
       <div
@@ -101,11 +107,13 @@ export function RegionRecordOverlay({ aspect, onAspectChange, region, onRegionCh
           borderRadius: 4,
           touchAction: 'none',
           cursor: 'move',
+          pointerEvents: 'auto',
         }}
         onPointerDown={(e) => {
           if ((e.target as HTMLElement).dataset.resize) return;
           dragRef.current = { sx: e.clientX, sy: e.clientY, ox: region.x, oy: region.y };
           e.currentTarget.setPointerCapture(e.pointerId);
+          e.preventDefault();
         }}
       >
         <div
@@ -120,11 +128,20 @@ export function RegionRecordOverlay({ aspect, onAspectChange, region, onRegionCh
             background: '#34C759',
             border: '2px solid #fff',
             cursor: 'nwse-resize',
+            touchAction: 'none',
           }}
           onPointerDown={(e) => {
             e.stopPropagation();
-            resizeRef.current = { sx: e.clientX, sy: e.clientY, ow: region.w, oh: region.h };
+            resizeRef.current = {
+              sx: e.clientX,
+              sy: e.clientY,
+              ow: region.w,
+              oh: region.h,
+              ox: region.x,
+              oy: region.y,
+            };
             e.currentTarget.setPointerCapture(e.pointerId);
+            e.preventDefault();
           }}
         />
       </div>
@@ -144,11 +161,13 @@ export function RegionRecordOverlay({ aspect, onAspectChange, region, onRegionCh
           fontSize: 12,
           fontWeight: 600,
           backdropFilter: 'blur(8px)',
+          pointerEvents: 'auto',
+          zIndex: 200001,
         }}
       >
         <button type="button" onClick={() => onAspectChange('16:9')} style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: aspect === '16:9' ? '#35679A' : 'rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer' }}>16:9</button>
         <button type="button" onClick={() => onAspectChange('9:16')} style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: aspect === '9:16' ? '#35679A' : 'rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer' }}>9:16</button>
-        <span style={{ opacity: 0.85 }}>{hint}</span>
+        <span style={{ opacity: 0.85 }}>Drag to move · corner to resize</span>
         <button type="button" onClick={onClose} style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: 'rgba(255,255,255,0.2)', color: '#fff', cursor: 'pointer' }}>Done</button>
       </div>
     </div>

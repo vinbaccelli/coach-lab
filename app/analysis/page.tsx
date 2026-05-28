@@ -184,7 +184,7 @@ export default function Home() {
   const HUB_EMBED_READY_MS = 100;
 
   // ── State ─────────────────────────────────────────────────────────────────
-  const [activeTool, setActiveTool]       = useState<ToolType>('pen');
+  const [activeTool, setActiveTool]       = useState<ToolType>('select');
   const [drawingOptions, setDrawingOptions] = useState<DrawingOptions>({
     color: '#F8F8F8',
     lineWidth: 3,
@@ -527,6 +527,7 @@ export default function Home() {
   const TOOLBAR_EXPANDED_W = 208;
   const TOOLBAR_COLLAPSED_W = 56;
   const TOOLBAR_MOBILE_W = 40;
+  const TOOLBAR_COMPACT_EXPANDED_W = 112;
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
 
   useEffect(() => {
@@ -554,17 +555,22 @@ export default function Home() {
   const reelsDesktopEarly = !isMobile && layoutMode === 'reels';
   const phoneToolbarLayout = isMobile || showMobileToolStrip || reelsDesktopEarly;
 
+  const [toolbarLabelsExpanded, setToolbarLabelsExpanded] = useState(false);
+
+  const compactToolbarRail = phoneToolbarLayout || (!isMobile && toolbarCollapsed);
+
   const toolbarWidthPx = useMemo(() => {
-    if (phoneToolbarLayout) return TOOLBAR_MOBILE_W;
+    if (compactToolbarRail) {
+      return toolbarLabelsExpanded ? TOOLBAR_COMPACT_EXPANDED_W : TOOLBAR_MOBILE_W;
+    }
     if (toolbarCollapsed) return TOOLBAR_COLLAPSED_W;
     return TOOLBAR_EXPANDED_W;
-  }, [phoneToolbarLayout, toolbarCollapsed]);
+  }, [compactToolbarRail, toolbarCollapsed, toolbarLabelsExpanded]);
 
   const showToolbarRail = isMobile ? showMobileToolStrip : true;
 
   const [precisionDrawEnabled, setPrecisionDrawEnabled] = useState(false);
   const [precisionInstructionsOpen, setPrecisionInstructionsOpen] = useState(false);
-  const [toolbarLabelsExpanded, setToolbarLabelsExpanded] = useState(false);
 
   useEffect(() => {
     if (!isMobile && precisionDrawEnabled) setPrecisionDrawEnabled(false);
@@ -823,6 +829,11 @@ export default function Home() {
   }, [resetSession]);
 
   // ── Video upload ──────────────────────────────────────────────────────────
+  const resetToolAfterVideoLoad = useCallback(() => {
+    setActiveTool('select');
+    setDrawContextActive(false);
+  }, []);
+
   const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -844,9 +855,10 @@ export default function Home() {
     setStroMotionRegion(undefined);
     clearGhosts();
     canvasRef.current?.clearAll();
+    resetToolAfterVideoLoad();
     // Allow uploading the same file again without needing a page refresh.
     e.target.value = '';
-  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl]);
+  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, resetToolAfterVideoLoad]);
 
   const handleVideoUploadB = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -864,8 +876,9 @@ export default function Home() {
     }
     setVideoBLoaded(false);
     canvasRefB.current?.clearAll();
+    resetToolAfterVideoLoad();
     e.target.value = '';
-  }, [cleanupVideoEl, revokeBlobUrl]);
+  }, [cleanupVideoEl, revokeBlobUrl, resetToolAfterVideoLoad]);
 
   /**
    * Direct-file handler for the RecordingHub Publer drop zone.
@@ -892,6 +905,7 @@ export default function Home() {
       setStroMotionRegion(undefined);
       clearGhosts();
       canvasRef.current?.clearAll();
+      resetToolAfterVideoLoad();
     } else {
       revokeBlobUrl(lastBlobUrlBRef.current);
       const url = URL.createObjectURL(file);
@@ -906,8 +920,9 @@ export default function Home() {
       }
       setVideoBLoaded(false);
       canvasRefB.current?.clearAll();
+      resetToolAfterVideoLoad();
     }
-  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl]);
+  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, resetToolAfterVideoLoad]);
 
   // ── Hub "Alternative — Screen Record" flow ────────────────────────────────
 
@@ -1091,8 +1106,7 @@ export default function Home() {
 
     const DRIFT_THRESHOLD = 0.1; // 100 ms — seek B if skew exceeds this
     let playPendingB = false;
-    let rafId: number;
-    let intervalId: number | undefined;
+    let rafId = 0;
 
     const bTarget = () => vA.currentTime - videoBOffset;
     const bInRange = (t: number) => t >= 0 && t <= videoBDuration;
@@ -1137,6 +1151,11 @@ export default function Home() {
     // ── Single rAF drift-correction loop ──
 
     const correctDrift = () => {
+      if (vA.paused || !playBothEnabled) {
+        rafId = 0;
+        return;
+      }
+
       const t = bTarget();
 
       if (vB.playbackRate !== vA.playbackRate) {
@@ -1166,27 +1185,32 @@ export default function Home() {
       rafId = requestAnimationFrame(correctDrift);
     };
 
+    const startDriftLoop = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(correctDrift);
+    };
+
+    const stopDriftLoop = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+    };
+
     // Initial alignment
     vB.playbackRate = vA.playbackRate;
     const t0 = bTarget();
     if (bInRange(t0)) vB.currentTime = t0;
 
-    rafId = requestAnimationFrame(correctDrift);
+    if (!vA.paused) startDriftLoop();
 
-    intervalId = window.setInterval(() => {
-      if (!vA.paused && bInRange(bTarget())) {
-        const t = bTarget();
-        const drift = Math.abs(vB.currentTime - t);
-        if (drift > DRIFT_THRESHOLD) vB.currentTime = t;
-      }
-      if (vB.playbackRate !== vA.playbackRate) {
-        vB.playbackRate = vA.playbackRate;
-      }
-    }, 500);
+    const onPlayStartDrift = () => startDriftLoop();
+    const onPauseStopDrift = () => stopDriftLoop();
+    vA.addEventListener('play', onPlayStartDrift);
+    vA.addEventListener('pause', onPauseStopDrift);
 
     return () => {
-      if (intervalId != null) window.clearInterval(intervalId);
-      cancelAnimationFrame(rafId);
+      stopDriftLoop();
+      vA.removeEventListener('play', onPlayStartDrift);
+      vA.removeEventListener('pause', onPauseStopDrift);
       vA.removeEventListener('play', onPlayA);
       vA.removeEventListener('pause', onPauseA);
       vA.removeEventListener('seeking', onSeekingA);
@@ -2572,10 +2596,10 @@ export default function Home() {
         }
       : {}),
     phoneLayout:                     reelsDesktopEarly,
-    compactToolbarChrome:            phoneToolbarLayout,
+    compactToolbarChrome:            compactToolbarRail,
     toolbarLabelsExpanded,
     onToggleToolbarLabels:             () => setToolbarLabelsExpanded((v) => !v),
-    ...(phoneToolbarLayout
+    ...(compactToolbarRail
       ? {
           iconOnlyLayout: true,
           denseMobile: true,
@@ -2638,11 +2662,12 @@ export default function Home() {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    minHeight: 28,
-    padding: '4px 10px',
+    gap: 5,
+    minHeight: 34,
+    minWidth: variant === 'add' ? 34 : undefined,
+    padding: variant === 'add' ? '6px 10px' : '6px 12px',
     borderRadius: 999,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 700,
     cursor: 'pointer',
     touchAction: 'manipulation',
@@ -2684,7 +2709,7 @@ export default function Home() {
           title="Remove Video A"
           style={slotPillStyle('remove')}
         >
-          <Trash2 size={14} strokeWidth={2.25} aria-hidden />
+          <Trash2 size={16} strokeWidth={2.25} aria-hidden />
           {phoneToolbarLayout ? null : 'Remove A'}
         </button>
         {!hasVideoBContent ? (
@@ -2694,8 +2719,8 @@ export default function Home() {
             title="Add Video B"
             style={slotPillStyle('add')}
           >
-            <Plus size={14} strokeWidth={2.5} aria-hidden />
-            {phoneToolbarLayout ? null : 'Add B'}
+            <Plus size={16} strokeWidth={2.5} aria-hidden />
+            {phoneToolbarLayout ? '+B' : 'Add B'}
           </button>
         ) : null}
       </div>
@@ -3123,8 +3148,8 @@ export default function Home() {
                       containerWidth={canvasSize.width}
                       containerHeight={canvasSize.height}
                       ballTrailMode={ballTrailMode}
-                      skeletonEnabled={skeletonEnabled}
-                      skeletonDrawEnabled={skeletonEnabled && !skeletonOverlayPaused}
+                      skeletonEnabled={skeletonEnabled && markupTarget === 'A'}
+                      skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                       ballTrailEnabled={ballTrailEnabled}
                       onProcessingStatus={setProcessingStatus}
                       isRecording={isRecording}
@@ -3147,6 +3172,8 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={isMobile && precisionDrawEnabled}
+                      webcamPipMobileChrome={isMobile}
+                      webcamPipBottomInsetPx={isMobile ? toolbarBottomReservePx : 0}
                       showTourHelpInZoomCluster
                       poseFrameSkip={hasVideoBContent ? 1 : 0}
                       panModeEnabled={panModeEnabled}
@@ -3450,8 +3477,8 @@ export default function Home() {
                       containerWidth={canvasSizeB.width}
                       containerHeight={canvasSizeB.height}
                       ballTrailMode={ballTrailMode}
-                      skeletonEnabled={skeletonEnabled}
-                      skeletonDrawEnabled={skeletonEnabled && !skeletonOverlayPaused}
+                      skeletonEnabled={skeletonEnabled && markupTarget === 'B'}
+                      skeletonDrawEnabled={skeletonEnabled && markupTarget === 'B' && !skeletonOverlayPaused}
                       ballTrailEnabled={ballTrailEnabled}
                       onProcessingStatus={setProcessingStatus}
                       isRecording={isRecording}
@@ -3471,6 +3498,8 @@ export default function Home() {
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={isMobile && precisionDrawEnabled}
+                      webcamPipMobileChrome={isMobile}
+                      webcamPipBottomInsetPx={isMobile ? toolbarBottomReservePx : 0}
                       poseFrameSkip={1}
                       panModeEnabled={panModeEnabled}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
@@ -3575,7 +3604,7 @@ export default function Home() {
                 padding: isMobile
                   ? `6px 12px calc(8px + env(safe-area-inset-bottom, 0px))`
                   : '12px 16px 16px',
-                pointerEvents: 'auto',
+                pointerEvents: 'none',
                 opacity: controlsVisible ? 1 : 0.3,
                 transition: 'opacity 0.4s ease',
               }}

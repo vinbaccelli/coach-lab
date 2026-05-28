@@ -154,6 +154,24 @@ function ToolbarIcon({ children, size = 18 }: { children: React.ReactElement; si
   });
 }
 
+function AngleToolIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
+      <path d="M4 20 L4 8 L18 20 Z" stroke="#FFFFFF" strokeWidth="2.25" strokeLinejoin="miter" fill="none" />
+    </svg>
+  );
+}
+
+function ArrowAngleToolIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
+      <path d="M4 20 L4 8 L18 20 Z" stroke="#FFFFFF" strokeWidth="2.25" strokeLinejoin="miter" fill="none" />
+      <path d="M14 14 L20 14 L20 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M20 14 L14 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function ThicknessPxBar({
   value,
   onChange,
@@ -269,13 +287,14 @@ function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties
 }
 
 function rowBase(active: boolean, io?: boolean, dense?: boolean): React.CSSProperties {
+  const compact = io || dense;
   const base: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: io ? 0 : 10,
     width: '100%',
-    minHeight: dense ? 34 : io ? 40 : 44,
-    padding: dense ? '4px 2px' : io ? '6px 4px' : '10px 12px',
+    minHeight: compact ? 34 : 44,
+    padding: compact ? '4px 2px' : '10px 12px',
     borderRadius: 10,
     border: active ? '1px solid #35679A' : '1px solid rgba(255,255,255,0.25)',
     background: active ? 'rgba(53,103,154,0.2)' : 'rgba(255,255,255,0.12)',
@@ -419,7 +438,54 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   const setTool = (t: ToolType) => onToolChange(t);
 
-  const iconBox = denseMobile ? 20 : io ? 24 : 26;
+  const iconBox = denseMobile || io ? 20 : 26;
+
+  const GlobalActionsFooter = () => (
+    <>
+      <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '8px 0' }} />
+      <Row k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} label="Undo" onPress={onUndo} />
+      <Row k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} label="Redo" onPress={onRedo} />
+      <Row k="cl" icon={<Trash2 size={denseMobile || io ? 16 : 20} />} label="Clear all" onPress={onClear} />
+      {onCleanSession ? (
+        <button
+          type="button"
+          aria-label="Clear session"
+          style={{
+            ...rowBase(false, io, denseMobile || io),
+            color: '#9a3412',
+            borderColor: '#fca5a5',
+            background: io ? 'rgba(254,226,226,0.35)' : '#FFF7ED',
+            transform: pressedKey === 'clean' ? 'scale(0.95)' : undefined,
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire('clean', onCleanSession);
+          }}
+        >
+          {io ? (
+            <span
+              style={{
+                display: 'flex',
+                width: iconBox,
+                height: iconBox,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <RefreshCw size={denseMobile || io ? 16 : 18} />
+            </span>
+          ) : (
+            <>
+              <span style={{ display: 'flex', width: 26, justifyContent: 'center', color: '#9a3412' }}>
+                <RefreshCw size={18} />
+              </span>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>Clear session</span>
+            </>
+          )}
+        </button>
+      ) : null}
+    </>
+  );
 
   const ToolbarLead = () => (
     <>
@@ -731,6 +797,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <ToolbarLead />
           <BackHeader title="Session & record" icon={<LayoutGrid size={18} />} />
           {recordingHubContent}
+          <GlobalActionsFooter />
         </div>
       </div>
     );
@@ -865,6 +932,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             </div>
           )}
         </div>
+        <GlobalActionsFooter />
       </div>
     );
   }
@@ -985,13 +1053,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <ToolbarLead />
           <BackHeader title="Draw" icon={<Pen size={18} />} />
           <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Pen" onPress={() => setTool('pen')} />
-          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => setTool('arrow')} />
           <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Line" onPress={() => setTool('line')} />
+          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => setTool('arrow')} />
+          <div data-tour-id="tour-angle">
+            <Row k="angle-d" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} label="Angle" onPress={() => setTool('angle')} />
+          </div>
+          <Row k="aa-d" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} label="Angle arrow" onPress={() => setTool('arrowAngle')} />
           <Row k="rect" active={activeTool === 'rect'} icon={<Square size={18} />} label="Rectangle" onPress={() => setTool('rect')} />
           <Row k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} label="Circle" onPress={() => setTool('circle')} />
-          <div data-tour-id="tour-angle">
-            <Row k="angle-d" active={activeTool === 'angle'} icon={<Activity size={18} />} label="Angle" onPress={() => setTool('angle')} />
-          </div>
           <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => setTool('manualSwing')} />
           <Row k="jc" active={activeTool === 'jointChain'} icon={<Link2 size={18} />} label="Joint chain" onPress={() => setTool('jointChain')} />
           <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => setTool('text')} />
@@ -1003,6 +1072,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => onOpenDrawContext?.()}
           />
           {drawContextActive ? MarkStyleControls : null}
+          <GlobalActionsFooter />
         </div>
       </div>
     );
@@ -1013,9 +1083,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
-          <BackHeader title="Angle" icon={<Activity size={18} />} />
-          <Row k="angle" active={activeTool === 'angle'} icon={<Triangle size={18} />} label="Angle" onPress={() => setTool('angle')} />
-          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<Activity size={18} />} label="Arrow Angle" onPress={() => setTool('arrowAngle')} />
+          <BackHeader title="Angle" icon={<AngleToolIcon size={18} />} />
+          <Row k="angle" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} label="Angle" onPress={() => setTool('angle')} />
+          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} label="Angle arrow" onPress={() => setTool('arrowAngle')} />
+          <GlobalActionsFooter />
         </div>
       </div>
     );
@@ -1097,6 +1168,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             chk('rl', 'Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange)}
           {onSkeletonShowLeftLegChange !== undefined &&
             chk('ll', 'Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange)}
+          <GlobalActionsFooter />
         </div>
       </div>
     );
@@ -1265,48 +1337,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             />
           </div>
         ) : null}
-        <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '8px 0' }} />
-        <Row k="u" icon={<Undo2 size={denseMobile ? 16 : 20} />} label="Undo" onPress={onUndo} />
-        <Row k="r" icon={<Redo2 size={denseMobile ? 16 : 20} />} label="Redo" onPress={onRedo} />
-        <Row k="cl" icon={<Trash2 size={denseMobile ? 16 : 20} />} label="Clear all" onPress={onClear} />
-        {onCleanSession ? (
-          <button
-            type="button"
-            aria-label="Clean session"
-            style={{
-              ...rowBase(false, io, denseMobile),
-              color: '#9a3412',
-              borderColor: '#fca5a5',
-              background: io ? 'rgba(254,226,226,0.35)' : '#FFF7ED',
-              transform: pressedKey === 'clean' ? 'scale(0.95)' : undefined,
-            }}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              fire('clean', onCleanSession);
-            }}
-          >
-            {io ? (
-              <span
-                style={{
-                  display: 'flex',
-                  width: iconBox,
-                  height: iconBox,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <RefreshCw size={denseMobile ? 16 : 18} />
-              </span>
-            ) : (
-              <>
-                <span style={{ display: 'flex', width: 26, justifyContent: 'center', color: '#9a3412' }}>
-                  <RefreshCw size={18} />
-                </span>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>New session</span>
-              </>
-            )}
-          </button>
-        ) : null}
+        <GlobalActionsFooter />
       </div>
     </div>
   );
