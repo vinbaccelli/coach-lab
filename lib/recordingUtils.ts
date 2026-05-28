@@ -37,7 +37,7 @@ export function getSupportedMimeType(): string {
 export async function startCanvasRecording(
   opts: RecordingOptions,
   onStop: (blob: Blob) => void,
-): Promise<{ mediaRecorder: MediaRecorder; stop: () => void }> {
+): Promise<{ mediaRecorder: MediaRecorder; stop: () => Promise<void> }> {
   const { canvasEl, webcamStream, micStream, fps = 30 } = opts;
 
   // Canvas video track
@@ -67,17 +67,32 @@ export async function startCanvasRecording(
   mediaRecorder.ondataavailable = (e) => {
     if (e.data.size > 0) chunks.push(e.data);
   };
+
+  let stopPromiseResolve: (() => void) | null = null;
+  const stopPromise = new Promise<void>((resolve) => {
+    stopPromiseResolve = resolve;
+  });
+
   mediaRecorder.onstop = () => {
+    console.log('[RecordingUtils] onstop fired', { state: mediaRecorder.state, chunksLength: chunks.length });
     const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
     onStop(blob);
+    if (stopPromiseResolve) stopPromiseResolve();
   };
 
   mediaRecorder.start(100);
 
   return {
     mediaRecorder,
-    stop: () => {
-      if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+    stop: async () => {
+      console.log('[RecordingUtils] stop clicked', { state: mediaRecorder.state });
+      if (mediaRecorder.state !== 'inactive') {
+        console.log('[RecordingUtils] mediaRecorder.stop called');
+        mediaRecorder.stop();
+        // Wait for onstop to fire before returning
+        await stopPromise;
+        console.log('[RecordingUtils] onstop completed');
+      }
     },
   };
 }
