@@ -32,7 +32,7 @@ interface RecordingContextValue {
   setWithMic: (v: boolean) => void;
   startRecording: () => Promise<void>;
   pauseRecording: () => void;
-  stopRecording: () => void;
+  stopRecording: () => Promise<void>;
   discardPreview: () => void;
   downloadRecording: () => void;
   /** Register a getter that returns the composite canvas for recording */
@@ -57,7 +57,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
   const webcamStreamRef = useRef<MediaStream | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
-  const stopRecordingRef = useRef<(() => void) | null>(null);
+  const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const compositeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -176,10 +176,18 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const stopRecording = useCallback(() => {
+  const stopRecording = useCallback(async () => {
+    console.log('[RecordingContext] stopRecording called');
     if (timerRef.current) clearInterval(timerRef.current);
     if (compositeIntervalRef.current) clearInterval(compositeIntervalRef.current);
-    stopRecordingRef.current?.();
+    
+    // Wait for stop to complete (including onstop event)
+    if (stopRecordingRef.current) {
+      await stopRecordingRef.current();
+    }
+    
+    // Only clean up streams AFTER onstop fires
+    console.log('[RecordingContext] stopping streams');
     webcamStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     webcamStreamRef.current = null;
