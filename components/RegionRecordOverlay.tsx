@@ -120,13 +120,14 @@ export function RegionRecordOverlay({ aspect, onAspectChange, region, onRegionCh
           data-resize="1"
           style={{
             position: 'absolute',
-            right: -6,
-            bottom: -6,
-            width: 18,
-            height: 18,
-            borderRadius: 4,
-            background: '#34C759',
-            border: '2px solid #fff',
+            right: -14,
+            bottom: -14,
+            width: 32,
+            height: 32,
+            borderRadius: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             cursor: 'nwse-resize',
             touchAction: 'none',
           }}
@@ -143,7 +144,9 @@ export function RegionRecordOverlay({ aspect, onAspectChange, region, onRegionCh
             e.currentTarget.setPointerCapture(e.pointerId);
             e.preventDefault();
           }}
-        />
+        >
+          <div style={{ width: 18, height: 18, borderRadius: 4, background: '#34C759', border: '2px solid #fff', pointerEvents: 'none' }} />
+        </div>
       </div>
       <div
         style={{

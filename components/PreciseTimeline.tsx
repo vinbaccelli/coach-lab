@@ -453,8 +453,12 @@ export default function PreciseTimeline({
           >
             <option value="A">A</option>
             <option value="B">B</option>
-            <option value="AB" disabled={compareAbDisabled}>
-              AB
+            <option
+              value="AB"
+              disabled={compareAbDisabled}
+              title={compareAbDisabled ? 'AB sync requires both slots to use local video files (not YouTube or embedded links)' : undefined}
+            >
+              AB{compareAbDisabled ? ' (local files only)' : ''}
             </option>
           </select>
         ) : null}

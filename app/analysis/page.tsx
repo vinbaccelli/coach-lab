@@ -1608,6 +1608,18 @@ export default function Home() {
     setShowCaptureSaveToast(false);
     setCaptureBusy(false);
     disposeFfmpegWasm();
+    // Detect YouTube playlist-only URLs (no video ID) and surface a clear error.
+    try {
+      const parsedUrl = new URL(raw.includes('://') ? raw : `https://${raw}`);
+      const host = parsedUrl.hostname.replace(/^www\./i, '');
+      if (host.includes('youtube.com') && parsedUrl.pathname === '/playlist') {
+        setUrlLoadPhase(null);
+        setUrlLoadError('YouTube playlists are not supported. Open a specific video from the playlist and paste that URL instead.');
+        return;
+      }
+    } catch {
+      // ignore URL parse errors; let downstream handle them
+    }
     setUrlLoadError(null);
     setUrlLoadPhase('Loading video\u2026');
     setProcessingStatus(null);
@@ -2604,7 +2616,10 @@ export default function Home() {
           iconOnlyLayout: true,
           denseMobile: true,
           collapsed: true,
-          showCollapseControl: false,
+          // Keep chevron on desktop-collapsed compact rail so the user can expand back;
+          // hide it only when we are truly in a phone/tablet strip layout.
+          showCollapseControl: !phoneToolbarLayout && !isMobile,
+          onToggleCollapsed: !phoneToolbarLayout && !isMobile ? toggleToolbarCollapsed : undefined,
         }
       : {}),
     recordingHubContent: (

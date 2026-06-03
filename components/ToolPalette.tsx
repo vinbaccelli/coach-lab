@@ -489,7 +489,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   const ToolbarLead = () => (
     <>
-      {compactToolbarChrome && onToggleToolbarLabels ? (
+      {(mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
         <button
           type="button"
           aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
@@ -1230,6 +1230,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <p style={{ margin: '4px 4px 0', fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
             Drag the PiP on the canvas to move it. Safari: choose Window or Screen and pick this browser window when sharing for capture.
           </p>
+          <GlobalActionsFooter />
         </div>
       </div>
     );
@@ -1326,6 +1327,15 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
           />
         </div>
+        {onToggleWebcam ? (
+          <Row
+            k="wc-h"
+            active={webcamActive}
+            icon={<Camera size={denseMobile ? 16 : 20} />}
+            label="Webcam"
+            onPress={() => push('webcam')}
+          />
+        ) : null}
         {onPrecisionDrawToggle ? (
           <div data-tour-id="tour-precision">
             <Row
