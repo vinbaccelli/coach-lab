@@ -52,8 +52,6 @@ const SHAPE_SPIN_SPEED = 0.025;
 const MIN_GHOST_OPACITY = 0.02;
 /** Vertical offset (screen px) from finger to precision crosshair — tuned for one-handed phones */
 const PRECISION_CURSOR_OFFSET_Y = 120;
-/** Synthetic pointer id for injected precision clicks */
-const PRECISION_SYNTHETIC_POINTER_ID = 91001;
 /** Fade-out duration when anchor finger lifts (ms) */
 const PRECISION_CURSOR_FADE_MS = 220;
 /** Ripple duration at synthetic click (ms) */
@@ -1470,14 +1468,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => {
       onDrawCommittedRef.current = onDrawCommitted;
     }, [onDrawCommitted]);
-    const precisionSyntheticDispatchRef = useRef<
-      ((type: 'pointerdown' | 'pointerup', logicalPt: Pt) => void) | null
-    >(null);
-    /** Second-finger / two-touch precision tap — ripple + same pointer path as desktop. */
-    const precisionInjectClickRef = useRef<(() => void) | null>(null);
-    const precisionFireAtLogicalRef = useRef<((pt: Pt) => void) | null>(null);
-    const onPointerDownRef = useRef<(e: React.PointerEvent<HTMLCanvasElement>) => void>(() => {});
-    const onPointerUpRef = useRef<(e: React.PointerEvent<HTMLCanvasElement>) => void>(() => {});
+    /** Precision second-finger tap → synchronous commit at the crosshair. */
+    const precisionCommitRef = useRef<((ch: Pt) => void) | null>(null);
 
     // Dragging circle
     const dragCircleIdxRef = useRef<number>(-1);
@@ -1605,6 +1597,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         };
     const webcamPipDragRef = useRef<WebcamPipDrag | null>(null);
     const webcamPinchRef = useRef<{ dist: number; w: number; cx: number; cy: number } | null>(null);
+    // ── Unified input pipeline state ─────────────────────────────────────────
+    // Single record of every live pointer (reconstructs multi-touch from
+    // concurrent pointer events — touchAction:'none' delivers touch as pointers).
+    const activePointersRef = useRef<Map<number, { clientX: number; clientY: number; pointerType: string }>>(new Map());
+    // Canvas-zoom pinch consumer; non-null only while a 2-finger zoom owns the gesture.
+    const canvasPinchRef = useRef<{ lastDist: number } | null>(null);
     const webcamPipBottomInsetRef = useRef(webcamPipBottomInsetPx);
     const webcamPipMobileChromeRef = useRef(webcamPipMobileChrome);
     const pipMirrorVideoRef = useRef<HTMLVideoElement>(null);
@@ -1957,124 +1955,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return true;
     }, []);
 
-    // ── Touch pinch: webcam PiP resize when pinch centroid is over PiP; else canvas zoom ───
-    useEffect(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      let lastDist = 0;
-      let pinchWebcam = false;
-      let baseDist = 0;
-      let baseW = 0;
-      let cx0 = 0;
-      let cy0 = 0;
-
-      const onTouchStart = (e: TouchEvent) => {
-        if (e.touches.length === 2) {
-          const t1 = e.touches[0], t2 = e.touches[1];
-          const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-          lastDist = dist;
-          pinchWebcam = false;
-          baseDist = 0;
-          webcamPinchRef.current = null;
-          if (webcamActiveRef.current && tryStartWebcamPinch(t1, t2, canvas)) {
-            const pinch = webcamPinchRef.current!;
-            pinchWebcam = true;
-            baseDist = pinch.dist;
-            baseW = pinch.w;
-            cx0 = pinch.cx;
-            cy0 = pinch.cy;
-            e.preventDefault();
-            return;
-          }
-          if (precisionTouchDrawRef.current) {
-            e.preventDefault();
-            const ch =
-              precisionCrosshairDisplayRef.current ??
-              precisionCrosshairTargetRef.current;
-            if (ch) {
-              precisionFireAtLogicalRef.current?.(ch);
-            }
-            return;
-          }
-          e.preventDefault();
-          return;
-        }
-        if (precisionTouchDrawRef.current) {
-          if (precisionAnchorPointerIdRef.current !== null) {
-            e.preventDefault();
-            return;
-          }
-        }
-      };
-      const onTouchMove = (e: TouchEvent) => {
-        if (precisionTouchDrawRef.current && !pinchWebcam) {
-          if (precisionAnchorPointerIdRef.current !== null || e.touches.length >= 2) {
-            e.preventDefault();
-          }
-          return;
-        }
-        if (e.touches.length === 2) {
-          const t1 = e.touches[0], t2 = e.touches[1];
-          const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-          if (pinchWebcam && baseDist > 0 && webcamActiveRef.current) {
-            const factor = dist / baseDist;
-            const nw = Math.max(72, Math.round(baseW * factor));
-            const nh = Math.round(nw / WEBCAM_PIP_ASPECT);
-            const nx = cx0 - nw / 2;
-            const ny = cy0 - nh / 2;
-            webcamPipRectRef.current = clampWebcamPip(
-              { x: nx, y: ny, w: nw, h: nh },
-              canvas.width,
-              canvas.height,
-              webcamPipBottomInsetRef.current,
-            );
-            renderDirtyRef.current = true;
-            queuePipUiSync();
-          } else if (!pinchWebcam && lastDist > 0) {
-            const factor = dist / lastDist;
-            zoomRef.current = Math.max(0.25, Math.min(8, zoomRef.current * factor));
-          }
-          lastDist = dist;
-          e.preventDefault();
-        } else if (
-          e.touches.length === 1 &&
-          (zoomRef.current > 1 || panModeEnabledRef.current) &&
-          !pinchWebcam
-        ) {
-          const t = activeToolRef.current;
-          const isDrawTool =
-            t === 'pen' || t === 'line' || t === 'arrow' || t === 'arrowAngle' ||
-            t === 'circle' || t === 'bodyCircle' || t === 'rect' || t === 'triangle' ||
-            t === 'angle' || t === 'text' || t === 'erase' || t === 'ballShadow' ||
-            t === 'swingPath' || t === 'manualSwing';
-          if (!isDrawTool || panModeEnabledRef.current) {
-            e.preventDefault();
-          }
-        }
-      };
-      const onTouchEnd = (e: TouchEvent) => {
-        if (precisionTouchDrawRef.current) {
-          e.preventDefault();
-        }
-        lastDist = 0;
-        pinchWebcam = false;
-        baseDist = 0;
-        webcamPinchRef.current = null;
-      };
-
-      canvas.addEventListener('touchstart', onTouchStart, { passive: false });
-      canvas.addEventListener('touchmove', onTouchMove, { passive: false });
-      canvas.addEventListener('touchend', onTouchEnd, { passive: false });
-      // touchcancel fires when the OS interrupts the gesture (e.g. incoming call).
-      // Treat it identically to touchend to ensure state is cleaned up.
-      canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
-      return () => {
-        canvas.removeEventListener('touchstart', onTouchStart);
-        canvas.removeEventListener('touchmove', onTouchMove);
-        canvas.removeEventListener('touchend', onTouchEnd);
-        canvas.removeEventListener('touchcancel', onTouchEnd);
-      };
-    }, [tryStartWebcamPinch, queuePipUiSync]);
+    // NOTE: The legacy native touch listeners (touchstart/move/end/cancel) that
+    // used to live here have been retired as part of the Unified Input Pipeline.
+    // The canvas carries `touchAction: 'none'`, so touch is delivered as pointer
+    // events and ALL multi-touch (canvas pinch + webcam PiP pinch), precision
+    // anchoring, and pan are reconstructed from concurrent pointers inside the
+    // single pointer pipeline (onPointerDown/Move/Up/Cancel). Keeping a parallel
+    // native path here caused double dispatch (double pinch-zoom, duplicate
+    // precision commits), which the pipeline now eliminates.
 
     // ── History ────────────────────────────────────────────────────────────
 
@@ -3372,25 +3260,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     // ── Pointer helpers ────────────────────────────────────────────────────
 
-    const getPos = (e: React.PointerEvent<HTMLCanvasElement>): Pt => {
+    // ── Unified coordinate mapping (single source of truth) ─────────────────
+    // clientToCanvasPx: client px → canvas device-pixel space (NO zoom/pan).
+    //   Used by screen-space overlays such as the webcam PiP rect.
+    // clientToLogical: client px → logical canvas space (inverse zoom/pan).
+    //   Used by all drawing / selection / measurement coordinates.
+    // The precision crosshair Y-offset is intentionally NOT part of either
+    // function — it is owned by the precision override layer alone.
+    const clientToCanvasPx = (clientX: number, clientY: number): Pt => {
       const canvas = canvasRef.current;
       if (!canvas) return { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
-      /** Match precision crosshair mapping so finger drawing lands where the offset crosshair would. */
-      const yAdj =
-        precisionTouchDrawRef.current && e.pointerType === 'touch'
-          ? PRECISION_CURSOR_OFFSET_Y
-          : 0;
-      const sx = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const sy = (e.clientY - yAdj - rect.top) * (canvas.height / rect.height);
-      const W = canvas.width;
-      const H = canvas.height;
-      // Inverse zoom/pan transform so returned coords are in logical canvas space
       return {
-        x: (sx - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
-        y: (sy - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
+        x: (clientX - rect.left) * (canvas.width / rect.width),
+        y: (clientY - rect.top) * (canvas.height / rect.height),
       };
     };
+
+    const clientToLogical = (clientX: number, clientY: number): Pt => {
+      const canvas = canvasRef.current;
+      if (!canvas) return { x: 0, y: 0 };
+      const W = canvas.width;
+      const H = canvas.height;
+      const s = clientToCanvasPx(clientX, clientY);
+      return {
+        x: (s.x - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
+        y: (s.y - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
+      };
+    };
+
+    const getPos = (e: React.PointerEvent<HTMLCanvasElement>): Pt =>
+      clientToLogical(e.clientX, e.clientY);
 
     const pressureWidth = (e: React.PointerEvent<HTMLCanvasElement>): number => {
       const base = drawingOptsRef.current.lineWidth;
@@ -3399,19 +3299,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         : base;
     };
 
-    const getPosFromClientXY = (clientX: number, clientY: number): Pt => {
-      const canvas = canvasRef.current;
-      if (!canvas) return { x: 0, y: 0 };
-      const rect = canvas.getBoundingClientRect();
-      const sx = (clientX - rect.left) * (canvas.width / rect.width);
-      const sy = (clientY - rect.top) * (canvas.height / rect.height);
-      const W = canvas.width;
-      const H = canvas.height;
-      return {
-        x: (sx - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
-        y: (sy - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
-      };
-    };
+    const getPosFromClientXY = (clientX: number, clientY: number): Pt =>
+      clientToLogical(clientX, clientY);
 
     const commitObjectMultiplierFromPts = useCallback((p1: Pt, p2: Pt) => {
       if (racketSuggestTimerRef.current) {
@@ -3847,328 +3736,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       );
     }, []);
 
-    // ── Pointer down ───────────────────────────────────────────────────────
+    // ── Tool primitives (single drawing source of truth) ────────────────────
+    // Both real pointer gestures and the precision override layer call these
+    // exact functions, so drawing has ONE entry contract regardless of input.
 
-    const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-      const canvasEl = e.target as HTMLCanvasElement;
-      const toolEarly = activeToolRef.current;
-      const isPrecisionSynthetic = e.pointerId === PRECISION_SYNTHETIC_POINTER_ID;
-      if (isPrecisionSynthetic && process.env.NODE_ENV !== 'production') {
-        console.debug('[precision] pointerdown received', { tool: toolEarly, clientX: e.clientX, clientY: e.clientY });
-      }
-
-      // Webcam PiP takes priority over precision, pan, and playback when touch starts on PiP.
-      if (webcamActiveRef.current && !isPrecisionSynthetic) {
-        const posPip = getPos(e);
-        const pipHitEarly = webcamPipHitTest(posPip);
-        if (pipHitEarly !== 'miss') {
-          beginWebcamPipDragAt(posPip, pipHitEarly);
-          canvasEl.setPointerCapture(e.pointerId);
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
-      }
-
-      const precisionTouchEligible =
-        precisionTouchDrawRef.current &&
-        e.pointerType === 'touch' &&
-        !isPrecisionSynthetic &&
-        toolEarly !== 'zoom' &&
-        toolEarly !== 'objectMultiplier';
-
-      if (precisionTouchEligible) {
-        const anchor = precisionAnchorPointerIdRef.current;
-        if (anchor === null) {
-          precisionAnchorPointerIdRef.current = e.pointerId;
-          const ch = getPosFromClientXY(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
-          precisionCrosshairTargetRef.current = ch;
-          precisionCrosshairDisplayRef.current = { ...ch };
-          precisionFadeStartRef.current = null;
-          canvasEl.setPointerCapture(e.pointerId);
-          e.preventDefault();
-          return;
-        }
-        if (e.pointerId !== anchor) {
-          e.preventDefault();
-          precisionInjectClickRef.current?.();
-          return;
-        }
-      }
-
-      canvasEl.setPointerCapture(e.pointerId);
-      const pos  = getPos(e);
-      const lw   = pressureWidth(e);
+    /** Begin the active tool's stroke/action at a logical point. */
+    const beginDrawToolAt = useCallback((pos: Pt, lw: number) => {
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
-
-      if (contextualTargetRef.current && outlineEraserSizeRef.current <= 0) {
-        closeContextualStyle();
-      }
-
-      // ── StroMotion rubber-band region selection ──────────────────────────
-      if (isSelectingStroRegionRef.current) {
-        stroRegionStartRef.current = pos;
-        stroRegionCurrentRef.current = pos;
-        isDraggingRef.current = true;
-        return;
-      }
-
-      // Object multiplier selection is handled by a dedicated overlay (see JSX).
-
-      // ── Pan: activates immediately on pointer-down with no delay ────────
-      // Triggers: middle-click, Space+drag, zoom tool while zoomed,
-      // select/skeleton tool while zoomed, touch while zoomed, or panMode
-      // enabled at ANY zoom level (no prior zoom-in required).
-      const zoomed = zoomRef.current > 1;
-      const isDrawingTool =
-        tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' ||
-        tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle' ||
-        tool === 'angle' || tool === 'text' || tool === 'erase' || tool === 'ballShadow' ||
-        tool === 'swingPath' || tool === 'manualSwing' || tool === 'jointChain';
-
-      // If the pointer lands on the webcam PiP, preserve PiP drag/resize even
-      // when pan mode is active.  We pre-check here so the PiP hit can veto
-      // the pan-mode condition inside shouldPan.
-      const pipVeto =
-        webcamActiveRef.current &&
-        webcamPipHitTest(getPos(e)) !== 'miss';
-
-      const shouldPan =
-        !isPrecisionSynthetic &&
-        !pipVeto && (
-          e.button === 1 ||
-          spaceHeldRef.current ||
-          (tool === 'zoom' && e.button === 0 && zoomed) ||
-          // Pan mode works at ANY zoom level — no prior zoom-in required.
-          panModeEnabledRef.current ||
-          (zoomed && !isDrawingTool) ||
-          // Touch one-finger drag while zoomed always pans (no activation needed).
-          (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current)
-        );
-      if (shouldPan) {
-        isPanningRef.current = true;
-        panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
-        e.preventDefault();
-        return;
-      }
-
-      // ── Select tool: stroke / joint selection ───────────────────────────
-      if (tool === 'select') {
-        // Check if clicking on a text resize handle of a currently-selected text stroke
-        const prevSel = selectionRef.current;
-        if (prevSel && prevSel.kind === 'stroke') {
-          const prevS = strokesRef.current[prevSel.idx];
-          if (prevS && prevS.tool === 'text') {
-            const corner = textResizeHandleHit(prevS as StrokeText, pos);
-            if (corner) {
-              selectionRef.current = { kind: 'textResize', idx: prevSel.idx, start: pos, orig: prevS as StrokeText, corner };
-              isDraggingRef.current = true;
-              return;
-            }
-          }
-        }
-
-        const HIT_T = 28;
-        const nodeHitR = e.pointerType === 'touch' ? JOINT_NODE_HIT_TOUCH : JOINT_NODE_HIT_POINTER;
-        let best: Selection = null;
-        let bestDist = Infinity;
-
-        for (let i = strokesRef.current.length - 1; i >= 0; i--) {
-          const s = strokesRef.current[i];
-          if (s.tool !== 'jointChain') continue;
-          const jc = s as StrokeJointChain;
-          for (let ni = jc.nodes.length - 1; ni >= 0; ni--) {
-            const d = Math.hypot(pos.x - jc.nodes[ni].x, pos.y - jc.nodes[ni].y);
-            if (d < nodeHitR && d < bestDist) {
-              bestDist = d;
-              best = { kind: 'jointNode', idx: i, nodeIdx: ni, start: pos, orig: jc };
-            }
-          }
-        }
-
-        for (let i = 0; i < strokesRef.current.length; i++) {
-          const d = hitTestStroke(strokesRef.current[i], pos);
-          if (d < bestDist) {
-            bestDist = d;
-            best = { kind: 'stroke', idx: i, start: pos, orig: strokesRef.current[i] };
-          }
-        }
-
-        for (let i = 0; i < angleMeasRef.current.length; i++) {
-          const m = angleMeasRef.current[i];
-          const d = Math.min(
-            Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
-            distToSegment(pos, m.v, m.p1),
-            distToSegment(pos, m.v, m.p2),
-          );
-          if (d < bestDist) {
-            bestDist = d;
-            best = { kind: 'angle', idx: i, start: pos, orig: m };
-          }
-        }
-
-        if (best && bestDist <= HIT_T) {
-          if (best.kind === 'stroke' && strokesRef.current[best.idx]?.tool === 'text' && e.pointerType === 'touch') {
-            const now = performance.now();
-            const lt = lastTextTapRef.current;
-            if (
-              lt &&
-              lt.idx === best.idx &&
-              now - lt.t < 420 &&
-              Math.hypot(pos.x - lt.x, pos.y - lt.y) < 48
-            ) {
-              lastTextTapRef.current = null;
-              const tx = strokesRef.current[best.idx] as StrokeText;
-              const bb = getTextBBox(tx);
-              const canvas = canvasRef.current!;
-              const rect = canvas.getBoundingClientRect();
-              const W = canvas.width;
-              const H = canvas.height;
-              const logX = bb.x0;
-              const logY = bb.y0;
-              const screenX = ((logX - W / 2) * zoomRef.current + W / 2 + panXRef.current) * (rect.width / canvas.width);
-              const screenY = ((logY - H / 2) * zoomRef.current + H / 2 + panYRef.current) * (rect.height / canvas.height);
-              const scaledFontSize = tx.fontSize * zoomRef.current * (rect.height / canvas.height);
-              const bbW = (bb.x1 - bb.x0) * zoomRef.current * (rect.width / canvas.width);
-              textEditingIdxRef.current = best.idx;
-              setTextEditing({
-                idx: best.idx,
-                left: screenX,
-                top: screenY,
-                width: Math.max(100, bbW + 20),
-                fontSize: scaledFontSize,
-                value: tx.text,
-                color: tx.color,
-              });
-              e.preventDefault();
-              return;
-            }
-            lastTextTapRef.current = { idx: best.idx, t: now, x: pos.x, y: pos.y };
-          }
-          if (best.kind === 'stroke' && outlineEraserSizeRef.current > 0) {
-            const hitStroke = strokesRef.current[best.idx];
-            const eraserEligible =
-              hitStroke &&
-              (hitStroke.tool === 'line' ||
-                hitStroke.tool === 'arrow' ||
-                hitStroke.tool === 'arrowAngle' ||
-                hitStroke.tool === 'pen' ||
-                hitStroke.tool === 'circle' ||
-                hitStroke.tool === 'bodyCircle' ||
-                hitStroke.tool === 'rect' ||
-                hitStroke.tool === 'triangle');
-            if (eraserEligible) {
-              const eraserR = outlineEraserSizeRef.current;
-              const dot: EraserDot = { x: pos.x, y: pos.y, radius: eraserR };
-              const prev = (hitStroke as StrokeLine | StrokePen | StrokeEllipse).eraserStrokes ?? [];
-              const updated = { ...hitStroke, eraserStrokes: [...prev, dot] };
-              strokesRef.current = [
-                ...strokesRef.current.slice(0, best.idx),
-                updated,
-                ...strokesRef.current.slice(best.idx + 1),
-              ];
-              outlineErasingIdxRef.current = best.idx;
-              outlineEraserPosRef.current = pos;
-              selectionRef.current = { kind: 'stroke', idx: best.idx, start: pos, orig: updated as Stroke };
-              isDraggingRef.current = true;
-              return;
-            }
-          }
-          selectionRef.current = best;
-          isDraggingRef.current = true;
-          return;
-        }
-
-        selectionRef.current = null;
-        isDraggingRef.current = false;
-        return;
-      }
-
-      // Outline eraser: line / arrow / pen
-      {
-        const eraserR = outlineEraserSizeRef.current;
-        if (eraserR > 0 && (tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' || tool === 'pen')) {
-          let bestIdx = -1;
-          let bestD = Infinity;
-          strokesRef.current.forEach((s, i) => {
-            if (s.tool !== 'line' && s.tool !== 'arrow' && s.tool !== 'arrowAngle' && s.tool !== 'pen') return;
-            const d = hitTestStroke(s, pos);
-            const strokeLw = (s as { lw?: number }).lw ?? 2;
-            if (d < bestD && d < 36 + strokeLw * 0.75) {
-              bestD = d;
-              bestIdx = i;
-            }
-          });
-          if (bestIdx >= 0) {
-            const hitStroke = strokesRef.current[bestIdx];
-            const dot: EraserDot = { x: pos.x, y: pos.y, radius: eraserR };
-            const prev = (hitStroke as StrokeLine | StrokeArrow | StrokePen).eraserStrokes ?? [];
-            const updated = { ...hitStroke, eraserStrokes: [...prev, dot] };
-            strokesRef.current = [
-              ...strokesRef.current.slice(0, bestIdx),
-              updated,
-              ...strokesRef.current.slice(bestIdx + 1),
-            ];
-            outlineErasingIdxRef.current = bestIdx;
-            outlineEraserPosRef.current = pos;
-            isDraggingRef.current = true;
-            return;
-          }
-        }
-      }
-
-      // Check if clicking near an existing draggable shape
-      if (tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle') {
-        const eraserR = outlineEraserSizeRef.current;
-        const touchShapePad =
-          e.pointerType === 'touch' && eraserR > 0 ? Math.max(36, eraserR * 1.35) : 0;
-        const hitShape = (pad: number) =>
-          strokesRef.current.findIndex((s) => {
-            if (s.tool !== 'circle' && s.tool !== 'bodyCircle' && s.tool !== 'rect' && s.tool !== 'triangle') return false;
-            const el = s as StrokeEllipse;
-            const rx = Math.max(el.rx, 1) + CIRCLE_DRAG_THRESHOLD + pad;
-            const ry = Math.max(el.ry, 1) + CIRCLE_DRAG_THRESHOLD + pad;
-            const dx2 = pos.x - el.cx;
-            const dy2 = pos.y - el.cy;
-            return (dx2 * dx2) / (rx * rx) + (dy2 * dy2) / (ry * ry) <= 1;
-          });
-        let idx = hitShape(0);
-        if (idx < 0 && touchShapePad > 0) idx = hitShape(touchShapePad);
-
-        // Outline eraser: start dragging to erase outline segments
-        if (idx >= 0 && eraserR > 0) {
-          const hitStroke = strokesRef.current[idx];
-          const isEligible =
-            hitStroke.tool === 'circle' ||
-            hitStroke.tool === 'bodyCircle' ||
-            hitStroke.tool === 'rect' ||
-            hitStroke.tool === 'triangle';
-          if (isEligible) {
-            const dot: EraserDot = { x: pos.x, y: pos.y, radius: eraserR };
-            const prev = (hitStroke as StrokeEllipse | StrokeRect | StrokeTriangle).eraserStrokes ?? [];
-            const updated = { ...hitStroke, eraserStrokes: [...prev, dot] };
-            strokesRef.current = [
-              ...strokesRef.current.slice(0, idx),
-              updated,
-              ...strokesRef.current.slice(idx + 1),
-            ];
-            outlineErasingIdxRef.current = idx;
-            outlineEraserPosRef.current = pos;
-            isDraggingRef.current = true;
-            return;
-          }
-        }
-
-        if (idx >= 0) {
-          const el = strokesRef.current[idx] as { cx: number; cy: number };
-          dragCircleIdxRef.current = idx;
-          dragCircleOffRef.current = { x: pos.x - el.cx, y: pos.y - el.cy };
-          isDraggingRef.current = true;
-          return;
-        }
-      }
-
       switch (tool) {
         case 'pen':
           activeStrokeRef.current = {
@@ -4179,9 +3754,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             dashed: opts.dashed ?? false,
             spinning: circleSpinningRef.current || undefined,
           };
-          if (process.env.NODE_ENV !== 'production') {
-            console.debug('[precision] stroke started', { tool: 'pen', pt: pos, synthetic: isPrecisionSynthetic });
-          }
           isDraggingRef.current = true;
           break;
 
@@ -4421,27 +3993,502 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           break;
       }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pushHistory, finishSwingPath, finishManualSwingPath, finishJointChain, eraseAt, videoRef, webcamPipHitTest, beginWebcamPipDragAt]);
+    }, [pushHistory, notifyDrawCommitted, finishSwingPath, finishManualSwingPath, finishJointChain, eraseAt, videoRef, onProcessingStatus]);
+
+    /** Update the in-progress active stroke to a new logical point. */
+    const updateActiveStrokeAt = useCallback((pos: Pt) => {
+      const active = activeStrokeRef.current;
+      if (!active) return;
+      if (active.tool === 'pen') {
+        (active as StrokePen).pts = [...(active as StrokePen).pts, pos];
+      } else if (active.tool === 'line' || active.tool === 'arrow' || active.tool === 'arrowAngle') {
+        (active as StrokeLine).p2 = pos;
+      } else if (active.tool === 'circle' || active.tool === 'bodyCircle' || active.tool === 'rect' || active.tool === 'triangle') {
+        const start = dragStartRef.current;
+        if (!start) return;
+        const el = active as StrokeEllipse;
+        el.cx = (start.x + pos.x) / 2;
+        el.cy = (start.y + pos.y) / 2;
+        el.rx = Math.abs(pos.x - start.x) / 2;
+        el.ry = Math.abs(pos.y - start.y) / 2;
+      }
+      renderDirtyRef.current = true;
+    }, []);
+
+    /** Commit the active stroke (if non-degenerate) into the stroke list. */
+    const commitActiveStroke = useCallback(() => {
+      isDraggingRef.current = false;
+      const active = activeStrokeRef.current;
+      activeStrokeRef.current = null;
+      if (!active) return;
+      if (active.tool === 'pen' && (active as StrokePen).pts.length < 1) return;
+      if (active.tool === 'circle' || active.tool === 'bodyCircle') {
+        if ((active as StrokeEllipse).rx < 2) return;
+      } else if (active.tool === 'rect') {
+        if ((active as StrokeRect).rx < 2) return;
+      } else if (active.tool === 'triangle') {
+        if ((active as StrokeTriangle).rx < 2) return;
+      }
+      strokesRef.current = [...strokesRef.current, active];
+      pushHistory();
+      if (isContextualStrokeTool(active.tool)) {
+        notifyDrawCommitted();
+      }
+    }, [pushHistory, notifyDrawCommitted]);
+
+    /**
+     * Discard any tentative single-finger interaction so that claiming a
+     * 2-finger pinch never leaves a half-started stroke / pan / selection drag
+     * that would commit on release.
+     */
+    const rollbackTentativeGesture = useCallback(() => {
+      activeStrokeRef.current = null;
+      isDraggingRef.current = false;
+      isPanningRef.current = false;
+      panStartRef.current = null;
+      dragCircleIdxRef.current = -1;
+      outlineErasingIdxRef.current = -1;
+      outlineEraserPosRef.current = null;
+      selectionRef.current = null;
+      webcamPipDragRef.current = null;
+    }, []);
+
+    // PiP lives in canvas device-pixel space (overlay, unaffected by zoom/pan),
+    // so it maps through canvas-px — NOT the logical-space mapper. Declared here
+    // (ahead of the pointer pipeline) so onPointerDown can reference it.
+    const getPosFromPointerEvent = useCallback((e: { clientX: number; clientY: number }) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return { x: 0, y: 0 };
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (e.clientX - rect.left) * (canvas.width / rect.width),
+        y: (e.clientY - rect.top) * (canvas.height / rect.height),
+      };
+    }, []);
+
+    // ── Pointer down ───────────────────────────────────────────────────────
+
+    const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      const canvasEl = e.target as HTMLCanvasElement;
+      const toolEarly = activeToolRef.current;
+
+      // ── Normalize: register this pointer in the single active-pointer map ──
+      activePointersRef.current.set(e.pointerId, {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        pointerType: e.pointerType,
+      });
+      const touchPointers = () =>
+        [...activePointersRef.current.values()].filter((p) => p.pointerType === 'touch');
+
+      // ── Gesture lock gate ─────────────────────────────────────────────────
+      // While the precision anchor owns the gesture, any other finger is a
+      // discrete commit tap routed to the precision consumer — never a new
+      // consumer, never a pinch.
+      if (
+        precisionAnchorPointerIdRef.current !== null &&
+        e.pointerId !== precisionAnchorPointerIdRef.current
+      ) {
+        e.preventDefault();
+        const ch =
+          precisionCrosshairDisplayRef.current ?? precisionCrosshairTargetRef.current;
+        if (ch) precisionCommitRef.current?.(ch);
+        return;
+      }
+
+      // ── Priority router (rule 1): webcam PiP ──────────────────────────────
+      // PiP is screen-space → map through canvas-px (NOT logical/zoom space).
+      if (webcamActiveRef.current) {
+        const posPip = getPosFromPointerEvent(e);
+        const pipHitEarly = webcamPipHitTest(posPip);
+        if (pipHitEarly !== 'miss') {
+          beginWebcamPipDragAt(posPip, pipHitEarly);
+          canvasEl.setPointerCapture(e.pointerId);
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }
+
+      // ── Priority router (rule 2): two-finger canvas/PiP pinch ─────────────
+      // Claimed the instant the 2nd touch arrives (no precision active). Any
+      // tentative single-finger consumer the 1st finger started is rolled back.
+      if (e.pointerType === 'touch' && touchPointers().length === 2) {
+        const tps = touchPointers();
+        const cClient = {
+          clientX: (tps[0].clientX + tps[1].clientX) / 2,
+          clientY: (tps[0].clientY + tps[1].clientY) / 2,
+        };
+        rollbackTentativeGesture();
+        const canvas = canvasRef.current;
+        const t1 = { clientX: tps[0].clientX, clientY: tps[0].clientY } as Touch;
+        const t2 = { clientX: tps[1].clientX, clientY: tps[1].clientY } as Touch;
+        if (
+          webcamActiveRef.current &&
+          canvas &&
+          webcamPipHitTest(getPosFromPointerEvent(cClient)) !== 'miss' &&
+          tryStartWebcamPinch(t1, t2, canvas)
+        ) {
+          // PiP pinch (webcamPinchRef now set); handled in onPointerMove.
+        } else {
+          webcamPinchRef.current = null;
+          canvasPinchRef.current = {
+            lastDist: Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY),
+          };
+        }
+        e.preventDefault();
+        return;
+      }
+
+      // ── Priority router (rule 3): precision anchor acquisition ────────────
+      const precisionTouchEligible =
+        precisionTouchDrawRef.current &&
+        e.pointerType === 'touch' &&
+        toolEarly !== 'zoom' &&
+        toolEarly !== 'objectMultiplier';
+
+      if (precisionTouchEligible && precisionAnchorPointerIdRef.current === null) {
+        precisionAnchorPointerIdRef.current = e.pointerId;
+        const ch = clientToLogical(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
+        precisionCrosshairTargetRef.current = ch;
+        precisionCrosshairDisplayRef.current = { ...ch };
+        precisionFadeStartRef.current = null;
+        canvasEl.setPointerCapture(e.pointerId);
+        e.preventDefault();
+        return;
+      }
+
+      canvasEl.setPointerCapture(e.pointerId);
+      const pos  = getPos(e);
+      const lw   = pressureWidth(e);
+      const tool = activeToolRef.current;
+      const opts = drawingOptsRef.current;
+
+      if (contextualTargetRef.current && outlineEraserSizeRef.current <= 0) {
+        closeContextualStyle();
+      }
+
+      // ── StroMotion rubber-band region selection ──────────────────────────
+      if (isSelectingStroRegionRef.current) {
+        stroRegionStartRef.current = pos;
+        stroRegionCurrentRef.current = pos;
+        isDraggingRef.current = true;
+        return;
+      }
+
+      // Object multiplier selection is handled by a dedicated overlay (see JSX).
+
+      // ── Pan: activates immediately on pointer-down with no delay ────────
+      // Triggers: middle-click, Space+drag, zoom tool while zoomed,
+      // select/skeleton tool while zoomed, touch while zoomed, or panMode
+      // enabled at ANY zoom level (no prior zoom-in required).
+      const zoomed = zoomRef.current > 1;
+      const isDrawingTool =
+        tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' ||
+        tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle' ||
+        tool === 'angle' || tool === 'text' || tool === 'erase' || tool === 'ballShadow' ||
+        tool === 'swingPath' || tool === 'manualSwing' || tool === 'jointChain';
+
+      // If the pointer lands on the webcam PiP, preserve PiP drag/resize even
+      // when pan mode is active.  We pre-check here so the PiP hit can veto
+      // the pan-mode condition inside shouldPan.
+      const pipVeto =
+        webcamActiveRef.current &&
+        webcamPipHitTest(getPosFromPointerEvent(e)) !== 'miss';
+
+      const shouldPan =
+        !pipVeto && (
+          e.button === 1 ||
+          spaceHeldRef.current ||
+          (tool === 'zoom' && e.button === 0 && zoomed) ||
+          // Pan mode works at ANY zoom level — no prior zoom-in required.
+          panModeEnabledRef.current ||
+          (zoomed && !isDrawingTool) ||
+          // Touch one-finger drag while zoomed always pans (no activation needed).
+          (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current)
+        );
+      if (shouldPan) {
+        isPanningRef.current = true;
+        panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
+        e.preventDefault();
+        return;
+      }
+
+      // ── Select tool: stroke / joint selection ───────────────────────────
+      if (tool === 'select') {
+        // Check if clicking on a text resize handle of a currently-selected text stroke
+        const prevSel = selectionRef.current;
+        if (prevSel && prevSel.kind === 'stroke') {
+          const prevS = strokesRef.current[prevSel.idx];
+          if (prevS && prevS.tool === 'text') {
+            const corner = textResizeHandleHit(prevS as StrokeText, pos);
+            if (corner) {
+              selectionRef.current = { kind: 'textResize', idx: prevSel.idx, start: pos, orig: prevS as StrokeText, corner };
+              isDraggingRef.current = true;
+              return;
+            }
+          }
+        }
+
+        const HIT_T = 28;
+        const nodeHitR = e.pointerType === 'touch' ? JOINT_NODE_HIT_TOUCH : JOINT_NODE_HIT_POINTER;
+        let best: Selection = null;
+        let bestDist = Infinity;
+
+        for (let i = strokesRef.current.length - 1; i >= 0; i--) {
+          const s = strokesRef.current[i];
+          if (s.tool !== 'jointChain') continue;
+          const jc = s as StrokeJointChain;
+          for (let ni = jc.nodes.length - 1; ni >= 0; ni--) {
+            const d = Math.hypot(pos.x - jc.nodes[ni].x, pos.y - jc.nodes[ni].y);
+            if (d < nodeHitR && d < bestDist) {
+              bestDist = d;
+              best = { kind: 'jointNode', idx: i, nodeIdx: ni, start: pos, orig: jc };
+            }
+          }
+        }
+
+        for (let i = 0; i < strokesRef.current.length; i++) {
+          const d = hitTestStroke(strokesRef.current[i], pos);
+          if (d < bestDist) {
+            bestDist = d;
+            best = { kind: 'stroke', idx: i, start: pos, orig: strokesRef.current[i] };
+          }
+        }
+
+        for (let i = 0; i < angleMeasRef.current.length; i++) {
+          const m = angleMeasRef.current[i];
+          const d = Math.min(
+            Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
+            distToSegment(pos, m.v, m.p1),
+            distToSegment(pos, m.v, m.p2),
+          );
+          if (d < bestDist) {
+            bestDist = d;
+            best = { kind: 'angle', idx: i, start: pos, orig: m };
+          }
+        }
+
+        if (best && bestDist <= HIT_T) {
+          if (best.kind === 'stroke' && strokesRef.current[best.idx]?.tool === 'text' && e.pointerType === 'touch') {
+            const now = performance.now();
+            const lt = lastTextTapRef.current;
+            if (
+              lt &&
+              lt.idx === best.idx &&
+              now - lt.t < 420 &&
+              Math.hypot(pos.x - lt.x, pos.y - lt.y) < 48
+            ) {
+              lastTextTapRef.current = null;
+              const tx = strokesRef.current[best.idx] as StrokeText;
+              const bb = getTextBBox(tx);
+              const canvas = canvasRef.current!;
+              const rect = canvas.getBoundingClientRect();
+              const W = canvas.width;
+              const H = canvas.height;
+              const logX = bb.x0;
+              const logY = bb.y0;
+              const screenX = ((logX - W / 2) * zoomRef.current + W / 2 + panXRef.current) * (rect.width / canvas.width);
+              const screenY = ((logY - H / 2) * zoomRef.current + H / 2 + panYRef.current) * (rect.height / canvas.height);
+              const scaledFontSize = tx.fontSize * zoomRef.current * (rect.height / canvas.height);
+              const bbW = (bb.x1 - bb.x0) * zoomRef.current * (rect.width / canvas.width);
+              textEditingIdxRef.current = best.idx;
+              setTextEditing({
+                idx: best.idx,
+                left: screenX,
+                top: screenY,
+                width: Math.max(100, bbW + 20),
+                fontSize: scaledFontSize,
+                value: tx.text,
+                color: tx.color,
+              });
+              e.preventDefault();
+              return;
+            }
+            lastTextTapRef.current = { idx: best.idx, t: now, x: pos.x, y: pos.y };
+          }
+          if (best.kind === 'stroke' && outlineEraserSizeRef.current > 0) {
+            const hitStroke = strokesRef.current[best.idx];
+            const eraserEligible =
+              hitStroke &&
+              (hitStroke.tool === 'line' ||
+                hitStroke.tool === 'arrow' ||
+                hitStroke.tool === 'arrowAngle' ||
+                hitStroke.tool === 'pen' ||
+                hitStroke.tool === 'circle' ||
+                hitStroke.tool === 'bodyCircle' ||
+                hitStroke.tool === 'rect' ||
+                hitStroke.tool === 'triangle');
+            if (eraserEligible) {
+              const eraserR = outlineEraserSizeRef.current;
+              const dot: EraserDot = { x: pos.x, y: pos.y, radius: eraserR };
+              const prev = (hitStroke as StrokeLine | StrokePen | StrokeEllipse).eraserStrokes ?? [];
+              const updated = { ...hitStroke, eraserStrokes: [...prev, dot] };
+              strokesRef.current = [
+                ...strokesRef.current.slice(0, best.idx),
+                updated,
+                ...strokesRef.current.slice(best.idx + 1),
+              ];
+              outlineErasingIdxRef.current = best.idx;
+              outlineEraserPosRef.current = pos;
+              selectionRef.current = { kind: 'stroke', idx: best.idx, start: pos, orig: updated as Stroke };
+              isDraggingRef.current = true;
+              return;
+            }
+          }
+          selectionRef.current = best;
+          isDraggingRef.current = true;
+          return;
+        }
+
+        selectionRef.current = null;
+        isDraggingRef.current = false;
+        return;
+      }
+
+      // Outline eraser: line / arrow / pen
+      {
+        const eraserR = outlineEraserSizeRef.current;
+        if (eraserR > 0 && (tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' || tool === 'pen')) {
+          let bestIdx = -1;
+          let bestD = Infinity;
+          strokesRef.current.forEach((s, i) => {
+            if (s.tool !== 'line' && s.tool !== 'arrow' && s.tool !== 'arrowAngle' && s.tool !== 'pen') return;
+            const d = hitTestStroke(s, pos);
+            const strokeLw = (s as { lw?: number }).lw ?? 2;
+            if (d < bestD && d < 36 + strokeLw * 0.75) {
+              bestD = d;
+              bestIdx = i;
+            }
+          });
+          if (bestIdx >= 0) {
+            const hitStroke = strokesRef.current[bestIdx];
+            const dot: EraserDot = { x: pos.x, y: pos.y, radius: eraserR };
+            const prev = (hitStroke as StrokeLine | StrokeArrow | StrokePen).eraserStrokes ?? [];
+            const updated = { ...hitStroke, eraserStrokes: [...prev, dot] };
+            strokesRef.current = [
+              ...strokesRef.current.slice(0, bestIdx),
+              updated,
+              ...strokesRef.current.slice(bestIdx + 1),
+            ];
+            outlineErasingIdxRef.current = bestIdx;
+            outlineEraserPosRef.current = pos;
+            isDraggingRef.current = true;
+            return;
+          }
+        }
+      }
+
+      // Check if clicking near an existing draggable shape
+      if (tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle') {
+        const eraserR = outlineEraserSizeRef.current;
+        const touchShapePad =
+          e.pointerType === 'touch' && eraserR > 0 ? Math.max(36, eraserR * 1.35) : 0;
+        const hitShape = (pad: number) =>
+          strokesRef.current.findIndex((s) => {
+            if (s.tool !== 'circle' && s.tool !== 'bodyCircle' && s.tool !== 'rect' && s.tool !== 'triangle') return false;
+            const el = s as StrokeEllipse;
+            const rx = Math.max(el.rx, 1) + CIRCLE_DRAG_THRESHOLD + pad;
+            const ry = Math.max(el.ry, 1) + CIRCLE_DRAG_THRESHOLD + pad;
+            const dx2 = pos.x - el.cx;
+            const dy2 = pos.y - el.cy;
+            return (dx2 * dx2) / (rx * rx) + (dy2 * dy2) / (ry * ry) <= 1;
+          });
+        let idx = hitShape(0);
+        if (idx < 0 && touchShapePad > 0) idx = hitShape(touchShapePad);
+
+        // Outline eraser: start dragging to erase outline segments
+        if (idx >= 0 && eraserR > 0) {
+          const hitStroke = strokesRef.current[idx];
+          const isEligible =
+            hitStroke.tool === 'circle' ||
+            hitStroke.tool === 'bodyCircle' ||
+            hitStroke.tool === 'rect' ||
+            hitStroke.tool === 'triangle';
+          if (isEligible) {
+            const dot: EraserDot = { x: pos.x, y: pos.y, radius: eraserR };
+            const prev = (hitStroke as StrokeEllipse | StrokeRect | StrokeTriangle).eraserStrokes ?? [];
+            const updated = { ...hitStroke, eraserStrokes: [...prev, dot] };
+            strokesRef.current = [
+              ...strokesRef.current.slice(0, idx),
+              updated,
+              ...strokesRef.current.slice(idx + 1),
+            ];
+            outlineErasingIdxRef.current = idx;
+            outlineEraserPosRef.current = pos;
+            isDraggingRef.current = true;
+            return;
+          }
+        }
+
+        if (idx >= 0) {
+          const el = strokesRef.current[idx] as { cx: number; cy: number };
+          dragCircleIdxRef.current = idx;
+          dragCircleOffRef.current = { x: pos.x - el.cx, y: pos.y - el.cy };
+          isDraggingRef.current = true;
+          return;
+        }
+      }
+
+      beginDrawToolAt(pos, lw);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [beginDrawToolAt, eraseAt, videoRef, webcamPipHitTest, beginWebcamPipDragAt, getPosFromPointerEvent, tryStartWebcamPinch, rollbackTentativeGesture]);
 
     // ── Pointer move ───────────────────────────────────────────────────────
 
     const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-      let pos = getPos(e);
-      if (precisionTouchDrawRef.current && activeToolRef.current !== 'zoom') {
-        if (
-          precisionAnchorPointerIdRef.current === e.pointerId &&
-          e.pointerType === 'touch'
-        ) {
-          pos = getPosFromClientXY(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
-          precisionCrosshairTargetRef.current = pos;
-          precisionCrosshairDisplayRef.current = { ...pos };
-          e.preventDefault();
-          const active = activeStrokeRef.current;
-          if (isDraggingRef.current && active?.tool === 'pen') {
-            (active as StrokePen).pts = [...(active as StrokePen).pts, pos];
-            renderDirtyRef.current = true;
+      const pos = getPos(e);
+
+      // Keep the active-pointer map current (used for multi-touch reconstruction).
+      if (activePointersRef.current.has(e.pointerId)) {
+        activePointersRef.current.set(e.pointerId, {
+          clientX: e.clientX,
+          clientY: e.clientY,
+          pointerType: e.pointerType,
+        });
+      }
+
+      // ── Pinch consumers (own the gesture; nothing else runs) ──────────────
+      const touchPts = [...activePointersRef.current.values()].filter((p) => p.pointerType === 'touch');
+      if ((canvasPinchRef.current || webcamPinchRef.current) && touchPts.length >= 2) {
+        const t1 = touchPts[0];
+        const t2 = touchPts[1];
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const canvas = canvasRef.current;
+        if (webcamPinchRef.current && canvas) {
+          const base = webcamPinchRef.current;
+          if (base.dist > 0) {
+            applyWebcamPinchScale(dist / base.dist);
+            queuePipUiSync();
           }
+        } else if (canvasPinchRef.current) {
+          const last = canvasPinchRef.current.lastDist;
+          if (last > 0) {
+            zoomRef.current = Math.max(0.25, Math.min(8, zoomRef.current * (dist / last)));
+          }
+          canvasPinchRef.current.lastDist = dist;
         }
+        e.preventDefault();
+        return;
+      }
+
+      // ── Precision anchor move: reposition crosshair (offset owned here) ────
+      if (
+        precisionAnchorPointerIdRef.current === e.pointerId &&
+        e.pointerType === 'touch' &&
+        activeToolRef.current !== 'zoom'
+      ) {
+        const ch = clientToLogical(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
+        precisionCrosshairTargetRef.current = ch;
+        precisionCrosshairDisplayRef.current = { ...ch };
+        renderDirtyRef.current = true;
+        e.preventDefault();
+        // Between a two-step shape's begin and commit taps, the endpoint tracks
+        // the crosshair. Pen dabs commit immediately, so there's nothing to drag.
+        if (isDraggingRef.current && activeStrokeRef.current) {
+          updateActiveStrokeAt(ch);
+        }
+        return;
       }
       const tool = activeToolRef.current;
 
@@ -4622,44 +4669,40 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!isDraggingRef.current) return;
       if (tool === 'erase') { eraseAt(pos); return; }
 
-      const active = activeStrokeRef.current;
-      if (!active) return;
-
-      if (active.tool === 'pen') {
-        (active as StrokePen).pts = [...(active as StrokePen).pts, pos];
-      } else if (active.tool === 'line' || active.tool === 'arrow' || active.tool === 'arrowAngle') {
-        (active as StrokeLine).p2 = pos;
-      } else if (active.tool === 'circle' || active.tool === 'bodyCircle' || active.tool === 'rect' || active.tool === 'triangle') {
-        const start = dragStartRef.current;
-        if (!start) return;
-        const el = active as StrokeEllipse;
-        el.cx = (start.x + pos.x) / 2;
-        el.cy = (start.y + pos.y) / 2;
-        el.rx = Math.abs(pos.x - start.x) / 2;
-        el.ry = Math.abs(pos.y - start.y) / 2;
-      }
+      updateActiveStrokeAt(pos);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [eraseAt, applyWebcamPipDragMove]);
+    }, [eraseAt, applyWebcamPipDragMove, updateActiveStrokeAt, applyWebcamPinchScale, queuePipUiSync]);
 
     // ── Pointer up ─────────────────────────────────────────────────────────
 
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      // ── Normalize: this pointer is gone ───────────────────────────────────
+      activePointersRef.current.delete(e.pointerId);
+      const remainingTouch = [...activePointersRef.current.values()].filter(
+        (p) => p.pointerType === 'touch',
+      ).length;
+
+      // ── End an active pinch once a finger lifts ───────────────────────────
+      if (canvasPinchRef.current || webcamPinchRef.current) {
+        if (remainingTouch < 2) {
+          canvasPinchRef.current = null;
+          webcamPinchRef.current = null;
+        }
+        try {
+          (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+
+      // ── Precision anchor lift: finalize any in-progress two-step shape ────
       if (
-        precisionTouchDrawRef.current &&
         precisionAnchorPointerIdRef.current === e.pointerId &&
         e.pointerType === 'touch'
       ) {
-        const ch =
-          precisionCrosshairTargetRef.current ??
-          precisionCrosshairDisplayRef.current;
-        const toolUp = activeToolRef.current;
-        if (
-          ch &&
-          isDraggingRef.current &&
-          activeStrokeRef.current !== null &&
-          (precisionToolUsesToggleDownUp(toolUp) || toolUp === 'pen')
-        ) {
-          precisionSyntheticDispatchRef.current?.('pointerup', ch);
+        if (isDraggingRef.current && activeStrokeRef.current !== null) {
+          commitActiveStroke();
         }
         precisionAnchorPointerIdRef.current = null;
         precisionFadeStartRef.current = performance.now();
@@ -4744,64 +4787,51 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         pushHistory();
         return;
       }
-      isDraggingRef.current = false;
-      const active = activeStrokeRef.current;
-      activeStrokeRef.current = null;
-      if (!active) return;
-      if (active.tool === 'pen' && (active as StrokePen).pts.length < 1) return;
-      // Don't commit zero-size shapes — check rx property via type narrowing
-      if (active.tool === 'circle' || active.tool === 'bodyCircle') {
-        if ((active as StrokeEllipse).rx < 2) return;
-      } else if (active.tool === 'rect') {
-        if ((active as StrokeRect).rx < 2) return;
-      } else if (active.tool === 'triangle') {
-        if ((active as StrokeTriangle).rx < 2) return;
-      }
-      strokesRef.current = [...strokesRef.current, active];
-      if (process.env.NODE_ENV !== 'production') {
-        console.debug('[precision] stroke committed', { tool: active.tool });
-      }
-      pushHistory();
-      if (isContextualStrokeTool(active.tool)) {
-        notifyDrawCommitted();
-      }
-    }, [pushHistory, notifyDrawCommitted]);
+      commitActiveStroke();
+    }, [pushHistory, commitActiveStroke]);
 
-    onPointerDownRef.current = onPointerDown;
-    onPointerUpRef.current = onPointerUp;
-
-    const firePrecisionPointer = (type: 'pointerdown' | 'pointerup', logicalPt: Pt) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      if (process.env.NODE_ENV !== 'production') {
-        console.debug('[precision] precision dispatch', { type, tool: activeToolRef.current, pt: logicalPt });
+    // ── Pointer cancel ───────────────────────────────────────────────────────
+    // OS / browser interruptions (incoming call, gesture nav, pointer steal)
+    // route here so the gesture lock is always released — the single teardown
+    // that prevents stuck isDragging / activeStroke / pinch / pip state.
+    const onPointerCancel = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      activePointersRef.current.delete(e.pointerId);
+      const remainingTouch = [...activePointersRef.current.values()].filter(
+        (p) => p.pointerType === 'touch',
+      ).length;
+      if (remainingTouch < 2) {
+        canvasPinchRef.current = null;
+        webcamPinchRef.current = null;
       }
-      const { clientX, clientY } = logicalPtToClient(logicalPt);
-      const reactEv = {
-        clientX,
-        clientY,
-        pointerId: PRECISION_SYNTHETIC_POINTER_ID,
-        pointerType: 'mouse',
-        button: 0,
-        buttons: type === 'pointerup' ? 0 : 1,
-        pressure: 0.5,
-        preventDefault: () => {},
-        stopPropagation: () => {},
-        target: canvas,
-        currentTarget: canvas,
-        setPointerCapture: () => {},
-        releasePointerCapture: () => {},
-      } as unknown as React.PointerEvent<HTMLCanvasElement>;
-      if (type === 'pointerdown') {
-        onPointerDown(reactEv);
-      } else {
-        onPointerUp(reactEv);
+      if (precisionAnchorPointerIdRef.current === e.pointerId) {
+        precisionAnchorPointerIdRef.current = null;
+        precisionFadeStartRef.current = performance.now();
       }
-    };
+      if (activePointersRef.current.size === 0) {
+        // Last pointer gone: discard any in-progress transient interaction.
+        activeStrokeRef.current = null;
+        isDraggingRef.current = false;
+        isPanningRef.current = false;
+        panStartRef.current = null;
+        dragCircleIdxRef.current = -1;
+        outlineErasingIdxRef.current = -1;
+        outlineEraserPosRef.current = null;
+        webcamPipDragRef.current = null;
+      }
+      try {
+        (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+      } catch {
+        /* noop */
+      }
+    }, []);
 
-    precisionSyntheticDispatchRef.current = firePrecisionPointer;
-
-    const firePrecisionDrawAt = (ch: Pt) => {
+    // ── Precision override layer (synchronous; no synthetic events) ──────────
+    // The anchor finger positions the crosshair; a second-finger tap is a
+    // discrete "commit" signal delivered directly to the shared tool
+    // primitives. There is no synthetic pointer dispatch, no microtask, and no
+    // re-entry into onPointerDown/onPointerUp — one coordinate source, one
+    // dispatch path.
+    const precisionCommitAt = (ch: Pt) => {
       const tool = activeToolRef.current;
       if (
         tool === 'zoom' ||
@@ -4816,48 +4846,45 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       precisionCrosshairDisplayRef.current = { ...ch };
       precisionRippleRef.current = { x: ch.x, y: ch.y, t0: performance.now() };
       renderDirtyRef.current = true;
-      const useToggle = precisionToolUsesToggleDownUp(tool);
-      const dragging = isDraggingRef.current && activeStrokeRef.current !== null;
-      if (useToggle && dragging) {
-        firePrecisionPointer('pointerup', ch);
-      } else {
-        if (process.env.NODE_ENV !== 'production') {
-          console.debug('[precision] synthetic draw dispatched', { tool });
-        }
-        firePrecisionPointer('pointerdown', ch);
-        if (tool === 'pen') {
-          const pen = activeStrokeRef.current as StrokePen | null;
-          if (pen?.tool === 'pen' && pen.pts.length === 1) {
-            pen.pts.push({ ...ch });
-          }
-          queueMicrotask(() => firePrecisionPointer('pointerup', ch));
-        } else if (
-          tool === 'line' ||
-          tool === 'arrow' ||
-          tool === 'arrowAngle' ||
-          tool === 'circle' ||
-          tool === 'rect' ||
-          tool === 'triangle' ||
-          tool === 'bodyCircle' ||
-          tool === 'jointChain' ||
-          tool === 'text' ||
-          tool === 'erase'
-        ) {
-          queueMicrotask(() => firePrecisionPointer('pointerup', ch));
-        }
+      const baseLw = drawingOptsRef.current.lineWidth;
+
+      // Erase: discrete tap, never holds a drag.
+      if (tool === 'erase') {
+        beginDrawToolAt(ch, baseLw);
+        isDraggingRef.current = false;
+        return;
       }
+
+      // Pen: each tap is a single dab (begin + commit immediately).
+      if (tool === 'pen') {
+        beginDrawToolAt(ch, baseLw);
+        const pen = activeStrokeRef.current as StrokePen | null;
+        if (pen?.tool === 'pen' && pen.pts.length === 1) {
+          pen.pts.push({ ...ch });
+        }
+        commitActiveStroke();
+        return;
+      }
+
+      // Two-step drag tools (line/arrow/arrowAngle/circle/bodyCircle/rect/triangle):
+      // first tap begins at the crosshair, second tap finalizes at the crosshair.
+      // Between taps the anchor move repositions the endpoint (see onPointerMove).
+      if (precisionToolUsesToggleDownUp(tool)) {
+        if (isDraggingRef.current && activeStrokeRef.current !== null) {
+          updateActiveStrokeAt(ch);
+          commitActiveStroke();
+        } else {
+          beginDrawToolAt(ch, baseLw);
+        }
+        return;
+      }
+
+      // Multi-step / discrete tools (angle, jointChain, manualSwing, swingPath, text):
+      // each tap advances the tool's own state machine.
+      beginDrawToolAt(ch, baseLw);
     };
 
-    precisionFireAtLogicalRef.current = (logicalPt: Pt) => {
-      firePrecisionDrawAt(logicalPt);
-    };
-
-    precisionInjectClickRef.current = () => {
-      const ch =
-        precisionCrosshairDisplayRef.current ?? precisionCrosshairTargetRef.current;
-      if (!ch) return;
-      queueMicrotask(() => firePrecisionDrawAt(ch));
-    };
+    precisionCommitRef.current = precisionCommitAt;
 
     // Commit text editing changes
     const commitTextEdit = useCallback(() => {
@@ -5037,16 +5064,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const pipOverlayRef = useRef<HTMLDivElement>(null);
 
-    const getPosFromPointerEvent = useCallback((e: { clientX: number; clientY: number }) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return { x: 0, y: 0 };
-      const rect = canvas.getBoundingClientRect();
-      return {
-        x: (e.clientX - rect.left) * (canvas.width / rect.width),
-        y: (e.clientY - rect.top) * (canvas.height / rect.height),
-      };
-    }, []);
-
     const onPipOverlayPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
       e.stopPropagation();
       const pos = getPosFromPointerEvent(e);
@@ -5208,6 +5225,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerLeave={onPointerUp}
+          onPointerCancel={onPointerCancel}
           onDoubleClick={onDoubleClick}
           onWheel={onWheelCanvas}
         />
