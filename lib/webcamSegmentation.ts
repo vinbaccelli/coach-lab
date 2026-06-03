@@ -40,10 +40,16 @@ export class WebcamSegmenter {
   private animFrameId = 0;
   private videoElement: HTMLVideoElement | null = null;
   private busy = false;
+  /** Optional consumer hook fired after each fresh mask is composited. */
+  private onMask: (() => void) | null = null;
 
   constructor() {
     this.outputCanvas = document.createElement('canvas');
     this.outputCtx = this.outputCanvas.getContext('2d', { willReadFrequently: false })!;
+  }
+
+  setOnMask(cb: (() => void) | null): void {
+    this.onMask = cb;
   }
 
   async init(): Promise<void> {
@@ -94,6 +100,8 @@ export class WebcamSegmenter {
     ctx.drawImage(results.image, 0, 0, w, h);
 
     ctx.globalCompositeOperation = 'source-over';
+
+    this.onMask?.();
   }
 
   start(videoElement: HTMLVideoElement): void {

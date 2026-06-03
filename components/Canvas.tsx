@@ -1520,6 +1520,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const lastRenderVideoTimeRef = useRef(-1);
     const lastRenderZoomRef = useRef(1);
     const lastRenderPanRef = useRef({ x: 0, y: 0 });
+    // Frame-accurate "a new video frame was presented" signal. currentTime
+    // advances continuously while playing, so it cannot gate to the decoded
+    // frame rate; requestVideoFrameCallback fires once per presented frame
+    // (playback and seek-while-paused). videoFrameRvfcActiveRef tells the render
+    // loop whether RVFC is driving us (so the currentTime delta is only used as
+    // a fallback on browsers without RVFC).
+    const videoFrameDirtyRef = useRef(false);
+    const videoFrameRvfcActiveRef = useRef(false);
 
     // Real-time ball detection
     const isBallDetectingRef  = useRef(false);
@@ -1584,6 +1592,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const webcamSegmenterRef = useRef<{ dispose: () => void } | null>(null);
     const webcamMaskRef = useRef<HTMLCanvasElement | null>(null);
     const webcamActiveRef = useRef(webcamActive);
+    // Set true when a new webcam frame (or a fresh cutout mask) is available so
+    // the render loop composites at the webcam's fps instead of display rate.
+    const webcamFrameDirtyRef = useRef(false);
     const panModeEnabledRef = useRef(panModeEnabled);
     /** Pixel rect on the backing canvas; (0,0,0,0) means “use default lower-right” */
     const webcamPipRectRef = useRef({ x: 0, y: 0, w: 0, h: 0 });
@@ -1918,6 +1929,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         webcamPipDragRef.current = { kind: rk, sx: pos.x, sy: pos.y, orig: { ...pip } };
       }
       isDraggingRef.current = true;
+      renderDirtyRef.current = true;
       queuePipUiSync();
     }, [queuePipUiSync]);
 
@@ -2335,6 +2347,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       let cancelled = false;
       const segmenter = new WebcamSegmenter();
+      // A fresh cutout mask is a visible change → mark the canvas dirty so the
+      // render loop composites it (cadence capped to the segmenter's rate).
+      segmenter.setOnMask(() => { webcamFrameDirtyRef.current = true; });
 
       (async () => {
         try {
@@ -2367,6 +2382,68 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
     }, [webcamCutout, webcamActive, webcamVideoRef, onProcessingStatus]);
 
+    // ── Webcam frame-change signal ─────────────────────────────────────────
+    // Mark a dirty frame once per decoded webcam frame (RVFC) so the render
+    // loop composites the PiP at the webcam's fps instead of forcing a full
+    // composite every display tick. Falls back to a ~30 Hz interval where RVFC
+    // is unavailable. Cutout masks additionally flip the flag via setOnMask.
+    useEffect(() => {
+      if (!webcamActive) return;
+      const wc = webcamVideoRef?.current;
+      if (!wc) return;
+      let cancelled = false;
+      let rvfcId = 0;
+      let intervalId: number | undefined;
+      const markDirty = () => { webcamFrameDirtyRef.current = true; };
+      const hasRvfc = typeof wc.requestVideoFrameCallback === 'function';
+      if (hasRvfc) {
+        const loop = () => {
+          if (cancelled) return;
+          markDirty();
+          rvfcId = wc.requestVideoFrameCallback(loop);
+        };
+        rvfcId = wc.requestVideoFrameCallback(loop);
+      } else {
+        intervalId = window.setInterval(markDirty, 33);
+      }
+      return () => {
+        cancelled = true;
+        if (hasRvfc && rvfcId) {
+          try { wc.cancelVideoFrameCallback?.(rvfcId); } catch { /* noop */ }
+        }
+        if (intervalId !== undefined) clearInterval(intervalId);
+      };
+    }, [webcamActive, webcamVideoRef]);
+
+    // ── Main video frame-change signal (render gating) ─────────────────────
+    // Drive composites at the source's true frame rate instead of display rate
+    // by marking a dirty frame only when a new video frame is actually
+    // presented. The <video> elements are persistent, so RVFC bound here keeps
+    // firing across source changes; it also fires on seek-while-paused.
+    useEffect(() => {
+      const v = videoRef.current;
+      if (!v) return;
+      if (typeof v.requestVideoFrameCallback !== 'function') {
+        // No RVFC: render loop falls back to the currentTime delta.
+        videoFrameRvfcActiveRef.current = false;
+        return;
+      }
+      videoFrameRvfcActiveRef.current = true;
+      let cancelled = false;
+      let id = 0;
+      const loop = () => {
+        if (cancelled) return;
+        videoFrameDirtyRef.current = true;
+        id = v.requestVideoFrameCallback(loop);
+      };
+      id = v.requestVideoFrameCallback(loop);
+      return () => {
+        cancelled = true;
+        videoFrameRvfcActiveRef.current = false;
+        try { v.cancelVideoFrameCallback?.(id); } catch { /* noop */ }
+      };
+    }, [videoRef]);
+
     useEffect(() => {
       youtubePoseCacheRef.current.clear();
       youtubeSmoothBufRef.current = [];
@@ -2384,6 +2461,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       let thumb: HTMLImageElement | null = null;
       let lastGood: PoseKeypoint[] | null = null;
       let baseEstimated = false;
+      // Scheduling guards: the loop keeps ticking at rAF rate, but the async
+      // smoothing body is (a) never re-entered while a prior pass is awaiting
+      // (inFlight) and (b) throttled to ~25 Hz once the one-time base estimate
+      // is done. estimatePoses runs once (baseEstimated); the per-frame cost is
+      // only smoothing + buffering, which does not need display-rate cadence.
+      let inFlight = false;
+      let lastSmoothTs = 0;
+      const YT_SMOOTH_INTERVAL_MS = 40; // ~25 Hz
 
       const ensureThumb = async () => {
         if (thumb?.complete) return;
@@ -2398,57 +2483,66 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       const poseLoop = async () => {
         if (!poseLoopActiveRef.current) return;
-        if (skeletonSuppressedRef.current) {
+        // Reschedule up-front so the loop keeps ticking independent of the
+        // async body below; the inFlight guard prevents overlapping work.
+        rafId = requestAnimationFrame(poseLoop);
+
+        if (skeletonSuppressedRef.current || !skeletonDrawEnabledRef.current) {
           latestKeypointsRef.current = null;
-          rafId = requestAnimationFrame(poseLoop);
           return;
         }
-        if (!skeletonDrawEnabledRef.current) {
-          latestKeypointsRef.current = null;
-          rafId = requestAnimationFrame(poseLoop);
-          return;
-        }
+        if (inFlight) return;
+        const tnow = performance.now();
+        if (baseEstimated && tnow - lastSmoothTs < YT_SMOOTH_INTERVAL_MS) return;
+        lastSmoothTs = tnow;
 
-        await ensureThumb();
-        const ctrl = yp.controllerRef.current;
-        const det = detectorRef.current;
-        const now = ctrl?.getCurrentTime() ?? 0;
+        inFlight = true;
+        try {
+          await ensureThumb();
+          const ctrl = yp.controllerRef.current;
+          const det = detectorRef.current;
+          const now = ctrl?.getCurrentTime() ?? 0;
 
-        if (det && thumb && thumb.complete) {
-          try {
-            if (!baseEstimated) {
-              const poses = await det.estimatePoses(thumb, { flipHorizontal: false });
-              const raw = poses?.[0]?.keypoints as PoseKeypoint[] | undefined;
-              if (raw?.length) {
-                lastGood = raw;
-                youtubePoseCacheRef.current.set(0, raw);
-                baseEstimated = true;
-              }
-            }
-            if (lastGood?.length) {
-              const merged = smoothPoseKeypoints(
-                latestKeypointsRef.current as PoseKeypoint[] | null,
-                lastGood,
-                { alpha: 0.35, minScore: 0.22 },
-              );
-              const buf = bufferSmoothKeypoints(youtubeSmoothBufRef.current, merged, 5);
-              latestKeypointsRef.current = buf;
-
-              const playing = ctrl?.isPlaying?.() ?? false;
-              const lastFrame = skeletonFramesRef.current.at(-1);
-              if (playing && (!lastFrame || Math.abs(now - lastFrame.timeSeconds) > 1 / 120)) {
-                skeletonFramesRef.current.push({ timeSeconds: now, keypoints: buf });
-                if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
-                  skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+          if (det && thumb && thumb.complete) {
+            try {
+              if (!baseEstimated) {
+                const poses = await det.estimatePoses(thumb, { flipHorizontal: false });
+                const raw = poses?.[0]?.keypoints as PoseKeypoint[] | undefined;
+                if (raw?.length) {
+                  lastGood = raw;
+                  youtubePoseCacheRef.current.set(0, raw);
+                  baseEstimated = true;
                 }
               }
-            }
-          } catch {
-            if (lastGood?.length) latestKeypointsRef.current = lastGood;
-          }
-        }
+              if (lastGood?.length) {
+                const merged = smoothPoseKeypoints(
+                  latestKeypointsRef.current as PoseKeypoint[] | null,
+                  lastGood,
+                  { alpha: 0.35, minScore: 0.22 },
+                );
+                const buf = bufferSmoothKeypoints(youtubeSmoothBufRef.current, merged, 5);
+                latestKeypointsRef.current = buf;
+                // YouTube path must mark the canvas dirty itself (the HTML5
+                // bridge does this in onResult); otherwise the overlay would
+                // not refresh once the blanket "playing" render trigger is gone.
+                renderDirtyRef.current = true;
 
-        rafId = requestAnimationFrame(poseLoop);
+                const playing = ctrl?.isPlaying?.() ?? false;
+                const lastFrame = skeletonFramesRef.current.at(-1);
+                if (playing && (!lastFrame || Math.abs(now - lastFrame.timeSeconds) > 1 / 120)) {
+                  skeletonFramesRef.current.push({ timeSeconds: now, keypoints: buf });
+                  if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+                    skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+                  }
+                }
+              }
+            } catch {
+              if (lastGood?.length) latestKeypointsRef.current = lastGood;
+            }
+          }
+        } finally {
+          inFlight = false;
+        }
       };
 
       rafId = requestAnimationFrame(poseLoop);
@@ -2580,16 +2674,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           strokesRef.current.some((st) => strokeHasSpinning(st)) ||
           strokeHasSpinning(activeStrokeRef.current);
 
+        // Composite only when a fresh decoded frame is actually presented (RVFC),
+        // not on every display tick. currentTime advances continuously during
+        // playback, so the delta is used only as the RVFC-unavailable fallback.
+        // Skeleton / PiP / tool / interaction changes still drive renders via
+        // renderDirtyRef, the webcam flag, and hasActiveInteraction.
+        const videoFrameChanged = videoFrameRvfcActiveRef.current
+          ? videoFrameDirtyRef.current
+          : videoTimeChanged;
+
         const needsRender =
-          videoTimeChanged ||
+          videoFrameChanged ||
           zoomChanged ||
           renderDirtyRef.current ||
           hasActiveInteraction ||
-          webcamActiveRef.current ||
-          (video && !video.paused);
+          webcamFrameDirtyRef.current;
 
         if (!needsRender) return;
         renderDirtyRef.current = false;
+        webcamFrameDirtyRef.current = false;
+        videoFrameDirtyRef.current = false;
 
         ctx.clearRect(0, 0, W, H);
 
@@ -5057,6 +5161,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         canvas.height,
         webcamPipBottomInsetRef.current,
       );
+      renderDirtyRef.current = true;
       queuePipUiSync();
       e.preventDefault();
       e.stopPropagation();

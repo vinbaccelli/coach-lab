@@ -1104,7 +1104,18 @@ export default function Home() {
     if (!vA || !vB || !videoBLoaded) return;
     if (!playBothEnabled) return;
 
-    const DRIFT_THRESHOLD = 0.1; // 100 ms — seek B if skew exceeds this
+    // Banded drift correction (B is muted, so trimming its playbackRate is
+    // inaudible). Small skew is corrected by nudging B's rate to close the gap
+    // — no <video> seek, no decoder flush — and a hard seek is reserved for
+    // large desyncs that a rate trim cannot recover quickly.
+    const DRIFT_DEADBAND = 0.05; // <=50 ms: treat as in sync, run at A's rate
+    const DRIFT_HARD_SEEK = 0.35; // >350 ms (or out of range): snap once
+    const DRIFT_RATE_NUDGE = 0.06; // +/-6% rate trim in the soft band
+    // Steady-state drift only needs checking a handful of times per second; the
+    // loop still reschedules every rAF frame (cheap) but runs its correction
+    // body at ~15 Hz to stay off the main-thread budget during playback.
+    const DRIFT_INTERVAL_MS = 66; // ~15 Hz
+    let lastDriftRunTs = 0;
     let playPendingB = false;
     let rafId = 0;
 
@@ -1156,30 +1167,49 @@ export default function Home() {
         return;
       }
 
-      const t = bTarget();
+      const tnow = performance.now();
+      if (tnow - lastDriftRunTs >= DRIFT_INTERVAL_MS) {
+        lastDriftRunTs = tnow;
 
-      if (vB.playbackRate !== vA.playbackRate) {
-        vB.playbackRate = vA.playbackRate;
-      }
+        const t = bTarget();
 
-      if (!vA.paused) {
-        if (bInRange(t)) {
-          const drift = Math.abs(vB.currentTime - t);
-          if (drift > DRIFT_THRESHOLD) vB.currentTime = t;
-          if (vB.paused && !playPendingB) {
-            playPendingB = true;
-            vB.play()
-              .then(() => { playPendingB = false; })
-              .catch(() => { playPendingB = false; });
+        if (!vA.paused) {
+          if (bInRange(t)) {
+            const base = vA.playbackRate;
+            const signedDrift = t - vB.currentTime; // + => B is behind target
+            const drift = Math.abs(signedDrift);
+
+            if (drift > DRIFT_HARD_SEEK) {
+              // Too far out of sync for a rate trim to recover quickly — snap
+              // once and restore the exact rate.
+              vB.currentTime = t;
+              if (vB.playbackRate !== base) vB.playbackRate = base;
+            } else if (drift > DRIFT_DEADBAND) {
+              // Soft-correct: nudge B's rate toward A to close the gap. No seek.
+              const target = signedDrift > 0
+                ? base * (1 + DRIFT_RATE_NUDGE)   // B behind → speed up
+                : base * (1 - DRIFT_RATE_NUDGE);  // B ahead  → slow down
+              if (vB.playbackRate !== target) vB.playbackRate = target;
+            } else {
+              // Within deadband — run at A's exact rate (ends any nudge).
+              if (vB.playbackRate !== base) vB.playbackRate = base;
+            }
+
+            if (vB.paused && !playPendingB) {
+              playPendingB = true;
+              vB.play()
+                .then(() => { playPendingB = false; })
+                .catch(() => { playPendingB = false; });
+            }
+          } else {
+            if (!vB.paused) vB.pause();
+            playPendingB = false;
+            if (t < 0) vB.currentTime = 0;
           }
         } else {
           if (!vB.paused) vB.pause();
           playPendingB = false;
-          if (t < 0) vB.currentTime = 0;
         }
-      } else {
-        if (!vB.paused) vB.pause();
-        playPendingB = false;
       }
 
       rafId = requestAnimationFrame(correctDrift);
