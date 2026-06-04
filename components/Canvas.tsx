@@ -1738,7 +1738,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         mirror.srcObject = src;
         void mirror.play().catch(() => {});
       }
-    }, [webcamActive, webcamVideoRef]);
+      // webcamCutout toggles whether the mirror <video> is mounted; re-run so the
+      // stream is (re)attached when it remounts after cutout is turned off.
+    }, [webcamActive, webcamVideoRef, webcamCutout]);
     useEffect(() => { panModeEnabledRef.current = panModeEnabled; }, [panModeEnabled]);
     useEffect(() => { onObjMultRegionSelectedRef.current = onObjMultiplierRegionSelected; }, [onObjMultiplierRegionSelected]);
 
@@ -4626,7 +4628,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // ── Webcam PiP drag / resize ─────────────────────────────────────────
       const pipDrag = webcamPipDragRef.current;
       if (pipDrag) {
-        applyWebcamPipDragMove(pos);
+        // PiP lives in canvas device-pixel space (overlay, unaffected by
+        // zoom/pan), and pointer-down anchored it via getPosFromPointerEvent.
+        // Using the logical `pos` here made drag/resize jump whenever zoom !== 1.
+        applyWebcamPipDragMove(getPosFromPointerEvent(e));
         return;
       }
 
@@ -4775,7 +4780,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       updateActiveStrokeAt(pos);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [eraseAt, applyWebcamPipDragMove, updateActiveStrokeAt, applyWebcamPinchScale, queuePipUiSync]);
+    }, [eraseAt, applyWebcamPipDragMove, updateActiveStrokeAt, applyWebcamPinchScale, queuePipUiSync, getPosFromPointerEvent]);
 
     // ── Pointer up ─────────────────────────────────────────────────────────
 
@@ -5352,26 +5357,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               pointerEvents: 'auto',
               overflow: 'hidden',
               borderRadius: webcamPipMode === 'circle' ? '50%' : 8,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+              // With cutout on, the canvas PiP paints the masked person; the raw
+              // <video> here would cover it, so we drop the video and box and keep
+              // only a transparent drag handle. Without cutout this is the PiP.
+              boxShadow: webcamCutout ? 'none' : '0 4px 16px rgba(0,0,0,0.35)',
+              background: 'transparent',
             }}
             onPointerDown={onPipOverlayPointerDown}
             onPointerMove={onPipOverlayPointerMove}
             onPointerUp={onPipOverlayPointerUp}
             onPointerCancel={onPipOverlayPointerUp}
           >
-            <video
-              ref={pipMirrorVideoRef}
-              autoPlay
-              muted
-              playsInline
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-                pointerEvents: 'none',
-                transform: webcamCutout ? 'scaleX(-1)' : undefined,
-              }}
-            />
+            {!webcamCutout ? (
+              <video
+                ref={pipMirrorVideoRef}
+                autoPlay
+                muted
+                playsInline
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  pointerEvents: 'none',
+                }}
+              />
+            ) : null}
           </div>
         ) : null}
 

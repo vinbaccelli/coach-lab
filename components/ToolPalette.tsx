@@ -129,6 +129,12 @@ interface ToolPaletteProps {
 
 const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
 
+// Tools surfaced on the Draw sub-screen. Used so opening Draw highlights a tool
+// (and so leaving Draw can return the canvas to a neutral select state).
+const DRAW_SCREEN_TOOLS: ToolType[] = [
+  'pen', 'line', 'arrow', 'angle', 'arrowAngle', 'rect', 'circle', 'manualSwing', 'jointChain', 'text',
+];
+
 type NavScreen =
   | 'home'
   | 'recording'
@@ -277,12 +283,10 @@ const scrollArea: React.CSSProperties = {
 function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties {
   let base = scrollArea;
   if (io) base = { ...scrollArea, padding: '6px 4px 10px', gap: 4 };
-  if (mobileChrome) {
-    return {
-      ...base,
-      paddingBottom: 'calc(100px + env(safe-area-inset-bottom, 0px))',
-    };
-  }
+  // The global actions footer is pinned outside this scroll area (a sibling of
+  // the shell), so we no longer pad ~100px at the bottom to clear it. The
+  // safe-area bottom inset is applied once by the page rail wrapper, avoiding
+  // the previous double inset that left a large empty gap on mobile.
   return base;
 }
 
@@ -489,7 +493,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   const ToolbarLead = () => (
     <>
-      {(mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
+      {(compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
         <button
           type="button"
           aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
@@ -797,8 +801,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <ToolbarLead />
           <BackHeader title="Session & record" icon={<LayoutGrid size={18} />} />
           {recordingHubContent}
-          <GlobalActionsFooter />
         </div>
+        <GlobalActionsFooter />
       </div>
     );
   }
@@ -1051,7 +1055,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <ToolbarLead />
-          <BackHeader title="Draw" icon={<Pen size={18} />} />
+          <BackHeader title="Draw" icon={<Pen size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
           <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Pen" onPress={() => setTool('pen')} />
           <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Line" onPress={() => setTool('line')} />
           <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => setTool('arrow')} />
@@ -1072,8 +1076,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => onOpenDrawContext?.()}
           />
           {drawContextActive ? MarkStyleControls : null}
-          <GlobalActionsFooter />
         </div>
+        <GlobalActionsFooter />
       </div>
     );
   }
@@ -1097,7 +1101,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
-          <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
+          <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
           {onSkeletonOverlayPausedChange !== undefined && (
             <label
               key="sov"
@@ -1168,8 +1172,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
             chk('rl', 'Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange)}
           {onSkeletonShowLeftLegChange !== undefined &&
             chk('ll', 'Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange)}
-          <GlobalActionsFooter />
         </div>
+        <GlobalActionsFooter />
       </div>
     );
   }
@@ -1179,7 +1183,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
-          <BackHeader title="Webcam" icon={<Camera size={18} />} />
+          <BackHeader title="Webcam" icon={<Camera size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
           {onToggleWebcam ? (
             <Row
               k="wct"
@@ -1230,8 +1234,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <p style={{ margin: '4px 4px 0', fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
             Drag the PiP on the canvas to move it. Safari: choose Window or Screen and pick this browser window when sharing for capture.
           </p>
-          <GlobalActionsFooter />
         </div>
+        <GlobalActionsFooter />
       </div>
     );
   }
@@ -1317,7 +1321,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         ) : null}
         <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
         <div data-tour-id="tour-draw-tools">
-          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => push('draw')} />
+          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
         </div>
         <div data-tour-id="tour-skeleton">
           <Row
@@ -1347,8 +1351,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
             />
           </div>
         ) : null}
-        <GlobalActionsFooter />
       </div>
+      <GlobalActionsFooter />
     </div>
   );
 }

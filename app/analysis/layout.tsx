@@ -10,7 +10,10 @@ export default function AnalysisLayout({ children }: { children: React.ReactNode
   return (
     <div
       style={{
-        height: '100vh',
+        // 100dvh tracks the visible viewport on iOS Safari (the dynamic
+        // toolbar otherwise makes 100vh taller than the screen). Matches the
+        // analysis page root, which also uses 100dvh.
+        height: '100dvh',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',

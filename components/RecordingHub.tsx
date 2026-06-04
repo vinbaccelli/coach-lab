@@ -21,9 +21,14 @@ import {
   PanelLeftOpen,
   PanelLeftClose,
   Crop,
+  Download,
+  X,
 } from 'lucide-react';
 import ScreenRecorder from '@/components/ScreenRecorder';
 import { RegionRecordOverlay, type ViewportRegion } from '@/components/RegionRecordOverlay';
+import type { CropAspect } from '@/components/PostRecordingCropModal';
+
+export type RecordingArea = { x: number; y: number; width: number; height: number; aspectRatio: CropAspect };
 
 export interface RecordingHubContentProps {
   isRecording: boolean;
@@ -34,6 +39,9 @@ export interface RecordingHubContentProps {
   getCropRegion: () => { x: number; y: number; w: number; h: number } | null;
   layoutMode: 'youtube' | 'reels';
   onScreenRecordComplete?: (blob: Blob, ext: string) => void;
+  /** Optional pre-record area metadata (UI only — never affects capture). */
+  recordingArea?: RecordingArea | null;
+  onRecordingAreaChange?: (area: RecordingArea | null) => void;
 
   webcamActive: boolean;
   onWebcamToggle: () => void;
@@ -62,6 +70,8 @@ export interface RecordingHubContentProps {
   hubIconOnly?: boolean;
   hubLabelsExpanded?: boolean;
   onToggleHubLabels?: () => void;
+  /** True while an embed/tab capture is running — disables hub record buttons. */
+  captureBusy?: boolean;
 }
 
 /** @deprecated Overlay panel — use RecordingHubContent inside ToolPalette instead. */
@@ -175,6 +185,8 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     getCropRegion,
     layoutMode,
     onScreenRecordComplete,
+    recordingArea,
+    onRecordingAreaChange,
     webcamActive,
     onWebcamToggle,
     micActive,
@@ -197,14 +209,16 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     hubIconOnly = false,
     hubLabelsExpanded = false,
     onToggleHubLabels,
+    captureBusy = false,
   } = props;
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dropInputRef = useRef<HTMLInputElement>(null);
   const [pendingDropFile, setPendingDropFile] = useState<File | null>(null);
-  const [regionOverlayOpen, setRegionOverlayOpen] = useState(false);
-  const [regionAspect, setRegionAspect] = useState<'16:9' | '9:16'>(layoutMode === 'reels' ? '9:16' : '16:9');
-  const [viewportRegion, setViewportRegion] = useState<ViewportRegion>({ x: 0, y: 0, w: 320, h: 568 });
+  // Phase 3: "Set recording area" is a UI-only metadata tool. Recording always
+  // captures the full screen via the single ScreenRecorder below; cropping (if
+  // any) is chosen afterward in the post-recording modal.
+  const [areaOverlayOpen, setAreaOverlayOpen] = useState(false);
 
   const handleDropZoneFile = (file: File | undefined) => {
     if (!file || !file.type.startsWith('video/')) return;
@@ -264,7 +278,7 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     >
       {hubIconOnly ? null : (
         <p style={{ margin: 0, fontSize: 12, color: '#4B5563', lineHeight: 1.45 }}>
-          Full display records your entire screen (like Google Meet). Selected area crops to a movable frame.
+          Recording always captures your full screen (like Google Meet). After you stop, you can keep it full or crop to an area.
         </p>
       )}
       {hubIconOnly ? (
@@ -272,6 +286,7 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           <ScreenRecorder
             mode="display"
             compactIcon
+            disabled={captureBusy}
             getCanvas={getCanvas}
             getWebcamStream={getWebcamStream}
             getMicStream={getMicStream}
@@ -283,70 +298,54 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           />
           <button
             type="button"
-            title="Select area to record"
-            aria-label="Select area to record"
+            title={recordingArea ? `Recording area set (${recordingArea.aspectRatio}) — tap to edit` : 'Set recording area (optional)'}
+            aria-label="Set recording area"
+            disabled={captureBusy}
             style={{
-              ...iconOnlyRowStyle(regionOverlayOpen),
+              ...iconOnlyRowStyle(!!recordingArea || areaOverlayOpen),
+              ...(captureBusy ? { opacity: 0.5, cursor: 'not-allowed' } : null),
             }}
-            onClick={() => setRegionOverlayOpen((v) => !v)}
+            onClick={() => setAreaOverlayOpen(true)}
           >
             <Crop size={16} />
           </button>
-          {regionOverlayOpen ? (
-            <ScreenRecorder
-              mode="display"
-              compactIcon
-              getCanvas={getCanvas}
-              getWebcamStream={getWebcamStream}
-              getMicStream={getMicStream}
-              getCropRegion={getCropRegion}
-              getViewportCropRegion={() => viewportRegion}
-              layoutMode={layoutMode}
-              onRecordingChange={onRecordingChange}
-              promptDownload
-              onRecordingComplete={onScreenRecordComplete}
-            />
-          ) : null}
         </>
       ) : (
         <>
+          <ScreenRecorder
+            mode="display"
+            disabled={captureBusy}
+            getCanvas={getCanvas}
+            getWebcamStream={getWebcamStream}
+            getMicStream={getMicStream}
+            getCropRegion={getCropRegion}
+            layoutMode={layoutMode}
+            onRecordingChange={onRecordingChange}
+            promptDownload
+            onRecordingComplete={onScreenRecordComplete}
+          />
           <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Full screen</div>
-            <ScreenRecorder
-              mode="display"
-              getCanvas={getCanvas}
-              getWebcamStream={getWebcamStream}
-              getMicStream={getMicStream}
-              getCropRegion={getCropRegion}
-              layoutMode={layoutMode}
-              onRecordingChange={onRecordingChange}
-              promptDownload
-              onRecordingComplete={onScreenRecordComplete}
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Selected area</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Recording area (optional)</div>
             <button
               type="button"
-              style={{ ...rowStyle(regionOverlayOpen), marginBottom: 8 }}
-              onClick={() => setRegionOverlayOpen((v) => !v)}
+              disabled={captureBusy}
+              style={{
+                ...rowStyle(!!recordingArea || areaOverlayOpen),
+                ...(captureBusy ? { opacity: 0.5, cursor: 'not-allowed' } : null),
+              }}
+              onClick={() => setAreaOverlayOpen(true)}
             >
               <Crop size={16} />
-              {regionOverlayOpen ? 'Hide area frame' : 'Set recording area'}
+              {recordingArea ? `Area set (${recordingArea.aspectRatio}) — edit` : 'Set recording area'}
             </button>
-            {regionOverlayOpen ? (
-              <ScreenRecorder
-                mode="display"
-                getCanvas={getCanvas}
-                getWebcamStream={getWebcamStream}
-                getMicStream={getMicStream}
-                getCropRegion={getCropRegion}
-                getViewportCropRegion={() => viewportRegion}
-                layoutMode={layoutMode}
-                onRecordingChange={onRecordingChange}
-                promptDownload
-                onRecordingComplete={onScreenRecordComplete}
-              />
+            {recordingArea ? (
+              <button
+                type="button"
+                style={{ ...rowStyle(), marginTop: 6, justifyContent: 'center', color: '#6B7280' }}
+                onClick={() => onRecordingAreaChange?.(null)}
+              >
+                Clear area
+              </button>
             ) : null}
           </div>
         </>
@@ -363,15 +362,17 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           50%       { opacity: 0.25; }
         }
       `}</style>
-      {regionOverlayOpen &&
+      {areaOverlayOpen &&
         typeof document !== 'undefined' &&
         createPortal(
           <RegionRecordOverlay
-            aspect={regionAspect}
-            onAspectChange={setRegionAspect}
-            region={viewportRegion}
-            onRegionChange={setViewportRegion}
-            onClose={() => setRegionOverlayOpen(false)}
+            initialAspect={recordingArea?.aspectRatio ?? (layoutMode === 'reels' ? '9:16' : '16:9')}
+            initialRegion={recordingArea ? { x: recordingArea.x, y: recordingArea.y, w: recordingArea.width, h: recordingArea.height } : null}
+            onCancel={() => setAreaOverlayOpen(false)}
+            onConfirm={(region: ViewportRegion, aspect: CropAspect) => {
+              onRecordingAreaChange?.({ x: region.x, y: region.y, width: region.w, height: region.h, aspectRatio: aspect });
+              setAreaOverlayOpen(false);
+            }}
           />,
           document.body,
         )}
@@ -457,7 +458,82 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
             {uploadSection()}
           </>
         )}
-        {hubIconOnly ? null : (
+        {hubIconOnly ? (
+          // Compact rail can't fit the full feedback cards, so surface the same
+          // states as tappable status chips (otherwise users get no recording /
+          // capture / download feedback on the icon-only rail).
+          <div style={compactStackStyle}>
+            {screenRecordDownloadPending ? (
+              <>
+                <HubRow
+                  iconOnly
+                  active
+                  icon={<Download size={16} />}
+                  label="Save recording as MP4"
+                  title="Save recording as MP4"
+                  onClick={onScreenRecordDownloadYes ?? (() => {})}
+                />
+                <HubRow
+                  iconOnly
+                  icon={<X size={16} />}
+                  label="Discard recording"
+                  title="Discard recording"
+                  onClick={onScreenRecordDownloadNo ?? (() => {})}
+                />
+              </>
+            ) : null}
+            {hubCaptureLoading ? (
+              <HubRow
+                iconOnly
+                icon={
+                  <span
+                    style={{
+                      width: 16,
+                      height: 16,
+                      border: '2px solid rgba(26,26,26,0.15)',
+                      borderTopColor: '#1A1A1A',
+                      borderRadius: '50%',
+                      animation: 'hubSpin 0.7s linear infinite',
+                    }}
+                  />
+                }
+                label="Loading video…"
+                title="Loading video… tap to cancel"
+                onClick={onHubCaptureCancel}
+              />
+            ) : null}
+            {hubCaptureIsActive ? (
+              <HubRow
+                iconOnly
+                active
+                icon={
+                  <span
+                    style={{
+                      width: 12,
+                      height: 12,
+                      borderRadius: '50%',
+                      background: '#FF3B30',
+                      animation: 'hubPulse 1.2s ease-in-out infinite',
+                    }}
+                  />
+                }
+                label="Recording… tap to cancel"
+                title="Recording… tap to cancel"
+                onClick={onHubCaptureCancel}
+              />
+            ) : null}
+            {captureDownloadStatus !== 'idle' ? (
+              <HubRow
+                iconOnly
+                active
+                icon={<Download size={16} />}
+                label={captureDownloadStatus === 'preparing' ? 'Preparing download…' : 'Download capture'}
+                title={captureDownloadStatus === 'preparing' ? 'Preparing download…' : 'Download capture'}
+                onClick={onDownloadCapture}
+              />
+            ) : null}
+          </div>
+        ) : (
           <>
             {screenRecordDownloadPending && downloadPrompt()}
             {hubCaptureLoading && captureLoading()}

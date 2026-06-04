@@ -15,7 +15,9 @@ import { createPortal } from 'react-dom';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
-import { RecordingHubContent } from '@/components/RecordingHub';
+import { RecordingHubContent, type RecordingArea } from '@/components/RecordingHub';
+import PostRecordingCropModal, { type CropAspect, type PixelRegion } from '@/components/PostRecordingCropModal';
+import { exportCroppedVideo } from '@/lib/cropExport';
 import GuidedTour from '@/components/GuidedTour';
 import { terminateGlobalPoseWorker, warmupMoveNetWorker } from '@/lib/poseWorkerBridge';
 import PrecisionDrawInstructions, {
@@ -49,6 +51,12 @@ import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 
 // Dynamic import prevents TensorFlow / Fabric from loading server-side
 const CanvasOverlay = dynamic(() => import('@/components/Canvas'), { ssr: false });
+
+// Tools that draw on the canvas and own the draw "context" (style controls).
+const DRAW_CONTEXT_TOOLS: ToolType[] = [
+  'pen', 'line', 'arrow', 'arrowAngle', 'circle', 'rect', 'triangle',
+  'bodyCircle', 'text', 'angle', 'manualSwing', 'swingPath', 'jointChain',
+];
 
 const btnStyle: React.CSSProperties = {
   display: 'flex',
@@ -97,8 +105,13 @@ function ReelsDesktopShell({
     >
       <div
         style={{
-          height: '100dvh',
-          width: 'min(calc(100dvh * 9 / 16), 100vw)',
+          // Fill the flex slot's height (not the raw viewport) so the frame can
+          // never overflow its parent and clip the bottom controls; derive the
+          // 9:16 width from that height via aspect-ratio.
+          height: '100%',
+          maxHeight: '100%',
+          aspectRatio: '9 / 16',
+          width: 'auto',
           maxWidth: '100vw',
           display: 'flex',
           flexDirection: 'row',
@@ -145,6 +158,13 @@ export default function Home() {
   const genericEmbedIframeRefB = useRef<HTMLIFrameElement | null>(null);
   /** Measured height of the pinned playback dock — toolbars sit above this + gap. */
   const playbackDockRef = useRef<HTMLDivElement | null>(null);
+  // Callback ref so the ResizeObserver re-attaches whenever the dock (re)mounts,
+  // even when it appears after the first effect run (e.g. once a video loads).
+  const [playbackDockEl, setPlaybackDockEl] = useState<HTMLDivElement | null>(null);
+  const setPlaybackDock = useCallback((el: HTMLDivElement | null) => {
+    playbackDockRef.current = el;
+    setPlaybackDockEl(el);
+  }, []);
   const sessionCaptureBlobRef = useRef<Blob | null>(null);
   /** Converted MP4 for download (original WebM stays in sessionCaptureBlobRef for playback). */
   const sessionMp4BlobRef = useRef<Blob | null>(null);
@@ -204,6 +224,16 @@ export default function Home() {
   const [micMuted, setMicMuted]           = useState(false);
   const screenRecordBlobRef               = useRef<{ blob: Blob; ext: string } | null>(null);
   const [screenRecordDownloadPending, setScreenRecordDownloadPending] = useState(false);
+  // Phase 3: recording is always captured full screen; cropping (if any) is
+  // chosen afterward in the post-recording modal and applied via post-processing.
+  // `recordingArea` is UI-only metadata from the optional "Set recording area".
+  const [recordingArea, setRecordingArea] = useState<RecordingArea | null>(null);
+  const [recordingSession, setRecordingSession] = useState<{
+    videoBlob: Blob | null;
+    ext: string;
+    mode: 'full' | 'selected-area';
+    cropRegion: null | { x: number; y: number; width: number; height: number; aspectRatio?: CropAspect };
+  } | null>(null);
   const [isRecording, setIsRecording]     = useState(false);
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBOffset, setVideoBOffset]   = useState(0);
@@ -406,21 +436,7 @@ export default function Home() {
 
   const handleToolChange = useCallback((t: ToolType) => {
     setActiveTool(t);
-    setDrawContextActive(
-      t === 'pen' ||
-        t === 'line' ||
-        t === 'arrow' ||
-        t === 'arrowAngle' ||
-        t === 'circle' ||
-        t === 'rect' ||
-        t === 'triangle' ||
-        t === 'bodyCircle' ||
-        t === 'text' ||
-        t === 'angle' ||
-        t === 'manualSwing' ||
-        t === 'swingPath' ||
-        t === 'jointChain',
-    );
+    setDrawContextActive(DRAW_CONTEXT_TOOLS.includes(t));
     if (t === 'objectMultiplier') {
       setObjMultiplierHasRegion(false);
       setObjMultiplierProgress(null);
@@ -498,7 +514,13 @@ export default function Home() {
   }, [activeTool]);
 
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 768px)');
+    // Width-only detection misclassified landscape phones (wider than 768px) as
+    // desktop, so they missed mobile chrome, precision draw, the mobile timeline
+    // and webcam insets. Also treat coarse-pointer (touch) devices up to 1024px
+    // as mobile so landscape phones get the touch layout.
+    const mq = window.matchMedia(
+      '(max-width: 768px), ((hover: none) and (pointer: coarse) and (max-width: 1024px))',
+    );
     const onChange = () => setIsMobile(mq.matches);
     onChange();
     mq.addEventListener('change', onChange);
@@ -706,7 +728,7 @@ export default function Home() {
   const TOOLBAR_PLAYBACK_GAP_PX = 16;
 
   useLayoutEffect(() => {
-    const el = playbackDockRef.current;
+    const el = playbackDockEl;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const measure = () => {
       const h = el.offsetHeight;
@@ -716,7 +738,7 @@ export default function Home() {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [playbackDockEl]);
 
   // Expose the playback-dock clearance as a CSS custom property so that the
   // global InstallPrompt banner (rendered in app/layout.tsx) can position
@@ -784,6 +806,14 @@ export default function Home() {
     // Hub screen-record flow reset
     setHubCaptureLoading(false);
     setHubCaptureTarget(null);
+    // Clear any lingering recording UI so a "clean session" never leaves the
+    // top Recording pill, countdown, step status, or download prompt behind.
+    setIsRecording(false);
+    setCaptureCountdown(null);
+    setCaptureStepStatus(null);
+    setScreenRecordDownloadPending(false);
+    setRecordingSession(null);
+    setRecordingArea(null);
     sessionCaptureBlobRef.current = null;
     sessionMp4BlobRef.current = null;
     captureMp4ConversionGenRef.current += 1;
@@ -996,6 +1026,16 @@ export default function Home() {
     setCaptureBusy(false);
     setEmbedCaptureRecording(false);
     setEmbedCapturePanelId(null);
+    // Mirror the shared clearCapturePrepUi reset so cancelling never leaves the
+    // bottom coach banner, countdown, step status, progress, or post-processing
+    // UI active. (clearCapturePrepUi is declared later, so we reset inline.)
+    setCapturePrepPanel(null);
+    setCaptureCoachBanner(false);
+    setCaptureActuallyRecording(false);
+    setCaptureCountdown(null);
+    setCaptureStepStatus(null);
+    setCaptureProgress01(0);
+    setCapturePostPhase('hidden');
   }, []);
 
   /** Alt URL flow: getDisplayMedia first (Safari), then load embed and auto-record when playing. */
@@ -1363,9 +1403,82 @@ export default function Home() {
   }, []);
 
   const handleScreenRecordComplete = useCallback((blob: Blob, ext: string) => {
-    screenRecordBlobRef.current = { blob, ext };
-    setScreenRecordDownloadPending(true);
+    // Phase 3: the capture is always the full screen. Open the post-recording
+    // modal so the user can download full or crop afterward (post-processing).
+    setRecordingSession({
+      videoBlob: blob,
+      ext,
+      mode: recordingArea ? 'selected-area' : 'full',
+      cropRegion: null,
+    });
+  }, [recordingArea]);
+
+  const downloadBlob = useCallback((blob: Blob, ext: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `coach-lab-recording-${Date.now()}.${ext}`;
+    a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }, []);
+
+  const handleRecordingReviewCancel = useCallback(() => {
+    setRecordingSession(null);
+  }, []);
+
+  const handleRecordingDownloadFull = useCallback(() => {
+    const session = recordingSession;
+    if (!session?.videoBlob) return;
+    setRecordingSession((s) => (s ? { ...s, mode: 'full', cropRegion: null } : s));
+    downloadBlob(session.videoBlob, session.ext);
+    setRecordingSession(null);
+  }, [recordingSession, downloadBlob]);
+
+  const handleRecordingExportCrop = useCallback(
+    async (region: PixelRegion, aspect: CropAspect) => {
+      const session = recordingSession;
+      const src = session?.videoBlob;
+      if (!src) return;
+
+      setRecordingSession((s) =>
+        s
+          ? {
+              ...s,
+              mode: 'selected-area',
+              cropRegion: {
+                x: Math.round(region.x),
+                y: Math.round(region.y),
+                width: Math.round(region.w),
+                height: Math.round(region.h),
+                aspectRatio: aspect,
+              },
+            }
+          : s,
+      );
+
+      const result = await exportCroppedVideo(src, region);
+      if (!result.ok) throw new Error(result.error || 'Could not crop the recording.');
+      downloadBlob(result.blob, result.ext);
+      setRecordingSession(null);
+    },
+    [recordingSession, downloadBlob],
+  );
+
+  // Pre-record area metadata -> fraction of the screen, used to seed the crop box.
+  const recordingAreaSeed = useMemo(() => {
+    if (!recordingArea || typeof window === 'undefined') return null;
+    const sw = window.innerWidth || 1;
+    const sh = window.innerHeight || 1;
+    return {
+      frac: {
+        x: recordingArea.x / sw,
+        y: recordingArea.y / sh,
+        w: recordingArea.width / sw,
+        h: recordingArea.height / sh,
+      },
+      aspect: recordingArea.aspectRatio,
+    };
+  }, [recordingArea]);
 
   const handleScreenRecordDownloadYes = useCallback(() => {
     const pack = screenRecordBlobRef.current;
@@ -2206,6 +2319,9 @@ export default function Home() {
       embedCaptureRetryPayloadRef.current = { panel, opts };
       captureLog('start-recording-click', panel);
 
+      // Never start an embed/tab capture while a screen recording is active —
+      // two getDisplayMedia flows would fight and produce duplicate chrome.
+      if (isRecording) return;
       if (embedShareInFlightRef.current) return;
       embedShareInFlightRef.current = true;
       embedCaptureCancelRef.current = false;
@@ -2267,6 +2383,7 @@ export default function Home() {
       clearCapturePrepUi,
       completeEmbedCaptureAfterStream,
       restoreBundleYouTube,
+      isRecording,
     ],
   );
 
@@ -2516,7 +2633,7 @@ export default function Home() {
                 leadingInsetPx={0}
                 compact
                 overlay
-                phoneChrome={isMobile}
+                phoneChrome={isMobile || reelsDesktop}
                 compareSlot={hasVideoBContent ? playbackTarget : undefined}
                 onCompareSlotChange={hasVideoBContent ? setPlaybackTarget : undefined}
                 compareAbDisabled={!canPlaybackSyncBoth}
@@ -2534,7 +2651,7 @@ export default function Home() {
                 leadingInsetPx={0}
                 compact
                 overlay
-                phoneChrome={isMobile}
+                phoneChrome={isMobile || reelsDesktop}
                 compareSlot={hasVideoBContent ? playbackTarget : undefined}
                 onCompareSlotChange={hasVideoBContent ? setPlaybackTarget : undefined}
                 compareAbDisabled={!canPlaybackSyncBoth}
@@ -2554,7 +2671,7 @@ export default function Home() {
             leadingInsetPx={0}
             compact
             overlay
-            phoneChrome={isMobile}
+            phoneChrome={isMobile || reelsDesktop}
             compareSlot={hasVideoBContent ? playbackTarget : undefined}
             onCompareSlotChange={hasVideoBContent ? setPlaybackTarget : undefined}
             compareAbDisabled={!canPlaybackSyncBoth}
@@ -2629,7 +2746,12 @@ export default function Home() {
     onCleanSession:                  resetSession,
     drawContextActive,
     onExitDrawContext:               exitDrawContext,
-    onOpenDrawContext:               () => setDrawContextActive(true),
+    onOpenDrawContext:               () => {
+      // Opening Style should also put the canvas in a drawing tool, otherwise
+      // the Style row highlights but activeTool stays 'select' and nothing draws.
+      if (DRAW_CONTEXT_TOOLS.includes(activeTool)) setDrawContextActive(true);
+      else handleToolChange('pen');
+    },
     ...(isMobile
       ? {
           precisionDrawEnabled,
@@ -2662,6 +2784,8 @@ export default function Home() {
         getCropRegion={getCropRegion}
         layoutMode={layoutMode as 'youtube' | 'reels'}
         onScreenRecordComplete={handleScreenRecordComplete}
+        recordingArea={recordingArea}
+        onRecordingAreaChange={setRecordingArea}
         webcamActive={webcamActive}
         onWebcamToggle={() => void toggleWebcam()}
         micActive={micActive}
@@ -2684,6 +2808,7 @@ export default function Home() {
         hubIconOnly={phoneToolbarLayout && !toolbarLabelsExpanded}
         hubLabelsExpanded={toolbarLabelsExpanded}
         onToggleHubLabels={() => setToolbarLabelsExpanded((v) => !v)}
+        captureBusy={captureBusy || embedCaptureRecording}
       />
     ),
   } satisfies React.ComponentProps<typeof ToolPalette>;
@@ -2896,7 +3021,11 @@ export default function Home() {
               ...(layoutMode === 'reels'
                 ? isMobile
                   ? {
-                      width: '100dvw',
+                      // Fill the space left by the toolbar rail in the flex row.
+                      // (100dvw here overflowed by the rail width, clipping the
+                      // canvas and adding horizontal scroll.)
+                      width: '100%',
+                      minWidth: 0,
                       height: '100dvh',
                       maxHeight: '100dvh',
                       borderRadius: 0,
@@ -2926,6 +3055,12 @@ export default function Home() {
                         margin: '0 auto',
                       }
                 : { width: '100%' }),
+              // In desktop reels A/B compare the playback dock (absolute, bottom:0
+              // of this container) would otherwise overlay the lower panel. Reserve
+              // its measured height so both stacked panels stay clear of the dock.
+              ...(reelsDesktop && hasVideoBContent
+                ? { paddingBottom: toolbarBottomReservePx }
+                : null),
             }}
           >
             <div
@@ -3203,7 +3338,7 @@ export default function Home() {
                       onOutlineEraserSizeChange={setOutlineEraserSize}
                       webcamPipMode={webcamPipMode}
                       webcamOpacity={webcamOpacity}
-                      webcamActive={webcamActive}
+                      webcamActive={webcamActive && markupTarget !== 'B'}
                       stroMotionGhosts={ghostFrames}
                       stroMotionOpacity={stroMotionOpacity}
                       stroMotionRegion={stroMotionRegion}
@@ -3218,7 +3353,7 @@ export default function Home() {
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={isMobile && precisionDrawEnabled}
                       webcamPipMobileChrome={isMobile}
-                      webcamPipBottomInsetPx={isMobile ? toolbarBottomReservePx : 0}
+                      webcamPipBottomInsetPx={toolbarBottomReservePx}
                       showTourHelpInZoomCluster
                       poseFrameSkip={hasVideoBContent ? 1 : 0}
                       panModeEnabled={panModeEnabled}
@@ -3234,7 +3369,11 @@ export default function Home() {
                           ? 'If you don’t see the video, it may be blocked from embedding — keep it playing in this tab, tap Capture, then choose This tab when your browser asks what to share.'
                           : undefined
                       }
-                      busy={capturePrepPanel === 'A' || (captureBusy && embedCapturePanelId === 'A')}
+                      busy={
+                        isRecording ||
+                        capturePrepPanel === 'A' ||
+                        (captureBusy && (embedCapturePanelId === 'A' || hubCaptureTarget === 'A'))
+                      }
                       progress01={embedCapturePanelId === 'A' ? captureProgress01 : 0}
                       recordingElapsedSec={embedCapturePanelId === 'A' ? captureRecordingElapsedSec : 0}
                       errorMessage={
@@ -3532,7 +3671,7 @@ export default function Home() {
                       onOutlineEraserSizeChange={setOutlineEraserSize}
                       webcamPipMode={webcamPipMode}
                       webcamOpacity={webcamOpacity}
-                      webcamActive={webcamActive}
+                      webcamActive={webcamActive && markupTarget === 'B'}
                       skeletonShowAngles={skeletonShowAngles}
                       skeletonShowHeadLine={skeletonShowHeadLine}
                       skeletonClassicColors={skeletonClassicColors}
@@ -3544,7 +3683,7 @@ export default function Home() {
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={isMobile && precisionDrawEnabled}
                       webcamPipMobileChrome={isMobile}
-                      webcamPipBottomInsetPx={isMobile ? toolbarBottomReservePx : 0}
+                      webcamPipBottomInsetPx={toolbarBottomReservePx}
                       poseFrameSkip={1}
                       panModeEnabled={panModeEnabled}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
@@ -3558,7 +3697,11 @@ export default function Home() {
                           ? 'If you don’t see the video, it may be blocked from embedding — keep it playing in this tab, tap Capture, then choose This tab when your browser asks what to share.'
                           : undefined
                       }
-                      busy={capturePrepPanel === 'B' || (captureBusy && embedCapturePanelId === 'B')}
+                      busy={
+                        isRecording ||
+                        capturePrepPanel === 'B' ||
+                        (captureBusy && (embedCapturePanelId === 'B' || hubCaptureTarget === 'B'))
+                      }
                       progress01={embedCapturePanelId === 'B' ? captureProgress01 : 0}
                       recordingElapsedSec={embedCapturePanelId === 'B' ? captureRecordingElapsedSec : 0}
                       errorMessage={
@@ -3634,7 +3777,7 @@ export default function Home() {
             </div>
             {/* Playback controls overlay — positioned inside the video container */}
             <div
-              ref={playbackDockRef}
+              ref={setPlaybackDock}
               data-tour-id="playback-dock"
               onPointerMove={showControls}
               onPointerDown={showControls}
@@ -3716,7 +3859,9 @@ export default function Home() {
           role="alert"
           style={{
             position: 'fixed',
-            top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+            // Stack below the recording pill (z250) and processing banner (z240)
+            // when those are visible, so the three top-center banners never overlap.
+            top: `calc(env(safe-area-inset-top, 0px) + 12px + ${isRecording ? 52 : 0}px + ${processingStatus || stroMotionProcessing ? 56 : 0}px)`,
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 205,
@@ -4102,7 +4247,8 @@ export default function Home() {
           aria-live="polite"
           style={{
             position: 'fixed',
-            top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+            // Drop below the recording pill (z250) when both are visible.
+            top: `calc(env(safe-area-inset-top, 0px) + 12px + ${isRecording ? 52 : 0}px)`,
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 240,
@@ -4127,6 +4273,22 @@ export default function Home() {
             : processingStatus}
         </div>
       )}
+
+      {recordingSession?.videoBlob &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <PostRecordingCropModal
+            blob={recordingSession.videoBlob}
+            ext={recordingSession.ext}
+            seedRegionFrac={recordingAreaSeed?.frac ?? null}
+            seedAspect={recordingAreaSeed?.aspect}
+            startInCrop={recordingSession.mode === 'selected-area'}
+            onCancel={handleRecordingReviewCancel}
+            onDownloadFull={handleRecordingDownloadFull}
+            onExportCrop={handleRecordingExportCrop}
+          />,
+          document.body,
+        )}
 
       <GuidedTour suppressFloatingHelp />
     </div>

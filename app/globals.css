@@ -23,7 +23,8 @@ body {
   background: var(--white);
   color: var(--gray-dark);
   overflow: hidden;
-  height: 100vh;
+  height: 100vh; /* fallback */
+  height: 100dvh; /* track visible viewport on mobile Safari */
 }
 
 /* ── Scrollbar ── */

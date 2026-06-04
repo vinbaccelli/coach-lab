@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 import { stopAllTracks } from '@/lib/tabCaptureRecording';
@@ -10,8 +10,6 @@ interface ScreenRecorderProps {
   getWebcamStream: () => MediaStream | null;
   getMicStream?: () => MediaStream | null;
   getCropRegion?: () => { x: number; y: number; w: number; h: number } | null;
-  /** Viewport CSS pixels — crops display capture to this region (area record). */
-  getViewportCropRegion?: () => { x: number; y: number; w: number; h: number } | null;
   layoutMode?: 'youtube' | 'reels';
   /** Icon-only trigger for compact recording hub rows. */
   compactIcon?: boolean;
@@ -21,6 +19,16 @@ interface ScreenRecorderProps {
   promptDownload?: boolean;
   onRecordingComplete?: (blob: Blob, ext: string) => void;
   onRecordingChange?: (recording: boolean) => void;
+  /** Block starting a recording while another capture/recording flow is busy. */
+  disabled?: boolean;
+  /** Render no UI — drive start()/stop() imperatively via the ref instead. */
+  headless?: boolean;
+}
+
+/** Imperative API exposed via ref so callers (e.g. the area overlay) can drive recording. */
+export interface ScreenRecorderHandle {
+  start: () => Promise<void>;
+  stop: () => void;
 }
 
 type RecState = 'idle' | 'recording' | 'stopped';
@@ -49,19 +57,20 @@ function formatHMS(seconds: number): string {
   return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
 }
 
-export default function ScreenRecorder({
+const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(function ScreenRecorder({
   getCanvas,
   getWebcamStream,
   getMicStream,
   getCropRegion,
-  getViewportCropRegion,
   layoutMode = 'youtube',
   mode = 'canvas',
   compactIcon = false,
   promptDownload = false,
   onRecordingComplete,
   onRecordingChange,
-}: ScreenRecorderProps) {
+  disabled = false,
+  headless = false,
+}: ScreenRecorderProps, ref) {
   const [recState, setRecState] = useState<RecState>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -260,33 +269,16 @@ export default function ScreenRecorder({
     recCanvasRef.current = recCanvas;
     const ctx = recCanvas.getContext('2d')!;
 
+    // Phase 3: always record the FULL display stream. Cropping (selected area)
+    // is applied after recording in post-processing, which keeps capture stable
+    // across This Tab / Window / Entire Screen and every layout.
     const paintOnce = () => {
-      const crop = getViewportCropRegion?.();
-      const useCrop = crop && crop.w > 16 && crop.h > 16;
       if (displayVideo.readyState >= 2) {
-        if (useCrop && typeof window !== 'undefined') {
-          const vw = displayVideo.videoWidth || window.innerWidth;
-          const vh = displayVideo.videoHeight || window.innerHeight;
-          const sx = vw / window.innerWidth;
-          const sy = vh / window.innerHeight;
-          const srcX = crop.x * sx;
-          const srcY = crop.y * sy;
-          const srcW = crop.w * sx;
-          const srcH = crop.h * sy;
-          const cw = Math.max(2, Math.round(srcW));
-          const ch = Math.max(2, Math.round(srcH));
-          if (recCanvas.width !== cw || recCanvas.height !== ch) {
-            recCanvas.width = cw;
-            recCanvas.height = ch;
-          }
-          ctx.drawImage(displayVideo, srcX, srcY, srcW, srcH, 0, 0, cw, ch);
-        } else {
-          if (recCanvas.width !== outW || recCanvas.height !== outH) {
-            recCanvas.width = outW;
-            recCanvas.height = outH;
-          }
-          ctx.drawImage(displayVideo, 0, 0, outW, outH);
+        if (recCanvas.width !== outW || recCanvas.height !== outH) {
+          recCanvas.width = outW;
+          recCanvas.height = outH;
         }
+        ctx.drawImage(displayVideo, 0, 0, outW, outH);
       }
       const cw = recCanvas.width;
       const ch = recCanvas.height;
@@ -380,6 +372,7 @@ export default function ScreenRecorder({
   }, [cleanupDisplayAux, deliverRecording, getMicStream, getWebcamStream, onRecordingChange]);
 
   const startRecording = useCallback(async () => {
+    if (disabled) return;
     setError(null);
     setElapsed(0);
     setProgress(null);
@@ -512,7 +505,7 @@ export default function ScreenRecorder({
     timerRef.current = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
     }, 1000);
-  }, [getCanvas, getCropRegion, getMicStream, getWebcamStream, layoutMode, mode, onRecordingChange, startDisplayRecording, deliverRecording]);
+  }, [disabled, getCanvas, getCropRegion, getMicStream, getWebcamStream, layoutMode, mode, onRecordingChange, startDisplayRecording, deliverRecording]);
 
   const stopRecording = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -568,6 +561,11 @@ export default function ScreenRecorder({
     }
   }, []);
 
+  useImperativeHandle(ref, () => ({ start: startRecording, stop: stopRecording }), [startRecording, stopRecording]);
+
+  // Headless mode: caller drives start()/stop() via the ref and supplies its own UI.
+  if (headless) return null;
+
   const btnStyle: React.CSSProperties = compactIcon
     ? {
         display: 'flex',
@@ -601,8 +599,9 @@ export default function ScreenRecorder({
       {recState === 'idle' && (
         <button
           onClick={startRecording}
-          style={btnStyle}
-          title="Start screen recording"
+          disabled={disabled}
+          style={{ ...btnStyle, ...(disabled ? { opacity: 0.5, cursor: 'not-allowed' } : null) }}
+          title={disabled ? 'Another capture is in progress' : 'Start screen recording'}
         >
           <span style={{ color: '#FF3B30', fontSize: compactIcon ? 18 : 16 }}>&#9210;</span>
           {compactIcon ? null : 'Record'}
@@ -669,4 +668,6 @@ export default function ScreenRecorder({
       `}</style>
     </div>
   );
-}
+});
+
+export default ScreenRecorder;
