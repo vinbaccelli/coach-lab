@@ -250,7 +250,7 @@ export default function Home() {
   const [skeletonShowLeftLeg, setSkeletonShowLeftLeg] = useState(true);
   const [ballSampleMode, setBallSampleMode] = useState(false);
   const [webcamPipMode, setWebcamPipMode]   = useState<WebcamPipMode>('rectangle');
-  const [webcamOpacity, setWebcamOpacity]   = useState(1);
+  const [webcamOpacity]                     = useState(1);
   const [urlInput, setUrlInput]             = useState('');
   const [urlTarget, setUrlTarget]           = useState<'A' | 'B'>('A');
   /** Which stream the unified timeline controls (AB = sync both for uploaded HTML5 pairs). */
@@ -1403,8 +1403,8 @@ export default function Home() {
   }, []);
 
   const handleScreenRecordComplete = useCallback((blob: Blob, ext: string) => {
-    // Phase 3: the capture is always the full screen. Open the post-recording
-    // modal so the user can download full or crop afterward (post-processing).
+    // Phase 3: always full screen. If the user pre-selected a recording area,
+    // open the post-record modal straight into crop mode (area seeds the crop box).
     setRecordingSession({
       videoBlob: blob,
       ext,
@@ -1412,6 +1412,13 @@ export default function Home() {
       cropRegion: null,
     });
   }, [recordingArea]);
+
+  const handleResetRecordingSettings = useCallback(() => {
+    setRecordingArea(null);
+    setLayoutMode('youtube');
+    if (webcamActive) void toggleWebcam();
+    if (micActive) toggleMic();
+  }, [webcamActive, micActive, toggleWebcam, toggleMic]);
 
   const downloadBlob = useCallback((blob: Blob, ext: string) => {
     const url = URL.createObjectURL(blob);
@@ -2725,14 +2732,6 @@ export default function Home() {
     ballSampleMode,
     onBallSampleModeChange:          setBallSampleMode,
     onResetCropZoom:                 () => canvasRef.current?.resetCropZoom(),
-    webcamPipMode,
-    onWebcamPipModeChange:           setWebcamPipMode,
-    webcamOpacity,
-    onWebcamOpacityChange:           setWebcamOpacity,
-    webcamActive,
-    webcamCutout,
-    onWebcamCutoutChange:            setWebcamCutout,
-    onToggleWebcam:                  () => void toggleWebcam(),
     objMultiplierFrameCount,
     onObjMultiplierFrameCountChange: setObjMultiplierFrameCount,
     onObjMultiplierCapture:          handleObjMultiplierCapture,
@@ -2781,20 +2780,23 @@ export default function Home() {
         getCanvas={getCanvas}
         getWebcamStream={getWebcamStream}
         getMicStream={getMicStream}
-        getCropRegion={getCropRegion}
         layoutMode={layoutMode as 'youtube' | 'reels'}
+        onLayoutChange={setLayoutMode}
         onScreenRecordComplete={handleScreenRecordComplete}
         recordingArea={recordingArea}
         onRecordingAreaChange={setRecordingArea}
+        onScreenshotEntireScreen={handleScreenshotEntireScreen}
+        onScreenshotVideoOnly={handleScreenshotVideoOnly}
         webcamActive={webcamActive}
         onWebcamToggle={() => void toggleWebcam()}
         micActive={micActive}
         micMuted={micMuted}
         onMicToggle={toggleMic}
-        onLayoutChange={setLayoutMode}
-        onScreenshotEntireScreen={handleScreenshotEntireScreen}
-        onScreenshotVideoOnly={handleScreenshotVideoOnly}
-        onFileDropped={handleVideoFile}
+        webcamCutout={webcamCutout}
+        onWebcamCutoutChange={setWebcamCutout}
+        webcamPipMode={webcamPipMode}
+        onWebcamPipModeChange={setWebcamPipMode}
+        onResetRecordingSettings={handleResetRecordingSettings}
         hubCaptureLoading={hubCaptureLoading}
         hubCaptureTarget={hubCaptureTarget}
         hubCaptureIsActive={captureBusy && embedCapturePanelId === hubCaptureTarget}
@@ -2802,9 +2804,6 @@ export default function Home() {
         captureDownloadStatus={captureDownloadStatus}
         onDownloadCapture={handleDownloadCaptureBlob}
         onDismissCaptureDownload={handleDismissCaptureDownload}
-        screenRecordDownloadPending={screenRecordDownloadPending}
-        onScreenRecordDownloadYes={handleScreenRecordDownloadYes}
-        onScreenRecordDownloadNo={handleScreenRecordDownloadNo}
         hubIconOnly={phoneToolbarLayout && !toolbarLabelsExpanded}
         hubLabelsExpanded={toolbarLabelsExpanded}
         onToggleHubLabels={() => setToolbarLabelsExpanded((v) => !v)}

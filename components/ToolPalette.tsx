@@ -27,7 +27,6 @@ import {
   LayoutGrid,
   Video,
   Crosshair,
-  Camera,
   Sparkles,
   Link2,
   Home,
@@ -64,13 +63,6 @@ interface ToolPaletteProps {
   onCircleSpinningChange?: (spinning: boolean) => void;
   outlineEraserSize?: number;
   onOutlineEraserSizeChange?: (size: number) => void;
-  webcamPipMode?: WebcamPipMode;
-  onWebcamPipModeChange?: (mode: WebcamPipMode) => void;
-  webcamOpacity?: number;
-  onWebcamOpacityChange?: (v: number) => void;
-  webcamActive?: boolean;
-  webcamCutout?: boolean;
-  onWebcamCutoutChange?: (v: boolean) => void;
   skeletonShowAngles?: boolean;
   onSkeletonShowAnglesChange?: (v: boolean) => void;
   skeletonShowHeadLine?: boolean;
@@ -91,8 +83,6 @@ interface ToolPaletteProps {
   ballSampleMode?: boolean;
   onBallSampleModeChange?: (v: boolean) => void;
   onResetCropZoom?: () => void;
-  /** Webcam PiP: turn camera on/off (must be synchronous-friendly for Safari). */
-  onToggleWebcam?: () => void;
   /** Mobile: Coach Now–style precision draw (optional) */
   precisionDrawEnabled?: boolean;
   onPrecisionDrawToggle?: () => void;
@@ -341,14 +331,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onCircleSpinningChange,
     outlineEraserSize = 0,
     onOutlineEraserSizeChange,
-    webcamPipMode,
-    onWebcamPipModeChange,
-    webcamOpacity,
-    onWebcamOpacityChange,
-    webcamActive,
-    webcamCutout,
-    onWebcamCutoutChange,
-    onToggleWebcam,
     onResetCropZoom,
     skeletonShowAngles,
     onSkeletonShowAnglesChange,
@@ -1178,68 +1160,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
     );
   }
 
-  if (top === 'webcam') {
-    return (
-      <div style={shellStyle}>
-        <CollapseControl />
-        <div style={scrollAreaFor(io, mobileChrome)}>
-          <BackHeader title="Webcam" icon={<Camera size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
-          {onToggleWebcam ? (
-            <Row
-              k="wct"
-              icon={<Camera size={18} />}
-              label={webcamActive ? 'Turn camera off' : 'Turn camera on'}
-              onPress={() => {
-                fire('wct', () => onToggleWebcam());
-              }}
-            />
-          ) : null}
-          {onWebcamCutoutChange !== undefined &&
-            chk('wcbg', 'Background removal', !!webcamCutout, (v) => onWebcamCutoutChange(v))}
-          {onWebcamOpacityChange !== undefined && (
-            <div style={{ padding: '4px 8px' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280' }}>
-                Opacity ({Math.round((webcamOpacity ?? 1) * 100)}%)
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={5}
-                value={Math.round((webcamOpacity ?? 1) * 100)}
-                onChange={(e) => onWebcamOpacityChange(Number(e.target.value) / 100)}
-                style={{ width: '100%', accentColor: '#35679A' }}
-              />
-            </div>
-          )}
-          {onWebcamPipModeChange !== undefined && (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', padding: '6px 4px 0' }}>
-                PiP shape
-              </div>
-              {(['rectangle', 'circle'] as WebcamPipMode[]).map((m) => (
-                <Row
-                  key={m}
-                  k={`wcp-${m}`}
-                  active={webcamPipMode === m}
-                  icon={<Camera size={16} />}
-                  label={m.charAt(0).toUpperCase() + m.slice(1)}
-                  onPress={() => {
-                    fire(`wcp-${m}`, () => onWebcamPipModeChange(m));
-                  }}
-                />
-              ))}
-            </>
-          )}
-          <p style={{ margin: '4px 4px 0', fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
-            Drag the PiP on the canvas to move it. Safari: choose Window or Screen and pick this browser window when sharing for capture.
-          </p>
-        </div>
-        <GlobalActionsFooter />
-      </div>
-    );
-  }
-
   if (top === 'more') {
     return (
       <div style={shellStyle}>
@@ -1331,15 +1251,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
           />
         </div>
-        {onToggleWebcam ? (
-          <Row
-            k="wc-h"
-            active={webcamActive}
-            icon={<Camera size={denseMobile ? 16 : 20} />}
-            label="Webcam"
-            onPress={() => push('webcam')}
-          />
-        ) : null}
         {onPrecisionDrawToggle ? (
           <div data-tour-id="tour-precision">
             <Row
