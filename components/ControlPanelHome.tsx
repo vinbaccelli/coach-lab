@@ -15,7 +15,6 @@ const shell: CSSProperties = {
   width: '100%',
   maxWidth: 1120,
   margin: '0 auto',
-  minHeight: 'min(100%, 100%)',
   padding: '24px 16px calc(100px + env(safe-area-inset-bottom, 0px))',
   background: 'linear-gradient(180deg, #FFFFFF 0%, #FAF8F5 45%, #F5F0E8 100%)',
   color: '#1A1A1A',

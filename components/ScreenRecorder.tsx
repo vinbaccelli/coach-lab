@@ -21,6 +21,8 @@ interface ScreenRecorderProps {
   onRecordingChange?: (recording: boolean) => void;
   /** Block starting a recording while another capture/recording flow is busy. */
   disabled?: boolean;
+  /** Headless mode: surface errors to the parent UI. */
+  onRecordingError?: (message: string) => void;
   /** Render no UI — drive start()/stop() imperatively via the ref instead. */
   headless?: boolean;
 }
@@ -69,6 +71,7 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
   onRecordingComplete,
   onRecordingChange,
   disabled = false,
+  onRecordingError,
   headless = false,
 }: ScreenRecorderProps, ref) {
   const [recState, setRecState] = useState<RecState>('idle');
@@ -94,6 +97,10 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
   const docPipWindowRef = useRef<Window | null>(null);
   useEffect(() => { recStateRef.current = recState; }, [recState]);
+
+  useEffect(() => {
+    if (error) onRecordingError?.(error);
+  }, [error, onRecordingError]);
 
   const cleanupDisplayAux = useCallback(() => {
     if (rafPaintRef.current) {
@@ -141,7 +148,7 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
       }
 
       let outBlob: Blob = finalBlob;
-      let outExt = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
+      let outExt = 'mp4';
       const blobLooksMp4 =
         outBlob.type.includes('mp4') || /mp4/i.test(mimeTypeRef.current);
 
@@ -155,11 +162,19 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
             outExt = 'mp4';
           } else {
             setProgress(null);
-            outExt = 'webm';
+            setError('Could not convert recording to MP4. Try again.');
+            setRecState('idle');
+            onRecordingChange?.(false);
+            saveFinishedRef.current = true;
+            return;
           }
         } catch {
           setProgress(null);
-          outExt = 'webm';
+          setError('Could not convert recording to MP4. Try again.');
+          setRecState('idle');
+          onRecordingChange?.(false);
+          saveFinishedRef.current = true;
+          return;
         }
       }
 
@@ -547,19 +562,11 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
           onRecordingChange?.(false);
           return;
         }
-        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const url = URL.createObjectURL(rawBlob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `coach-lab-${ts}.webm`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 10_000);
-        setRecState('idle');
-        onRecordingChange?.(false);
-        saveFinishedRef.current = true;
+        const duration = Math.max(0, (Date.now() - startTimeRef.current) / 1000);
+        void deliverRecording(rawBlob, duration);
       }, 55_000);
     }
-  }, []);
+  }, [deliverRecording, onRecordingChange]);
 
   useImperativeHandle(ref, () => ({ start: startRecording, stop: stopRecording }), [startRecording, stopRecording]);
 

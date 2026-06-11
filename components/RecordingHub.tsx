@@ -96,6 +96,8 @@ export interface RecordingHubContentProps {
   hubIconOnly?: boolean;
   hubLabelsExpanded?: boolean;
   onToggleHubLabels?: () => void;
+  /** Surface recorder errors in the hub UI (required for headless mode on mobile). */
+  onRecordingError?: (message: string) => void;
 }
 
 /** @deprecated Overlay panel — use RecordingHubContent inside ToolPalette instead. */
@@ -132,7 +134,27 @@ function rowStyle(active?: boolean): React.CSSProperties {
   };
 }
 
-function iconOnlyRowStyle(active?: boolean): React.CSSProperties {
+function iconOnlyRowStyle(active?: boolean, onDarkRail?: boolean): React.CSSProperties {
+  if (onDarkRail) {
+    return {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: 44,
+      height: 44,
+      minHeight: 44,
+      maxHeight: 44,
+      padding: 0,
+      margin: '0 auto',
+      borderRadius: 10,
+      border: active ? '1px solid #8BB8E8' : '1px solid rgba(255,255,255,0.38)',
+      background: active ? 'rgba(53,103,154,0.55)' : 'rgba(255,255,255,0.18)',
+      color: active ? '#FFFFFF' : 'rgba(255,255,255,0.94)',
+      cursor: 'pointer',
+      touchAction: 'manipulation',
+      flexShrink: 0,
+    };
+  }
   return {
     display: 'flex',
     alignItems: 'center',
@@ -172,7 +194,7 @@ function HubRow({
   disabled?: boolean;
   danger?: boolean;
 }) {
-  const base = iconOnly ? iconOnlyRowStyle(active) : rowStyle(active);
+  const base = iconOnly ? iconOnlyRowStyle(active, iconOnly) : rowStyle(active);
   return (
     <button
       type="button"
@@ -226,17 +248,23 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     hubIconOnly = false,
     hubLabelsExpanded = false,
     onToggleHubLabels,
+    onRecordingError,
   } = props;
 
   const io = hubIconOnly;
+  const hubDarkRail = io;
   const recorderRef = useRef<ScreenRecorderHandle | null>(null);
   const [screenRecording, setScreenRecording] = useState(false);
   const [areaOverlayOpen, setAreaOverlayOpen] = useState(false);
+  const [recorderError, setRecorderError] = useState<string | null>(null);
 
   const startBlocked = captureBusy && !screenRecording;
   const handleStartStop = () => {
     if (screenRecording) recorderRef.current?.stop();
-    else if (!startBlocked) void recorderRef.current?.start();
+    else if (!startBlocked) {
+      setRecorderError(null);
+      void recorderRef.current?.start();
+    }
   };
 
   const gridStyle: React.CSSProperties = {
@@ -258,10 +286,10 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
       style={
         io
           ? {
-              ...iconOnlyRowStyle(false),
-              background: screenRecording ? '#FF3B30' : '#FAF8F5',
-              borderColor: screenRecording ? '#FF3B30' : '#E8E6E1',
-              color: screenRecording ? '#fff' : '#1A1A1A',
+              ...iconOnlyRowStyle(false, hubDarkRail),
+              background: screenRecording ? '#FF3B30' : hubDarkRail ? 'rgba(255,255,255,0.18)' : '#FAF8F5',
+              borderColor: screenRecording ? '#FF3B30' : hubDarkRail ? 'rgba(255,255,255,0.38)' : '#E8E6E1',
+              color: screenRecording ? '#fff' : hubDarkRail ? 'rgba(255,255,255,0.94)' : '#1A1A1A',
               ...(startBlocked ? { opacity: 0.5, cursor: 'not-allowed' } : null),
             }
           : {
@@ -340,6 +368,28 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
         )}
 
       <div data-tour-id="recording-hub" style={gridStyle}>
+        {recorderError ? (
+          io ? (
+            <button
+              type="button"
+              title={recorderError}
+              aria-label={recorderError}
+              style={{
+                ...iconOnlyRowStyle(false),
+                color: '#9a3412',
+                borderColor: '#fca5a5',
+                background: '#FFF7ED',
+                fontSize: 10,
+                fontWeight: 700,
+              }}
+              onClick={() => setRecorderError(null)}
+            >
+              !
+            </button>
+          ) : (
+            <p style={{ margin: 0, fontSize: 11, lineHeight: 1.4, color: '#9a3412', padding: '0 2px' }}>{recorderError}</p>
+          )
+        ) : null}
         {io && onToggleHubLabels ? (
           <HubRow
             iconOnly
@@ -412,6 +462,10 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           headless
           mode="display"
           disabled={captureBusy}
+          onRecordingError={(msg) => {
+            setRecorderError(msg);
+            onRecordingError?.(msg);
+          }}
           getCanvas={getCanvas}
           getWebcamStream={getWebcamStream}
           getMicStream={getMicStream}

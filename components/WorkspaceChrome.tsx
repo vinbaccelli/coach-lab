@@ -42,7 +42,9 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
   return (
     <div
       style={{
+        height: '100dvh',
         minHeight: '100vh',
+        overflow: 'hidden',
         background: '#0b0b0c',
         color: '#fff',
         display: 'flex',

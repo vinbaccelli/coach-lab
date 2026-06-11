@@ -19,7 +19,6 @@ import {
   RefreshCw,
   Minus,
   Square,
-  Zap,
   Layers,
   ChevronLeft,
   ChevronRight,
@@ -28,7 +27,6 @@ import {
   Video,
   Crosshair,
   Sparkles,
-  Link2,
   Home,
   PanelLeftOpen,
   PanelLeftClose,
@@ -153,7 +151,9 @@ function ToolbarIcon({ children, size = 18 }: { children: React.ReactElement; si
 function AngleToolIcon({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
-      <path d="M4 20 L4 8 L18 20 Z" stroke="#FFFFFF" strokeWidth="2.25" strokeLinejoin="miter" fill="none" />
+      <path d="M4 20 A16 16 0 0 1 20 20" stroke="#FFFFFF" strokeWidth="2.25" fill="none" />
+      <path d="M4 20 L4 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
+      <path d="M4 20 L15 11" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
     </svg>
   );
 }
@@ -161,9 +161,43 @@ function AngleToolIcon({ size = 18 }: { size?: number }) {
 function ArrowAngleToolIcon({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
-      <path d="M4 20 L4 8 L18 20 Z" stroke="#FFFFFF" strokeWidth="2.25" strokeLinejoin="miter" fill="none" />
+      <path d="M4 20 A16 16 0 0 1 20 20" stroke="#FFFFFF" strokeWidth="2.25" fill="none" />
+      <path d="M4 20 L4 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
+      <path d="M4 20 L15 11" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
       <path d="M14 14 L20 14 L20 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M20 14 L14 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SwingPathIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
+      <path d="M4 17 C7 7, 13 7, 16 13 S20 17, 20 17" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" fill="none" />
+      <circle cx="4" cy="17" r="1.75" fill="#FFFFFF" />
+      <path d="M18 15 L20 17 L18 19" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function JointChainIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
+      <circle cx="6" cy="17" r="2.5" stroke="#FFFFFF" strokeWidth="2.25" />
+      <circle cx="12" cy="7" r="2.5" stroke="#FFFFFF" strokeWidth="2.25" />
+      <circle cx="18" cy="17" r="2.5" stroke="#FFFFFF" strokeWidth="2.25" />
+      <path d="M8 15.5 L10.5 9.5" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
+      <path d="M13.5 9.5 L16 15.5" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RecordHubIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
+      <rect x="3" y="6" width="14" height="12" rx="2" stroke="#FFFFFF" strokeWidth="2.25" />
+      <path d="M17 10 L21 8 V16 L17 14 Z" stroke="#FFFFFF" strokeWidth="2.25" strokeLinejoin="round" fill="none" />
+      <circle cx="10" cy="12" r="2.75" fill="#FF3B30" stroke="#FFFFFF" strokeWidth="1.5" />
     </svg>
   );
 }
@@ -273,33 +307,54 @@ const scrollArea: React.CSSProperties = {
 function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties {
   let base = scrollArea;
   if (io) base = { ...scrollArea, padding: '6px 4px 10px', gap: 4 };
-  // The global actions footer is pinned outside this scroll area (a sibling of
-  // the shell), so we no longer pad ~100px at the bottom to clear it. The
-  // safe-area bottom inset is applied once by the page rail wrapper, avoiding
-  // the previous double inset that left a large empty gap on mobile.
+  if (mobileChrome) {
+    base = {
+      ...base,
+      paddingBottom: 'calc(8px + var(--coachlab-install-banner-height, 0px))',
+    };
+  }
   return base;
 }
 
-function rowBase(active: boolean, io?: boolean, dense?: boolean): React.CSSProperties {
+function rowBase(active: boolean, io?: boolean, dense?: boolean, onDarkRail?: boolean): React.CSSProperties {
   const compact = io || dense;
-  const base: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: io ? 0 : 10,
-    width: '100%',
-    minHeight: compact ? 34 : 44,
-    padding: compact ? '4px 2px' : '10px 12px',
-    borderRadius: 10,
-    border: active ? '1px solid #35679A' : '1px solid rgba(255,255,255,0.25)',
-    background: active ? 'rgba(53,103,154,0.2)' : 'rgba(255,255,255,0.12)',
-    color: '#1A1A1A',
-    cursor: 'pointer',
-    textAlign: io ? 'center' : 'left',
-    fontSize: 14,
-    fontWeight: 600,
-    touchAction: 'manipulation',
-    transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease',
-  };
+  const base: React.CSSProperties = onDarkRail
+    ? {
+        display: 'flex',
+        alignItems: 'center',
+        gap: io ? 0 : 10,
+        width: '100%',
+        minHeight: compact ? 44 : 44,
+        padding: compact ? '6px 4px' : '10px 12px',
+        borderRadius: 10,
+        border: active ? '1px solid #8BB8E8' : '1px solid rgba(255,255,255,0.38)',
+        background: active ? 'rgba(53,103,154,0.55)' : 'rgba(255,255,255,0.18)',
+        color: active ? '#FFFFFF' : 'rgba(255,255,255,0.94)',
+        cursor: 'pointer',
+        textAlign: io ? 'center' : 'left',
+        fontSize: 14,
+        fontWeight: 600,
+        touchAction: 'manipulation',
+        transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease',
+      }
+    : {
+        display: 'flex',
+        alignItems: 'center',
+        gap: io ? 0 : 10,
+        width: '100%',
+        minHeight: compact ? 34 : 44,
+        padding: compact ? '4px 2px' : '10px 12px',
+        borderRadius: 10,
+        border: active ? '1px solid #35679A' : '1px solid rgba(255,255,255,0.25)',
+        background: active ? 'rgba(53,103,154,0.2)' : 'rgba(255,255,255,0.12)',
+        color: '#1A1A1A',
+        cursor: 'pointer',
+        textAlign: io ? 'center' : 'left',
+        fontSize: 14,
+        fontWeight: 600,
+        touchAction: 'manipulation',
+        transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease',
+      };
   if (io) {
     return { ...base, justifyContent: 'center' };
   }
@@ -373,13 +428,18 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onToggleToolbarLabels,
   } = props;
 
-  const useVerticalThickness = Boolean(compactToolbarChrome || mobileChrome || phoneLayout);
+  const useVerticalThickness = Boolean((compactToolbarChrome || phoneLayout) && !mobileChrome);
   const iconOnlyMode = compactToolbarChrome
     ? !toolbarLabelsExpanded
     : Boolean(iconOnlyLayout || mobileChrome || collapsed || phoneLayout);
   const io = iconOnlyMode;
+  const rb = (active: boolean, iconOnly = io, dense = denseMobile || iconOnly): React.CSSProperties =>
+    rowBase(active, iconOnly, dense, mobileChrome);
+  const textMuted = mobileChrome ? 'rgba(255,255,255,0.78)' : '#6B7280';
+  const textSubtle = mobileChrome ? 'rgba(255,255,255,0.62)' : '#9CA3AF';
   const shellStyle: React.CSSProperties = {
     ...shell,
+    ...(mobileChrome ? { flex: 1, minHeight: 0 } : null),
     background: mobileChrome ? 'rgba(255,255,255,0.15)' : 'transparent',
     backdropFilter: mobileChrome ? 'blur(10px)' : undefined,
     WebkitBackdropFilter: mobileChrome ? 'blur(10px)' : undefined,
@@ -427,7 +487,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const iconBox = denseMobile || io ? 20 : 26;
 
   const GlobalActionsFooter = () => (
-    <>
+    <div
+      style={{
+        flexShrink: 0,
+        paddingBottom: mobileChrome
+          ? 'calc(4px + env(safe-area-inset-bottom, 0px) + var(--coachlab-install-banner-height, 0px))'
+          : undefined,
+      }}
+    >
       <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '8px 0' }} />
       <Row k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} label="Undo" onPress={onUndo} />
       <Row k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} label="Redo" onPress={onRedo} />
@@ -437,7 +504,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           type="button"
           aria-label="Clear session"
           style={{
-            ...rowBase(false, io, denseMobile || io),
+            ...rb(false, io, denseMobile || io),
             color: '#9a3412',
             borderColor: '#fca5a5',
             background: io ? 'rgba(254,226,226,0.35)' : '#FFF7ED',
@@ -470,7 +537,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           )}
         </button>
       ) : null}
-    </>
+    </div>
   );
 
   const ToolbarLead = () => (
@@ -480,7 +547,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           type="button"
           aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
           style={{
-            ...rowBase(false, true, denseMobile),
+            ...rb(false, true, denseMobile),
             transform: pressedKey === 'expand' ? 'scale(0.95)' : undefined,
           }}
           onPointerDown={(e) => {
@@ -497,7 +564,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         href="/"
         aria-label="Back to Control Panel"
         style={{
-          ...rowBase(false, io, denseMobile),
+          ...rb(false, io, denseMobile),
           textDecoration: 'none',
           color: 'inherit',
         }}
@@ -516,7 +583,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <Home />
           </ToolbarIcon>
         </span>
-        {io ? null : <span style={{ fontSize: 14, fontWeight: 700, color: '#35679A' }}>Control Panel</span>}
+        {io ? null : <span style={{ fontSize: 14, fontWeight: 700, color: mobileChrome ? 'rgba(255,255,255,0.94)' : '#35679A' }}>Control Panel</span>}
       </Link>
     </>
   );
@@ -535,7 +602,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           type="button"
           aria-label={collapsed ? 'Expand toolbar' : 'Collapse toolbar'}
           style={{
-            ...rowBase(false, true, denseMobile),
+            ...rb(false, true, denseMobile),
             width: denseMobile ? 32 : 36,
             minHeight: denseMobile ? 28 : 32,
             padding: 0,
@@ -573,7 +640,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           type="button"
           aria-label={sub ? `${label} — ${sub}` : label}
           style={{
-            ...rowBase(!!active, true, denseMobile),
+            ...rb(!!active, true, denseMobile),
             transform: pressed ? 'scale(0.95)' : undefined,
           }}
           onPointerDown={(e) => {
@@ -599,7 +666,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <button
         type="button"
         style={{
-          ...rowBase(!!active, false, denseMobile),
+          ...rb(!!active, false, denseMobile),
           transform: pressed ? 'scale(0.95)' : undefined,
         }}
         onPointerDown={(e) => {
@@ -612,7 +679,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         </span>
         <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
           <span style={{ lineHeight: 1.2 }}>{label}</span>
-          {sub ? <span style={{ fontSize: 11, fontWeight: 500, color: '#6B7280' }}>{sub}</span> : null}
+          {sub ? <span style={{ fontSize: 11, fontWeight: 500, color: textMuted }}>{sub}</span> : null}
         </span>
       </button>
     );
@@ -632,12 +699,16 @@ export default function ToolPalette(props: ToolPaletteProps) {
         type="button"
         aria-label="Back"
         style={{
-          ...rowBase(false, io),
-          background: '#fff',
-          borderColor: '#E8E6E1',
-          fontWeight: 700,
-          color: '#35679A',
-          ...(io ? { minHeight: 40, padding: '6px 4px' } : {}),
+          ...rb(false, io),
+          ...(mobileChrome
+            ? { fontWeight: 700, ...(io ? { minHeight: 44, padding: '6px 4px' } : {}) }
+            : {
+                background: '#fff',
+                borderColor: '#E8E6E1',
+                fontWeight: 700,
+                color: '#35679A',
+                ...(io ? { minHeight: 40, padding: '6px 4px' } : {}),
+              }),
         }}
         onPointerDown={(e) => {
           e.preventDefault();
@@ -661,13 +732,13 @@ export default function ToolPalette(props: ToolPaletteProps) {
           justifyContent: io ? 'center' : 'flex-start',
           gap: io ? 6 : 10,
           padding: io ? '6px 2px 4px' : '10px 4px 4px',
-          color: '#111827',
+          color: mobileChrome ? 'rgba(255,255,255,0.94)' : '#111827',
           fontWeight: 800,
           fontSize: io ? 0 : 15,
           position: 'relative',
         }}
       >
-        <span style={{ color: '#35679A', display: 'flex', alignItems: 'center' }}>{icon}</span>
+        <span style={{ color: mobileChrome ? '#FFFFFF' : '#35679A', display: 'flex', alignItems: 'center' }}>{icon}</span>
         {io ? (
           <span
             style={{
@@ -704,7 +775,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       aria-checked={checked}
       role="checkbox"
       style={{
-        ...rowBase(checked, io),
+        ...rb(checked, io),
         cursor: 'pointer',
         transform: pressedKey === key ? 'scale(0.95)' : undefined,
         position: 'relative',
@@ -722,7 +793,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             height: 28,
             alignItems: 'center',
             justifyContent: 'center',
-            color: checked ? '#35679A' : '#4B5563',
+            color: checked ? (mobileChrome ? '#FFFFFF' : '#35679A') : (mobileChrome ? 'rgba(255,255,255,0.78)' : '#4B5563'),
           }}
         >
           {icon}
@@ -743,7 +814,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 display: 'flex',
                 width: 26,
                 justifyContent: 'center',
-                color: checked ? '#35679A' : '#4B5563',
+                color: checked ? (mobileChrome ? '#FFFFFF' : '#35679A') : (mobileChrome ? 'rgba(255,255,255,0.78)' : '#4B5563'),
               }}
             >
               {icon}
@@ -781,7 +852,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <ToolbarLead />
-          <BackHeader title="Session & record" icon={<LayoutGrid size={18} />} />
+          <BackHeader title="Session & record" icon={<RecordHubIcon size={18} />} />
           {recordingHubContent}
         </div>
         <GlobalActionsFooter />
@@ -796,10 +867,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <div style={scrollAreaFor(io, mobileChrome)}>
           <ToolbarLead />
           <BackHeader title="Default style" icon={<Palette size={18} />} />
-          <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: '#6B7280' }}>
+          <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: textMuted }}>
             Sets the look for your next mark. Tap a finished shape on the video to edit it there.
           </p>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
             Preset colors
           </div>
           {PRESET_COLORS.map((c) => (
@@ -808,7 +879,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               type="button"
               aria-label={`Color ${c}`}
               style={{
-                ...rowBase(drawingOptions.color === c, io),
+                ...rb(drawingOptions.color === c, io),
                 justifyContent: io ? 'center' : 'flex-start',
                 transform: pressedKey === `c-${c}` ? 'scale(0.95)' : undefined,
               }}
@@ -829,7 +900,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               {io ? null : c}
             </button>
           ))}
-          <label style={{ ...rowBase(false, io), cursor: 'pointer' }}>
+          <label style={{ ...rb(false, io), cursor: 'pointer' }}>
             <span style={{ fontSize: 13, fontWeight: 600 }}>Custom</span>
             <input
               type="color"
@@ -847,7 +918,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <button
               type="button"
               aria-label="Solid line"
-              style={{ ...rowBase(!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
+              style={{ ...rb(!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('solid', () => onOptionsChange({ dashed: false }));
@@ -858,7 +929,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <button
               type="button"
               aria-label="Dashed line"
-              style={{ ...rowBase(!!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
+              style={{ ...rb(!!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('dash', () => onOptionsChange({ dashed: true }));
@@ -886,7 +957,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               )}
               {outlineEraserSize > 0 && (
                 <div style={{ padding: '0 8px' }}>
-                  <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
+                  <div style={{ fontSize: 12, color: textMuted, marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
                   <input
                     type="range"
                     min={5}
@@ -904,7 +975,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             chk('arrowEnd', 'Arrow at end of swing path', !!drawingOptions.arrowAtEnd, (v) => onOptionsChange({ arrowAtEnd: v }))}
           {activeTool === 'text' && (
             <div style={{ padding: '4px 8px 0' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', marginBottom: 4 }}>Text size</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', marginBottom: 4 }}>Text size</div>
               <input
                 type="range"
                 min={10}
@@ -914,7 +985,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
                 style={{ width: '100%' }}
               />
-              <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>{drawingOptions.fontSize}px</div>
+              <div style={{ fontSize: 12, color: textMuted, marginTop: 4 }}>{drawingOptions.fontSize}px</div>
             </div>
           )}
         </div>
@@ -922,114 +993,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
       </div>
     );
   }
-
-  const MarkStyleControls = (
-    <>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 700,
-          color: '#9CA3AF',
-          textTransform: 'uppercase',
-          letterSpacing: '0.06em',
-          padding: '10px 4px 6px',
-          borderTop: '1px solid #F0EDE8',
-          marginTop: 6,
-        }}
-      >
-        Mark style
-      </div>
-      {PRESET_COLORS.map((c) => (
-        <button
-          key={`dc-${c}`}
-          type="button"
-          aria-label={`Color ${c}`}
-          style={{
-            ...rowBase(drawingOptions.color === c, io),
-            justifyContent: io ? 'center' : 'flex-start',
-            transform: pressedKey === `dc-${c}` ? 'scale(0.95)' : undefined,
-          }}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            fire(`dc-${c}`, () => onOptionsChange({ color: c }));
-          }}
-        >
-          <span
-            style={{
-              width: io ? 26 : 22,
-              height: io ? 26 : 22,
-              borderRadius: 6,
-              background: c,
-              border: drawingOptions.color === c ? '2px solid #35679A' : '1px solid #E5E5E5',
-            }}
-          />
-          {io ? null : c}
-        </button>
-      ))}
-      <ThicknessPxBar
-        value={drawingOptions.lineWidth}
-        onChange={(v) => onOptionsChange({ lineWidth: v })}
-        vertical={useVerticalThickness}
-      />
-      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-        <button
-          type="button"
-          aria-label="Solid line"
-          style={{ ...rowBase(!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            fire('dc-solid', () => onOptionsChange({ dashed: false }));
-          }}
-        >
-          {io ? '━' : 'Solid'}
-        </button>
-        <button
-          type="button"
-          aria-label="Dashed line"
-          style={{ ...rowBase(!!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            fire('dc-dash', () => onOptionsChange({ dashed: true }));
-          }}
-        >
-          {io ? '┅' : 'Dashed'}
-        </button>
-      </div>
-      {onCircleSpinningChange &&
-        chk(
-          'dc-spin',
-          'Highlight pulse',
-          !!circleSpinning,
-          onCircleSpinningChange,
-          <Sparkles size={18} strokeWidth={2} />,
-        )}
-      {onOutlineEraserSizeChange && (
-        <>
-          {chk(
-            'dc-oe',
-            'Erase part of line',
-            outlineEraserSize > 0,
-            (v) => onOutlineEraserSizeChange(v ? 15 : 0),
-            <Eraser size={18} strokeWidth={2} />,
-          )}
-          {outlineEraserSize > 0 && (
-            <div style={{ padding: '0 8px' }}>
-              <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Eraser ({outlineEraserSize}px)</div>
-              <input
-                type="range"
-                min={5}
-                max={50}
-                step={1}
-                value={outlineEraserSize}
-                onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
-                style={{ width: '100%' }}
-              />
-            </div>
-          )}
-        </>
-      )}
-    </>
-  );
 
   if (top === 'draw') {
     return (
@@ -1047,17 +1010,15 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row k="aa-d" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} label="Angle arrow" onPress={() => setTool('arrowAngle')} />
           <Row k="rect" active={activeTool === 'rect'} icon={<Square size={18} />} label="Rectangle" onPress={() => setTool('rect')} />
           <Row k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} label="Circle" onPress={() => setTool('circle')} />
-          <Row k="sw" active={activeTool === 'manualSwing'} icon={<Zap size={18} />} label="Swing path" onPress={() => setTool('manualSwing')} />
-          <Row k="jc" active={activeTool === 'jointChain'} icon={<Link2 size={18} />} label="Joint chain" onPress={() => setTool('jointChain')} />
+          <Row k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} label="Swing path" onPress={() => setTool('manualSwing')} />
+          <Row k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} label="Joint chain" onPress={() => setTool('jointChain')} />
           <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => setTool('text')} />
           <Row
             k="st-d"
-            active={drawContextActive}
             icon={<Palette size={18} />}
             label="Style"
-            onPress={() => onOpenDrawContext?.()}
+            onPress={() => push('style')}
           />
-          {drawContextActive ? MarkStyleControls : null}
         </div>
         <GlobalActionsFooter />
       </div>
@@ -1072,8 +1033,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <BackHeader title="Angle" icon={<AngleToolIcon size={18} />} />
           <Row k="angle" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} label="Angle" onPress={() => setTool('angle')} />
           <Row k="aa" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} label="Angle arrow" onPress={() => setTool('arrowAngle')} />
-          <GlobalActionsFooter />
         </div>
+        <GlobalActionsFooter />
       </div>
     );
   }
@@ -1089,7 +1050,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               key="sov"
               aria-label="Skeleton on/off"
               style={{
-                ...rowBase(!skeletonOverlayPaused, io),
+                ...rb(!skeletonOverlayPaused, io),
                 cursor: 'pointer',
                 transform: pressedKey === 'sov' ? 'scale(0.95)' : undefined,
               }}
@@ -1120,12 +1081,12 @@ export default function ToolPalette(props: ToolPaletteProps) {
               )}
             </label>
           )}
-          <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
+          <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
             AI pose overlay follows the player. Keep the video playing for best results.
           </p>
           <button
             type="button"
-            style={{ ...rowBase(false, io), color: '#C2410C', borderColor: '#FED7AA', background: '#FFF7ED' }}
+            style={{ ...rb(false, io), color: '#C2410C', borderColor: '#FED7AA', background: '#FFF7ED' }}
             onPointerDown={(e) => {
               e.preventDefault();
               fire('reskel', () => onResetSkeleton());
@@ -1145,7 +1106,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               skeletonClassicColors ?? true,
               onSkeletonClassicColorsChange,
             )}
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', padding: '8px 4px 0' }}>Body parts</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', padding: '8px 4px 0' }}>Body parts</div>
           {onSkeletonShowRightArmChange !== undefined &&
             chk('ra', 'Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange)}
           {onSkeletonShowLeftArmChange !== undefined &&
@@ -1166,8 +1127,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <div style={scrollAreaFor(io, mobileChrome)}>
           <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
-          <p style={{ margin: '0 4px 8px', fontSize: 12, color: '#6B7280' }}>More tools will return in a future update.</p>
+          <p style={{ margin: '0 4px 8px', fontSize: 12, color: textMuted }}>More tools will return in a future update.</p>
         </div>
+        <GlobalActionsFooter />
       </div>
     );
   }
@@ -1193,7 +1155,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   //                 key={n}
   //                 type="button"
   //                 style={{
-  //                   ...rowBase(objMultiplierFrameCount === n, io),
+  //                   ...rb(objMultiplierFrameCount === n, io),
   //                   flex: '1 1 40%',
   //                   justifyContent: 'center',
   //                   minHeight: 40,
@@ -1233,7 +1195,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
             <Row
               k="cp"
-              icon={<LayoutGrid size={denseMobile ? 16 : 20} />}
+              icon={<RecordHubIcon size={denseMobile ? 16 : 20} />}
               label="Session & record"
               onPress={() => push('recording')}
             />
@@ -1243,6 +1205,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <div data-tour-id="tour-draw-tools">
           <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
         </div>
+        <Row k="style-h" icon={<Palette size={denseMobile ? 16 : 20} />} label="Style" onPress={() => push('style')} />
         <div data-tour-id="tour-skeleton">
           <Row
             k="sk"

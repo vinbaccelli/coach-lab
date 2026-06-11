@@ -143,7 +143,7 @@ export async function exportCroppedVideo(
     onProgress?.('Converting to MP4…');
     const conv = await convertWebmToMp4ForScreenRecord(out);
     if (conv.ok) return { ok: true, blob: conv.blob, ext: 'mp4' };
-    return { ok: true, blob: out, ext: 'webm' };
+    return { ok: false, error: 'Could not convert cropped recording to MP4.' };
   } catch (e) {
     try { URL.revokeObjectURL(url); } catch { /* noop */ }
     return { ok: false, error: e instanceof Error ? e.message : 'Crop export failed.' };

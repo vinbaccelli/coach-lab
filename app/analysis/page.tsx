@@ -549,6 +549,7 @@ export default function Home() {
   const TOOLBAR_EXPANDED_W = 208;
   const TOOLBAR_COLLAPSED_W = 56;
   const TOOLBAR_MOBILE_W = 40;
+  const TOOLBAR_MOBILE_FIXED_W = 48;
   const TOOLBAR_COMPACT_EXPANDED_W = 112;
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
 
@@ -582,12 +583,13 @@ export default function Home() {
   const compactToolbarRail = phoneToolbarLayout || (!isMobile && toolbarCollapsed);
 
   const toolbarWidthPx = useMemo(() => {
+    if (isMobile) return TOOLBAR_MOBILE_FIXED_W;
     if (compactToolbarRail) {
       return toolbarLabelsExpanded ? TOOLBAR_COMPACT_EXPANDED_W : TOOLBAR_MOBILE_W;
     }
     if (toolbarCollapsed) return TOOLBAR_COLLAPSED_W;
     return TOOLBAR_EXPANDED_W;
-  }, [compactToolbarRail, toolbarCollapsed, toolbarLabelsExpanded]);
+  }, [isMobile, compactToolbarRail, toolbarCollapsed, toolbarLabelsExpanded]);
 
   const showToolbarRail = isMobile ? showMobileToolStrip : true;
 
@@ -1464,7 +1466,9 @@ export default function Home() {
       );
 
       const result = await exportCroppedVideo(src, region);
-      if (!result.ok) throw new Error(result.error || 'Could not crop the recording.');
+      if (!result.ok) {
+        throw new Error(result.error || 'Could not crop the recording.');
+      }
       downloadBlob(result.blob, result.ext);
       setRecordingSession(null);
     },
@@ -2760,8 +2764,8 @@ export default function Home() {
       : {}),
     phoneLayout:                     reelsDesktopEarly,
     compactToolbarChrome:            compactToolbarRail,
-    toolbarLabelsExpanded,
-    onToggleToolbarLabels:             () => setToolbarLabelsExpanded((v) => !v),
+    toolbarLabelsExpanded:             isMobile ? false : toolbarLabelsExpanded,
+    onToggleToolbarLabels:             isMobile ? undefined : () => setToolbarLabelsExpanded((v) => !v),
     ...(compactToolbarRail
       ? {
           iconOnlyLayout: true,
@@ -2804,9 +2808,9 @@ export default function Home() {
         captureDownloadStatus={captureDownloadStatus}
         onDownloadCapture={handleDownloadCaptureBlob}
         onDismissCaptureDownload={handleDismissCaptureDownload}
-        hubIconOnly={phoneToolbarLayout && !toolbarLabelsExpanded}
-        hubLabelsExpanded={toolbarLabelsExpanded}
-        onToggleHubLabels={() => setToolbarLabelsExpanded((v) => !v)}
+        hubIconOnly={isMobile || (phoneToolbarLayout && !toolbarLabelsExpanded)}
+        hubLabelsExpanded={isMobile ? false : toolbarLabelsExpanded}
+        onToggleHubLabels={isMobile ? undefined : () => setToolbarLabelsExpanded((v) => !v)}
         captureBusy={captureBusy || embedCaptureRecording}
       />
     ),
@@ -2909,7 +2913,7 @@ export default function Home() {
         style={{
           flexShrink: 0,
           width: toolbarWidthPx,
-          transition: 'width 200ms ease',
+          ...(isMobile ? {} : { transition: 'width 200ms ease' }),
           display: 'flex',
           flexDirection: 'column',
           minHeight: 0,
@@ -2926,12 +2930,10 @@ export default function Home() {
           style={{
             flex: 1,
             minHeight: 0,
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            WebkitOverflowScrolling: 'touch',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
             padding: isMobile ? '4px 2px' : 6,
-            paddingBottom:
-              'calc(12px + var(--coachlab-install-banner-height, 0px) + env(safe-area-inset-bottom, 0px))',
           }}
         >
           <ToolPalette {...paletteProps} />
