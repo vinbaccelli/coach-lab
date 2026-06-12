@@ -236,7 +236,6 @@ export default function Home() {
   } | null>(null);
   const [isRecording, setIsRecording]     = useState(false);
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
-  const [videoBOffset, setVideoBOffset]   = useState(0);
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
   const [circleSpinning, setCircleSpinning] = useState(false);
@@ -1161,7 +1160,7 @@ export default function Home() {
     let playPendingB = false;
     let rafId = 0;
 
-    const bTarget = () => vA.currentTime - videoBOffset;
+    const bTarget = () => vA.currentTime;
     const bInRange = (t: number) => t >= 0 && t <= videoBDuration;
 
     // ── Event handlers: respond instantly to user actions on A ──
@@ -1289,7 +1288,7 @@ export default function Home() {
       vA.removeEventListener('ratechange', onRateA);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoBLoaded, videoBOffset, videoBDuration, playBothEnabled, youtubeVideoIdA, genericEmbedSrcA]);
+  }, [videoBLoaded, videoBDuration, playBothEnabled, youtubeVideoIdA, genericEmbedSrcA]);
 
   // ── Webcam ────────────────────────────────────────────────────────────────
   const setAudioMuted = useCallback((muted: boolean) => {
@@ -2628,6 +2627,28 @@ export default function Home() {
     else if (playbackTarget === 'A') setMarkupTarget('A');
   }, [playbackTarget, hasVideoBContent]);
 
+  const syncCompanionBeforePlay = useCallback(() => {
+    if (!playBothEnabled) return;
+    const vA = videoRef.current;
+    const vB = videoRefB.current;
+    if (!vA || !vB || !videoBLoaded) return;
+    const t = vA.currentTime;
+    if (t >= 0 && t <= videoBDuration) {
+      vB.playbackRate = vA.playbackRate;
+      vB.currentTime = t;
+      if (vB.paused) void vB.play().catch(() => {});
+    } else if (t < 0) {
+      vB.currentTime = 0;
+      if (!vB.paused) vB.pause();
+    }
+  }, [playBothEnabled, videoBLoaded, videoBDuration]);
+
+  const syncCompanionBeforePause = useCallback(() => {
+    if (!playBothEnabled) return;
+    const vB = videoRefB.current;
+    if (vB && !vB.paused) vB.pause();
+  }, [playBothEnabled]);
+
   const renderTimelineDock = () => (
     <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: isMobile ? 4 : 8 }}>
       {!(capturePrepPanel || (captureBusy && embedCaptureRecording)) && (hasVideoBContent ? (
@@ -2666,6 +2687,8 @@ export default function Home() {
                 compareSlot={hasVideoBContent ? playbackTarget : undefined}
                 onCompareSlotChange={hasVideoBContent ? setPlaybackTarget : undefined}
                 compareAbDisabled={!canPlaybackSyncBoth}
+                beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
+                beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
               />
             )
       ) : (
@@ -2942,6 +2965,7 @@ export default function Home() {
 
   return (
     <div
+      className="coachlab-analysis-root"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -2950,6 +2974,9 @@ export default function Home() {
         overflow: 'hidden',
         background: '#FFFFFF',
         color: '#1A1A1A',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        WebkitTouchCallout: 'none',
       }}
     >
 
@@ -3077,7 +3104,7 @@ export default function Home() {
             {/* Slot A: video panel + side-by-side actions when B is empty */}
             <div
               style={{
-                flex: layoutMode === 'reels' ? (hasVideoBContent ? '1 1 50%' : '1 1 auto') : 1,
+                flex: layoutMode === 'reels' ? '1 1 0' : 1,
                 display: 'flex',
                 flexDirection: 'column',
                 minWidth: 0,
@@ -3487,7 +3514,7 @@ export default function Home() {
             {hasVideoBContent ? (
               <>
                 <div style={{
-                  flex: layoutMode === 'reels' ? '1 1 50%' : 1,
+                  flex: layoutMode === 'reels' ? '1 1 0' : 1,
                   position: 'relative',
                   minWidth: 0,
                   minHeight: layoutMode === 'reels' ? 0 : undefined,
@@ -3799,53 +3826,6 @@ export default function Home() {
               {renderTimelineDock()}
             </div>
           </div>
-
-          {/* Match timing: shift Video B relative to A */}
-          {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
-            <div
-              style={{
-                position: 'absolute',
-                right: 12,
-                top: layoutMode === 'reels' ? 'calc(env(safe-area-inset-top, 0px) + 12px)' : undefined,
-                bottom: layoutMode === 'reels' ? undefined : (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) ? 260 : 132,
-                zIndex: 80,
-                pointerEvents: 'auto',
-                padding: '8px 12px',
-                borderRadius: 12,
-                background: 'rgba(250, 249, 247, 0.96)',
-                border: '1px solid #E5E5E5',
-                color: '#1A1A1A',
-                backdropFilter: 'blur(14px)',
-                WebkitBackdropFilter: 'blur(14px)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.06)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                fontSize: 12,
-              }}
-              title="Shift the right video earlier or later to line up with the left clip (seconds)"
-            >
-              <span style={{ fontWeight: 700 }}>Match timing</span>
-              <input
-                type="number"
-                step="0.1"
-                value={videoBOffset}
-                onChange={e => setVideoBOffset(parseFloat(e.target.value) || 0)}
-                style={{
-                  width: 76,
-                  height: 30,
-                  padding: '0 8px',
-                  borderRadius: 10,
-                  border: '1px solid #E5E5E5',
-                  background: '#FFFFFF',
-                  color: '#1A1A1A',
-                  outline: 'none',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                }}
-              />
-              <span style={{ color: '#6e6e73' }}>sec</span>
-            </div>
-          )}
 
           {/* Hint bar */}
           {false && <div />}

@@ -28,6 +28,7 @@ import {
   Crosshair,
   Sparkles,
   Home,
+  GripHorizontal,
   PanelLeftOpen,
   PanelLeftClose,
 } from 'lucide-react';
@@ -309,7 +310,7 @@ const scrollArea: React.CSSProperties = {
 
 function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties {
   let base = scrollArea;
-  if (io) base = { ...scrollArea, padding: '6px 4px 10px', gap: 4 };
+  if (io) base = { ...scrollArea, padding: '6px 4px 10px', gap: 4, alignItems: 'center' };
   if (mobileChrome) {
     base = {
       ...base,
@@ -355,7 +356,20 @@ function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolea
     whiteSpace: 'nowrap',
   };
   if (io) {
-    return { ...base, justifyContent: 'center' };
+    return {
+      ...base,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 0,
+      width: 44,
+      height: 44,
+      minHeight: 44,
+      maxHeight: 44,
+      margin: '0 auto',
+      gap: 0,
+      overflow: 'hidden',
+      whiteSpace: 'normal',
+    };
   }
   return base;
 }
@@ -427,11 +441,11 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onToggleToolbarLabels,
   } = props;
 
-  const useVerticalThickness = Boolean((compactToolbarChrome || phoneLayout) && !mobileChrome);
   const iconOnlyMode = compactToolbarChrome
     ? !toolbarLabelsExpanded
     : Boolean(iconOnlyLayout || mobileChrome || collapsed || phoneLayout);
   const io = iconOnlyMode;
+  const useVerticalThickness = Boolean((compactToolbarChrome || phoneLayout) && !mobileChrome && !io);
   const rb = (active: boolean, pressed: boolean, iconOnly = io, dense = denseMobile || iconOnly): React.CSSProperties =>
     rowBase(active, pressed, iconOnly, dense);
   const textMuted = '#6E6E73';
@@ -647,6 +661,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         : null),
       transform: pressed ? 'scale(0.95)' : undefined,
       justifyContent: io ? ('center' as const) : ('flex-start' as const),
+      ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0 } : null),
     };
     if (io) {
       return (
@@ -712,8 +727,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
         aria-label="Back"
         style={{
           ...rb(false, pressedKey === `back-${title}`, io, denseMobile),
+          ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0, justifyContent: 'center' } : null),
           fontWeight: 600,
-          fontSize: 16,
+          fontSize: io ? undefined : 16,
         }}
         onPointerDown={(e) => {
           e.preventDefault();
@@ -730,40 +746,24 @@ export default function ToolPalette(props: ToolPaletteProps) {
           </>
         )}
       </button>
+      {!io ? (
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: io ? 'center' : 'flex-start',
-          gap: io ? 6 : 10,
-          padding: io ? '6px 2px 4px' : '10px 4px 4px',
+          justifyContent: 'flex-start',
+          gap: 10,
+          padding: '10px 4px 4px',
           color: '#1D1D1F',
           fontWeight: 600,
-          fontSize: io ? 0 : 16,
+          fontSize: 16,
           position: 'relative',
         }}
       >
         <span style={{ display: 'flex', alignItems: 'center', color: 'currentColor' }}>{icon}</span>
-        {io ? (
-          <span
-            style={{
-              position: 'absolute',
-              width: 1,
-              height: 1,
-              padding: 0,
-              margin: -1,
-              overflow: 'hidden',
-              clip: 'rect(0,0,0,0)',
-              whiteSpace: 'nowrap',
-              border: 0,
-            }}
-          >
-            {title}
-          </span>
-        ) : (
-          title
-        )}
+        {title}
       </div>
+      ) : null}
     </>
   );
 
@@ -872,12 +872,16 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <div style={scrollAreaFor(io, mobileChrome)}>
           <ToolbarLead />
           <BackHeader title="Default style" icon={<Palette size={18} />} />
+          {!io ? (
+          <>
           <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: textMuted }}>
             Sets the look for your next mark. Tap a finished shape on the video to edit it there.
           </p>
           <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
             Preset colors
           </div>
+          </>
+          ) : null}
           {PRESET_COLORS.map((c) => (
             <button
               key={c}
@@ -905,13 +909,13 @@ export default function ToolPalette(props: ToolPaletteProps) {
               {io ? null : c}
             </button>
           ))}
-          <label style={{ ...rb(false, false, io), cursor: 'pointer' }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>Custom</span>
+          <label style={{ ...rb(false, false, io), cursor: 'pointer', ...(io ? { justifyContent: 'center' } : null) }}>
+            {io ? null : <span style={{ fontSize: 13, fontWeight: 600 }}>Custom</span>}
             <input
               type="color"
               value={drawingOptions.color}
               onChange={(e) => onOptionsChange({ color: e.target.value })}
-              style={{ marginLeft: 'auto', width: 44, height: 32, border: 'none', background: 'transparent' }}
+              style={{ marginLeft: io ? 0 : 'auto', width: io ? 32 : 44, height: io ? 32 : 32, border: 'none', background: 'transparent' }}
             />
           </label>
           <ThicknessPxBar
@@ -923,24 +927,24 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <button
               type="button"
               aria-label="Solid line"
-              style={{ ...rb(!drawingOptions.dashed, pressedKey === 'solid', io), flex: 1, justifyContent: 'center' }}
+              style={{ ...rb(!drawingOptions.dashed, pressedKey === 'solid', io), flex: io ? undefined : 1, justifyContent: 'center', ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : null) }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('solid', () => onOptionsChange({ dashed: false }));
               }}
             >
-              {io ? '━' : 'Solid line'}
+              {io ? <Minus size={18} strokeWidth={2} /> : 'Solid line'}
             </button>
             <button
               type="button"
               aria-label="Dashed line"
-              style={{ ...rb(!!drawingOptions.dashed, pressedKey === 'dash', io), flex: 1, justifyContent: 'center' }}
+              style={{ ...rb(!!drawingOptions.dashed, pressedKey === 'dash', io), flex: io ? undefined : 1, justifyContent: 'center', ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : null) }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('dash', () => onOptionsChange({ dashed: true }));
               }}
             >
-              {io ? '┅' : 'Dashed'}
+              {io ? <GripHorizontal size={18} strokeWidth={2} /> : 'Dashed'}
             </button>
           </div>
           {onCircleSpinningChange && animatedOutlineEligible &&
@@ -960,7 +964,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 (v) => onOutlineEraserSizeChange(v ? 15 : 0),
                 <Eraser size={18} strokeWidth={2} />,
               )}
-              {outlineEraserSize > 0 && (
+              {outlineEraserSize > 0 && !io && (
                 <div style={{ padding: '0 8px' }}>
                   <div style={{ fontSize: 12, color: textMuted, marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
                   <input
@@ -1210,7 +1214,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <div data-tour-id="tour-draw-tools">
           <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
         </div>
-        <Row k="style-h" icon={<Palette size={denseMobile ? 16 : 20} />} label="Style" onPress={() => push('style')} />
         <div data-tour-id="tour-skeleton">
           <Row
             k="sk"

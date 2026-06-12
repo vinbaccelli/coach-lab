@@ -49,6 +49,9 @@ export default function PreciseTimeline({
   compareSlot,
   onCompareSlotChange,
   compareAbDisabled = false,
+  /** Called synchronously before play/pause on the primary source (AB sync hook). */
+  beforePlay,
+  beforePause,
 }: {
   source: Source;
   defaultFps?: number;
@@ -61,6 +64,8 @@ export default function PreciseTimeline({
   compareSlot?: 'A' | 'B' | 'AB';
   onCompareSlotChange?: (v: 'A' | 'B' | 'AB') => void;
   compareAbDisabled?: boolean;
+  beforePlay?: () => void;
+  beforePause?: () => void;
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
@@ -268,21 +273,23 @@ export default function PreciseTimeline({
     tRef.current = nextClamped;
   }, [source]);
 
-  const seekFromClientX = useCallback((clientX: number) => {
+  const seekFromClientX = useCallback((clientX: number, dragging = false) => {
     const el = scrubTrackRef.current;
     const dur = dRef.current;
     if (!el || !dur) return;
     const r = el.getBoundingClientRect();
     const raw = clamp((clientX - r.left) / Math.max(1, r.width), 0, 1);
-    const sens = scrubSensRef.current;
-    const adj = clamp(0.5 + (raw - 0.5) * sens, 0, 1);
-    seekTo(adj * dur);
+    // Clicks map linearly (0% → start, 100% → end). Sensitivity applies only while dragging.
+    const pos = dragging
+      ? clamp(0.5 + (raw - 0.5) * scrubSensRef.current, 0, 1)
+      : raw;
+    seekTo(pos * dur);
   }, [seekTo]);
 
   useEffect(() => {
     const onWinMove = (e: PointerEvent) => {
       if (!scrubbingRef.current) return;
-      seekFromClientX(e.clientX);
+      seekFromClientX(e.clientX, true);
     };
     const onWinUp = () => { scrubbingRef.current = false; };
     window.addEventListener('pointermove', onWinMove);
@@ -329,34 +336,50 @@ export default function PreciseTimeline({
     if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (!v) return;
-      if (v.paused) v.play().catch(() => {});
-      else v.pause();
+      if (v.paused) {
+        beforePlay?.();
+        v.play().catch(() => {});
+      } else {
+        beforePause?.();
+        v.pause();
+      }
       return;
     }
     const p = source.playerRef.current;
     if (!p) return;
     try {
-      if (isPlaying) p.pauseVideo?.();
-      else p.playVideo?.();
+      if (isPlaying) {
+        beforePause?.();
+        p.pauseVideo?.();
+      } else {
+        beforePlay?.();
+        p.playVideo?.();
+      }
     } catch {
       /* YT player may be mid-destroy during embed → file swap */
     }
-  }, [isPlaying, source]);
+  }, [beforePause, beforePlay, isPlaying, source]);
 
   const stepFrame = useCallback((dir: 1 | -1, mult = 1) => {
-    // Pause then step for deterministic frame-by-frame scrubbing
+    const dur = dRef.current;
+    const delta = dir * frameStepRef.current * mult;
     if (source.kind === 'html') {
       const v = source.videoRef.current;
-      if (v) v.pause();
-    } else {
-      try {
-        source.playerRef.current?.pauseVideo?.();
-      } catch {
-        /* ignore */
-      }
+      if (!v) return;
+      v.pause();
+      const cur = v.currentTime;
+      const next = clamp(cur + delta, 0, dur || Math.max(cur + delta, 0));
+      v.currentTime = next;
+      tRef.current = next;
+      setT(next);
+      return;
     }
-    // Use a ref so rapid clicks remain responsive without waiting for re-render.
-    const next = tRef.current + dir * frameStepRef.current * mult;
+    try {
+      source.playerRef.current?.pauseVideo?.();
+    } catch {
+      /* ignore */
+    }
+    const next = clamp(tRef.current + delta, 0, dur || tRef.current + delta);
     tRef.current = next;
     setT(next);
     seekTo(next);
@@ -664,12 +687,12 @@ export default function PreciseTimeline({
         onPointerDown={(e) => {
           scrubbingRef.current = true;
           (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-          seekFromClientX(e.clientX);
+          seekFromClientX(e.clientX, false);
         }}
         onPointerMove={(e) => {
           if (!scrubbingRef.current) return;
           if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
-          seekFromClientX(e.clientX);
+          seekFromClientX(e.clientX, true);
         }}
         onPointerUp={(e) => {
           scrubbingRef.current = false;

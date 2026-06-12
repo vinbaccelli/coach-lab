@@ -147,3 +147,18 @@ button:active:not(:disabled),
 .tool-activating {
   animation: coachlab-tool-pulse 0.8s ease-in-out infinite;
 }
+
+/* Analysis workspace: prevent browser text-selection flash during canvas/tool interaction */
+.coachlab-analysis-root,
+.coachlab-analysis-root .coachlab-video-toolbar {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.coachlab-analysis-root input,
+.coachlab-analysis-root textarea,
+.coachlab-analysis-root [contenteditable='true'] {
+  -webkit-user-select: text;
+  user-select: text;
+}
