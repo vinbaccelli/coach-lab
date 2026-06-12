@@ -403,7 +403,7 @@ export default function SaveReportModal({
                 marginTop: 8,
                 border: 'none',
                 background: 'transparent',
-                color: '#35679A',
+                color: '#007AFF',
                 fontWeight: 600,
                 fontSize: 13,
                 cursor: 'pointer',

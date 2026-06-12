@@ -113,62 +113,65 @@ export interface RecordingHubProps extends RecordingHubContentProps {
   onHubCaptureShare: () => void;
 }
 
-function rowStyle(active?: boolean): React.CSSProperties {
+function rowStyle(active?: boolean, pressed?: boolean): React.CSSProperties {
+  let background = '#FFFFFF';
+  let color = '#1D1D1F';
+  let border = '1px solid #D1D1D6';
+  if (active) {
+    background = '#007AFF';
+    color = '#FFFFFF';
+    border = '1px solid #007AFF';
+  } else if (pressed) {
+    background = '#DCEBFF';
+    color = '#007AFF';
+  }
   return {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
     width: '100%',
     minWidth: 0,
+    minHeight: 44,
     padding: '9px 10px',
     borderRadius: 10,
-    border: active ? '1px solid #35679A' : '1px solid #E8E6E1',
-    background: active ? 'rgba(53,103,154,0.10)' : '#FAF8F5',
-    color: active ? '#35679A' : '#1A1A1A',
+    border,
+    background,
+    color,
     fontSize: 13,
-    fontWeight: 600,
+    fontWeight: 500,
     cursor: 'pointer',
     textAlign: 'left' as const,
-    overflow: 'hidden',
+    whiteSpace: 'nowrap' as const,
     touchAction: 'manipulation',
   };
 }
 
-function iconOnlyRowStyle(active?: boolean, onDarkRail?: boolean): React.CSSProperties {
-  if (onDarkRail) {
-    return {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      width: 44,
-      height: 44,
-      minHeight: 44,
-      maxHeight: 44,
-      padding: 0,
-      margin: '0 auto',
-      borderRadius: 10,
-      border: active ? '1px solid #8BB8E8' : '1px solid rgba(255,255,255,0.38)',
-      background: active ? 'rgba(53,103,154,0.55)' : 'rgba(255,255,255,0.18)',
-      color: active ? '#FFFFFF' : 'rgba(255,255,255,0.94)',
-      cursor: 'pointer',
-      touchAction: 'manipulation',
-      flexShrink: 0,
-    };
+function iconOnlyRowStyle(active?: boolean, pressed?: boolean): React.CSSProperties {
+  let background = '#FFFFFF';
+  let color = '#1D1D1F';
+  let border = '1px solid #D1D1D6';
+  if (active) {
+    background = '#007AFF';
+    color = '#FFFFFF';
+    border = '1px solid #007AFF';
+  } else if (pressed) {
+    background = '#DCEBFF';
+    color = '#007AFF';
   }
   return {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 36,
-    height: 36,
-    minHeight: 36,
-    maxHeight: 36,
+    width: 44,
+    height: 44,
+    minHeight: 44,
+    maxHeight: 44,
     padding: 0,
     margin: '0 auto',
     borderRadius: 10,
-    border: active ? '1px solid #35679A' : '1px solid #E8E6E1',
-    background: active ? 'rgba(53,103,154,0.10)' : '#FAF8F5',
-    color: active ? '#35679A' : '#1A1A1A',
+    border,
+    background,
+    color,
     cursor: 'pointer',
     touchAction: 'manipulation',
     flexShrink: 0,
@@ -194,7 +197,7 @@ function HubRow({
   disabled?: boolean;
   danger?: boolean;
 }) {
-  const base = iconOnly ? iconOnlyRowStyle(active, iconOnly) : rowStyle(active);
+  const base = iconOnly ? iconOnlyRowStyle(active) : rowStyle(active);
   return (
     <button
       type="button"
@@ -203,13 +206,13 @@ function HubRow({
       disabled={disabled}
       style={{
         ...base,
-        ...(danger ? { color: '#9a3412', borderColor: '#fca5a5', background: '#FFF7ED' } : null),
+        ...(danger ? { color: '#FF3B30', borderColor: '#D1D1D6', background: '#FFFFFF' } : null),
         ...(disabled ? { opacity: 0.5, cursor: 'not-allowed' } : null),
       }}
       onClick={disabled ? undefined : onClick}
     >
       <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{icon}</span>
-      {iconOnly ? null : <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>}
+      {iconOnly ? null : <span style={{ minWidth: 0 }}>{label}</span>}
     </button>
   );
 }
@@ -252,7 +255,6 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
   } = props;
 
   const io = hubIconOnly;
-  const hubDarkRail = io;
   const recorderRef = useRef<ScreenRecorderHandle | null>(null);
   const [screenRecording, setScreenRecording] = useState(false);
   const [areaOverlayOpen, setAreaOverlayOpen] = useState(false);
@@ -286,19 +288,19 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
       style={
         io
           ? {
-              ...iconOnlyRowStyle(false, hubDarkRail),
-              background: screenRecording ? '#FF3B30' : hubDarkRail ? 'rgba(255,255,255,0.18)' : '#FAF8F5',
-              borderColor: screenRecording ? '#FF3B30' : hubDarkRail ? 'rgba(255,255,255,0.38)' : '#E8E6E1',
-              color: screenRecording ? '#fff' : hubDarkRail ? 'rgba(255,255,255,0.94)' : '#1A1A1A',
+              ...iconOnlyRowStyle(screenRecording),
+              background: screenRecording ? '#FF3B30' : '#FFFFFF',
+              borderColor: screenRecording ? '#FF3B30' : '#D1D1D6',
+              color: screenRecording ? '#fff' : '#1D1D1F',
               ...(startBlocked ? { opacity: 0.5, cursor: 'not-allowed' } : null),
             }
           : {
               ...rowStyle(false),
               justifyContent: 'center',
-              background: screenRecording ? '#FF3B30' : '#16A34A',
+              background: screenRecording ? '#FF3B30' : '#007AFF',
               color: '#fff',
               border: 'none',
-              fontWeight: 700,
+              fontWeight: 600,
               ...(startBlocked ? { opacity: 0.5, cursor: 'not-allowed' } : null),
             }
       }
@@ -518,7 +520,7 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
             {captureDownloadStatus !== 'idle' ? (
               <FeedbackCard tone="info">
                 <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: '#1E40AF' }}>{captureDownloadStatus === 'preparing' ? 'Preparing download…' : 'Capture ready'}</span>
-                <button type="button" style={{ ...rowStyle(), width: 'auto', padding: '6px 10px', fontSize: 12, background: '#2563EB', color: '#fff', border: 'none' }} onClick={onDownloadCapture} disabled={captureDownloadStatus === 'preparing'}>Download</button>
+                <button type="button" style={{ ...rowStyle(), width: 'auto', padding: '6px 10px', fontSize: 12, background: '#007AFF', color: '#fff', border: 'none' }} onClick={onDownloadCapture} disabled={captureDownloadStatus === 'preparing'}>Download</button>
                 <button type="button" style={{ ...rowStyle(), width: 'auto', padding: '6px 10px', fontSize: 12 }} onClick={onDismissCaptureDownload}>Dismiss</button>
               </FeedbackCard>
             ) : null}

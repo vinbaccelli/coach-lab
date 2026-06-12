@@ -4,14 +4,14 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Coach Lab Design System ── */
+/* ── Coach Lab Design System (V1 freeze) ── */
 :root {
   --white: #ffffff;
-  --cream: #faf9f7;
-  --gray-dark: #1a1a1a;
+  --cream: #f2f2f7;
+  --gray-dark: #1d1d1f;
   --gray-mid: #6e6e73;
-  --gray-light: #faf9f7;
-  --border: #e5e5e5;
+  --gray-light: #f5f5f7;
+  --border-color: #d1d1d6;
 }
 
 * {
@@ -19,12 +19,12 @@
 }
 
 body {
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
-  background: var(--white);
-  color: var(--gray-dark);
+  font-family: var(--cl-font);
+  background: var(--cl-bg-primary);
+  color: var(--cl-text-primary);
   overflow: hidden;
-  height: 100vh; /* fallback */
-  height: 100dvh; /* track visible viewport on mobile Safari */
+  height: 100vh;
+  height: 100dvh;
 }
 
 /* ── Scrollbar ── */
@@ -55,103 +55,94 @@ body {
   @apply btn px-3 py-2 border border-gray-300 hover:bg-blue-50 text-gray-700;
 }
 
-/* ── Tool Button: default = readable on cream/white panels & submenus ── */
+/* ── Tool Button (light panels) ── */
 .tool-btn {
   @apply flex flex-col items-center justify-center gap-0.5 min-h-12 rounded-xl
          transition-colors cursor-pointer border font-medium;
-  border-color: #e5e5e5;
-  background: #ffffff;
-  color: #1a1a1a;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  border-color: var(--cl-border);
+  background: var(--cl-bg-panel);
+  color: var(--cl-text-primary);
+  box-shadow: none;
 }
 .tool-btn:hover {
-  background: #faf9f7;
-  border-color: #d4d4d4;
+  background: var(--cl-bg-secondary);
 }
 .tool-btn.active {
-  background: #faf9f7;
-  border-color: #c4c4c4;
-  color: #1a1a1a;
+  background: var(--cl-accent);
+  border-color: var(--cl-accent);
+  color: #ffffff;
 }
 .tool-btn span {
   @apply text-[9px] font-medium leading-none;
-  color: #3a3a3a;
+  color: inherit;
 }
 
-/* Left / upper frosted rails over video: white icons + legible shadow */
-.tool-btn-chrome {
-  @apply text-white border font-medium;
-  border-color: rgba(255, 255, 255, 0.22);
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffffff;
+/* Video toolbar: same light Apple surfaces (no frosted dark chrome) */
+.tool-btn-chrome,
+.coachlab-video-toolbar .tool-btn {
+  border-color: var(--cl-border);
+  background: var(--cl-bg-panel);
+  color: var(--cl-text-primary);
   box-shadow: none;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 1px rgba(0, 0, 0, 0.35));
-}
-.tool-btn-chrome:hover {
-  background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.35);
-}
-.tool-btn-chrome.active {
-  background: rgba(255, 255, 255, 0.22);
-  border-color: rgba(255, 255, 255, 0.45);
-  color: #ffffff;
-}
-.tool-btn-chrome span {
-  color: rgba(255, 255, 255, 0.92);
   filter: none;
 }
+.tool-btn-chrome:hover,
+.coachlab-video-toolbar .tool-btn:hover {
+  background: var(--cl-bg-secondary);
+}
+.tool-btn-chrome.active,
+.coachlab-video-toolbar .tool-btn.active {
+  background: var(--cl-accent);
+  border-color: var(--cl-accent);
+  color: #ffffff;
+}
+.tool-btn-chrome span,
+.coachlab-video-toolbar .tool-btn span {
+  color: inherit;
+  filter: none;
+}
+.coachlab-video-toolbar .tool-btn svg {
+  stroke: currentColor;
+  stroke-width: 2px;
+}
 
-/*
- * Analysis video overlays: black chrome buttons + white glyphs (mobile strip + desktop rails).
- * Scoped so cream-panel `.tool-btn` defaults stay unchanged elsewhere.
- */
-.coachlab-video-toolbar .tool-btn.tool-btn-chrome,
-.coachlab-video-toolbar .tool-btn.tool-btn-chrome.active {
-  background: #111111 !important;
-  border-color: rgba(255, 255, 255, 0.22) !important;
-  color: #ffffff !important;
-  filter: none !important;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35) !important;
+/* Toolbar row hover (inline-styled buttons) */
+.coachlab-video-toolbar button[type='button']:hover:not(:disabled):not([data-destructive='true']) {
+  background: var(--cl-bg-secondary) !important;
 }
-.coachlab-video-toolbar .tool-btn.tool-btn-chrome:hover {
-  background: #1f1f1f !important;
-  border-color: rgba(255, 255, 255, 0.3) !important;
-}
-.coachlab-video-toolbar .tool-btn.tool-btn-chrome.active {
-  background: #2a2a2a !important;
-  border-color: rgba(255, 255, 255, 0.38) !important;
-}
-.coachlab-video-toolbar .tool-btn.tool-btn-chrome svg {
-  stroke: #ffffff !important;
-  stroke-width: 2.25px !important;
-}
-.coachlab-video-toolbar .tool-btn.tool-btn-chrome span {
-  color: rgba(255, 255, 255, 0.95) !important;
+.coachlab-video-toolbar button[type='button'][data-active='true']:hover:not(:disabled) {
+  background: var(--cl-accent) !important;
 }
 
 /* ── Range Input ── */
 input[type='range'] {
-  @apply w-full accent-blue-500;
+  @apply w-full;
+  accent-color: var(--cl-accent);
 }
 
 /* ── Universal button tap feedback ── */
-button, [role="button"] {
+button,
+[role='button'] {
   transition: transform 0.1s ease, background 0.12s, color 0.12s, border-color 0.12s;
 }
-button:active:not(:disabled), [role="button"]:active:not(:disabled) {
+button:active:not(:disabled),
+[role='button']:active:not(:disabled) {
   transform: scale(0.95);
 }
 
-/* Tool buttons get snappier feedback */
 .tool-btn:active,
 .tool-btn-chrome:active {
   transform: scale(0.92) !important;
 }
 
-/* Skeleton loading pulse when tool is activating */
 @keyframes coachlab-tool-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 .tool-activating {
   animation: coachlab-tool-pulse 0.8s ease-in-out infinite;

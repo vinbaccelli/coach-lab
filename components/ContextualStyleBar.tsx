@@ -26,7 +26,7 @@ export type ContextualStyleBarProps = {
   onBeginOutlineEraser?: () => void;
 };
 
-const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
+const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#007AFF'] as const;
 
 export default function ContextualStyleBar({
   open,
@@ -120,7 +120,7 @@ export default function ContextualStyleBar({
         minHeight: 36,
         padding: '6px 10px',
         borderRadius: 10,
-        border: on ? '1px solid #35679A' : '1px solid #E5E5E5',
+        border: on ? '1px solid #007AFF' : '1px solid #E5E5E5',
         background: on ? 'rgba(53,103,154,0.12)' : '#FFFFFF',
         fontSize: 12,
         fontWeight: 600,
@@ -181,7 +181,7 @@ export default function ContextualStyleBar({
               height: 28,
               borderRadius: 8,
               background: c,
-              border: snapshot.color === c ? '2px solid #35679A' : '1px solid #D1D5DB',
+              border: snapshot.color === c ? '2px solid #007AFF' : '1px solid #D1D5DB',
               cursor: 'pointer',
             }}
           />
@@ -204,7 +204,7 @@ export default function ContextualStyleBar({
           step={1}
           value={snapshot.lineWidth}
           onChange={(e) => onChange({ lineWidth: Number(e.target.value) })}
-          style={{ flex: 1, accentColor: '#35679A' }}
+          style={{ flex: 1, accentColor: '#007AFF' }}
         />
         <span style={{ fontSize: 12, fontWeight: 700, minWidth: 28, textAlign: 'right' }}>
           {snapshot.lineWidth}px
@@ -220,7 +220,7 @@ export default function ContextualStyleBar({
           step={5}
           value={Math.round(snapshot.opacity * 100)}
           onChange={(e) => onChange({ opacity: Number(e.target.value) / 100 })}
-          style={{ flex: 1, accentColor: '#35679A' }}
+          style={{ flex: 1, accentColor: '#007AFF' }}
         />
         <span style={{ fontSize: 12, fontWeight: 700, minWidth: 32, textAlign: 'right' }}>
           {Math.round(snapshot.opacity * 100)}%
@@ -259,7 +259,7 @@ export default function ContextualStyleBar({
             step={1}
             value={snapshot.outlineEraserSize}
             onChange={(e) => onChange({ outlineEraserSize: Number(e.target.value) })}
-            style={{ flex: 1, accentColor: '#35679A' }}
+            style={{ flex: 1, accentColor: '#007AFF' }}
           />
           <span style={{ fontSize: 12, fontWeight: 700, minWidth: 32, textAlign: 'right' }}>
             {snapshot.outlineEraserSize}px

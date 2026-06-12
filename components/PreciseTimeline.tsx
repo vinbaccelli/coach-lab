@@ -39,7 +39,7 @@ const SPEED_OPTIONS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 export default function PreciseTimeline({
   source,
   defaultFps = 30,
-  accent = '#35679A',
+  accent = '#007AFF',
   leadingInsetPx = 0,
   compact = false,
   /** Desktop 9:16 phone: taller scrub; Speed/FPS tucked into Options */

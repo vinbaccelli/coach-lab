@@ -387,9 +387,9 @@ export default function ManualMatchRecorder() {
             minHeight: 44,
             padding: '0 14px',
             fontSize: 14,
-            background: '#35679A',
+            background: '#007AFF',
             color: '#fff',
-            borderColor: '#35679A',
+            borderColor: '#007AFF',
           }}
         >
           End match

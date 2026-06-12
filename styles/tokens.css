@@ -1,29 +1,54 @@
 :root {
-  --bg-primary: #FFFFFF;
-  --bg-cream: #FAF9F7;
-  --bg-warm: #FAF9F7;
-  --bg-secondary: #FFFFFF;
-  --bg-tertiary: #FAF9F7;
-  --text-primary: #1A1A1A;
-  --text-secondary: #6E6E73;
-  --text-tertiary: #AEAEB2;
-  --accent: #1A1A1A;
-  --accent-soft: rgba(26, 26, 26, 0.08);
-  --danger: #FF3B30;
-  --success: #34C759;
-  --warning: #FF9500;
-  --border: 0.5px solid #E5E5E5;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --font: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+  /* ── CoachLab V1 — Apple-inspired light theme ── */
+  --cl-bg-primary: #F5F5F7;
+  --cl-bg-panel: #FFFFFF;
+  --cl-bg-secondary: #F2F2F7;
+
+  --cl-text-primary: #1D1D1F;
+  --cl-text-secondary: #6E6E73;
+  --cl-text-muted: #8E8E93;
+
+  --cl-accent: #007AFF;
+  --cl-accent-pressed: #DCEBFF;
+  --cl-accent-soft: rgba(0, 122, 255, 0.12);
+
+  --cl-border: #D1D1D6;
+  --cl-border-subtle: rgba(209, 209, 214, 0.65);
+
+  --cl-success: #007AFF;
+  --cl-warning: #FF9F0A;
+  --cl-destructive: #FF3B30;
+
+  --cl-radius-sm: 8px;
+  --cl-radius-md: 10px;
+  --cl-radius-lg: 16px;
+
+  --cl-font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
+
+  /* Legacy aliases (keep existing references working) */
+  --bg-primary: var(--cl-bg-panel);
+  --bg-cream: var(--cl-bg-secondary);
+  --bg-warm: var(--cl-bg-secondary);
+  --bg-secondary: var(--cl-bg-panel);
+  --bg-tertiary: var(--cl-bg-secondary);
+  --text-primary: var(--cl-text-primary);
+  --text-secondary: var(--cl-text-secondary);
+  --text-tertiary: var(--cl-text-muted);
+  --accent: var(--cl-accent);
+  --accent-soft: var(--cl-accent-soft);
+  --danger: var(--cl-destructive);
+  --success: var(--cl-success);
+  --warning: var(--cl-warning);
+  --border: 1px solid var(--cl-border);
+  --radius-sm: var(--cl-radius-sm);
+  --radius-md: var(--cl-radius-md);
+  --radius-lg: var(--cl-radius-lg);
+  --font: var(--cl-font);
   --transition: all 0.15s ease;
 }
 
-/* Coach Lab analysis UI is tuned for light “paper” surfaces; keep tokens stable across OS theme. */
-
 body {
-  font-family: var(--font);
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  font-family: var(--cl-font);
+  background: var(--cl-bg-primary);
+  color: var(--cl-text-primary);
 }

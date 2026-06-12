@@ -104,7 +104,7 @@ export default function YouTubeControls({
         <button onClick={() => stepFrame(-1)} style={btnStyle} title="Back 1 frame">◀</button>
         <button onClick={() => stepFrame(1)} style={btnStyle} title="Forward 1 frame">▶</button>
 
-        <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#35679A', fontWeight: 700, marginLeft: 4 }}>
+        <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#007AFF', fontWeight: 700, marginLeft: 4 }}>
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
 
@@ -117,7 +117,7 @@ export default function YouTubeControls({
               style={{
                 ...btnStyle,
                 width: 44,
-                background: playbackRate === s ? '#35679A' : '#fff',
+                background: playbackRate === s ? '#007AFF' : '#fff',
                 color: playbackRate === s ? '#fff' : '#1D1D1F',
               }}
             >
@@ -136,7 +136,7 @@ export default function YouTubeControls({
             style={{
               ...btnStyle,
               width: 44,
-              background: frameMode === f ? '#35679A' : '#fff',
+              background: frameMode === f ? '#007AFF' : '#fff',
               color: frameMode === f ? '#fff' : '#1D1D1F',
             }}
           >

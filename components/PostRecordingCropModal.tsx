@@ -197,7 +197,7 @@ export default function PostRecordingCropModal({
     padding: '6px 14px',
     borderRadius: 8,
     border: 'none',
-    background: selected ? '#35679A' : 'rgba(255,255,255,0.14)',
+    background: selected ? '#007AFF' : 'rgba(255,255,255,0.14)',
     color: '#fff',
     fontSize: 13,
     fontWeight: 600,
@@ -312,7 +312,7 @@ export default function PostRecordingCropModal({
         {phase === 'choose' ? (
           <>
             <button type="button" style={bigBtn('rgba(255,255,255,0.16)')} onClick={onCancel} disabled={busy}>Cancel</button>
-            <button type="button" style={bigBtn('#35679A')} onClick={() => setPhase('crop')} disabled={busy}>Crop before download</button>
+            <button type="button" style={bigBtn('#007AFF')} onClick={() => setPhase('crop')} disabled={busy}>Crop before download</button>
             <button type="button" style={bigBtn('#16A34A')} onClick={onDownloadFull} disabled={busy}>Download full ({ext.toUpperCase()})</button>
           </>
         ) : (

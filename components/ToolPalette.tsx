@@ -115,7 +115,7 @@ interface ToolPaletteProps {
   onToggleToolbarLabels?: () => void;
 }
 
-const PRESET_COLORS = ['#FFFFFF', '#111827', '#DC2626', '#2563EB'] as const;
+const PRESET_COLORS = ['#FFFFFF', '#1D1D1F', '#FF3B30', '#007AFF'] as const;
 
 // Tools surfaced on the Draw sub-screen. Used so opening Draw highlights a tool
 // (and so leaving Draw can return the canvas to a neutral select state).
@@ -136,9 +136,8 @@ type NavScreen =
   | 'more';
 
 const TOOLBAR_ICON_PROPS = {
-  color: '#FFFFFF',
-  strokeWidth: 2.25,
-  style: { filter: 'drop-shadow(0 0 1px #000) drop-shadow(0 1px 0 #000)' },
+  strokeWidth: 2,
+  color: 'currentColor',
 } as const;
 
 function ToolbarIcon({ children, size = 18 }: { children: React.ReactElement; size?: number }) {
@@ -148,56 +147,60 @@ function ToolbarIcon({ children, size = 18 }: { children: React.ReactElement; si
   });
 }
 
+function svgIconProps(size: number) {
+  return { width: size, height: size, viewBox: '0 0 24 24', fill: 'none' as const, 'aria-hidden': true };
+}
+
 function AngleToolIcon({ size = 18 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
-      <path d="M4 20 A16 16 0 0 1 20 20" stroke="#FFFFFF" strokeWidth="2.25" fill="none" />
-      <path d="M4 20 L4 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
-      <path d="M4 20 L15 11" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
+    <svg {...svgIconProps(size)}>
+      <path d="M4 20 A16 16 0 0 1 20 20" stroke="currentColor" strokeWidth="2" fill="none" />
+      <path d="M4 20 L4 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M4 20 L15 11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }
 
 function ArrowAngleToolIcon({ size = 18 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
-      <path d="M4 20 A16 16 0 0 1 20 20" stroke="#FFFFFF" strokeWidth="2.25" fill="none" />
-      <path d="M4 20 L4 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
-      <path d="M4 20 L15 11" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
-      <path d="M14 14 L20 14 L20 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M20 14 L14 8" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
+    <svg {...svgIconProps(size)}>
+      <path d="M4 20 A16 16 0 0 1 20 20" stroke="currentColor" strokeWidth="2" fill="none" />
+      <path d="M4 20 L4 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M4 20 L15 11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M14 14 L20 14 L20 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M20 14 L14 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }
 
 function SwingPathIcon({ size = 18 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
-      <path d="M4 17 C7 7, 13 7, 16 13 S20 17, 20 17" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" fill="none" />
-      <circle cx="4" cy="17" r="1.75" fill="#FFFFFF" />
-      <path d="M18 15 L20 17 L18 19" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+    <svg {...svgIconProps(size)}>
+      <path d="M4 17 C7 7, 13 7, 16 13 S20 17, 20 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+      <circle cx="4" cy="17" r="1.75" fill="currentColor" />
+      <path d="M18 15 L20 17 L18 19" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
 function JointChainIcon({ size = 18 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
-      <circle cx="6" cy="17" r="2.5" stroke="#FFFFFF" strokeWidth="2.25" />
-      <circle cx="12" cy="7" r="2.5" stroke="#FFFFFF" strokeWidth="2.25" />
-      <circle cx="18" cy="17" r="2.5" stroke="#FFFFFF" strokeWidth="2.25" />
-      <path d="M8 15.5 L10.5 9.5" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
-      <path d="M13.5 9.5 L16 15.5" stroke="#FFFFFF" strokeWidth="2.25" strokeLinecap="round" />
+    <svg {...svgIconProps(size)}>
+      <circle cx="6" cy="17" r="2.5" stroke="currentColor" strokeWidth="2" />
+      <circle cx="12" cy="7" r="2.5" stroke="currentColor" strokeWidth="2" />
+      <circle cx="18" cy="17" r="2.5" stroke="currentColor" strokeWidth="2" />
+      <path d="M8 15.5 L10.5 9.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M13.5 9.5 L16 15.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }
 
 function RecordHubIcon({ size = 18 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={TOOLBAR_ICON_PROPS.style}>
-      <rect x="3" y="6" width="14" height="12" rx="2" stroke="#FFFFFF" strokeWidth="2.25" />
-      <path d="M17 10 L21 8 V16 L17 14 Z" stroke="#FFFFFF" strokeWidth="2.25" strokeLinejoin="round" fill="none" />
-      <circle cx="10" cy="12" r="2.75" fill="#FF3B30" stroke="#FFFFFF" strokeWidth="1.5" />
+    <svg {...svgIconProps(size)}>
+      <rect x="3" y="6" width="14" height="12" rx="2" stroke="currentColor" strokeWidth="2" />
+      <path d="M17 10 L21 8 V16 L17 14 Z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" fill="none" />
+      <circle cx="10" cy="12" r="2.75" fill="#FF3B30" stroke="currentColor" strokeWidth="1.5" />
     </svg>
   );
 }
@@ -234,7 +237,7 @@ function ThicknessPxBar({
         padding: '4px 0 8px',
       }}
     >
-      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', color: '#6B7280' }}>PX</span>
+      <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', color: 'var(--cl-text-muted)' }}>PX</span>
       <input
         type="range"
         min={1}
@@ -247,13 +250,13 @@ function ThicknessPxBar({
           width: 28,
           height: 96,
           margin: 0,
-          accentColor: '#35679A',
+          accentColor: 'var(--cl-accent)',
           WebkitAppearance: 'slider-vertical' as React.CSSProperties['WebkitAppearance'],
           writingMode: 'vertical-lr',
           direction: 'rtl',
         }}
       />
-      <span style={{ fontSize: 9, fontWeight: 600, color: '#9CA3AF', lineHeight: 1 }}>{value}</span>
+      <span style={{ fontSize: 9, fontWeight: 500, color: 'var(--cl-text-muted)', lineHeight: 1 }}>{value}</span>
     </div>
   );
 }
@@ -316,45 +319,41 @@ function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties
   return base;
 }
 
-function rowBase(active: boolean, io?: boolean, dense?: boolean, onDarkRail?: boolean): React.CSSProperties {
+function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolean): React.CSSProperties {
   const compact = io || dense;
-  const base: React.CSSProperties = onDarkRail
-    ? {
-        display: 'flex',
-        alignItems: 'center',
-        gap: io ? 0 : 10,
-        width: '100%',
-        minHeight: compact ? 44 : 44,
-        padding: compact ? '6px 4px' : '10px 12px',
-        borderRadius: 10,
-        border: active ? '1px solid #8BB8E8' : '1px solid rgba(255,255,255,0.38)',
-        background: active ? 'rgba(53,103,154,0.55)' : 'rgba(255,255,255,0.18)',
-        color: active ? '#FFFFFF' : 'rgba(255,255,255,0.94)',
-        cursor: 'pointer',
-        textAlign: io ? 'center' : 'left',
-        fontSize: 14,
-        fontWeight: 600,
-        touchAction: 'manipulation',
-        transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease',
-      }
-    : {
-        display: 'flex',
-        alignItems: 'center',
-        gap: io ? 0 : 10,
-        width: '100%',
-        minHeight: compact ? 34 : 44,
-        padding: compact ? '4px 2px' : '10px 12px',
-        borderRadius: 10,
-        border: active ? '1px solid #35679A' : '1px solid rgba(255,255,255,0.25)',
-        background: active ? 'rgba(53,103,154,0.2)' : 'rgba(255,255,255,0.12)',
-        color: '#1A1A1A',
-        cursor: 'pointer',
-        textAlign: io ? 'center' : 'left',
-        fontSize: 14,
-        fontWeight: 600,
-        touchAction: 'manipulation',
-        transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease',
-      };
+  let background = '#FFFFFF';
+  let color = '#1D1D1F';
+  let border = '1px solid #D1D1D6';
+
+  if (active) {
+    background = '#007AFF';
+    color = '#FFFFFF';
+    border = '1px solid #007AFF';
+  } else if (pressed) {
+    background = '#DCEBFF';
+    color = '#007AFF';
+    border = '1px solid #D1D1D6';
+  }
+
+  const base: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: io ? 8 : 10,
+    width: '100%',
+    minHeight: 44,
+    padding: compact ? (io ? '8px 10px' : '8px 12px') : '10px 12px',
+    borderRadius: 10,
+    border,
+    background,
+    color,
+    cursor: 'pointer',
+    textAlign: io ? 'left' : 'left',
+    fontSize: 13,
+    fontWeight: 500,
+    touchAction: 'manipulation',
+    transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease',
+    whiteSpace: 'nowrap',
+  };
   if (io) {
     return { ...base, justifyContent: 'center' };
   }
@@ -433,16 +432,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
     ? !toolbarLabelsExpanded
     : Boolean(iconOnlyLayout || mobileChrome || collapsed || phoneLayout);
   const io = iconOnlyMode;
-  const rb = (active: boolean, iconOnly = io, dense = denseMobile || iconOnly): React.CSSProperties =>
-    rowBase(active, iconOnly, dense, mobileChrome);
-  const textMuted = mobileChrome ? 'rgba(255,255,255,0.78)' : '#6B7280';
-  const textSubtle = mobileChrome ? 'rgba(255,255,255,0.62)' : '#9CA3AF';
+  const rb = (active: boolean, pressed: boolean, iconOnly = io, dense = denseMobile || iconOnly): React.CSSProperties =>
+    rowBase(active, pressed, iconOnly, dense);
+  const textMuted = '#6E6E73';
+  const textSubtle = '#8E8E93';
   const shellStyle: React.CSSProperties = {
     ...shell,
     ...(mobileChrome ? { flex: 1, minHeight: 0 } : null),
-    background: mobileChrome ? 'rgba(255,255,255,0.15)' : 'transparent',
-    backdropFilter: mobileChrome ? 'blur(10px)' : undefined,
-    WebkitBackdropFilter: mobileChrome ? 'blur(10px)' : undefined,
+    background: 'transparent',
     boxShadow: 'none',
     border: 'none',
   };
@@ -495,19 +492,20 @@ export default function ToolPalette(props: ToolPaletteProps) {
           : undefined,
       }}
     >
-      <div style={{ height: 1, background: 'rgba(255,255,255,0.2)', margin: '8px 0' }} />
+      <div style={{ height: 1, background: '#D1D1D6', margin: '8px 0' }} />
       <Row k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} label="Undo" onPress={onUndo} />
       <Row k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} label="Redo" onPress={onRedo} />
-      <Row k="cl" icon={<Trash2 size={denseMobile || io ? 16 : 20} />} label="Clear all" onPress={onClear} />
+      <Row k="cl" destructive icon={<Trash2 size={denseMobile || io ? 16 : 20} />} label="Clear all" onPress={onClear} />
       {onCleanSession ? (
         <button
           type="button"
           aria-label="Clear session"
+          data-destructive="true"
           style={{
-            ...rb(false, io, denseMobile || io),
-            color: '#9a3412',
-            borderColor: '#fca5a5',
-            background: io ? 'rgba(254,226,226,0.35)' : '#FFF7ED',
+            ...rb(false, pressedKey === 'clean', io, denseMobile || io),
+            color: '#FF3B30',
+            borderColor: '#D1D1D6',
+            background: pressedKey === 'clean' ? '#FFECEC' : '#FFFFFF',
             transform: pressedKey === 'clean' ? 'scale(0.95)' : undefined,
           }}
           onPointerDown={(e) => {
@@ -529,10 +527,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
             </span>
           ) : (
             <>
-              <span style={{ display: 'flex', width: 26, justifyContent: 'center', color: '#9a3412' }}>
+              <span style={{ display: 'flex', width: 26, justifyContent: 'center' }}>
                 <RefreshCw size={18} />
               </span>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>Clear session</span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>Clear session</span>
             </>
           )}
         </button>
@@ -547,7 +545,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
           type="button"
           aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
           style={{
-            ...rb(false, true, denseMobile),
+            ...rb(false, pressedKey === 'expand', true, denseMobile),
+            justifyContent: 'center',
             transform: pressedKey === 'expand' ? 'scale(0.95)' : undefined,
           }}
           onPointerDown={(e) => {
@@ -564,7 +563,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         href="/"
         aria-label="Back to Control Panel"
         style={{
-          ...rb(false, io, denseMobile),
+          ...rb(false, false, io, denseMobile),
           textDecoration: 'none',
           color: 'inherit',
         }}
@@ -577,13 +576,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
             height: iconBox,
             alignItems: 'center',
             justifyContent: 'center',
+            flexShrink: 0,
           }}
         >
           <ToolbarIcon size={denseMobile ? 16 : 18}>
             <Home />
           </ToolbarIcon>
         </span>
-        {io ? null : <span style={{ fontSize: 14, fontWeight: 700, color: mobileChrome ? 'rgba(255,255,255,0.94)' : '#35679A' }}>Control Panel</span>}
+        {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
       </Link>
     </>
   );
@@ -602,9 +602,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
           type="button"
           aria-label={collapsed ? 'Expand toolbar' : 'Collapse toolbar'}
           style={{
-            ...rb(false, true, denseMobile),
-            width: denseMobile ? 32 : 36,
-            minHeight: denseMobile ? 28 : 32,
+            ...rb(false, pressedKey === 'collapse', true, denseMobile),
+            width: denseMobile ? 36 : 40,
+            minHeight: 44,
             padding: 0,
             justifyContent: 'center',
           }}
@@ -625,6 +625,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     label,
     onPress,
     sub,
+    destructive,
   }: {
     k: string;
     active?: boolean;
@@ -632,17 +633,29 @@ export default function ToolPalette(props: ToolPaletteProps) {
     label: string;
     onPress: () => void;
     sub?: string;
+    destructive?: boolean;
   }) => {
     const pressed = pressedKey === k;
+    const rowStyle = {
+      ...rb(!!active, pressed, io, denseMobile),
+      ...(destructive && !active
+        ? {
+            color: '#FF3B30',
+            background: pressed ? '#FFECEC' : '#FFFFFF',
+            borderColor: '#D1D1D6',
+          }
+        : null),
+      transform: pressed ? 'scale(0.95)' : undefined,
+      justifyContent: io ? ('center' as const) : ('flex-start' as const),
+    };
     if (io) {
       return (
         <button
           type="button"
           aria-label={sub ? `${label} — ${sub}` : label}
-          style={{
-            ...rb(!!active, true, denseMobile),
-            transform: pressed ? 'scale(0.95)' : undefined,
-          }}
+          data-active={active ? 'true' : undefined}
+          data-destructive={destructive ? 'true' : undefined}
+          style={rowStyle}
           onPointerDown={(e) => {
             e.preventDefault();
             fire(k, onPress);
@@ -657,7 +670,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               justifyContent: 'center',
             }}
           >
-            <ToolbarIcon size={denseMobile ? 16 : io ? 20 : 18}>{icon as React.ReactElement}</ToolbarIcon>
+            {icon}
           </span>
         </button>
       );
@@ -665,21 +678,20 @@ export default function ToolPalette(props: ToolPaletteProps) {
     return (
       <button
         type="button"
-        style={{
-          ...rb(!!active, false, denseMobile),
-          transform: pressed ? 'scale(0.95)' : undefined,
-        }}
+        data-active={active ? 'true' : undefined}
+        data-destructive={destructive ? 'true' : undefined}
+        style={rowStyle}
         onPointerDown={(e) => {
           e.preventDefault();
           fire(k, onPress);
         }}
       >
-        <span style={{ display: 'flex', width: 26, justifyContent: 'center' }}>
-          <ToolbarIcon size={18}>{icon as React.ReactElement}</ToolbarIcon>
+        <span style={{ display: 'flex', width: 26, justifyContent: 'center', flexShrink: 0 }}>
+          {icon}
         </span>
         <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
-          <span style={{ lineHeight: 1.2 }}>{label}</span>
-          {sub ? <span style={{ fontSize: 11, fontWeight: 500, color: textMuted }}>{sub}</span> : null}
+          <span style={{ lineHeight: 1.2, fontSize: 13, fontWeight: 500 }}>{label}</span>
+          {sub ? <span style={{ fontSize: 11, fontWeight: 400, color: textMuted }}>{sub}</span> : null}
         </span>
       </button>
     );
@@ -699,16 +711,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
         type="button"
         aria-label="Back"
         style={{
-          ...rb(false, io),
-          ...(mobileChrome
-            ? { fontWeight: 700, ...(io ? { minHeight: 44, padding: '6px 4px' } : {}) }
-            : {
-                background: '#fff',
-                borderColor: '#E8E6E1',
-                fontWeight: 700,
-                color: '#35679A',
-                ...(io ? { minHeight: 40, padding: '6px 4px' } : {}),
-              }),
+          ...rb(false, pressedKey === `back-${title}`, io, denseMobile),
+          fontWeight: 600,
+          fontSize: 16,
         }}
         onPointerDown={(e) => {
           e.preventDefault();
@@ -732,13 +737,13 @@ export default function ToolPalette(props: ToolPaletteProps) {
           justifyContent: io ? 'center' : 'flex-start',
           gap: io ? 6 : 10,
           padding: io ? '6px 2px 4px' : '10px 4px 4px',
-          color: mobileChrome ? 'rgba(255,255,255,0.94)' : '#111827',
-          fontWeight: 800,
-          fontSize: io ? 0 : 15,
+          color: '#1D1D1F',
+          fontWeight: 600,
+          fontSize: io ? 0 : 16,
           position: 'relative',
         }}
       >
-        <span style={{ color: mobileChrome ? '#FFFFFF' : '#35679A', display: 'flex', alignItems: 'center' }}>{icon}</span>
+        <span style={{ display: 'flex', alignItems: 'center', color: 'currentColor' }}>{icon}</span>
         {io ? (
           <span
             style={{
@@ -775,7 +780,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       aria-checked={checked}
       role="checkbox"
       style={{
-        ...rb(checked, io),
+        ...rb(checked, pressedKey === key, io),
         cursor: 'pointer',
         transform: pressedKey === key ? 'scale(0.95)' : undefined,
         position: 'relative',
@@ -793,7 +798,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             height: 28,
             alignItems: 'center',
             justifyContent: 'center',
-            color: checked ? (mobileChrome ? '#FFFFFF' : '#35679A') : (mobileChrome ? 'rgba(255,255,255,0.78)' : '#4B5563'),
+            color: checked ? '#007AFF' : '#1D1D1F',
           }}
         >
           {icon}
@@ -806,7 +811,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             checked={checked}
             tabIndex={-1}
             aria-hidden
-            style={{ width: 18, height: 18, accentColor: '#35679A' }}
+            style={{ width: 18, height: 18, accentColor: '#007AFF' }}
           />
           {icon ? (
             <span
@@ -814,7 +819,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 display: 'flex',
                 width: 26,
                 justifyContent: 'center',
-                color: checked ? (mobileChrome ? '#FFFFFF' : '#35679A') : (mobileChrome ? 'rgba(255,255,255,0.78)' : '#4B5563'),
+                color: checked ? '#007AFF' : '#1D1D1F',
               }}
             >
               {icon}
@@ -879,7 +884,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               type="button"
               aria-label={`Color ${c}`}
               style={{
-                ...rb(drawingOptions.color === c, io),
+                ...rb(drawingOptions.color === c, pressedKey === `c-${c}`, io),
                 justifyContent: io ? 'center' : 'flex-start',
                 transform: pressedKey === `c-${c}` ? 'scale(0.95)' : undefined,
               }}
@@ -894,13 +899,13 @@ export default function ToolPalette(props: ToolPaletteProps) {
                   height: io ? 26 : 22,
                   borderRadius: 6,
                   background: c,
-                  border: drawingOptions.color === c ? '2px solid #35679A' : '1px solid #E5E5E5',
+                  border: drawingOptions.color === c ? '2px solid #007AFF' : '1px solid #D1D1D6',
                 }}
               />
               {io ? null : c}
             </button>
           ))}
-          <label style={{ ...rb(false, io), cursor: 'pointer' }}>
+          <label style={{ ...rb(false, false, io), cursor: 'pointer' }}>
             <span style={{ fontSize: 13, fontWeight: 600 }}>Custom</span>
             <input
               type="color"
@@ -918,7 +923,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <button
               type="button"
               aria-label="Solid line"
-              style={{ ...rb(!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
+              style={{ ...rb(!drawingOptions.dashed, pressedKey === 'solid', io), flex: 1, justifyContent: 'center' }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('solid', () => onOptionsChange({ dashed: false }));
@@ -929,7 +934,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <button
               type="button"
               aria-label="Dashed line"
-              style={{ ...rb(!!drawingOptions.dashed, io), flex: 1, justifyContent: 'center' }}
+              style={{ ...rb(!!drawingOptions.dashed, pressedKey === 'dash', io), flex: 1, justifyContent: 'center' }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('dash', () => onOptionsChange({ dashed: true }));
@@ -1050,7 +1055,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               key="sov"
               aria-label="Skeleton on/off"
               style={{
-                ...rb(!skeletonOverlayPaused, io),
+                ...rb(!skeletonOverlayPaused, pressedKey === 'sov', io),
                 cursor: 'pointer',
                 transform: pressedKey === 'sov' ? 'scale(0.95)' : undefined,
               }}
@@ -1086,7 +1091,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           </p>
           <button
             type="button"
-            style={{ ...rb(false, io), color: '#C2410C', borderColor: '#FED7AA', background: '#FFF7ED' }}
+            style={{ ...rb(false, pressedKey === 'reskel', io), color: '#FF3B30', borderColor: '#D1D1D6', background: '#FFFFFF' }}
             onPointerDown={(e) => {
               e.preventDefault();
               fire('reskel', () => onResetSkeleton());

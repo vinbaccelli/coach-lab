@@ -219,7 +219,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
         alignItems: 'center',
         gap: '8px',
       }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#35679A', width: 24 }}>A</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#007AFF', width: 24 }}>A</span>
 
         {/* Play/Pause */}
         <button
@@ -240,7 +240,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
           }}
           style={{
             ...btnStyle,
-            background: isPlayingA ? '#35679A' : '#E8E8ED',
+            background: isPlayingA ? '#007AFF' : '#E8E8ED',
             color: isPlayingA ? '#fff' : '#1D1D1F',
           }}
           title="Play/Pause (Space)"
@@ -309,7 +309,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
               outline: 'none',
               cursor: 'pointer',
               background: '#D1D5DB',
-              accentColor: '#35679A',
+              accentColor: '#007AFF',
             }}
           />
           {/* Time display below slider */}
@@ -488,7 +488,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
               if (isSynced && videoRefB?.current) videoRefB.current.playbackRate = s;
               setPlaybackRate(s);
             }}
-            style={{ width: 60, height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, border: '1px solid #35679A' }}
+            style={{ width: 60, height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, border: '1px solid #007AFF' }}
           />
         )}
 

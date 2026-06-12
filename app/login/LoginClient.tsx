@@ -58,7 +58,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
             height: 44,
             borderRadius: 12,
             border: '1px solid rgba(255,255,255,0.14)',
-            background: loading ? 'rgba(255,255,255,0.08)' : '#35679A',
+            background: loading ? 'rgba(255,255,255,0.08)' : '#007AFF',
             color: '#fff',
             fontWeight: 800,
             cursor: loading ? 'not-allowed' : 'pointer',

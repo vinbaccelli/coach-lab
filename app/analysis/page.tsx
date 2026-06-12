@@ -546,11 +546,11 @@ export default function Home() {
     return () => mq.removeEventListener('change', fn);
   }, []);
 
-  const TOOLBAR_EXPANDED_W = 208;
+  const TOOLBAR_EXPANDED_W = 240;
   const TOOLBAR_COLLAPSED_W = 56;
-  const TOOLBAR_MOBILE_W = 40;
-  const TOOLBAR_MOBILE_FIXED_W = 48;
-  const TOOLBAR_COMPACT_EXPANDED_W = 112;
+  const TOOLBAR_MOBILE_W = 56;
+  const TOOLBAR_MOBILE_FIXED_W = 56;
+  const TOOLBAR_COMPACT_EXPANDED_W = 196;
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
 
   useEffect(() => {
@@ -2919,11 +2919,9 @@ export default function Home() {
           minHeight: 0,
           overflow: 'hidden',
           zIndex: 80,
-          background: isMobile ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.15)',
-          backdropFilter: 'blur(10px)',
-          WebkitBackdropFilter: 'blur(10px)',
-          borderRight: isMobile ? 'none' : '1px solid rgba(255,255,255,0.2)',
-          boxShadow: isMobile ? 'none' : '2px 0 24px rgba(0,0,0,0.06)',
+          background: '#FFFFFF',
+          borderRight: '1px solid #D1D1D6',
+          boxShadow: 'none',
         }}
       >
         <div

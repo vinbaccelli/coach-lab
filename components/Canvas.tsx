@@ -324,7 +324,7 @@ function drawSkeletonOverlay(
   ctx.lineCap = 'round';
 
   // Draw limb + structural bones in solid yellow (or blue monochrome in alternative mode)
-  ctx.strokeStyle = classicColors ? '#FFD700' : '#35679A';
+  ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
   ctx.lineWidth = classicColors ? 2 : 1.5;
 
   for (const [a, b] of [...LIMB_BONES, ...STRUCT_BONES]) {
@@ -351,7 +351,7 @@ function drawSkeletonOverlay(
     const midHipX = ((lHip.x + rHip.x) / 2) * sx;
     const midHipY = ((lHip.y + rHip.y) / 2) * sy;
     ctx.save();
-    ctx.strokeStyle = classicColors ? '#39FF14' : '#35679A';
+    ctx.strokeStyle = classicColors ? '#39FF14' : '#007AFF';
     ctx.lineWidth = classicColors ? 2 : 1.5;
     ctx.setLineDash([6, 4]);
     ctx.beginPath();
@@ -372,7 +372,7 @@ function drawSkeletonOverlay(
     if (ys.length > 0) {
       const headY = Math.min(...ys);
       ctx.save();
-      ctx.strokeStyle = classicColors ? '#39FF14' : '#35679A';
+      ctx.strokeStyle = classicColors ? '#39FF14' : '#007AFF';
       ctx.lineWidth = 1.5;
       ctx.setLineDash([8, 6]);
       ctx.beginPath();
@@ -399,7 +399,7 @@ function drawSkeletonOverlay(
       const dy2 = (ay - ky) / dist;
       const ext = dist * 0.4;
       ctx.save();
-      ctx.strokeStyle = classicColors ? '#FFD700' : '#35679A';
+      ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
       ctx.lineWidth = classicColors ? 2 : 1.5;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
@@ -421,7 +421,7 @@ function drawSkeletonOverlay(
     if (classicColors) {
       ctx.fillStyle = i % 2 === 0 ? '#FF4444' : '#4488FF';
     } else {
-      ctx.fillStyle = '#35679A';
+      ctx.fillStyle = '#007AFF';
     }
     ctx.fill();
     if (classicColors) {
@@ -2827,7 +2827,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               // Draw faint outline around region on first (most-opaque) ghost
               if (i === stroGhosts.length - 1) {
                 ctx.globalAlpha = 0.5;
-                ctx.strokeStyle = '#35679A';
+                ctx.strokeStyle = '#007AFF';
                 ctx.lineWidth = 1.5;
                 ctx.setLineDash([4, 4]);
                 ctx.strokeRect(rx, ry, rw, rh);
@@ -3213,7 +3213,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const rx = Math.min(p1.x, p2.x), ry = Math.min(p1.y, p2.y);
           const rw = Math.abs(p2.x - p1.x), rh = Math.abs(p2.y - p1.y);
           ctx.save();
-          ctx.strokeStyle = '#35679A';
+          ctx.strokeStyle = '#007AFF';
           ctx.lineWidth = 2;
           ctx.setLineDash([5, 5]);
           ctx.strokeRect(rx, ry, rw, rh);

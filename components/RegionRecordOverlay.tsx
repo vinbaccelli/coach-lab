@@ -173,7 +173,7 @@ export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onC
             key={a}
             type="button"
             onClick={() => onAspectChange(a)}
-            style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: aspect === a ? '#35679A' : 'rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer' }}
+            style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: aspect === a ? '#007AFF' : 'rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer' }}
           >
             {a === 'free' ? 'Free' : a}
           </button>

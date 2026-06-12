@@ -16,8 +16,8 @@ const shell: CSSProperties = {
   maxWidth: 1120,
   margin: '0 auto',
   padding: '24px 16px calc(100px + env(safe-area-inset-bottom, 0px))',
-  background: 'linear-gradient(180deg, #FFFFFF 0%, #FAF8F5 45%, #F5F0E8 100%)',
-  color: '#1A1A1A',
+  background: '#F5F5F7',
+  color: '#1D1D1F',
 };
 
 const cardBase: CSSProperties = {
@@ -27,28 +27,28 @@ const cardBase: CSSProperties = {
   padding: 20,
   borderRadius: 16,
   background: '#FFFFFF',
-  border: '1px solid #E8E6E1',
-  color: '#1A1A1A',
+  border: '1px solid #D1D1D6',
+  color: '#1D1D1F',
   textDecoration: 'none',
   transition: 'border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease',
   minHeight: 132,
-  boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+  boxShadow: 'none',
 };
 
 export default function ControlPanelHome() {
   return (
     <div style={shell}>
       <div style={{ marginBottom: 22 }}>
-        <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 900, letterSpacing: '-0.03em', color: '#111827' }}>
+        <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 600, letterSpacing: '-0.03em', color: '#1D1D1F' }}>
           Control Panel
         </h1>
-        <p style={{ margin: '10px 0 0', fontSize: 14, lineHeight: 1.55, color: '#4B5563', maxWidth: 720 }}>
+        <p style={{ margin: '10px 0 0', fontSize: 13, lineHeight: 1.55, color: '#6E6E73', maxWidth: 720 }}>
           Your coaching workspace: open the video lab, manage players and documents, log matches by hand, or run the AI decoder.
           Everything routes into each player&apos;s profile when you connect storage and APIs later.
         </p>
       </div>
 
-      <h2 style={{ margin: '0 0 12px', fontSize: 12, fontWeight: 800, letterSpacing: '0.12em', color: '#9CA3AF', textTransform: 'uppercase' }}>
+      <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: '#1D1D1F' }}>
         Primary tools
       </h2>
       <div
@@ -62,12 +62,12 @@ export default function ControlPanelHome() {
       >
         <Link href="/analysis" style={cardBase} className="coachlab-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ color: '#2563EB' }}>
+            <span style={{ color: '#007AFF' }}>
               <Video size={22} strokeWidth={2.25} />
             </span>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>Video Analysis</span>
+            <span style={{ fontSize: 16, fontWeight: 600 }}>Video Analysis</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6B7280' }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
             Draw, measure angles, skeleton overlay, split-screen compare, zoom, slow motion, frame stepping, record with webcam or mic.
             Import videos by file upload.
           </p>
@@ -80,7 +80,7 @@ export default function ControlPanelHome() {
             </span>
             <span style={{ fontSize: 16, fontWeight: 800 }}>Coach Lab Academy</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6B7280' }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
             YouTube &amp; Instagram workflows, Drive organization, copyright guidelines, and the recommended
             CoachLab setup — replace fragile URL pasting with a clear import strategy.
           </p>
@@ -93,14 +93,14 @@ export default function ControlPanelHome() {
             </span>
             <span style={{ fontSize: 16, fontWeight: 800 }}>Player database</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6B7280' }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
             Technical sheet, match analysis timeline, and technical analysis with embedded YouTube / SwingVision clips.
             Player profiles are the hub for every document.
           </p>
         </Link>
       </div>
 
-      <h2 style={{ margin: '0 0 12px', fontSize: 12, fontWeight: 800, letterSpacing: '0.12em', color: '#9CA3AF', textTransform: 'uppercase' }}>
+      <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: '#1D1D1F' }}>
         Match intelligence
       </h2>
       <div
@@ -119,7 +119,7 @@ export default function ControlPanelHome() {
             </span>
             <span style={{ fontSize: 16, fontWeight: 800 }}>Manual match report</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6B7280' }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
             Point-by-point logging when you don&apos;t have automated tracking — server, score, shot type, outcome, notes.
             Designed to feed the AI decoder and the player&apos;s match analysis.
           </p>
@@ -132,14 +132,14 @@ export default function ControlPanelHome() {
             </span>
             <span style={{ fontSize: 16, fontWeight: 800 }}>AI match data decoder</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6B7280' }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
             Turn SwingVision exports, Gemini-assisted screenshots, or a finished manual report into stats, ratios, and patterns.
             Output will merge into match analysis when wired to your database.
           </p>
         </Link>
       </div>
 
-      <h2 style={{ margin: '0 0 12px', fontSize: 12, fontWeight: 800, letterSpacing: '0.12em', color: '#9CA3AF', textTransform: 'uppercase' }}>
+      <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: '#1D1D1F' }}>
         Profile &amp; business
       </h2>
       <div
@@ -155,7 +155,7 @@ export default function ControlPanelHome() {
             <UserCircle size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Coach profile</span>
           </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
             Services, pricing, payment links — your public-facing coaching identity inside CoachLab.
           </p>
         </Link>
@@ -165,7 +165,7 @@ export default function ControlPanelHome() {
             <Globe size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Public catalog</span>
           </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
             Optional showcase: reviews (Trustpilot / Google), socials, website — clients leave reviews with one click.
           </p>
         </Link>
@@ -175,20 +175,20 @@ export default function ControlPanelHome() {
             <CreditCard size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Subscription</span>
           </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6B7280' }}>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
             €15/month or €120/year via Stripe — connect your account when you&apos;re ready.
           </p>
         </Link>
       </div>
 
-      <p style={{ fontSize: 11, color: '#9CA3AF', lineHeight: 1.5, margin: 0, maxWidth: 640 }}>
+      <p style={{ fontSize: 13, color: '#8E8E93', lineHeight: 1.5, margin: 0, maxWidth: 640 }}>
         V1 workflow: upload MP4 files into Video Analysis; use Academy guides for YouTube unlisted, Drive folders, and social exports.
       </p>
 
       <style>{`
         .coachlab-card-hover-light:hover {
-          border-color: rgba(53, 103, 154, 0.45);
-          box-shadow: 0 8px 28px rgba(53, 103, 154, 0.12);
+          border-color: rgba(0, 122, 255, 0.35);
+          box-shadow: none;
           transform: translateY(-1px);
         }
         @media (max-width: 640px) {

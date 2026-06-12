@@ -207,7 +207,7 @@ export default function WebcamDropdown({
                   padding: '0 4px',
                   border: 'none',
                   background: 'none',
-                  color: '#35679A',
+                  color: '#007AFF',
                   fontWeight: 700,
                   fontSize: 15,
                   cursor: 'pointer',
@@ -264,7 +264,7 @@ export default function WebcamDropdown({
                   step={5}
                   value={Math.round(webcamOpacity * 100)}
                   onChange={(e) => onWebcamOpacityChange(Number(e.target.value) / 100)}
-                  style={{ width: '100%', accentColor: '#35679A' }}
+                  style={{ width: '100%', accentColor: '#007AFF' }}
                 />
               </div>
 
@@ -284,7 +284,7 @@ export default function WebcamDropdown({
                     style={{
                       minHeight: 46,
                       borderRadius: 12,
-                      border: webcamPipMode === m ? '2px solid #35679A' : '1px solid #E8E6E1',
+                      border: webcamPipMode === m ? '2px solid #007AFF' : '1px solid #E8E6E1',
                       background: webcamPipMode === m ? 'rgba(53,103,154,0.08)' : '#FAF8F5',
                       fontWeight: 600,
                       fontSize: 14,
