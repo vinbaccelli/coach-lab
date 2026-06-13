@@ -742,7 +742,13 @@ const DEFAULT_CONTEXTUAL_SNAPSHOT: ContextualStyleSnapshot = {
   outlineEraserSize: 0,
 };
 
-/** Keep letterboxed video from panning so far that empty margins dominate the view. */
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 5;
+/** Trackpad-friendly wheel zoom gain (exp(delta * gain)). */
+const ZOOM_WHEEL_GAIN = 0.0011;
+const ZOOM_BUTTON_STEP = 0.2;
+
+/** Keep pan inside the zoomed video rect — no letterbox gutters, full edge reach. */
 function clampPanToLetterbox(
   panX: number,
   panY: number,
@@ -754,34 +760,71 @@ function clampPanToLetterbox(
   dw: number,
   dh: number,
 ): { x: number; y: number } {
-  if (zoom <= 1 || dw <= 1 || dh <= 1) {
-    return { x: panX, y: panY };
+  if (zoom <= ZOOM_MIN + 0.001 || dw <= 1 || dh <= 1) {
+    return { x: 0, y: 0 };
   }
-  let px = panX;
-  let py = panY;
-  for (let iter = 0; iter < 10; iter++) {
-    const left = (dx - W / 2) * zoom + W / 2 + px;
-    const right = (dx + dw - W / 2) * zoom + W / 2 + px;
-    const top = (dy - H / 2) * zoom + H / 2 + py;
-    const bottom = (dy + dh - H / 2) * zoom + H / 2 + py;
-    let moved = false;
-    if (left > 0.5) {
-      px -= left;
-      moved = true;
-    } else if (right < W - 0.5) {
-      px += W - right;
-      moved = true;
+
+  const clampAxis = (pan: number, origin: number, size: number, viewport: number): number => {
+    const leading = (origin - viewport / 2) * zoom + viewport / 2;
+    const trailing = (origin + size - viewport / 2) * zoom + viewport / 2;
+    const span = trailing - leading;
+    if (span <= viewport + 0.5) {
+      const panMax = -leading;
+      const panMin = viewport - trailing;
+      if (panMax < panMin) return (panMax + panMin) / 2;
+      return Math.max(panMin, Math.min(panMax, pan));
     }
-    if (top > 0.5) {
-      py -= top;
-      moved = true;
-    } else if (bottom < H - 0.5) {
-      py += H - bottom;
-      moved = true;
-    }
-    if (!moved) break;
+    const panMax = -leading;
+    const panMin = viewport - trailing;
+    return Math.max(panMin, Math.min(panMax, pan));
+  };
+
+  return {
+    x: clampAxis(panX, dx, dw, W),
+    y: clampAxis(panY, dy, dh, H),
+  };
+}
+
+function applyZoomPanAt(
+  zoomRef: { current: number },
+  panXRef: { current: number },
+  panYRef: { current: number },
+  videoBounds: { dx: number; dy: number; dw: number; dh: number },
+  W: number,
+  H: number,
+  nextZoom: number,
+  focalX: number,
+  focalY: number,
+): void {
+  const oldZoom = zoomRef.current;
+  const z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, nextZoom));
+  if (Math.abs(z - oldZoom) < 0.0001) return;
+
+  if (z <= ZOOM_MIN + 0.001) {
+    zoomRef.current = ZOOM_MIN;
+    panXRef.current = 0;
+    panYRef.current = 0;
+    return;
   }
-  return { x: px, y: py };
+
+  const lx = (focalX - W / 2 - panXRef.current) / oldZoom + W / 2;
+  const ly = (focalY - H / 2 - panYRef.current) / oldZoom + H / 2;
+  zoomRef.current = z;
+  panXRef.current = focalX - (lx - W / 2) * z - W / 2;
+  panYRef.current = focalY - (ly - H / 2) * z - H / 2;
+  const c = clampPanToLetterbox(
+    panXRef.current,
+    panYRef.current,
+    z,
+    W,
+    H,
+    videoBounds.dx,
+    videoBounds.dy,
+    videoBounds.dw,
+    videoBounds.dh,
+  );
+  panXRef.current = c.x;
+  panYRef.current = c.y;
 }
 
 function drawCircleStroke(
@@ -1605,7 +1648,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // concurrent pointer events — touchAction:'none' delivers touch as pointers).
     const activePointersRef = useRef<Map<number, { clientX: number; clientY: number; pointerType: string }>>(new Map());
     // Canvas-zoom pinch consumer; non-null only while a 2-finger zoom owns the gesture.
-    const canvasPinchRef = useRef<{ lastDist: number } | null>(null);
+    const canvasPinchRef = useRef<{ lastDist: number; focalX: number; focalY: number } | null>(null);
+    const applyZoomAtRef = useRef<(nextZoom: number, focalX: number, focalY: number) => void>(() => {});
+    applyZoomAtRef.current = (nextZoom, focalX, focalY) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      applyZoomPanAt(
+        zoomRef,
+        panXRef,
+        panYRef,
+        videoBoundsRef.current,
+        canvas.width,
+        canvas.height,
+        nextZoom,
+        focalX,
+        focalY,
+      );
+      renderDirtyRef.current = true;
+    };
     const webcamPipBottomInsetRef = useRef(webcamPipBottomInsetPx);
     const webcamPipMobileChromeRef = useRef(webcamPipMobileChrome);
     const pipMirrorVideoRef = useRef<HTMLVideoElement>(null);
@@ -2136,17 +2196,51 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         panYRef.current = 0;
       },
       zoomIn: () => {
-        zoomRef.current = Math.min(5, zoomRef.current + 0.25);
+        const canvas = canvasRef.current;
+        const next = Math.min(ZOOM_MAX, zoomRef.current + ZOOM_BUTTON_STEP);
+        if (!canvas) {
+          zoomRef.current = next;
+          return;
+        }
+        applyZoomPanAt(
+          zoomRef,
+          panXRef,
+          panYRef,
+          videoBoundsRef.current,
+          canvas.width,
+          canvas.height,
+          next,
+          canvas.width / 2,
+          canvas.height / 2,
+        );
+        renderDirtyRef.current = true;
       },
       zoomOut: () => {
-        const next = Math.max(1, zoomRef.current - 0.25);
-        zoomRef.current = next;
-        if (next <= 1) { panXRef.current = 0; panYRef.current = 0; }
+        const canvas = canvasRef.current;
+        const next = Math.max(ZOOM_MIN, zoomRef.current - ZOOM_BUTTON_STEP);
+        if (!canvas) {
+          zoomRef.current = next;
+          if (next <= ZOOM_MIN) { panXRef.current = 0; panYRef.current = 0; }
+          return;
+        }
+        applyZoomPanAt(
+          zoomRef,
+          panXRef,
+          panYRef,
+          videoBoundsRef.current,
+          canvas.width,
+          canvas.height,
+          next,
+          canvas.width / 2,
+          canvas.height / 2,
+        );
+        renderDirtyRef.current = true;
       },
       resetZoomPan: () => {
-        zoomRef.current = 1.0;
+        zoomRef.current = ZOOM_MIN;
         panXRef.current = 0;
         panYRef.current = 0;
+        renderDirtyRef.current = true;
       },
       startObjMultiplierRegionSelect: () => {
         isSelectingObjMultRegionRef.current = true;
@@ -2621,8 +2715,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!canvas) return;
       const onWheel = (e: WheelEvent) => {
         e.preventDefault();
-        const factor = e.deltaY < 0 ? 1.1 : 0.9;
-        zoomRef.current = Math.max(0.25, Math.min(8, zoomRef.current * factor));
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const fx = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const fy = (e.clientY - rect.top) * (canvas.height / rect.height);
+        const factor = Math.exp(-e.deltaY * ZOOM_WHEEL_GAIN);
+        applyZoomAtRef.current(zoomRef.current * factor, fx, fy);
       };
       canvas.addEventListener('wheel', onWheel, { passive: false });
       return () => canvas.removeEventListener('wheel', onWheel);
@@ -2822,6 +2921,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
           dx = 0; dy = 0; dw = W; dh = H; vW = W; vH = H;
           videoBoundsRef.current = { dx, dy, dw, dh };
+        }
+
+        if (zoomRef.current > ZOOM_MIN + 0.001 && !isPanningRef.current) {
+          const c = clampPanToLetterbox(
+            panXRef.current,
+            panYRef.current,
+            zoomRef.current,
+            W,
+            H,
+            dx,
+            dy,
+            dw,
+            dh,
+          );
+          panXRef.current = c.x;
+          panYRef.current = c.y;
         }
 
         // ── StroMotion ghost frames ───────────────────────────────────────
@@ -4275,10 +4390,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           tryStartWebcamPinch(t1, t2, canvas)
         ) {
           // PiP pinch (webcamPinchRef now set); handled in onPointerMove.
-        } else {
+        } else if (canvas) {
           webcamPinchRef.current = null;
+          const rect = canvas.getBoundingClientRect();
+          const focalX = (cClient.clientX - rect.left) * (canvas.width / rect.width);
+          const focalY = (cClient.clientY - rect.top) * (canvas.height / rect.height);
           canvasPinchRef.current = {
             lastDist: Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY),
+            focalX,
+            focalY,
           };
         }
         e.preventDefault();
@@ -4605,12 +4725,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             applyWebcamPinchScale(dist / base.dist);
             queuePipUiSync();
           }
-        } else if (canvasPinchRef.current) {
-          const last = canvasPinchRef.current.lastDist;
+        } else if (canvasPinchRef.current && canvas) {
+          const pinch = canvasPinchRef.current;
+          const last = pinch.lastDist;
+          const midClientX = (t1.clientX + t2.clientX) / 2;
+          const midClientY = (t1.clientY + t2.clientY) / 2;
+          const rect = canvas.getBoundingClientRect();
+          const focalX = (midClientX - rect.left) * (canvas.width / rect.width);
+          const focalY = (midClientY - rect.top) * (canvas.height / rect.height);
           if (last > 0) {
-            zoomRef.current = Math.max(0.25, Math.min(8, zoomRef.current * (dist / last)));
+            applyZoomAtRef.current(zoomRef.current * (dist / last), focalX, focalY);
           }
-          canvasPinchRef.current.lastDist = dist;
+          canvasPinchRef.current = { lastDist: dist, focalX, focalY };
         }
         e.preventDefault();
         return;
@@ -4668,6 +4794,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           );
           panXRef.current = c.x;
           panYRef.current = c.y;
+          renderDirtyRef.current = true;
         }
         return;
       }
@@ -5638,7 +5765,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             type="button"
             onPointerDown={(e) => e.preventDefault()}
             onClick={() => {
-              zoomRef.current = Math.min(5, zoomRef.current + 0.25);
+              const canvas = canvasRef.current;
+              if (!canvas) return;
+              applyZoomAtRef.current(zoomRef.current + ZOOM_BUTTON_STEP, canvas.width / 2, canvas.height / 2);
             }}
             style={zoomControlBtnStyle}
             title="Zoom in"
@@ -5649,9 +5778,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             type="button"
             onPointerDown={(e) => e.preventDefault()}
             onClick={() => {
-              const next = Math.max(1, zoomRef.current - 0.25);
-              zoomRef.current = next;
-              if (next <= 1) { panXRef.current = 0; panYRef.current = 0; }
+              const canvas = canvasRef.current;
+              if (!canvas) return;
+              applyZoomAtRef.current(zoomRef.current - ZOOM_BUTTON_STEP, canvas.width / 2, canvas.height / 2);
             }}
             style={zoomControlBtnStyle}
             title="Zoom out"
@@ -5662,9 +5791,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             type="button"
             onPointerDown={(e) => e.preventDefault()}
             onClick={() => {
-              zoomRef.current = 1.0;
+              zoomRef.current = ZOOM_MIN;
               panXRef.current = 0;
               panYRef.current = 0;
+              renderDirtyRef.current = true;
             }}
             style={{
               ...zoomControlBtnStyle,
