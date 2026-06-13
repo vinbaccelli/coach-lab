@@ -483,6 +483,9 @@ export default function Home() {
   const attachPanelAContainer = useCallback((el: HTMLDivElement | null) => {
     (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
     (captureShellRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+    if (el) {
+      setCanvasSize({ width: el.clientWidth, height: el.clientHeight });
+    }
   }, []);
 
   const attachPanelBContainer = useCallback((el: HTMLDivElement | null) => {
@@ -3186,17 +3189,23 @@ export default function Home() {
                       display: 'flex', flexDirection: 'column',
                       alignItems: 'center', justifyContent: 'center',
                       gap: 16,
-                      borderRadius: layoutMode === 'reels' ? 0 : 20,
-                      background: layoutMode === 'reels' ? '#000' : '#FFFFFF',
                       pointerEvents: 'none',
                       zIndex: 10,
+                      background: 'transparent',
                     }}>
+                      <div style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                        gap: 16, borderRadius: layoutMode === 'reels' ? 0 : 20,
+                        background: layoutMode === 'reels' ? 'rgba(0,0,0,0.72)' : 'rgba(255,255,255,0.96)',
+                        padding: 24, pointerEvents: 'none',
+                      }}>
                       <svg width="40" height="40" viewBox="0 0 40 40" style={{ animation: 'spin 1s linear infinite' }}>
                         <circle cx="20" cy="20" r="16" fill="none" stroke="#007AFF" strokeWidth="3" strokeDasharray="75" strokeDashoffset="20" strokeLinecap="round" />
                       </svg>
                       <span style={{ fontSize: 15, fontWeight: 500, color: layoutMode === 'reels' ? '#fff' : '#1A1A1A', textAlign: 'center', maxWidth: 280 }}>
                         {urlLoadPhase}
                       </span>
+                      </div>
                     </div>
                   ) : urlLoadError && urlTarget === 'A' ? (
                     <div style={{
@@ -3204,12 +3213,19 @@ export default function Home() {
                       display: 'flex', flexDirection: 'column',
                       alignItems: 'center', justifyContent: 'center',
                       gap: 14,
-                      borderRadius: layoutMode === 'reels' ? 0 : 20,
-                      background: layoutMode === 'reels' ? '#000' : '#FFFFFF',
-                      padding: 24,
                       pointerEvents: 'none',
                       zIndex: 10,
+                      background: 'transparent',
                     }}>
+                      <div style={{
+                        display: 'flex', flexDirection: 'column',
+                        alignItems: 'center', justifyContent: 'center',
+                        gap: 14,
+                        borderRadius: layoutMode === 'reels' ? 0 : 20,
+                        background: layoutMode === 'reels' ? 'rgba(0,0,0,0.72)' : 'rgba(255,255,255,0.96)',
+                        padding: 24,
+                        pointerEvents: 'none',
+                      }}>
                       <div style={{ fontSize: 14, color: '#CC3333', textAlign: 'center', lineHeight: 1.5, maxWidth: 320 }}>
                         {urlLoadError}
                       </div>
@@ -3227,26 +3243,67 @@ export default function Home() {
                           Upload instead
                         </button>
                       </div>
+                      </div>
                     </div>
                   ) : (
                   <div style={{
                     position: 'absolute', inset: layoutMode === 'reels' ? 0 : 16,
                     display: 'flex', flexDirection: 'column',
                     alignItems: 'center', justifyContent: 'center',
-                    gap: 16,
-                    borderRadius: layoutMode === 'reels' ? 0 : 20,
-                    border: layoutMode === 'reels' ? 'none' : '1px solid #E8E8ED',
-                    background: layoutMode === 'reels' ? '#000' : '#FAFAFA',
-                    padding: 24,
                     pointerEvents: 'none',
                     zIndex: 10,
+                    background: 'transparent',
                   }}>
+                    {webcamActive ? (
+                      <button
+                        type="button"
+                        data-tour-id="tour-upload"
+                        onClick={() => fileInputRef.current?.click()}
+                        style={{
+                          position: 'absolute',
+                          top: layoutMode === 'reels' ? 12 : 0,
+                          left: '50%',
+                          transform: 'translateX(-50%)',
+                          minHeight: 40,
+                          padding: '0 16px',
+                          borderRadius: 12,
+                          border: '1px solid rgba(255,255,255,0.2)',
+                          background: 'rgba(0,0,0,0.55)',
+                          color: '#fff',
+                          fontSize: 13,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 8,
+                          pointerEvents: 'auto',
+                          backdropFilter: 'blur(8px)',
+                          WebkitBackdropFilter: 'blur(8px)',
+                        }}
+                      >
+                        <Upload size={16} /> Upload Video
+                      </button>
+                    ) : (
+                    <div style={{
+                      display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', justifyContent: 'center',
+                      gap: 16,
+                      borderRadius: layoutMode === 'reels' ? 0 : 20,
+                      border: layoutMode === 'reels' ? 'none' : '1px solid #E8E8ED',
+                      background: layoutMode === 'reels' ? 'rgba(0,0,0,0.72)' : '#FAFAFA',
+                      padding: 24,
+                      pointerEvents: 'none',
+                      maxWidth: 420,
+                    }}>
                     <button type="button" data-tour-id="tour-upload" onClick={() => fileInputRef.current?.click()} style={{ minHeight: 52, minWidth: 200, padding: '0 24px', borderRadius: 14, border: '1px solid #E5E5E5', background: '#FFFFFF', fontSize: 15, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, pointerEvents: 'auto' }}>
                       <Upload size={20} /> Upload Video
                     </button>
                     <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8e8e93', textAlign: 'center', maxWidth: 320 }}>
                       or drag and drop a video file here. See Coach Lab Academy in the Control Panel for import workflows.
                     </span>
+                    </div>
+                    )}
                   </div>
                   )
                 ) : (

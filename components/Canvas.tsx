@@ -1732,6 +1732,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
     }, [activeTool]);
     useEffect(() => {
+      if (webcamActive) renderDirtyRef.current = true;
+    }, [webcamActive]);
+    useEffect(() => {
       const src = webcamVideoRef?.current?.srcObject ?? null;
       const mirror = pipMirrorVideoRef.current;
       if (!mirror || !src) return;
@@ -2397,21 +2400,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       let cancelled = false;
       let rvfcId = 0;
       let intervalId: number | undefined;
-      const markDirty = () => { webcamFrameDirtyRef.current = true; };
-      const hasRvfc = typeof wc.requestVideoFrameCallback === 'function';
-      if (hasRvfc) {
-        const loop = () => {
-          if (cancelled) return;
-          markDirty();
+      const markDirty = () => {
+        webcamFrameDirtyRef.current = true;
+        renderDirtyRef.current = true;
+      };
+      const startTracking = () => {
+        if (cancelled) return;
+        markDirty();
+        const hasRvfc = typeof wc.requestVideoFrameCallback === 'function';
+        if (hasRvfc) {
+          const loop = () => {
+            if (cancelled) return;
+            markDirty();
+            rvfcId = wc.requestVideoFrameCallback(loop);
+          };
           rvfcId = wc.requestVideoFrameCallback(loop);
-        };
-        rvfcId = wc.requestVideoFrameCallback(loop);
-      } else {
-        intervalId = window.setInterval(markDirty, 33);
-      }
+        } else {
+          intervalId = window.setInterval(markDirty, 33);
+        }
+      };
+      if (wc.readyState >= 2) startTracking();
+      else wc.addEventListener('loadeddata', startTracking, { once: true });
       return () => {
         cancelled = true;
-        if (hasRvfc && rvfcId) {
+        wc.removeEventListener('loadeddata', startTracking);
+        if (rvfcId) {
           try { wc.cancelVideoFrameCallback?.(rvfcId); } catch { /* noop */ }
         }
         if (intervalId !== undefined) clearInterval(intervalId);
@@ -2692,7 +2705,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           zoomChanged ||
           renderDirtyRef.current ||
           hasActiveInteraction ||
-          webcamFrameDirtyRef.current;
+          webcamFrameDirtyRef.current ||
+          (webcamActiveRef.current && webcamPipModeRef.current !== 'hidden');
 
         if (!needsRender) return;
         renderDirtyRef.current = false;
@@ -2954,7 +2968,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const showWebcamPip =
           webcamActiveRef.current &&
           webcam &&
-          webcam.readyState >= 2 &&
+          webcam.videoWidth > 0 &&
+          webcam.readyState >= 1 &&
           webcamPipModeRef.current !== 'hidden';
         if (showWebcamPip) {
           let pip = webcamPipRectRef.current;
@@ -3816,7 +3831,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Erase near a point ─────────────────────────────────────────────────
 
     const webcamPipHitTest = useCallback((pos: Pt): 'tl' | 'tr' | 'bl' | 'br' | 'inside' | 'miss' => {
-      if (!webcamActiveRef.current || !webcamVideoRef?.current || webcamVideoRef.current.readyState < 2) {
+      if (!webcamActiveRef.current || !webcamVideoRef?.current || webcamVideoRef.current.readyState < 1 || webcamVideoRef.current.videoWidth <= 0) {
         return 'miss';
       }
       const canvas = canvasRef.current;
@@ -5304,7 +5319,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     };
 
     return (
-      <div style={{ position: 'absolute', inset: 0 }}>
+      <div style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
         {coachToolHint ? (
           <div
             style={{
