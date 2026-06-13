@@ -15,7 +15,7 @@ import { createPortal } from 'react-dom';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
-import { RecordingHubContent, type RecordingArea } from '@/components/RecordingHub';
+import { RecordingHubContent } from '@/components/RecordingHub';
 import PostRecordingCropModal, { type CropAspect, type PixelRegion } from '@/components/PostRecordingCropModal';
 import { exportCroppedVideo } from '@/lib/cropExport';
 import GuidedTour from '@/components/GuidedTour';
@@ -226,12 +226,9 @@ export default function Home() {
   const [screenRecordDownloadPending, setScreenRecordDownloadPending] = useState(false);
   // Phase 3: recording is always captured full screen; cropping (if any) is
   // chosen afterward in the post-recording modal and applied via post-processing.
-  // `recordingArea` is UI-only metadata from the optional "Set recording area".
-  const [recordingArea, setRecordingArea] = useState<RecordingArea | null>(null);
   const [recordingSession, setRecordingSession] = useState<{
     videoBlob: Blob | null;
     ext: string;
-    mode: 'full' | 'selected-area';
     cropRegion: null | { x: number; y: number; width: number; height: number; aspectRatio?: CropAspect };
   } | null>(null);
   const [isRecording, setIsRecording]     = useState(false);
@@ -814,7 +811,6 @@ export default function Home() {
     setCaptureStepStatus(null);
     setScreenRecordDownloadPending(false);
     setRecordingSession(null);
-    setRecordingArea(null);
     sessionCaptureBlobRef.current = null;
     sessionMp4BlobRef.current = null;
     captureMp4ConversionGenRef.current += 1;
@@ -1404,18 +1400,14 @@ export default function Home() {
   }, []);
 
   const handleScreenRecordComplete = useCallback((blob: Blob, ext: string) => {
-    // Phase 3: always full screen. If the user pre-selected a recording area,
-    // open the post-record modal straight into crop mode (area seeds the crop box).
     setRecordingSession({
       videoBlob: blob,
       ext,
-      mode: recordingArea ? 'selected-area' : 'full',
       cropRegion: null,
     });
-  }, [recordingArea]);
+  }, []);
 
   const handleResetRecordingSettings = useCallback(() => {
-    setRecordingArea(null);
     setLayoutMode('youtube');
     if (webcamActive) void toggleWebcam();
     if (micActive) toggleMic();
@@ -1437,7 +1429,7 @@ export default function Home() {
   const handleRecordingDownloadFull = useCallback(() => {
     const session = recordingSession;
     if (!session?.videoBlob) return;
-    setRecordingSession((s) => (s ? { ...s, mode: 'full', cropRegion: null } : s));
+    setRecordingSession((s) => (s ? { ...s, cropRegion: null } : s));
     downloadBlob(session.videoBlob, session.ext);
     setRecordingSession(null);
   }, [recordingSession, downloadBlob]);
@@ -1452,7 +1444,6 @@ export default function Home() {
         s
           ? {
               ...s,
-              mode: 'selected-area',
               cropRegion: {
                 x: Math.round(region.x),
                 y: Math.round(region.y),
@@ -1473,22 +1464,6 @@ export default function Home() {
     },
     [recordingSession, downloadBlob],
   );
-
-  // Pre-record area metadata -> fraction of the screen, used to seed the crop box.
-  const recordingAreaSeed = useMemo(() => {
-    if (!recordingArea || typeof window === 'undefined') return null;
-    const sw = window.innerWidth || 1;
-    const sh = window.innerHeight || 1;
-    return {
-      frac: {
-        x: recordingArea.x / sw,
-        y: recordingArea.y / sh,
-        w: recordingArea.width / sw,
-        h: recordingArea.height / sh,
-      },
-      aspect: recordingArea.aspectRatio,
-    };
-  }, [recordingArea]);
 
   const handleScreenRecordDownloadYes = useCallback(() => {
     const pack = screenRecordBlobRef.current;
@@ -2810,8 +2785,6 @@ export default function Home() {
         layoutMode={layoutMode as 'youtube' | 'reels'}
         onLayoutChange={setLayoutMode}
         onScreenRecordComplete={handleScreenRecordComplete}
-        recordingArea={recordingArea}
-        onRecordingAreaChange={setRecordingArea}
         onScreenshotEntireScreen={handleScreenshotEntireScreen}
         onScreenshotVideoOnly={handleScreenshotVideoOnly}
         webcamActive={webcamActive}
@@ -4259,9 +4232,6 @@ export default function Home() {
           <PostRecordingCropModal
             blob={recordingSession.videoBlob}
             ext={recordingSession.ext}
-            seedRegionFrac={recordingAreaSeed?.frac ?? null}
-            seedAspect={recordingAreaSeed?.aspect}
-            startInCrop={recordingSession.mode === 'selected-area'}
             onCancel={handleRecordingReviewCancel}
             onDownloadFull={handleRecordingDownloadFull}
             onExportCrop={handleRecordingExportCrop}

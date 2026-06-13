@@ -4,23 +4,18 @@
  * RecordingHub — the single, unified recording control surface.
  *
  * One ordered action grid (no nested toolbars, no duplicated controls):
- *   1. Layout 16:9
- *   2. Layout 9:16
- *   3. Screenshot — entire screen
- *   4. Screenshot — video frame
- *   5. Capture mode — entire screen
- *   6. Capture mode — selected area
- *   7. Start / Stop recording (toggle; also a sticky floating Stop while recording)
- *   8. Select recording area (opens metadata-only overlay)
- *   9. Webcam on/off
- *  10. Mic on/off
- *  11. Background removal on/off
- *  12. PiP shape (rectangle / circle)
- *  13. Reset recording settings
+ *   1. Layout toggle (16:9 ↔ 9:16)
+ *   2. Screenshot — entire screen
+ *   3. Screenshot — video frame
+ *   4. Start / Stop recording (toggle; also a sticky floating Stop while recording)
+ *   5. Webcam on/off
+ *   6. Mic on/off
+ *   7. Background removal on/off
+ *   8. PiP shape (rectangle / circle)
+ *   9. Reset recording settings
  *
- * Recording always captures the FULL screen; selected-area is metadata applied
- * after recording (see PostRecordingCropModal). This component is self-contained:
- * it only needs isRecording, recordingArea, layoutMode + callbacks.
+ * Recording always captures the FULL screen; crop/trim is chosen after recording
+ * (see PostRecordingCropModal).
  */
 
 import React, { useRef, useState } from 'react';
@@ -31,25 +26,19 @@ import {
   Camera,
   CameraOff,
   Monitor,
-  LayoutGrid,
+  RectangleHorizontal,
+  RectangleVertical,
   Image as ImageIcon,
   PanelLeftOpen,
   PanelLeftClose,
-  Crop,
-  Frame,
   Square,
   Circle,
   Scissors,
   RefreshCw,
   Download,
-  X,
 } from 'lucide-react';
 import ScreenRecorder, { type ScreenRecorderHandle } from '@/components/ScreenRecorder';
-import { RegionRecordOverlay, type ViewportRegion } from '@/components/RegionRecordOverlay';
-import type { CropAspect } from '@/components/PostRecordingCropModal';
 import type { WebcamPipMode } from '@/components/ToolPalette';
-
-export type RecordingArea = { x: number; y: number; width: number; height: number; aspectRatio: CropAspect };
 
 export interface RecordingHubContentProps {
   isRecording: boolean;
@@ -60,10 +49,6 @@ export interface RecordingHubContentProps {
   layoutMode: 'youtube' | 'reels';
   onLayoutChange: (mode: 'youtube' | 'reels') => void;
   onScreenRecordComplete?: (blob: Blob, ext: string) => void;
-
-  /** Selected-area metadata (UI only — never affects capture). */
-  recordingArea?: RecordingArea | null;
-  onRecordingAreaChange?: (area: RecordingArea | null) => void;
 
   onScreenshotEntireScreen: () => void;
   onScreenshotVideoOnly: () => void;
@@ -78,7 +63,7 @@ export interface RecordingHubContentProps {
   webcamPipMode?: WebcamPipMode;
   onWebcamPipModeChange?: (m: WebcamPipMode) => void;
 
-  /** Clears area + capture mode + layout + webcam + mic state. */
+  /** Clears layout + webcam + mic state. */
   onResetRecordingSettings?: () => void;
 
   // Embed / tab-capture status (separate feature — kept as feedback only).
@@ -226,8 +211,6 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     layoutMode,
     onLayoutChange,
     onScreenRecordComplete,
-    recordingArea,
-    onRecordingAreaChange,
     onScreenshotEntireScreen,
     onScreenshotVideoOnly,
     webcamActive,
@@ -257,7 +240,6 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
   const io = hubIconOnly;
   const recorderRef = useRef<ScreenRecorderHandle | null>(null);
   const [screenRecording, setScreenRecording] = useState(false);
-  const [areaOverlayOpen, setAreaOverlayOpen] = useState(false);
   const [recorderError, setRecorderError] = useState<string | null>(null);
 
   const startBlocked = captureBusy && !screenRecording;
@@ -320,21 +302,6 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
         @keyframes hubSpin { to { transform: rotate(360deg); } }
         @keyframes hubPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
       `}</style>
-
-      {areaOverlayOpen &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <RegionRecordOverlay
-            initialAspect={recordingArea?.aspectRatio ?? (layoutMode === 'reels' ? '9:16' : '16:9')}
-            initialRegion={recordingArea ? { x: recordingArea.x, y: recordingArea.y, w: recordingArea.width, h: recordingArea.height } : null}
-            onCancel={() => setAreaOverlayOpen(false)}
-            onConfirm={(region: ViewportRegion, aspect: CropAspect) => {
-              onRecordingAreaChange?.({ x: region.x, y: region.y, width: region.w, height: region.h, aspectRatio: aspect });
-              setAreaOverlayOpen(false);
-            }}
-          />,
-          document.body,
-        )}
 
       {/* Sticky floating Stop — always reachable while recording, never inside scroll. */}
       {screenRecording &&
@@ -401,28 +368,23 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           />
         ) : null}
 
-        {/* 1–2 Layout */}
-        <HubRow active={layoutMode === 'youtube'} iconOnly={io} icon={<LayoutGrid size={16} />} label="16:9" title="16:9 layout" onClick={() => onLayoutChange('youtube')} />
-        <HubRow active={layoutMode === 'reels'} iconOnly={io} icon={<LayoutGrid size={16} />} label="9:16" title="9:16 layout" onClick={() => onLayoutChange('reels')} />
+        {/* Layout toggle */}
+        <HubRow
+          iconOnly={io}
+          icon={layoutMode === 'youtube' ? <RectangleVertical size={16} /> : <RectangleHorizontal size={16} />}
+          label={layoutMode === 'youtube' ? 'Switch to 9:16' : 'Switch to 16:9'}
+          title={layoutMode === 'youtube' ? 'Switch to 9:16 layout' : 'Switch to 16:9 layout'}
+          onClick={() => onLayoutChange(layoutMode === 'youtube' ? 'reels' : 'youtube')}
+        />
 
-        {/* 3–4 Screenshot */}
+        {/* Screenshot */}
         <HubRow iconOnly={io} icon={<Monitor size={16} />} label="Screenshot screen" title="Screenshot entire screen" onClick={onScreenshotEntireScreen} />
         <HubRow iconOnly={io} icon={<ImageIcon size={16} />} label="Screenshot frame" title="Screenshot video frame" onClick={onScreenshotVideoOnly} />
 
-        {/* 5 Start / Stop */}
+        {/* Start / Stop */}
         <div data-tour-id="tour-record-screen" style={{ width: '100%' }}>{startStopButton}</div>
 
-        {/* 8 Select recording area */}
-        <HubRow
-          active={!!recordingArea || areaOverlayOpen}
-          iconOnly={io}
-          icon={<Frame size={16} />}
-          label={recordingArea ? `Area set (${recordingArea.aspectRatio})` : 'Select area'}
-          title="Select recording area"
-          onClick={() => setAreaOverlayOpen(true)}
-        />
-
-        {/* 9 Webcam */}
+        {/* Webcam */}
         <div data-tour-id="tour-webcam" style={{ width: '100%' }}>
           <HubRow active={webcamActive} iconOnly={io} icon={webcamActive ? <CameraOff size={16} /> : <Camera size={16} />} label={webcamActive ? 'Webcam on' : 'Webcam off'} onClick={onWebcamToggle} />
         </div>

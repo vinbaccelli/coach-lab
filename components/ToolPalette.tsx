@@ -310,7 +310,7 @@ const scrollArea: React.CSSProperties = {
 
 function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties {
   let base = scrollArea;
-  if (io) base = { ...scrollArea, padding: '6px 4px 10px', gap: 4, alignItems: 'center' };
+  if (io) base = { ...scrollArea, padding: '6px 2px 10px', gap: 4, alignItems: 'center' };
   if (mobileChrome) {
     base = {
       ...base,
@@ -318,6 +318,25 @@ function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties
     };
   }
   return base;
+}
+
+function ToolbarScrollArea({
+  io,
+  mobileChrome,
+  children,
+}: {
+  io: boolean;
+  mobileChrome?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={io ? 'coachlab-toolbar-scroll coachlab-toolbar-scroll--icon-only' : 'coachlab-toolbar-scroll'}
+      style={scrollAreaFor(io, mobileChrome)}
+    >
+      {children}
+    </div>
+  );
 }
 
 function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolean): React.CSSProperties {
@@ -855,11 +874,11 @@ export default function ToolPalette(props: ToolPaletteProps) {
     return (
       <div style={shellStyle}>
         <CollapseControl />
-        <div style={scrollAreaFor(io, mobileChrome)}>
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead />
           <BackHeader title="Session & record" icon={<RecordHubIcon size={18} />} />
           {recordingHubContent}
-        </div>
+        </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
     );
@@ -869,7 +888,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     return (
       <div style={shellStyle}>
         <CollapseControl />
-        <div style={scrollAreaFor(io, mobileChrome)}>
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead />
           <BackHeader title="Default style" icon={<Palette size={18} />} />
           {!io ? (
@@ -997,7 +1016,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               <div style={{ fontSize: 12, color: textMuted, marginTop: 4 }}>{drawingOptions.fontSize}px</div>
             </div>
           )}
-        </div>
+        </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
     );
@@ -1007,7 +1026,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     return (
       <div style={shellStyle}>
         <CollapseControl />
-        <div style={scrollAreaFor(io, mobileChrome)}>
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead />
           <BackHeader title="Draw" icon={<Pen size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
           <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Pen" onPress={() => setTool('pen')} />
@@ -1028,7 +1047,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             label="Style"
             onPress={() => push('style')}
           />
-        </div>
+        </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
     );
@@ -1038,11 +1057,11 @@ export default function ToolPalette(props: ToolPaletteProps) {
     return (
       <div style={shellStyle}>
         <CollapseControl />
-        <div style={scrollAreaFor(io, mobileChrome)}>
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Angle" icon={<AngleToolIcon size={18} />} />
           <Row k="angle" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} label="Angle" onPress={() => setTool('angle')} />
           <Row k="aa" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} label="Angle arrow" onPress={() => setTool('arrowAngle')} />
-        </div>
+        </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
     );
@@ -1052,7 +1071,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     return (
       <div style={shellStyle}>
         <CollapseControl />
-        <div style={scrollAreaFor(io, mobileChrome)}>
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
           {onSkeletonOverlayPausedChange !== undefined && (
             <label
@@ -1124,7 +1143,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             chk('rl', 'Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange)}
           {onSkeletonShowLeftLegChange !== undefined &&
             chk('ll', 'Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange)}
-        </div>
+        </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
     );
@@ -1134,10 +1153,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
     return (
       <div style={shellStyle}>
         <CollapseControl />
-        <div style={scrollAreaFor(io, mobileChrome)}>
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
           <p style={{ margin: '0 4px 8px', fontSize: 12, color: textMuted }}>More tools will return in a future update.</p>
-        </div>
+        </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
     );
@@ -1198,7 +1217,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   return (
     <div style={shellStyle}>
       <CollapseControl />
-      <div style={scrollAreaFor(io, mobileChrome)}>
+      <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
         <ToolbarLead />
         {recordingHubContent ? (
           <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
@@ -1233,7 +1252,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             />
           </div>
         ) : null}
-      </div>
+      </ToolbarScrollArea>
       <GlobalActionsFooter />
     </div>
   );

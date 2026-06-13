@@ -162,3 +162,14 @@ button:active:not(:disabled),
   -webkit-user-select: text;
   user-select: text;
 }
+
+/* Collapsed toolbar: hide scrollbar but keep native scroll (wheel + touch) */
+.coachlab-toolbar-scroll--icon-only {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.coachlab-toolbar-scroll--icon-only::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
