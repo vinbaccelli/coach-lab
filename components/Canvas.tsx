@@ -23,10 +23,14 @@ import {
 } from '@/lib/youtubeThumbnailPose';
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
+import { getPoseDetector } from '@/lib/poseDetection';
 import { HelpCircle } from 'lucide-react';
+import { renderStroMotionComposite, type StroMotionOpacityMode } from '@/lib/stroMotion';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 
-// ── Constants ──────────────────────────────────────────────────────────────
+/** Poll interval while waiting for a ref-backed <video> to mount. */
+const WEBCAM_VIDEO_REF_RETRY_MS = 50;
+const WEBCAM_VIDEO_REF_RETRY_MAX = 200;
 
 /** Throttle interval for real-time skeleton pose detection (~30fps) */
 const POSE_DETECTION_INTERVAL = 1 / 30;
@@ -48,8 +52,6 @@ const RACKET_TRAIL_CIRCLE_RADIUS = 8;
 const RACKET_TRAIL_MAX_ALPHA = 0.65;
 /** Radians per animFrame for spinning shapes */
 const SHAPE_SPIN_SPEED = 0.025;
-/** Minimum alpha applied to any StroMotion ghost frame */
-const MIN_GHOST_OPACITY = 0.02;
 /** Vertical offset (screen px) from finger to precision crosshair — tuned for one-handed phones */
 const PRECISION_CURSOR_OFFSET_Y = 120;
 /** Fade-out duration when anchor finger lifts (ms) */
@@ -171,10 +173,11 @@ export interface CanvasProps {
   onOutlineEraserSizeChange?: (size: number) => void;
   webcamPipMode?: WebcamPipMode;
   webcamOpacity?: number;
-  stroMotionGhosts?: ImageBitmap[];
+  stroMotionFrames?: ImageBitmap[];
   stroMotionOpacity?: number;
-  /** Region (video-normalized 0..1) to display stro-motion ghosts in */
-  stroMotionRegion?: { x: number; y: number; w: number; h: number };
+  stroMotionOpacityMode?: StroMotionOpacityMode;
+  /** Animated mode: number of ghost frames currently visible (1..n). Omit = all. */
+  stroMotionVisibleCount?: number;
   skeletonShowAngles?: boolean;
   skeletonShowHeadLine?: boolean;
   skeletonClassicColors?: boolean;
@@ -764,19 +767,20 @@ function clampPanToLetterbox(
     return { x: 0, y: 0 };
   }
 
-  const clampAxis = (pan: number, origin: number, size: number, viewport: number): number => {
+  const clampAxis = (
+    pan: number,
+    origin: number,
+    size: number,
+    viewport: number,
+  ): number => {
     const leading = (origin - viewport / 2) * zoom + viewport / 2;
     const trailing = (origin + size - viewport / 2) * zoom + viewport / 2;
-    const span = trailing - leading;
-    if (span <= viewport + 0.5) {
-      const panMax = -leading;
-      const panMin = viewport - trailing;
-      if (panMax < panMin) return (panMax + panMin) / 2;
-      return Math.max(panMin, Math.min(panMax, pan));
-    }
     const panMax = -leading;
     const panMin = viewport - trailing;
-    return Math.max(panMin, Math.min(panMax, pan));
+    // When span <= viewport, panMax < panMin — valid slide range is [panMax, panMin].
+    const lo = Math.min(panMax, panMin);
+    const hi = Math.max(panMax, panMin);
+    return Math.max(lo, Math.min(hi, pan));
   };
 
   return {
@@ -1440,9 +1444,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       onOutlineEraserSizeChange,
       webcamPipMode = 'rectangle',
       webcamOpacity = 1,
-      stroMotionGhosts,
-      stroMotionOpacity = 0.3,
-      stroMotionRegion,
+      stroMotionFrames,
+      stroMotionOpacity = 0.6,
+      stroMotionOpacityMode = 'temporal',
+      stroMotionVisibleCount,
       skeletonShowAngles = true,
       skeletonShowHeadLine = false,
       skeletonClassicColors = true,
@@ -1550,8 +1555,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // Racket multiplier trail
     const racketTrailRef   = useRef<RacketTrail | null>(null);
 
-    // Real-time skeleton detection
-    const detectorRef         = useRef<any>(null);
+    // Real-time skeleton detection (HTML5 bridge path)
+    const youtubePoseDetectorRef = useRef<Awaited<ReturnType<typeof getPoseDetector>> | null>(null);
     const latestKeypointsRef  = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
     const poseLoopActiveRef   = useRef(false);
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
@@ -1593,9 +1598,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const outlineEraserSizeRef = useRef(outlineEraserSize);
     const webcamPipModeRef    = useRef(webcamPipMode);
     const webcamOpacityRef    = useRef(webcamOpacity);
-    const stroMotionGhostsRef = useRef<ImageBitmap[]>(stroMotionGhosts ?? []);
+    const stroMotionFramesRef = useRef<ImageBitmap[]>(stroMotionFrames ?? []);
     const stroMotionOpacityRef = useRef(stroMotionOpacity);
-    const stroMotionRegionRef = useRef(stroMotionRegion);
+    const stroMotionOpacityModeRef = useRef(stroMotionOpacityMode);
+    const stroMotionVisibleCountRef = useRef(stroMotionVisibleCount);
     const skeletonShowAnglesRef   = useRef(skeletonShowAngles);
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
@@ -1766,9 +1772,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     }, [circleSpinning]);
     useEffect(() => { webcamPipModeRef.current     = webcamPipMode; },   [webcamPipMode]);
     useEffect(() => { webcamOpacityRef.current     = webcamOpacity; },   [webcamOpacity]);
-    useEffect(() => { stroMotionGhostsRef.current  = stroMotionGhosts ?? []; }, [stroMotionGhosts]);
-    useEffect(() => { stroMotionOpacityRef.current = stroMotionOpacity; },      [stroMotionOpacity]);
-    useEffect(() => { stroMotionRegionRef.current  = stroMotionRegion; },        [stroMotionRegion]);
+    useEffect(() => { stroMotionFramesRef.current = stroMotionFrames ?? []; renderDirtyRef.current = true; }, [stroMotionFrames]);
+    useEffect(() => { stroMotionOpacityRef.current = stroMotionOpacity; renderDirtyRef.current = true; }, [stroMotionOpacity]);
+    useEffect(() => { stroMotionOpacityModeRef.current = stroMotionOpacityMode; renderDirtyRef.current = true; }, [stroMotionOpacityMode]);
+    useEffect(() => { stroMotionVisibleCountRef.current = stroMotionVisibleCount; renderDirtyRef.current = true; }, [stroMotionVisibleCount]);
     useEffect(() => { skeletonShowAnglesRef.current   = skeletonShowAngles; },   [skeletonShowAngles]);
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; },  [skeletonShowHeadLine]);
     useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; }, [skeletonClassicColors]);
@@ -2251,19 +2258,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       runObjMultiplierCapture: async (frameCount, onProgress) => {
         const video = videoRef.current;
         if (!video || !objMultRegionRef.current) return 0;
-        const { ObjectMultiplier } = await import('@/lib/objectMultiplier');
-        if (!objMultiplierRef.current) {
-          objMultiplierRef.current = new ObjectMultiplier();
+        try {
+          const { ObjectMultiplier } = await import('@/lib/objectMultiplier');
+          if (!objMultiplierRef.current) {
+            objMultiplierRef.current = new ObjectMultiplier();
+          }
+          objMultiplierRef.current.clear();
+          await objMultiplierRef.current.autoCaptureSequence(
+            video,
+            objMultRegionRef.current,
+            frameCount,
+            0,
+            onProgress,
+          );
+          return objMultiplierRef.current.getFrameCount();
+        } catch {
+          objMultiplierRef.current?.clear();
+          objMultiplierRef.current = null;
+          throw new Error('Object multiplier capture failed');
         }
-        objMultiplierRef.current.clear();
-        await objMultiplierRef.current.autoCaptureSequence(
-          video,
-          objMultRegionRef.current,
-          frameCount,
-          0,
-          onProgress,
-        );
-        return objMultiplierRef.current.getFrameCount();
       },
       clearObjMultiplier: () => {
         objMultiplierRef.current?.clear();
@@ -2333,7 +2346,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       });
 
       bridge.onReady(() => {
-        detectorRef.current = true; // signal to YouTube path that a detector exists
         onProcessingStatus?.('Skeleton ready — press play');
       });
 
@@ -2446,27 +2458,44 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       let cancelled = false;
+      let retryTimer: number | undefined;
+      let loadedDataHandler: (() => void) | null = null;
       const segmenter = new WebcamSegmenter();
-      // A fresh cutout mask is a visible change → mark the canvas dirty so the
-      // render loop composites it (cadence capped to the segmenter's rate).
-      segmenter.setOnMask(() => { webcamFrameDirtyRef.current = true; });
+      segmenter.setOnMask(() => { webcamFrameDirtyRef.current = true; renderDirtyRef.current = true; });
+
+      const startOnVideo = (wc: HTMLVideoElement) => {
+        if (cancelled) return;
+        if (wc.readyState >= 2) {
+          segmenter.start(wc);
+          return;
+        }
+        loadedDataHandler = () => {
+          wc.removeEventListener('loadeddata', loadedDataHandler!);
+          loadedDataHandler = null;
+          if (!cancelled) segmenter.start(wc);
+        };
+        wc.addEventListener('loadeddata', loadedDataHandler);
+      };
+
+      const waitForWebcamVideo = (onReady: (wc: HTMLVideoElement) => void, attempt = 0) => {
+        if (cancelled) return;
+        const wc = webcamVideoRef?.current;
+        if (wc) {
+          onReady(wc);
+          return;
+        }
+        if (attempt >= WEBCAM_VIDEO_REF_RETRY_MAX) return;
+        retryTimer = window.setTimeout(
+          () => waitForWebcamVideo(onReady, attempt + 1),
+          WEBCAM_VIDEO_REF_RETRY_MS,
+        );
+      };
 
       (async () => {
         try {
           await segmenter.init();
           if (cancelled) { segmenter.dispose(); return; }
-
-          const wc = webcamVideoRef?.current;
-          if (wc && wc.readyState >= 2) {
-            segmenter.start(wc);
-          } else if (wc) {
-            const onReady = () => {
-              wc.removeEventListener('loadeddata', onReady);
-              if (!cancelled) segmenter.start(wc);
-            };
-            wc.addEventListener('loadeddata', onReady);
-          }
-
+          waitForWebcamVideo(startOnVideo);
           webcamSegmenterRef.current = segmenter;
           webcamMaskRef.current = segmenter.getOutputCanvas();
         } catch {
@@ -2476,6 +2505,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       return () => {
         cancelled = true;
+        if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+        const wc = webcamVideoRef?.current;
+        if (wc && loadedDataHandler) wc.removeEventListener('loadeddata', loadedDataHandler);
         segmenter.dispose();
         webcamSegmenterRef.current = null;
         webcamMaskRef.current = null;
@@ -2483,45 +2515,83 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     }, [webcamCutout, webcamActive, webcamVideoRef, onProcessingStatus]);
 
     // ── Webcam frame-change signal ─────────────────────────────────────────
-    // Mark a dirty frame once per decoded webcam frame (RVFC) so the render
-    // loop composites the PiP at the webcam's fps instead of forcing a full
-    // composite every display tick. Falls back to a ~30 Hz interval where RVFC
-    // is unavailable. Cutout masks additionally flip the flag via setOnMask.
     useEffect(() => {
       if (!webcamActive) return;
-      const wc = webcamVideoRef?.current;
-      if (!wc) return;
+
       let cancelled = false;
+      let retryTimer: number | undefined;
       let rvfcId = 0;
       let intervalId: number | undefined;
-      const markDirty = () => {
-        webcamFrameDirtyRef.current = true;
-        renderDirtyRef.current = true;
+      let boundVideo: HTMLVideoElement | null = null;
+      let loadedDataHandler: (() => void) | null = null;
+
+      const cleanupTracking = () => {
+        if (boundVideo && loadedDataHandler) {
+          boundVideo.removeEventListener('loadeddata', loadedDataHandler);
+        }
+        loadedDataHandler = null;
+        if (rvfcId && boundVideo) {
+          try { boundVideo.cancelVideoFrameCallback?.(rvfcId); } catch { /* noop */ }
+        }
+        rvfcId = 0;
+        if (intervalId !== undefined) window.clearInterval(intervalId);
+        intervalId = undefined;
+        boundVideo = null;
       };
-      const startTracking = () => {
-        if (cancelled) return;
-        markDirty();
-        const hasRvfc = typeof wc.requestVideoFrameCallback === 'function';
-        if (hasRvfc) {
-          const loop = () => {
-            if (cancelled) return;
-            markDirty();
+
+      const bindTracking = (wc: HTMLVideoElement) => {
+        cleanupTracking();
+        boundVideo = wc;
+        const markDirty = () => {
+          webcamFrameDirtyRef.current = true;
+          renderDirtyRef.current = true;
+        };
+        const startTracking = () => {
+          if (cancelled) return;
+          markDirty();
+          const hasRvfc = typeof wc.requestVideoFrameCallback === 'function';
+          if (hasRvfc) {
+            const loop = () => {
+              if (cancelled) return;
+              markDirty();
+              rvfcId = wc.requestVideoFrameCallback(loop);
+            };
             rvfcId = wc.requestVideoFrameCallback(loop);
+          } else {
+            intervalId = window.setInterval(markDirty, 33);
+          }
+        };
+        if (wc.readyState >= 2) startTracking();
+        else {
+          loadedDataHandler = () => {
+            wc.removeEventListener('loadeddata', loadedDataHandler!);
+            loadedDataHandler = null;
+            startTracking();
           };
-          rvfcId = wc.requestVideoFrameCallback(loop);
-        } else {
-          intervalId = window.setInterval(markDirty, 33);
+          wc.addEventListener('loadeddata', loadedDataHandler);
         }
       };
-      if (wc.readyState >= 2) startTracking();
-      else wc.addEventListener('loadeddata', startTracking, { once: true });
+
+      const waitForWebcamVideo = (attempt = 0) => {
+        if (cancelled) return;
+        const wc = webcamVideoRef?.current;
+        if (wc) {
+          bindTracking(wc);
+          return;
+        }
+        if (attempt >= WEBCAM_VIDEO_REF_RETRY_MAX) return;
+        retryTimer = window.setTimeout(
+          () => waitForWebcamVideo(attempt + 1),
+          WEBCAM_VIDEO_REF_RETRY_MS,
+        );
+      };
+
+      waitForWebcamVideo();
+
       return () => {
         cancelled = true;
-        wc.removeEventListener('loadeddata', startTracking);
-        if (rvfcId) {
-          try { wc.cancelVideoFrameCallback?.(rvfcId); } catch { /* noop */ }
-        }
-        if (intervalId !== undefined) clearInterval(intervalId);
+        if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+        cleanupTracking();
       };
     }, [webcamActive, webcamVideoRef]);
 
@@ -2567,7 +2637,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!yp) return;
 
       let rafId: number;
+      let detectorCancelled = false;
       poseLoopActiveRef.current = true;
+      youtubePoseDetectorRef.current = null;
+
+      getPoseDetector().then((det) => {
+        if (detectorCancelled) return;
+        youtubePoseDetectorRef.current = det;
+        if (det) onProcessingStatus?.('Skeleton ready — press play');
+      });
+
       let thumb: HTMLImageElement | null = null;
       let lastGood: PoseKeypoint[] | null = null;
       let baseEstimated = false;
@@ -2610,10 +2689,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         try {
           await ensureThumb();
           const ctrl = yp.controllerRef.current;
-          const det = detectorRef.current;
+          const det = youtubePoseDetectorRef.current;
           const now = ctrl?.getCurrentTime() ?? 0;
 
-          if (det && thumb && thumb.complete) {
+          if (det && typeof det.estimatePoses === 'function' && thumb && thumb.complete) {
             try {
               if (!baseEstimated) {
                 const poses = await det.estimatePoses(thumb, { flipHorizontal: false });
@@ -2657,10 +2736,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       rafId = requestAnimationFrame(poseLoop);
       return () => {
+        detectorCancelled = true;
         poseLoopActiveRef.current = false;
         cancelAnimationFrame(rafId);
       };
-    }, [skeletonEnabled, youtubePose?.videoId]);
+    }, [skeletonEnabled, onProcessingStatus, youtubePose?.videoId]);
 
     // ── Ball detection canvas initialization ──────────────────────────────
 
@@ -2940,36 +3020,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         // ── StroMotion ghost frames ───────────────────────────────────────
-        const stroGhosts = stroMotionGhostsRef.current;
-        if (stroGhosts.length > 0 && dw > 0 && dh > 0) {
-          ctx.save();
-          const baseOpacity = stroMotionOpacityRef.current;
-          const region = stroMotionRegionRef.current;
-          for (let i = 0; i < stroGhosts.length; i++) {
-            const alpha = Math.min(baseOpacity, ((i + 1) / stroGhosts.length) * baseOpacity);
-            ctx.globalAlpha = Math.max(MIN_GHOST_OPACITY, alpha);
-            if (region) {
-              // Draw only in the selected video region
-              const rx = dx + region.x * dw;
-              const ry = dy + region.y * dh;
-              const rw = region.w * dw;
-              const rh = region.h * dh;
-              ctx.drawImage(stroGhosts[i], rx, ry, rw, rh);
-              // Draw faint outline around region on first (most-opaque) ghost
-              if (i === stroGhosts.length - 1) {
-                ctx.globalAlpha = 0.5;
-                ctx.strokeStyle = '#007AFF';
-                ctx.lineWidth = 1.5;
-                ctx.setLineDash([4, 4]);
-                ctx.strokeRect(rx, ry, rw, rh);
-                ctx.setLineDash([]);
-              }
-            } else {
-              ctx.drawImage(stroGhosts[i], dx, dy, dw, dh);
-            }
-          }
-          ctx.globalAlpha = 1.0;
-          ctx.restore();
+        const stroFrames = stroMotionFramesRef.current;
+        if (stroFrames.length > 0 && dw > 0 && dh > 0) {
+          renderStroMotionComposite(ctx, stroFrames, {
+            opacity: stroMotionOpacityRef.current,
+            fadeMode: stroMotionOpacityModeRef.current,
+            visibleCount: stroMotionVisibleCountRef.current,
+            dest: { x: dx, y: dy, w: dw, h: dh },
+          });
         }
 
         // ── Object Multiplier overlay ───────────────────────────────────

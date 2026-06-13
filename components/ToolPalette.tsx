@@ -113,7 +113,9 @@ interface ToolPaletteProps {
   compactToolbarChrome?: boolean;
   toolbarLabelsExpanded?: boolean;
   onToggleToolbarLabels?: () => void;
-  /** Stromotion toggle (toolbar only — does not change processing logic). */
+  /** Stromotion panel content (full workflow UI). */
+  stroMotionPanel?: React.ReactNode;
+  /** @deprecated Use stroMotionPanel — legacy toggle only */
   stroMotionEnabled?: boolean;
   onStroMotionToggle?: () => void;
 }
@@ -471,6 +473,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     compactToolbarChrome = false,
     toolbarLabelsExpanded = false,
     onToggleToolbarLabels,
+    stroMotionPanel,
     stroMotionEnabled = false,
     onStroMotionToggle,
   } = props;
@@ -1176,7 +1179,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             label="Skeleton"
             onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
           />
-          <Row k="sm-t" icon={<Layers size={18} />} label="Stromotion" onPress={() => push('stromotion')} />
+          <Row k="sm-t" icon={<Layers size={18} />} label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
           <Row k="ai-t" icon={<BarChart3 size={18} />} label="AI Metrics" onPress={() => push('aimetrics')} />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
@@ -1190,20 +1193,24 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Stromotion" icon={<Layers size={18} />} />
-          {onStroMotionToggle ? (
-            <Row
-              k="sm-on"
-              active={stroMotionEnabled}
-              icon={<Layers size={18} />}
-              label="Stromotion"
-              onPress={() => onStroMotionToggle()}
-            />
-          ) : null}
-          {!io ? (
-            <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
-              Overlay ghost frames across a clip segment. Works with uploaded video files.
-            </p>
-          ) : null}
+          {stroMotionPanel ?? (
+            <>
+              {onStroMotionToggle ? (
+                <Row
+                  k="sm-on"
+                  active={stroMotionEnabled}
+                  icon={<Layers size={18} />}
+                  label="Stromotion"
+                  onPress={() => onStroMotionToggle()}
+                />
+              ) : null}
+              {!io ? (
+                <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
+                  Overlay ghost frames across a clip segment. Works with uploaded video files.
+                </p>
+              ) : null}
+            </>
+          )}
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>

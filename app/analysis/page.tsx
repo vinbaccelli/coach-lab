@@ -30,6 +30,18 @@ import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
+import StroMotionPanel from '@/components/StroMotionPanel';
+import {
+  computeAutoSampleTimes,
+  exportStroMotionPNG,
+  prepareVideoForStroMotionExtraction,
+  STRO_MOTION_ANIM_INTERVAL_MS,
+  STRO_MOTION_DEFAULT_OPACITY,
+  STRO_MOTION_MAX_FRAMES,
+  type StroMotionOpacityMode,
+  type StroMotionRenderMode,
+  type StroMotionSamplingMode,
+} from '@/lib/stroMotion';
 import { normalizeWebUrlInput, resolveEmbedTarget } from '@/lib/embedUrl';
 import {
   createHtml5VideoController,
@@ -413,12 +425,38 @@ export default function Home() {
   const touchChrome                         = isMobile;
 
   // StroMotion state
-  const [stroMotionEnabled, setStroMotionEnabled] = useState(false);
-  const [stroMotionStart, setStroMotionStart]     = useState(0);
-  const [stroMotionEnd, setStroMotionEnd]         = useState(3);
-  const [stroMotionCount, setStroMotionCount]     = useState(6);
-  const [stroMotionOpacity, setStroMotionOpacity] = useState(0.3);
-  const [stroMotionRegion, setStroMotionRegion]   = useState<{ x: number; y: number; w: number; h: number } | undefined>(undefined);
+  const [stroMotionActive, setStroMotionActive] = useState(false);
+  const [stroRangeStart, setStroRangeStart] = useState(0);
+  const [stroRangeEnd, setStroRangeEnd] = useState(3);
+  const [stroSamplingMode, setStroSamplingMode] = useState<StroMotionSamplingMode>('auto');
+  const [stroIntervalFrames, setStroIntervalFrames] = useState(5);
+  const [stroManualKeyframes, setStroManualKeyframes] = useState<number[]>([]);
+  const [stroMotionOpacity, setStroMotionOpacity] = useState(STRO_MOTION_DEFAULT_OPACITY);
+  const [stroOpacityMode, setStroOpacityMode] = useState<StroMotionOpacityMode>('temporal');
+  const [stroRenderMode, setStroRenderMode] = useState<StroMotionRenderMode>('static');
+  const [stroVideoTime, setStroVideoTime] = useState(0);
+  const [stroVideoDuration, setStroVideoDuration] = useState(0);
+  const [stroVisibleCount, setStroVisibleCount] = useState<number | undefined>(undefined);
+  const [stroIsAnimating, setStroIsAnimating] = useState(false);
+  const stroAnimTimerRef = useRef<number | null>(null);
+
+  const stroMotionHtml5Only =
+    !!videoSrc &&
+    !youtubeVideoIdA &&
+    !youtubeVideoIdB &&
+    !genericEmbedSrcA &&
+    !genericEmbedSrcB;
+
+  const {
+    ghostFrames,
+    isProcessing: stroMotionProcessing,
+    progress: stroMotionProgress,
+    clearGhosts,
+    extractFrames,
+    cancelExtraction,
+    setAnimating: setStroMotionAnimating,
+    setConfiguring: setStroMotionConfiguring,
+  } = useStroMotion(videoRef);
 
   // Object Multiplier state
   const [objMultiplierFrameCount, setObjMultiplierFrameCount] = useState(5);
@@ -456,16 +494,164 @@ export default function Home() {
     setDrawContextActive(false);
   }, []);
 
-  // StroMotion hook
-  const stroMotionConfig = {
-    enabled: stroMotionEnabled && !youtubeVideoIdA && !youtubeVideoIdB && !genericEmbedSrcA && !genericEmbedSrcB,
-    startFrame: Math.round(stroMotionStart * 30),
-    endFrame: Math.round(stroMotionEnd * 30),
-    ghostCount: stroMotionCount,
-    opacity: stroMotionOpacity,
-    region: stroMotionRegion,
-  };
-  const { ghostFrames, isProcessing: stroMotionProcessing, progress: stroMotionProgress, clearGhosts } = useStroMotion(videoRef, stroMotionConfig);
+  const stopStroAnimation = useCallback(() => {
+    if (stroAnimTimerRef.current) {
+      clearTimeout(stroAnimTimerRef.current);
+      stroAnimTimerRef.current = null;
+    }
+    setStroIsAnimating(false);
+    setStroVisibleCount(undefined);
+    setStroMotionAnimating(false);
+  }, [setStroMotionAnimating]);
+
+  const resetStroMotion = useCallback(() => {
+    stopStroAnimation();
+    cancelExtraction();
+    clearGhosts();
+    setStroMotionActive(false);
+    setStroManualKeyframes([]);
+    setStroMotionConfiguring(false);
+  }, [cancelExtraction, clearGhosts, setStroMotionConfiguring, stopStroAnimation]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) return;
+    if (videoSrc.startsWith('blob:')) {
+      prepareVideoForStroMotionExtraction(v);
+    }
+    const syncMeta = () => {
+      const dur = v.duration;
+      if (Number.isFinite(dur) && dur > 0) {
+        setStroVideoDuration(dur);
+        setStroRangeEnd((prev) => (prev <= stroRangeStart || prev > dur ? Math.min(Math.max(stroRangeStart + 1, 3), dur) : prev));
+      }
+      setStroVideoTime(v.currentTime || 0);
+    };
+    v.addEventListener('loadedmetadata', syncMeta);
+    v.addEventListener('timeupdate', syncMeta);
+    syncMeta();
+    return () => {
+      v.removeEventListener('loadedmetadata', syncMeta);
+      v.removeEventListener('timeupdate', syncMeta);
+    };
+  }, [videoSrc, stroRangeStart]);
+
+  useEffect(() => {
+    if (stroRenderMode === 'static') setStroVisibleCount(undefined);
+  }, [stroRenderMode, ghostFrames.length]);
+
+  useEffect(() => {
+    if (stroMotionActive && ghostFrames.length === 0 && !stroMotionProcessing) {
+      setStroMotionConfiguring(true);
+    } else if (!stroMotionActive) {
+      setStroMotionConfiguring(false);
+    }
+  }, [ghostFrames.length, setStroMotionConfiguring, stroMotionActive, stroMotionProcessing]);
+
+  useEffect(() => {
+    return () => stopStroAnimation();
+  }, [stopStroAnimation]);
+
+  const buildStroSampleTimes = useCallback((): number[] => {
+    if (stroSamplingMode === 'manual') {
+      return [...stroManualKeyframes].sort((a, b) => a - b);
+    }
+    return computeAutoSampleTimes(stroRangeStart, stroRangeEnd, stroIntervalFrames, 30, STRO_MOTION_MAX_FRAMES);
+  }, [stroSamplingMode, stroManualKeyframes, stroRangeStart, stroRangeEnd, stroIntervalFrames]);
+
+  const handleStroGenerate = useCallback(async () => {
+    const times = buildStroSampleTimes();
+    if (times.length < 2) {
+      alert('Select at least 2 key frames (manual) or widen the range / decrease the interval.');
+      return;
+    }
+    if (times.length > STRO_MOTION_MAX_FRAMES) {
+      alert(`Maximum ${STRO_MOTION_MAX_FRAMES} frames. Increase the interval or shorten the range.`);
+      return;
+    }
+    stopStroAnimation();
+    await extractFrames({ times });
+  }, [buildStroSampleTimes, extractFrames, stopStroAnimation]);
+
+  const handleStroPlayAnimated = useCallback(() => {
+    if (ghostFrames.length < 2) return;
+    stopStroAnimation();
+    setStroIsAnimating(true);
+    setStroMotionAnimating(true);
+    let i = 0;
+    const tick = () => {
+      setStroVisibleCount(i + 1);
+      i += 1;
+      if (i < ghostFrames.length) {
+        stroAnimTimerRef.current = window.setTimeout(tick, STRO_MOTION_ANIM_INTERVAL_MS);
+      } else {
+        setStroIsAnimating(false);
+        setStroMotionAnimating(false);
+      }
+    };
+    tick();
+  }, [ghostFrames.length, setStroMotionAnimating, stopStroAnimation]);
+
+  const handleStroExportPng = useCallback(() => {
+    const canvas = canvasRef.current?.getCanvas();
+    if (!canvas || ghostFrames.length === 0) return;
+    exportStroMotionPNG(canvas, `stromotion-${Date.now()}.png`);
+  }, [ghostFrames.length]);
+
+  const stroMotionPanelEl = (
+    <StroMotionPanel
+      active={stroMotionActive}
+      onActiveChange={setStroMotionActive}
+      videoDuration={stroVideoDuration}
+      currentTime={stroVideoTime}
+      rangeStart={stroRangeStart}
+      rangeEnd={stroRangeEnd}
+      onRangeStartChange={setStroRangeStart}
+      onRangeEndChange={setStroRangeEnd}
+      onSetInFromPlayhead={() => setStroRangeStart(Math.max(0, stroVideoTime))}
+      onSetOutFromPlayhead={() => setStroRangeEnd(Math.min(stroVideoDuration || stroVideoTime, Math.max(stroVideoTime, stroRangeStart + 0.04)))}
+      samplingMode={stroSamplingMode}
+      onSamplingModeChange={setStroSamplingMode}
+      intervalFrames={stroIntervalFrames}
+      onIntervalFramesChange={setStroIntervalFrames}
+      manualKeyframes={stroManualKeyframes}
+      onAddKeyframe={() => {
+        if (stroManualKeyframes.length >= STRO_MOTION_MAX_FRAMES) return;
+        setStroManualKeyframes((prev) =>
+          prev.some((t) => Math.abs(t - stroVideoTime) < 0.03) ? prev : [...prev, stroVideoTime],
+        );
+      }}
+      onRemoveKeyframe={(index) => {
+        setStroManualKeyframes((prev) => prev.filter((_, i) => i !== index));
+      }}
+      opacity={stroMotionOpacity}
+      onOpacityChange={setStroMotionOpacity}
+      opacityMode={stroOpacityMode}
+      onOpacityModeChange={setStroOpacityMode}
+      renderMode={stroRenderMode}
+      onRenderModeChange={(m) => {
+        setStroRenderMode(m);
+        if (m === 'static') stopStroAnimation();
+      }}
+      frameCount={ghostFrames.length}
+      isProcessing={stroMotionProcessing}
+      progressCurrent={stroMotionProgress.current}
+      progressTotal={stroMotionProgress.total}
+      hasFrames={ghostFrames.length > 0}
+      onGenerate={() => void handleStroGenerate()}
+      onClear={resetStroMotion}
+      onExportPng={() => void handleStroExportPng()}
+      onPlayAnimated={handleStroPlayAnimated}
+      onStopAnimated={stopStroAnimation}
+      isAnimating={stroIsAnimating}
+      disabled={!stroMotionHtml5Only}
+      disabledReason={
+        !stroMotionHtml5Only
+          ? 'Stromotion requires an uploaded video file (not YouTube or embed links).'
+          : undefined
+      }
+    />
+  );
 
   // ── Container size measurement ────────────────────────────────────────────
   const updateSize = useCallback(() => {
@@ -689,18 +875,38 @@ export default function Home() {
 
   // ── Keyboard shortcuts (undo / redo) ──────────────────────────────────────
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-        e.preventDefault();
+    const undoActiveCanvas = () => {
+      if (markupTarget === 'both') {
         canvasRef.current?.undo();
+        canvasRefB.current?.undo();
+      } else if (markupTarget === 'B') {
+        canvasRefB.current?.undo();
+      } else {
+        canvasRef.current?.undo();
+      }
+    };
+    const redoActiveCanvas = () => {
+      if (markupTarget === 'both') {
+        canvasRef.current?.redo();
+        canvasRefB.current?.redo();
+      } else if (markupTarget === 'B') {
+        canvasRefB.current?.redo();
+      } else {
+        canvasRef.current?.redo();
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undoActiveCanvas();
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
         e.preventDefault();
-        canvasRef.current?.redo();
+        redoActiveCanvas();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [markupTarget]);
 
   // ── Safari autoplay: dismiss "Tap to Play" overlay once video actually plays ──
   useEffect(() => {
@@ -820,6 +1026,14 @@ export default function Home() {
     // Hub screen-record flow reset
     setHubCaptureLoading(false);
     setHubCaptureTarget(null);
+    stopAllTracks(hubAltStreamRef.current);
+    hubAltStreamRef.current = null;
+    setCaptureYoutubeBusy(false);
+    setUrlLoadPhase(null);
+    setUrlLoadError(null);
+    setCaptureSaveModalOpen(false);
+    urlLoadAbortRef.current?.abort();
+    urlLoadAbortRef.current = null;
     // Clear any lingering recording UI so a "clean session" never leaves the
     // top Recording pill, countdown, step status, or download prompt behind.
     setIsRecording(false);
@@ -834,9 +1048,7 @@ export default function Home() {
     setShowTapToPlay(false);
     setProcessingStatus(null);
     setVideoBLoaded(false);
-    setStroMotionEnabled(false);
-    setStroMotionRegion(undefined);
-    clearGhosts();
+    resetStroMotion();
     webcamStreamRef.current?.getTracks().forEach((t) => t.stop());
     webcamStreamRef.current = null;
     setWebcamActive(false);
@@ -851,7 +1063,7 @@ export default function Home() {
     cleanupVideoEl(videoRefB.current);
     canvasRef.current?.clearAll();
     canvasRefB.current?.clearAll();
-  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl]);
+  }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl]);
 
   /** Full page reload should not inherit URL field or stale session state */
   useEffect(() => {
@@ -894,14 +1106,12 @@ export default function Home() {
     }
     // Reset AI caches for new video
     setProcessingStatus(null);
-    setStroMotionEnabled(false);
-    setStroMotionRegion(undefined);
-    clearGhosts();
+    resetStroMotion();
     canvasRef.current?.clearAll();
     resetToolAfterVideoLoad();
     // Allow uploading the same file again without needing a page refresh.
     e.target.value = '';
-  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, resetToolAfterVideoLoad]);
+  }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl, resetToolAfterVideoLoad]);
 
   const handleVideoUploadB = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -944,9 +1154,7 @@ export default function Home() {
         videoRef.current.load();
       }
       setProcessingStatus(null);
-      setStroMotionEnabled(false);
-      setStroMotionRegion(undefined);
-      clearGhosts();
+      resetStroMotion();
       canvasRef.current?.clearAll();
       resetToolAfterVideoLoad();
     } else {
@@ -965,7 +1173,7 @@ export default function Home() {
       canvasRefB.current?.clearAll();
       resetToolAfterVideoLoad();
     }
-  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl, resetToolAfterVideoLoad]);
+  }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl, resetToolAfterVideoLoad]);
 
   // ── Hub "Alternative — Screen Record" flow ────────────────────────────────
 
@@ -1112,11 +1320,9 @@ export default function Home() {
     setShowTapToPlay(false);
     if (videoRef.current) { cleanupVideoEl(videoRef.current); videoRef.current.src = url; videoRef.current.load(); }
     setProcessingStatus(null);
-    setStroMotionEnabled(false);
-    setStroMotionRegion(undefined);
-    clearGhosts();
+    resetStroMotion();
     canvasRef.current?.clearAll();
-  }, [cleanupVideoEl, clearGhosts, revokeBlobUrl]);
+  }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl]);
 
   const handleDragOverB = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -1674,11 +1880,16 @@ export default function Home() {
       return;
     }
     setObjMultiplierProgress('Capturing…');
-    const count = await canvasRef.current?.runObjMultiplierCapture(
-      objMultiplierFrameCount,
-      (done, total) => setObjMultiplierProgress(`Capturing ${done}/${total}…`),
-    );
-    setObjMultiplierProgress(count ? `${count} frames captured` : null);
+    try {
+      const count = await canvasRef.current?.runObjMultiplierCapture(
+        objMultiplierFrameCount,
+        (done, total) => setObjMultiplierProgress(`Capturing ${done}/${total}…`),
+      );
+      setObjMultiplierProgress(count ? `${count} frames captured` : null);
+    } catch {
+      setObjMultiplierProgress(null);
+      alert('Object multiplier capture failed. Try again.');
+    }
   }, [objMultiplierFrameCount]);
 
   const handleObjMultiplierClear = useCallback(() => {
@@ -1769,9 +1980,7 @@ export default function Home() {
     setUrlLoadError(null);
     setUrlLoadPhase('Loading video\u2026');
     setProcessingStatus(null);
-    setStroMotionEnabled(false);
-    setStroMotionRegion(undefined);
-    clearGhosts();
+    resetStroMotion();
     (urlTarget === 'A' ? canvasRef.current : canvasRefB.current)?.clearAll();
 
     // Fast path: direct video URL \u2192 proxy same-origin for Canvas/ML
@@ -1882,7 +2091,7 @@ export default function Home() {
     setUrlLoadError(
       'We couldn\u2019t open that link. Try a YouTube address, a social clip link, or paste a direct video link \u2014 then tap Load again.',
     );
-  }, [applyVideoStream, cleanupVideoEl, clearGhosts, revokeBlobUrl, urlInput, urlTarget, videoBDuration]);
+  }, [applyVideoStream, cleanupVideoEl, resetStroMotion, revokeBlobUrl, urlInput, urlTarget, videoBDuration]);
 
   const buildEmbedCaptureBundle = useCallback(
     async (
@@ -2691,6 +2900,12 @@ export default function Home() {
                 compareAbDisabled={!canPlaybackSyncBoth}
                 beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
                 beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
+                trimRange={
+                  stroMotionActive && stroMotionHtml5Only
+                    ? { start: stroRangeStart, end: stroRangeEnd }
+                    : null
+                }
+                onCurrentTime={stroMotionActive ? setStroVideoTime : undefined}
               />
             )
       ) : (
@@ -2710,6 +2925,14 @@ export default function Home() {
             compareSlot={hasVideoBContent ? playbackTarget : undefined}
             onCompareSlotChange={hasVideoBContent ? setPlaybackTarget : undefined}
             compareAbDisabled={!canPlaybackSyncBoth}
+            beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
+            beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
+            trimRange={
+              stroMotionActive && stroMotionHtml5Only
+                ? { start: stroRangeStart, end: stroRangeEnd }
+                : null
+            }
+            onCurrentTime={stroMotionActive ? setStroVideoTime : undefined}
           />
         )
       ))}
@@ -2755,8 +2978,7 @@ export default function Home() {
     onSkeletonShowRightLegChange:    setSkeletonShowRightLeg,
     skeletonShowLeftLeg,
     onSkeletonShowLeftLegChange:     setSkeletonShowLeftLeg,
-    stroMotionEnabled,
-    onStroMotionToggle:              () => setStroMotionEnabled((v) => !v),
+    stroMotionPanel: stroMotionPanelEl,
     skeletonOverlayPaused,
     onSkeletonOverlayPausedChange:   () => setSkeletonOverlayPaused((p) => !p),
     ballSampleMode,
@@ -2985,7 +3207,7 @@ export default function Home() {
       <video
         ref={videoRef}
         playsInline
-        preload="auto"
+        preload={videoSrc?.startsWith('blob:') ? 'metadata' : 'auto'}
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
       />
       <video
@@ -3161,9 +3383,10 @@ export default function Home() {
                   webcamPipMode={webcamPipMode}
                   webcamOpacity={webcamOpacity}
                   webcamActive={webcamActive && markupTarget !== 'B'}
-                  stroMotionGhosts={ghostFrames}
+                  stroMotionFrames={ghostFrames}
                   stroMotionOpacity={stroMotionOpacity}
-                  stroMotionRegion={stroMotionRegion}
+                  stroMotionOpacityMode={stroOpacityMode}
+                  stroMotionVisibleCount={stroVisibleCount}
                   skeletonShowAngles={skeletonShowAngles}
                   skeletonShowHeadLine={skeletonShowHeadLine}
                   skeletonClassicColors={skeletonClassicColors}
@@ -4310,8 +4533,8 @@ export default function Home() {
             textAlign: 'center',
           }}
         >
-          {stroMotionProcessing && stroMotionProgress
-            ? stroMotionProgress
+          {stroMotionProcessing
+            ? `Stromotion: extracting frames… ${stroMotionProgress.current} / ${stroMotionProgress.total}`
             : processingStatus}
         </div>
       )}

@@ -1,133 +1,123 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { StroMotionConfig } from '@/lib/stroMotion';
+import { useCallback, useRef, useState } from 'react';
+import {
+  clearFrames,
+  extractAllFrames,
+  type StroMotionStatus,
+} from '@/lib/stroMotion';
 
-export type { StroMotionConfig };
+export interface StroMotionExtractParams {
+  /** Sorted video timestamps in seconds */
+  times: number[];
+}
 
-/** Assumed frame rate used to convert frame numbers to seek timestamps. */
-const FPS = 30;
+export interface StroMotionProgress {
+  current: number;
+  total: number;
+}
 
-/** Fallback timeout (ms) for when the 'seeked' event does not fire. */
-const SEEK_TIMEOUT_MS = 500;
-
-export function useStroMotion(
-  videoRef: React.RefObject<HTMLVideoElement>,
-  config: StroMotionConfig
-) {
+export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>) {
   const [ghostFrames, setGhostFrames] = useState<ImageBitmap[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState<StroMotionStatus>('idle');
+  const [progress, setProgress] = useState<StroMotionProgress>({ current: 0, total: 0 });
+  const extractGenRef = useRef(0);
 
-  // Keep opacity in a ref so opacity-only changes do not trigger re-extraction.
-  const opacityRef = useRef(config.opacity);
-  useEffect(() => {
-    opacityRef.current = config.opacity;
-  }, [config.opacity]);
-
-  const { enabled, startFrame, endFrame, ghostCount, region } = config;
-
-  useEffect(() => {
-    if (!enabled || !videoRef.current || ghostCount < 2) return;
-    // Ensure a valid range before processing.
-    if (startFrame >= endFrame) return;
-
-    let cancelled = false;
-
-    const processGhosts = async () => {
-      setIsProcessing(true);
-      const video = videoRef.current!;
-      if (video.videoWidth === 0 || video.videoHeight === 0) {
-        setIsProcessing(false);
-        return;
-      }
-
-      // Save the current playback position so we can restore it afterwards.
-      const origTime = video.currentTime;
-
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d')!;
-
-      const frames: ImageBitmap[] = [];
-      const step = Math.floor((endFrame - startFrame) / Math.max(1, ghostCount - 1));
-
-      for (let i = 0; i < ghostCount; i++) {
-        if (cancelled) break;
-
-        const frame = startFrame + i * step;
-        const time = frame / FPS;
-
-        await new Promise<void>((resolve) => {
-          let settled = false;
-          const settle = () => {
-            if (settled) return;
-            settled = true;
-            resolve();
-          };
-
-          const timer = setTimeout(settle, SEEK_TIMEOUT_MS);
-
-          video.addEventListener(
-            'seeked',
-            () => {
-              clearTimeout(timer);
-              settle();
-            },
-            { once: true }
-          );
-
-          video.currentTime = time;
-        });
-
-        if (cancelled) break;
-
-        ctx.drawImage(video, 0, 0);
-        let bitmap: ImageBitmap;
-        if (region) {
-          const px = Math.round(region.x * canvas.width);
-          const py = Math.round(region.y * canvas.height);
-          const pw = Math.max(1, Math.round(region.w * canvas.width));
-          const ph = Math.max(1, Math.round(region.h * canvas.height));
-          bitmap = await createImageBitmap(canvas, px, py, pw, ph);
-        } else {
-          bitmap = await createImageBitmap(canvas);
-        }
-        frames.push(bitmap);
-        setProgress(Math.floor(((i + 1) / ghostCount) * 100));
-      }
-
-      if (!cancelled) {
-        // Release previous bitmaps before replacing.
-        setGhostFrames((prev) => {
-          prev.forEach((bm) => bm.close());
-          return frames;
-        });
-        setIsProcessing(false);
-        // Restore the original playback position instead of jumping to 0.
-        video.currentTime = origTime;
-      } else {
-        // Cancelled mid-run — release any frames already collected.
-        frames.forEach((bm) => bm.close());
-      }
-    };
-
-    processGhosts();
-
-    return () => {
-      cancelled = true;
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, startFrame, endFrame, ghostCount, region, videoRef]);
-
-  /** Clear all captured ghost frames and release their GPU memory. */
   const clearGhosts = useCallback(() => {
     setGhostFrames((prev) => {
-      prev.forEach((bm) => bm.close());
+      clearFrames(prev);
       return [];
+    });
+    setProgress({ current: 0, total: 0 });
+    setStatus('idle');
+  }, []);
+
+  const extractFrames = useCallback(
+    async (params: StroMotionExtractParams): Promise<ImageBitmap[]> => {
+      const video = videoRef.current;
+      if (!video || params.times.length < 2) return [];
+
+      if (video.videoWidth === 0 || video.videoHeight === 0) return [];
+
+      const gen = ++extractGenRef.current;
+
+      setGhostFrames((prev) => {
+        clearFrames(prev);
+        return [];
+      });
+      setStatus('extracting');
+      setProgress({ current: 0, total: params.times.length });
+
+      const isCancelled = () => extractGenRef.current !== gen;
+
+      try {
+        const bitmaps = await extractAllFrames(
+          video,
+          params.times,
+          (current, total) => {
+            if (isCancelled()) return;
+            setProgress({ current, total });
+          },
+          isCancelled,
+        );
+
+        if (isCancelled()) {
+          clearFrames(bitmaps);
+          return [];
+        }
+
+        setGhostFrames(bitmaps);
+        setStatus('ready');
+        return bitmaps;
+      } catch {
+        if (!isCancelled()) {
+          setGhostFrames((prev) => {
+            clearFrames(prev);
+            return [];
+          });
+          setStatus('idle');
+        }
+        return [];
+      } finally {
+        if (extractGenRef.current === gen) {
+          setProgress((p) => (p.total > 0 ? p : { current: 0, total: 0 }));
+        }
+      }
+    },
+    [videoRef],
+  );
+
+  const cancelExtraction = useCallback(() => {
+    extractGenRef.current += 1;
+    setStatus((prev) => (prev === 'extracting' ? 'idle' : prev));
+    setProgress({ current: 0, total: 0 });
+  }, []);
+
+  const setAnimating = useCallback((animating: boolean) => {
+    setStatus((prev) => {
+      if (animating) return 'animating';
+      if (prev === 'animating') return ghostFrames.length > 0 ? 'ready' : 'idle';
+      return prev;
+    });
+  }, [ghostFrames.length]);
+
+  const setConfiguring = useCallback((configuring: boolean) => {
+    setStatus((prev) => {
+      if (configuring && prev === 'idle') return 'configuring';
+      if (!configuring && prev === 'configuring') return 'idle';
+      return prev;
     });
   }, []);
 
-  return { ghostFrames, isProcessing, progress, clearGhosts };
+  return {
+    ghostFrames,
+    status,
+    isProcessing: status === 'extracting',
+    progress,
+    clearGhosts,
+    extractFrames,
+    cancelExtraction,
+    setAnimating,
+    setConfiguring,
+  };
 }

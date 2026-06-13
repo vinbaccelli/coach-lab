@@ -36,6 +36,39 @@ type Source =
 
 const SPEED_OPTIONS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 
+const VIDEO_REF_RETRY_MS = 50;
+const VIDEO_REF_RETRY_MAX = 200;
+
+/** Wait for a video ref to attach, then bind listeners; retries instead of giving up on mount. */
+function bindWhenVideoReady(
+  videoRef: React.RefObject<HTMLVideoElement | null>,
+  bind: (v: HTMLVideoElement) => () => void,
+): () => void {
+  let cancelled = false;
+  let unbind: (() => void) | undefined;
+  let retryCount = 0;
+  let retryTimer: number | undefined;
+
+  const attempt = () => {
+    if (cancelled) return;
+    const v = videoRef.current;
+    if (v) {
+      unbind = bind(v);
+      return;
+    }
+    if (retryCount >= VIDEO_REF_RETRY_MAX) return;
+    retryCount += 1;
+    retryTimer = window.setTimeout(attempt, VIDEO_REF_RETRY_MS);
+  };
+
+  attempt();
+  return () => {
+    cancelled = true;
+    if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    unbind?.();
+  };
+}
+
 /** Fast seek acknowledgment for frame stepping — seeked only, short fallback. */
 function waitForSeekPresented(v: HTMLVideoElement): Promise<number> {
   return new Promise((resolve) => {
@@ -101,6 +134,9 @@ export default function PreciseTimeline({
   /** Called synchronously before play/pause on the primary source (AB sync hook). */
   beforePlay,
   beforePause,
+  trimRange = null,
+  trimAccent = '#FF9500',
+  onCurrentTime,
 }: {
   source: Source;
   defaultFps?: number;
@@ -115,6 +151,9 @@ export default function PreciseTimeline({
   compareAbDisabled?: boolean;
   beforePlay?: () => void;
   beforePause?: () => void;
+  trimRange?: { start: number; end: number } | null;
+  trimAccent?: string;
+  onCurrentTime?: (t: number) => void;
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
@@ -158,75 +197,75 @@ export default function PreciseTimeline({
 
   useEffect(() => {
     if (source.kind !== 'html') { setAutoFps(null); return; }
-    const v = source.videoRef.current;
-    if (!v) { setAutoFps(null); return; }
 
-    const anyV = v as HTMLVideoElement & {
-      requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number;
-      cancelVideoFrameCallback?: (id: number) => void;
-    };
-    if (typeof anyV.requestVideoFrameCallback !== 'function') {
-      setAutoFps(null);
-      return;
-    }
-
-    let cancelled = false;
-    const stamps: number[] = [];
-    let id = 0;
-
-    const stopLoop = () => {
-      if (id) {
-        try { anyV.cancelVideoFrameCallback?.(id); } catch { /* noop */ }
-        id = 0;
+    return bindWhenVideoReady(source.videoRef, (v) => {
+      const anyV = v as HTMLVideoElement & {
+        requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number;
+        cancelVideoFrameCallback?: (id: number) => void;
+      };
+      if (typeof anyV.requestVideoFrameCallback !== 'function') {
+        setAutoFps(null);
+        return () => {};
       }
-    };
 
-    const onFrame = (_now: number, meta: { mediaTime: number }) => {
-      if (cancelled) return;
-      if (v.paused) {
+      let cancelled = false;
+      const stamps: number[] = [];
+      let id = 0;
+
+      const stopLoop = () => {
+        if (id) {
+          try { anyV.cancelVideoFrameCallback?.(id); } catch { /* noop */ }
+          id = 0;
+        }
+      };
+
+      const onFrame = (_now: number, meta: { mediaTime: number }) => {
+        if (cancelled) return;
+        if (v.paused) {
+          stopLoop();
+          return;
+        }
+        stamps.push(meta.mediaTime);
+        if (stamps.length > 24) stamps.shift();
+
+        if (stamps.length >= 12) {
+          const diffs: number[] = [];
+          for (let i = 1; i < stamps.length; i++) {
+            const dt = stamps[i] - stamps[i - 1];
+            if (dt > 0 && dt < 0.2) diffs.push(dt);
+          }
+          if (diffs.length >= 8) {
+            diffs.sort((a, b) => a - b);
+            const mid = diffs[Math.floor(diffs.length / 2)];
+            const est = 1 / mid;
+            const cleaned = Math.round(Math.max(10, Math.min(240, est)) * 10) / 10;
+            setAutoFps(cleaned);
+          }
+        }
+
+        id = anyV.requestVideoFrameCallback!(onFrame);
+      };
+
+      const startLoop = () => {
+        if (cancelled || v.paused) return;
         stopLoop();
-        return;
-      }
-      stamps.push(meta.mediaTime);
-      if (stamps.length > 24) stamps.shift();
+        id = anyV.requestVideoFrameCallback!(onFrame);
+      };
 
-      if (stamps.length >= 12) {
-        const diffs: number[] = [];
-        for (let i = 1; i < stamps.length; i++) {
-          const dt = stamps[i] - stamps[i - 1];
-          if (dt > 0 && dt < 0.2) diffs.push(dt);
-        }
-        if (diffs.length >= 8) {
-          diffs.sort((a, b) => a - b);
-          const mid = diffs[Math.floor(diffs.length / 2)];
-          const est = 1 / mid;
-          const cleaned = Math.round(Math.max(10, Math.min(240, est)) * 10) / 10;
-          setAutoFps(cleaned);
-        }
-      }
+      const onPlay = () => startLoop();
+      const onPause = () => stopLoop();
 
-      id = anyV.requestVideoFrameCallback!(onFrame);
-    };
+      v.addEventListener('play', onPlay);
+      v.addEventListener('pause', onPause);
+      if (!v.paused) startLoop();
 
-    const startLoop = () => {
-      if (cancelled || v.paused) return;
-      stopLoop();
-      id = anyV.requestVideoFrameCallback!(onFrame);
-    };
-
-    const onPlay = () => startLoop();
-    const onPause = () => stopLoop();
-
-    v.addEventListener('play', onPlay);
-    v.addEventListener('pause', onPause);
-    if (!v.paused) startLoop();
-
-    return () => {
-      cancelled = true;
-      v.removeEventListener('play', onPlay);
-      v.removeEventListener('pause', onPause);
-      stopLoop();
-    };
+      return () => {
+        cancelled = true;
+        v.removeEventListener('play', onPlay);
+        v.removeEventListener('pause', onPause);
+        stopLoop();
+      };
+    });
   }, [source]);
 
   const selectedFps = (() => {
@@ -263,7 +302,8 @@ export default function PreciseTimeline({
   const applyTimeUi = useCallback((next: number) => {
     tRef.current = next;
     setT(next);
-  }, []);
+    onCurrentTime?.(next);
+  }, [onCurrentTime]);
 
   const readState = useCallback(() => {
     if (scrubbingRef.current) return;
@@ -292,10 +332,13 @@ export default function PreciseTimeline({
 
   // Sync from source
   useEffect(() => {
-    if (source.kind === 'html') {
-      const v = source.videoRef.current;
-      if (!v) return;
+    if (source.kind !== 'html') {
+      const id = window.setInterval(readState, 100);
+      readState();
+      return () => window.clearInterval(id);
+    }
 
+    return bindWhenVideoReady(source.videoRef, (v) => {
       const onTime = () => {
         if (scrubbingRef.current) return;
         const now = performance.now();
@@ -323,11 +366,7 @@ export default function PreciseTimeline({
         v.removeEventListener('play', onPlay);
         v.removeEventListener('pause', onPause);
       };
-    }
-
-    const id = window.setInterval(readState, 100);
-    readState();
-    return () => window.clearInterval(id);
+    });
   }, [applyTimeUi, readState, source]);
 
   const commitHtmlStep = useCallback(async (next: number) => {
@@ -580,6 +619,9 @@ export default function PreciseTimeline({
 
   const displayT = scrubPreviewT ?? t;
   const pct = d > 0 ? (displayT / d) * 100 : 0;
+  const trimStartPct = trimRange && d > 0 ? (trimRange.start / d) * 100 : 0;
+  const trimEndPct = trimRange && d > 0 ? (trimRange.end / d) * 100 : 0;
+  const trimWidthPct = Math.max(0, trimEndPct - trimStartPct);
 
   const shellStyle: React.CSSProperties = useMemo(() => ({
     pointerEvents: 'auto',
@@ -704,6 +746,47 @@ export default function PreciseTimeline({
             pointerEvents: 'none',
           }}
         />
+        {trimRange && d > 0 && trimWidthPct > 0 ? (
+          <>
+            <div
+              style={{
+                position: 'absolute',
+                left: `calc(10px + (100% - 20px) * ${trimStartPct / 100})`,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                height: phoneChrome ? 10 : 8,
+                width: `calc((100% - 20px) * ${trimWidthPct / 100})`,
+                borderRadius: 4,
+                background: `${trimAccent}44`,
+                border: `1px solid ${trimAccent}`,
+                pointerEvents: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                left: `calc(10px + (100% - 20px) * ${trimStartPct / 100} - 1px)`,
+                top: 4,
+                bottom: 4,
+                width: 2,
+                background: trimAccent,
+                pointerEvents: 'none',
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                left: `calc(10px + (100% - 20px) * ${trimEndPct / 100} - 1px)`,
+                top: 4,
+                bottom: 4,
+                width: 2,
+                background: trimAccent,
+                pointerEvents: 'none',
+              }}
+            />
+          </>
+        ) : null}
         <div
           style={{
             position: 'absolute',
