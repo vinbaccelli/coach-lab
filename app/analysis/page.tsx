@@ -2736,6 +2736,8 @@ export default function Home() {
     onSkeletonShowRightLegChange:    setSkeletonShowRightLeg,
     skeletonShowLeftLeg,
     onSkeletonShowLeftLegChange:     setSkeletonShowLeftLeg,
+    stroMotionEnabled,
+    onStroMotionToggle:              () => setStroMotionEnabled((v) => !v),
     skeletonOverlayPaused,
     onSkeletonOverlayPausedChange:   () => setSkeletonOverlayPaused((p) => !p),
     ballSampleMode,
@@ -2811,7 +2813,7 @@ export default function Home() {
         captureDownloadStatus={captureDownloadStatus}
         onDownloadCapture={handleDownloadCaptureBlob}
         onDismissCaptureDownload={handleDismissCaptureDownload}
-        hubIconOnly={isMobile || (phoneToolbarLayout && !toolbarLabelsExpanded)}
+        hubIconOnly={isMobile || (compactToolbarRail && !toolbarLabelsExpanded)}
         hubLabelsExpanded={isMobile ? false : toolbarLabelsExpanded}
         onToggleHubLabels={isMobile ? undefined : () => setToolbarLabelsExpanded((v) => !v)}
         captureBusy={captureBusy || embedCaptureRecording}

@@ -187,3 +187,14 @@ button:active:not(:disabled),
 .coachlab-toolbar-scroll--icon-only label[role='checkbox'] svg {
   flex-shrink: 0;
 }
+
+/* Recording Hub collapsed: icon-only rows */
+.coachlab-recording-hub--icon-only button {
+  font-size: 0;
+  line-height: 0;
+  letter-spacing: 0;
+}
+.coachlab-recording-hub--icon-only button svg,
+.coachlab-recording-hub--icon-only button span[aria-hidden='true'] {
+  flex-shrink: 0;
+}

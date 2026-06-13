@@ -29,8 +29,7 @@ import {
   Sparkles,
   Home,
   GripHorizontal,
-  PanelLeftOpen,
-  PanelLeftClose,
+  BarChart3,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -114,6 +113,9 @@ interface ToolPaletteProps {
   compactToolbarChrome?: boolean;
   toolbarLabelsExpanded?: boolean;
   onToggleToolbarLabels?: () => void;
+  /** Stromotion toggle (toolbar only — does not change processing logic). */
+  stroMotionEnabled?: boolean;
+  onStroMotionToggle?: () => void;
 }
 
 const PRESET_COLORS = ['#FFFFFF', '#1D1D1F', '#FF3B30', '#007AFF'] as const;
@@ -132,9 +134,10 @@ type NavScreen =
   | 'drawContext'
   | 'angle'
   | 'skeleton'
-  | 'webcam'
-  | 'multiplier'
-  | 'more';
+  | 'tools'
+  | 'stromotion'
+  | 'aimetrics'
+  | 'webcam';
 
 const TOOLBAR_ICON_PROPS = {
   strokeWidth: 2,
@@ -146,6 +149,15 @@ function ToolbarIcon({ children, size = 18 }: { children: React.ReactElement; si
     size,
     ...TOOLBAR_ICON_PROPS,
   });
+}
+
+function ToolbarChevron({ expanded }: { expanded: boolean }) {
+  const size = 18;
+  return expanded ? (
+    <ChevronLeft size={size} strokeWidth={2} />
+  ) : (
+    <ChevronRight size={size} strokeWidth={2} />
+  );
 }
 
 function svgIconProps(size: number) {
@@ -458,6 +470,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     compactToolbarChrome = false,
     toolbarLabelsExpanded = false,
     onToggleToolbarLabels,
+    stroMotionEnabled = false,
+    onStroMotionToggle,
   } = props;
 
   const iconOnlyMode = compactToolbarChrome
@@ -540,65 +554,35 @@ export default function ToolPalette(props: ToolPaletteProps) {
             borderColor: '#D1D1D6',
             background: pressedKey === 'clean' ? '#FFECEC' : '#FFFFFF',
             transform: pressedKey === 'clean' ? 'scale(0.95)' : undefined,
+            ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
           }}
           onPointerDown={(e) => {
             e.preventDefault();
             fire('clean', onCleanSession);
           }}
         >
-          {io ? (
-            <span
-              style={{
-                display: 'flex',
-                width: iconBox,
-                height: iconBox,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <RefreshCw size={denseMobile || io ? 16 : 18} />
-            </span>
-          ) : (
-            <>
-              <span style={{ display: 'flex', width: 26, justifyContent: 'center' }}>
-                <RefreshCw size={18} />
-              </span>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>Clear session</span>
-            </>
-          )}
-        </button>
-      ) : null}
-    </div>
-  );
-
-  const ToolbarLead = () => (
-    <>
-      {(compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
-        <button
-          type="button"
-          aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
-          style={{
-            ...rb(false, pressedKey === 'expand', true, denseMobile),
-            justifyContent: 'center',
-            transform: pressedKey === 'expand' ? 'scale(0.95)' : undefined,
-          }}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            fire('expand', onToggleToolbarLabels);
-          }}
-        >
-          <ToolbarIcon size={denseMobile ? 18 : 20}>
-            {toolbarLabelsExpanded ? <PanelLeftClose /> : <PanelLeftOpen />}
-          </ToolbarIcon>
+          <span
+            style={{
+              display: 'flex',
+              width: iconBox,
+              height: iconBox,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <RefreshCw size={denseMobile || io ? 16 : 18} />
+          </span>
+          {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Clear session</span>}
         </button>
       ) : null}
       <Link
         href="/"
-        aria-label="Back to Control Panel"
+        aria-label="Control Panel"
         style={{
           ...rb(false, false, io, denseMobile),
           textDecoration: 'none',
           color: 'inherit',
+          ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
         }}
         onPointerDown={() => haptic()}
       >
@@ -618,6 +602,39 @@ export default function ToolPalette(props: ToolPaletteProps) {
         </span>
         {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
       </Link>
+    </div>
+  );
+
+  const ToolbarLead = () => (
+    <>
+      {(compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
+        <button
+          type="button"
+          aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
+          style={{
+            ...rb(false, pressedKey === 'expand', io, denseMobile),
+            justifyContent: 'center',
+            transform: pressedKey === 'expand' ? 'scale(0.95)' : undefined,
+            ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0 } : null),
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire('expand', onToggleToolbarLabels);
+          }}
+        >
+          <span
+            style={{
+              display: 'flex',
+              width: iconBox,
+              height: iconBox,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <ToolbarChevron expanded={toolbarLabelsExpanded} />
+          </span>
+        </button>
+      ) : null}
     </>
   );
 
@@ -635,18 +652,22 @@ export default function ToolPalette(props: ToolPaletteProps) {
           type="button"
           aria-label={collapsed ? 'Expand toolbar' : 'Collapse toolbar'}
           style={{
-            ...rb(false, pressedKey === 'collapse', true, denseMobile),
-            width: denseMobile ? 36 : 40,
+            ...rb(false, pressedKey === 'collapse', io, denseMobile),
+            width: io ? 44 : denseMobile ? 36 : 40,
+            height: io ? 44 : undefined,
             minHeight: 44,
+            maxHeight: io ? 44 : undefined,
             padding: 0,
             justifyContent: 'center',
+            margin: io ? '0 auto' : undefined,
           }}
           onPointerDown={(e) => {
             e.preventDefault();
             fire('collapse', onToggleCollapsed);
           }}
         >
-          {collapsed ? <ChevronRight size={denseMobile ? 16 : 18} /> : <ChevronLeft size={denseMobile ? 16 : 18} />}
+          <ChevronRight size={18} strokeWidth={2} style={{ display: collapsed ? 'block' : 'none' }} />
+          <ChevronLeft size={18} strokeWidth={2} style={{ display: collapsed ? 'none' : 'block' }} />
         </button>
       </div>
     ) : null;
@@ -758,9 +779,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
           });
         }}
       >
-        {io ? <ChevronLeft size={22} strokeWidth={2.25} /> : (
+        {io ? <ChevronLeft size={18} strokeWidth={2} /> : (
           <>
-            <ChevronLeft size={20} />
+            <ChevronLeft size={18} strokeWidth={2} />
             Back
           </>
         )}
@@ -824,20 +845,24 @@ export default function ToolPalette(props: ToolPaletteProps) {
         </span>
       ) : (
         <>
-          <input
-            type="checkbox"
-            readOnly
-            checked={checked}
-            tabIndex={-1}
-            aria-hidden
-            style={{ width: 18, height: 18, accentColor: '#007AFF' }}
-          />
+          {!io ? (
+            <input
+              type="checkbox"
+              readOnly
+              checked={checked}
+              tabIndex={-1}
+              aria-hidden
+              style={{ width: 18, height: 18, accentColor: '#007AFF' }}
+            />
+          ) : null}
           {icon ? (
             <span
               style={{
                 display: 'flex',
-                width: 26,
+                width: io ? 28 : 26,
+                height: io ? 28 : undefined,
                 justifyContent: 'center',
+                alignItems: 'center',
                 color: checked ? '#007AFF' : '#1D1D1F',
               }}
             >
@@ -860,7 +885,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead />
-          <BackHeader title="Session & record" icon={<RecordHubIcon size={18} />} />
+          <BackHeader title="Recording Hub" icon={<RecordHubIcon size={18} />} />
           {recordingHubContent}
         </ToolbarScrollArea>
         <GlobalActionsFooter />
@@ -926,7 +951,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onChange={(v) => onOptionsChange({ lineWidth: v })}
             vertical={useVerticalThickness}
           />
-          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <div style={{ display: 'flex', gap: io ? 4 : 8, marginTop: 6, ...(io ? { justifyContent: 'center' } : null) }}>
             <button
               type="button"
               aria-label="Solid line"
@@ -985,7 +1010,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           )}
           {(activeTool === 'manualSwing' || activeTool === 'swingPath') &&
             chk('arrowEnd', 'Arrow at end of swing path', !!drawingOptions.arrowAtEnd, (v) => onOptionsChange({ arrowAtEnd: v }))}
-          {activeTool === 'text' && (
+          {activeTool === 'text' && !io && (
             <div style={{ padding: '4px 8px 0' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', marginBottom: 4 }}>Text size</div>
               <input
@@ -1058,6 +1083,15 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
           {onSkeletonOverlayPausedChange !== undefined && (
+            io ? (
+              <Row
+                k="sov"
+                active={!skeletonOverlayPaused}
+                icon={<PersonStanding size={18} />}
+                label="Skeleton on/off"
+                onPress={() => onSkeletonOverlayPausedChange()}
+              />
+            ) : (
             <label
               key="sov"
               aria-label="Skeleton on/off"
@@ -1072,130 +1106,124 @@ export default function ToolPalette(props: ToolPaletteProps) {
               }}
             >
               <input type="checkbox" readOnly checked={!skeletonOverlayPaused} style={{ width: 18, height: 18 }} />
-              {io ? (
-                <span
-                  style={{
-                    position: 'absolute',
-                    width: 1,
-                    height: 1,
-                    padding: 0,
-                    margin: -1,
-                    overflow: 'hidden',
-                    clip: 'rect(0,0,0,0)',
-                    whiteSpace: 'nowrap',
-                    border: 0,
-                  }}
-                >
-                  Skeleton on
-                </span>
-              ) : (
-                <span style={{ fontSize: 13, fontWeight: 600 }}>Skeleton on/off</span>
-              )}
+              <span style={{ fontSize: 13, fontWeight: 600 }}>Skeleton on/off</span>
             </label>
+            )
           )}
+          {!io ? (
           <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
             AI pose overlay follows the player. Keep the video playing for best results.
           </p>
+          ) : null}
           <button
             type="button"
-            style={{ ...rb(false, pressedKey === 'reskel', io), color: '#FF3B30', borderColor: '#D1D1D6', background: '#FFFFFF' }}
+            aria-label="Refresh pose overlay"
+            style={{
+              ...rb(false, pressedKey === 'reskel', io),
+              color: '#FF3B30',
+              borderColor: '#D1D1D6',
+              background: '#FFFFFF',
+              ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
+            }}
             onPointerDown={(e) => {
               e.preventDefault();
               fire('reskel', () => onResetSkeleton());
             }}
           >
             <RefreshCw size={18} />
-            Refresh pose overlay
+            {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Refresh pose overlay</span>}
           </button>
           {onSkeletonShowAnglesChange !== undefined &&
-            chk('sa', 'Show angle labels', skeletonShowAngles ?? true, onSkeletonShowAnglesChange)}
+            chk('sa', 'Show angle labels', skeletonShowAngles ?? true, onSkeletonShowAnglesChange, <Activity size={18} strokeWidth={2} />)}
           {onSkeletonShowHeadLineChange !== undefined &&
-            chk('sh', 'Show head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange)}
+            chk('sh', 'Show head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange, <Minus size={18} strokeWidth={2} />)}
           {onSkeletonClassicColorsChange !== undefined &&
             chk(
               'sc',
               skeletonClassicColors ?? true ? 'Colourful skeleton' : 'Simple blue skeleton',
               skeletonClassicColors ?? true,
               onSkeletonClassicColorsChange,
+              <Palette size={18} strokeWidth={2} />,
             )}
+          {!io ? (
           <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', padding: '8px 4px 0' }}>Body parts</div>
+          ) : null}
           {onSkeletonShowRightArmChange !== undefined &&
-            chk('ra', 'Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange)}
+            chk('ra', 'Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange, <ArrowRight size={18} strokeWidth={2} />)}
           {onSkeletonShowLeftArmChange !== undefined &&
-            chk('la', 'Left arm', skeletonShowLeftArm ?? true, onSkeletonShowLeftArmChange)}
+            chk('la', 'Left arm', skeletonShowLeftArm ?? true, onSkeletonShowLeftArmChange, <ArrowRight size={18} strokeWidth={2} style={{ transform: 'scaleX(-1)' }} />)}
           {onSkeletonShowRightLegChange !== undefined &&
-            chk('rl', 'Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange)}
+            chk('rl', 'Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange, <TrendingUp size={18} strokeWidth={2} />)}
           {onSkeletonShowLeftLegChange !== undefined &&
-            chk('ll', 'Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange)}
+            chk('ll', 'Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange, <TrendingUp size={18} strokeWidth={2} style={{ transform: 'scaleX(-1)' }} />)}
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
     );
   }
 
-  if (top === 'more') {
+  if (top === 'tools') {
     return (
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <BackHeader title="More tools" icon={<LayoutGrid size={18} />} />
-          <p style={{ margin: '0 4px 8px', fontSize: 12, color: textMuted }}>More tools will return in a future update.</p>
+          <BackHeader title="Tools" icon={<LayoutGrid size={18} />} />
+          <Row
+            k="sk-t"
+            icon={<PersonStanding size={18} />}
+            label="Skeleton"
+            onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
+          />
+          <Row k="sm-t" icon={<Layers size={18} />} label="Stromotion" onPress={() => push('stromotion')} />
+          <Row k="ai-t" icon={<BarChart3 size={18} />} label="AI Metrics" onPress={() => push('aimetrics')} />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
     );
   }
 
-  // V2 — Racket Multiplier
-  // if (top === 'multiplier') {
-  //   const frameChoices = [3, 5, 8, 10] as const;
-  //   return (
-  //     <div style={shellStyle}>
-  //       <div style={scrollAreaFor(io, mobileChrome)}>
-  //         <BackHeader title="Racket multiplier" icon={<Layers size={18} />} />
-  //         <p style={{ margin: '0 4px 8px', fontSize: 13, fontWeight: 600, color: '#7C3AED', lineHeight: 1.4 }}>
-  //           Highlight the racket region across frames
-  //         </p>
-  //         <p style={{ margin: '0 4px 12px', fontSize: 12, color: '#6B7280', lineHeight: 1.45 }}>
-  //           Drag a rectangle on the video to select the racket area. Frames are captured at 10 fps from the current time, with background softened on each frame.
-  //         </p>
-  //         <div style={{ padding: '4px 8px' }}>
-  //           <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>Frames to overlay</div>
-  //           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-  //             {frameChoices.map((n) => (
-  //               <button
-  //                 key={n}
-  //                 type="button"
-  //                 style={{
-  //                   ...rb(objMultiplierFrameCount === n, io),
-  //                   flex: '1 1 40%',
-  //                   justifyContent: 'center',
-  //                   minHeight: 40,
-  //                 }}
-  //                 onPointerDown={(e) => {
-  //                   e.preventDefault();
-  //                   fire(`frm-${n}`, () => onObjMultiplierFrameCountChange?.(n));
-  //                 }}
-  //               >
-  //                 {n}
-  //               </button>
-  //             ))}
-  //           </div>
-  //         </div>
-  //         {!objMultiplierActive ? (
-  //           <p style={{ fontSize: 12, color: '#B45309', fontWeight: 600, margin: '4px 8px', lineHeight: 1.4 }}>
-  //             No region yet — drag on the video to select the racket area first.
-  //           </p>
-  //         ) : null}
-  //         {objMultiplierProgress ? (
-  //           <p style={{ fontSize: 12, color: '#7C3AED', fontWeight: 600, margin: '4px 8px' }}>{objMultiplierProgress}</p>
-  //         ) : null}
-  //         <Row k="cap" icon={<Layers size={18} />} label="Capture frames" onPress={() => onObjMultiplierCapture?.()} />
-  //         <Row k="clr" icon={<RefreshCw size={18} />} label="Clear overlay" onPress={() => onObjMultiplierClear?.()} />
-  //       </div>
-  //     </div>
-  //   );
-  // }
+  if (top === 'stromotion') {
+    return (
+      <div style={shellStyle}>
+        <CollapseControl />
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
+          <BackHeader title="Stromotion" icon={<Layers size={18} />} />
+          {onStroMotionToggle ? (
+            <Row
+              k="sm-on"
+              active={stroMotionEnabled}
+              icon={<Layers size={18} />}
+              label="Stromotion"
+              onPress={() => onStroMotionToggle()}
+            />
+          ) : null}
+          {!io ? (
+            <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
+              Overlay ghost frames across a clip segment. Works with uploaded video files.
+            </p>
+          ) : null}
+        </ToolbarScrollArea>
+        <GlobalActionsFooter />
+      </div>
+    );
+  }
+
+  if (top === 'aimetrics') {
+    return (
+      <div style={shellStyle}>
+        <CollapseControl />
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
+          <BackHeader title="AI Metrics" icon={<BarChart3 size={18} />} />
+          {!io ? (
+            <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
+              Quantitative pose metrics will appear here in a future update.
+            </p>
+          ) : null}
+        </ToolbarScrollArea>
+        <GlobalActionsFooter />
+      </div>
+    );
+  }
 
   /* ── Home ─────────────────────────────────────────────────────────── */
   return (
@@ -1203,36 +1231,18 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <CollapseControl />
       <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
         <ToolbarLead />
+        <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
+        <div data-tour-id="tour-draw-tools">
+          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
+        </div>
+        <Row k="tools-h" icon={<LayoutGrid size={denseMobile ? 16 : 20} />} label="Tools" onPress={() => push('tools')} />
         {recordingHubContent ? (
           <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
             <Row
               k="cp"
               icon={<RecordHubIcon size={denseMobile ? 16 : 20} />}
-              label="Session & record"
+              label="Recording Hub"
               onPress={() => push('recording')}
-            />
-          </div>
-        ) : null}
-        <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
-        <div data-tour-id="tour-draw-tools">
-          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
-        </div>
-        <div data-tour-id="tour-skeleton">
-          <Row
-            k="sk"
-            icon={<PersonStanding size={denseMobile ? 16 : 20} />}
-            label="Skeleton"
-            onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
-          />
-        </div>
-        {onPrecisionDrawToggle ? (
-          <div data-tour-id="tour-precision">
-            <Row
-              k="prec"
-              active={precisionDrawEnabled}
-              icon={<Crosshair size={denseMobile ? 16 : 20} />}
-              label="Precision"
-              onPress={() => onPrecisionDrawToggle()}
             />
           </div>
         ) : null}

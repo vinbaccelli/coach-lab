@@ -33,6 +33,7 @@ import {
   Circle,
   RefreshCw,
   Download,
+  AlertCircle,
 } from 'lucide-react';
 import ScreenRecorder, { type ScreenRecorderHandle } from '@/components/ScreenRecorder';
 import { RegionRecordOverlay, type ViewportRegion } from '@/components/RegionRecordOverlay';
@@ -186,6 +187,22 @@ function BackgroundRemovalIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+function RecordStartIcon({ size = 14 }: { size?: number }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        background: '#FF3B30',
+        display: 'block',
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
 function HubRow({
   active,
   onClick,
@@ -296,17 +313,18 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
         io
           ? {
               ...iconOnlyRowStyle(screenRecording),
-              background: screenRecording ? '#FF3B30' : '#FFFFFF',
+              background: '#FFFFFF',
               borderColor: screenRecording ? '#FF3B30' : '#D1D1D6',
               color: screenRecording ? '#fff' : '#1D1D1F',
               ...(startBlocked ? { opacity: 0.5, cursor: 'not-allowed' } : null),
+              ...(screenRecording ? { background: '#FF3B30', color: '#fff' } : null),
             }
           : {
               ...rowStyle(false),
               justifyContent: 'center',
-              background: screenRecording ? '#FF3B30' : '#007AFF',
-              color: '#fff',
-              border: 'none',
+              background: screenRecording ? '#FF3B30' : '#FFFFFF',
+              color: screenRecording ? '#fff' : '#1D1D1F',
+              border: screenRecording ? 'none' : '1px solid #D1D1D6',
               fontWeight: 600,
               ...(startBlocked ? { opacity: 0.5, cursor: 'not-allowed' } : null),
             }
@@ -315,7 +333,7 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
       {screenRecording ? (
         <Square size={16} fill="currentColor" />
       ) : (
-        <span style={{ width: 11, height: 11, borderRadius: '50%', background: io ? '#FF3B30' : '#fff', display: 'inline-block', flexShrink: 0 }} />
+        <RecordStartIcon size={io ? 14 : 12} />
       )}
       {io ? null : <span>{screenRecording ? 'Stop recording' : 'Start recording'}</span>}
     </button>
@@ -440,7 +458,7 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           document.body,
         )}
 
-      <div data-tour-id="recording-hub" style={gridStyle}>
+      <div data-tour-id="recording-hub" className={io ? 'coachlab-recording-hub--icon-only' : undefined} style={gridStyle}>
         {recorderError ? (
           io ? (
             <button
@@ -452,12 +470,10 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
                 color: '#9a3412',
                 borderColor: '#fca5a5',
                 background: '#FFF7ED',
-                fontSize: 10,
-                fontWeight: 700,
               }}
               onClick={() => setRecorderError(null)}
             >
-              !
+              <AlertCircle size={16} />
             </button>
           ) : (
             <p style={{ margin: 0, fontSize: 11, lineHeight: 1.4, color: '#9a3412', padding: '0 2px' }}>{recorderError}</p>
@@ -495,7 +511,7 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
 
         {/* Webcam */}
         <div data-tour-id="tour-webcam" style={{ width: '100%' }}>
-          <HubRow active={webcamActive} iconOnly={io} icon={webcamActive ? <CameraOff size={16} /> : <Camera size={16} />} label={webcamActive ? 'Webcam on' : 'Webcam off'} onClick={onWebcamToggle} />
+          <HubRow active={webcamActive} iconOnly={io} icon={webcamActive ? <Camera size={16} /> : <CameraOff size={16} />} label={webcamActive ? 'Webcam on' : 'Webcam off'} onClick={onWebcamToggle} />
         </div>
 
         {/* 10 Mic */}
