@@ -36,6 +36,55 @@ type Source =
 
 const SPEED_OPTIONS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 
+/** Fast seek acknowledgment for frame stepping — seeked only, short fallback. */
+function waitForSeekPresented(v: HTMLVideoElement): Promise<number> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      v.removeEventListener('seeked', onSeeked);
+      clearTimeout(timer);
+      resolve(v.currentTime);
+    };
+    const onSeeked = () => finish();
+    v.addEventListener('seeked', onSeeked, { once: true });
+    const timer = window.setTimeout(finish, 48);
+  });
+}
+
+/** Wait until the decoder presents a frame at or after a seek (scrub/marker commits). */
+function waitForFrameReady(v: HTMLVideoElement, targetTime?: number): Promise<number> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let rvfcId = 0;
+    const finish = (t: number) => {
+      if (settled) return;
+      settled = true;
+      v.removeEventListener('seeked', onSeeked);
+      if (rvfcId) {
+        try { (v as HTMLVideoElement & { cancelVideoFrameCallback?: (id: number) => void }).cancelVideoFrameCallback?.(rvfcId); } catch { /* noop */ }
+      }
+      clearTimeout(timer);
+      resolve(t);
+    };
+    const onSeeked = () => finish(v.currentTime);
+    v.addEventListener('seeked', onSeeked, { once: true });
+    const anyV = v as HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number };
+    if (typeof anyV.requestVideoFrameCallback === 'function') {
+      const onFrame = (_now: number, meta: { mediaTime: number }) => {
+        if (targetTime !== undefined && Math.abs(meta.mediaTime - targetTime) > 0.05) {
+          rvfcId = anyV.requestVideoFrameCallback!(onFrame);
+          return;
+        }
+        finish(meta.mediaTime);
+      };
+      rvfcId = anyV.requestVideoFrameCallback(onFrame);
+    }
+    const timer = window.setTimeout(() => finish(v.currentTime), 120);
+  });
+}
+
 export default function PreciseTimeline({
   source,
   defaultFps = 30,
@@ -69,17 +118,10 @@ export default function PreciseTimeline({
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
-  const STORAGE_SCRUB_KEY = 'coachlab.timeline.scrubSensitivity';
 
   const [fpsMode, setFpsMode] = useState<'auto' | '30' | '60' | '120' | 'custom'>('30');
   const [customFps, setCustomFps] = useState(defaultFps);
   const [autoFps, setAutoFps] = useState<number | null>(null);
-  /** 0.35 = very precise scrub, 1 = linear, 2.5 = large jumps per small drag */
-  const [scrubSensitivity, setScrubSensitivity] = useState(1);
-  const scrubSensRef = useRef(1);
-  useEffect(() => {
-    scrubSensRef.current = scrubSensitivity;
-  }, [scrubSensitivity]);
 
   // Load persisted FPS choice (once)
   useEffect(() => {
@@ -98,10 +140,6 @@ export default function PreciseTimeline({
 
       if (Number.isFinite(parsedCustom)) setCustomFps(parsedCustom);
       else setCustomFps(defaultFps);
-
-      const rawSens = window.localStorage.getItem(STORAGE_SCRUB_KEY);
-      const s = rawSens ? Number(rawSens) : NaN;
-      if (Number.isFinite(s) && s >= 0.25 && s <= 3) setScrubSensitivity(s);
     } catch {
       // ignore
     }
@@ -119,19 +157,14 @@ export default function PreciseTimeline({
   }, [customFps, fpsMode]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_SCRUB_KEY, String(scrubSensitivity));
-    } catch {
-      // ignore
-    }
-  }, [scrubSensitivity]);
-
-  useEffect(() => {
     if (source.kind !== 'html') { setAutoFps(null); return; }
     const v = source.videoRef.current;
     if (!v) { setAutoFps(null); return; }
 
-    const anyV = v as any;
+    const anyV = v as HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number;
+      cancelVideoFrameCallback?: (id: number) => void;
+    };
     if (typeof anyV.requestVideoFrameCallback !== 'function') {
       setAutoFps(null);
       return;
@@ -141,8 +174,19 @@ export default function PreciseTimeline({
     const stamps: number[] = [];
     let id = 0;
 
+    const stopLoop = () => {
+      if (id) {
+        try { anyV.cancelVideoFrameCallback?.(id); } catch { /* noop */ }
+        id = 0;
+      }
+    };
+
     const onFrame = (_now: number, meta: { mediaTime: number }) => {
       if (cancelled) return;
+      if (v.paused) {
+        stopLoop();
+        return;
+      }
       stamps.push(meta.mediaTime);
       if (stamps.length > 24) stamps.shift();
 
@@ -161,13 +205,27 @@ export default function PreciseTimeline({
         }
       }
 
-      id = anyV.requestVideoFrameCallback(onFrame);
+      id = anyV.requestVideoFrameCallback!(onFrame);
     };
 
-    id = anyV.requestVideoFrameCallback(onFrame);
+    const startLoop = () => {
+      if (cancelled || v.paused) return;
+      stopLoop();
+      id = anyV.requestVideoFrameCallback!(onFrame);
+    };
+
+    const onPlay = () => startLoop();
+    const onPause = () => stopLoop();
+
+    v.addEventListener('play', onPlay);
+    v.addEventListener('pause', onPause);
+    if (!v.paused) startLoop();
+
     return () => {
       cancelled = true;
-      try { anyV.cancelVideoFrameCallback?.(id); } catch {}
+      v.removeEventListener('play', onPlay);
+      v.removeEventListener('pause', onPause);
+      stopLoop();
     };
   }, [source]);
 
@@ -194,6 +252,19 @@ export default function PreciseTimeline({
 
   const scrubTrackRef = useRef<HTMLDivElement | null>(null);
   const scrubbingRef = useRef(false);
+  /** Live scrub thumb position while dragging (before frame-ready commit). */
+  const [scrubPreviewT, setScrubPreviewT] = useState<number | null>(null);
+  const pendingScrubTimeRef = useRef<number | null>(null);
+  const scrubRafRef = useRef(0);
+  const lastScrubCommitRef = useRef<number | null>(null);
+  const lastTimeUiTsRef = useRef(0);
+  const stepInFlightRef = useRef(false);
+  const scrubPreviewRafRef = useRef(0);
+
+  const applyTimeUi = useCallback((next: number) => {
+    tRef.current = next;
+    setT(next);
+  }, []);
 
   const readState = useCallback(() => {
     if (scrubbingRef.current) return;
@@ -226,10 +297,19 @@ export default function PreciseTimeline({
       const v = source.videoRef.current;
       if (!v) return;
 
-      const onTime = () => setT(v.currentTime || 0);
+      const onTime = () => {
+        if (scrubbingRef.current) return;
+        const now = performance.now();
+        if (!v.paused && now - lastTimeUiTsRef.current < 100) return;
+        lastTimeUiTsRef.current = now;
+        applyTimeUi(v.currentTime || 0);
+      };
       const onMeta = () => setD(Number.isFinite(v.duration) ? v.duration : 0);
       const onPlay = () => setIsPlaying(true);
-      const onPause = () => setIsPlaying(false);
+      const onPause = () => {
+        setIsPlaying(false);
+        if (!scrubbingRef.current) applyTimeUi(v.currentTime || 0);
+      };
 
       v.addEventListener('timeupdate', onTime);
       v.addEventListener('loadedmetadata', onMeta);
@@ -249,17 +329,103 @@ export default function PreciseTimeline({
     const id = window.setInterval(readState, 100);
     readState();
     return () => window.clearInterval(id);
-  }, [readState, source]);
+  }, [applyTimeUi, readState, source]);
 
-  const seekTo = useCallback((next: number) => {
+  const commitHtmlStep = useCallback(async (next: number) => {
+    const dur = dRef.current;
+    const nextClamped = clamp(next, 0, dur || next);
+    const v = source.kind === 'html' ? source.videoRef.current : null;
+    if (!v) return nextClamped;
+    v.pause();
+    applyTimeUi(nextClamped);
+    if (Math.abs(v.currentTime - nextClamped) > 0.00001 || v.seeking) {
+      v.currentTime = nextClamped;
+      const actual = await waitForSeekPresented(v);
+      if (Math.abs(actual - nextClamped) > 0.001) applyTimeUi(actual);
+    }
+    return nextClamped;
+  }, [applyTimeUi, source]);
+
+  const commitHtmlSeek = useCallback(async (next: number, updateUi: boolean) => {
+    const dur = dRef.current;
+    const nextClamped = clamp(next, 0, dur || next);
+    const v = source.kind === 'html' ? source.videoRef.current : null;
+    if (!v) return nextClamped;
+    v.currentTime = nextClamped;
+    if (!updateUi) return nextClamped;
+    const actual = await waitForFrameReady(v, nextClamped);
+    applyTimeUi(actual);
+    return actual;
+  }, [applyTimeUi, source]);
+
+  const flushScrubSeek = useCallback(() => {
+    scrubRafRef.current = 0;
+    const pending = pendingScrubTimeRef.current;
+    if (pending === null) return;
+    if (source.kind === 'html') {
+      const v = source.videoRef.current;
+      if (!v) return;
+      if (lastScrubCommitRef.current !== null && Math.abs(pending - lastScrubCommitRef.current) < 0.00001) return;
+      lastScrubCommitRef.current = pending;
+      v.currentTime = pending;
+      return;
+    }
+    const p = source.playerRef.current;
+    if (!p) return;
+    try {
+      p.seekTo?.(pending, true);
+    } catch {
+      /* YT iframe can throw while tearing down */
+    }
+    lastScrubCommitRef.current = pending;
+  }, [source]);
+
+  const scheduleScrubSeek = useCallback(() => {
+    if (scrubRafRef.current) return;
+    scrubRafRef.current = requestAnimationFrame(() => {
+      flushScrubSeek();
+    });
+  }, [flushScrubSeek]);
+
+  const finalizeScrub = useCallback(async () => {
+    if (scrubRafRef.current) {
+      cancelAnimationFrame(scrubRafRef.current);
+      scrubRafRef.current = 0;
+    }
+    if (scrubPreviewRafRef.current) {
+      cancelAnimationFrame(scrubPreviewRafRef.current);
+      scrubPreviewRafRef.current = 0;
+    }
+    const pending = pendingScrubTimeRef.current;
+    pendingScrubTimeRef.current = null;
+    lastScrubCommitRef.current = null;
+    if (pending === null) {
+      setScrubPreviewT(null);
+      return;
+    }
+    if (source.kind === 'html') {
+      const v = source.videoRef.current;
+      if (v) v.pause();
+      await commitHtmlSeek(pending, true);
+    } else {
+      const p = source.playerRef.current;
+      if (p) {
+        try { p.pauseVideo?.(); } catch { /* noop */ }
+        try { p.seekTo?.(pending, true); } catch { /* noop */ }
+      }
+      applyTimeUi(pending);
+    }
+    setScrubPreviewT(null);
+  }, [applyTimeUi, commitHtmlSeek, source]);
+
+  const seekTo = useCallback(async (next: number) => {
     const dur = dRef.current;
     const nextClamped = clamp(next, 0, dur || next);
     if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (!v) return;
-      v.currentTime = nextClamped;
-      setT(nextClamped);
-      tRef.current = nextClamped;
+      v.pause();
+      await commitHtmlSeek(nextClamped, true);
       return;
     }
     const p = source.playerRef.current;
@@ -269,29 +435,42 @@ export default function PreciseTimeline({
     } catch {
       /* YT iframe can throw internal errors (e.g. this.g.src) while tearing down */
     }
-    setT(nextClamped);
-    tRef.current = nextClamped;
-  }, [source]);
+    applyTimeUi(nextClamped);
+  }, [applyTimeUi, commitHtmlSeek, source]);
 
-  const seekFromClientX = useCallback((clientX: number, dragging = false) => {
+  const timeFromClientX = useCallback((clientX: number) => {
     const el = scrubTrackRef.current;
     const dur = dRef.current;
-    if (!el || !dur) return;
+    if (!el || !dur) return null;
     const r = el.getBoundingClientRect();
     const raw = clamp((clientX - r.left) / Math.max(1, r.width), 0, 1);
-    // Clicks map linearly (0% → start, 100% → end). Sensitivity applies only while dragging.
-    const pos = dragging
-      ? clamp(0.5 + (raw - 0.5) * scrubSensRef.current, 0, 1)
-      : raw;
-    seekTo(pos * dur);
-  }, [seekTo]);
+    return raw * dur;
+  }, []);
+
+  const queueScrubAtClientX = useCallback((clientX: number) => {
+    const next = timeFromClientX(clientX);
+    if (next === null) return;
+    pendingScrubTimeRef.current = next;
+    if (!scrubPreviewRafRef.current) {
+      scrubPreviewRafRef.current = requestAnimationFrame(() => {
+        scrubPreviewRafRef.current = 0;
+        const pending = pendingScrubTimeRef.current;
+        if (pending !== null) setScrubPreviewT(pending);
+      });
+    }
+    scheduleScrubSeek();
+  }, [scheduleScrubSeek, timeFromClientX]);
 
   useEffect(() => {
     const onWinMove = (e: PointerEvent) => {
       if (!scrubbingRef.current) return;
-      seekFromClientX(e.clientX, true);
+      queueScrubAtClientX(e.clientX);
     };
-    const onWinUp = () => { scrubbingRef.current = false; };
+    const onWinUp = () => {
+      if (!scrubbingRef.current) return;
+      scrubbingRef.current = false;
+      void finalizeScrub();
+    };
     window.addEventListener('pointermove', onWinMove);
     window.addEventListener('pointerup', onWinUp);
     window.addEventListener('pointercancel', onWinUp);
@@ -300,7 +479,7 @@ export default function PreciseTimeline({
       window.removeEventListener('pointerup', onWinUp);
       window.removeEventListener('pointercancel', onWinUp);
     };
-  }, [seekFromClientX]);
+  }, [finalizeScrub, queueScrubAtClientX]);
 
   const setRate = useCallback((r: number) => {
     playbackRateRef.current = r;
@@ -338,9 +517,12 @@ export default function PreciseTimeline({
       if (!v) return;
       if (v.paused) {
         beforePlay?.();
-        v.play().catch(() => {});
+        setIsPlaying(true);
+        v.play().catch(() => setIsPlaying(false));
       } else {
         beforePause?.();
+        setIsPlaying(false);
+        applyTimeUi(v.currentTime || 0);
         v.pause();
       }
       return;
@@ -361,29 +543,32 @@ export default function PreciseTimeline({
   }, [beforePause, beforePlay, isPlaying, source]);
 
   const stepFrame = useCallback((dir: 1 | -1, mult = 1) => {
-    const dur = dRef.current;
-    const delta = dir * frameStepRef.current * mult;
-    if (source.kind === 'html') {
-      const v = source.videoRef.current;
-      if (!v) return;
-      v.pause();
-      const cur = v.currentTime;
-      const next = clamp(cur + delta, 0, dur || Math.max(cur + delta, 0));
-      v.currentTime = next;
-      tRef.current = next;
-      setT(next);
-      return;
-    }
-    try {
-      source.playerRef.current?.pauseVideo?.();
-    } catch {
-      /* ignore */
-    }
-    const next = clamp(tRef.current + delta, 0, dur || tRef.current + delta);
-    tRef.current = next;
-    setT(next);
-    seekTo(next);
-  }, [seekTo, source]);
+    if (stepInFlightRef.current) return;
+    stepInFlightRef.current = true;
+    void (async () => {
+      try {
+        const dur = dRef.current;
+        const delta = dir * frameStepRef.current * mult;
+        if (source.kind === 'html') {
+          const v = source.videoRef.current;
+          if (!v) return;
+          const cur = v.currentTime;
+          const next = clamp(cur + delta, 0, dur || Math.max(cur + delta, 0));
+          await commitHtmlStep(next);
+          return;
+        }
+        try {
+          source.playerRef.current?.pauseVideo?.();
+        } catch {
+          /* ignore */
+        }
+        const next = clamp(tRef.current + delta, 0, dur || tRef.current + delta);
+        await seekTo(next);
+      } finally {
+        stepInFlightRef.current = false;
+      }
+    })();
+  }, [commitHtmlStep, seekTo, source]);
 
   // Keyboard: frame-accurate stepping + play/pause
   useEffect(() => {
@@ -397,7 +582,8 @@ export default function PreciseTimeline({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [stepFrame, togglePlay]);
 
-  const pct = d > 0 ? (t / d) * 100 : 0;
+  const displayT = scrubPreviewT ?? t;
+  const pct = d > 0 ? (displayT / d) * 100 : 0;
 
   const shellStyle: React.CSSProperties = useMemo(() => ({
     pointerEvents: 'auto',
@@ -492,7 +678,7 @@ export default function PreciseTimeline({
         <button onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
 
         <div style={{ minWidth: 130, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
-          <div style={{ lineHeight: 1.1 }}>{formatTime(t)}</div>
+          <div style={{ lineHeight: 1.1 }}>{formatTime(displayT)}</div>
           <div style={{ lineHeight: 1.1, opacity: 0.75 }}>{formatTime(d)}</div>
         </div>
 
@@ -622,49 +808,6 @@ export default function PreciseTimeline({
         )}
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          width: '100%',
-          flexShrink: 0,
-          padding: phoneChrome ? '4px 0 2px' : '2px 0 0',
-        }}
-      >
-        <span style={{ fontSize: 11, fontWeight: 700, color: phoneChrome ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.65)', whiteSpace: 'nowrap' }}>
-          Scrub
-        </span>
-        <input
-          type="range"
-          min={35}
-          max={250}
-          step={5}
-          value={Math.round(scrubSensitivity * 100)}
-          onChange={(e) => setScrubSensitivity(Number(e.target.value) / 100)}
-          aria-label="Timeline scrub sensitivity"
-          title="Low = precise small adjustments. High = faster scrub across the video."
-          style={{
-            flex: 1,
-            minWidth: 0,
-            height: phoneChrome ? 36 : 32,
-            accentColor: accent,
-            touchAction: 'none',
-          }}
-        />
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 700,
-            color: phoneChrome ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.5)',
-            width: 52,
-            textAlign: 'right',
-          }}
-        >
-          {scrubSensitivity < 0.85 ? 'Precise' : scrubSensitivity > 1.35 ? 'Fast' : 'Normal'}
-        </span>
-      </div>
-
       {/* Full-width touch scrub bar */}
       <div
         ref={scrubTrackRef}
@@ -672,7 +815,7 @@ export default function PreciseTimeline({
         tabIndex={0}
         aria-valuemin={0}
         aria-valuemax={d || 0}
-        aria-valuenow={t}
+        aria-valuenow={displayT}
         aria-label="Scrub timeline"
         style={{
           width: '100%',
@@ -686,17 +829,22 @@ export default function PreciseTimeline({
         }}
         onPointerDown={(e) => {
           scrubbingRef.current = true;
+          lastScrubCommitRef.current = null;
           (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-          seekFromClientX(e.clientX, false);
+          const v = source.kind === 'html' ? source.videoRef.current : null;
+          if (v) v.pause();
+          queueScrubAtClientX(e.clientX);
         }}
         onPointerMove={(e) => {
           if (!scrubbingRef.current) return;
           if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
-          seekFromClientX(e.clientX, true);
+          queueScrubAtClientX(e.clientX);
         }}
         onPointerUp={(e) => {
+          if (!scrubbingRef.current) return;
           scrubbingRef.current = false;
           try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+          void finalizeScrub();
         }}
       >
         <div
@@ -746,7 +894,7 @@ export default function PreciseTimeline({
         <TimelineMarkers
           duration={d}
           overlay={overlay}
-          onSeek={seekTo}
+          onSeek={(time) => { void seekTo(time); }}
         />
       )}
     </div>

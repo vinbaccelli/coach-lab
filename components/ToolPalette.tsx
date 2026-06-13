@@ -607,7 +607,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   const ToolbarLead = () => (
     <>
-      {(compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
+      {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
         <button
           type="button"
           aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}

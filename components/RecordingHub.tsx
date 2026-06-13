@@ -233,11 +233,24 @@ function HubRow({
         ...base,
         ...(danger ? { color: '#FF3B30', borderColor: '#D1D1D6', background: '#FFFFFF' } : null),
         ...(disabled ? { opacity: 0.5, cursor: 'not-allowed' } : null),
+        overflow: 'hidden',
       }}
       onClick={disabled ? undefined : onClick}
     >
       <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{icon}</span>
-      {iconOnly ? null : <span style={{ minWidth: 0 }}>{label}</span>}
+      {iconOnly ? null : (
+        <span
+          style={{
+            minWidth: 0,
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {label}
+        </span>
+      )}
     </button>
   );
 }

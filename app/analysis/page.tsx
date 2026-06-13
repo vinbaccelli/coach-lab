@@ -1188,12 +1188,20 @@ export default function Home() {
     const onPauseA = () => {
       if (!vB.paused) vB.pause();
       playPendingB = false;
-    };
-
-    const onSeekingA = () => {
       const t = bTarget();
       if (bInRange(t)) {
         vB.currentTime = t;
+        vB.playbackRate = vA.playbackRate;
+      } else if (t < 0) {
+        vB.currentTime = 0;
+      }
+    };
+
+    const onSeekedA = () => {
+      const t = bTarget();
+      if (bInRange(t)) {
+        vB.currentTime = t;
+        vB.playbackRate = vA.playbackRate;
       } else if (t < 0) {
         vB.currentTime = 0;
         if (!vB.paused) vB.pause();
@@ -1206,7 +1214,7 @@ export default function Home() {
 
     vA.addEventListener('play', onPlayA);
     vA.addEventListener('pause', onPauseA);
-    vA.addEventListener('seeking', onSeekingA);
+    vA.addEventListener('seeked', onSeekedA);
     vA.addEventListener('ratechange', onRateA);
 
     // ── Single rAF drift-correction loop ──
@@ -1293,7 +1301,7 @@ export default function Home() {
       vA.removeEventListener('pause', onPauseStopDrift);
       vA.removeEventListener('play', onPlayA);
       vA.removeEventListener('pause', onPauseA);
-      vA.removeEventListener('seeking', onSeekingA);
+      vA.removeEventListener('seeked', onSeekedA);
       vA.removeEventListener('ratechange', onRateA);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2627,9 +2635,18 @@ export default function Home() {
 
   const syncCompanionBeforePause = useCallback(() => {
     if (!playBothEnabled) return;
+    const vA = videoRef.current;
     const vB = videoRefB.current;
-    if (vB && !vB.paused) vB.pause();
-  }, [playBothEnabled]);
+    if (!vA || !vB || !videoBLoaded) return;
+    const t = vA.currentTime;
+    if (t >= 0 && t <= videoBDuration) {
+      vB.currentTime = t;
+      vB.playbackRate = vA.playbackRate;
+    } else if (t < 0) {
+      vB.currentTime = 0;
+    }
+    if (!vB.paused) vB.pause();
+  }, [playBothEnabled, videoBLoaded, videoBDuration]);
 
   const renderTimelineDock = () => (
     <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: isMobile ? 4 : 8 }}>
@@ -3115,6 +3132,54 @@ export default function Home() {
                 onDragLeave={handleDragLeaveA}
                 onDrop={handleDropA}
               >
+                <CanvasOverlay
+                  ref={canvasRef}
+                  videoRef={videoRef}
+                  webcamVideoRef={webcamVideoRef}
+                  renderVideo={hasVideoAContent && (embedLiveVideoA || (!youtubeVideoIdA && !genericEmbedSrcA))}
+                  transparentWhenNoVideo={!hasVideoAContent || ((!!youtubeVideoIdA || !!genericEmbedSrcA) && !embedLiveVideoA)}
+                  youtubePose={
+                    youtubeVideoIdA && !embedLiveVideoA
+                      ? { videoId: youtubeVideoIdA, controllerRef: playbackControllerARef }
+                      : undefined
+                  }
+                  activeTool={activeTool}
+                  drawingOptions={drawingOptions}
+                  containerWidth={canvasSize.width}
+                  containerHeight={canvasSize.height}
+                  ballTrailMode={ballTrailMode}
+                  skeletonEnabled={skeletonEnabled && markupTarget === 'A'}
+                  skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
+                  ballTrailEnabled={ballTrailEnabled}
+                  onProcessingStatus={setProcessingStatus}
+                  isRecording={isRecording}
+                  circleSpinning={circleSpinning}
+                  outlineEraserSize={outlineEraserSize}
+                  onOutlineEraserSizeChange={setOutlineEraserSize}
+                  webcamPipMode={webcamPipMode}
+                  webcamOpacity={webcamOpacity}
+                  webcamActive={webcamActive && markupTarget !== 'B'}
+                  stroMotionGhosts={ghostFrames}
+                  stroMotionOpacity={stroMotionOpacity}
+                  stroMotionRegion={stroMotionRegion}
+                  skeletonShowAngles={skeletonShowAngles}
+                  skeletonShowHeadLine={skeletonShowHeadLine}
+                  skeletonClassicColors={skeletonClassicColors}
+                  skeletonParts={skeletonParts}
+                  ballSampleMode={ballSampleMode}
+                  suppressTabCaptureMirror={
+                    embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)
+                  }
+                  webcamCutout={webcamCutout}
+                  precisionTouchDraw={isMobile && precisionDrawEnabled}
+                  webcamPipMobileChrome={isMobile}
+                  webcamPipBottomInsetPx={toolbarBottomReservePx}
+                  showTourHelpInZoomCluster
+                  poseFrameSkip={hasVideoBContent ? 1 : 0}
+                  panModeEnabled={panModeEnabled}
+                  onPanModeToggle={() => setPanModeEnabled((p) => !p)}
+                  onObjMultiplierRegionSelected={() => setObjMultiplierHasRegion(true)}
+                />
                 {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (
                   urlLoadPhase && urlTarget === 'A' ? (
                     <div style={{
@@ -3124,6 +3189,8 @@ export default function Home() {
                       gap: 16,
                       borderRadius: layoutMode === 'reels' ? 0 : 20,
                       background: layoutMode === 'reels' ? '#000' : '#FFFFFF',
+                      pointerEvents: 'none',
+                      zIndex: 10,
                     }}>
                       <svg width="40" height="40" viewBox="0 0 40 40" style={{ animation: 'spin 1s linear infinite' }}>
                         <circle cx="20" cy="20" r="16" fill="none" stroke="#007AFF" strokeWidth="3" strokeDasharray="75" strokeDashoffset="20" strokeLinecap="round" />
@@ -3141,6 +3208,8 @@ export default function Home() {
                       borderRadius: layoutMode === 'reels' ? 0 : 20,
                       background: layoutMode === 'reels' ? '#000' : '#FFFFFF',
                       padding: 24,
+                      pointerEvents: 'none',
+                      zIndex: 10,
                     }}>
                       <div style={{ fontSize: 14, color: '#CC3333', textAlign: 'center', lineHeight: 1.5, maxWidth: 320 }}>
                         {urlLoadError}
@@ -3148,13 +3217,13 @@ export default function Home() {
                       <div style={{ display: 'flex', gap: 10 }}>
                         <button
                           onClick={() => { setUrlLoadError(null); handleUrlSubmit(); }}
-                          style={{ padding: '8px 20px', borderRadius: 10, border: 'none', background: '#007AFF', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+                          style={{ padding: '8px 20px', borderRadius: 10, border: 'none', background: '#007AFF', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', pointerEvents: 'auto' }}
                         >
                           Retry
                         </button>
                         <button
                           onClick={() => { setUrlLoadError(null); fileInputRef.current?.click(); }}
-                          style={{ padding: '8px 20px', borderRadius: 10, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
+                          style={{ padding: '8px 20px', borderRadius: 10, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontSize: 14, fontWeight: 500, cursor: 'pointer', pointerEvents: 'auto' }}
                         >
                           Upload instead
                         </button>
@@ -3170,8 +3239,10 @@ export default function Home() {
                     border: layoutMode === 'reels' ? 'none' : '1px solid #E8E8ED',
                     background: layoutMode === 'reels' ? '#000' : '#FAFAFA',
                     padding: 24,
+                    pointerEvents: 'none',
+                    zIndex: 10,
                   }}>
-                    <button type="button" data-tour-id="tour-upload" onClick={() => fileInputRef.current?.click()} style={{ minHeight: 52, minWidth: 200, padding: '0 24px', borderRadius: 14, border: '1px solid #E5E5E5', background: '#FFFFFF', fontSize: 15, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <button type="button" data-tour-id="tour-upload" onClick={() => fileInputRef.current?.click()} style={{ minHeight: 52, minWidth: 200, padding: '0 24px', borderRadius: 14, border: '1px solid #E5E5E5', background: '#FFFFFF', fontSize: 15, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, pointerEvents: 'auto' }}>
                       <Upload size={20} /> Upload Video
                     </button>
                     <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8e8e93', textAlign: 'center', maxWidth: 320 }}>
@@ -3320,54 +3391,6 @@ export default function Home() {
                         ) : null}
                       </div>
                     ) : null}
-                    <CanvasOverlay
-                      ref={canvasRef}
-                      videoRef={videoRef}
-                      webcamVideoRef={webcamVideoRef}
-                      renderVideo={embedLiveVideoA || (!youtubeVideoIdA && !genericEmbedSrcA)}
-                      transparentWhenNoVideo={(!!youtubeVideoIdA || !!genericEmbedSrcA) && !embedLiveVideoA}
-                      youtubePose={
-                        youtubeVideoIdA && !embedLiveVideoA
-                          ? { videoId: youtubeVideoIdA, controllerRef: playbackControllerARef }
-                          : undefined
-                      }
-                      activeTool={activeTool}
-                      drawingOptions={drawingOptions}
-                      containerWidth={canvasSize.width}
-                      containerHeight={canvasSize.height}
-                      ballTrailMode={ballTrailMode}
-                      skeletonEnabled={skeletonEnabled && markupTarget === 'A'}
-                      skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
-                      ballTrailEnabled={ballTrailEnabled}
-                      onProcessingStatus={setProcessingStatus}
-                      isRecording={isRecording}
-                      circleSpinning={circleSpinning}
-                      outlineEraserSize={outlineEraserSize}
-                      onOutlineEraserSizeChange={setOutlineEraserSize}
-                      webcamPipMode={webcamPipMode}
-                      webcamOpacity={webcamOpacity}
-                      webcamActive={webcamActive && markupTarget !== 'B'}
-                      stroMotionGhosts={ghostFrames}
-                      stroMotionOpacity={stroMotionOpacity}
-                      stroMotionRegion={stroMotionRegion}
-                      skeletonShowAngles={skeletonShowAngles}
-                      skeletonShowHeadLine={skeletonShowHeadLine}
-                      skeletonClassicColors={skeletonClassicColors}
-                      skeletonParts={skeletonParts}
-                      ballSampleMode={ballSampleMode}
-                      suppressTabCaptureMirror={
-                        embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)
-                      }
-                      webcamCutout={webcamCutout}
-                      precisionTouchDraw={isMobile && precisionDrawEnabled}
-                      webcamPipMobileChrome={isMobile}
-                      webcamPipBottomInsetPx={toolbarBottomReservePx}
-                      showTourHelpInZoomCluster
-                      poseFrameSkip={hasVideoBContent ? 1 : 0}
-                      panModeEnabled={panModeEnabled}
-                      onPanModeToggle={() => setPanModeEnabled((p) => !p)}
-                      onObjMultiplierRegionSelected={() => setObjMultiplierHasRegion(true)}
-                    />
                     <EmbedCapturePanel
                       visible={!!(youtubeVideoIdA || genericEmbedSrcA) && !videoSrc}
                       embedReady={embedReadyA}
