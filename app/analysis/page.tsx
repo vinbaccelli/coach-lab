@@ -556,9 +556,9 @@ export default function Home() {
   }, []);
 
   const TOOLBAR_EXPANDED_W = 240;
-  const TOOLBAR_COLLAPSED_W = 56;
-  const TOOLBAR_MOBILE_W = 56;
-  const TOOLBAR_MOBILE_FIXED_W = 56;
+  const TOOLBAR_COLLAPSED_W = 60;
+  const TOOLBAR_MOBILE_W = 60;
+  const TOOLBAR_MOBILE_FIXED_W = 60;
   const TOOLBAR_COMPACT_EXPANDED_W = 196;
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
 
@@ -2649,10 +2649,10 @@ export default function Home() {
   }, [playBothEnabled, videoBLoaded, videoBDuration]);
 
   const renderTimelineDock = () => (
-    <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: isMobile ? 4 : 8 }}>
+    <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: isMobile ? 4 : 8, minHeight: isMobile ? 108 : 120 }}>
       {!(capturePrepPanel || (captureBusy && embedCaptureRecording)) && (hasVideoBContent ? (
         playbackTarget === 'B'
-          ? ((videoSrcB || youtubeVideoIdB) && !(genericEmbedSrcB && !videoSrcB)) && (
+          ? (videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
               <PreciseTimeline
                 source={
                   youtubeVideoIdB
@@ -2670,7 +2670,7 @@ export default function Home() {
                 compareAbDisabled={!canPlaybackSyncBoth}
               />
             )
-          : ((videoSrc || youtubeVideoIdA) && !(genericEmbedSrcA && !videoSrc)) && (
+          : (videoSrc || youtubeVideoIdA || genericEmbedSrcA) && (
               <PreciseTimeline
                 source={
                   youtubeVideoIdA
@@ -2691,8 +2691,7 @@ export default function Home() {
               />
             )
       ) : (
-        (videoSrc || youtubeVideoIdA) &&
-        !(genericEmbedSrcA && !videoSrc) && (
+        hasVideoAContent && (
           <PreciseTimeline
             source={
               youtubeVideoIdA
@@ -2953,7 +2952,7 @@ export default function Home() {
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
-            padding: isMobile ? '4px 2px' : 6,
+            padding: isMobile ? '4px 4px' : '6px 4px',
           }}
         >
           <ToolPalette {...paletteProps} />
@@ -3826,6 +3825,8 @@ export default function Home() {
                 pointerEvents: 'none',
                 opacity: controlsVisible ? 1 : 0.3,
                 transition: 'opacity 0.4s ease',
+                minHeight: isMobile ? 108 : 120,
+                boxSizing: 'border-box',
               }}
             >
               {renderTimelineDock()}

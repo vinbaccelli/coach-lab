@@ -21,28 +21,61 @@ type Props = {
   onConfirm: (region: ViewportRegion, aspect: CropAspect) => void;
 };
 
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
 function aspectRatioValue(a: CropAspect): number | null {
   if (a === '9:16') return 9 / 16;
   if (a === '16:9') return 16 / 9;
   return null;
 }
 
-function defaultRegion(aspect: CropAspect): ViewportRegion {
-  const w = Math.min(window.innerWidth * 0.85, 420);
+function fitRegionToViewport(r: ViewportRegion): ViewportRegion {
+  const maxW = window.innerWidth;
+  const maxH = window.innerHeight;
+  let { x, y, w, h } = r;
+  w = Math.min(Math.max(120, w), maxW);
+  h = Math.min(Math.max(80, h), maxH);
+  x = clamp(x, 0, Math.max(0, maxW - w));
+  y = clamp(y, 0, Math.max(0, maxH - h));
+  return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+}
+
+function regionForAspect(aspect: CropAspect, prev?: ViewportRegion | null): ViewportRegion {
+  const maxW = window.innerWidth * 0.92;
+  const maxH = window.innerHeight * 0.82;
   const ratio = aspectRatioValue(aspect);
-  const h = ratio == null ? w * (9 / 16) : w / ratio;
-  return {
+  if (ratio == null) {
+    return fitRegionToViewport(prev ?? {
+      x: Math.round((window.innerWidth - Math.min(maxW, 420)) / 2),
+      y: Math.round((window.innerHeight - Math.min(maxH, 420 * (9 / 16))) / 2),
+      w: Math.round(Math.min(maxW, 420)),
+      h: Math.round(Math.min(maxH, 420 * (9 / 16))),
+    });
+  }
+  let w = Math.min(maxW, prev?.w ?? maxW * 0.55);
+  let h = w / ratio;
+  if (h > maxH) {
+    h = maxH * 0.9;
+    w = h * ratio;
+  }
+  if (w > maxW) {
+    w = maxW;
+    h = w / ratio;
+  }
+  return fitRegionToViewport({
     x: Math.round((window.innerWidth - w) / 2),
     y: Math.round((window.innerHeight - h) / 2),
     w: Math.round(w),
     h: Math.round(h),
-  };
+  });
 }
 
 export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onCancel, onConfirm }: Props) {
   const [aspect, setAspect] = useState<CropAspect>(initialAspect);
   const [region, setRegion] = useState<ViewportRegion>(
-    () => initialRegion ?? defaultRegion(initialAspect),
+    () => fitRegionToViewport(initialRegion ?? regionForAspect(initialAspect)),
   );
 
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
@@ -54,36 +87,42 @@ export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onC
 
   const onAspectChange = useCallback((a: CropAspect) => {
     setAspect(a);
-    setRegion((r) => {
-      const ratio = aspectRatioValue(a);
-      if (ratio == null) return r;
-      const h = r.w / ratio;
-      return { ...r, h: Math.round(h) };
-    });
+    setRegion((r) => regionForAspect(a, r));
   }, []);
 
   const onMove = useCallback((e: PointerEvent) => {
     const r = regionRef.current;
     if (dragRef.current) {
       const d = dragRef.current;
-      setRegion({
+      setRegion(fitRegionToViewport({
         ...r,
-        x: Math.max(0, Math.min(window.innerWidth - r.w, d.ox + (e.clientX - d.sx))),
-        y: Math.max(0, Math.min(window.innerHeight - r.h, d.oy + (e.clientY - d.sy))),
-      });
+        x: d.ox + (e.clientX - d.sx),
+        y: d.oy + (e.clientY - d.sy),
+      }));
     } else if (resizeRef.current) {
       const rv = resizeRef.current;
       const ratio = aspectRatioValue(aspectRef.current);
       let nw = Math.max(120, rv.ow + (e.clientX - rv.sx));
       let nh = ratio == null ? Math.max(80, rv.oh + (e.clientY - rv.sy)) : nw / ratio;
-      nw = Math.min(nw, window.innerWidth - r.x);
-      nh = Math.min(nh, window.innerHeight - r.y);
-      if (ratio != null) { nw = Math.min(nw, nh * ratio); nh = nw / ratio; }
-      setRegion({ ...r, w: Math.round(nw), h: Math.round(nh) });
+      const maxW = window.innerWidth - r.x;
+      const maxH = window.innerHeight - r.y;
+      nw = Math.min(nw, maxW);
+      nh = Math.min(nh, maxH);
+      if (ratio != null) {
+        nw = Math.min(nw, nh * ratio);
+        nh = nw / ratio;
+      }
+      setRegion(fitRegionToViewport({ ...r, w: Math.round(nw), h: Math.round(nh) }));
     }
   }, []);
 
   const onUp = useCallback(() => { dragRef.current = null; resizeRef.current = null; }, []);
+
+  useEffect(() => {
+    const onResize = () => setRegion((r) => fitRegionToViewport(r));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useEffect(() => {
     window.addEventListener('pointermove', onMove);
@@ -112,6 +151,7 @@ export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onC
           touchAction: 'none',
           cursor: 'move',
           pointerEvents: 'auto',
+          boxSizing: 'border-box',
         }}
         onPointerDown={(e) => {
           if ((e.target as HTMLElement).dataset.resize) return;
@@ -124,16 +164,17 @@ export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onC
           data-resize="1"
           style={{
             position: 'absolute',
-            right: -14,
-            bottom: -14,
-            width: 32,
-            height: 32,
-            borderRadius: 6,
+            right: 8,
+            bottom: 8,
+            width: 36,
+            height: 36,
+            borderRadius: 8,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             cursor: 'nwse-resize',
             touchAction: 'none',
+            zIndex: 2,
           }}
           onPointerDown={(e) => {
             e.stopPropagation();
@@ -142,7 +183,7 @@ export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onC
             e.preventDefault();
           }}
         >
-          <div style={{ width: 18, height: 18, borderRadius: 4, background: '#34C759', border: '2px solid #fff', pointerEvents: 'none' }} />
+          <div style={{ width: 20, height: 20, borderRadius: 4, background: '#34C759', border: '2px solid #fff', pointerEvents: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.35)' }} />
         </div>
       </div>
       <div

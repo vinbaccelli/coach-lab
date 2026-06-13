@@ -259,7 +259,6 @@ export default function PreciseTimeline({
   const lastScrubCommitRef = useRef<number | null>(null);
   const lastTimeUiTsRef = useRef(0);
   const stepInFlightRef = useRef(false);
-  const scrubPreviewRafRef = useRef(0);
 
   const applyTimeUi = useCallback((next: number) => {
     tRef.current = next;
@@ -368,6 +367,7 @@ export default function PreciseTimeline({
       if (lastScrubCommitRef.current !== null && Math.abs(pending - lastScrubCommitRef.current) < 0.00001) return;
       lastScrubCommitRef.current = pending;
       v.currentTime = pending;
+      applyTimeUi(pending);
       return;
     }
     const p = source.playerRef.current;
@@ -378,7 +378,8 @@ export default function PreciseTimeline({
       /* YT iframe can throw while tearing down */
     }
     lastScrubCommitRef.current = pending;
-  }, [source]);
+    applyTimeUi(pending);
+  }, [applyTimeUi, source]);
 
   const scheduleScrubSeek = useCallback(() => {
     if (scrubRafRef.current) return;
@@ -392,10 +393,6 @@ export default function PreciseTimeline({
       cancelAnimationFrame(scrubRafRef.current);
       scrubRafRef.current = 0;
     }
-    if (scrubPreviewRafRef.current) {
-      cancelAnimationFrame(scrubPreviewRafRef.current);
-      scrubPreviewRafRef.current = 0;
-    }
     const pending = pendingScrubTimeRef.current;
     pendingScrubTimeRef.current = null;
     lastScrubCommitRef.current = null;
@@ -405,8 +402,13 @@ export default function PreciseTimeline({
     }
     if (source.kind === 'html') {
       const v = source.videoRef.current;
-      if (v) v.pause();
-      await commitHtmlSeek(pending, true);
+      if (v) {
+        v.pause();
+        applyTimeUi(pending);
+        v.currentTime = pending;
+        const actual = await waitForSeekPresented(v);
+        if (Math.abs(actual - pending) > 0.001) applyTimeUi(actual);
+      }
     } else {
       const p = source.playerRef.current;
       if (p) {
@@ -416,7 +418,7 @@ export default function PreciseTimeline({
       applyTimeUi(pending);
     }
     setScrubPreviewT(null);
-  }, [applyTimeUi, commitHtmlSeek, source]);
+  }, [applyTimeUi, source]);
 
   const seekTo = useCallback(async (next: number) => {
     const dur = dRef.current;
@@ -451,13 +453,7 @@ export default function PreciseTimeline({
     const next = timeFromClientX(clientX);
     if (next === null) return;
     pendingScrubTimeRef.current = next;
-    if (!scrubPreviewRafRef.current) {
-      scrubPreviewRafRef.current = requestAnimationFrame(() => {
-        scrubPreviewRafRef.current = 0;
-        const pending = pendingScrubTimeRef.current;
-        if (pending !== null) setScrubPreviewT(pending);
-      });
-    }
+    setScrubPreviewT(next);
     scheduleScrubSeek();
   }, [scheduleScrubSeek, timeFromClientX]);
 
@@ -633,8 +629,97 @@ export default function PreciseTimeline({
     minWidth: 72,
   }), []);
 
+  const thumbSize = phoneChrome ? 26 : 24;
+  const scrubTrackH = phoneChrome ? 56 : 48;
+
   return (
     <div data-tour-id="tour-timeline" style={shellStyle} aria-label="Timeline">
+      {/* Full-width scrub bar — placed first so it stays visible above control chrome */}
+      <div
+        ref={scrubTrackRef}
+        role="slider"
+        tabIndex={0}
+        aria-valuemin={0}
+        aria-valuemax={d || 0}
+        aria-valuenow={displayT}
+        aria-label="Scrub timeline"
+        aria-disabled={d <= 0}
+        style={{
+          width: '100%',
+          height: scrubTrackH,
+          minHeight: scrubTrackH,
+          borderRadius: 12,
+          background: d > 0 ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.08)',
+          border: '1px solid rgba(255,255,255,0.22)',
+          position: 'relative',
+          cursor: d > 0 ? 'pointer' : 'default',
+          touchAction: 'none',
+          flexShrink: 0,
+          boxSizing: 'border-box',
+        }}
+        onPointerDown={(e) => {
+          if (d <= 0) return;
+          scrubbingRef.current = true;
+          lastScrubCommitRef.current = null;
+          (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+          const v = source.kind === 'html' ? source.videoRef.current : null;
+          if (v) v.pause();
+          queueScrubAtClientX(e.clientX);
+        }}
+        onPointerMove={(e) => {
+          if (!scrubbingRef.current || d <= 0) return;
+          if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+          queueScrubAtClientX(e.clientX);
+        }}
+        onPointerUp={(e) => {
+          if (!scrubbingRef.current) return;
+          scrubbingRef.current = false;
+          try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+          void finalizeScrub();
+        }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            left: 10,
+            right: 10,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            height: phoneChrome ? 8 : 6,
+            borderRadius: 4,
+            background: 'rgba(255,255,255,0.28)',
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            left: 10,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            height: phoneChrome ? 8 : 6,
+            width: d > 0 ? `calc((100% - 20px) * ${pct / 100})` : 0,
+            borderRadius: 4,
+            background: accent,
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            left: d > 0 ? `calc(10px + (100% - 20px) * ${pct / 100} - ${thumbSize / 2}px)` : 10,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: thumbSize,
+            height: thumbSize,
+            borderRadius: '50%',
+            background: '#fff',
+            boxShadow: `0 0 0 3px ${accent}, 0 2px 8px rgba(0,0,0,0.35)`,
+            pointerEvents: 'none',
+          }}
+        />
+      </div>
+
       <div
         data-tour-id="tour-frame-controls"
         style={{
@@ -806,87 +891,6 @@ export default function PreciseTimeline({
             </div>
           </>
         )}
-      </div>
-
-      {/* Full-width touch scrub bar */}
-      <div
-        ref={scrubTrackRef}
-        role="slider"
-        tabIndex={0}
-        aria-valuemin={0}
-        aria-valuemax={d || 0}
-        aria-valuenow={displayT}
-        aria-label="Scrub timeline"
-        style={{
-          width: '100%',
-          height: phoneChrome ? 52 : 44,
-          borderRadius: 10,
-          background: 'rgba(255,255,255,0.1)',
-          position: 'relative',
-          cursor: 'pointer',
-          touchAction: 'none',
-          flexShrink: 0,
-        }}
-        onPointerDown={(e) => {
-          scrubbingRef.current = true;
-          lastScrubCommitRef.current = null;
-          (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-          const v = source.kind === 'html' ? source.videoRef.current : null;
-          if (v) v.pause();
-          queueScrubAtClientX(e.clientX);
-        }}
-        onPointerMove={(e) => {
-          if (!scrubbingRef.current) return;
-          if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
-          queueScrubAtClientX(e.clientX);
-        }}
-        onPointerUp={(e) => {
-          if (!scrubbingRef.current) return;
-          scrubbingRef.current = false;
-          try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
-          void finalizeScrub();
-        }}
-      >
-        <div
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            height: phoneChrome ? 6 : 8,
-            width: '100%',
-            borderRadius: 4,
-            background: 'rgba(255,255,255,0.2)',
-            pointerEvents: 'none',
-          }}
-        />
-        <div
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            height: phoneChrome ? 6 : 8,
-            width: `${pct}%`,
-            borderRadius: 4,
-            background: accent,
-            pointerEvents: 'none',
-          }}
-        />
-        <div
-          style={{
-            position: 'absolute',
-            left: `calc(${pct}% - ${phoneChrome ? 11 : 10}px)`,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            width: phoneChrome ? 22 : 20,
-            height: phoneChrome ? 22 : 20,
-            borderRadius: '50%',
-            background: '#fff',
-            boxShadow: `0 0 0 2px ${accent}`,
-            pointerEvents: 'none',
-          }}
-        />
       </div>
 
       {/* Vertical tick markers */}

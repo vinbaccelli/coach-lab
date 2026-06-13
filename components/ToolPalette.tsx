@@ -322,7 +322,7 @@ const scrollArea: React.CSSProperties = {
 
 function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties {
   let base = scrollArea;
-  if (io) base = { ...scrollArea, padding: '6px 2px 10px', gap: 4, alignItems: 'center' };
+  if (io) base = { ...scrollArea, padding: '6px 4px 10px', gap: 4, alignItems: 'center' };
   if (mobileChrome) {
     base = {
       ...base,
@@ -389,6 +389,7 @@ function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolea
   if (io) {
     return {
       ...base,
+      boxSizing: 'border-box',
       justifyContent: 'center',
       alignItems: 'center',
       padding: 0,
@@ -653,6 +654,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           aria-label={collapsed ? 'Expand toolbar' : 'Collapse toolbar'}
           style={{
             ...rb(false, pressedKey === 'collapse', io, denseMobile),
+            boxSizing: 'border-box',
             width: io ? 44 : denseMobile ? 36 : 40,
             height: io ? 44 : undefined,
             minHeight: 44,
@@ -1232,10 +1234,12 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
         <ToolbarLead />
         <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
-        <div data-tour-id="tour-draw-tools">
+        <div data-tour-id="tour-draw-tools" style={io ? { display: 'flex', justifyContent: 'center', width: '100%' } : undefined}>
           <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
         </div>
-        <Row k="tools-h" icon={<LayoutGrid size={denseMobile ? 16 : 20} />} label="Tools" onPress={() => push('tools')} />
+        <div style={io ? { display: 'flex', justifyContent: 'center', width: '100%' } : undefined}>
+          <Row k="tools-h" icon={<LayoutGrid size={denseMobile ? 16 : 20} />} label="Tools" onPress={() => push('tools')} />
+        </div>
         {recordingHubContent ? (
           <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
             <Row

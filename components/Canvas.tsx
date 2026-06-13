@@ -23,7 +23,7 @@ import {
 } from '@/lib/youtubeThumbnailPose';
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
-import { Hand, HelpCircle } from 'lucide-react';
+import { HelpCircle } from 'lucide-react';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -1498,7 +1498,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /** CSS-pixel selection rect on the object-multiplier overlay (relative to overlay box). */
     const [objMultOverlayPx, setObjMultOverlayPx] = useState<{ l: number; t: number; w: number; h: number } | null>(null);
     const objMultOverlayDownRef = useRef<{ cx: number; cy: number } | null>(null);
-    const [showFinePointerPanBtn, setShowFinePointerPanBtn] = useState(true);
     const lastTextTapRef = useRef<{ idx: number; t: number; x: number; y: number } | null>(null);
 
     // Outline eraser: tracks which shape is being erased and the cursor position
@@ -1571,15 +1570,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const poseScheduleRef = useRef<{ kind: 'rvfc' | 'raf'; id: number } | null>(null);
     const poseFrameSkipRef = useRef(poseFrameSkip);
     useEffect(() => { poseFrameSkipRef.current = poseFrameSkip; }, [poseFrameSkip]);
-
-    useEffect(() => {
-      if (typeof window === 'undefined' || !window.matchMedia) return;
-      const mq = window.matchMedia('(pointer: fine)');
-      const fn = () => setShowFinePointerPanBtn(!!mq.matches);
-      fn();
-      mq.addEventListener?.('change', fn);
-      return () => mq.removeEventListener?.('change', fn);
-    }, []);
 
     useEffect(() => {
       if (activeTool !== 'objectMultiplier') {
@@ -5669,22 +5659,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           >
             ⌂
           </button>
-          {onPanModeToggle && showFinePointerPanBtn && (
-            <button
-              type="button"
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={onPanModeToggle}
-              style={{
-                ...zoomControlBtnStyle,
-                fontSize: 13,
-                background: panModeEnabled ? 'rgba(53,103,154,0.85)' : 'rgba(0,0,0,0.55)',
-                border: panModeEnabled ? '2px solid #5ba3e0' : 'none',
-              }}
-              title={panModeEnabled ? 'Pan mode on — click to use drawing tools' : 'Pan mode — drag the video while zoomed'}
-            >
-              <Hand size={20} strokeWidth={2.25} />
-            </button>
-          )}
         </div>
         {newTextDraft && (
           <textarea

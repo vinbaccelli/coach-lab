@@ -181,6 +181,7 @@ button:active:not(:disabled),
   font-size: 0;
   line-height: 0;
   letter-spacing: 0;
+  box-sizing: border-box;
 }
 .coachlab-toolbar-scroll--icon-only button svg,
 .coachlab-toolbar-scroll--icon-only a svg,
