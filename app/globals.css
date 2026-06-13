@@ -173,3 +173,17 @@ button:active:not(:disabled),
   width: 0;
   height: 0;
 }
+
+/* Collapsed toolbar: suppress any clipped label text beside icons */
+.coachlab-toolbar-scroll--icon-only button,
+.coachlab-toolbar-scroll--icon-only a,
+.coachlab-toolbar-scroll--icon-only label[role='checkbox'] {
+  font-size: 0;
+  line-height: 0;
+  letter-spacing: 0;
+}
+.coachlab-toolbar-scroll--icon-only button svg,
+.coachlab-toolbar-scroll--icon-only a svg,
+.coachlab-toolbar-scroll--icon-only label[role='checkbox'] svg {
+  flex-shrink: 0;
+}

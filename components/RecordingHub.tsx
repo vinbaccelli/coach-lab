@@ -5,14 +5,13 @@
  *
  * One ordered action grid (no nested toolbars, no duplicated controls):
  *   1. Layout toggle (16:9 ↔ 9:16)
- *   2. Screenshot — entire screen
- *   3. Screenshot — video frame
- *   4. Start / Stop recording (toggle; also a sticky floating Stop while recording)
- *   5. Webcam on/off
- *   6. Mic on/off
- *   7. Background removal on/off
- *   8. PiP shape (rectangle / circle)
- *   9. Reset recording settings
+ *   2. Screenshot (entire area or select area)
+ *   3. Start / Stop recording (toggle; also a sticky floating Stop while recording)
+ *   4. Webcam on/off
+ *   5. Mic on/off
+ *   6. Background removal on/off
+ *   7. PiP shape (rectangle / circle)
+ *   8. Reset recording settings
  *
  * Recording always captures the FULL screen; crop/trim is chosen after recording
  * (see PostRecordingCropModal).
@@ -25,7 +24,6 @@ import {
   MicOff,
   Camera,
   CameraOff,
-  Monitor,
   RectangleHorizontal,
   RectangleVertical,
   Image as ImageIcon,
@@ -33,11 +31,11 @@ import {
   PanelLeftClose,
   Square,
   Circle,
-  Scissors,
   RefreshCw,
   Download,
 } from 'lucide-react';
 import ScreenRecorder, { type ScreenRecorderHandle } from '@/components/ScreenRecorder';
+import { RegionRecordOverlay, type ViewportRegion } from '@/components/RegionRecordOverlay';
 import type { WebcamPipMode } from '@/components/ToolPalette';
 
 export interface RecordingHubContentProps {
@@ -50,8 +48,8 @@ export interface RecordingHubContentProps {
   onLayoutChange: (mode: 'youtube' | 'reels') => void;
   onScreenRecordComplete?: (blob: Blob, ext: string) => void;
 
-  onScreenshotEntireScreen: () => void;
-  onScreenshotVideoOnly: () => void;
+  onScreenshotEntireArea: () => void;
+  onScreenshotSelectArea: (region: ViewportRegion) => void;
 
   webcamActive: boolean;
   onWebcamToggle: () => void;
@@ -163,6 +161,31 @@ function iconOnlyRowStyle(active?: boolean, pressed?: boolean): React.CSSPropert
   };
 }
 
+function BackgroundRemovalIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="2" />
+      <path d="M6 16 L10 12 L14 15 L18 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="9" cy="9" r="1.5" fill="currentColor" />
+      <path
+        d="M15 17 H21 V23 H15 Z"
+        fill="url(#cl-bg-checker)"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <defs>
+        <pattern id="cl-bg-checker" width="4" height="4" patternUnits="userSpaceOnUse">
+          <rect width="2" height="2" fill="#D1D1D6" />
+          <rect x="2" y="2" width="2" height="2" fill="#D1D1D6" />
+          <rect x="2" width="2" height="2" fill="#FFFFFF" />
+          <rect y="2" width="2" height="2" fill="#FFFFFF" />
+        </pattern>
+      </defs>
+    </svg>
+  );
+}
+
 function HubRow({
   active,
   onClick,
@@ -211,8 +234,8 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     layoutMode,
     onLayoutChange,
     onScreenRecordComplete,
-    onScreenshotEntireScreen,
-    onScreenshotVideoOnly,
+    onScreenshotEntireArea,
+    onScreenshotSelectArea,
     webcamActive,
     onWebcamToggle,
     micActive,
@@ -241,6 +264,8 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
   const recorderRef = useRef<ScreenRecorderHandle | null>(null);
   const [screenRecording, setScreenRecording] = useState(false);
   const [recorderError, setRecorderError] = useState<string | null>(null);
+  const [screenshotModalOpen, setScreenshotModalOpen] = useState(false);
+  const [screenshotAreaOpen, setScreenshotAreaOpen] = useState(false);
 
   const startBlocked = captureBusy && !screenRecording;
   const handleStartStop = () => {
@@ -302,6 +327,85 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
         @keyframes hubSpin { to { transform: rotate(360deg); } }
         @keyframes hubPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
       `}</style>
+
+      {screenshotModalOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Screenshot options"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 200001,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 16,
+              background: 'rgba(0,0,0,0.45)',
+            }}
+            onPointerDown={() => setScreenshotModalOpen(false)}
+          >
+            <div
+              style={{
+                width: 'min(360px, 100%)',
+                borderRadius: 16,
+                background: '#FFFFFF',
+                border: '1px solid #D1D1D6',
+                boxShadow: '0 20px 48px rgba(0,0,0,0.18)',
+                padding: '18px 16px 16px',
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#1D1D1F', marginBottom: 12 }}>Screenshot</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button
+                  type="button"
+                  style={{ ...rowStyle(), justifyContent: 'center', fontWeight: 600 }}
+                  onClick={() => {
+                    setScreenshotModalOpen(false);
+                    onScreenshotEntireArea();
+                  }}
+                >
+                  Entire area
+                </button>
+                <button
+                  type="button"
+                  style={{ ...rowStyle(), justifyContent: 'center', fontWeight: 600 }}
+                  onClick={() => {
+                    setScreenshotModalOpen(false);
+                    setScreenshotAreaOpen(true);
+                  }}
+                >
+                  Select area
+                </button>
+                <button
+                  type="button"
+                  style={{ ...rowStyle(), justifyContent: 'center', color: '#6E6E73' }}
+                  onClick={() => setScreenshotModalOpen(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {screenshotAreaOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <RegionRecordOverlay
+            initialAspect={layoutMode === 'reels' ? '9:16' : '16:9'}
+            onCancel={() => setScreenshotAreaOpen(false)}
+            onConfirm={(region) => {
+              setScreenshotAreaOpen(false);
+              onScreenshotSelectArea(region);
+            }}
+          />,
+          document.body,
+        )}
 
       {/* Sticky floating Stop — always reachable while recording, never inside scroll. */}
       {screenRecording &&
@@ -378,8 +482,13 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
         />
 
         {/* Screenshot */}
-        <HubRow iconOnly={io} icon={<Monitor size={16} />} label="Screenshot screen" title="Screenshot entire screen" onClick={onScreenshotEntireScreen} />
-        <HubRow iconOnly={io} icon={<ImageIcon size={16} />} label="Screenshot frame" title="Screenshot video frame" onClick={onScreenshotVideoOnly} />
+        <HubRow
+          iconOnly={io}
+          icon={<ImageIcon size={16} />}
+          label="Screenshot"
+          title="Screenshot"
+          onClick={() => setScreenshotModalOpen(true)}
+        />
 
         {/* Start / Stop */}
         <div data-tour-id="tour-record-screen" style={{ width: '100%' }}>{startStopButton}</div>
@@ -400,7 +509,7 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
 
         {/* 11 Background removal */}
         {onWebcamCutoutChange ? (
-          <HubRow active={!!webcamCutout} iconOnly={io} icon={<Scissors size={16} />} label={webcamCutout ? 'Background removed' : 'Background removal'} title="Webcam background removal" onClick={() => onWebcamCutoutChange(!webcamCutout)} />
+          <HubRow active={!!webcamCutout} iconOnly={io} icon={<BackgroundRemovalIcon size={16} />} label={webcamCutout ? 'Background removed' : 'Background removal'} title="Webcam background removal" onClick={() => onWebcamCutoutChange(!webcamCutout)} />
         ) : null}
 
         {/* 12 PiP shape */}

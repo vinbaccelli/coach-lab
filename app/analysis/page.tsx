@@ -16,6 +16,7 @@ import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 import { RecordingHubContent } from '@/components/RecordingHub';
+import type { ViewportRegion } from '@/components/RegionRecordOverlay';
 import PostRecordingCropModal, { type CropAspect, type PixelRegion } from '@/components/PostRecordingCropModal';
 import { exportCroppedVideo } from '@/lib/cropExport';
 import GuidedTour from '@/components/GuidedTour';
@@ -91,35 +92,47 @@ function ReelsDesktopShell({
   enabled: boolean;
   children: React.ReactNode;
 }) {
-  if (!enabled) return <>{children}</>;
+  // Keep a stable two-div wrapper so toggling 16:9 ↔ 9:16 does not remount
+  // toolbar children (which would reset ToolPalette navStack to home).
   return (
     <div
       style={{
         flex: 1,
         minHeight: 0,
         display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        background: '#000',
+        flexDirection: 'row',
+        overflow: 'hidden',
+        width: '100%',
+        ...(enabled
+          ? { justifyContent: 'center', alignItems: 'center', background: '#000' }
+          : {}),
       }}
     >
       <div
-        style={{
-          // Fill the flex slot's height (not the raw viewport) so the frame can
-          // never overflow its parent and clip the bottom controls; derive the
-          // 9:16 width from that height via aspect-ratio.
-          height: '100%',
-          maxHeight: '100%',
-          aspectRatio: '9 / 16',
-          width: 'auto',
-          maxWidth: '100vw',
-          display: 'flex',
-          flexDirection: 'row',
-          overflow: 'hidden',
-          flexShrink: 0,
-          background: '#000',
-          boxShadow: '0 0 0 1px rgba(255, 255, 255, 0.08)',
-        }}
+        style={
+          enabled
+            ? {
+                height: '100%',
+                maxHeight: '100%',
+                aspectRatio: '9 / 16',
+                width: 'auto',
+                maxWidth: '100vw',
+                display: 'flex',
+                flexDirection: 'row',
+                overflow: 'hidden',
+                flexShrink: 0,
+                background: '#000',
+                boxShadow: '0 0 0 1px rgba(255, 255, 255, 0.08)',
+              }
+            : {
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'row',
+                overflow: 'hidden',
+                width: '100%',
+              }
+        }
       >
         {children}
       </div>
@@ -1363,40 +1376,34 @@ export default function Home() {
   }, [micActive, micMuted, webcamActive, startMic, setAudioMuted]);
 
   // ── Screenshot ────────────────────────────────────────────────────────────
-  const handleScreenshotVideoOnly = useCallback(() => {
+  const handleScreenshotEntireArea = useCallback(() => {
     const canvas = canvasRef.current?.getCanvas();
     if (!canvas) return;
-    downloadDataURL(canvas.toDataURL('image/png'), `coach-lab-video-${Date.now()}.png`);
+    downloadDataURL(canvas.toDataURL('image/png'), `coach-lab-screenshot-${Date.now()}.png`);
   }, []);
 
-  const handleScreenshotEntireScreen = useCallback(async () => {
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
-      alert('Screen capture is not supported in this browser.');
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false,
-      });
-      const video = document.createElement('video');
-      video.muted = true;
-      video.playsInline = true;
-      video.srcObject = stream;
-      await video.play();
-      await new Promise<void>((r) => window.setTimeout(r, 250));
-      const w = video.videoWidth || 1280;
-      const h = video.videoHeight || 720;
-      const snap = document.createElement('canvas');
-      snap.width = w;
-      snap.height = h;
-      snap.getContext('2d')?.drawImage(video, 0, 0, w, h);
-      stopAllTracks(stream);
-      downloadDataURL(snap.toDataURL('image/png'), `coach-lab-screen-${Date.now()}.png`);
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'NotAllowedError') return;
-      alert('Could not capture screenshot.');
-    }
+  const handleScreenshotSelectArea = useCallback((region: ViewportRegion) => {
+    const canvas = canvasRef.current?.getCanvas();
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const ix = Math.max(region.x, rect.left);
+    const iy = Math.max(region.y, rect.top);
+    const ix2 = Math.min(region.x + region.w, rect.right);
+    const iy2 = Math.min(region.y + region.h, rect.bottom);
+    if (ix2 <= ix || iy2 <= iy) return;
+
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const sx = (ix - rect.left) * scaleX;
+    const sy = (iy - rect.top) * scaleY;
+    const sw = (ix2 - ix) * scaleX;
+    const sh = (iy2 - iy) * scaleY;
+
+    const crop = document.createElement('canvas');
+    crop.width = Math.max(1, Math.round(sw));
+    crop.height = Math.max(1, Math.round(sh));
+    crop.getContext('2d')?.drawImage(canvas, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
+    downloadDataURL(crop.toDataURL('image/png'), `coach-lab-screenshot-${Date.now()}.png`);
   }, []);
 
   const handleScreenRecordComplete = useCallback((blob: Blob, ext: string) => {
@@ -2785,8 +2792,8 @@ export default function Home() {
         layoutMode={layoutMode as 'youtube' | 'reels'}
         onLayoutChange={setLayoutMode}
         onScreenRecordComplete={handleScreenRecordComplete}
-        onScreenshotEntireScreen={handleScreenshotEntireScreen}
-        onScreenshotVideoOnly={handleScreenshotVideoOnly}
+        onScreenshotEntireArea={handleScreenshotEntireArea}
+        onScreenshotSelectArea={handleScreenshotSelectArea}
         webcamActive={webcamActive}
         onWebcamToggle={() => void toggleWebcam()}
         micActive={micActive}

@@ -12,6 +12,9 @@
  * Crop phase = video preview + draggable/resizable rectangle with Free / 9:16 /
  * 16:9 presets. The crop is applied at export time (canvas-based) by the parent
  * via onExportCrop. This component only collects the pixel region.
+ *
+ * Icon semantics (V1): Crop = crop/region tool; Trim (future) = scissors;
+ * Background removal (hub) = landscape cut-out icon — keep meanings distinct.
  */
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
