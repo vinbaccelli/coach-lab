@@ -25,7 +25,7 @@ import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { HelpCircle } from 'lucide-react';
-import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, type StroMotionOpacityMode } from '@/lib/stroMotion';
+import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 
 /** Poll interval while waiting for a ref-backed <video> to mount. */
@@ -180,10 +180,9 @@ export interface CanvasProps {
   onOutlineEraserSizeChange?: (size: number) => void;
   webcamPipMode?: WebcamPipMode;
   webcamOpacity?: number;
-  stroMotionFrames?: ImageBitmap[];
-  stroMotionOpacity?: number;
-  stroMotionOpacityMode?: StroMotionOpacityMode;
-  /** Animated mode: number of ghost frames currently visible (1..n). Omit = all. */
+  stroMotionResult?: StroMotionResult | null;
+  /** Subject box preview before generate (video-normalized 0..1) */
+  stroMotionSubjectBox?: StroMotionSubjectBox | null;
   stroMotionVisibleCount?: number;
   skeletonShowAngles?: boolean;
   skeletonShowHeadLine?: boolean;
@@ -1451,9 +1450,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       onOutlineEraserSizeChange,
       webcamPipMode = 'rectangle',
       webcamOpacity = 1,
-      stroMotionFrames,
-      stroMotionOpacity = 0.6,
-      stroMotionOpacityMode = 'temporal',
+      stroMotionResult,
+      stroMotionSubjectBox,
       stroMotionVisibleCount,
       skeletonShowAngles = true,
       skeletonShowHeadLine = false,
@@ -1606,9 +1604,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const outlineEraserSizeRef = useRef(outlineEraserSize);
     const webcamPipModeRef    = useRef(webcamPipMode);
     const webcamOpacityRef    = useRef(webcamOpacity);
-    const stroMotionFramesRef = useRef<ImageBitmap[]>(stroMotionFrames ?? []);
-    const stroMotionOpacityRef = useRef(stroMotionOpacity);
-    const stroMotionOpacityModeRef = useRef(stroMotionOpacityMode);
+    const stroMotionResultRef = useRef<StroMotionResult | null>(stroMotionResult ?? null);
+    const stroMotionSubjectBoxRef = useRef<StroMotionSubjectBox | null>(stroMotionSubjectBox ?? null);
     const stroMotionVisibleCountRef = useRef(stroMotionVisibleCount);
     const skeletonShowAnglesRef   = useRef(skeletonShowAngles);
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
@@ -1780,9 +1777,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     }, [circleSpinning]);
     useEffect(() => { webcamPipModeRef.current     = webcamPipMode; },   [webcamPipMode]);
     useEffect(() => { webcamOpacityRef.current     = webcamOpacity; },   [webcamOpacity]);
-    useEffect(() => { stroMotionFramesRef.current = stroMotionFrames ?? []; renderDirtyRef.current = true; }, [stroMotionFrames]);
-    useEffect(() => { stroMotionOpacityRef.current = stroMotionOpacity; renderDirtyRef.current = true; }, [stroMotionOpacity]);
-    useEffect(() => { stroMotionOpacityModeRef.current = stroMotionOpacityMode; renderDirtyRef.current = true; }, [stroMotionOpacityMode]);
+    useEffect(() => { stroMotionResultRef.current = stroMotionResult ?? null; renderDirtyRef.current = true; }, [stroMotionResult]);
+    useEffect(() => { stroMotionSubjectBoxRef.current = stroMotionSubjectBox ?? null; renderDirtyRef.current = true; }, [stroMotionSubjectBox]);
     useEffect(() => { stroMotionVisibleCountRef.current = stroMotionVisibleCount; renderDirtyRef.current = true; }, [stroMotionVisibleCount]);
     useEffect(() => { skeletonShowAnglesRef.current   = skeletonShowAngles; },   [skeletonShowAngles]);
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; },  [skeletonShowHeadLine]);
@@ -2314,7 +2310,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (!canvas) return { ok: false, reason: 'no-canvas' };
         if (!canvasSupportsVideoExport(canvas)) return { ok: false, reason: 'unsupported' };
-        const frames = stroMotionFramesRef.current;
+        const frames = stroMotionResultRef.current?.ghostCrops ?? [];
         if (frames.length === 0) return { ok: false, reason: 'no-frames' };
 
         const savedVisible = stroMotionVisibleCountRef.current;
@@ -2324,6 +2320,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             renderFrame: async (visibleCount) => {
               stroMotionVisibleCountRef.current = visibleCount;
               renderDirtyRef.current = true;
+              await new Promise<void>((resolve) => {
+                renderWaitersRef.current.push(resolve);
+                renderDirtyRef.current = true;
+              });
               await new Promise<void>((resolve) => {
                 renderWaitersRef.current.push(resolve);
                 renderDirtyRef.current = true;
@@ -2969,7 +2969,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             !!video.srcObject &&
             typeof MediaStream !== 'undefined' &&
             video.srcObject instanceof MediaStream;
-          if (!hideStreamMirror) {
+          const stroComposite = stroMotionResultRef.current;
+          if (stroComposite && dw > 0 && dh > 0) {
+            renderStroMotionComposite(ctx, stroComposite, {
+              visibleCount: stroMotionVisibleCountRef.current,
+              dest: { x: dx, y: dy, w: dw, h: dh },
+            });
+          } else if (!hideStreamMirror) {
             ctx.drawImage(video, dx, dy, dw, dh);
           }
 
@@ -3068,15 +3074,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           panYRef.current = c.y;
         }
 
-        // ── StroMotion ghost frames ───────────────────────────────────────
-        const stroFrames = stroMotionFramesRef.current;
-        if (stroFrames.length > 0 && dw > 0 && dh > 0) {
-          renderStroMotionComposite(ctx, stroFrames, {
-            opacity: stroMotionOpacityRef.current,
-            fadeMode: stroMotionOpacityModeRef.current,
-            visibleCount: stroMotionVisibleCountRef.current,
-            dest: { x: dx, y: dy, w: dw, h: dh },
-          });
+        // ── StroMotion subject box preview (before generate) ────────────────
+        const stroSubjectPreview = stroMotionSubjectBoxRef.current;
+        if (!stroMotionResultRef.current && stroSubjectPreview && dw > 0 && dh > 0) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(0,122,255,0.95)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 4]);
+          ctx.strokeRect(
+            dx + stroSubjectPreview.x * dw,
+            dy + stroSubjectPreview.y * dh,
+            stroSubjectPreview.width * dw,
+            stroSubjectPreview.height * dh,
+          );
+          ctx.setLineDash([]);
+          ctx.restore();
         }
 
         // ── Object Multiplier overlay ───────────────────────────────────

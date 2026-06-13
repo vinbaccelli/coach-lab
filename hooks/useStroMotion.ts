@@ -2,15 +2,19 @@
 
 import { useCallback, useRef, useState } from 'react';
 import {
-  clearFrames,
-  extractAllFrames,
+  clearStroMotionResult,
+  extractStroMotionComposite,
   logStroMotionExtractDiagnostics,
+  type StroMotionResult,
   type StroMotionStatus,
+  type StroMotionSubjectBox,
 } from '@/lib/stroMotion';
 
 export interface StroMotionExtractParams {
-  /** Sorted video timestamps in seconds */
-  times: number[];
+  startSec: number;
+  endSec: number;
+  ghostCount: number;
+  subjectBox: StroMotionSubjectBox;
 }
 
 export interface StroMotionProgress {
@@ -19,42 +23,45 @@ export interface StroMotionProgress {
 }
 
 export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>) {
-  const [ghostFrames, setGhostFrames] = useState<ImageBitmap[]>([]);
+  const [result, setResult] = useState<StroMotionResult | null>(null);
   const [status, setStatus] = useState<StroMotionStatus>('idle');
   const [progress, setProgress] = useState<StroMotionProgress>({ current: 0, total: 0 });
   const extractGenRef = useRef(0);
 
   const clearGhosts = useCallback(() => {
-    setGhostFrames((prev) => {
-      clearFrames(prev);
-      return [];
+    setResult((prev) => {
+      clearStroMotionResult(prev);
+      return null;
     });
     setProgress({ current: 0, total: 0 });
     setStatus('idle');
   }, []);
 
   const extractFrames = useCallback(
-    async (params: StroMotionExtractParams): Promise<ImageBitmap[]> => {
+    async (params: StroMotionExtractParams): Promise<StroMotionResult | null> => {
       const video = videoRef.current;
-      if (!video || params.times.length < 2) return [];
-
-      if (video.videoWidth === 0 || video.videoHeight === 0) return [];
+      if (!video) return null;
+      if (params.endSec <= params.startSec) return null;
+      if (params.subjectBox.width <= 0 || params.subjectBox.height <= 0) return null;
 
       const gen = ++extractGenRef.current;
 
-      setGhostFrames((prev) => {
-        clearFrames(prev);
-        return [];
+      setResult((prev) => {
+        clearStroMotionResult(prev);
+        return null;
       });
       setStatus('extracting');
-      setProgress({ current: 0, total: params.times.length });
+      setProgress({ current: 0, total: params.ghostCount + 1 });
 
       const isCancelled = () => extractGenRef.current !== gen;
 
       try {
-        const bitmaps = await extractAllFrames(
+        const composite = await extractStroMotionComposite(
           video,
-          params.times,
+          params.startSec,
+          params.endSec,
+          params.ghostCount,
+          params.subjectBox,
           (current, total) => {
             if (isCancelled()) return;
             setProgress({ current, total });
@@ -62,25 +69,25 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
           isCancelled,
         );
 
-        if (isCancelled()) {
-          clearFrames(bitmaps);
-          return [];
+        if (isCancelled() || !composite) {
+          if (composite) clearStroMotionResult(composite);
+          return null;
         }
 
-        await logStroMotionExtractDiagnostics(bitmaps, params.times);
+        await logStroMotionExtractDiagnostics(composite);
 
-        setGhostFrames(bitmaps);
+        setResult(composite);
         setStatus('ready');
-        return bitmaps;
+        return composite;
       } catch {
         if (!isCancelled()) {
-          setGhostFrames((prev) => {
-            clearFrames(prev);
-            return [];
+          setResult((prev) => {
+            clearStroMotionResult(prev);
+            return null;
           });
           setStatus('idle');
         }
-        return [];
+        return null;
       } finally {
         if (extractGenRef.current === gen) {
           setProgress((p) => (p.total > 0 ? p : { current: 0, total: 0 }));
@@ -99,10 +106,10 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   const setAnimating = useCallback((animating: boolean) => {
     setStatus((prev) => {
       if (animating) return 'animating';
-      if (prev === 'animating') return ghostFrames.length > 0 ? 'ready' : 'idle';
+      if (prev === 'animating') return result ? 'ready' : 'idle';
       return prev;
     });
-  }, [ghostFrames.length]);
+  }, [result]);
 
   const setConfiguring = useCallback((configuring: boolean) => {
     setStatus((prev) => {
@@ -113,7 +120,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   }, []);
 
   return {
-    ghostFrames,
+    result,
     status,
     isProcessing: status === 'extracting',
     progress,

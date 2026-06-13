@@ -32,15 +32,13 @@ import { downloadDataURL } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
 import StroMotionPanel from '@/components/StroMotionPanel';
 import {
-  computeAutoSampleTimes,
   exportStroMotionPNGAfterRender,
+  normalizeSubjectBox,
   prepareVideoForStroMotionExtraction,
-  STRO_MOTION_ANIM_INTERVAL_MS,
-  STRO_MOTION_DEFAULT_OPACITY,
-  STRO_MOTION_MAX_FRAMES,
-  type StroMotionOpacityMode,
-  type StroMotionRenderMode,
-  type StroMotionSamplingMode,
+  subjectBoxFromRegion,
+  STRO_MOTION_DEFAULT_GHOST_COUNT,
+  type StroMotionGhostCount,
+  type StroMotionSubjectBox,
 } from '@/lib/stroMotion';
 import { normalizeWebUrlInput, resolveEmbedTarget } from '@/lib/embedUrl';
 import {
@@ -424,21 +422,16 @@ export default function Home() {
   /** Large tap targets only on real phones — desktop 9:16 preview keeps compact UI */
   const touchChrome                         = isMobile;
 
-  // StroMotion state
+  // StroMotion state (Dartfish-style subject box workflow)
   const [stroMotionActive, setStroMotionActive] = useState(false);
-  const [stroRangeStart, setStroRangeStart] = useState(0);
-  const [stroRangeEnd, setStroRangeEnd] = useState(3);
-  const [stroSamplingMode, setStroSamplingMode] = useState<StroMotionSamplingMode>('auto');
-  const [stroIntervalFrames, setStroIntervalFrames] = useState(5);
-  const [stroManualKeyframes, setStroManualKeyframes] = useState<number[]>([]);
-  const [stroMotionOpacity, setStroMotionOpacity] = useState(STRO_MOTION_DEFAULT_OPACITY);
-  const [stroOpacityMode, setStroOpacityMode] = useState<StroMotionOpacityMode>('temporal');
-  const [stroRenderMode, setStroRenderMode] = useState<StroMotionRenderMode>('static');
+  const [stroStartFrame, setStroStartFrame] = useState(0);
+  const [stroEndFrame, setStroEndFrame] = useState(3);
+  const [stroGhostCount, setStroGhostCount] = useState<StroMotionGhostCount>(STRO_MOTION_DEFAULT_GHOST_COUNT);
+  const [stroSubjectBox, setStroSubjectBox] = useState<StroMotionSubjectBox | null>(null);
+  const [stroSelectingSubject, setStroSelectingSubject] = useState(false);
   const [stroVideoTime, setStroVideoTime] = useState(0);
   const [stroVideoDuration, setStroVideoDuration] = useState(0);
   const [stroVisibleCount, setStroVisibleCount] = useState<number | undefined>(undefined);
-  const [stroIsAnimating, setStroIsAnimating] = useState(false);
-  const stroAnimTimerRef = useRef<number | null>(null);
 
   const stroMotionHtml5Only =
     !!videoSrc &&
@@ -448,14 +441,13 @@ export default function Home() {
     !genericEmbedSrcB;
 
   const {
-    ghostFrames,
+    result: stroMotionResult,
     status: stroMotionStatus,
     isProcessing: stroMotionProcessing,
     progress: stroMotionProgress,
     clearGhosts,
     extractFrames,
     cancelExtraction,
-    setAnimating: setStroMotionAnimating,
     setConfiguring: setStroMotionConfiguring,
   } = useStroMotion(videoRef);
 
@@ -463,6 +455,7 @@ export default function Home() {
     typeof HTMLCanvasElement !== 'undefined'
     && typeof HTMLCanvasElement.prototype.captureStream === 'function';
   const [stroIsExportingVideo, setStroIsExportingVideo] = useState(false);
+  const stroConfigAtGenerateRef = useRef<string | null>(null);
 
   // Object Multiplier state
   const [objMultiplierFrameCount, setObjMultiplierFrameCount] = useState(5);
@@ -500,24 +493,48 @@ export default function Home() {
     setDrawContextActive(false);
   }, []);
 
-  const stopStroAnimation = useCallback(() => {
-    if (stroAnimTimerRef.current) {
-      clearTimeout(stroAnimTimerRef.current);
-      stroAnimTimerRef.current = null;
-    }
-    setStroIsAnimating(false);
-    setStroVisibleCount(undefined);
-    setStroMotionAnimating(false);
-  }, [setStroMotionAnimating]);
-
   const resetStroMotion = useCallback(() => {
-    stopStroAnimation();
     cancelExtraction();
     clearGhosts();
-    setStroMotionActive(false);
-    setStroManualKeyframes([]);
+    stroConfigAtGenerateRef.current = null;
+    setStroSubjectBox(null);
+    setStroSelectingSubject(false);
+    setStroVisibleCount(undefined);
+    canvasRef.current?.setStroMotionVisibleCount?.(undefined);
     setStroMotionConfiguring(false);
-  }, [cancelExtraction, clearGhosts, setStroMotionConfiguring, stopStroAnimation]);
+  }, [cancelExtraction, clearGhosts, setStroMotionConfiguring]);
+
+  const stroConfigKey = useMemo(
+    () => JSON.stringify({
+      box: stroSubjectBox,
+      start: stroStartFrame,
+      end: stroEndFrame,
+      count: stroGhostCount,
+    }),
+    [stroSubjectBox, stroStartFrame, stroEndFrame, stroGhostCount],
+  );
+
+  const handleStroSelectSubject = useCallback(() => {
+    setStroSelectingSubject(true);
+    canvasRef.current?.startStroMotionRegionSelect?.((region) => {
+      const normalized = normalizeSubjectBox(subjectBoxFromRegion(region));
+      clearGhosts();
+      stroConfigAtGenerateRef.current = null;
+      setStroVisibleCount(undefined);
+      canvasRef.current?.setStroMotionVisibleCount?.(undefined);
+      setStroSubjectBox(normalized);
+      setStroSelectingSubject(false);
+    });
+  }, [clearGhosts]);
+
+  useEffect(() => {
+    if (stroMotionStatus !== 'ready' || !stroConfigAtGenerateRef.current) return;
+    if (stroConfigKey === stroConfigAtGenerateRef.current) return;
+    clearGhosts();
+    stroConfigAtGenerateRef.current = null;
+    setStroVisibleCount(undefined);
+    canvasRef.current?.setStroMotionVisibleCount?.(undefined);
+  }, [clearGhosts, stroConfigKey, stroMotionStatus]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -529,7 +546,7 @@ export default function Home() {
       const dur = v.duration;
       if (Number.isFinite(dur) && dur > 0) {
         setStroVideoDuration(dur);
-        setStroRangeEnd((prev) => (prev <= stroRangeStart || prev > dur ? Math.min(Math.max(stroRangeStart + 1, 3), dur) : prev));
+        setStroEndFrame((prev) => (prev <= stroStartFrame || prev > dur ? Math.min(Math.max(stroStartFrame + 1, 3), dur) : prev));
       }
       setStroVideoTime(v.currentTime || 0);
     };
@@ -540,85 +557,68 @@ export default function Home() {
       v.removeEventListener('loadedmetadata', syncMeta);
       v.removeEventListener('timeupdate', syncMeta);
     };
-  }, [videoSrc, stroRangeStart]);
+  }, [videoSrc, stroStartFrame]);
 
   useEffect(() => {
-    if (stroRenderMode === 'static') setStroVisibleCount(undefined);
-  }, [stroRenderMode, ghostFrames.length]);
-
-  useEffect(() => {
-    if (stroMotionActive && ghostFrames.length === 0 && !stroMotionProcessing) {
+    if (stroMotionActive && !stroMotionResult && !stroMotionProcessing) {
       setStroMotionConfiguring(true);
     } else if (!stroMotionActive) {
       setStroMotionConfiguring(false);
     }
-  }, [ghostFrames.length, setStroMotionConfiguring, stroMotionActive, stroMotionProcessing]);
-
-  useEffect(() => {
-    return () => stopStroAnimation();
-  }, [stopStroAnimation]);
-
-  const buildStroSampleTimes = useCallback((): number[] => {
-    if (stroSamplingMode === 'manual') {
-      return [...stroManualKeyframes].sort((a, b) => a - b);
-    }
-    return computeAutoSampleTimes(stroRangeStart, stroRangeEnd, stroIntervalFrames, 30, STRO_MOTION_MAX_FRAMES);
-  }, [stroSamplingMode, stroManualKeyframes, stroRangeStart, stroRangeEnd, stroIntervalFrames]);
+  }, [stroMotionActive, stroMotionProcessing, stroMotionResult, setStroMotionConfiguring]);
 
   const handleStroGenerate = useCallback(async () => {
-    const times = buildStroSampleTimes();
-    if (times.length < 2) {
-      alert('Select at least 2 key frames (manual) or widen the range / decrease the interval.');
+    if (!stroSubjectBox) {
+      alert('Select Subject first — draw a box around the athlete.');
       return;
     }
-    if (times.length > STRO_MOTION_MAX_FRAMES) {
-      alert(`Maximum ${STRO_MOTION_MAX_FRAMES} frames. Increase the interval or shorten the range.`);
+    if (stroEndFrame <= stroStartFrame) {
+      alert('End frame must be after start frame.');
       return;
     }
-    stopStroAnimation();
-    await extractFrames({ times });
-  }, [buildStroSampleTimes, extractFrames, stopStroAnimation]);
-
-  const handleStroPlayAnimated = useCallback(() => {
-    if (ghostFrames.length < 2) return;
-    stopStroAnimation();
-    setStroIsAnimating(true);
-    setStroMotionAnimating(true);
-    let i = 0;
-    const tick = () => {
-      setStroVisibleCount(i + 1);
-      i += 1;
-      if (i < ghostFrames.length) {
-        stroAnimTimerRef.current = window.setTimeout(tick, STRO_MOTION_ANIM_INTERVAL_MS);
-      } else {
-        setStroIsAnimating(false);
-        setStroMotionAnimating(false);
-      }
-    };
-    tick();
-  }, [ghostFrames.length, setStroMotionAnimating, stopStroAnimation]);
+    setStroVisibleCount(undefined);
+    canvasRef.current?.setStroMotionVisibleCount?.(undefined);
+    const composite = await extractFrames({
+      startSec: stroStartFrame,
+      endSec: stroEndFrame,
+      ghostCount: stroGhostCount,
+      subjectBox: stroSubjectBox,
+    });
+    if (composite) {
+      setStroSubjectBox(composite.subjectBox);
+      stroConfigAtGenerateRef.current = JSON.stringify({
+        box: composite.subjectBox,
+        start: stroStartFrame,
+        end: stroEndFrame,
+        count: stroGhostCount,
+      });
+    }
+  }, [extractFrames, stroEndFrame, stroGhostCount, stroStartFrame, stroSubjectBox]);
 
   const handleStroExportPng = useCallback(async () => {
-    if (ghostFrames.length === 0) return;
-    stopStroAnimation();
+    if (!stroMotionResult) return;
     canvasRef.current?.setStroMotionVisibleCount?.(undefined);
     await canvasRef.current?.waitForRender?.();
     const canvas = canvasRef.current?.getCanvas();
     if (!canvas) return;
-    await exportStroMotionPNGAfterRender(canvas, `stromotion-${Date.now()}.png`);
-  }, [ghostFrames.length, stopStroAnimation]);
+    const waitForPaint = canvasRef.current?.waitForRender?.bind(canvasRef.current);
+    await exportStroMotionPNGAfterRender(
+      canvas,
+      `stromotion-${Date.now()}.png`,
+      waitForPaint,
+    );
+  }, [stroMotionResult]);
 
   const handleStroExportVideo = useCallback(async () => {
-    if (ghostFrames.length === 0) return;
+    if (!stroMotionResult) return;
     if (!stroVideoExportSupported) {
       alert('Video export is not supported in Safari — use Export PNG instead.');
       return;
     }
-    stopStroAnimation();
     setStroIsExportingVideo(true);
     try {
-      const result = await canvasRef.current?.exportStroMotionVideo?.();
-      if (result && !result.ok && result.reason === 'unsupported') {
+      const exportResult = await canvasRef.current?.exportStroMotionVideo?.();
+      if (exportResult && !exportResult.ok && exportResult.reason === 'unsupported') {
         alert('Video export is not supported in Safari — use Export PNG instead.');
       }
     } finally {
@@ -626,48 +626,23 @@ export default function Home() {
       canvasRef.current?.setStroMotionVisibleCount?.(undefined);
       setStroVisibleCount(undefined);
     }
-  }, [ghostFrames.length, stopStroAnimation, stroVideoExportSupported]);
+  }, [stroMotionResult, stroVideoExportSupported]);
 
   const stroMotionPanelEl = (
     <StroMotionPanel
-      active={stroMotionActive}
-      onActiveChange={setStroMotionActive}
-      videoDuration={stroVideoDuration}
       currentTime={stroVideoTime}
-      rangeStart={stroRangeStart}
-      rangeEnd={stroRangeEnd}
-      onRangeStartChange={setStroRangeStart}
-      onRangeEndChange={setStroRangeEnd}
-      onSetInFromPlayhead={() => setStroRangeStart(Math.max(0, stroVideoTime))}
-      onSetOutFromPlayhead={() => setStroRangeEnd(Math.min(stroVideoDuration || stroVideoTime, Math.max(stroVideoTime, stroRangeStart + 0.04)))}
-      samplingMode={stroSamplingMode}
-      onSamplingModeChange={setStroSamplingMode}
-      intervalFrames={stroIntervalFrames}
-      onIntervalFramesChange={setStroIntervalFrames}
-      manualKeyframes={stroManualKeyframes}
-      onAddKeyframe={() => {
-        if (stroManualKeyframes.length >= STRO_MOTION_MAX_FRAMES) return;
-        setStroManualKeyframes((prev) =>
-          prev.some((t) => Math.abs(t - stroVideoTime) < 0.03) ? prev : [...prev, stroVideoTime],
-        );
-      }}
-      onRemoveKeyframe={(index) => {
-        setStroManualKeyframes((prev) => prev.filter((_, i) => i !== index));
-      }}
-      opacity={stroMotionOpacity}
-      onOpacityChange={setStroMotionOpacity}
-      opacityMode={stroOpacityMode}
-      onOpacityModeChange={setStroOpacityMode}
-      renderMode={stroRenderMode}
-      onRenderModeChange={(m) => {
-        setStroRenderMode(m);
-        if (m === 'static') stopStroAnimation();
-      }}
-      frameCount={ghostFrames.length}
+      startFrame={stroStartFrame}
+      endFrame={stroEndFrame}
+      onSetStartFrame={() => setStroStartFrame(Math.max(0, stroVideoTime))}
+      onSetEndFrame={() => setStroEndFrame(Math.min(stroVideoDuration || stroVideoTime, Math.max(stroVideoTime, stroStartFrame + 0.04)))}
+      ghostCount={stroGhostCount}
+      onGhostCountChange={setStroGhostCount}
+      subjectBox={stroSubjectBox}
+      onSelectSubject={handleStroSelectSubject}
+      isSelectingSubject={stroSelectingSubject}
       isProcessing={stroMotionProcessing}
       progressCurrent={stroMotionProgress.current}
       progressTotal={stroMotionProgress.total}
-      hasFrames={ghostFrames.length > 0}
       isReady={stroMotionStatus === 'ready'}
       videoExportSupported={stroVideoExportSupported}
       isExportingVideo={stroIsExportingVideo}
@@ -675,9 +650,6 @@ export default function Home() {
       onClear={resetStroMotion}
       onExportPng={() => void handleStroExportPng()}
       onExportVideo={() => void handleStroExportVideo()}
-      onPlayAnimated={handleStroPlayAnimated}
-      onStopAnimated={stopStroAnimation}
-      isAnimating={stroIsAnimating}
       disabled={!stroMotionHtml5Only}
       disabledReason={
         !stroMotionHtml5Only
@@ -2936,7 +2908,7 @@ export default function Home() {
                 beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
                 trimRange={
                   stroMotionActive && stroMotionHtml5Only
-                    ? { start: stroRangeStart, end: stroRangeEnd }
+                    ? { start: stroStartFrame, end: stroEndFrame }
                     : null
                 }
                 onCurrentTime={stroMotionActive ? setStroVideoTime : undefined}
@@ -2963,7 +2935,7 @@ export default function Home() {
             beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
             trimRange={
               stroMotionActive && stroMotionHtml5Only
-                ? { start: stroRangeStart, end: stroRangeEnd }
+                ? { start: stroStartFrame, end: stroEndFrame }
                 : null
             }
             onCurrentTime={stroMotionActive ? setStroVideoTime : undefined}
@@ -3013,6 +2985,10 @@ export default function Home() {
     skeletonShowLeftLeg,
     onSkeletonShowLeftLegChange:     setSkeletonShowLeftLeg,
     stroMotionPanel: stroMotionPanelEl,
+    onNavigate: (screen) => {
+      if (screen === 'stromotion') setStroMotionActive(true);
+      else if (screen === 'home') setStroMotionActive(false);
+    },
     skeletonOverlayPaused,
     onSkeletonOverlayPausedChange:   () => setSkeletonOverlayPaused((p) => !p),
     ballSampleMode,
@@ -3417,9 +3393,8 @@ export default function Home() {
                   webcamPipMode={webcamPipMode}
                   webcamOpacity={webcamOpacity}
                   webcamActive={webcamActive && markupTarget !== 'B'}
-                  stroMotionFrames={ghostFrames}
-                  stroMotionOpacity={stroMotionOpacity}
-                  stroMotionOpacityMode={stroOpacityMode}
+                  stroMotionResult={stroMotionResult}
+                  stroMotionSubjectBox={stroSubjectBox}
                   stroMotionVisibleCount={stroVisibleCount}
                   skeletonShowAngles={skeletonShowAngles}
                   skeletonShowHeadLine={skeletonShowHeadLine}

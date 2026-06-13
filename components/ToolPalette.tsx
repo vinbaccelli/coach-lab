@@ -115,6 +115,8 @@ interface ToolPaletteProps {
   onToggleToolbarLabels?: () => void;
   /** Stromotion panel content (full workflow UI). */
   stroMotionPanel?: React.ReactNode;
+  /** Called when the user navigates to a toolbar screen. */
+  onNavigate?: (screen: 'home' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
   /** @deprecated Use stroMotionPanel — legacy toggle only */
   stroMotionEnabled?: boolean;
   onStroMotionToggle?: () => void;
@@ -474,6 +476,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     toolbarLabelsExpanded = false,
     onToggleToolbarLabels,
     stroMotionPanel,
+    onNavigate,
     stroMotionEnabled = false,
     onStroMotionToggle,
   } = props;
@@ -504,7 +507,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
   }, []);
   const push = useCallback((x: NavScreen) => {
     setNavStack((s) => [...s, x]);
-  }, []);
+    onNavigate?.(x);
+  }, [onNavigate]);
   useEffect(() => {
     const id = 'coachlab-toolbar-keyframes';
     if (typeof document === 'undefined' || document.getElementById(id)) return;

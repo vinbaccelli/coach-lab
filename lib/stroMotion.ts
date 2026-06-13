@@ -1,23 +1,35 @@
 'use client';
 
 export type StroMotionOpacityMode = 'uniform' | 'temporal';
-export type StroMotionRenderMode = 'static' | 'animated';
-export type StroMotionSamplingMode = 'auto' | 'manual';
 export type StroMotionStatus = 'idle' | 'configuring' | 'extracting' | 'ready' | 'animating';
 
-export interface StroMotionConfig {
-  enabled: boolean;
-  startFrame: number;
-  endFrame: number;
-  ghostCount: number;
-  opacity: number;
-  region?: { x: number; y: number; w: number; h: number };
+/** Video-normalized subject rectangle (0..1). */
+export interface StroMotionSubjectBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-export const STRO_MOTION_MAX_FRAMES = 20;
-export const STRO_MOTION_MIN_FRAMES = 2;
-export const STRO_MOTION_DEFAULT_OPACITY = 0.6;
+export interface StroMotionResult {
+  /** Full frame at start time — static background court/scene */
+  baseFrame: ImageBitmap;
+  /** Cropped athlete regions at each sample time */
+  ghostCrops: ImageBitmap[];
+  subjectBox: StroMotionSubjectBox;
+  sampleTimes: number[];
+}
+
+export const STRO_MOTION_GHOST_COUNTS = [3, 5, 8, 10] as const;
+export type StroMotionGhostCount = (typeof STRO_MOTION_GHOST_COUNTS)[number];
+export const STRO_MOTION_DEFAULT_GHOST_COUNT: StroMotionGhostCount = 5;
+export const STRO_MOTION_DEFAULT_OPACITY = 0.62;
 export const STRO_MOTION_ANIM_INTERVAL_MS = 150;
+/** Extra margin around the drawn box so racket / arms are not clipped during movement. */
+export const STRO_MOTION_SUBJECT_PAD_RATIO = 0.12;
+/** Minimum subject box size (video-normalized) for a full tennis stroke arc. */
+export const STRO_MOTION_MIN_SUBJECT_WIDTH = 0.10;
+export const STRO_MOTION_MIN_SUBJECT_HEIGHT = 0.22;
 
 type ExtractionSurface = OffscreenCanvas | HTMLCanvasElement;
 
@@ -33,6 +45,46 @@ function createExtractionSurface(width: number, height: number): ExtractionSurfa
 
 function createSampleSurface(): ExtractionSurface {
   return createExtractionSurface(1, 1);
+}
+
+/** Convert { w, h } region from canvas selection to subject box (not yet padded). */
+export function subjectBoxFromRegion(region: { x: number; y: number; w: number; h: number }): StroMotionSubjectBox {
+  return { x: region.x, y: region.y, width: region.w, height: region.h };
+}
+
+/** Expand box outward (clamped to frame) for racket / arm / follow-through margin. */
+export function expandSubjectBox(
+  box: StroMotionSubjectBox,
+  paddingRatio = STRO_MOTION_SUBJECT_PAD_RATIO,
+): StroMotionSubjectBox {
+  const padW = box.width * paddingRatio;
+  const padH = box.height * paddingRatio;
+  const x = Math.max(0, box.x - padW);
+  const y = Math.max(0, box.y - padH);
+  const width = Math.min(1 - x, box.width + padW * 2);
+  const height = Math.min(1 - y, box.height + padH * 2);
+  return { x, y, width, height };
+}
+
+/**
+ * Apply padding + minimum size so forehand / serve / volley arcs stay inside the crop.
+ * Call once when the user finishes drawing the subject box.
+ */
+export function normalizeSubjectBox(box: StroMotionSubjectBox): StroMotionSubjectBox {
+  let { x, y, width, height } = expandSubjectBox(box);
+
+  if (width < STRO_MOTION_MIN_SUBJECT_WIDTH) {
+    const cx = x + width / 2;
+    width = STRO_MOTION_MIN_SUBJECT_WIDTH;
+    x = Math.max(0, Math.min(1 - width, cx - width / 2));
+  }
+  if (height < STRO_MOTION_MIN_SUBJECT_HEIGHT) {
+    const cy = y + height / 2;
+    height = STRO_MOTION_MIN_SUBJECT_HEIGHT;
+    y = Math.max(0, Math.min(1 - height, cy - height / 2));
+  }
+
+  return { x, y, width, height };
 }
 
 /** iOS Safari blob: URL requirements — call before sequential frame extraction. */
@@ -93,35 +145,46 @@ async function seekVideoAndWait(video: HTMLVideoElement, targetTime: number): Pr
   });
 }
 
-/** Compute evenly-spaced sample times inside [startSec, endSec] (inclusive). */
-export function computeAutoSampleTimes(
+/** Evenly spaced sample times from start through end (inclusive). */
+export function computeGhostSampleTimes(
   startSec: number,
   endSec: number,
-  intervalFrames: number,
-  fps: number,
-  maxFrames = STRO_MOTION_MAX_FRAMES,
+  ghostCount: number,
 ): number[] {
-  if (endSec <= startSec || intervalFrames < 1 || fps < 1) return [];
-  const stepSec = intervalFrames / fps;
+  if (ghostCount < 1 || endSec < startSec) return [];
+  if (ghostCount === 1) return [startSec];
   const times: number[] = [];
-  for (let t = startSec; t <= endSec + 1e-6 && times.length < maxFrames; t += stepSec) {
-    times.push(Math.min(endSec, t));
-  }
-  if (times.length === 0) times.push(startSec);
-  if (times[times.length - 1] < endSec - 1e-6 && times.length < maxFrames) {
-    times.push(endSec);
+  for (let i = 0; i < ghostCount; i++) {
+    times.push(startSec + ((endSec - startSec) * i) / (ghostCount - 1));
   }
   return times;
 }
 
-export async function extractFrameAtTime(
+function subjectBoxPixels(
+  box: StroMotionSubjectBox,
+  videoWidth: number,
+  videoHeight: number,
+): { px: number; py: number; pw: number; ph: number } {
+  const px = Math.round(box.x * videoWidth);
+  const py = Math.round(box.y * videoHeight);
+  const pw = Math.max(1, Math.round(box.width * videoWidth));
+  const ph = Math.max(1, Math.round(box.height * videoHeight));
+  return {
+    px: Math.max(0, Math.min(px, videoWidth - 1)),
+    py: Math.max(0, Math.min(py, videoHeight - 1)),
+    pw: Math.min(pw, videoWidth - px),
+    ph: Math.min(ph, videoHeight - py),
+  };
+}
+
+async function captureVideoToSurface(
   video: HTMLVideoElement,
   targetTime: number,
   offscreen: ExtractionSurface,
-): Promise<ImageBitmap> {
+): Promise<void> {
   const seekTarget = clampSeekTime(video, targetTime);
 
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error(`Seek timeout at ${targetTime}s`));
@@ -138,7 +201,7 @@ export async function extractFrameAtTime(
           return;
         }
         ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
-        void createImageBitmap(offscreen).then(resolve).catch(reject);
+        resolve();
       });
     };
 
@@ -171,38 +234,64 @@ export async function extractFrameAtTime(
   });
 }
 
-export async function extractAllFrames(
+export async function extractStroMotionComposite(
   video: HTMLVideoElement,
-  times: number[],
-  onProgress?: (n: number, total: number) => void,
+  startSec: number,
+  endSec: number,
+  ghostCount: number,
+  subjectBox: StroMotionSubjectBox,
+  onProgress?: (current: number, total: number) => void,
   isCancelled?: () => boolean,
-): Promise<ImageBitmap[]> {
-  prepareVideoForStroMotionExtraction(video);
+): Promise<StroMotionResult | null> {
+  const sampleTimes = computeGhostSampleTimes(startSec, endSec, ghostCount);
+  if (sampleTimes.length === 0) return null;
+  if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
+  const cropBox = normalizeSubjectBox(subjectBox);
+
+  prepareVideoForStroMotionExtraction(video);
   const wasPlaying = !video.paused;
   await waitForVideoPaused(video);
 
-  const offscreen = createExtractionSurface(video.videoWidth, video.videoHeight);
-  const bitmaps: ImageBitmap[] = [];
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const offscreen = createExtractionSurface(vw, vh);
+  const { px, py, pw, ph } = subjectBoxPixels(cropBox, vw, vh);
   const originalTime = video.currentTime;
 
+  let baseFrame: ImageBitmap | null = null;
+  const ghostCrops: ImageBitmap[] = [];
+
   try {
-    for (let i = 0; i < times.length; i++) {
+    await captureVideoToSurface(video, startSec, offscreen);
+    if (isCancelled?.()) return null;
+    baseFrame = await createImageBitmap(offscreen);
+    onProgress?.(1, sampleTimes.length + 1);
+
+    for (let i = 0; i < sampleTimes.length; i++) {
       if (isCancelled?.()) {
-        bitmaps.forEach((b) => b.close());
-        return [];
+        if (baseFrame) baseFrame.close();
+        ghostCrops.forEach((c) => c.close());
+        return null;
       }
 
-      const bitmap = await extractFrameAtTime(video, times[i], offscreen);
+      await captureVideoToSurface(video, sampleTimes[i], offscreen);
       if (isCancelled?.()) {
-        bitmap.close();
-        bitmaps.forEach((b) => b.close());
-        return [];
+        if (baseFrame) baseFrame.close();
+        ghostCrops.forEach((c) => c.close());
+        return null;
       }
 
-      bitmaps.push(bitmap);
-      onProgress?.(i + 1, times.length);
+      const crop = await createImageBitmap(offscreen, px, py, pw, ph);
+      ghostCrops.push(crop);
+      onProgress?.(i + 2, sampleTimes.length + 1);
     }
+
+    return { baseFrame, ghostCrops, subjectBox: cropBox, sampleTimes };
+  } catch {
+    if (baseFrame) baseFrame.close();
+    ghostCrops.forEach((c) => c.close());
+    return null;
   } finally {
     try {
       await seekVideoAndWait(video, originalTime);
@@ -211,20 +300,15 @@ export async function extractAllFrames(
     }
     if (wasPlaying) void video.play();
   }
-
-  return bitmaps;
 }
 
-/** Log center-pixel samples to detect stuck-frame extraction. */
-export async function logStroMotionExtractDiagnostics(
-  bitmaps: ImageBitmap[],
-  times?: number[],
-): Promise<void> {
+/** Log center-pixel samples on ghost crops to detect stuck-frame extraction. */
+export async function logStroMotionExtractDiagnostics(result: StroMotionResult): Promise<void> {
   console.log(
-    '[StroMotion] Extracted',
-    bitmaps.length,
-    'frames',
-    times?.length ? `at times: ${times.map((t) => t.toFixed(3)).join(', ')}` : '',
+    '[StroMotion] Composite ready:',
+    result.ghostCrops.length,
+    'ghost crops at times:',
+    result.sampleTimes.map((t) => t.toFixed(3)).join(', '),
   );
 
   const sampleCanvas = createSampleSurface();
@@ -237,62 +321,73 @@ export async function logStroMotionExtractDiagnostics(
     return;
   }
 
-  bitmaps.forEach((bmp, i) => {
+  result.ghostCrops.forEach((bmp, i) => {
     const sx = Math.max(0, Math.floor(bmp.width / 2));
     const sy = Math.max(0, Math.floor(bmp.height / 2));
     sampleCtx.clearRect(0, 0, 1, 1);
     sampleCtx.drawImage(bmp, sx, sy, 1, 1, 0, 0, 1, 1);
     const px = sampleCtx.getImageData(0, 0, 1, 1).data;
     console.log(
-      `[StroMotion] Frame ${i}${times?.[i] !== undefined ? ` @ ${times[i].toFixed(3)}s` : ''} center pixel: rgba(${px[0]},${px[1]},${px[2]},${px[3]})`,
+      `[StroMotion] Ghost ${i} @ ${result.sampleTimes[i]?.toFixed(3) ?? '?'}s crop center: rgba(${px[0]},${px[1]},${px[2]},${px[3]})`,
     );
   });
 }
 
 export interface StroMotionCompositeOptions {
-  opacity: number;
-  fadeMode: StroMotionOpacityMode;
+  opacity?: number;
+  fadeMode?: StroMotionOpacityMode;
   visibleCount?: number;
-  /** Letterbox destination rect; defaults to full canvas */
-  dest?: { x: number; y: number; w: number; h: number };
+  dest: { x: number; y: number; w: number; h: number };
 }
 
+/** Draw base background + subject ghost crops (Dartfish-style). */
 export function renderStroMotionComposite(
   ctx: CanvasRenderingContext2D,
-  frames: ImageBitmap[],
+  result: StroMotionResult,
   options: StroMotionCompositeOptions,
 ): void {
-  const { opacity, fadeMode, visibleCount = frames.length, dest } = options;
-  const count = Math.min(visibleCount, frames.length);
+  const {
+    opacity = STRO_MOTION_DEFAULT_OPACITY,
+    fadeMode = 'temporal',
+    visibleCount = result.ghostCrops.length,
+    dest,
+  } = options;
+
+  const count = Math.min(visibleCount, result.ghostCrops.length);
   if (count <= 0) return;
 
-  const dx = dest?.x ?? 0;
-  const dy = dest?.y ?? 0;
-  const dw = dest?.w ?? ctx.canvas.width;
-  const dh = dest?.h ?? ctx.canvas.height;
+  const boxX = dest.x + result.subjectBox.x * dest.w;
+  const boxY = dest.y + result.subjectBox.y * dest.h;
+  const boxW = result.subjectBox.width * dest.w;
+  const boxH = result.subjectBox.height * dest.h;
 
   ctx.save();
 
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(result.baseFrame, dest.x, dest.y, dest.w, dest.h);
+
   for (let i = 0; i < count; i++) {
     const isLast = i === count - 1;
-
     if (isLast) {
       ctx.globalAlpha = 1.0;
     } else if (fadeMode === 'temporal') {
-      ctx.globalAlpha = opacity * ((i + 1) / frames.length);
+      // Earliest ghost (i=0) lightest → latest non-final darker → final at 100%.
+      ctx.globalAlpha = opacity * ((i + 1) / Math.max(1, result.ghostCrops.length));
     } else {
       ctx.globalAlpha = opacity;
     }
-
     ctx.globalCompositeOperation = 'source-over';
-    ctx.drawImage(frames[i], dx, dy, dw, dh);
+    ctx.drawImage(result.ghostCrops[i], boxX, boxY, boxW, boxH);
   }
 
   ctx.restore();
 }
 
-export function clearFrames(frames: ImageBitmap[]): void {
-  frames.forEach((b) => b.close());
+export function clearStroMotionResult(result: StroMotionResult | null): void {
+  if (!result) return;
+  result.baseFrame.close();
+  result.ghostCrops.forEach((c) => c.close());
 }
 
 export function exportStroMotionPNG(canvas: HTMLCanvasElement, filename = 'stromotion.png'): void {
@@ -305,8 +400,15 @@ export function exportStroMotionPNG(canvas: HTMLCanvasElement, filename = 'strom
 export async function exportStroMotionPNGAfterRender(
   canvas: HTMLCanvasElement,
   filename = 'stromotion.png',
+  waitForPaint?: () => Promise<void>,
 ): Promise<void> {
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  if (waitForPaint) {
+    await waitForPaint();
+    await waitForPaint();
+  } else {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
   exportStroMotionPNG(canvas, filename);
 }
 
