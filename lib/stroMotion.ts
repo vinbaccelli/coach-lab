@@ -31,10 +31,66 @@ function createExtractionSurface(width: number, height: number): ExtractionSurfa
   return canvas;
 }
 
+function createSampleSurface(): ExtractionSurface {
+  return createExtractionSurface(1, 1);
+}
+
 /** iOS Safari blob: URL requirements — call before sequential frame extraction. */
 export function prepareVideoForStroMotionExtraction(video: HTMLVideoElement): void {
   video.preload = 'metadata';
   video.playsInline = true;
+}
+
+async function waitForVideoPaused(video: HTMLVideoElement): Promise<void> {
+  video.pause();
+  if (video.paused) {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    video.addEventListener('pause', () => resolve(), { once: true });
+  });
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function clampSeekTime(video: HTMLVideoElement, targetTime: number): number {
+  if (!Number.isFinite(targetTime)) return 0;
+  const max = Number.isFinite(video.duration) && video.duration > 0
+    ? Math.max(0, video.duration - 1e-6)
+    : targetTime;
+  return Math.max(0, Math.min(targetTime, max));
+}
+
+async function seekVideoAndWait(video: HTMLVideoElement, targetTime: number): Promise<void> {
+  const seekTarget = clampSeekTime(video, targetTime);
+  if (Math.abs(video.currentTime - seekTarget) < 0.001) return;
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, 5000);
+
+    const onSeeked = () => {
+      cleanup();
+      resolve();
+    };
+
+    const onError = () => {
+      cleanup();
+      reject(new Error('Seek error'));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      video.removeEventListener('seeked', onSeeked);
+      video.removeEventListener('error', onError);
+    };
+
+    video.addEventListener('seeked', onSeeked, { once: true });
+    video.addEventListener('error', onError, { once: true });
+    video.currentTime = seekTarget;
+  });
 }
 
 /** Compute evenly-spaced sample times inside [startSec, endSec] (inclusive). */
@@ -63,15 +119,15 @@ export async function extractFrameAtTime(
   targetTime: number,
   offscreen: ExtractionSurface,
 ): Promise<ImageBitmap> {
+  const seekTarget = clampSeekTime(video, targetTime);
+
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error(`Seek timeout at ${targetTime}s`));
     }, 5000);
 
-    const onSeeked = () => {
-      cleanup();
-      // On iOS Safari with Blob URLs, frame data may lag behind seeked event
+    const drawFrame = () => {
       requestAnimationFrame(() => {
         const ctx = offscreen.getContext('2d') as
           | CanvasRenderingContext2D
@@ -84,6 +140,11 @@ export async function extractFrameAtTime(
         ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
         void createImageBitmap(offscreen).then(resolve).catch(reject);
       });
+    };
+
+    const onSeeked = () => {
+      cleanup();
+      drawFrame();
     };
 
     const onError = () => {
@@ -99,7 +160,14 @@ export async function extractFrameAtTime(
 
     video.addEventListener('seeked', onSeeked, { once: true });
     video.addEventListener('error', onError, { once: true });
-    video.currentTime = targetTime;
+
+    if (Math.abs(video.currentTime - seekTarget) < 0.001) {
+      cleanup();
+      drawFrame();
+      return;
+    }
+
+    video.currentTime = seekTarget;
   });
 }
 
@@ -112,7 +180,7 @@ export async function extractAllFrames(
   prepareVideoForStroMotionExtraction(video);
 
   const wasPlaying = !video.paused;
-  video.pause();
+  await waitForVideoPaused(video);
 
   const offscreen = createExtractionSurface(video.videoWidth, video.videoHeight);
   const bitmaps: ImageBitmap[] = [];
@@ -136,11 +204,49 @@ export async function extractAllFrames(
       onProgress?.(i + 1, times.length);
     }
   } finally {
-    video.currentTime = originalTime;
+    try {
+      await seekVideoAndWait(video, originalTime);
+    } catch {
+      video.currentTime = originalTime;
+    }
     if (wasPlaying) void video.play();
   }
 
   return bitmaps;
+}
+
+/** Log center-pixel samples to detect stuck-frame extraction. */
+export async function logStroMotionExtractDiagnostics(
+  bitmaps: ImageBitmap[],
+  times?: number[],
+): Promise<void> {
+  console.log(
+    '[StroMotion] Extracted',
+    bitmaps.length,
+    'frames',
+    times?.length ? `at times: ${times.map((t) => t.toFixed(3)).join(', ')}` : '',
+  );
+
+  const sampleCanvas = createSampleSurface();
+  const sampleCtx = sampleCanvas.getContext('2d') as
+    | CanvasRenderingContext2D
+    | OffscreenCanvasRenderingContext2D
+    | null;
+  if (!sampleCtx) {
+    console.warn('[StroMotion] Could not create sample context for diagnostics');
+    return;
+  }
+
+  bitmaps.forEach((bmp, i) => {
+    const sx = Math.max(0, Math.floor(bmp.width / 2));
+    const sy = Math.max(0, Math.floor(bmp.height / 2));
+    sampleCtx.clearRect(0, 0, 1, 1);
+    sampleCtx.drawImage(bmp, sx, sy, 1, 1, 0, 0, 1, 1);
+    const px = sampleCtx.getImageData(0, 0, 1, 1).data;
+    console.log(
+      `[StroMotion] Frame ${i}${times?.[i] !== undefined ? ` @ ${times[i].toFixed(3)}s` : ''} center pixel: rgba(${px[0]},${px[1]},${px[2]},${px[3]})`,
+    );
+  });
 }
 
 export interface StroMotionCompositeOptions {
@@ -194,4 +300,64 @@ export function exportStroMotionPNG(canvas: HTMLCanvasElement, filename = 'strom
   link.download = filename;
   link.href = canvas.toDataURL('image/png');
   link.click();
+}
+
+export async function exportStroMotionPNGAfterRender(
+  canvas: HTMLCanvasElement,
+  filename = 'stromotion.png',
+): Promise<void> {
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  exportStroMotionPNG(canvas, filename);
+}
+
+export function canvasSupportsVideoExport(canvas: HTMLCanvasElement): boolean {
+  return typeof canvas.captureStream === 'function';
+}
+
+export async function exportStroMotionVideo(
+  canvasEl: HTMLCanvasElement,
+  options: {
+    frameCount: number;
+    intervalMs?: number;
+    renderFrame: (visibleCount: number) => Promise<void>;
+  },
+): Promise<void> {
+  const { frameCount, intervalMs = STRO_MOTION_ANIM_INTERVAL_MS, renderFrame } = options;
+  if (frameCount <= 0) return;
+
+  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+    ? 'video/webm;codecs=vp9'
+    : MediaRecorder.isTypeSupported('video/webm')
+      ? 'video/webm'
+      : 'video/mp4';
+
+  const stream = canvasEl.captureStream(30);
+  const recorder = new MediaRecorder(stream, { mimeType });
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (e) => {
+    if (e.data.size > 0) chunks.push(e.data);
+  };
+
+  recorder.start();
+
+  for (let visibleCount = 1; visibleCount <= frameCount; visibleCount++) {
+    await renderFrame(visibleCount);
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  await renderFrame(frameCount);
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  recorder.stop();
+  await new Promise<void>((resolve) => {
+    recorder.onstop = () => resolve();
+  });
+
+  const blob = new Blob(chunks, { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `stromotion.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`;
+  a.click();
+  URL.revokeObjectURL(url);
 }

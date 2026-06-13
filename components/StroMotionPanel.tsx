@@ -145,9 +145,13 @@ export interface StroMotionPanelProps {
   progressCurrent: number;
   progressTotal: number;
   hasFrames: boolean;
+  isReady: boolean;
+  videoExportSupported: boolean;
+  isExportingVideo?: boolean;
   onGenerate: () => void;
   onClear: () => void;
   onExportPng: () => void;
+  onExportVideo: () => void;
   onPlayAnimated: () => void;
   onStopAnimated: () => void;
   isAnimating: boolean;
@@ -182,9 +186,13 @@ export default function StroMotionPanel({
   progressCurrent,
   progressTotal,
   hasFrames,
+  isReady,
+  videoExportSupported,
+  isExportingVideo = false,
   onGenerate,
   onClear,
   onExportPng,
+  onExportVideo,
   onPlayAnimated,
   onStopAnimated,
   isAnimating,
@@ -391,9 +399,35 @@ export default function StroMotionPanel({
                     {isAnimating ? ' Stop animation' : ' Play animation'}
                   </button>
                 ) : null}
-                <button type="button" onClick={onExportPng} style={secondaryBtnStyle}>
+                <button
+                  type="button"
+                  onClick={onExportPng}
+                  disabled={!isReady || isExportingVideo}
+                  style={{
+                    ...secondaryBtnStyle,
+                    opacity: !isReady || isExportingVideo ? 0.5 : 1,
+                    cursor: !isReady || isExportingVideo ? 'not-allowed' : 'pointer',
+                  }}
+                >
                   <Download size={14} /> Export PNG
                 </button>
+                <button
+                  type="button"
+                  onClick={onExportVideo}
+                  disabled={!isReady || isExportingVideo || !videoExportSupported}
+                  style={{
+                    ...secondaryBtnStyle,
+                    opacity: !isReady || isExportingVideo || !videoExportSupported ? 0.5 : 1,
+                    cursor: !isReady || isExportingVideo || !videoExportSupported ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  <Download size={14} /> {isExportingVideo ? 'Recording…' : 'Export Video'}
+                </button>
+                {!videoExportSupported ? (
+                  <p style={{ margin: 0, fontSize: 11, color: 'var(--cl-text-muted)', lineHeight: 1.4 }}>
+                    Video export is not supported in Safari — use Export PNG instead.
+                  </p>
+                ) : null}
                 <button type="button" onClick={onClear} style={dangerBtnStyle}>
                   <Trash2 size={14} /> Clear frames
                 </button>

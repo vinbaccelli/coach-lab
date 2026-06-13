@@ -25,7 +25,7 @@ import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { HelpCircle } from 'lucide-react';
-import { renderStroMotionComposite, type StroMotionOpacityMode } from '@/lib/stroMotion';
+import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, type StroMotionOpacityMode } from '@/lib/stroMotion';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 
 /** Poll interval while waiting for a ref-backed <video> to mount. */
@@ -148,6 +148,13 @@ export interface CanvasHandle {
   runObjMultiplierCapture: (frameCount: number, onProgress?: (done: number, total: number) => void) => Promise<number>;
   clearObjMultiplier: () => void;
   getObjMultiplierFrameCount: () => number;
+  /** Wait until the next canvas paint completes */
+  waitForRender: () => Promise<void>;
+  /** Record animated Stromotion build-up to a downloadable video (Chrome/desktop) */
+  exportStroMotionVideo: () => Promise<{ ok: boolean; reason?: string }>;
+  canvasSupportsStroMotionVideoExport: () => boolean;
+  /** Set visible ghost count immediately (bypasses React prop lag for export) */
+  setStroMotionVisibleCount: (count: number | undefined) => void;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -1564,6 +1571,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonSuppressedRef = useRef(false);
     const poseBridgeRef = useRef<PoseWorkerBridge | null>(null);
     const renderDirtyRef = useRef(true);
+    const renderWaitersRef = useRef<Array<() => void>>([]);
     const lastRenderVideoTimeRef = useRef(-1);
     const lastRenderZoomRef = useRef(1);
     const lastRenderPanRef = useRef({ x: 0, y: 0 });
@@ -2290,6 +2298,46 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         setRacketHudOpen(false);
       },
       getObjMultiplierFrameCount: () => objMultiplierRef.current?.getFrameCount() ?? 0,
+      waitForRender: () => new Promise<void>((resolve) => {
+        renderWaitersRef.current.push(resolve);
+        renderDirtyRef.current = true;
+      }),
+      canvasSupportsStroMotionVideoExport: () => {
+        const canvas = canvasRef.current;
+        return !!canvas && canvasSupportsVideoExport(canvas);
+      },
+      setStroMotionVisibleCount: (count) => {
+        stroMotionVisibleCountRef.current = count;
+        renderDirtyRef.current = true;
+      },
+      exportStroMotionVideo: async () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return { ok: false, reason: 'no-canvas' };
+        if (!canvasSupportsVideoExport(canvas)) return { ok: false, reason: 'unsupported' };
+        const frames = stroMotionFramesRef.current;
+        if (frames.length === 0) return { ok: false, reason: 'no-frames' };
+
+        const savedVisible = stroMotionVisibleCountRef.current;
+        try {
+          await exportStroMotionVideo(canvas, {
+            frameCount: frames.length,
+            renderFrame: async (visibleCount) => {
+              stroMotionVisibleCountRef.current = visibleCount;
+              renderDirtyRef.current = true;
+              await new Promise<void>((resolve) => {
+                renderWaitersRef.current.push(resolve);
+                renderDirtyRef.current = true;
+              });
+            },
+          });
+          return { ok: true };
+        } catch {
+          return { ok: false, reason: 'record-failed' };
+        } finally {
+          stroMotionVisibleCountRef.current = savedVisible;
+          renderDirtyRef.current = true;
+        }
+      },
     }), [onProcessingStatus, pushHistory, videoRef]);
 
     // ── Skeleton: PoseWorkerBridge lifecycle ───────────────────────────────
@@ -2883,6 +2931,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           videoFrameChanged ||
           zoomChanged ||
           renderDirtyRef.current ||
+          renderWaitersRef.current.length > 0 ||
           hasActiveInteraction ||
           webcamFrameDirtyRef.current ||
           (webcamActiveRef.current && webcamPipModeRef.current !== 'hidden');
@@ -3556,6 +3605,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.fillStyle = '#fff';
           ctx.fillText(label, 14, 24);
           ctx.restore();
+        }
+
+        if (renderWaitersRef.current.length > 0) {
+          const waiters = renderWaitersRef.current.splice(0);
+          waiters.forEach((resolve) => resolve());
         }
       };
 

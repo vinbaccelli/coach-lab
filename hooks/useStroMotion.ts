@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import {
   clearFrames,
   extractAllFrames,
+  logStroMotionExtractDiagnostics,
   type StroMotionStatus,
 } from '@/lib/stroMotion';
 
@@ -65,6 +66,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
           clearFrames(bitmaps);
           return [];
         }
+
+        await logStroMotionExtractDiagnostics(bitmaps, params.times);
 
         setGhostFrames(bitmaps);
         setStatus('ready');

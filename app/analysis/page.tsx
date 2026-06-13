@@ -33,7 +33,7 @@ import { useStroMotion } from '@/hooks/useStroMotion';
 import StroMotionPanel from '@/components/StroMotionPanel';
 import {
   computeAutoSampleTimes,
-  exportStroMotionPNG,
+  exportStroMotionPNGAfterRender,
   prepareVideoForStroMotionExtraction,
   STRO_MOTION_ANIM_INTERVAL_MS,
   STRO_MOTION_DEFAULT_OPACITY,
@@ -449,6 +449,7 @@ export default function Home() {
 
   const {
     ghostFrames,
+    status: stroMotionStatus,
     isProcessing: stroMotionProcessing,
     progress: stroMotionProgress,
     clearGhosts,
@@ -457,6 +458,11 @@ export default function Home() {
     setAnimating: setStroMotionAnimating,
     setConfiguring: setStroMotionConfiguring,
   } = useStroMotion(videoRef);
+
+  const stroVideoExportSupported =
+    typeof HTMLCanvasElement !== 'undefined'
+    && typeof HTMLCanvasElement.prototype.captureStream === 'function';
+  const [stroIsExportingVideo, setStroIsExportingVideo] = useState(false);
 
   // Object Multiplier state
   const [objMultiplierFrameCount, setObjMultiplierFrameCount] = useState(5);
@@ -592,11 +598,35 @@ export default function Home() {
     tick();
   }, [ghostFrames.length, setStroMotionAnimating, stopStroAnimation]);
 
-  const handleStroExportPng = useCallback(() => {
+  const handleStroExportPng = useCallback(async () => {
+    if (ghostFrames.length === 0) return;
+    stopStroAnimation();
+    canvasRef.current?.setStroMotionVisibleCount?.(undefined);
+    await canvasRef.current?.waitForRender?.();
     const canvas = canvasRef.current?.getCanvas();
-    if (!canvas || ghostFrames.length === 0) return;
-    exportStroMotionPNG(canvas, `stromotion-${Date.now()}.png`);
-  }, [ghostFrames.length]);
+    if (!canvas) return;
+    await exportStroMotionPNGAfterRender(canvas, `stromotion-${Date.now()}.png`);
+  }, [ghostFrames.length, stopStroAnimation]);
+
+  const handleStroExportVideo = useCallback(async () => {
+    if (ghostFrames.length === 0) return;
+    if (!stroVideoExportSupported) {
+      alert('Video export is not supported in Safari — use Export PNG instead.');
+      return;
+    }
+    stopStroAnimation();
+    setStroIsExportingVideo(true);
+    try {
+      const result = await canvasRef.current?.exportStroMotionVideo?.();
+      if (result && !result.ok && result.reason === 'unsupported') {
+        alert('Video export is not supported in Safari — use Export PNG instead.');
+      }
+    } finally {
+      setStroIsExportingVideo(false);
+      canvasRef.current?.setStroMotionVisibleCount?.(undefined);
+      setStroVisibleCount(undefined);
+    }
+  }, [ghostFrames.length, stopStroAnimation, stroVideoExportSupported]);
 
   const stroMotionPanelEl = (
     <StroMotionPanel
@@ -638,9 +668,13 @@ export default function Home() {
       progressCurrent={stroMotionProgress.current}
       progressTotal={stroMotionProgress.total}
       hasFrames={ghostFrames.length > 0}
+      isReady={stroMotionStatus === 'ready'}
+      videoExportSupported={stroVideoExportSupported}
+      isExportingVideo={stroIsExportingVideo}
       onGenerate={() => void handleStroGenerate()}
       onClear={resetStroMotion}
       onExportPng={() => void handleStroExportPng()}
+      onExportVideo={() => void handleStroExportVideo()}
       onPlayAnimated={handleStroPlayAnimated}
       onStopAnimated={stopStroAnimation}
       isAnimating={stroIsAnimating}
