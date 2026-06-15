@@ -115,6 +115,8 @@ interface ToolPaletteProps {
   onToggleToolbarLabels?: () => void;
   /** Stromotion panel content (full workflow UI). */
   stroMotionPanel?: React.ReactNode;
+  /** Biomechanics analysis panel (V1 primary workflow). */
+  biomechanicsPanel?: React.ReactNode;
   /** Called when the user navigates to a toolbar screen. */
   onNavigate?: (screen: 'home' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
   /** @deprecated Use stroMotionPanel — legacy toggle only */
@@ -476,6 +478,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     toolbarLabelsExpanded = false,
     onToggleToolbarLabels,
     stroMotionPanel,
+    biomechanicsPanel,
     onNavigate,
     stroMotionEnabled = false,
     onStroMotionToggle,
@@ -1184,7 +1187,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
           />
           <Row k="sm-t" icon={<Layers size={18} />} label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
-          <Row k="ai-t" icon={<BarChart3 size={18} />} label="AI Metrics" onPress={() => push('aimetrics')} />
+          <Row k="bio-t" icon={<BarChart3 size={18} />} label="Biomechanics" onPress={() => push('aimetrics')} />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
@@ -1226,12 +1229,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <BackHeader title="AI Metrics" icon={<BarChart3 size={18} />} />
-          {!io ? (
-            <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
-              Quantitative pose metrics will appear here in a future update.
-            </p>
-          ) : null}
+          <BackHeader title="Biomechanics" icon={<BarChart3 size={18} />} />
+          {biomechanicsPanel ?? (
+            !io ? (
+              <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
+                Select stroke type, trim to one stroke, detect phases, then verify markers on the timeline.
+              </p>
+            ) : null
+          )}
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>

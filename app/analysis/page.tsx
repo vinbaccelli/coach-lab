@@ -30,9 +30,15 @@ import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
+import { useBiomechanicsAnalysis } from '@/hooks/useBiomechanicsAnalysis';
 import StroMotionPanel from '@/components/StroMotionPanel';
+import BiomechanicsPanel from '@/components/BiomechanicsPanel';
 import {
-  exportStroMotionPNGAfterRender,
+  computeGhostSampleTimes,
+  exportStroMotionPNG,
+  hashCanvasContent,
+  recordExportParity,
+  setStroMotionPreviewHash,
   normalizeSubjectBox,
   prepareVideoForStroMotionExtraction,
   subjectBoxFromRegion,
@@ -432,6 +438,13 @@ export default function Home() {
   const [stroVideoTime, setStroVideoTime] = useState(0);
   const [stroVideoDuration, setStroVideoDuration] = useState(0);
   const [stroVisibleCount, setStroVisibleCount] = useState<number | undefined>(undefined);
+  const [stroShowSkeleton, setStroShowSkeleton] = useState(false);
+  const [stroDebugMode, setStroDebugMode] = useState(false);
+
+  const stroSampleTimes = useMemo(
+    () => computeGhostSampleTimes(stroStartFrame, stroEndFrame, stroGhostCount),
+    [stroStartFrame, stroEndFrame, stroGhostCount],
+  );
 
   const stroMotionHtml5Only =
     !!videoSrc &&
@@ -440,11 +453,42 @@ export default function Home() {
     !genericEmbedSrcA &&
     !genericEmbedSrcB;
 
+  // Biomechanics analysis (V1 primary workflow — measurements per phase)
+  const [biomechActive, setBiomechActive] = useState(false);
+  const [biomechVideoTime, setBiomechVideoTime] = useState(0);
+  const [biomechVideoDuration, setBiomechVideoDuration] = useState(0);
+  const biomechHtml5Only = stroMotionHtml5Only;
+
+  const {
+    strokeType: biomechStrokeType,
+    setStrokeType: setBiomechStrokeType,
+    customSteps: biomechCustomSteps,
+    addCustomStep: addBiomechCustomStep,
+    renameCustomStep: renameBiomechCustomStep,
+    deleteCustomStep: deleteBiomechCustomStep,
+    reorderCustomStep: reorderBiomechCustomStep,
+    trimStartSec: biomechTrimStart,
+    setTrimStartSec: setBiomechTrimStart,
+    trimEndSec: biomechTrimEnd,
+    setTrimEndSec: setBiomechTrimEnd,
+    phases: biomechPhases,
+    analysis: biomechAnalysis,
+    isProcessing: biomechProcessing,
+    progress: biomechProgress,
+    selectedPhaseId: biomechSelectedPhaseId,
+    setSelectedPhaseId: setBiomechSelectedPhaseId,
+    updatePhaseTime: updateBiomechPhaseTime,
+    detectPhases: detectBiomechPhases,
+    refreshMeasurements: refreshBiomechMeasurements,
+    clearAnalysis: clearBiomechAnalysis,
+  } = useBiomechanicsAnalysis(videoRef);
+
   const {
     result: stroMotionResult,
     status: stroMotionStatus,
     isProcessing: stroMotionProcessing,
     progress: stroMotionProgress,
+    diagnostics: stroMotionDiagnostics,
     clearGhosts,
     extractFrames,
     cancelExtraction,
@@ -463,7 +507,7 @@ export default function Home() {
   const [objMultiplierProgress, setObjMultiplierProgress] = useState<string | null>(null);
 
   // Derived: skeleton / ball trail enabled when their tool is active
-  const skeletonEnabled  = activeTool === 'skeleton';
+  const skeletonEnabled  = activeTool === 'skeleton' || (biomechActive && biomechHtml5Only);
   /** When false, pose still runs but overlay is hidden (coach can turn off drawing without Clear All). */
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const ballTrailEnabled = activeTool === 'ballShadow';
@@ -547,8 +591,15 @@ export default function Home() {
       if (Number.isFinite(dur) && dur > 0) {
         setStroVideoDuration(dur);
         setStroEndFrame((prev) => (prev <= stroStartFrame || prev > dur ? Math.min(Math.max(stroStartFrame + 1, 3), dur) : prev));
+        setBiomechVideoDuration(dur);
+        setBiomechTrimEnd((prev) =>
+          prev <= biomechTrimStart || prev > dur
+            ? Math.min(Math.max(biomechTrimStart + 1, 3), dur)
+            : prev,
+        );
       }
       setStroVideoTime(v.currentTime || 0);
+      setBiomechVideoTime(v.currentTime || 0);
     };
     v.addEventListener('loadedmetadata', syncMeta);
     v.addEventListener('timeupdate', syncMeta);
@@ -557,7 +608,12 @@ export default function Home() {
       v.removeEventListener('loadedmetadata', syncMeta);
       v.removeEventListener('timeupdate', syncMeta);
     };
-  }, [videoSrc, stroStartFrame]);
+  }, [videoSrc, stroStartFrame, biomechTrimStart]);
+
+  useEffect(() => {
+    if (!biomechActive || biomechPhases.length === 0) return;
+    refreshBiomechMeasurements();
+  }, [biomechActive, biomechPhases, refreshBiomechMeasurements]);
 
   useEffect(() => {
     if (stroMotionActive && !stroMotionResult && !stroMotionProcessing) {
@@ -578,11 +634,13 @@ export default function Home() {
     }
     setStroVisibleCount(undefined);
     canvasRef.current?.setStroMotionVisibleCount?.(undefined);
+    setStroMotionPreviewHash(null);
     const composite = await extractFrames({
       startSec: stroStartFrame,
       endSec: stroEndFrame,
       ghostCount: stroGhostCount,
       subjectBox: stroSubjectBox,
+      sampleTimes: stroSampleTimes,
     });
     if (composite) {
       setStroSubjectBox(composite.subjectBox);
@@ -593,20 +651,26 @@ export default function Home() {
         count: stroGhostCount,
       });
     }
-  }, [extractFrames, stroEndFrame, stroGhostCount, stroStartFrame, stroSubjectBox]);
+  }, [extractFrames, stroEndFrame, stroGhostCount, stroSampleTimes, stroStartFrame, stroSubjectBox]);
 
   const handleStroExportPng = useCallback(async () => {
     if (!stroMotionResult) return;
+    setStroVisibleCount(undefined);
     canvasRef.current?.setStroMotionVisibleCount?.(undefined);
+    await canvasRef.current?.waitForRender?.();
     await canvasRef.current?.waitForRender?.();
     const canvas = canvasRef.current?.getCanvas();
     if (!canvas) return;
-    const waitForPaint = canvasRef.current?.waitForRender?.bind(canvasRef.current);
-    await exportStroMotionPNGAfterRender(
-      canvas,
-      `stromotion-${Date.now()}.png`,
-      waitForPaint,
-    );
+
+    let parity = stroMotionResult.diagnostics.exportParity;
+    const previewHash = await hashCanvasContent(canvas);
+    setStroMotionPreviewHash(previewHash);
+    parity = recordExportParity(parity, 'preview', previewHash);
+
+    exportStroMotionPNG(canvas, `stromotion-${Date.now()}.png`);
+
+    const pngHash = await hashCanvasContent(canvas);
+    recordExportParity(parity, 'png', pngHash);
   }, [stroMotionResult]);
 
   const handleStroExportVideo = useCallback(async () => {
@@ -650,10 +714,106 @@ export default function Home() {
       onClear={resetStroMotion}
       onExportPng={() => void handleStroExportPng()}
       onExportVideo={() => void handleStroExportVideo()}
+      showSkeleton={stroShowSkeleton}
+      onShowSkeletonChange={setStroShowSkeleton}
+      debugMode={stroDebugMode}
+      onDebugModeChange={setStroDebugMode}
+      diagnostics={stroMotionDiagnostics}
+      precomputedSampleTimes={stroSampleTimes}
       disabled={!stroMotionHtml5Only}
       disabledReason={
         !stroMotionHtml5Only
           ? 'Stromotion requires an uploaded video file (not YouTube or embed links).'
+          : undefined
+      }
+    />
+  );
+
+  const seekBiomechVideo = useCallback(async (timeSec: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.pause();
+    const dur = Number.isFinite(v.duration) ? v.duration : timeSec;
+    const next = Math.max(0, Math.min(timeSec, dur));
+    if (Math.abs(v.currentTime - next) > 0.00001 || v.seeking) {
+      v.currentTime = next;
+      await new Promise<void>((resolve) => {
+        const onSeeked = () => {
+          v.removeEventListener('seeked', onSeeked);
+          resolve();
+        };
+        v.addEventListener('seeked', onSeeked, { once: true });
+        window.setTimeout(resolve, 120);
+      });
+    }
+    setBiomechVideoTime(next);
+    await canvasRef.current?.waitForRender?.();
+  }, []);
+
+  const handleBiomechDetect = useCallback(async () => {
+    const frames = canvasRef.current?.getSkeletonFrames() ?? [];
+    await detectBiomechPhases({ skeletonFrames: frames });
+  }, [detectBiomechPhases]);
+
+  const handleBiomechExportJson = useCallback(() => {
+    if (!biomechAnalysis) return;
+    const blob = new Blob([JSON.stringify(biomechAnalysis, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `biomechanics-${biomechStrokeType}-${Date.now()}.json`;
+    a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }, [biomechAnalysis, biomechStrokeType]);
+
+  const handleBiomechExportPhaseScreenshots = useCallback(async () => {
+    if (biomechPhases.length === 0) return;
+    for (const phase of biomechPhases) {
+      await seekBiomechVideo(phase.timeSec);
+      const canvas = canvasRef.current?.getCanvas();
+      if (!canvas) continue;
+      const filename = `${phase.label.replace(/[^\w]+/g, '')}.png`;
+      downloadDataURL(canvas.toDataURL('image/png'), filename);
+    }
+  }, [biomechPhases, seekBiomechVideo]);
+
+  const biomechanicsPanelEl = (
+    <BiomechanicsPanel
+      currentTime={biomechVideoTime}
+      duration={biomechVideoDuration}
+      strokeType={biomechStrokeType}
+      onStrokeTypeChange={setBiomechStrokeType}
+      customSteps={biomechCustomSteps}
+      onAddCustomStep={addBiomechCustomStep}
+      onRenameCustomStep={renameBiomechCustomStep}
+      onDeleteCustomStep={deleteBiomechCustomStep}
+      onReorderCustomStep={reorderBiomechCustomStep}
+      trimStartSec={biomechTrimStart}
+      trimEndSec={biomechTrimEnd}
+      onSetTrimStart={() => setBiomechTrimStart(Math.max(0, biomechVideoTime))}
+      onSetTrimEnd={() =>
+        setBiomechTrimEnd(
+          Math.min(
+            biomechVideoDuration || biomechVideoTime,
+            Math.max(biomechVideoTime, biomechTrimStart + 0.04),
+          ),
+        )
+      }
+      phases={biomechPhases}
+      selectedPhaseId={biomechSelectedPhaseId}
+      onSelectPhase={setBiomechSelectedPhaseId}
+      onSeekPhase={(t) => { void seekBiomechVideo(t); }}
+      onDetectPhases={() => { void handleBiomechDetect(); }}
+      onClear={clearBiomechAnalysis}
+      onExportMeasurements={handleBiomechExportJson}
+      onExportPhaseScreenshots={() => { void handleBiomechExportPhaseScreenshots(); }}
+      isProcessing={biomechProcessing}
+      progress={biomechProgress}
+      analysis={biomechAnalysis}
+      disabled={!biomechHtml5Only}
+      disabledReason={
+        !biomechHtml5Only
+          ? 'Biomechanics analysis requires an uploaded video file (not YouTube or embed links).'
           : undefined
       }
     />
@@ -2866,6 +3026,62 @@ export default function Home() {
     if (!vB.paused) vB.pause();
   }, [playBothEnabled, videoBLoaded, videoBDuration]);
 
+  const analysisTimelineExtras = useMemo(() => {
+    if (biomechActive && biomechHtml5Only) {
+      return {
+        trimRange: { start: biomechTrimStart, end: biomechTrimEnd } as { start: number; end: number },
+        trimAccent: '#34C759',
+        onCurrentTime: setBiomechVideoTime,
+        phaseMarkers: biomechPhases.map((p) => ({
+          id: p.id,
+          label: p.label,
+          short: p.short,
+          time: p.timeSec,
+        })),
+        selectedPhaseMarkerId: biomechSelectedPhaseId,
+        onPhaseMarkerSelect: setBiomechSelectedPhaseId,
+        onPhaseMarkerChange: (id: string, time: number) => {
+          updateBiomechPhaseTime(id, time, biomechTrimStart, biomechTrimEnd);
+        },
+        phaseMarkerBounds: { start: biomechTrimStart, end: biomechTrimEnd },
+      };
+    }
+    if (stroMotionActive && stroMotionHtml5Only) {
+      return {
+        trimRange: { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number },
+        trimAccent: '#FF9500',
+        onCurrentTime: setStroVideoTime,
+        phaseMarkers: null as null,
+        selectedPhaseMarkerId: null as null,
+        onPhaseMarkerSelect: undefined,
+        onPhaseMarkerChange: undefined,
+        phaseMarkerBounds: null as null,
+      };
+    }
+    return {
+      trimRange: null as null,
+      trimAccent: '#FF9500',
+      onCurrentTime: undefined as undefined,
+      phaseMarkers: null as null,
+      selectedPhaseMarkerId: null as null,
+      onPhaseMarkerSelect: undefined,
+      onPhaseMarkerChange: undefined,
+      phaseMarkerBounds: null as null,
+    };
+  }, [
+    biomechActive,
+    biomechHtml5Only,
+    biomechTrimStart,
+    biomechTrimEnd,
+    biomechPhases,
+    biomechSelectedPhaseId,
+    updateBiomechPhaseTime,
+    stroMotionActive,
+    stroMotionHtml5Only,
+    stroStartFrame,
+    stroEndFrame,
+  ]);
+
   const renderTimelineDock = () => (
     <div style={{ width: '100%', pointerEvents: 'auto', display: 'flex', flexDirection: 'column', gap: isMobile ? 4 : 8, minHeight: isMobile ? 108 : 120 }}>
       {!(capturePrepPanel || (captureBusy && embedCaptureRecording)) && (hasVideoBContent ? (
@@ -2906,12 +3122,14 @@ export default function Home() {
                 compareAbDisabled={!canPlaybackSyncBoth}
                 beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
                 beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
-                trimRange={
-                  stroMotionActive && stroMotionHtml5Only
-                    ? { start: stroStartFrame, end: stroEndFrame }
-                    : null
-                }
-                onCurrentTime={stroMotionActive ? setStroVideoTime : undefined}
+                trimRange={analysisTimelineExtras.trimRange}
+                trimAccent={analysisTimelineExtras.trimAccent}
+                onCurrentTime={analysisTimelineExtras.onCurrentTime}
+                phaseMarkers={analysisTimelineExtras.phaseMarkers}
+                selectedPhaseMarkerId={analysisTimelineExtras.selectedPhaseMarkerId}
+                onPhaseMarkerSelect={analysisTimelineExtras.onPhaseMarkerSelect}
+                onPhaseMarkerChange={analysisTimelineExtras.onPhaseMarkerChange}
+                phaseMarkerBounds={analysisTimelineExtras.phaseMarkerBounds}
               />
             )
       ) : (
@@ -2933,12 +3151,14 @@ export default function Home() {
             compareAbDisabled={!canPlaybackSyncBoth}
             beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
             beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
-            trimRange={
-              stroMotionActive && stroMotionHtml5Only
-                ? { start: stroStartFrame, end: stroEndFrame }
-                : null
-            }
-            onCurrentTime={stroMotionActive ? setStroVideoTime : undefined}
+            trimRange={analysisTimelineExtras.trimRange}
+            trimAccent={analysisTimelineExtras.trimAccent}
+            onCurrentTime={analysisTimelineExtras.onCurrentTime}
+            phaseMarkers={analysisTimelineExtras.phaseMarkers}
+            selectedPhaseMarkerId={analysisTimelineExtras.selectedPhaseMarkerId}
+            onPhaseMarkerSelect={analysisTimelineExtras.onPhaseMarkerSelect}
+            onPhaseMarkerChange={analysisTimelineExtras.onPhaseMarkerChange}
+            phaseMarkerBounds={analysisTimelineExtras.phaseMarkerBounds}
           />
         )
       ))}
@@ -2985,9 +3205,18 @@ export default function Home() {
     skeletonShowLeftLeg,
     onSkeletonShowLeftLegChange:     setSkeletonShowLeftLeg,
     stroMotionPanel: stroMotionPanelEl,
+    biomechanicsPanel: biomechanicsPanelEl,
     onNavigate: (screen) => {
-      if (screen === 'stromotion') setStroMotionActive(true);
-      else if (screen === 'home') setStroMotionActive(false);
+      if (screen === 'stromotion') {
+        setStroMotionActive(true);
+        setBiomechActive(false);
+      } else if (screen === 'aimetrics') {
+        setBiomechActive(true);
+        setStroMotionActive(false);
+      } else if (screen === 'home') {
+        setStroMotionActive(false);
+        setBiomechActive(false);
+      }
     },
     skeletonOverlayPaused,
     onSkeletonOverlayPausedChange:   () => setSkeletonOverlayPaused((p) => !p),
@@ -3396,6 +3625,7 @@ export default function Home() {
                   stroMotionResult={stroMotionResult}
                   stroMotionSubjectBox={stroSubjectBox}
                   stroMotionVisibleCount={stroVisibleCount}
+                  stroMotionShowSkeleton={stroShowSkeleton}
                   skeletonShowAngles={skeletonShowAngles}
                   skeletonShowHeadLine={skeletonShowHeadLine}
                   skeletonClassicColors={skeletonClassicColors}

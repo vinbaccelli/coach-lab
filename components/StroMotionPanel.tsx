@@ -4,6 +4,7 @@ import React from 'react';
 import { BoxSelect, Download, Trash2 } from 'lucide-react';
 import {
   STRO_MOTION_GHOST_COUNTS,
+  type StroMotionDiagnostics,
   type StroMotionGhostCount,
   type StroMotionSubjectBox,
 } from '@/lib/stroMotion';
@@ -39,6 +40,12 @@ export interface StroMotionPanelProps {
   onExportVideo: () => void;
   disabled?: boolean;
   disabledReason?: string;
+  showSkeleton?: boolean;
+  onShowSkeletonChange?: (v: boolean) => void;
+  debugMode?: boolean;
+  onDebugModeChange?: (v: boolean) => void;
+  diagnostics?: StroMotionDiagnostics | null;
+  precomputedSampleTimes?: number[];
 }
 
 export default function StroMotionPanel({
@@ -64,6 +71,12 @@ export default function StroMotionPanel({
   onExportVideo,
   disabled,
   disabledReason,
+  showSkeleton = false,
+  onShowSkeletonChange,
+  debugMode = false,
+  onDebugModeChange,
+  diagnostics,
+  precomputedSampleTimes,
 }: StroMotionPanelProps) {
   const canGenerate =
     !disabled &&
@@ -164,6 +177,27 @@ export default function StroMotionPanel({
         </div>
       ) : null}
 
+      <label
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginTop: 8,
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: disabled || isProcessing ? 'not-allowed' : 'pointer',
+          opacity: disabled || isProcessing ? 0.5 : 1,
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={showSkeleton}
+          disabled={disabled || isProcessing || isExportingVideo}
+          onChange={(e) => onShowSkeletonChange?.(e.target.checked)}
+        />
+        Show Skeleton
+      </label>
+
       <button
         type="button"
         onClick={onGenerate}
@@ -214,6 +248,67 @@ export default function StroMotionPanel({
         <button type="button" onClick={onClear} style={dangerBtnStyle}>
           <Trash2 size={14} /> Clear
         </button>
+      ) : null}
+
+      <label
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginTop: 4,
+          fontSize: 11,
+          color: 'var(--cl-text-muted)',
+          cursor: 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={debugMode}
+          onChange={(e) => onDebugModeChange?.(e.target.checked)}
+        />
+        Debug diagnostics
+      </label>
+
+      {debugMode ? (
+        <div
+          style={{
+            marginTop: 6,
+            padding: 8,
+            borderRadius: 8,
+            border: '1px dashed var(--cl-border, #ccc)',
+            fontSize: 10,
+            fontFamily: 'ui-monospace, monospace',
+            lineHeight: 1.5,
+            color: 'var(--cl-text-muted)',
+          }}
+        >
+          <div>
+            <strong>Sample times:</strong>{' '}
+            {(precomputedSampleTimes ?? diagnostics?.sampleTimes ?? [])
+              .map((t) => t.toFixed(3))
+              .join(', ') || '—'}
+          </div>
+          {diagnostics ? (
+            <>
+              <div>
+                <strong>Effective region:</strong>{' '}
+                {`${(diagnostics.effectiveBox.x * 100).toFixed(1)}%, ${(diagnostics.effectiveBox.y * 100).toFixed(1)}% · ${(diagnostics.effectiveBox.width * 100).toFixed(1)}×${(diagnostics.effectiveBox.height * 100).toFixed(1)}%`}
+              </div>
+              <div>
+                <strong>Mask coverage:</strong>{' '}
+                {diagnostics.maskCoveragePercent.map((p) => `${p.toFixed(1)}%`).join(', ')}
+              </div>
+              <div>
+                <strong>Pose success:</strong> {diagnostics.poseSuccessRate.toFixed(0)}%
+              </div>
+              <div>
+                <strong>Extraction time:</strong> {diagnostics.extractionTimeMs} ms
+              </div>
+            </>
+          ) : (
+            <div style={{ marginTop: 4 }}>Generate to populate diagnostics.</div>
+          )}
+        </div>
       ) : null}
     </div>
   );

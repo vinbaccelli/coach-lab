@@ -137,6 +137,11 @@ export default function PreciseTimeline({
   trimRange = null,
   trimAccent = '#FF9500',
   onCurrentTime,
+  phaseMarkers = null,
+  selectedPhaseMarkerId = null,
+  onPhaseMarkerSelect,
+  onPhaseMarkerChange,
+  phaseMarkerBounds = null,
 }: {
   source: Source;
   defaultFps?: number;
@@ -154,6 +159,11 @@ export default function PreciseTimeline({
   trimRange?: { start: number; end: number } | null;
   trimAccent?: string;
   onCurrentTime?: (t: number) => void;
+  phaseMarkers?: Array<{ id: string; label: string; short?: string; time: number }> | null;
+  selectedPhaseMarkerId?: string | null;
+  onPhaseMarkerSelect?: (id: string) => void;
+  onPhaseMarkerChange?: (id: string, time: number) => void;
+  phaseMarkerBounds?: { start: number; end: number } | null;
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
@@ -291,6 +301,7 @@ export default function PreciseTimeline({
 
   const scrubTrackRef = useRef<HTMLDivElement | null>(null);
   const scrubbingRef = useRef(false);
+  const phaseDragIdRef = useRef<string | null>(null);
   /** Live scrub thumb position while dragging (before frame-ready commit). */
   const [scrubPreviewT, setScrubPreviewT] = useState<number | null>(null);
   const pendingScrubTimeRef = useRef<number | null>(null);
@@ -787,6 +798,60 @@ export default function PreciseTimeline({
             />
           </>
         ) : null}
+        {phaseMarkers && d > 0 ? phaseMarkers.map((m) => {
+          const pctM = (m.time / d) * 100;
+          const selected = m.id === selectedPhaseMarkerId;
+          return (
+            <div
+              key={m.id}
+              title={`${m.label} @ ${formatTimeShort(m.time)}`}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                phaseDragIdRef.current = m.id;
+                onPhaseMarkerSelect?.(m.id);
+                (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                if (phaseDragIdRef.current !== m.id) return;
+                if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+                e.stopPropagation();
+                const next = timeFromClientX(e.clientX);
+                if (next === null || !onPhaseMarkerChange) return;
+                const lo = phaseMarkerBounds?.start ?? 0;
+                const hi = phaseMarkerBounds?.end ?? d;
+                onPhaseMarkerChange(m.id, clamp(next, lo, hi));
+              }}
+              onPointerUp={(e) => {
+                if (phaseDragIdRef.current !== m.id) return;
+                phaseDragIdRef.current = null;
+                try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+              }}
+              style={{
+                position: 'absolute',
+                left: `calc(10px + (100% - 20px) * ${pctM / 100} - 5px)`,
+                top: 2,
+                width: 10,
+                height: scrubTrackH - 4,
+                borderRadius: 3,
+                background: selected ? '#34C759' : 'rgba(52,199,89,0.75)',
+                border: selected ? '2px solid #fff' : '1px solid rgba(0,0,0,0.35)',
+                cursor: 'ew-resize',
+                zIndex: 3,
+                boxSizing: 'border-box',
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'center',
+                paddingTop: 1,
+                fontSize: 8,
+                fontWeight: 700,
+                color: '#fff',
+                touchAction: 'none',
+              }}
+            >
+              {m.short ?? m.label.charAt(0)}
+            </div>
+          );
+        }) : null}
         <div
           style={{
             position: 'absolute',

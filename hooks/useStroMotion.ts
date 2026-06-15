@@ -3,8 +3,11 @@
 import { useCallback, useRef, useState } from 'react';
 import {
   clearStroMotionResult,
+  computeGhostSampleTimes,
   extractStroMotionComposite,
   logStroMotionExtractDiagnostics,
+  stroMotionCacheKey,
+  type StroMotionDiagnostics,
   type StroMotionResult,
   type StroMotionStatus,
   type StroMotionSubjectBox,
@@ -15,6 +18,8 @@ export interface StroMotionExtractParams {
   endSec: number;
   ghostCount: number;
   subjectBox: StroMotionSubjectBox;
+  /** Pre-computed sample times (Phase A) — skip recompute during Generate */
+  sampleTimes?: number[];
 }
 
 export interface StroMotionProgress {
@@ -27,15 +32,33 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   const [status, setStatus] = useState<StroMotionStatus>('idle');
   const [progress, setProgress] = useState<StroMotionProgress>({ current: 0, total: 0 });
   const extractGenRef = useRef(0);
+  const cacheRef = useRef<Map<string, StroMotionResult>>(new Map());
+
+  const evictCachedResult = useCallback((target: StroMotionResult | null) => {
+    if (!target) return;
+    for (const [key, cached] of cacheRef.current.entries()) {
+      if (cached === target) {
+        cacheRef.current.delete(key);
+        break;
+      }
+    }
+  }, []);
 
   const clearGhosts = useCallback(() => {
     setResult((prev) => {
-      clearStroMotionResult(prev);
+      if (prev) {
+        evictCachedResult(prev);
+        clearStroMotionResult(prev);
+      }
       return null;
     });
+    for (const entry of cacheRef.current.values()) {
+      clearStroMotionResult(entry);
+    }
+    cacheRef.current.clear();
     setProgress({ current: 0, total: 0 });
     setStatus('idle');
-  }, []);
+  }, [evictCachedResult]);
 
   const extractFrames = useCallback(
     async (params: StroMotionExtractParams): Promise<StroMotionResult | null> => {
@@ -44,14 +67,41 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       if (params.endSec <= params.startSec) return null;
       if (params.subjectBox.width <= 0 || params.subjectBox.height <= 0) return null;
 
+      const cacheKey = stroMotionCacheKey({
+        subjectBox: params.subjectBox,
+        startSec: params.startSec,
+        endSec: params.endSec,
+        ghostCount: params.ghostCount,
+      });
+
+      const cached = cacheRef.current.get(cacheKey);
+      if (cached) {
+        setResult((prev) => {
+          if (prev && prev !== cached) {
+            evictCachedResult(prev);
+            clearStroMotionResult(prev);
+          }
+          return cached;
+        });
+        setStatus('ready');
+        setProgress({ current: cached.ghostLayers.length + 1, total: cached.ghostLayers.length + 1 });
+        return cached;
+      }
+
       const gen = ++extractGenRef.current;
+      const sampleTimes = params.sampleTimes?.length
+        ? params.sampleTimes
+        : computeGhostSampleTimes(params.startSec, params.endSec, params.ghostCount);
 
       setResult((prev) => {
-        clearStroMotionResult(prev);
+        if (prev) {
+          evictCachedResult(prev);
+          clearStroMotionResult(prev);
+        }
         return null;
       });
       setStatus('extracting');
-      setProgress({ current: 0, total: params.ghostCount + 1 });
+      setProgress({ current: 0, total: sampleTimes.length * 2 + 2 });
 
       const isCancelled = () => extractGenRef.current !== gen;
 
@@ -67,6 +117,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             setProgress({ current, total });
           },
           isCancelled,
+          sampleTimes,
         );
 
         if (isCancelled() || !composite) {
@@ -75,6 +126,9 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         }
 
         await logStroMotionExtractDiagnostics(composite);
+
+        cacheRef.current.clear();
+        cacheRef.current.set(cacheKey, composite);
 
         setResult(composite);
         setStatus('ready');
@@ -94,13 +148,20 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         }
       }
     },
-    [videoRef],
+    [evictCachedResult, videoRef],
   );
 
   const cancelExtraction = useCallback(() => {
     extractGenRef.current += 1;
     setStatus((prev) => (prev === 'extracting' ? 'idle' : prev));
     setProgress({ current: 0, total: 0 });
+  }, []);
+
+  const invalidateCache = useCallback(() => {
+    for (const entry of cacheRef.current.values()) {
+      clearStroMotionResult(entry);
+    }
+    cacheRef.current.clear();
   }, []);
 
   const setAnimating = useCallback((animating: boolean) => {
@@ -119,14 +180,18 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     });
   }, []);
 
+  const diagnostics: StroMotionDiagnostics | null = result?.diagnostics ?? null;
+
   return {
     result,
     status,
     isProcessing: status === 'extracting',
     progress,
+    diagnostics,
     clearGhosts,
     extractFrames,
     cancelExtraction,
+    invalidateCache,
     setAnimating,
     setConfiguring,
   };

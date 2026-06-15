@@ -25,7 +25,7 @@ import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { HelpCircle } from 'lucide-react';
-import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
+import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 
 /** Poll interval while waiting for a ref-backed <video> to mount. */
@@ -184,6 +184,8 @@ export interface CanvasProps {
   /** Subject box preview before generate (video-normalized 0..1) */
   stroMotionSubjectBox?: StroMotionSubjectBox | null;
   stroMotionVisibleCount?: number;
+  /** Overlay skeleton on each StroMotion ghost position */
+  stroMotionShowSkeleton?: boolean;
   skeletonShowAngles?: boolean;
   skeletonShowHeadLine?: boolean;
   skeletonClassicColors?: boolean;
@@ -316,7 +318,8 @@ function drawSkeletonOverlay(
   const classicColors = opts?.classicColors !== false;
   const showFootLine  = opts?.showFootLine !== false;
   const parts: SkeletonPartVisibility = opts?.parts ?? {};
-  const jointRadius = Math.max(2, Math.min(7, Math.round(Math.min(canvasW, canvasH) / 180)));
+  const jointRadius = Math.max(3, Math.min(8, Math.round(Math.min(canvasW, canvasH) / 150)));
+  const scoreThreshold = 0.2;
 
   // Limb bones: solid yellow lines (arms + legs)
   const LIMB_BONES: [number, number][] = [
@@ -333,16 +336,19 @@ function drawSkeletonOverlay(
 
   ctx.save();
   ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur = 2;
 
   // Draw limb + structural bones in solid yellow (or blue monochrome in alternative mode)
   ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
-  ctx.lineWidth = classicColors ? 2 : 1.5;
+  ctx.lineWidth = classicColors ? 2.5 : 2;
 
   for (const [a, b] of [...LIMB_BONES, ...STRUCT_BONES]) {
     if (!isJointVisible(a, parts, keypoints[a]?.name) || !isJointVisible(b, parts, keypoints[b]?.name)) continue;
     const ka = keypoints[a];
     const kb = keypoints[b];
-    if (!ka || !kb || ka.score < 0.3 || kb.score < 0.3) continue;
+    if (!ka || !kb || ka.score < scoreThreshold || kb.score < scoreThreshold) continue;
     ctx.beginPath();
     ctx.moveTo(ka.x * sx, ka.y * sy);
     ctx.lineTo(kb.x * sx, kb.y * sy);
@@ -354,8 +360,8 @@ function drawSkeletonOverlay(
   const lHip = keypoints[11], rHip = keypoints[12];
   if (
     lShoulder && rShoulder && lHip && rHip &&
-    lShoulder.score >= 0.3 && rShoulder.score >= 0.3 &&
-    lHip.score >= 0.3 && rHip.score >= 0.3
+    lShoulder.score >= scoreThreshold && rShoulder.score >= scoreThreshold &&
+    lHip.score >= scoreThreshold && rHip.score >= scoreThreshold
   ) {
     const midShoulderX = ((lShoulder.x + rShoulder.x) / 2) * sx;
     const midShoulderY = ((lShoulder.y + rShoulder.y) / 2) * sy;
@@ -378,7 +384,7 @@ function drawSkeletonOverlay(
     const headIdxs = [0, 1, 2, 3, 4];
     const ys = headIdxs
       .map((i) => keypoints[i])
-      .filter((kp) => kp && kp.score >= 0.3)
+      .filter((kp) => kp && kp.score >= scoreThreshold)
       .map((kp) => kp.y * sy);
     if (ys.length > 0) {
       const headY = Math.min(...ys);
@@ -401,7 +407,7 @@ function drawSkeletonOverlay(
       if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
       const knee  = keypoints[kneeIdx];
       const ankle = keypoints[ankleIdx];
-      if (!knee || !ankle || knee.score < 0.3 || ankle.score < 0.3) continue;
+      if (!knee || !ankle || knee.score < scoreThreshold || ankle.score < scoreThreshold) continue;
       const kx = knee.x  * sx, ky = knee.y  * sy;
       const ax = ankle.x * sx, ay = ankle.y * sy;
       const dist = Math.hypot(ax - kx, ay - ky);
@@ -426,7 +432,7 @@ function drawSkeletonOverlay(
   for (let i = 5; i < keypoints.length; i++) {
     if (!isJointVisible(i, parts, keypoints[i]?.name)) continue;
     const kp = keypoints[i];
-    if (!kp || kp.score < 0.3) continue;
+    if (!kp || kp.score < scoreThreshold) continue;
     ctx.beginPath();
     ctx.arc(kp.x * sx, kp.y * sy, jointRadius, 0, Math.PI * 2);
     if (classicColors) {
@@ -458,7 +464,7 @@ function drawSkeletonOverlay(
       const v = keypoints[vi];
       const a = keypoints[ai];
       const b = keypoints[bi];
-      if (!v || !a || !b || v.score < 0.3 || a.score < 0.3 || b.score < 0.3) continue;
+      if (!v || !a || !b || v.score < scoreThreshold || a.score < scoreThreshold || b.score < scoreThreshold) continue;
 
       const vx = v.x * sx, vy = v.y * sy;
       const ax = a.x * sx, ay = a.y * sy;
@@ -1453,6 +1459,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionResult,
       stroMotionSubjectBox,
       stroMotionVisibleCount,
+      stroMotionShowSkeleton = false,
       skeletonShowAngles = true,
       skeletonShowHeadLine = false,
       skeletonClassicColors = true,
@@ -1607,6 +1614,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const stroMotionResultRef = useRef<StroMotionResult | null>(stroMotionResult ?? null);
     const stroMotionSubjectBoxRef = useRef<StroMotionSubjectBox | null>(stroMotionSubjectBox ?? null);
     const stroMotionVisibleCountRef = useRef(stroMotionVisibleCount);
+    const stroMotionShowSkeletonRef = useRef(stroMotionShowSkeleton);
     const skeletonShowAnglesRef   = useRef(skeletonShowAngles);
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
@@ -1780,6 +1788,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { stroMotionResultRef.current = stroMotionResult ?? null; renderDirtyRef.current = true; }, [stroMotionResult]);
     useEffect(() => { stroMotionSubjectBoxRef.current = stroMotionSubjectBox ?? null; renderDirtyRef.current = true; }, [stroMotionSubjectBox]);
     useEffect(() => { stroMotionVisibleCountRef.current = stroMotionVisibleCount; renderDirtyRef.current = true; }, [stroMotionVisibleCount]);
+    useEffect(() => { stroMotionShowSkeletonRef.current = stroMotionShowSkeleton; renderDirtyRef.current = true; }, [stroMotionShowSkeleton]);
     useEffect(() => { skeletonShowAnglesRef.current   = skeletonShowAngles; },   [skeletonShowAngles]);
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; },  [skeletonShowHeadLine]);
     useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; }, [skeletonClassicColors]);
@@ -2105,6 +2114,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         skeletonFramesRef.current = [];
         latestKeypointsRef.current = null;
         poseSmoothPrevRef.current = null;
+        renderDirtyRef.current = true;
         onProcessingStatus?.(null);
       },
       resetBallTrail: () => {
@@ -2310,11 +2320,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (!canvas) return { ok: false, reason: 'no-canvas' };
         if (!canvasSupportsVideoExport(canvas)) return { ok: false, reason: 'unsupported' };
-        const frames = stroMotionResultRef.current?.ghostCrops ?? [];
+        const frames = stroMotionResultRef.current?.ghostLayers ?? [];
         if (frames.length === 0) return { ok: false, reason: 'no-frames' };
 
         const savedVisible = stroMotionVisibleCountRef.current;
+        let parityBase = stroMotionResultRef.current?.diagnostics.exportParity ?? null;
         try {
+          stroMotionVisibleCountRef.current = undefined;
+          renderDirtyRef.current = true;
+          await new Promise<void>((resolve) => {
+            renderWaitersRef.current.push(resolve);
+            renderDirtyRef.current = true;
+          });
+          await new Promise<void>((resolve) => {
+            renderWaitersRef.current.push(resolve);
+            renderDirtyRef.current = true;
+          });
+          const previewHash = await hashCanvasContent(canvas);
+          setStroMotionPreviewHash(previewHash);
+          if (parityBase) parityBase = recordExportParity(parityBase, 'preview', previewHash);
+
           await exportStroMotionVideo(canvas, {
             frameCount: frames.length,
             renderFrame: async (visibleCount) => {
@@ -2328,6 +2353,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 renderWaitersRef.current.push(resolve);
                 renderDirtyRef.current = true;
               });
+              if (visibleCount === frames.length && parityBase) {
+                const videoHash = await hashCanvasContent(canvas);
+                parityBase = recordExportParity(parityBase, 'video', videoHash);
+              }
             },
           });
           return { ok: true };
@@ -2352,6 +2381,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderDirtyRef.current = true;
         return;
       }
+      skeletonSuppressedRef.current = false;
+      renderDirtyRef.current = true;
       if (typeof window === 'undefined') return;
       if (youtubePoseRef.current) {
         poseLoopActiveRef.current = false;
@@ -2380,10 +2411,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           renderDirtyRef.current = true;
 
           const v = videoRef.current;
-          if (v && !v.paused) {
+          if (v) {
             const nowT = v.currentTime;
             const lastFrame = skeletonFramesRef.current.at(-1);
-            if (!lastFrame || nowT !== lastFrame.timeSeconds) {
+            if (!lastFrame || Math.abs(nowT - lastFrame.timeSeconds) > 1 / 60) {
               skeletonFramesRef.current.push({ timeSeconds: nowT, keypoints });
               if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
                 skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
@@ -2481,6 +2512,45 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return () => {
         poseLoopActiveRef.current = false;
         cancelScheduled();
+      };
+    }, [skeletonEnabled, videoRef]);
+
+    /** Restore cached pose when scrubbing / frame-stepping so overlay stays visible while paused. */
+    useEffect(() => {
+      if (!skeletonEnabled) return;
+      const video = videoRef.current;
+      if (!video) return;
+
+      const syncFromCache = () => {
+        const frames = skeletonFramesRef.current;
+        if (frames.length === 0) return;
+        const t = video.currentTime;
+        let best = frames[0];
+        let bestDist = Math.abs(best.timeSeconds - t);
+        for (const frame of frames) {
+          const dist = Math.abs(frame.timeSeconds - t);
+          if (dist < bestDist) {
+            best = frame;
+            bestDist = dist;
+          }
+        }
+        if (bestDist <= 0.12) {
+          latestKeypointsRef.current = best.keypoints;
+          renderDirtyRef.current = true;
+        }
+      };
+
+      const onSeeked = () => {
+        syncFromCache();
+        renderDirtyRef.current = true;
+      };
+
+      video.addEventListener('seeked', onSeeked);
+      video.addEventListener('timeupdate', syncFromCache);
+      syncFromCache();
+      return () => {
+        video.removeEventListener('seeked', onSeeked);
+        video.removeEventListener('timeupdate', syncFromCache);
       };
     }, [skeletonEnabled, videoRef]);
 
@@ -2971,10 +3041,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             video.srcObject instanceof MediaStream;
           const stroComposite = stroMotionResultRef.current;
           if (stroComposite && dw > 0 && dh > 0) {
+            const visibleCount = stroMotionVisibleCountRef.current ?? stroComposite.ghostLayers.length;
             renderStroMotionComposite(ctx, stroComposite, {
-              visibleCount: stroMotionVisibleCountRef.current,
+              visibleCount,
               dest: { x: dx, y: dy, w: dw, h: dh },
             });
+
+            if (stroMotionShowSkeletonRef.current && stroComposite.ghostPoses?.length) {
+              const total = stroComposite.ghostLayers.length;
+              const count = Math.min(visibleCount, total);
+              for (let i = 0; i < count; i++) {
+                const pose = stroComposite.ghostPoses[i];
+                if (!pose?.length) continue;
+                const isLast = i === count - 1;
+                const skAlpha = isLast ? 1.0 : temporalGhostOpacity(i, total);
+                ctx.save();
+                ctx.globalAlpha = skAlpha;
+                ctx.translate(dx, dy);
+                drawSkeletonOverlay(ctx, pose, vW, vH, dw, dh, {
+                  showAngles: false,
+                  showHeadLine: false,
+                  classicColors: skeletonClassicColorsRef.current,
+                  parts: skeletonPartsRef.current,
+                });
+                ctx.restore();
+              }
+            }
           } else if (!hideStreamMirror) {
             ctx.drawImage(video, dx, dy, dw, dh);
           }
@@ -3077,17 +3169,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // ── StroMotion subject box preview (before generate) ────────────────
         const stroSubjectPreview = stroMotionSubjectBoxRef.current;
         if (!stroMotionResultRef.current && stroSubjectPreview && dw > 0 && dh > 0) {
+          const sx = dx + stroSubjectPreview.x * dw;
+          const sy = dy + stroSubjectPreview.y * dh;
+          const sw = stroSubjectPreview.width * dw;
+          const sh = stroSubjectPreview.height * dh;
           ctx.save();
+          ctx.fillStyle = 'rgba(0,122,255,0.14)';
+          ctx.fillRect(sx, sy, sw, sh);
           ctx.strokeStyle = 'rgba(0,122,255,0.95)';
           ctx.lineWidth = 2;
           ctx.setLineDash([8, 4]);
-          ctx.strokeRect(
-            dx + stroSubjectPreview.x * dw,
-            dy + stroSubjectPreview.y * dh,
-            stroSubjectPreview.width * dw,
-            stroSubjectPreview.height * dh,
-          );
+          ctx.strokeRect(sx, sy, sw, sh);
           ctx.setLineDash([]);
+          ctx.restore();
+        }
+
+        const stroEffectiveBox = stroMotionResultRef.current?.subjectBox;
+        if (stroMotionResultRef.current && stroEffectiveBox && dw > 0 && dh > 0) {
+          const sx = dx + stroEffectiveBox.x * dw;
+          const sy = dy + stroEffectiveBox.y * dh;
+          const sw = stroEffectiveBox.width * dw;
+          const sh = stroEffectiveBox.height * dh;
+          ctx.save();
+          ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1);
           ctx.restore();
         }
 
