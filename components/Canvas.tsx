@@ -183,6 +183,13 @@ export interface CanvasProps {
   stroMotionResult?: StroMotionResult | null;
   /** Subject box preview before generate (video-normalized 0..1) */
   stroMotionSubjectBox?: StroMotionSubjectBox | null;
+  /** Per-frame object boxes during coach verification */
+  stroMotionFrameStops?: Array<{
+    box: StroMotionSubjectBox;
+    active: boolean;
+    autoDetected: boolean;
+    userConfirmed: boolean;
+  }> | null;
   stroMotionVisibleCount?: number;
   /** Overlay skeleton on each StroMotion ghost position */
   stroMotionShowSkeleton?: boolean;
@@ -1458,6 +1465,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamOpacity = 1,
       stroMotionResult,
       stroMotionSubjectBox,
+      stroMotionFrameStops,
       stroMotionVisibleCount,
       stroMotionShowSkeleton = false,
       skeletonShowAngles = true,
@@ -1613,6 +1621,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const webcamOpacityRef    = useRef(webcamOpacity);
     const stroMotionResultRef = useRef<StroMotionResult | null>(stroMotionResult ?? null);
     const stroMotionSubjectBoxRef = useRef<StroMotionSubjectBox | null>(stroMotionSubjectBox ?? null);
+    const stroMotionFrameStopsRef = useRef(stroMotionFrameStops ?? null);
     const stroMotionVisibleCountRef = useRef(stroMotionVisibleCount);
     const stroMotionShowSkeletonRef = useRef(stroMotionShowSkeleton);
     const skeletonShowAnglesRef   = useRef(skeletonShowAngles);
@@ -1787,6 +1796,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { webcamOpacityRef.current     = webcamOpacity; },   [webcamOpacity]);
     useEffect(() => { stroMotionResultRef.current = stroMotionResult ?? null; renderDirtyRef.current = true; }, [stroMotionResult]);
     useEffect(() => { stroMotionSubjectBoxRef.current = stroMotionSubjectBox ?? null; renderDirtyRef.current = true; }, [stroMotionSubjectBox]);
+    useEffect(() => { stroMotionFrameStopsRef.current = stroMotionFrameStops ?? null; renderDirtyRef.current = true; }, [stroMotionFrameStops]);
     useEffect(() => { stroMotionVisibleCountRef.current = stroMotionVisibleCount; renderDirtyRef.current = true; }, [stroMotionVisibleCount]);
     useEffect(() => { stroMotionShowSkeletonRef.current = stroMotionShowSkeleton; renderDirtyRef.current = true; }, [stroMotionShowSkeleton]);
     useEffect(() => { skeletonShowAnglesRef.current   = skeletonShowAngles; },   [skeletonShowAngles]);
@@ -3166,7 +3176,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           panYRef.current = c.y;
         }
 
-        // ── StroMotion subject box preview (before generate) ────────────────
+        // ── StroMotion subject / frame-stop box preview (before generate) ───
+        const stroFrameStopsPreview = stroMotionFrameStopsRef.current;
+        if (!stroMotionResultRef.current && stroFrameStopsPreview?.length && dw > 0 && dh > 0) {
+          for (const stop of stroFrameStopsPreview) {
+            const sx = dx + stop.box.x * dw;
+            const sy = dy + stop.box.y * dh;
+            const sw = stop.box.width * dw;
+            const sh = stop.box.height * dh;
+            ctx.save();
+            const color = stop.active
+              ? 'rgba(0,122,255,0.95)'
+              : stop.userConfirmed
+                ? 'rgba(52,199,89,0.85)'
+                : stop.autoDetected
+                  ? 'rgba(255,149,0,0.85)'
+                  : 'rgba(255,59,48,0.85)';
+            ctx.fillStyle = stop.active ? 'rgba(0,122,255,0.18)' : 'rgba(255,255,255,0.06)';
+            ctx.fillRect(sx, sy, sw, sh);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = stop.active ? 2.5 : 1.5;
+            ctx.setLineDash(stop.userConfirmed ? [] : [6, 4]);
+            ctx.strokeRect(sx, sy, sw, sh);
+            ctx.setLineDash([]);
+            ctx.restore();
+          }
+        } else {
         const stroSubjectPreview = stroMotionSubjectBoxRef.current;
         if (!stroMotionResultRef.current && stroSubjectPreview && dw > 0 && dh > 0) {
           const sx = dx + stroSubjectPreview.x * dw;
@@ -3182,6 +3217,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.strokeRect(sx, sy, sw, sh);
           ctx.setLineDash([]);
           ctx.restore();
+        }
         }
 
         const stroEffectiveBox = stroMotionResultRef.current?.subjectBox;

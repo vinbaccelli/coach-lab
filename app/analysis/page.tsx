@@ -435,6 +435,8 @@ export default function Home() {
   const [stroGhostCount, setStroGhostCount] = useState<StroMotionGhostCount>(STRO_MOTION_DEFAULT_GHOST_COUNT);
   const [stroSubjectBox, setStroSubjectBox] = useState<StroMotionSubjectBox | null>(null);
   const [stroSelectingObject, setStroSelectingObject] = useState(false);
+  const [stroActiveFrameStopIndex, setStroActiveFrameStopIndex] = useState<number | null>(null);
+  const stroReselectStopRef = useRef<number | null>(null);
   const [stroVideoTime, setStroVideoTime] = useState(0);
   const [stroVideoDuration, setStroVideoDuration] = useState(0);
   const [stroVisibleCount, setStroVisibleCount] = useState<number | undefined>(undefined);
@@ -487,9 +489,15 @@ export default function Home() {
     result: stroMotionResult,
     status: stroMotionStatus,
     isProcessing: stroMotionProcessing,
+    isTracking: stroMotionTracking,
     progress: stroMotionProgress,
     diagnostics: stroMotionDiagnostics,
+    frameStops: stroFrameStops,
     clearGhosts,
+    clearFrameStops,
+    detectFrameStops,
+    updateFrameStopBox,
+    confirmFrameStop,
     extractFrames,
     cancelExtraction,
     setConfiguring: setStroMotionConfiguring,
@@ -543,10 +551,33 @@ export default function Home() {
     stroConfigAtGenerateRef.current = null;
     setStroSubjectBox(null);
     setStroSelectingObject(false);
+    setStroActiveFrameStopIndex(null);
+    stroReselectStopRef.current = null;
     setStroVisibleCount(undefined);
     canvasRef.current?.setStroMotionVisibleCount?.(undefined);
     setStroMotionConfiguring(false);
   }, [cancelExtraction, clearGhosts, setStroMotionConfiguring]);
+
+  const seekStroVideo = useCallback(async (timeSec: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.pause();
+    const dur = Number.isFinite(v.duration) ? v.duration : timeSec;
+    const next = Math.max(0, Math.min(timeSec, dur));
+    if (Math.abs(v.currentTime - next) > 0.00001 || v.seeking) {
+      v.currentTime = next;
+      await new Promise<void>((resolve) => {
+        const onSeeked = () => {
+          v.removeEventListener('seeked', onSeeked);
+          resolve();
+        };
+        v.addEventListener('seeked', onSeeked, { once: true });
+        window.setTimeout(resolve, 120);
+      });
+    }
+    setStroVideoTime(next);
+    await canvasRef.current?.waitForRender?.();
+  }, []);
 
   const stroConfigKey = useMemo(
     () => JSON.stringify({
@@ -559,6 +590,7 @@ export default function Home() {
   );
 
   const handleStroSelectObject = useCallback(() => {
+    stroReselectStopRef.current = null;
     setStroSelectingObject(true);
     canvasRef.current?.startStroMotionRegionSelect?.((region) => {
       const normalized = normalizeObjectBox(subjectBoxFromRegion(region));
@@ -567,9 +599,65 @@ export default function Home() {
       setStroVisibleCount(undefined);
       canvasRef.current?.setStroMotionVisibleCount?.(undefined);
       setStroSubjectBox(normalized);
+      setStroActiveFrameStopIndex(0);
       setStroSelectingObject(false);
     });
   }, [clearGhosts]);
+
+  const handleStroReselectFrameStop = useCallback((index: number) => {
+    const stop = stroFrameStops.find((s) => s.index === index);
+    if (!stop) return;
+    stroReselectStopRef.current = index;
+    setStroActiveFrameStopIndex(index);
+    setStroSelectingObject(true);
+    void seekStroVideo(stop.timeSec).then(() => {
+      canvasRef.current?.startStroMotionRegionSelect?.((region) => {
+        const normalized = normalizeObjectBox(subjectBoxFromRegion(region));
+        updateFrameStopBox(index, normalized);
+        if (index === 0) setStroSubjectBox(normalized);
+        stroReselectStopRef.current = null;
+        setStroSelectingObject(false);
+      });
+    });
+  }, [seekStroVideo, stroFrameStops, updateFrameStopBox]);
+
+  const handleStroSelectFrameStop = useCallback((index: number) => {
+    const stop = stroFrameStops.find((s) => s.index === index);
+    if (!stop) return;
+    setStroActiveFrameStopIndex(index);
+    void seekStroVideo(stop.timeSec);
+  }, [seekStroVideo, stroFrameStops]);
+
+  const handleStroAutoDetectFrames = useCallback(async () => {
+    if (!stroSubjectBox) {
+      alert('Select Object first — draw a tight box around the racket on the first frame.');
+      return;
+    }
+    if (stroEndFrame <= stroStartFrame) {
+      alert('End frame must be after start frame.');
+      return;
+    }
+    setStroActiveFrameStopIndex(0);
+    await detectFrameStops({
+      startSec: stroStartFrame,
+      endSec: stroEndFrame,
+      ghostCount: stroGhostCount,
+      seedBox: stroSubjectBox,
+      sampleTimes: stroSampleTimes,
+    });
+  }, [
+    detectFrameStops,
+    stroEndFrame,
+    stroGhostCount,
+    stroSampleTimes,
+    stroStartFrame,
+    stroSubjectBox,
+  ]);
+
+  useEffect(() => {
+    clearFrameStops();
+    setStroActiveFrameStopIndex(null);
+  }, [stroGhostCount, stroStartFrame, stroEndFrame, clearFrameStops]);
 
   useEffect(() => {
     if (stroMotionStatus !== 'ready' || !stroConfigAtGenerateRef.current) return;
@@ -632,6 +720,10 @@ export default function Home() {
       alert('End frame must be after start frame.');
       return;
     }
+    if (stroFrameStops.length !== stroGhostCount) {
+      alert('Auto-detect positions first — verify each frame stop, then Generate.');
+      return;
+    }
     setStroVisibleCount(undefined);
     canvasRef.current?.setStroMotionVisibleCount?.(undefined);
     setStroMotionPreviewHash(null);
@@ -641,6 +733,7 @@ export default function Home() {
       ghostCount: stroGhostCount,
       subjectBox: stroSubjectBox,
       sampleTimes: stroSampleTimes,
+      frameStops: stroFrameStops,
     });
     if (composite) {
       setStroSubjectBox(composite.subjectBox);
@@ -649,9 +742,18 @@ export default function Home() {
         start: stroStartFrame,
         end: stroEndFrame,
         count: stroGhostCount,
+        stops: stroFrameStops.map((s) => s.box),
       });
     }
-  }, [extractFrames, stroEndFrame, stroGhostCount, stroSampleTimes, stroStartFrame, stroSubjectBox]);
+  }, [
+    extractFrames,
+    stroEndFrame,
+    stroFrameStops,
+    stroGhostCount,
+    stroSampleTimes,
+    stroStartFrame,
+    stroSubjectBox,
+  ]);
 
   const handleStroExportPng = useCallback(async () => {
     if (!stroMotionResult) return;
@@ -704,6 +806,13 @@ export default function Home() {
       subjectBox={stroSubjectBox}
       onSelectObject={handleStroSelectObject}
       isSelectingObject={stroSelectingObject}
+      frameStops={stroFrameStops}
+      activeFrameStopIndex={stroActiveFrameStopIndex}
+      onSelectFrameStop={handleStroSelectFrameStop}
+      onReselectFrameStop={handleStroReselectFrameStop}
+      onConfirmFrameStop={confirmFrameStop}
+      onAutoDetectFrames={() => { void handleStroAutoDetectFrames(); }}
+      isTracking={stroMotionTracking}
       isProcessing={stroMotionProcessing}
       progressCurrent={stroMotionProgress.current}
       progressTotal={stroMotionProgress.total}
@@ -728,6 +837,25 @@ export default function Home() {
       }
     />
   );
+
+  const stroMotionFrameStopsForCanvas = useMemo(
+    () =>
+      stroFrameStops.length > 0 && !stroMotionResult
+        ? stroFrameStops.map((s) => ({
+            box: s.box,
+            active: s.index === stroActiveFrameStopIndex,
+            autoDetected: s.autoDetected,
+            userConfirmed: s.userConfirmed,
+          }))
+        : null,
+    [stroFrameStops, stroActiveFrameStopIndex, stroMotionResult],
+  );
+
+  useEffect(() => {
+    if (stroMotionActive && stroMotionHtml5Only) {
+      void import('@/lib/racketCocoDetect').then((m) => m.preloadRacketDetector());
+    }
+  }, [stroMotionActive, stroMotionHtml5Only]);
 
   const seekBiomechVideo = useCallback(async (timeSec: number) => {
     const v = videoRef.current;
@@ -3079,6 +3207,8 @@ export default function Home() {
         sampleMarkers: stroFrameStopMarkers,
         onSampleMarkerSelect: (_id: string, time: number) => {
           setStroVideoTime(time);
+          const idx = stroFrameStops.findIndex((s) => Math.abs(s.timeSec - time) < 0.001);
+          if (idx >= 0) setStroActiveFrameStopIndex(stroFrameStops[idx].index);
         },
       };
     }
@@ -3108,6 +3238,7 @@ export default function Home() {
     stroEndFrame,
     stroSampleTimes,
     stroMotionResult,
+    stroFrameStops,
   ]);
 
   const renderTimelineDock = () => (
@@ -3656,6 +3787,7 @@ export default function Home() {
                   webcamActive={webcamActive && markupTarget !== 'B'}
                   stroMotionResult={stroMotionResult}
                   stroMotionSubjectBox={stroSubjectBox}
+                  stroMotionFrameStops={stroMotionFrameStopsForCanvas}
                   stroMotionVisibleCount={stroVisibleCount}
                   stroMotionShowSkeleton={stroShowSkeleton}
                   skeletonShowAngles={skeletonShowAngles}

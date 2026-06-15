@@ -112,6 +112,8 @@ export interface StroMotionResult {
   ghostPoses: (StroMotionPoseKeypoint[] | null)[];
   /** Object matting vs full-body pose masking */
   extractionMode?: StroMotionExtractionMode;
+  /** Per-frame object boxes used for object-mode ghosts */
+  frameBoxes?: StroMotionSubjectBox[];
   diagnostics: StroMotionDiagnostics;
 }
 
@@ -574,6 +576,7 @@ export async function extractStroMotionObjectComposite(
   onProgress?: (current: number, total: number) => void,
   isCancelled?: () => boolean,
   precomputedSampleTimes?: number[],
+  perFrameBoxes?: Array<{ timeSec: number; box: StroMotionSubjectBox }>,
 ): Promise<StroMotionResult | null> {
   const t0 = performance.now();
   const sampleTimes = precomputedSampleTimes?.length
@@ -582,7 +585,13 @@ export async function extractStroMotionObjectComposite(
   if (sampleTimes.length === 0) return null;
   if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
-  const normalizedBox = normalizeObjectBox(objectBox);
+  const frameBoxes = perFrameBoxes?.length === sampleTimes.length
+    ? perFrameBoxes
+    : sampleTimes.map((timeSec) => ({
+        timeSec,
+        box: normalizeObjectBox(objectBox),
+      }));
+
   prepareVideoForStroMotionExtraction(video);
   const wasPlaying = !video.paused;
   await waitForVideoPaused(video);
@@ -593,12 +602,12 @@ export async function extractStroMotionObjectComposite(
   const ctx = offscreen.getContext('2d') as CanvasCtx | null;
   if (!ctx) return null;
 
-  const { px, py, pw, ph } = subjectBoxPixels(normalizedBox, vw, vh);
   const originalTime = video.currentTime;
   const totalSteps = sampleTimes.length + 2;
 
   let baseFrame: ImageBitmap | null = null;
   let ghostLayers: ImageBitmap[] = [];
+  const effectiveBoxes: StroMotionSubjectBox[] = [];
 
   try {
     await captureVideoToSurface(video, startSec, offscreen);
@@ -608,14 +617,28 @@ export async function extractStroMotionObjectComposite(
 
     for (let i = 0; i < sampleTimes.length; i++) {
       if (isCancelled?.()) return null;
-      await captureVideoToSurface(video, sampleTimes[i], offscreen);
+      const { timeSec, box } = frameBoxes[i];
+      await captureVideoToSurface(video, timeSec, offscreen);
       if (isCancelled?.()) return null;
-      const layer = await buildObjectGhostLayer(offscreen, normalizedBox, vw, vh);
+      const normalized = normalizeObjectBox(box);
+      effectiveBoxes.push(normalized);
+      const layer = await buildObjectGhostLayer(offscreen, normalized, vw, vh);
       ghostLayers.push(layer);
       onProgress?.(2 + i, totalSteps);
     }
 
+    const unionBox = effectiveBoxes.reduce(
+      (acc, b) => ({
+        x: Math.min(acc.x, b.x),
+        y: Math.min(acc.y, b.y),
+        width: Math.max(acc.x + acc.width, b.x + b.width) - Math.min(acc.x, b.x),
+        height: Math.max(acc.y + acc.height, b.y + b.height) - Math.min(acc.y, b.y),
+      }),
+      effectiveBoxes[0] ?? normalizeObjectBox(objectBox),
+    );
+
     const extractionTimeMs = Math.round(performance.now() - t0);
+    const { px, py, pw, ph } = subjectBoxPixels(unionBox, vw, vh);
     const coachRect: PixelRect = { x0: px, y0: py, x1: px + pw, y1: py + ph };
     const validation = buildStroMotionValidationReport(
       coachRect,
@@ -633,15 +656,16 @@ export async function extractStroMotionObjectComposite(
     return {
       baseFrame,
       ghostLayers,
-      subjectBox: normalizedBox,
+      subjectBox: unionBox,
       sampleTimes,
       ghostPoses: sampleTimes.map(() => null),
       extractionMode: 'object',
+      frameBoxes: effectiveBoxes,
       diagnostics: {
         extractionTimeMs,
         poseSuccessRate: 0,
         maskCoveragePercent: ghostLayers.map(() => 100),
-        effectiveBox: normalizedBox,
+        effectiveBox: unionBox,
         sampleTimes,
         validation,
         maskQuality: [],

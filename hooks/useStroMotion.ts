@@ -12,14 +12,20 @@ import {
   type StroMotionStatus,
   type StroMotionSubjectBox,
 } from '@/lib/stroMotion';
+import {
+  trackObjectFrameStops,
+  type StroMotionFrameStop,
+} from '@/lib/stroMotionObjectTrack';
+
+export type { StroMotionFrameStop };
 
 export interface StroMotionExtractParams {
   startSec: number;
   endSec: number;
   ghostCount: number;
   subjectBox: StroMotionSubjectBox;
-  /** Pre-computed sample times (Phase A) — skip recompute during Generate */
   sampleTimes?: number[];
+  frameStops?: StroMotionFrameStop[];
 }
 
 export interface StroMotionProgress {
@@ -31,6 +37,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   const [result, setResult] = useState<StroMotionResult | null>(null);
   const [status, setStatus] = useState<StroMotionStatus>('idle');
   const [progress, setProgress] = useState<StroMotionProgress>({ current: 0, total: 0 });
+  const [frameStops, setFrameStops] = useState<StroMotionFrameStop[]>([]);
+  const [isTracking, setIsTracking] = useState(false);
   const extractGenRef = useRef(0);
   const cacheRef = useRef<Map<string, StroMotionResult>>(new Map());
 
@@ -56,9 +64,87 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       clearStroMotionResult(entry);
     }
     cacheRef.current.clear();
+    setFrameStops([]);
     setProgress({ current: 0, total: 0 });
     setStatus('idle');
   }, [evictCachedResult]);
+
+  const invalidateCache = useCallback(() => {
+    for (const entry of cacheRef.current.values()) {
+      clearStroMotionResult(entry);
+    }
+    cacheRef.current.clear();
+  }, []);
+
+  const clearFrameStops = useCallback(() => {
+    setFrameStops([]);
+    invalidateCache();
+  }, [invalidateCache]);
+
+  const detectFrameStops = useCallback(async (params: {
+    startSec: number;
+    endSec: number;
+    ghostCount: number;
+    seedBox: StroMotionSubjectBox;
+    sampleTimes?: number[];
+  }): Promise<StroMotionFrameStop[]> => {
+    const video = videoRef.current;
+    if (!video || params.endSec <= params.startSec) return [];
+
+    const sampleTimes = params.sampleTimes?.length
+      ? params.sampleTimes
+      : computeGhostSampleTimes(params.startSec, params.endSec, params.ghostCount);
+
+    setIsTracking(true);
+    setProgress({ current: 0, total: sampleTimes.length });
+    setStatus('configuring');
+
+    try {
+      const stops = await trackObjectFrameStops(
+        video,
+        sampleTimes,
+        params.seedBox,
+        (current, total) => setProgress({ current, total }),
+      );
+      setFrameStops(stops);
+      invalidateCache();
+      setResult((prev) => {
+        if (prev) {
+          evictCachedResult(prev);
+          clearStroMotionResult(prev);
+        }
+        return null;
+      });
+      setStatus('configuring');
+      return stops;
+    } finally {
+      setIsTracking(false);
+    }
+  }, [evictCachedResult, invalidateCache, videoRef]);
+
+  const updateFrameStopBox = useCallback((index: number, box: StroMotionSubjectBox) => {
+    setFrameStops((prev) =>
+      prev.map((s) =>
+        s.index === index
+          ? { ...s, box, userConfirmed: true, autoDetected: false }
+          : s,
+      ),
+    );
+    invalidateCache();
+    setResult((prev) => {
+      if (prev) {
+        evictCachedResult(prev);
+        clearStroMotionResult(prev);
+      }
+      return null;
+    });
+  }, [evictCachedResult, invalidateCache]);
+
+  const confirmFrameStop = useCallback((index: number) => {
+    setFrameStops((prev) =>
+      prev.map((s) => (s.index === index ? { ...s, userConfirmed: true } : s)),
+    );
+  }, []);
 
   const extractFrames = useCallback(
     async (params: StroMotionExtractParams): Promise<StroMotionResult | null> => {
@@ -67,12 +153,20 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       if (params.endSec <= params.startSec) return null;
       if (params.subjectBox.width <= 0 || params.subjectBox.height <= 0) return null;
 
+      const sampleTimes = params.sampleTimes?.length
+        ? params.sampleTimes
+        : computeGhostSampleTimes(params.startSec, params.endSec, params.ghostCount);
+
+      const perFrameBoxes = params.frameStops?.length === sampleTimes.length
+        ? params.frameStops.map((s) => ({ timeSec: s.timeSec, box: s.box }))
+        : undefined;
+
       const cacheKey = stroMotionCacheKey({
         subjectBox: params.subjectBox,
         startSec: params.startSec,
         endSec: params.endSec,
         ghostCount: params.ghostCount,
-      }) + ':object';
+      }) + ':object:' + JSON.stringify(perFrameBoxes ?? null);
 
       const cached = cacheRef.current.get(cacheKey);
       if (cached) {
@@ -89,9 +183,6 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       }
 
       const gen = ++extractGenRef.current;
-      const sampleTimes = params.sampleTimes?.length
-        ? params.sampleTimes
-        : computeGhostSampleTimes(params.startSec, params.endSec, params.ghostCount);
 
       setResult((prev) => {
         if (prev) {
@@ -118,6 +209,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
           },
           isCancelled,
           sampleTimes,
+          perFrameBoxes,
         );
 
         if (isCancelled() || !composite) {
@@ -139,7 +231,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             clearStroMotionResult(prev);
             return null;
           });
-          setStatus('idle');
+          setStatus('configuring');
         }
         return null;
       } finally {
@@ -153,32 +245,25 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
 
   const cancelExtraction = useCallback(() => {
     extractGenRef.current += 1;
-    setStatus((prev) => (prev === 'extracting' ? 'idle' : prev));
+    setStatus((prev) => (prev === 'extracting' ? 'configuring' : prev));
     setProgress({ current: 0, total: 0 });
-  }, []);
-
-  const invalidateCache = useCallback(() => {
-    for (const entry of cacheRef.current.values()) {
-      clearStroMotionResult(entry);
-    }
-    cacheRef.current.clear();
   }, []);
 
   const setAnimating = useCallback((animating: boolean) => {
     setStatus((prev) => {
       if (animating) return 'animating';
-      if (prev === 'animating') return result ? 'ready' : 'idle';
+      if (prev === 'animating') return result ? 'ready' : 'configuring';
       return prev;
     });
   }, [result]);
 
   const setConfiguring = useCallback((configuring: boolean) => {
     setStatus((prev) => {
-      if (configuring && prev === 'idle') return 'configuring';
-      if (!configuring && prev === 'configuring') return 'idle';
+      if (configuring && (prev === 'idle' || prev === 'configuring')) return 'configuring';
+      if (!configuring && prev === 'configuring') return frameStops.length ? 'configuring' : 'idle';
       return prev;
     });
-  }, []);
+  }, [frameStops.length]);
 
   const diagnostics: StroMotionDiagnostics | null = result?.diagnostics ?? null;
 
@@ -186,8 +271,15 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     result,
     status,
     isProcessing: status === 'extracting',
+    isTracking,
     progress,
     diagnostics,
+    frameStops,
+    setFrameStops,
+    clearFrameStops,
+    detectFrameStops,
+    updateFrameStopBox,
+    confirmFrameStop,
     clearGhosts,
     extractFrames,
     cancelExtraction,
