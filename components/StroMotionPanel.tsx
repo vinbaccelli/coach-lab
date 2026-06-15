@@ -26,8 +26,8 @@ export interface StroMotionPanelProps {
   ghostCount: StroMotionGhostCount;
   onGhostCountChange: (n: StroMotionGhostCount) => void;
   subjectBox: StroMotionSubjectBox | null;
-  onSelectSubject: () => void;
-  isSelectingSubject: boolean;
+  onSelectObject: () => void;
+  isSelectingObject: boolean;
   isProcessing: boolean;
   progressCurrent: number;
   progressTotal: number;
@@ -57,8 +57,8 @@ export default function StroMotionPanel({
   ghostCount,
   onGhostCountChange,
   subjectBox,
-  onSelectSubject,
-  isSelectingSubject,
+  onSelectObject,
+  isSelectingObject,
   isProcessing,
   progressCurrent,
   progressTotal,
@@ -87,7 +87,7 @@ export default function StroMotionPanel({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '0 4px 12px' }}>
       <p style={{ margin: '0 0 8px', fontSize: 12, lineHeight: 1.45, color: 'var(--cl-text-muted, #666)' }}>
-        Dartfish-style stromotion: one background frame with multiple athlete positions inside your subject box.
+        Stromotion multiplier: select an object (racket, club, bat, etc.) and capture its positions across the movement.
       </p>
 
       {disabled && disabledReason ? (
@@ -96,25 +96,25 @@ export default function StroMotionPanel({
 
       <button
         type="button"
-        onClick={onSelectSubject}
+        onClick={onSelectObject}
         disabled={disabled || isProcessing || isExportingVideo}
         style={{
           ...secondaryBtnStyle,
-          borderColor: isSelectingSubject ? 'var(--cl-accent, #007AFF)' : undefined,
-          background: isSelectingSubject ? 'rgba(0,122,255,0.08)' : undefined,
+          borderColor: isSelectingObject ? 'var(--cl-accent, #007AFF)' : undefined,
+          background: isSelectingObject ? 'rgba(0,122,255,0.08)' : undefined,
           opacity: disabled || isProcessing || isExportingVideo ? 0.5 : 1,
         }}
       >
         <BoxSelect size={14} />
-        {isSelectingSubject ? ' Draw box on video…' : subjectBox ? ' Re-select Subject' : ' Select Subject'}
+        {isSelectingObject ? ' Draw box on object…' : subjectBox ? ' Re-select Object' : ' Select Object'}
       </button>
       {subjectBox ? (
         <p style={{ margin: 0, fontSize: 11, color: 'var(--cl-text-muted)' }}>
-          Subject box ({Math.round(subjectBox.width * 100)}% × {Math.round(subjectBox.height * 100)}%) — include full swing, racket, and follow-through.
+          Object box ({Math.round(subjectBox.width * 100)}% × {Math.round(subjectBox.height * 100)}%) — tight around the object only.
         </p>
       ) : (
         <p style={{ margin: 0, fontSize: 11, color: 'var(--cl-text-muted)' }}>
-          Draw generously around the athlete: body, racket, arm extension, and follow-through (forehand, serve, or volley).
+          Draw a tight box around the object to multiply — e.g. tennis racket, golf club, or baseball bat. Not the full athlete.
         </p>
       )}
 
@@ -128,7 +128,7 @@ export default function StroMotionPanel({
       </button>
       <div style={{ fontSize: 11, color: 'var(--cl-text-muted)', paddingLeft: 4 }}>
         Start: <strong style={{ fontFamily: 'ui-monospace, monospace' }}>{formatTimeShort(startFrame)}</strong>
-        {' '}(background court)
+        {' '}(background)
       </div>
 
       <button
@@ -143,7 +143,10 @@ export default function StroMotionPanel({
         End: <strong style={{ fontFamily: 'ui-monospace, monospace' }}>{formatTimeShort(endFrame)}</strong>
       </div>
 
-      <div style={{ fontSize: 12, fontWeight: 600, margin: '8px 0 4px' }}>Ghost Count</div>
+      <div style={{ fontSize: 12, fontWeight: 600, margin: '8px 0 4px' }}>Frame Stops</div>
+      <p style={{ margin: '0 0 4px', fontSize: 10, color: 'var(--cl-text-muted)', lineHeight: 1.4 }}>
+        Each count adds a ball marker on the timeline — one multiplied object position per stop.
+      </p>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
         {STRO_MOTION_GHOST_COUNTS.map((n) => (
           <button
@@ -173,7 +176,7 @@ export default function StroMotionPanel({
         </div>
       ) : isReady ? (
         <div style={{ fontSize: 12, marginTop: 8, fontWeight: 600 }}>
-          {ghostCount} positions ready
+          {ghostCount} object positions ready
         </div>
       ) : null}
 
@@ -291,15 +294,8 @@ export default function StroMotionPanel({
           {diagnostics ? (
             <>
               <div>
-                <strong>Effective region:</strong>{' '}
+                <strong>Object region:</strong>{' '}
                 {`${(diagnostics.effectiveBox.x * 100).toFixed(1)}%, ${(diagnostics.effectiveBox.y * 100).toFixed(1)}% · ${(diagnostics.effectiveBox.width * 100).toFixed(1)}×${(diagnostics.effectiveBox.height * 100).toFixed(1)}%`}
-              </div>
-              <div>
-                <strong>Mask coverage:</strong>{' '}
-                {diagnostics.maskCoveragePercent.map((p) => `${p.toFixed(1)}%`).join(', ')}
-              </div>
-              <div>
-                <strong>Pose success:</strong> {diagnostics.poseSuccessRate.toFixed(0)}%
               </div>
               <div>
                 <strong>Extraction time:</strong> {diagnostics.extractionTimeMs} ms

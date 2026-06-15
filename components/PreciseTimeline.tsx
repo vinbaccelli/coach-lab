@@ -142,6 +142,8 @@ export default function PreciseTimeline({
   onPhaseMarkerSelect,
   onPhaseMarkerChange,
   phaseMarkerBounds = null,
+  sampleMarkers = null,
+  onSampleMarkerSelect,
 }: {
   source: Source;
   defaultFps?: number;
@@ -164,6 +166,9 @@ export default function PreciseTimeline({
   onPhaseMarkerSelect?: (id: string) => void;
   onPhaseMarkerChange?: (id: string, time: number) => void;
   phaseMarkerBounds?: { start: number; end: number } | null;
+  /** Stromotion frame-stop balls — one per multiplied object position */
+  sampleMarkers?: Array<{ id: string; time: number; label?: string }> | null;
+  onSampleMarkerSelect?: (id: string, time: number) => void;
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
@@ -850,6 +855,37 @@ export default function PreciseTimeline({
             >
               {m.short ?? m.label.charAt(0)}
             </div>
+          );
+        }) : null}
+        {sampleMarkers && d > 0 ? sampleMarkers.map((m) => {
+          const pctM = (m.time / d) * 100;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              title={`Frame stop ${m.label ?? ''} @ ${formatTimeShort(m.time)}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSampleMarkerSelect?.(m.id, m.time);
+                void seekTo(m.time);
+              }}
+              style={{
+                position: 'absolute',
+                left: `calc(10px + (100% - 20px) * ${pctM / 100} - 7px)`,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: 14,
+                height: 14,
+                borderRadius: '50%',
+                background: 'linear-gradient(145deg, #D4FF00 0%, #9ACD00 55%, #6B8E00 100%)',
+                border: '2px solid rgba(255,255,255,0.9)',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                cursor: 'pointer',
+                zIndex: 4,
+                padding: 0,
+                touchAction: 'manipulation',
+              }}
+            />
           );
         }) : null}
         <div

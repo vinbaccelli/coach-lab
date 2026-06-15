@@ -39,7 +39,7 @@ import {
   hashCanvasContent,
   recordExportParity,
   setStroMotionPreviewHash,
-  normalizeSubjectBox,
+  normalizeObjectBox,
   prepareVideoForStroMotionExtraction,
   subjectBoxFromRegion,
   STRO_MOTION_DEFAULT_GHOST_COUNT,
@@ -434,7 +434,7 @@ export default function Home() {
   const [stroEndFrame, setStroEndFrame] = useState(3);
   const [stroGhostCount, setStroGhostCount] = useState<StroMotionGhostCount>(STRO_MOTION_DEFAULT_GHOST_COUNT);
   const [stroSubjectBox, setStroSubjectBox] = useState<StroMotionSubjectBox | null>(null);
-  const [stroSelectingSubject, setStroSelectingSubject] = useState(false);
+  const [stroSelectingObject, setStroSelectingObject] = useState(false);
   const [stroVideoTime, setStroVideoTime] = useState(0);
   const [stroVideoDuration, setStroVideoDuration] = useState(0);
   const [stroVisibleCount, setStroVisibleCount] = useState<number | undefined>(undefined);
@@ -542,7 +542,7 @@ export default function Home() {
     clearGhosts();
     stroConfigAtGenerateRef.current = null;
     setStroSubjectBox(null);
-    setStroSelectingSubject(false);
+    setStroSelectingObject(false);
     setStroVisibleCount(undefined);
     canvasRef.current?.setStroMotionVisibleCount?.(undefined);
     setStroMotionConfiguring(false);
@@ -558,16 +558,16 @@ export default function Home() {
     [stroSubjectBox, stroStartFrame, stroEndFrame, stroGhostCount],
   );
 
-  const handleStroSelectSubject = useCallback(() => {
-    setStroSelectingSubject(true);
+  const handleStroSelectObject = useCallback(() => {
+    setStroSelectingObject(true);
     canvasRef.current?.startStroMotionRegionSelect?.((region) => {
-      const normalized = normalizeSubjectBox(subjectBoxFromRegion(region));
+      const normalized = normalizeObjectBox(subjectBoxFromRegion(region));
       clearGhosts();
       stroConfigAtGenerateRef.current = null;
       setStroVisibleCount(undefined);
       canvasRef.current?.setStroMotionVisibleCount?.(undefined);
       setStroSubjectBox(normalized);
-      setStroSelectingSubject(false);
+      setStroSelectingObject(false);
     });
   }, [clearGhosts]);
 
@@ -625,7 +625,7 @@ export default function Home() {
 
   const handleStroGenerate = useCallback(async () => {
     if (!stroSubjectBox) {
-      alert('Select Subject first — draw a box around the athlete.');
+      alert('Select Object first — draw a tight box around the racket or object.');
       return;
     }
     if (stroEndFrame <= stroStartFrame) {
@@ -702,8 +702,8 @@ export default function Home() {
       ghostCount={stroGhostCount}
       onGhostCountChange={setStroGhostCount}
       subjectBox={stroSubjectBox}
-      onSelectSubject={handleStroSelectSubject}
-      isSelectingSubject={stroSelectingSubject}
+      onSelectObject={handleStroSelectObject}
+      isSelectingObject={stroSelectingObject}
       isProcessing={stroMotionProcessing}
       progressCurrent={stroMotionProgress.current}
       progressTotal={stroMotionProgress.total}
@@ -3027,23 +3027,37 @@ export default function Home() {
   }, [playBothEnabled, videoBLoaded, videoBDuration]);
 
   const analysisTimelineExtras = useMemo(() => {
+    const biomechPhaseMarkers = biomechPhases.length > 0
+      ? biomechPhases.map((p) => ({
+          id: p.id,
+          label: p.label,
+          short: p.short,
+          time: p.timeSec,
+        }))
+      : null;
+
+    const stroFrameStopMarkers = stroMotionActive && stroMotionHtml5Only
+      ? (stroMotionResult?.sampleTimes ?? stroSampleTimes).map((time, i) => ({
+          id: `stro-stop-${i}`,
+          time,
+          label: String(i + 1),
+        }))
+      : null;
+
     if (biomechActive && biomechHtml5Only) {
       return {
         trimRange: { start: biomechTrimStart, end: biomechTrimEnd } as { start: number; end: number },
         trimAccent: '#34C759',
         onCurrentTime: setBiomechVideoTime,
-        phaseMarkers: biomechPhases.map((p) => ({
-          id: p.id,
-          label: p.label,
-          short: p.short,
-          time: p.timeSec,
-        })),
+        phaseMarkers: biomechPhaseMarkers,
         selectedPhaseMarkerId: biomechSelectedPhaseId,
         onPhaseMarkerSelect: setBiomechSelectedPhaseId,
         onPhaseMarkerChange: (id: string, time: number) => {
           updateBiomechPhaseTime(id, time, biomechTrimStart, biomechTrimEnd);
         },
         phaseMarkerBounds: { start: biomechTrimStart, end: biomechTrimEnd },
+        sampleMarkers: null as null,
+        onSampleMarkerSelect: undefined,
       };
     }
     if (stroMotionActive && stroMotionHtml5Only) {
@@ -3051,11 +3065,21 @@ export default function Home() {
         trimRange: { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number },
         trimAccent: '#FF9500',
         onCurrentTime: setStroVideoTime,
-        phaseMarkers: null as null,
-        selectedPhaseMarkerId: null as null,
-        onPhaseMarkerSelect: undefined,
-        onPhaseMarkerChange: undefined,
-        phaseMarkerBounds: null as null,
+        phaseMarkers: biomechPhaseMarkers,
+        selectedPhaseMarkerId: biomechSelectedPhaseId,
+        onPhaseMarkerSelect: setBiomechSelectedPhaseId,
+        onPhaseMarkerChange: biomechPhases.length > 0
+          ? (id: string, time: number) => {
+              updateBiomechPhaseTime(id, time, biomechTrimStart, biomechTrimEnd);
+            }
+          : undefined,
+        phaseMarkerBounds: biomechPhases.length > 0
+          ? { start: biomechTrimStart, end: biomechTrimEnd }
+          : { start: stroStartFrame, end: stroEndFrame },
+        sampleMarkers: stroFrameStopMarkers,
+        onSampleMarkerSelect: (_id: string, time: number) => {
+          setStroVideoTime(time);
+        },
       };
     }
     return {
@@ -3067,6 +3091,8 @@ export default function Home() {
       onPhaseMarkerSelect: undefined,
       onPhaseMarkerChange: undefined,
       phaseMarkerBounds: null as null,
+      sampleMarkers: null as null,
+      onSampleMarkerSelect: undefined,
     };
   }, [
     biomechActive,
@@ -3080,6 +3106,8 @@ export default function Home() {
     stroMotionHtml5Only,
     stroStartFrame,
     stroEndFrame,
+    stroSampleTimes,
+    stroMotionResult,
   ]);
 
   const renderTimelineDock = () => (
@@ -3130,6 +3158,8 @@ export default function Home() {
                 onPhaseMarkerSelect={analysisTimelineExtras.onPhaseMarkerSelect}
                 onPhaseMarkerChange={analysisTimelineExtras.onPhaseMarkerChange}
                 phaseMarkerBounds={analysisTimelineExtras.phaseMarkerBounds}
+                sampleMarkers={analysisTimelineExtras.sampleMarkers}
+                onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
               />
             )
       ) : (
@@ -3159,6 +3189,8 @@ export default function Home() {
             onPhaseMarkerSelect={analysisTimelineExtras.onPhaseMarkerSelect}
             onPhaseMarkerChange={analysisTimelineExtras.onPhaseMarkerChange}
             phaseMarkerBounds={analysisTimelineExtras.phaseMarkerBounds}
+            sampleMarkers={analysisTimelineExtras.sampleMarkers}
+            onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
           />
         )
       ))}

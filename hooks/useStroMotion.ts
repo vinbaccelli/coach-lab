@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import {
   clearStroMotionResult,
   computeGhostSampleTimes,
-  extractStroMotionComposite,
+  extractStroMotionObjectComposite,
   logStroMotionExtractDiagnostics,
   stroMotionCacheKey,
   type StroMotionDiagnostics,
@@ -72,7 +72,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         startSec: params.startSec,
         endSec: params.endSec,
         ghostCount: params.ghostCount,
-      });
+      }) + ':object';
 
       const cached = cacheRef.current.get(cacheKey);
       if (cached) {
@@ -101,12 +101,12 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         return null;
       });
       setStatus('extracting');
-      setProgress({ current: 0, total: sampleTimes.length * 2 + 2 });
+      setProgress({ current: 0, total: sampleTimes.length + 2 });
 
       const isCancelled = () => extractGenRef.current !== gen;
 
       try {
-        const composite = await extractStroMotionComposite(
+        const composite = await extractStroMotionObjectComposite(
           video,
           params.startSec,
           params.endSec,

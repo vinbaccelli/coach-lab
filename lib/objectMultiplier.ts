@@ -17,7 +17,7 @@ function colorDist(r1: number, g1: number, b1: number, r2: number, g2: number, b
  * Lightweight background suppression from border colour — yields a premultiplied-style
  * cutout without blocking the UI (chunked on the main thread via await between frames).
  */
-async function matteRacketFrame(bitmap: ImageBitmap): Promise<ImageBitmap> {
+export async function matteRacketFrame(bitmap: ImageBitmap): Promise<ImageBitmap> {
   const w = bitmap.width;
   const h = bitmap.height;
   const c = document.createElement('canvas');

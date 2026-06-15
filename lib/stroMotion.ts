@@ -1,6 +1,7 @@
 'use client';
 
 import { acquirePoseDetector } from '@/lib/sharedPoseDetector';
+import { matteRacketFrame } from '@/lib/objectMultiplier';
 import {
   clampPixelRect,
   countSuccessfulPoses,
@@ -109,6 +110,8 @@ export interface StroMotionResult {
   sampleTimes: number[];
   /** Pose per ghost sample (video pixel coords) */
   ghostPoses: (StroMotionPoseKeypoint[] | null)[];
+  /** Object matting vs full-body pose masking */
+  extractionMode?: StroMotionExtractionMode;
   diagnostics: StroMotionDiagnostics;
 }
 
@@ -126,6 +129,12 @@ export const STRO_MOTION_EXTRACT_CONCURRENCY = 3;
 export const STRO_MOTION_SUBJECT_PAD_RATIO = 0.20;
 export const STRO_MOTION_MIN_SUBJECT_WIDTH = 0.10;
 export const STRO_MOTION_MIN_SUBJECT_HEIGHT = 0.22;
+/** Tighter bounds for object-only selection (racket, ball, club, etc.). */
+export const STRO_MOTION_OBJECT_PAD_RATIO = 0.08;
+export const STRO_MOTION_MIN_OBJECT_WIDTH = 0.025;
+export const STRO_MOTION_MIN_OBJECT_HEIGHT = 0.035;
+
+export type StroMotionExtractionMode = 'object' | 'subject';
 
 const STRO_MOTION_MOTION_DIFF_THRESHOLD = 20;
 const STRO_MOTION_MOTION_UNION_PAD_PX = 8;
@@ -164,6 +173,23 @@ export function expandSubjectBox(
   const y = Math.max(0, box.y - padH);
   const width = Math.min(1 - x, box.width + padW * 2);
   const height = Math.min(1 - y, box.height + padH * 2);
+  return { x, y, width, height };
+}
+
+export function normalizeObjectBox(box: StroMotionSubjectBox): StroMotionSubjectBox {
+  let { x, y, width, height } = expandSubjectBox(box, STRO_MOTION_OBJECT_PAD_RATIO);
+
+  if (width < STRO_MOTION_MIN_OBJECT_WIDTH) {
+    const cx = x + width / 2;
+    width = STRO_MOTION_MIN_OBJECT_WIDTH;
+    x = Math.max(0, Math.min(1 - width, cx - width / 2));
+  }
+  if (height < STRO_MOTION_MIN_OBJECT_HEIGHT) {
+    const cy = y + height / 2;
+    height = STRO_MOTION_MIN_OBJECT_HEIGHT;
+    y = Math.max(0, Math.min(1 - height, cy - height / 2));
+  }
+
   return { x, y, width, height };
 }
 
@@ -513,6 +539,147 @@ function imageDataToBitmap(data: ImageData): Promise<ImageBitmap> {
   if (!ctx) return createImageBitmap(createExtractionSurface(1, 1));
   ctx.putImageData(data, 0, 0);
   return createImageBitmap(canvas);
+}
+
+async function buildObjectGhostLayer(
+  source: ExtractionSurface,
+  objectBox: StroMotionSubjectBox,
+  vw: number,
+  vh: number,
+): Promise<ImageBitmap> {
+  const { px, py, pw, ph } = subjectBoxPixels(objectBox, vw, vh);
+  let cropBitmap = await createImageBitmap(source, px, py, pw, ph);
+  const matted = await matteRacketFrame(cropBitmap);
+  cropBitmap.close();
+
+  const layer = createExtractionSurface(vw, vh);
+  const lctx = layer.getContext('2d') as CanvasCtx | null;
+  if (!lctx) {
+    matted.close();
+    return createImageBitmap(createExtractionSurface(1, 1));
+  }
+  lctx.clearRect(0, 0, vw, vh);
+  lctx.drawImage(matted, px, py, pw, ph);
+  matted.close();
+  return createImageBitmap(layer);
+}
+
+/** Object-multiplier extraction: matte the selected object region at each sample time. */
+export async function extractStroMotionObjectComposite(
+  video: HTMLVideoElement,
+  startSec: number,
+  endSec: number,
+  ghostCount: number,
+  objectBox: StroMotionSubjectBox,
+  onProgress?: (current: number, total: number) => void,
+  isCancelled?: () => boolean,
+  precomputedSampleTimes?: number[],
+): Promise<StroMotionResult | null> {
+  const t0 = performance.now();
+  const sampleTimes = precomputedSampleTimes?.length
+    ? precomputedSampleTimes
+    : computeGhostSampleTimes(startSec, endSec, ghostCount);
+  if (sampleTimes.length === 0) return null;
+  if (video.videoWidth === 0 || video.videoHeight === 0) return null;
+
+  const normalizedBox = normalizeObjectBox(objectBox);
+  prepareVideoForStroMotionExtraction(video);
+  const wasPlaying = !video.paused;
+  await waitForVideoPaused(video);
+
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const offscreen = createExtractionSurface(vw, vh);
+  const ctx = offscreen.getContext('2d') as CanvasCtx | null;
+  if (!ctx) return null;
+
+  const { px, py, pw, ph } = subjectBoxPixels(normalizedBox, vw, vh);
+  const originalTime = video.currentTime;
+  const totalSteps = sampleTimes.length + 2;
+
+  let baseFrame: ImageBitmap | null = null;
+  let ghostLayers: ImageBitmap[] = [];
+
+  try {
+    await captureVideoToSurface(video, startSec, offscreen);
+    if (isCancelled?.()) return null;
+    baseFrame = await createImageBitmap(offscreen);
+    onProgress?.(1, totalSteps);
+
+    for (let i = 0; i < sampleTimes.length; i++) {
+      if (isCancelled?.()) return null;
+      await captureVideoToSurface(video, sampleTimes[i], offscreen);
+      if (isCancelled?.()) return null;
+      const layer = await buildObjectGhostLayer(offscreen, normalizedBox, vw, vh);
+      ghostLayers.push(layer);
+      onProgress?.(2 + i, totalSteps);
+    }
+
+    const extractionTimeMs = Math.round(performance.now() - t0);
+    const coachRect: PixelRect = { x0: px, y0: py, x1: px + pw, y1: py + ph };
+    const validation = buildStroMotionValidationReport(
+      coachRect,
+      coachRect,
+      coachRect,
+      null,
+      null,
+      null,
+      sampleTimes,
+      ghostLayers.map(() => null),
+      vw,
+      vh,
+    );
+
+    return {
+      baseFrame,
+      ghostLayers,
+      subjectBox: normalizedBox,
+      sampleTimes,
+      ghostPoses: sampleTimes.map(() => null),
+      extractionMode: 'object',
+      diagnostics: {
+        extractionTimeMs,
+        poseSuccessRate: 0,
+        maskCoveragePercent: ghostLayers.map(() => 100),
+        effectiveBox: normalizedBox,
+        sampleTimes,
+        validation,
+        maskQuality: [],
+        ghostRacketValidation: [],
+        serveStress: [],
+        serveWarnings: [],
+        timings: {
+          captureMs: extractionTimeMs,
+          poseMs: 0,
+          regionMs: 0,
+          maskMs: extractionTimeMs,
+          bitmapMs: 0,
+          totalMs: extractionTimeMs,
+        },
+        visualQuality: buildVisualQualityScorecard({
+          maskMetrics: [],
+          ghostRacket: [],
+          serveWarnings: [],
+          hasOverhead: false,
+          exportParity: null,
+          avgForegroundLeakage: 0,
+          avgBackgroundLeakage: 0,
+        }),
+        exportParity: createEmptyExportParity(),
+      },
+    };
+  } catch {
+    if (baseFrame) baseFrame.close();
+    ghostLayers.forEach((c) => c.close());
+    return null;
+  } finally {
+    try {
+      await seekVideoAndWait(video, originalTime);
+    } catch {
+      video.currentTime = originalTime;
+    }
+    if (wasPlaying) void video.play();
+  }
 }
 
 export async function extractStroMotionComposite(
