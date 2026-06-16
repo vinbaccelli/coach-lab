@@ -75,6 +75,8 @@ export function recordExportParity(
 
 export type StroMotionOpacityMode = 'uniform' | 'temporal';
 export type StroMotionStatus = 'idle' | 'configuring' | 'extracting' | 'ready' | 'animating';
+export type StroMotionMode = 'athlete' | 'object';
+export const STRO_MOTION_DEFAULT_MODE: StroMotionMode = 'athlete';
 
 /** Video-normalized subject rectangle (0..1). */
 export interface StroMotionSubjectBox {
@@ -298,6 +300,23 @@ export function computeGhostSampleTimes(
     times.push(startSec + ((endSec - startSec) * i) / (ghostCount - 1));
   }
   return times;
+}
+
+/** Keep sample times inside trim and minimally spaced when dragging markers. */
+export function enforceMonotonicSampleTimes(
+  times: number[],
+  trimStartSec: number,
+  trimEndSec: number,
+): number[] {
+  const span = trimEndSec - trimStartSec;
+  const minGap = span > 0 ? Math.min(0.04, span / (times.length * 3)) : 0.01;
+  let prev = trimStartSec - minGap;
+  return times.map((t) => {
+    const clamped = Math.max(trimStartSec, Math.min(trimEndSec, Math.max(t, prev + minGap)));
+    const next = Math.round(clamped * 1000) / 1000;
+    prev = next;
+    return next;
+  });
 }
 
 function subjectBoxPixels(
@@ -957,6 +976,7 @@ export async function extractStroMotionComposite(
       subjectBox: effectiveBox,
       sampleTimes,
       ghostPoses,
+      extractionMode: 'subject',
       diagnostics: {
         extractionTimeMs,
         poseSuccessRate,
@@ -989,6 +1009,7 @@ export async function extractStroMotionComposite(
 
 export async function logStroMotionExtractDiagnostics(result: StroMotionResult): Promise<void> {
   console.log('[StroMotion] Composite ready:', {
+    mode: result.extractionMode ?? 'unknown',
     ghosts: result.ghostLayers.length,
     times: result.sampleTimes.map((t) => t.toFixed(3)),
     effectiveBox: result.subjectBox,
@@ -1005,6 +1026,16 @@ export async function logStroMotionExtractDiagnostics(result: StroMotionResult):
     result.diagnostics.serveStress,
     result.diagnostics.exportParity,
   );
+  if (result.ghostPoses.some((p) => p != null && p.length > 0)) {
+    const { buildStrokeAnalytics } = await import('@/lib/stroMotionAnalytics');
+    const analytics = buildStrokeAnalytics(result);
+    console.log('[StroMotion] Stroke analytics ready:', {
+      strokeId: analytics.strokeId,
+      strokeFamily: analytics.diagnosticsSummary.strokeFamily,
+      poseSuccessRate: analytics.diagnosticsSummary.poseSuccessRate,
+      phaseCount: analytics.stroke.phases.length,
+    });
+  }
 }
 
 export interface StroMotionCompositeOptions {
@@ -1036,7 +1067,7 @@ export function renderStroMotionComposite(
   ctx.save();
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
-  ctx.drawImage(result.baseFrame, dest.x, dest.y, dest.w, dest.h);
+  safeDrawImageBitmap(ctx, result.baseFrame, dest.x, dest.y, dest.w, dest.h);
 
   // Strict chronological order: index 0 = oldest drawn first, last = newest on top
   for (let i = 0; i < count; i++) {
@@ -1051,7 +1082,7 @@ export function renderStroMotionComposite(
     ctx.globalAlpha = ghostAlpha;
     ctx.globalCompositeOperation = 'source-over';
     ctx.filter = 'contrast(1.03) saturate(1.02)';
-    ctx.drawImage(layers[i], dest.x, dest.y, dest.w, dest.h);
+    safeDrawImageBitmap(ctx, layers[i], dest.x, dest.y, dest.w, dest.h);
     ctx.filter = 'none';
     ctx.restore();
   }
@@ -1059,17 +1090,79 @@ export function renderStroMotionComposite(
   ctx.restore();
 }
 
+function safeDrawImageBitmap(
+  ctx: CanvasRenderingContext2D,
+  bitmap: ImageBitmap,
+  ...args: [number, number, number, number]
+): boolean {
+  try {
+    ctx.drawImage(bitmap, ...args);
+    return true;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'InvalidStateError') {
+      console.warn('[StroMotion] Skipped draw — bitmap was closed');
+      return false;
+    }
+    throw err;
+  }
+}
+
 export function clearStroMotionResult(result: StroMotionResult | null): void {
   if (!result) return;
-  result.baseFrame.close();
-  result.ghostLayers.forEach((c) => c.close());
+  const { baseFrame, ghostLayers } = result;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      try { baseFrame.close(); } catch { /* already closed */ }
+      ghostLayers.forEach((layer) => {
+        try { layer.close(); } catch { /* already closed */ }
+      });
+    });
+  });
 }
 
 export function exportStroMotionPNG(canvas: HTMLCanvasElement, filename = 'stromotion.png'): void {
-  const link = document.createElement('a');
-  link.download = filename;
-  link.href = canvas.toDataURL('image/png');
-  link.click();
+  try {
+    const link = document.createElement('a');
+    link.download = filename;
+    link.href = canvas.toDataURL('image/png');
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (err) {
+    console.error('[StroMotion] PNG export failed:', err);
+    throw err;
+  }
+}
+
+/** Export directly from result bitmaps when the live canvas is unavailable. */
+export async function renderStroMotionResultToCanvas(
+  result: StroMotionResult,
+): Promise<HTMLCanvasElement> {
+  const base = result.baseFrame;
+  const w = base.width;
+  const h = base.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D unavailable');
+  renderStroMotionComposite(ctx, result, {
+    dest: { x: 0, y: 0, w, h },
+  });
+  return canvas;
+}
+
+export async function stroMotionResultToDataURL(result: StroMotionResult): Promise<string> {
+  const canvas = await renderStroMotionResultToCanvas(result);
+  return canvas.toDataURL('image/png');
+}
+
+export async function exportStroMotionPNGFromResult(
+  result: StroMotionResult,
+  filename = 'stromotion.png',
+): Promise<void> {
+  const canvas = await renderStroMotionResultToCanvas(result);
+  exportStroMotionPNG(canvas, filename);
 }
 
 export async function exportStroMotionPNGAfterRender(
@@ -1098,15 +1191,19 @@ export async function exportStroMotionVideo(
     intervalMs?: number;
     renderFrame: (visibleCount: number) => Promise<void>;
     finalHoldMs?: number;
+    download?: boolean;
+    filename?: string;
   },
-): Promise<void> {
+): Promise<Blob | null> {
   const {
     frameCount,
     intervalMs = STRO_MOTION_ANIM_INTERVAL_MS,
     renderFrame,
     finalHoldMs = STRO_MOTION_VIDEO_FINAL_HOLD_MS,
+    download = true,
+    filename,
   } = options;
-  if (frameCount <= 0) return;
+  if (frameCount <= 0) return null;
 
   const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
     ? 'video/webm;codecs=vp9'
@@ -1137,10 +1234,80 @@ export async function exportStroMotionVideo(
   });
 
   const blob = new Blob(chunks, { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `stromotion.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`;
-  a.click();
-  URL.revokeObjectURL(url);
+  if (download) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename ?? `stromotion.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+  return blob;
+}
+
+/** Re-run AI mask proposal for a single frame (draft regenerate). */
+export async function regenerateStroMotionFrameGhostLayer(
+  video: HTMLVideoElement,
+  params: {
+    mode: StroMotionMode;
+    startSec: number;
+    sampleTimeSec: number;
+    subjectBox: StroMotionSubjectBox;
+    objectBox?: StroMotionSubjectBox;
+  },
+): Promise<ImageBitmap | null> {
+  if (video.videoWidth === 0 || video.videoHeight === 0) return null;
+
+  prepareVideoForStroMotionExtraction(video);
+  const wasPlaying = !video.paused;
+  await waitForVideoPaused(video);
+
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const offscreen = createExtractionSurface(vw, vh);
+  const ctx = offscreen.getContext('2d') as CanvasCtx | null;
+  if (!ctx) return null;
+
+  const originalTime = video.currentTime;
+
+  try {
+    if (params.mode === 'object') {
+      const box = normalizeObjectBox(params.objectBox ?? params.subjectBox);
+      await captureVideoToSurface(video, params.sampleTimeSec, offscreen);
+      return await buildObjectGhostLayer(offscreen, box, vw, vh);
+    }
+
+    const initialBox = normalizeSubjectBox(params.subjectBox);
+    const { px, py, pw, ph } = subjectBoxPixels(initialBox, vw, vh);
+    const motionUnion: PixelRect = { x0: px, y0: py, x1: px + pw, y1: py + ph };
+
+    await captureVideoToSurface(video, params.startSec, offscreen);
+    const baseImageData = ctx.getImageData(0, 0, vw, vh);
+
+    await captureVideoToSurface(video, params.sampleTimeSec, offscreen);
+    const currentImageData = ctx.getImageData(0, 0, vw, vh);
+
+    const detector = await acquirePoseDetector();
+    const pose = await detectPoseOnSurface(offscreen, detector);
+
+    const { layer } = buildGhostLayerMask(
+      currentImageData,
+      baseImageData,
+      pose,
+      motionUnion,
+      vw,
+      vh,
+    );
+
+    return await imageDataToBitmap(layer);
+  } finally {
+    try {
+      await seekVideoAndWait(video, originalTime);
+    } catch {
+      video.currentTime = originalTime;
+    }
+    if (wasPlaying) void video.play();
+  }
 }

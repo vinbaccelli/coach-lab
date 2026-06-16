@@ -70,6 +70,15 @@ function captureVideoFrame(
   return ctx.getImageData(0, 0, vw, vh);
 }
 
+function lerpBox(a: StroMotionSubjectBox, b: StroMotionSubjectBox, t: number): StroMotionSubjectBox {
+  return normalizeObjectBox({
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    width: a.width + (b.width - a.width) * t,
+    height: a.height + (b.height - a.height) * t,
+  });
+}
+
 /** Motion centroid shift inside search window — fallback when COCO misses. */
 function trackByMotion(
   prevFrame: ImageData,
@@ -87,21 +96,39 @@ function trackByMotion(
   const sh = y1 - y0;
   if (sw < 8 || sh < 8) return null;
 
-  const TH = 28;
+  const stride = sw * sh > 120_000 ? 2 : 1;
+  const diffs: number[] = [];
+  for (let y = y0; y < y1; y += stride) {
+    for (let x = x0; x < x1; x += stride) {
+      const i = (y * vw + x) * 4;
+      const dr = Math.abs(currFrame.data[i] - prevFrame.data[i]);
+      const dg = Math.abs(currFrame.data[i + 1] - prevFrame.data[i + 1]);
+      const db = Math.abs(currFrame.data[i + 2] - prevFrame.data[i + 2]);
+      diffs.push(dr + dg + db);
+    }
+  }
+  diffs.sort((a, b) => a - b);
+  const medianDiff = diffs[Math.floor(diffs.length / 2)] ?? 24;
+  const TH = Math.max(18, Math.min(42, medianDiff * 1.35));
+
+  let sumX = 0;
+  let sumY = 0;
+  let hits = 0;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  let hits = 0;
 
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
+  for (let y = y0; y < y1; y += stride) {
+    for (let x = x0; x < x1; x += stride) {
       const i = (y * vw + x) * 4;
       const dr = Math.abs(currFrame.data[i] - prevFrame.data[i]);
       const dg = Math.abs(currFrame.data[i + 1] - prevFrame.data[i + 1]);
       const db = Math.abs(currFrame.data[i + 2] - prevFrame.data[i + 2]);
       if (dr + dg + db > TH) {
         hits++;
+        sumX += x;
+        sumY += y;
         if (x < minX) minX = x;
         if (y < minY) minY = y;
         if (x > maxX) maxX = x;
@@ -110,14 +137,15 @@ function trackByMotion(
     }
   }
 
-  if (hits < 12) return null;
+  const minHits = Math.max(8, Math.floor((sw * sh) / (stride * stride * 180)));
+  if (hits < minHits) return null;
 
-  const motionW = (maxX - minX + 1) / vw;
-  const motionH = (maxY - minY + 1) / vh;
-  const blendW = Math.max(hint.width, motionW * 1.15);
-  const blendH = Math.max(hint.height, motionH * 1.15);
-  const mcx = (minX + maxX) / 2 / vw;
-  const mcy = (minY + maxY) / 2 / vh;
+  const motionW = (maxX - minX + stride) / vw;
+  const motionH = (maxY - minY + stride) / vh;
+  const blendW = Math.max(hint.width * 0.92, motionW * 1.08);
+  const blendH = Math.max(hint.height * 0.92, motionH * 1.08);
+  const mcx = sumX / hits / vw;
+  const mcy = sumY / hits / vh;
 
   return normalizeObjectBox({
     x: mcx - blendW / 2,
@@ -160,7 +188,23 @@ async function detectAtTime(
   return { box: normalizeObjectBox(hint), score: null, method: 'carry' };
 }
 
-/** Auto-track object across frame stops; coach verifies before Generate. */
+export function enforceMonotonicFrameStops(
+  stops: StroMotionFrameStop[],
+  trimStartSec: number,
+  trimEndSec: number,
+): StroMotionFrameStop[] {
+  const sorted = [...stops].sort((a, b) => a.index - b.index);
+  const span = trimEndSec - trimStartSec;
+  const minGap = span > 0 ? Math.min(0.04, span / (sorted.length * 3)) : 0.01;
+  let prev = trimStartSec - minGap;
+  return sorted.map((s) => {
+    const t = Math.max(trimStartSec, Math.min(trimEndSec, Math.max(s.timeSec, prev + minGap)));
+    const next = { ...s, timeSec: Math.round(t * 1000) / 1000 };
+    prev = t;
+    return next;
+  });
+}
+
 export async function trackObjectFrameStops(
   video: HTMLVideoElement,
   sampleTimes: number[],
@@ -186,14 +230,20 @@ export async function trackObjectFrameStops(
         hint,
         prevFrame,
       );
-      hint = box;
+      const smoothed =
+        method === 'coco'
+          ? box
+          : method === 'motion'
+            ? lerpBox(hint, box, 0.72)
+            : hint;
+      hint = smoothed;
       await seekVideo(video, sampleTimes[i]);
       prevFrame = captureVideoFrame(video);
 
       stops.push({
         index: i,
         timeSec: sampleTimes[i],
-        box,
+        box: smoothed,
         autoDetected: method !== 'carry',
         userConfirmed: false,
         detectionScore: score,

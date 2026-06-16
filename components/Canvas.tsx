@@ -26,6 +26,7 @@ import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
+import { renderStroMotionDraftComposite, type StroMotionDraft } from '@/lib/stroMotionDraft';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 
 /** Poll interval while waiting for a ref-backed <video> to mount. */
@@ -134,8 +135,8 @@ export interface CanvasHandle {
   drawSwingFromSegment: (segment: SwingSegment, color: string) => void;
   setRacketTrail: (trail: RacketTrail | null) => void;
   getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
-  /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords */
-  startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number }) => void) => void;
+  /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
+  startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
   resetCropZoom: () => void;
   /** Crop region (canvas-normalized 0..1) for export/recording */
   getCropRegion: () => { x: number; y: number; w: number; h: number } | null;
@@ -151,7 +152,7 @@ export interface CanvasHandle {
   /** Wait until the next canvas paint completes */
   waitForRender: () => Promise<void>;
   /** Record animated Stromotion build-up to a downloadable video (Chrome/desktop) */
-  exportStroMotionVideo: () => Promise<{ ok: boolean; reason?: string }>;
+  exportStroMotionVideo: () => Promise<{ ok: boolean; reason?: string; blob?: Blob; url?: string }>;
   canvasSupportsStroMotionVideoExport: () => boolean;
   /** Set visible ghost count immediately (bypasses React prop lag for export) */
   setStroMotionVisibleCount: (count: number | undefined) => void;
@@ -164,6 +165,8 @@ export interface CanvasProps {
   webcamVideoRef?: React.RefObject<HTMLVideoElement | null>;
   /** When false, Canvas does NOT draw the video frame (overlay-only). */
   renderVideo?: boolean;
+  /** Uploaded HTML5 file plays in a native <video> under this canvas — skip canvas video compositing. */
+  nativeVideoUnderlay?: boolean;
   activeTool: ToolType;
   drawingOptions: DrawingOptions;
   containerWidth: number;
@@ -181,6 +184,12 @@ export interface CanvasProps {
   webcamPipMode?: WebcamPipMode;
   webcamOpacity?: number;
   stroMotionResult?: StroMotionResult | null;
+  /** Coach-editable draft — preferred over raw result when present */
+  stroMotionDraft?: StroMotionDraft | null;
+  /** When false, always paint the live video even if StroMotion output exists */
+  stroMotionCanvasPreview?: boolean;
+  /** When true, composite uses export-ready masks only (post-Generate). */
+  stroMotionUseExportMasks?: boolean;
   /** Subject box preview before generate (video-normalized 0..1) */
   stroMotionSubjectBox?: StroMotionSubjectBox | null;
   /** Per-frame object boxes during coach verification */
@@ -200,6 +209,8 @@ export interface CanvasProps {
   ballSampleMode?: boolean;
   /** When videoRef has no playable video (e.g. YouTube embed), keep canvas transparent */
   transparentWhenNoVideo?: boolean;
+  /** Changes when the HTML video src changes — triggers first-frame redraw */
+  videoSourceKey?: string | null;
   /**
    * YouTube iframe mode: pose uses CDN thumbnail + playback timing (iframe pixels are not readable).
    */
@@ -1448,6 +1459,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       videoRef,
       webcamVideoRef,
       renderVideo = true,
+      nativeVideoUnderlay = false,
       activeTool,
       drawingOptions,
       containerWidth,
@@ -1464,6 +1476,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamPipMode = 'rectangle',
       webcamOpacity = 1,
       stroMotionResult,
+      stroMotionDraft,
+      stroMotionCanvasPreview = false,
+      stroMotionUseExportMasks = false,
       stroMotionSubjectBox,
       stroMotionFrameStops,
       stroMotionVisibleCount,
@@ -1474,6 +1489,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       skeletonParts,
       ballSampleMode = false,
       transparentWhenNoVideo = false,
+      videoSourceKey = null,
       youtubePose,
       suppressTabCaptureMirror = false,
       webcamCutout = false,
@@ -1620,6 +1636,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const webcamPipModeRef    = useRef(webcamPipMode);
     const webcamOpacityRef    = useRef(webcamOpacity);
     const stroMotionResultRef = useRef<StroMotionResult | null>(stroMotionResult ?? null);
+    const stroMotionDraftRef = useRef<StroMotionDraft | null>(stroMotionDraft ?? null);
+    const stroMotionCanvasPreviewRef = useRef(stroMotionCanvasPreview);
+    const stroMotionUseExportMasksRef = useRef(stroMotionUseExportMasks);
     const stroMotionSubjectBoxRef = useRef<StroMotionSubjectBox | null>(stroMotionSubjectBox ?? null);
     const stroMotionFrameStopsRef = useRef(stroMotionFrameStops ?? null);
     const stroMotionVisibleCountRef = useRef(stroMotionVisibleCount);
@@ -1631,6 +1650,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const ballSampleModeRef = useRef(ballSampleMode);
     const transparentWhenNoVideoRef = useRef(transparentWhenNoVideo);
     const renderVideoRef = useRef(renderVideo);
+    const nativeVideoUnderlayRef = useRef(nativeVideoUnderlay);
     const youtubePoseRef = useRef(youtubePose);
     const youtubePoseDimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
     const youtubeSmoothBufRef = useRef<PoseKeypoint[][]>([]);
@@ -1713,7 +1733,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     // StroMotion rubber-band region selection
     const isSelectingStroRegionRef   = useRef(false);
-    const stroRegionCallbackRef      = useRef<((r: { x: number; y: number; w: number; h: number }) => void) | null>(null);
+    const stroRegionCallbackRef      = useRef<((r: { x: number; y: number; w: number; h: number } | null) => void) | null>(null);
     const stroRegionStartRef         = useRef<Pt | null>(null);
     const stroRegionCurrentRef       = useRef<Pt | null>(null);
 
@@ -1795,6 +1815,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { webcamPipModeRef.current     = webcamPipMode; },   [webcamPipMode]);
     useEffect(() => { webcamOpacityRef.current     = webcamOpacity; },   [webcamOpacity]);
     useEffect(() => { stroMotionResultRef.current = stroMotionResult ?? null; renderDirtyRef.current = true; }, [stroMotionResult]);
+    useEffect(() => { stroMotionDraftRef.current = stroMotionDraft ?? null; renderDirtyRef.current = true; }, [stroMotionDraft]);
+    useEffect(() => { stroMotionCanvasPreviewRef.current = stroMotionCanvasPreview; renderDirtyRef.current = true; }, [stroMotionCanvasPreview]);
+    useEffect(() => { stroMotionUseExportMasksRef.current = stroMotionUseExportMasks; renderDirtyRef.current = true; }, [stroMotionUseExportMasks]);
     useEffect(() => { stroMotionSubjectBoxRef.current = stroMotionSubjectBox ?? null; renderDirtyRef.current = true; }, [stroMotionSubjectBox]);
     useEffect(() => { stroMotionFrameStopsRef.current = stroMotionFrameStops ?? null; renderDirtyRef.current = true; }, [stroMotionFrameStops]);
     useEffect(() => { stroMotionVisibleCountRef.current = stroMotionVisibleCount; renderDirtyRef.current = true; }, [stroMotionVisibleCount]);
@@ -1805,7 +1828,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonPartsRef.current = skeletonParts; }, [skeletonParts]);
     useEffect(() => { ballSampleModeRef.current = ballSampleMode; }, [ballSampleMode]);
     useEffect(() => { transparentWhenNoVideoRef.current = transparentWhenNoVideo; }, [transparentWhenNoVideo]);
-    useEffect(() => { renderVideoRef.current = renderVideo; }, [renderVideo]);
+    useEffect(() => { renderVideoRef.current = renderVideo; if (renderVideo) renderDirtyRef.current = true; }, [renderVideo]);
+    useEffect(() => { nativeVideoUnderlayRef.current = nativeVideoUnderlay; }, [nativeVideoUnderlay]);
+
     useEffect(() => { youtubePoseRef.current = youtubePose; }, [youtubePose]);
     useEffect(() => { suppressTabCaptureMirrorRef.current = suppressTabCaptureMirror; }, [suppressTabCaptureMirror]);
     useEffect(() => { webcamCutoutRef.current = webcamCutout; }, [webcamCutout]);
@@ -2330,7 +2355,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (!canvas) return { ok: false, reason: 'no-canvas' };
         if (!canvasSupportsVideoExport(canvas)) return { ok: false, reason: 'unsupported' };
-        const frames = stroMotionResultRef.current?.ghostLayers ?? [];
+        const draft = stroMotionDraftRef.current;
+        const frames = draft?.frames ?? stroMotionResultRef.current?.ghostLayers ?? [];
         if (frames.length === 0) return { ok: false, reason: 'no-frames' };
 
         const savedVisible = stroMotionVisibleCountRef.current;
@@ -2350,8 +2376,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           setStroMotionPreviewHash(previewHash);
           if (parityBase) parityBase = recordExportParity(parityBase, 'preview', previewHash);
 
-          await exportStroMotionVideo(canvas, {
+          const blob = await exportStroMotionVideo(canvas, {
             frameCount: frames.length,
+            download: false,
             renderFrame: async (visibleCount) => {
               stroMotionVisibleCountRef.current = visibleCount;
               renderDirtyRef.current = true;
@@ -2369,7 +2396,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               }
             },
           });
-          return { ok: true };
+          if (!blob) return { ok: false, reason: 'record-failed' };
+          const url = URL.createObjectURL(blob);
+          return { ok: true, blob, url };
         } catch {
           return { ok: false, reason: 'record-failed' };
         } finally {
@@ -2732,7 +2761,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const v = videoRef.current;
       if (!v) return;
       if (typeof v.requestVideoFrameCallback !== 'function') {
-        // No RVFC: render loop falls back to the currentTime delta.
         videoFrameRvfcActiveRef.current = false;
         return;
       }
@@ -2751,6 +2779,29 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         try { v.cancelVideoFrameCallback?.(id); } catch { /* noop */ }
       };
     }, [videoRef]);
+
+    // While the HTML video plays, mark the canvas dirty on presentation signals.
+    // RVFC alone is not reliable across src swaps and hidden-decoder setups.
+    useEffect(() => {
+      const v = videoRef.current;
+      if (!v) return;
+
+      const markDirty = () => {
+        renderDirtyRef.current = true;
+      };
+
+      v.addEventListener('play', markDirty);
+      v.addEventListener('playing', markDirty);
+      v.addEventListener('seeked', markDirty);
+      v.addEventListener('timeupdate', markDirty);
+
+      return () => {
+        v.removeEventListener('play', markDirty);
+        v.removeEventListener('playing', markDirty);
+        v.removeEventListener('seeked', markDirty);
+        v.removeEventListener('timeupdate', markDirty);
+      };
+    }, [videoSourceKey, videoRef]);
 
     useEffect(() => {
       youtubePoseCacheRef.current.clear();
@@ -2914,7 +2965,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!canvas || !containerWidth || !containerHeight) return;
       canvas.width = containerWidth;
       canvas.height = containerHeight;
+      renderDirtyRef.current = true;
     }, [containerWidth, containerHeight]);
+
+    // ── Video source lifecycle — redraw when a new file loads or presents frames ──
+    useEffect(() => {
+      const v = videoRef.current;
+      if (!v) return;
+
+      const markDirty = () => {
+        renderDirtyRef.current = true;
+      };
+
+      v.addEventListener('loadedmetadata', markDirty);
+      v.addEventListener('loadeddata', markDirty);
+      v.addEventListener('canplay', markDirty);
+      v.addEventListener('seeked', markDirty);
+      markDirty();
+
+      return () => {
+        v.removeEventListener('loadedmetadata', markDirty);
+        v.removeEventListener('loadeddata', markDirty);
+        v.removeEventListener('canplay', markDirty);
+        v.removeEventListener('seeked', markDirty);
+      };
+    }, [videoSourceKey, videoRef]);
 
     // ── Wheel zoom ─────────────────────────────────────────────────────────
 
@@ -2965,7 +3040,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         const canvas = canvasRef.current;
         if (!canvas) return;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext('2d', { alpha: true });
         if (!ctx) return;
 
         const W = canvas.width;
@@ -3003,9 +3078,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // playback, so the delta is used only as the RVFC-unavailable fallback.
         // Skeleton / PiP / tool / interaction changes still drive renders via
         // renderDirtyRef, the webcam flag, and hasActiveInteraction.
-        const videoFrameChanged = videoFrameRvfcActiveRef.current
-          ? videoFrameDirtyRef.current
-          : videoTimeChanged;
+        const videoIsPlaying = renderVideoRef.current && !!video && !video.paused;
+        const trackVideoFrames = renderVideoRef.current && !nativeVideoUnderlayRef.current;
+        const videoFrameChanged = !trackVideoFrames
+          ? false
+          : videoIsPlaying
+            ? true
+            : videoFrameRvfcActiveRef.current
+              ? videoFrameDirtyRef.current
+              : videoTimeChanged;
 
         const needsRender =
           videoFrameChanged ||
@@ -3017,9 +3098,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           (webcamActiveRef.current && webcamPipModeRef.current !== 'hidden');
 
         if (!needsRender) return;
-        renderDirtyRef.current = false;
-        webcamFrameDirtyRef.current = false;
-        videoFrameDirtyRef.current = false;
+
+        const videoPaintable =
+          renderVideoRef.current &&
+          !!video &&
+          !!video.src &&
+          video.readyState >= 2 &&
+          video.videoWidth > 0;
+        const awaitingVideoPaint = renderVideoRef.current && !!video && !!video.src && !videoPaintable;
+
+        if (!awaitingVideoPaint) {
+          renderDirtyRef.current = false;
+          webcamFrameDirtyRef.current = false;
+          videoFrameDirtyRef.current = false;
+        } else {
+          renderDirtyRef.current = true;
+        }
 
         ctx.clearRect(0, 0, W, H);
 
@@ -3034,7 +3128,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const ytDim = youtubePoseDimsRef.current;
         let dx = 0, dy = 0, dw = W, dh = H, vW = W, vH = H;
 
-        if (renderVideoRef.current && video && video.readyState >= 2 && video.videoWidth > 0) {
+        if (renderVideoRef.current && video && video.readyState >= 1 && video.videoWidth > 0) {
           vW = video.videoWidth;
           vH = video.videoHeight;
           const scale = Math.min(W / vW, H / vH);
@@ -3049,8 +3143,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             !!video.srcObject &&
             typeof MediaStream !== 'undefined' &&
             video.srcObject instanceof MediaStream;
-          const stroComposite = stroMotionResultRef.current;
-          if (stroComposite && dw > 0 && dh > 0) {
+          const stroDraft = stroMotionCanvasPreviewRef.current ? stroMotionDraftRef.current : null;
+          const stroComposite = stroMotionCanvasPreviewRef.current ? stroMotionResultRef.current : null;
+          if (stroDraft && dw > 0 && dh > 0) {
+            const visibleCount = stroMotionVisibleCountRef.current ?? stroDraft.frames.length;
+            renderStroMotionDraftComposite(ctx, stroDraft, {
+              visibleCount,
+              previewMode: !stroMotionUseExportMasksRef.current,
+              dest: { x: dx, y: dy, w: dw, h: dh },
+            });
+
+            if (stroMotionShowSkeletonRef.current && stroComposite?.ghostPoses?.length) {
+              const total = stroDraft.frames.length;
+              const count = Math.min(visibleCount, total);
+              for (let i = 0; i < count; i++) {
+                const pose = stroComposite.ghostPoses[i];
+                if (!pose?.length) continue;
+                const isLast = i === count - 1;
+                const skAlpha = isLast ? 1.0 : temporalGhostOpacity(i, total);
+                ctx.save();
+                ctx.globalAlpha = skAlpha;
+                ctx.translate(dx, dy);
+                drawSkeletonOverlay(ctx, pose, vW, vH, dw, dh, {
+                  showAngles: false,
+                  showHeadLine: false,
+                  classicColors: skeletonClassicColorsRef.current,
+                  parts: skeletonPartsRef.current,
+                });
+                ctx.restore();
+              }
+            }
+          } else if (stroComposite && dw > 0 && dh > 0) {
             const visibleCount = stroMotionVisibleCountRef.current ?? stroComposite.ghostLayers.length;
             renderStroMotionComposite(ctx, stroComposite, {
               visibleCount,
@@ -3137,6 +3260,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               }
             }
           }
+        } else if (
+          stroMotionCanvasPreviewRef.current &&
+          stroMotionDraftRef.current &&
+          stroMotionDraftRef.current.videoWidth > 0 &&
+          stroMotionDraftRef.current.videoHeight > 0
+        ) {
+          const stroDraft = stroMotionDraftRef.current;
+          vW = stroDraft.videoWidth;
+          vH = stroDraft.videoHeight;
+          const scale = Math.min(W / vW, H / vH);
+          dw = vW * scale;
+          dh = vH * scale;
+          dx = (W - dw) / 2;
+          dy = (H - dh) / 2;
+          videoBoundsRef.current = { dx, dy, dw, dh };
+          const visibleCount = stroMotionVisibleCountRef.current ?? stroDraft.frames.length;
+          renderStroMotionDraftComposite(ctx, stroDraft, {
+            visibleCount,
+            previewMode: !stroMotionUseExportMasksRef.current,
+            dest: { x: dx, y: dy, w: dw, h: dh },
+          });
         } else if (yt && ytDim.w > 0 && ytDim.h > 0) {
           vW = ytDim.w;
           vH = ytDim.h;
@@ -3147,12 +3291,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           dy = (H - dh) / 2;
           videoBoundsRef.current = { dx, dy, dw, dh };
         } else if (!renderVideoRef.current) {
-          dx = 0; dy = 0; dw = W; dh = H; vW = W; vH = H;
+          if (nativeVideoUnderlayRef.current && video && video.videoWidth > 0 && video.videoHeight > 0) {
+            vW = video.videoWidth;
+            vH = video.videoHeight;
+            const scale = Math.min(W / vW, H / vH);
+            dw = vW * scale;
+            dh = vH * scale;
+            dx = (W - dw) / 2;
+            dy = (H - dh) / 2;
+          } else {
+            dx = 0; dy = 0; dw = W; dh = H; vW = W; vH = H;
+          }
           videoBoundsRef.current = { dx, dy, dw, dh };
         } else {
-          if (transparentWhenNoVideoRef.current) {
-            ctx.clearRect(0, 0, W, H);
-          } else {
+          const waitingOnVideo = !!video?.src;
+          if (
+            !waitingOnVideo &&
+            !transparentWhenNoVideoRef.current &&
+            !nativeVideoUnderlayRef.current
+          ) {
             ctx.fillStyle = '#111';
             ctx.fillRect(0, 0, W, H);
           }
@@ -3185,25 +3342,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const sw = stop.box.width * dw;
             const sh = stop.box.height * dh;
             ctx.save();
-            const color = stop.active
-              ? 'rgba(0,122,255,0.95)'
-              : stop.userConfirmed
-                ? 'rgba(52,199,89,0.85)'
-                : stop.autoDetected
-                  ? 'rgba(255,149,0,0.85)'
-                  : 'rgba(255,59,48,0.85)';
-            ctx.fillStyle = stop.active ? 'rgba(0,122,255,0.18)' : 'rgba(255,255,255,0.06)';
+            ctx.fillStyle = stop.userConfirmed
+              ? 'rgba(52,199,89,0.12)'
+              : stop.active
+                ? 'rgba(0,122,255,0.14)'
+                : 'rgba(0,122,255,0.08)';
             ctx.fillRect(sx, sy, sw, sh);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = stop.active ? 2.5 : 1.5;
-            ctx.setLineDash(stop.userConfirmed ? [] : [6, 4]);
+            ctx.strokeStyle = stop.userConfirmed
+              ? 'rgba(52,199,89,0.95)'
+              : stop.active
+                ? 'rgba(0,122,255,0.95)'
+                : 'rgba(0,122,255,0.45)';
+            ctx.lineWidth = stop.active ? 2 : 1.5;
+            ctx.setLineDash(stop.active ? [] : [6, 4]);
             ctx.strokeRect(sx, sy, sw, sh);
             ctx.setLineDash([]);
             ctx.restore();
           }
-        } else {
-        const stroSubjectPreview = stroMotionSubjectBoxRef.current;
-        if (!stroMotionResultRef.current && stroSubjectPreview && dw > 0 && dh > 0) {
+        } else if (!stroMotionResultRef.current && stroMotionSubjectBoxRef.current && dw > 0 && dh > 0) {
+          const stroSubjectPreview = stroMotionSubjectBoxRef.current;
           const sx = dx + stroSubjectPreview.x * dw;
           const sy = dy + stroSubjectPreview.y * dh;
           const sw = stroSubjectPreview.width * dw;
@@ -3216,20 +3373,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.setLineDash([8, 4]);
           ctx.strokeRect(sx, sy, sw, sh);
           ctx.setLineDash([]);
-          ctx.restore();
-        }
-        }
-
-        const stroEffectiveBox = stroMotionResultRef.current?.subjectBox;
-        if (stroMotionResultRef.current && stroEffectiveBox && dw > 0 && dh > 0) {
-          const sx = dx + stroEffectiveBox.x * dw;
-          const sy = dy + stroEffectiveBox.y * dh;
-          const sw = stroEffectiveBox.width * dw;
-          const sh = stroEffectiveBox.height * dh;
-          ctx.save();
-          ctx.strokeStyle = 'rgba(255,255,255,0.42)';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1);
           ctx.restore();
         }
 
@@ -5294,8 +5437,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const h = Math.max(0, Math.min(1 - y, Math.abs(p2.y - p1.y) / dh));
             if (w > 0.01 && h > 0.01) {
               stroRegionCallbackRef.current?.({ x, y, w, h });
+            } else {
+              stroRegionCallbackRef.current?.(null);
             }
+          } else {
+            stroRegionCallbackRef.current?.(null);
           }
+        } else {
+          stroRegionCallbackRef.current?.(null);
         }
         isSelectingStroRegionRef.current = false;
         stroRegionCallbackRef.current = null;
@@ -5343,6 +5492,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         outlineErasingIdxRef.current = -1;
         outlineEraserPosRef.current = null;
         webcamPipDragRef.current = null;
+        if (isSelectingStroRegionRef.current) {
+          stroRegionCallbackRef.current?.(null);
+          isSelectingStroRegionRef.current = false;
+          stroRegionCallbackRef.current = null;
+          stroRegionStartRef.current = null;
+          stroRegionCurrentRef.current = null;
+        }
       }
       try {
         (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
@@ -5712,7 +5868,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     };
 
     return (
-      <div style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 2,
+        background: 'transparent',
+        pointerEvents: 'auto',
+        ...(nativeVideoUnderlay ? { WebkitBackfaceVisibility: 'hidden' as const } : {}),
+      }}>
         {coachToolHint ? (
           <div
             style={{

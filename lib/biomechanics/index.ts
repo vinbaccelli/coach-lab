@@ -47,6 +47,9 @@ export function buildBiomechanicsAnalysis(input: {
   };
 }
 
+export { samplePosesAtTimes } from '@/lib/biomechanics/poseSampling';
+export { renderMeasurementCard } from '@/lib/biomechanics/frameExport';
+
 export function detectAndMeasure(input: {
   strokeType: StrokeType;
   trimStartSec: number;

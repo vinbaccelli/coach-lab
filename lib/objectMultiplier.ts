@@ -1,5 +1,7 @@
 'use client';
 
+import type { AlphaMask } from '@/lib/stroMotionDraft/types';
+
 export interface MultiplierFrame {
   imageData: ImageBitmap;
   timestamp: number;
@@ -13,9 +15,201 @@ function colorDist(r1: number, g1: number, b1: number, r2: number, g2: number, b
   return Math.hypot(r1 - r2, g1 - g2, b1 - b2);
 }
 
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+/** Robust background colour from full border band (median RGB). */
+function estimateBorderBackground(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+): [number, number, number] {
+  const rs: number[] = [];
+  const gs: number[] = [];
+  const bs: number[] = [];
+  const step = Math.max(1, Math.floor(Math.min(w, h) / 28));
+  const band = Math.max(2, Math.floor(Math.min(w, h) * 0.06));
+
+  const sample = (x: number, y: number) => {
+    const i = (y * w + x) * 4;
+    rs.push(data[i]);
+    gs.push(data[i + 1]);
+    bs.push(data[i + 2]);
+  };
+
+  for (let x = 0; x < w; x += step) {
+    for (let y = 0; y < band; y++) sample(x, y);
+    for (let y = h - band; y < h; y++) sample(x, y);
+  }
+  for (let y = band; y < h - band; y += step) {
+    for (let x = 0; x < band; x++) sample(x, y);
+    for (let x = w - band; x < w; x++) sample(x, y);
+  }
+
+  return [median(rs), median(gs), median(bs)];
+}
+
 /**
- * Lightweight background suppression from border colour — yields a premultiplied-style
- * cutout without blocking the UI (chunked on the main thread via await between frames).
+ * Border-connected flood fill — removes court/wall background while keeping the object.
+ * Feathered alpha reduces halos around racket edges.
+ */
+function matteFromBorderFlood(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  br: number,
+  bg: number,
+  bb: number,
+): Uint8ClampedArray {
+  const n = w * h;
+  const isBg = new Uint8Array(n);
+  const queue = new Int32Array(n);
+  let head = 0;
+  let tail = 0;
+
+  const distAt = (idx: number) => {
+    const i = idx * 4;
+    return colorDist(data[i], data[i + 1], data[i + 2], br, bg, bb);
+  };
+
+  const T_SEED = 20;
+  const T_FLOOD = 36;
+
+  const trySeed = (idx: number) => {
+    if (isBg[idx]) return;
+    if (distAt(idx) > T_SEED) return;
+    isBg[idx] = 1;
+    queue[tail++] = idx;
+  };
+
+  for (let x = 0; x < w; x++) {
+    trySeed(x);
+    trySeed((h - 1) * w + x);
+  }
+  for (let y = 1; y < h - 1; y++) {
+    trySeed(y * w);
+    trySeed(y * w + w - 1);
+  }
+
+  while (head < tail) {
+    const idx = queue[head++];
+    const x = idx % w;
+    const y = (idx / w) | 0;
+
+    if (x > 0) {
+      const nIdx = idx - 1;
+      if (!isBg[nIdx] && distAt(nIdx) <= T_FLOOD) {
+        isBg[nIdx] = 1;
+        queue[tail++] = nIdx;
+      }
+    }
+    if (x < w - 1) {
+      const nIdx = idx + 1;
+      if (!isBg[nIdx] && distAt(nIdx) <= T_FLOOD) {
+        isBg[nIdx] = 1;
+        queue[tail++] = nIdx;
+      }
+    }
+    if (y > 0) {
+      const nIdx = idx - w;
+      if (!isBg[nIdx] && distAt(nIdx) <= T_FLOOD) {
+        isBg[nIdx] = 1;
+        queue[tail++] = nIdx;
+      }
+    }
+    if (y < h - 1) {
+      const nIdx = idx + w;
+      if (!isBg[nIdx] && distAt(nIdx) <= T_FLOOD) {
+        isBg[nIdx] = 1;
+        queue[tail++] = nIdx;
+      }
+    }
+  }
+
+  // Fill small holes inside the object (speckles from similar-to-bg pixels).
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = y * w + x;
+      if (!isBg[idx]) continue;
+      let fgNeighbors = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (!isBg[(y + dy) * w + (x + dx)]) fgNeighbors++;
+        }
+      }
+      if (fgNeighbors >= 6) isBg[idx] = 0;
+    }
+  }
+
+  const alpha = new Uint8Array(n);
+  for (let idx = 0; idx < n; idx++) {
+    alpha[idx] = isBg[idx] ? 0 : 255;
+  }
+
+  // Feather foreground pixels adjacent to background for softer edges.
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = y * w + x;
+      if (alpha[idx] === 0) continue;
+      let bgNeighbors = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (alpha[(y + dy) * w + (x + dx)] === 0) bgNeighbors++;
+        }
+      }
+      if (bgNeighbors > 0) {
+        const d = distAt(idx);
+        const edge = Math.min(1, Math.max(0, (d - T_SEED) / (T_FLOOD - T_SEED + 1)));
+        const neighborFactor = 1 - bgNeighbors / 8;
+        alpha[idx] = Math.round(255 * Math.max(0.35, edge * 0.65 + neighborFactor * 0.35));
+      }
+    }
+  }
+
+  const out = new Uint8ClampedArray(data.length);
+  for (let idx = 0; idx < n; idx++) {
+    const i = idx * 4;
+    out[i] = data[i];
+    out[i + 1] = data[i + 1];
+    out[i + 2] = data[i + 2];
+    out[i + 3] = alpha[idx];
+  }
+  return out;
+}
+
+/** Full-frame border flood matte as an alpha mask (StroMotion mask editor). */
+export async function buildMatteAlphaMask(bitmap: ImageBitmap): Promise<AlphaMask> {
+  const w = bitmap.width;
+  const h = bitmap.height;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    return { width: w, height: h, data: new Uint8ClampedArray(w * h) };
+  }
+  ctx.drawImage(bitmap, 0, 0);
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const [br, bg, bb] = estimateBorderBackground(data, w, h);
+  const matted = matteFromBorderFlood(data, w, h, br, bg, bb);
+  const alpha = new Uint8ClampedArray(w * h);
+  for (let i = 0; i < w * h; i++) {
+    alpha[i] = matted[i * 4 + 3];
+  }
+  return { width: w, height: h, data: alpha };
+}
+
+/**
+ * Background suppression from border-connected flood fill — yields a cutout
+ * without blocking the UI (async yield between heavy frames).
  */
 export async function matteRacketFrame(bitmap: ImageBitmap): Promise<ImageBitmap> {
   const w = bitmap.width;
@@ -30,44 +224,9 @@ export async function matteRacketFrame(bitmap: ImageBitmap): Promise<ImageBitmap
   }
   ctx.drawImage(bitmap, 0, 0);
   const { data } = ctx.getImageData(0, 0, w, h);
-  let rs = 0;
-  let gs = 0;
-  let bs = 0;
-  let n = 0;
-  const sample = (x: number, y: number) => {
-    const i = (Math.max(0, Math.min(h - 1, y)) * w + Math.max(0, Math.min(w - 1, x))) * 4;
-    rs += data[i];
-    gs += data[i + 1];
-    bs += data[i + 2];
-    n++;
-  };
-  const step = Math.max(1, Math.floor(Math.min(w, h) / 28));
-  for (let x = 0; x < w; x += step) {
-    sample(x, 0);
-    sample(x, h - 1);
-  }
-  for (let y = 0; y < h; y += step) {
-    sample(0, y);
-    sample(w - 1, y);
-  }
-  const br = rs / Math.max(1, n);
-  const bg = gs / Math.max(1, n);
-  const bb = bs / Math.max(1, n);
-  const T0 = 26;
-  const T1 = 78;
-  const out = ctx.createImageData(w, h);
-  for (let i = 0; i < data.length; i += 4) {
-    const d = colorDist(data[i], data[i + 1], data[i + 2], br, bg, bb);
-    let a = 255;
-    if (d < T1) {
-      a = d <= T0 ? 0 : Math.round(((d - T0) / (T1 - T0)) * 255);
-    }
-    out.data[i] = data[i];
-    out.data[i + 1] = data[i + 1];
-    out.data[i + 2] = data[i + 2];
-    out.data[i + 3] = a;
-  }
-  ctx.putImageData(out, 0, 0);
+  const [br, bg, bb] = estimateBorderBackground(data, w, h);
+  const matted = matteFromBorderFlood(data, w, h, br, bg, bb);
+  ctx.putImageData(new ImageData(new Uint8ClampedArray(matted), w, h), 0, 0);
   const result = await createImageBitmap(c);
   bitmap.close();
   return result;

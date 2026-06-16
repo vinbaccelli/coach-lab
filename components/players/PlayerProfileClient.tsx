@@ -1,8 +1,12 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Plus } from 'lucide-react';
+import PlayerSessionTimeline from '@/components/players/PlayerSessionTimeline';
+import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
+import type { PlayerSession } from '@/lib/sessions/types';
 
 type Player = {
   id: string;
@@ -25,11 +29,14 @@ type Entry = {
 };
 
 export default function PlayerProfileClient({ playerId }: { playerId: string }) {
+  const router = useRouter();
   const [player, setPlayer] = useState<Player | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [sessions, setSessions] = useState<PlayerSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -40,6 +47,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       if (!res.ok) throw new Error(data.error ?? 'Not found');
       setPlayer(data.player);
       setEntries(data.entries ?? []);
+      const sessRes = await fetch(`/api/players/${playerId}/sessions`);
+      const sessData = await sessRes.json();
+      if (sessRes.ok) setSessions(sessData.sessions ?? []);
+      else setSessions([]);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Failed');
     } finally {
@@ -87,6 +98,21 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       setErr(e instanceof Error ? e.message : 'Save failed');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const startNewSession = async () => {
+    if (!player) return;
+    setCreatingSession(true);
+    setErr(null);
+    try {
+      const title = `${player.display_name} — ${new Date().toLocaleDateString()}`;
+      const session = await createPlayerDraftSession(playerId, title);
+      router.push(`/analysis?playerId=${playerId}&sessionId=${session.id}`);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Could not start session');
+    } finally {
+      setCreatingSession(false);
     }
   };
 
@@ -191,11 +217,52 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           borderRadius: 16,
           padding: 18,
           color: '#1A1A1A',
+          marginBottom: 16,
         }}
       >
-        <h2 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Timeline</h2>
+        <h2 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>
+          Analysis Sessions
+        </h2>
+        <p style={{ margin: '0 0 12px', fontSize: 12, color: '#78716c' }}>
+          Start from the player, use tools in Video Analysis, then Save Report — newest first.
+        </p>
+        <button
+          type="button"
+          onClick={() => { void startNewSession(); }}
+          disabled={creatingSession}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 16,
+            padding: '10px 16px',
+            borderRadius: 10,
+            border: 'none',
+            background: '#007AFF',
+            color: '#fff',
+            fontWeight: 700,
+            fontSize: 13,
+            cursor: creatingSession ? 'wait' : 'pointer',
+          }}
+        >
+          <Plus size={16} />
+          {creatingSession ? 'Starting…' : 'New Analysis Session'}
+        </button>
+        <PlayerSessionTimeline playerId={playerId} sessions={sessions} />
+      </section>
+
+      <section
+        style={{
+          background: 'rgba(250, 249, 247, 0.96)',
+          border: '1px solid #E5E5E5',
+          borderRadius: 16,
+          padding: 18,
+          color: '#1A1A1A',
+        }}
+      >
+        <h2 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Reports</h2>
         <p style={{ margin: '0 0 16px', fontSize: 12, color: '#78716c' }}>
-          Technique Analysis and Match Analysis — newest first.
+          Match and technique reports — newest first.
         </p>
         {timelineEntries.length === 0 ? (
           <p style={{ margin: 0, fontSize: 13, color: '#78716c' }}>No entries yet.</p>

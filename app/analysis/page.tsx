@@ -10,6 +10,7 @@ import React, {
 } from 'react';
 import { flushSync } from 'react-dom';
 import dynamic from 'next/dynamic';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Camera, Plus, Trash2, Upload } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import type { CanvasHandle } from '@/components/Canvas';
@@ -30,22 +31,40 @@ import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
-import { useBiomechanicsAnalysis } from '@/hooks/useBiomechanicsAnalysis';
+import { useAIMetrics } from '@/hooks/useAIMetrics';
 import StroMotionPanel from '@/components/StroMotionPanel';
 import BiomechanicsPanel from '@/components/BiomechanicsPanel';
+import FrameMeasurementEditor from '@/components/aiMetrics/FrameMeasurementEditor';
+import SaveSessionModal from '@/components/sessions/SaveSessionModal';
+import { useSessionDraft } from '@/hooks/useSessionDraft';
+import { renderMeasurementCard } from '@/lib/biomechanics';
+import {
+  AIMETRICS_DEFAULT_FRAME_COUNT,
+  frameHasMeasurements,
+  getWorkingMeasurements,
+  type AIMetricsFrameCount,
+} from '@/lib/aiMetricsDraft';
 import {
   computeGhostSampleTimes,
-  exportStroMotionPNG,
-  hashCanvasContent,
-  recordExportParity,
+  enforceMonotonicSampleTimes,
   setStroMotionPreviewHash,
   normalizeObjectBox,
-  prepareVideoForStroMotionExtraction,
+  normalizeSubjectBox,
   subjectBoxFromRegion,
-  STRO_MOTION_DEFAULT_GHOST_COUNT,
-  type StroMotionGhostCount,
-  type StroMotionSubjectBox,
 } from '@/lib/stroMotion';
+import {
+  allFramesReady,
+  countExportReadyFrames,
+  countFramesWithPreviewMask,
+  exportStroMotionDraftPng,
+  frameHasMask,
+  maskHasContent,
+  STRO_MOTION_DEFAULT_FRAME_COUNT,
+  STRO_MOTION_FRAME_COUNTS,
+  type StroMotionFrameCount,
+} from '@/lib/stroMotionDraft';
+import FrameMaskEditor from '@/components/stroMotion/FrameMaskEditor';
+import StroMotionPreviewModal from '@/components/stroMotion/StroMotionPreviewModal';
 import { normalizeWebUrlInput, resolveEmbedTarget } from '@/lib/embedUrl';
 import {
   createHtml5VideoController,
@@ -74,6 +93,19 @@ const DRAW_CONTEXT_TOOLS: ToolType[] = [
   'pen', 'line', 'arrow', 'arrowAngle', 'circle', 'rect', 'triangle',
   'bodyCircle', 'text', 'angle', 'manualSwing', 'swingPath', 'jointChain',
 ];
+
+/** Full-viewport invisible decoder — opacity 0 can block Safari frame delivery; keep off-screen but sized. */
+const hiddenDecoderVideoStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: 0,
+  top: 0,
+  width: '100%',
+  height: '100%',
+  opacity: 0.01,
+  pointerEvents: 'none',
+  zIndex: 0,
+  objectFit: 'contain',
+};
 
 const btnStyle: React.CSSProperties = {
   display: 'flex',
@@ -157,6 +189,11 @@ function ReelsDesktopShell({
 }
 
 export default function Home() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const contextPlayerId = searchParams.get('playerId');
+  const contextSessionId = searchParams.get('sessionId');
+  const [contextPlayerName, setContextPlayerName] = useState<string | null>(null);
   // ── Refs that must never unmount ─────────────────────────────────────────
   const videoRef      = useRef<HTMLVideoElement>(null);
   const videoRefB     = useRef<HTMLVideoElement>(null);
@@ -420,6 +457,7 @@ export default function Home() {
 
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
+  const [videoLoadErrorA, setVideoLoadErrorA] = useState<string | null>(null);
   /** Drag-over state for the two video panels */
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
@@ -432,21 +470,64 @@ export default function Home() {
   const [stroMotionActive, setStroMotionActive] = useState(false);
   const [stroStartFrame, setStroStartFrame] = useState(0);
   const [stroEndFrame, setStroEndFrame] = useState(3);
-  const [stroGhostCount, setStroGhostCount] = useState<StroMotionGhostCount>(STRO_MOTION_DEFAULT_GHOST_COUNT);
-  const [stroSubjectBox, setStroSubjectBox] = useState<StroMotionSubjectBox | null>(null);
+  const [stroFrameCount, setStroFrameCount] = useState<StroMotionFrameCount>(STRO_MOTION_DEFAULT_FRAME_COUNT);
   const [stroSelectingObject, setStroSelectingObject] = useState(false);
-  const [stroActiveFrameStopIndex, setStroActiveFrameStopIndex] = useState<number | null>(null);
-  const stroReselectStopRef = useRef<number | null>(null);
+  const [stroSelectingFrameIndex, setStroSelectingFrameIndex] = useState<number | null>(null);
   const [stroVideoTime, setStroVideoTime] = useState(0);
   const [stroVideoDuration, setStroVideoDuration] = useState(0);
   const [stroVisibleCount, setStroVisibleCount] = useState<number | undefined>(undefined);
   const [stroShowSkeleton, setStroShowSkeleton] = useState(false);
-  const [stroDebugMode, setStroDebugMode] = useState(false);
+  const [stroSampleTimesOverride, setStroSampleTimesOverride] = useState<number[] | null>(null);
+  const [stroPreviewPngUrl, setStroPreviewPngUrl] = useState<string | null>(null);
+  const [stroEditingFrameIndex, setStroEditingFrameIndex] = useState<number | null>(null);
+  const [stroPreviewVideoUrl, setStroPreviewVideoUrl] = useState<string | null>(null);
+  const [stroPreviewModalOpen, setStroPreviewModalOpen] = useState(false);
+  const [stroPreviewError, setStroPreviewError] = useState<string | null>(null);
+  const [stroIsBuildingVideoPreview, setStroIsBuildingVideoPreview] = useState(false);
+  const stroPreviewVideoBlobRef = useRef<Blob | null>(null);
+  const [sessionSaveModalOpen, setSessionSaveModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!contextPlayerId) {
+      setContextPlayerName(null);
+      return;
+    }
+    let cancelled = false;
+    void fetch(`/api/players/${contextPlayerId}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled && data.player?.display_name) {
+          setContextPlayerName(data.player.display_name as string);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setContextPlayerName(null);
+      });
+    return () => { cancelled = true; };
+  }, [contextPlayerId]);
+
+  const {
+    draft: sessionDraft,
+    hasContent: sessionDraftHasContent,
+    applyStroMotion: applyStroMotionToDraft,
+    applyAIMetrics: applyAIMetricsToDraft,
+    setTitle: setSessionDraftTitle,
+    resetDraft: resetSessionDraft,
+  } = useSessionDraft();
 
   const stroSampleTimes = useMemo(
-    () => computeGhostSampleTimes(stroStartFrame, stroEndFrame, stroGhostCount),
-    [stroStartFrame, stroEndFrame, stroGhostCount],
+    () => computeGhostSampleTimes(stroStartFrame, stroEndFrame, stroFrameCount),
+    [stroStartFrame, stroEndFrame, stroFrameCount],
   );
+
+  const stroEffectiveSampleTimes = useMemo(() => {
+    if (stroSampleTimesOverride?.length === stroFrameCount) return stroSampleTimesOverride;
+    return stroSampleTimes;
+  }, [stroSampleTimesOverride, stroSampleTimes, stroFrameCount]);
+
+  useEffect(() => {
+    setStroSampleTimesOverride(null);
+  }, [stroStartFrame, stroEndFrame, stroFrameCount]);
 
   const stroMotionHtml5Only =
     !!videoSrc &&
@@ -455,13 +536,20 @@ export default function Home() {
     !genericEmbedSrcA &&
     !genericEmbedSrcB;
 
-  // Biomechanics analysis (V1 primary workflow — measurements per phase)
+  // AI Metrics (coach override — frame time + optional labels)
   const [biomechActive, setBiomechActive] = useState(false);
   const [biomechVideoTime, setBiomechVideoTime] = useState(0);
   const [biomechVideoDuration, setBiomechVideoDuration] = useState(0);
+  const [biomechFrameCount, setBiomechFrameCount] = useState<AIMetricsFrameCount>(AIMETRICS_DEFAULT_FRAME_COUNT);
+  const [biomechSampleTimesOverride, setBiomechSampleTimesOverride] = useState<number[] | null>(null);
+  const [biomechFrameCards, setBiomechFrameCards] = useState<Array<{ id: string; label: string; timeSec: number; imageUrl: string }>>([]);
+  const [biomechReportAnalysis, setBiomechReportAnalysis] = useState<import('@/lib/biomechanics/types').BiomechanicsAnalysis | null>(null);
+  const [biomechEditingFrameIndex, setBiomechEditingFrameIndex] = useState<number | null>(null);
   const biomechHtml5Only = stroMotionHtml5Only;
 
   const {
+    draft: aiMetricsDraft,
+    status: aiMetricsStatus,
     strokeType: biomechStrokeType,
     setStrokeType: setBiomechStrokeType,
     customSteps: biomechCustomSteps,
@@ -473,33 +561,67 @@ export default function Home() {
     setTrimStartSec: setBiomechTrimStart,
     trimEndSec: biomechTrimEnd,
     setTrimEndSec: setBiomechTrimEnd,
-    phases: biomechPhases,
-    analysis: biomechAnalysis,
+    activeFrameIndex: biomechActiveFrameIndex,
+    setActiveFrameIndex: setBiomechActiveFrameIndex,
+    proposingFrameIndex: biomechProposingFrameIndex,
+    isProposingFrame: biomechProposingFrame,
+    isGenerating: biomechGenerating,
     isProcessing: biomechProcessing,
     progress: biomechProgress,
-    selectedPhaseId: biomechSelectedPhaseId,
-    setSelectedPhaseId: setBiomechSelectedPhaseId,
-    updatePhaseTime: updateBiomechPhaseTime,
-    detectPhases: detectBiomechPhases,
-    refreshMeasurements: refreshBiomechMeasurements,
-    clearAnalysis: clearBiomechAnalysis,
-  } = useBiomechanicsAnalysis(videoRef);
+    showSkeleton: biomechShowSkeleton,
+    setShowSkeleton: setBiomechShowSkeleton,
+    syncDraft: syncAIMetricsDraft,
+    updateFrameTime: updateBiomechFrameTime,
+    updateEnabledModule: updateBiomechEnabledModule,
+    proposeMeasurementsForFrame: proposeBiomechFrameMeasurements,
+    updateFrameMeasurements: updateBiomechFrameMeasurements,
+    resetFrameMeasurements: resetBiomechFrameMeasurements,
+    reproposeFrameMeasurements: reproposeBiomechFrameMeasurements,
+    markFrameReady: markBiomechFrameReady,
+    generateReport: generateBiomechReport,
+    invalidateReport: invalidateBiomechReport,
+    clearAll: clearBiomechAll,
+    readyCount: biomechReadyCount,
+    enabledModules: biomechEnabledModules,
+  } = useAIMetrics(videoRef);
+
+  const biomechDefaultSampleTimes = useMemo(
+    () => computeGhostSampleTimes(biomechTrimStart, biomechTrimEnd, biomechFrameCount),
+    [biomechTrimStart, biomechTrimEnd, biomechFrameCount],
+  );
+
+  const biomechEffectiveSampleTimes = useMemo(() => {
+    if (biomechSampleTimesOverride?.length === biomechFrameCount) return biomechSampleTimesOverride;
+    return biomechDefaultSampleTimes;
+  }, [biomechSampleTimesOverride, biomechDefaultSampleTimes, biomechFrameCount]);
+
+  useEffect(() => {
+    setBiomechSampleTimesOverride(null);
+  }, [biomechTrimStart, biomechTrimEnd, biomechFrameCount]);
 
   const {
-    result: stroMotionResult,
+    draft: stroMotionDraft,
     status: stroMotionStatus,
+    objectType: stroObjectType,
+    setObjectType: setStroObjectType,
+    activeFrameIndex: stroActiveFrameIndex,
+    setActiveFrameIndex: setStroActiveFrameIndex,
+    proposingFrameIndex: stroProposingFrameIndex,
+    isProposingFrame: stroProposingFrame,
+    isGenerating: stroGenerating,
     isProcessing: stroMotionProcessing,
-    isTracking: stroMotionTracking,
     progress: stroMotionProgress,
-    diagnostics: stroMotionDiagnostics,
-    frameStops: stroFrameStops,
-    clearGhosts,
-    clearFrameStops,
-    detectFrameStops,
-    updateFrameStopBox,
-    confirmFrameStop,
-    extractFrames,
-    cancelExtraction,
+    syncDraft: syncStroDraft,
+    updateFrameTime: updateStroFrameTime,
+    selectAreaForFrame: selectStroAreaForFrame,
+    updateFrameMask,
+    resetFrameMask,
+    reproposeFrameMask,
+    markFrameReady: markStroFrameReady,
+    generatePreview: generateStroPreview,
+    hydrateDraftForExport: hydrateStroDraftForExport,
+    invalidatePreview: invalidateStroPreview,
+    clearAll: clearStroMotionAll,
     setConfiguring: setStroMotionConfiguring,
   } = useStroMotion(videoRef);
 
@@ -507,7 +629,6 @@ export default function Home() {
     typeof HTMLCanvasElement !== 'undefined'
     && typeof HTMLCanvasElement.prototype.captureStream === 'function';
   const [stroIsExportingVideo, setStroIsExportingVideo] = useState(false);
-  const stroConfigAtGenerateRef = useRef<string | null>(null);
 
   // Object Multiplier state
   const [objMultiplierFrameCount, setObjMultiplierFrameCount] = useState(5);
@@ -515,7 +636,7 @@ export default function Home() {
   const [objMultiplierProgress, setObjMultiplierProgress] = useState<string | null>(null);
 
   // Derived: skeleton / ball trail enabled when their tool is active
-  const skeletonEnabled  = activeTool === 'skeleton' || (biomechActive && biomechHtml5Only);
+  const skeletonEnabled  = activeTool === 'skeleton' || (biomechActive && biomechHtml5Only && biomechShowSkeleton);
   /** When false, pose still runs but overlay is hidden (coach can turn off drawing without Clear All). */
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const ballTrailEnabled = activeTool === 'ballShadow';
@@ -546,17 +667,39 @@ export default function Home() {
   }, []);
 
   const resetStroMotion = useCallback(() => {
-    cancelExtraction();
-    clearGhosts();
-    stroConfigAtGenerateRef.current = null;
-    setStroSubjectBox(null);
+    clearStroMotionAll();
+    setStroMotionActive(false);
     setStroSelectingObject(false);
-    setStroActiveFrameStopIndex(null);
-    stroReselectStopRef.current = null;
+    setStroSelectingFrameIndex(null);
     setStroVisibleCount(undefined);
     canvasRef.current?.setStroMotionVisibleCount?.(undefined);
     setStroMotionConfiguring(false);
-  }, [cancelExtraction, clearGhosts, setStroMotionConfiguring]);
+    setStroSampleTimesOverride(null);
+    if (stroPreviewVideoUrl) URL.revokeObjectURL(stroPreviewVideoUrl);
+    stroPreviewVideoBlobRef.current = null;
+    setStroPreviewPngUrl(null);
+    setStroPreviewVideoUrl(null);
+    setStroPreviewModalOpen(false);
+    setStroIsBuildingVideoPreview(false);
+    setStroEditingFrameIndex(null);
+  }, [clearStroMotionAll, setStroMotionConfiguring, stroPreviewVideoUrl]);
+
+  const refreshStroPreviewFromDraft = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || !stroMotionDraft || stroMotionStatus !== 'ready') return;
+    try {
+      const pngUrl = await exportStroMotionDraftPng(video, stroMotionDraft);
+      setStroPreviewPngUrl(pngUrl);
+      setStroMotionPreviewHash(null);
+      if (stroPreviewVideoUrl) {
+        URL.revokeObjectURL(stroPreviewVideoUrl);
+        stroPreviewVideoBlobRef.current = null;
+        setStroPreviewVideoUrl(null);
+      }
+    } catch (err) {
+      console.error('[StroMotion] Draft preview PNG error:', err);
+    }
+  }, [stroMotionDraft, stroMotionStatus, stroPreviewVideoUrl]);
 
   const seekStroVideo = useCallback(async (timeSec: number) => {
     const v = videoRef.current;
@@ -579,101 +722,179 @@ export default function Home() {
     await canvasRef.current?.waitForRender?.();
   }, []);
 
-  const stroConfigKey = useMemo(
-    () => JSON.stringify({
-      box: stroSubjectBox,
-      start: stroStartFrame,
-      end: stroEndFrame,
-      count: stroGhostCount,
-    }),
-    [stroSubjectBox, stroStartFrame, stroEndFrame, stroGhostCount],
+  const stroReadyCount = useMemo(
+    () => countExportReadyFrames(stroMotionDraft?.frames ?? []),
+    [stroMotionDraft],
   );
 
-  const handleStroSelectObject = useCallback(() => {
-    stroReselectStopRef.current = null;
-    setStroSelectingObject(true);
-    canvasRef.current?.startStroMotionRegionSelect?.((region) => {
-      const normalized = normalizeObjectBox(subjectBoxFromRegion(region));
-      clearGhosts();
-      stroConfigAtGenerateRef.current = null;
-      setStroVisibleCount(undefined);
-      canvasRef.current?.setStroMotionVisibleCount?.(undefined);
-      setStroSubjectBox(normalized);
-      setStroActiveFrameStopIndex(0);
-      setStroSelectingObject(false);
-    });
-  }, [clearGhosts]);
+  const stroAllFramesExportReady = useMemo(
+    () => (stroMotionDraft ? allFramesReady(stroMotionDraft.frames) : false),
+    [stroMotionDraft],
+  );
 
-  const handleStroReselectFrameStop = useCallback((index: number) => {
-    const stop = stroFrameStops.find((s) => s.index === index);
-    if (!stop) return;
-    stroReselectStopRef.current = index;
-    setStroActiveFrameStopIndex(index);
-    setStroSelectingObject(true);
-    void seekStroVideo(stop.timeSec).then(() => {
-      canvasRef.current?.startStroMotionRegionSelect?.((region) => {
-        const normalized = normalizeObjectBox(subjectBoxFromRegion(region));
-        updateFrameStopBox(index, normalized);
-        if (index === 0) setStroSubjectBox(normalized);
-        stroReselectStopRef.current = null;
-        setStroSelectingObject(false);
-      });
-    });
-  }, [seekStroVideo, stroFrameStops, updateFrameStopBox]);
+  const stroFrameRows = useMemo(
+    () => (stroMotionDraft?.frames ?? []).map((f) => ({
+      index: f.index,
+      timeSec: f.timeSec,
+      label: f.label,
+      status: f.status,
+      hasMask: frameHasMask(f),
+      hasSelection: !!f.selectionBox,
+    })),
+    [stroMotionDraft],
+  );
 
-  const handleStroSelectFrameStop = useCallback((index: number) => {
-    const stop = stroFrameStops.find((s) => s.index === index);
-    if (!stop) return;
-    setStroActiveFrameStopIndex(index);
-    void seekStroVideo(stop.timeSec);
-  }, [seekStroVideo, stroFrameStops]);
-
-  const handleStroAutoDetectFrames = useCallback(async () => {
-    if (!stroSubjectBox) {
-      alert('Select Object first — draw a tight box around the racket on the first frame.');
-      return;
-    }
-    if (stroEndFrame <= stroStartFrame) {
-      alert('End frame must be after start frame.');
-      return;
-    }
-    setStroActiveFrameStopIndex(0);
-    await detectFrameStops({
-      startSec: stroStartFrame,
-      endSec: stroEndFrame,
-      ghostCount: stroGhostCount,
-      seedBox: stroSubjectBox,
-      sampleTimes: stroSampleTimes,
+  useEffect(() => {
+    if (!stroMotionActive || !stroMotionHtml5Only) return;
+    if (stroEndFrame <= stroStartFrame) return;
+    void syncStroDraft({
+      objectType: stroObjectType,
+      backgroundTimeSec: stroStartFrame,
+      sampleTimes: stroEffectiveSampleTimes,
     });
   }, [
-    detectFrameStops,
-    stroEndFrame,
-    stroGhostCount,
-    stroSampleTimes,
+    stroMotionActive,
+    stroMotionHtml5Only,
+    stroObjectType,
     stroStartFrame,
-    stroSubjectBox,
+    stroEndFrame,
+    stroEffectiveSampleTimes,
+    syncStroDraft,
   ]);
 
-  useEffect(() => {
-    clearFrameStops();
-    setStroActiveFrameStopIndex(null);
-  }, [stroGhostCount, stroStartFrame, stroEndFrame, clearFrameStops]);
+  const handleStroObjectTypeChange = useCallback((type: typeof stroObjectType) => {
+    setStroObjectType(type);
+    invalidateStroPreview();
+    setStroPreviewPngUrl(null);
+    if (stroPreviewVideoUrl) URL.revokeObjectURL(stroPreviewVideoUrl);
+    stroPreviewVideoBlobRef.current = null;
+    setStroPreviewVideoUrl(null);
+  }, [invalidateStroPreview, setStroObjectType, stroPreviewVideoUrl]);
 
-  useEffect(() => {
-    if (stroMotionStatus !== 'ready' || !stroConfigAtGenerateRef.current) return;
-    if (stroConfigKey === stroConfigAtGenerateRef.current) return;
-    clearGhosts();
-    stroConfigAtGenerateRef.current = null;
-    setStroVisibleCount(undefined);
-    canvasRef.current?.setStroMotionVisibleCount?.(undefined);
-  }, [clearGhosts, stroConfigKey, stroMotionStatus]);
+  const handleStroSelectFrame = useCallback((index: number) => {
+    const frame = stroMotionDraft?.frames[index];
+    const timeSec = frame?.timeSec ?? stroEffectiveSampleTimes[index];
+    if (timeSec === undefined) return;
+    setStroActiveFrameIndex(index);
+    void seekStroVideo(timeSec);
+  }, [seekStroVideo, stroEffectiveSampleTimes, stroMotionDraft, setStroActiveFrameIndex]);
+
+  const finishStroRegionSelect = useCallback((
+    index: number,
+    region: { x: number; y: number; w: number; h: number } | null,
+  ) => {
+    setStroSelectingObject(false);
+    setStroSelectingFrameIndex(null);
+    if (!region) {
+      setProcessingStatus('Draw a larger box around the object.');
+      return;
+    }
+    setProcessingStatus('Removing background…');
+    const raw = subjectBoxFromRegion(region);
+    const normalized = stroObjectType === 'player'
+      ? normalizeSubjectBox(raw)
+      : normalizeObjectBox(raw);
+    void selectStroAreaForFrame(index, normalized)
+      .then((ok) => {
+        setStroEditingFrameIndex(index);
+        if (!ok) {
+          setProcessingStatus('Mask proposal failed — use Add brush or Re-propose mask.');
+        } else {
+          setProcessingStatus(null);
+        }
+        void canvasRef.current?.waitForRender?.();
+      })
+      .catch(() => {
+        setProcessingStatus('Mask proposal failed — try Select Area again.');
+      });
+  }, [selectStroAreaForFrame, stroObjectType]);
+
+  const handleStroSelectArea = useCallback((index: number) => {
+    const frame = stroMotionDraft?.frames[index];
+    const timeSec = frame?.timeSec ?? stroEffectiveSampleTimes[index];
+    if (timeSec === undefined) return;
+    setStroActiveFrameIndex(index);
+    setStroSelectingFrameIndex(index);
+    setStroSelectingObject(true);
+    setStroEditingFrameIndex(index);
+    setProcessingStatus('Draw a box around the object…');
+    void seekStroVideo(timeSec).then(() => {
+      canvasRef.current?.startStroMotionRegionSelect?.((region) => {
+        finishStroRegionSelect(index, region);
+      });
+    });
+  }, [finishStroRegionSelect, seekStroVideo, setStroActiveFrameIndex, stroEffectiveSampleTimes, stroMotionDraft]);
+
+  const handleStroMarkReadyAndNext = useCallback((index: number) => {
+    if (!markStroFrameReady(index)) {
+      setProcessingStatus('Use Auto remove background or Add brush until the subject is visible.');
+      return;
+    }
+    invalidateStroPreview();
+    setStroPreviewPngUrl(null);
+    const frames = stroMotionDraft?.frames ?? [];
+    const next = frames.find((f) => f.index !== index && f.status !== 'ready' && frameHasMask(f));
+    const needsArea = frames.find((f) => f.status !== 'ready' && !frameHasMask(f));
+    if (next) {
+      setStroEditingFrameIndex(next.index);
+      setStroActiveFrameIndex(next.index);
+      void seekStroVideo(next.timeSec);
+      void canvasRef.current?.waitForRender?.();
+      return;
+    }
+    setStroEditingFrameIndex(null);
+    void canvasRef.current?.waitForRender?.();
+    if (needsArea) {
+      setStroActiveFrameIndex(needsArea.index);
+      void seekStroVideo(needsArea.timeSec);
+      setProcessingStatus(`Frame ${needsArea.index + 1} still needs Select Area.`);
+      return;
+    }
+    setProcessingStatus('All frames ready — press Generate StroMotion.');
+  }, [invalidateStroPreview, markStroFrameReady, seekStroVideo, stroMotionDraft, setStroActiveFrameIndex]);
+
+  const handleStroMarkReady = useCallback((index: number): boolean => {
+    if (!markStroFrameReady(index)) {
+      setProcessingStatus('Use Auto remove background or Add brush until the subject is visible.');
+      return false;
+    }
+    invalidateStroPreview();
+    setStroPreviewPngUrl(null);
+    return true;
+  }, [invalidateStroPreview, markStroFrameReady]);
+
+  const buildStroVideoPreview = useCallback(async () => {
+    if (!stroVideoExportSupported) return false;
+    setStroIsBuildingVideoPreview(true);
+    try {
+      await hydrateStroDraftForExport();
+      await canvasRef.current?.waitForRender?.();
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+      const exportResult = await canvasRef.current?.exportStroMotionVideo?.();
+      if (!exportResult?.ok || !exportResult.url) return false;
+      setStroPreviewVideoUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return exportResult.url ?? null;
+      });
+      stroPreviewVideoBlobRef.current = exportResult.blob ?? null;
+      return true;
+    } catch (err) {
+      console.error('[StroMotion] Video preview error:', err);
+      return false;
+    } finally {
+      setStroIsBuildingVideoPreview(false);
+      canvasRef.current?.setStroMotionVisibleCount?.(undefined);
+      setStroVisibleCount(undefined);
+    }
+  }, [hydrateStroDraftForExport, stroVideoExportSupported]);
 
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !videoSrc) return;
-    if (videoSrc.startsWith('blob:')) {
-      prepareVideoForStroMotionExtraction(v);
-    }
     const syncMeta = () => {
       const dur = v.duration;
       if (Number.isFinite(dur) && dur > 0) {
@@ -698,137 +919,211 @@ export default function Home() {
     };
   }, [videoSrc, stroStartFrame, biomechTrimStart]);
 
-  useEffect(() => {
-    if (!biomechActive || biomechPhases.length === 0) return;
-    refreshBiomechMeasurements();
-  }, [biomechActive, biomechPhases, refreshBiomechMeasurements]);
+  const biomechFrameRows = useMemo(
+    () => (aiMetricsDraft?.frames ?? []).map((f) => ({
+      index: f.index,
+      timeSec: f.timeSec,
+      label: f.label,
+      status: f.status,
+      hasMeasurements: frameHasMeasurements(f),
+    })),
+    [aiMetricsDraft],
+  );
 
   useEffect(() => {
-    if (stroMotionActive && !stroMotionResult && !stroMotionProcessing) {
+    if (!biomechActive || !biomechHtml5Only) return;
+    if (biomechTrimEnd <= biomechTrimStart) return;
+    syncAIMetricsDraft({
+      strokeType: biomechStrokeType,
+      trimStartSec: biomechTrimStart,
+      trimEndSec: biomechTrimEnd,
+      sampleTimes: biomechEffectiveSampleTimes,
+      customSteps: biomechStrokeType === 'custom' ? biomechCustomSteps : undefined,
+    });
+  }, [
+    biomechActive,
+    biomechHtml5Only,
+    biomechStrokeType,
+    biomechTrimStart,
+    biomechTrimEnd,
+    biomechEffectiveSampleTimes,
+    biomechCustomSteps,
+    syncAIMetricsDraft,
+  ]);
+
+  useEffect(() => {
+    if (stroMotionActive && stroMotionHtml5Only && !stroMotionProcessing) {
       setStroMotionConfiguring(true);
     } else if (!stroMotionActive) {
       setStroMotionConfiguring(false);
     }
-  }, [stroMotionActive, stroMotionProcessing, stroMotionResult, setStroMotionConfiguring]);
+  }, [stroMotionActive, stroMotionHtml5Only, stroMotionProcessing, setStroMotionConfiguring]);
 
   const handleStroGenerate = useCallback(async () => {
-    if (!stroSubjectBox) {
-      alert('Select Object first — draw a tight box around the racket or object.');
-      return;
-    }
     if (stroEndFrame <= stroStartFrame) {
       alert('End frame must be after start frame.');
       return;
     }
-    if (stroFrameStops.length !== stroGhostCount) {
-      alert('Auto-detect positions first — verify each frame stop, then Generate.');
+    if (!stroMotionDraft || !stroAllFramesExportReady) {
+      alert(`Mark every frame Ready with a visible mask before generating (${stroReadyCount}/${stroMotionDraft?.frames.length ?? 0} ready).`);
       return;
     }
     setStroVisibleCount(undefined);
     canvasRef.current?.setStroMotionVisibleCount?.(undefined);
     setStroMotionPreviewHash(null);
-    const composite = await extractFrames({
-      startSec: stroStartFrame,
-      endSec: stroEndFrame,
-      ghostCount: stroGhostCount,
-      subjectBox: stroSubjectBox,
-      sampleTimes: stroSampleTimes,
-      frameStops: stroFrameStops,
-    });
-    if (composite) {
-      setStroSubjectBox(composite.subjectBox);
-      stroConfigAtGenerateRef.current = JSON.stringify({
-        box: composite.subjectBox,
-        start: stroStartFrame,
-        end: stroEndFrame,
-        count: stroGhostCount,
-        stops: stroFrameStops.map((s) => s.box),
-      });
-    }
-  }, [
-    extractFrames,
-    stroEndFrame,
-    stroFrameStops,
-    stroGhostCount,
-    stroSampleTimes,
-    stroStartFrame,
-    stroSubjectBox,
-  ]);
+    if (stroPreviewVideoUrl) URL.revokeObjectURL(stroPreviewVideoUrl);
+    stroPreviewVideoBlobRef.current = null;
+    setStroPreviewVideoUrl(null);
+    setStroPreviewPngUrl(null);
+    setStroPreviewError(null);
+    setStroPreviewModalOpen(true);
 
-  const handleStroExportPng = useCallback(async () => {
-    if (!stroMotionResult) return;
-    setStroVisibleCount(undefined);
-    canvasRef.current?.setStroMotionVisibleCount?.(undefined);
-    await canvasRef.current?.waitForRender?.();
-    await canvasRef.current?.waitForRender?.();
-    const canvas = canvasRef.current?.getCanvas();
-    if (!canvas) return;
-
-    let parity = stroMotionResult.diagnostics.exportParity;
-    const previewHash = await hashCanvasContent(canvas);
-    setStroMotionPreviewHash(previewHash);
-    parity = recordExportParity(parity, 'preview', previewHash);
-
-    exportStroMotionPNG(canvas, `stromotion-${Date.now()}.png`);
-
-    const pngHash = await hashCanvasContent(canvas);
-    recordExportParity(parity, 'png', pngHash);
-  }, [stroMotionResult]);
-
-  const handleStroExportVideo = useCallback(async () => {
-    if (!stroMotionResult) return;
-    if (!stroVideoExportSupported) {
-      alert('Video export is not supported in Safari — use Export PNG instead.');
+    await hydrateStroDraftForExport();
+    const pngUrl = await generateStroPreview();
+    if (!pngUrl) {
+      setStroPreviewError('Could not build the StroMotion image. Close and try Generate again.');
       return;
     }
-    setStroIsExportingVideo(true);
-    try {
-      const exportResult = await canvasRef.current?.exportStroMotionVideo?.();
-      if (exportResult && !exportResult.ok && exportResult.reason === 'unsupported') {
-        alert('Video export is not supported in Safari — use Export PNG instead.');
-      }
-    } finally {
-      setStroIsExportingVideo(false);
-      canvasRef.current?.setStroMotionVisibleCount?.(undefined);
-      setStroVisibleCount(undefined);
+    setStroPreviewPngUrl(pngUrl);
+    setStroPreviewError(null);
+
+    if (stroVideoExportSupported) {
+      void buildStroVideoPreview();
     }
-  }, [stroMotionResult, stroVideoExportSupported]);
+  }, [
+    buildStroVideoPreview,
+    generateStroPreview,
+    hydrateStroDraftForExport,
+    stroAllFramesExportReady,
+    stroEndFrame,
+    stroMotionDraft,
+    stroPreviewVideoUrl,
+    stroReadyCount,
+    stroStartFrame,
+    stroVideoExportSupported,
+  ]);
+
+  useEffect(() => {
+    if (stroMotionStatus !== 'ready' || !stroMotionDraft) return;
+    applyStroMotionToDraft({
+      draft: stroMotionDraft,
+      pngDataUrl: stroPreviewPngUrl,
+      videoBlob: stroPreviewVideoBlobRef.current,
+      trimStartSec: stroStartFrame,
+      trimEndSec: stroEndFrame,
+    });
+    setSessionDraftTitle(`${localDateTimeForFolder()} — StroMotion`);
+  }, [
+    applyStroMotionToDraft,
+    setSessionDraftTitle,
+    stroMotionDraft,
+    stroMotionStatus,
+    stroPreviewPngUrl,
+    stroPreviewVideoUrl,
+    stroStartFrame,
+    stroEndFrame,
+  ]);
+
+  const handleStroDownloadPng = useCallback(() => {
+    if (stroPreviewPngUrl) {
+      downloadDataURL(stroPreviewPngUrl, `stromotion-${Date.now()}.png`);
+      return;
+    }
+    const video = videoRef.current;
+    if (video && stroMotionDraft) {
+      void exportStroMotionDraftPng(video, stroMotionDraft).then((url) => {
+        downloadDataURL(url, `stromotion-${Date.now()}.png`);
+      }).catch(() => {
+        alert('Could not export PNG. Generate StroMotion first.');
+      });
+      return;
+    }
+    alert('Generate StroMotion first.');
+  }, [stroMotionDraft, stroPreviewPngUrl]);
+
+  const handleStroEditFrame = useCallback((index: number) => {
+    const frame = stroMotionDraft?.frames[index];
+    const timeSec = frame?.timeSec ?? stroEffectiveSampleTimes[index];
+    setStroEditingFrameIndex(index);
+    setStroActiveFrameIndex(index);
+    if (timeSec !== undefined) void seekStroVideo(timeSec);
+  }, [seekStroVideo, setStroActiveFrameIndex, stroEffectiveSampleTimes, stroMotionDraft]);
+
+  const handleStroCloseFrameEditor = useCallback(() => {
+    setStroEditingFrameIndex(null);
+    void refreshStroPreviewFromDraft();
+  }, [refreshStroPreviewFromDraft]);
+
+  const handleStroBuildVideoPreview = useCallback(async () => {
+    if (!stroMotionDraft) {
+      alert('Generate StroMotion first.');
+      return;
+    }
+    if (!stroVideoExportSupported) return;
+    const ok = await buildStroVideoPreview();
+    if (!ok) {
+      alert('Video preview failed. Try again or download PNG instead.');
+      return;
+    }
+    setStroPreviewModalOpen(true);
+  }, [buildStroVideoPreview, stroMotionDraft, stroVideoExportSupported]);
+
+  const handleStroDownloadVideo = useCallback(() => {
+    const blob = stroPreviewVideoBlobRef.current;
+    if (!blob) {
+      alert('Build the video preview first.');
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `stromotion-${Date.now()}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }, []);
 
   const stroMotionPanelEl = (
     <StroMotionPanel
+      objectType={stroObjectType}
+      onObjectTypeChange={handleStroObjectTypeChange}
       currentTime={stroVideoTime}
       startFrame={stroStartFrame}
       endFrame={stroEndFrame}
       onSetStartFrame={() => setStroStartFrame(Math.max(0, stroVideoTime))}
       onSetEndFrame={() => setStroEndFrame(Math.min(stroVideoDuration || stroVideoTime, Math.max(stroVideoTime, stroStartFrame + 0.04)))}
-      ghostCount={stroGhostCount}
-      onGhostCountChange={setStroGhostCount}
-      subjectBox={stroSubjectBox}
-      onSelectObject={handleStroSelectObject}
-      isSelectingObject={stroSelectingObject}
-      frameStops={stroFrameStops}
-      activeFrameStopIndex={stroActiveFrameStopIndex}
-      onSelectFrameStop={handleStroSelectFrameStop}
-      onReselectFrameStop={handleStroReselectFrameStop}
-      onConfirmFrameStop={confirmFrameStop}
-      onAutoDetectFrames={() => { void handleStroAutoDetectFrames(); }}
-      isTracking={stroMotionTracking}
-      isProcessing={stroMotionProcessing}
+      frameCount={stroFrameCount}
+      onFrameCountChange={setStroFrameCount}
+      frames={stroFrameRows}
+      activeFrameIndex={stroActiveFrameIndex}
+      onSelectFrame={handleStroSelectFrame}
+      onSelectArea={handleStroSelectArea}
+      onEditFrame={handleStroEditFrame}
+      onMarkReady={handleStroMarkReady}
+      isSelectingArea={stroSelectingObject}
+      selectingFrameIndex={stroSelectingFrameIndex}
+      isProposingFrame={stroProposingFrame}
+      proposingFrameIndex={stroProposingFrameIndex}
+      isGenerating={stroGenerating}
       progressCurrent={stroMotionProgress.current}
       progressTotal={stroMotionProgress.total}
-      isReady={stroMotionStatus === 'ready'}
+      readyCount={stroReadyCount}
+      isPreviewReady={stroMotionStatus === 'ready' || !!stroPreviewPngUrl}
       videoExportSupported={stroVideoExportSupported}
       isExportingVideo={stroIsExportingVideo}
       onGenerate={() => void handleStroGenerate()}
       onClear={resetStroMotion}
-      onExportPng={() => void handleStroExportPng()}
-      onExportVideo={() => void handleStroExportVideo()}
+      previewPngUrl={stroPreviewPngUrl}
+      previewVideoUrl={stroPreviewVideoUrl}
+      isBuildingVideoPreview={stroIsBuildingVideoPreview}
+      onDownloadPng={handleStroDownloadPng}
+      onDownloadVideo={handleStroDownloadVideo}
+      onBuildVideoPreview={() => { void handleStroBuildVideoPreview(); }}
+      onOpenPreview={() => setStroPreviewModalOpen(true)}
       showSkeleton={stroShowSkeleton}
       onShowSkeletonChange={setStroShowSkeleton}
-      debugMode={stroDebugMode}
-      onDebugModeChange={setStroDebugMode}
-      diagnostics={stroMotionDiagnostics}
-      precomputedSampleTimes={stroSampleTimes}
+      precomputedSampleTimes={stroEffectiveSampleTimes}
       disabled={!stroMotionHtml5Only}
       disabledReason={
         !stroMotionHtml5Only
@@ -838,18 +1133,19 @@ export default function Home() {
     />
   );
 
-  const stroMotionFrameStopsForCanvas = useMemo(
-    () =>
-      stroFrameStops.length > 0 && !stroMotionResult
-        ? stroFrameStops.map((s) => ({
-            box: s.box,
-            active: s.index === stroActiveFrameStopIndex,
-            autoDetected: s.autoDetected,
-            userConfirmed: s.userConfirmed,
-          }))
-        : null,
-    [stroFrameStops, stroActiveFrameStopIndex, stroMotionResult],
-  );
+  const stroMotionFrameStopsForCanvas = useMemo(() => {
+    if (!stroMotionActive || !stroMotionHtml5Only || !stroMotionDraft) return null;
+    const activeIdx = stroActiveFrameIndex;
+    const boxes = stroMotionDraft.frames
+      .filter((f) => f.selectionBox)
+      .map((f) => ({
+        box: f.selectionBox!,
+        active: f.index === activeIdx,
+        autoDetected: false,
+        userConfirmed: f.status === 'ready',
+      }));
+    return boxes.length > 0 ? boxes : null;
+  }, [stroMotionActive, stroMotionHtml5Only, stroMotionDraft, stroActiveFrameIndex]);
 
   useEffect(() => {
     if (stroMotionActive && stroMotionHtml5Only) {
@@ -878,32 +1174,97 @@ export default function Home() {
     await canvasRef.current?.waitForRender?.();
   }, []);
 
-  const handleBiomechDetect = useCallback(async () => {
-    const frames = canvasRef.current?.getSkeletonFrames() ?? [];
-    await detectBiomechPhases({ skeletonFrames: frames });
-  }, [detectBiomechPhases]);
+  const handleBiomechSelectFrame = useCallback((index: number) => {
+    const frame = aiMetricsDraft?.frames[index];
+    const timeSec = frame?.timeSec ?? biomechEffectiveSampleTimes[index];
+    if (timeSec === undefined) return;
+    setBiomechActiveFrameIndex(index);
+    void seekBiomechVideo(timeSec);
+  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex]);
+
+  const handleBiomechProposeFrame = useCallback((index: number) => {
+    const frame = aiMetricsDraft?.frames[index];
+    const timeSec = frame?.timeSec ?? biomechEffectiveSampleTimes[index];
+    if (timeSec === undefined) return;
+    setBiomechActiveFrameIndex(index);
+    void seekBiomechVideo(timeSec).then(() => {
+      void proposeBiomechFrameMeasurements(index);
+    });
+  }, [aiMetricsDraft, biomechEffectiveSampleTimes, proposeBiomechFrameMeasurements, seekBiomechVideo, setBiomechActiveFrameIndex]);
+
+  const handleBiomechMarkReady = useCallback((index: number) => {
+    markBiomechFrameReady(index);
+    invalidateBiomechReport();
+    setBiomechFrameCards([]);
+    setBiomechReportAnalysis(null);
+  }, [invalidateBiomechReport, markBiomechFrameReady]);
+
+  const handleBiomechGenerateReport = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || !aiMetricsDraft) return;
+    const analysis = generateBiomechReport();
+    if (!analysis) return;
+
+    setBiomechFrameCards([]);
+    const cards: Array<{ id: string; label: string; timeSec: number; imageUrl: string }> = [];
+    const snap = document.createElement('canvas');
+    snap.width = video.videoWidth;
+    snap.height = video.videoHeight;
+    const sctx = snap.getContext('2d');
+
+    for (const m of analysis.measurements) {
+      await seekBiomechVideo(m.timeSec);
+      if (sctx && video.videoWidth > 0) {
+        try {
+          sctx.drawImage(video, 0, 0, snap.width, snap.height);
+          const imageUrl = renderMeasurementCard(snap, snap.width, snap.height, m);
+          cards.push({ id: m.phaseId, label: m.phaseLabel, timeSec: m.timeSec, imageUrl });
+        } catch { /* skip */ }
+      }
+    }
+
+    setBiomechFrameCards(cards);
+    setBiomechReportAnalysis(analysis);
+    applyAIMetricsToDraft({
+      strokeType: biomechStrokeType,
+      trimStartSec: biomechTrimStart,
+      trimEndSec: biomechTrimEnd,
+      frameCards: cards,
+      sampleTimes: biomechEffectiveSampleTimes,
+      measurements: analysis,
+    });
+    setSessionDraftTitle(`${localDateTimeForFolder()} — AI Metrics`);
+  }, [
+    aiMetricsDraft,
+    applyAIMetricsToDraft,
+    biomechEffectiveSampleTimes,
+    biomechStrokeType,
+    biomechTrimEnd,
+    biomechTrimStart,
+    generateBiomechReport,
+    seekBiomechVideo,
+    setSessionDraftTitle,
+  ]);
 
   const handleBiomechExportJson = useCallback(() => {
-    if (!biomechAnalysis) return;
-    const blob = new Blob([JSON.stringify(biomechAnalysis, null, 2)], { type: 'application/json' });
+    if (!biomechReportAnalysis) return;
+    const blob = new Blob([JSON.stringify(biomechReportAnalysis, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `biomechanics-${biomechStrokeType}-${Date.now()}.json`;
+    a.download = `ai-metrics-${biomechStrokeType}-${Date.now()}.json`;
     a.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  }, [biomechAnalysis, biomechStrokeType]);
+  }, [biomechReportAnalysis, biomechStrokeType]);
 
-  const handleBiomechExportPhaseScreenshots = useCallback(async () => {
-    if (biomechPhases.length === 0) return;
-    for (const phase of biomechPhases) {
-      await seekBiomechVideo(phase.timeSec);
-      const canvas = canvasRef.current?.getCanvas();
-      if (!canvas) continue;
-      const filename = `${phase.label.replace(/[^\w]+/g, '')}.png`;
-      downloadDataURL(canvas.toDataURL('image/png'), filename);
-    }
-  }, [biomechPhases, seekBiomechVideo]);
+  const resetBiomech = useCallback(() => {
+    clearBiomechAll();
+    setBiomechActive(false);
+    setBiomechFrameCards([]);
+    setBiomechReportAnalysis(null);
+    setBiomechSampleTimesOverride(null);
+    setBiomechEditingFrameIndex(null);
+  }, [clearBiomechAll]);
 
   const biomechanicsPanelEl = (
     <BiomechanicsPanel
@@ -927,21 +1288,40 @@ export default function Home() {
           ),
         )
       }
-      phases={biomechPhases}
-      selectedPhaseId={biomechSelectedPhaseId}
-      onSelectPhase={setBiomechSelectedPhaseId}
-      onSeekPhase={(t) => { void seekBiomechVideo(t); }}
-      onDetectPhases={() => { void handleBiomechDetect(); }}
-      onClear={clearBiomechAnalysis}
+      frameCount={biomechFrameCount}
+      onFrameCountChange={setBiomechFrameCount}
+      sampleTimes={biomechEffectiveSampleTimes}
+      frames={biomechFrameRows}
+      activeFrameIndex={biomechActiveFrameIndex}
+      onSelectFrame={handleBiomechSelectFrame}
+      onProposeFrame={handleBiomechProposeFrame}
+      onEditFrame={(index) => {
+        setBiomechEditingFrameIndex(index);
+        setBiomechActiveFrameIndex(index);
+      }}
+      onMarkReady={handleBiomechMarkReady}
+      isProposingFrame={biomechProposingFrame}
+      proposingFrameIndex={biomechProposingFrameIndex}
+      isGenerating={biomechGenerating}
+      readyCount={biomechReadyCount}
+      isReportReady={aiMetricsStatus === 'ready'}
+      enabledModules={biomechEnabledModules}
+      onToggleModule={updateBiomechEnabledModule}
+      showSkeleton={biomechShowSkeleton}
+      onShowSkeletonChange={setBiomechShowSkeleton}
+      onGenerate={() => { void handleBiomechGenerateReport(); }}
+      onClear={resetBiomech}
+      frameCards={biomechFrameCards}
+      onDownloadFrameCard={(url, label) => {
+        downloadDataURL(url, `ai-metrics-${label.replace(/[^\w]+/g, '')}-${Date.now()}.png`);
+      }}
       onExportMeasurements={handleBiomechExportJson}
-      onExportPhaseScreenshots={() => { void handleBiomechExportPhaseScreenshots(); }}
       isProcessing={biomechProcessing}
       progress={biomechProgress}
-      analysis={biomechAnalysis}
       disabled={!biomechHtml5Only}
       disabledReason={
         !biomechHtml5Only
-          ? 'Biomechanics analysis requires an uploaded video file (not YouTube or embed links).'
+          ? 'AI Metrics requires an uploaded video file (not YouTube or embed links).'
           : undefined
       }
     />
@@ -1137,36 +1517,6 @@ export default function Home() {
     return () => ro.disconnect();
   }, [updateSizeB, videoSrcB]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !videoSrc) return;
-    const bump = () => {
-      try {
-        if (video.readyState >= 1) video.currentTime = 0.001;
-      } catch {
-        /* noop */
-      }
-    };
-    video.addEventListener('loadeddata', bump, { once: true });
-    bump();
-    return () => video.removeEventListener('loadeddata', bump);
-  }, [videoSrc]);
-
-  useEffect(() => {
-    const video = videoRefB.current;
-    if (!video || !videoSrcB) return;
-    const bump = () => {
-      try {
-        if (video.readyState >= 1) video.currentTime = 0.001;
-      } catch {
-        /* noop */
-      }
-    };
-    video.addEventListener('loadeddata', bump, { once: true });
-    bump();
-    return () => video.removeEventListener('loadeddata', bump);
-  }, [videoSrcB]);
-
   // ── Keyboard shortcuts (undo / redo) ──────────────────────────────────────
   useEffect(() => {
     const undoActiveCanvas = () => {
@@ -1226,6 +1576,49 @@ export default function Home() {
   /** Called by PlaybackControls when play() is rejected (e.g. Safari NotAllowedError) */
   const handlePlayBlocked = useCallback(() => {
     setShowTapToPlay(true);
+  }, []);
+
+  const attemptHtml5Play = useCallback(async (target: 'A' | 'B' = 'A') => {
+    const v = target === 'A' ? videoRef.current : videoRefB.current;
+    const canvas = target === 'A' ? canvasRef.current : canvasRefB.current;
+    if (!v?.currentSrc) return false;
+    try {
+      if (v.readyState < 2) {
+        await new Promise<void>((resolve, reject) => {
+          const onReady = () => {
+            cleanup();
+            resolve();
+          };
+          const onError = () => {
+            cleanup();
+            reject(new Error('Video failed to load'));
+          };
+          const cleanup = () => {
+            v.removeEventListener('loadeddata', onReady);
+            v.removeEventListener('error', onError);
+          };
+          v.addEventListener('loadeddata', onReady, { once: true });
+          v.addEventListener('error', onError, { once: true });
+          window.setTimeout(() => {
+            cleanup();
+            resolve();
+          }, 4000);
+        });
+      }
+      try {
+        if (v.readyState >= 2 && v.currentTime === 0) v.currentTime = 0.001;
+      } catch { /* noop */ }
+      v.muted = true;
+      await v.play();
+      if (v.paused) throw new Error('Video remained paused after play()');
+      setShowTapToPlay(false);
+      await canvas?.waitForRender?.();
+      return true;
+    } catch (err: unknown) {
+      console.warn('[CoachLab] HTML5 play failed:', err);
+      setShowTapToPlay(true);
+      return false;
+    }
   }, []);
 
   const showControls = useCallback(() => {
@@ -1340,6 +1733,7 @@ export default function Home() {
     captureMp4ConversionGenRef.current += 1;
     setCaptureDownloadStatus('idle');
     setShowTapToPlay(false);
+    setVideoLoadErrorA(null);
     setProcessingStatus(null);
     setVideoBLoaded(false);
     resetStroMotion();
@@ -1383,49 +1777,135 @@ export default function Home() {
     setDrawContextActive(false);
   }, []);
 
+  const requestCanvasPaintAfterVideoLoad = useCallback((target: 'A' | 'B') => {
+    const v = target === 'A' ? videoRef.current : videoRefB.current;
+    const canvas = target === 'A' ? canvasRef.current : canvasRefB.current;
+    if (!v || !canvas) return;
+    const paint = () => { void canvas.waitForRender?.(); };
+    if (v.readyState >= 2 && v.videoWidth > 0) {
+      paint();
+      return;
+    }
+    v.addEventListener('loadeddata', paint, { once: true });
+    v.addEventListener('seeked', paint, { once: true });
+    v.addEventListener('error', paint, { once: true });
+  }, []);
+
+  const loadVideoFileIntoSlot = useCallback((
+    file: File,
+    target: 'A' | 'B',
+  ) => {
+    revokeBlobUrl(target === 'A' ? lastBlobUrlARef.current : lastBlobUrlBRef.current);
+    const url = URL.createObjectURL(file);
+    if (target === 'A') {
+      lastBlobUrlARef.current = url;
+      setVideoLoadErrorA(null);
+      setVideoSrc(url);
+      setYoutubeVideoIdA(null);
+      setGenericEmbedSrcA(null);
+      setShowTapToPlay(false);
+      setProcessingStatus(null);
+      resetStroMotion();
+      canvasRef.current?.clearAll();
+      resetToolAfterVideoLoad();
+    } else {
+      lastBlobUrlBRef.current = url;
+      setVideoSrcB(url);
+      setYoutubeVideoIdB(null);
+      setGenericEmbedSrcB(null);
+      setVideoBLoaded(false);
+      canvasRefB.current?.clearAll();
+      resetToolAfterVideoLoad();
+    }
+  }, [
+    resetStroMotion,
+    resetToolAfterVideoLoad,
+    revokeBlobUrl,
+  ]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoSrc) return;
+
+    const paintFirstFrame = () => {
+      requestCanvasPaintAfterVideoLoad('A');
+      try {
+        if (video.readyState >= 2 && video.currentTime === 0) video.currentTime = 0.001;
+      } catch { /* noop */ }
+      void canvasRef.current?.waitForRender?.();
+    };
+
+    const onLoaded = () => {
+      setVideoLoadErrorA(null);
+      setShowTapToPlay(false);
+      paintFirstFrame();
+    };
+
+    const onError = () => {
+      const code = video.error?.code;
+      const message = code === MediaError.MEDIA_ERR_DECODE
+        ? 'This video format is not supported. Try exporting as MP4 (H.264).'
+        : 'Could not load this video file. Try a different MP4 or WebM.';
+      setVideoLoadErrorA(message);
+      setShowTapToPlay(false);
+    };
+
+    video.addEventListener('loadeddata', onLoaded, { once: true });
+    video.addEventListener('error', onError);
+    if (video.readyState >= 2) onLoaded();
+
+    return () => {
+      video.removeEventListener('error', onError);
+    };
+  }, [requestCanvasPaintAfterVideoLoad, videoSrc, youtubeVideoIdA, genericEmbedSrcA]);
+
+  useEffect(() => {
+    const video = videoRefB.current;
+    if (!video || !videoSrcB) return;
+
+    const onLoaded = () => {
+      requestCanvasPaintAfterVideoLoad('B');
+      try {
+        if (video.readyState >= 2 && video.currentTime === 0) video.currentTime = 0.001;
+      } catch { /* noop */ }
+      void canvasRefB.current?.waitForRender?.();
+    };
+
+    video.addEventListener('loadeddata', onLoaded, { once: true });
+    if (video.readyState >= 2) onLoaded();
+
+    return () => {
+      video.removeEventListener('loadeddata', onLoaded);
+    };
+  }, [requestCanvasPaintAfterVideoLoad, videoSrcB]);
+
   const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    revokeBlobUrl(lastBlobUrlARef.current);
-    const url = URL.createObjectURL(file);
-    lastBlobUrlARef.current = url;
-    setVideoSrc(url);
-    setYoutubeVideoIdA(null);
-    setGenericEmbedSrcA(null);
-    setShowTapToPlay(false);
-    if (videoRef.current) {
-      cleanupVideoEl(videoRef.current);
-      videoRef.current.src = url;
-      videoRef.current.load();
-    }
-    // Reset AI caches for new video
-    setProcessingStatus(null);
-    resetStroMotion();
-    canvasRef.current?.clearAll();
-    resetToolAfterVideoLoad();
-    // Allow uploading the same file again without needing a page refresh.
+    loadVideoFileIntoSlot(file, 'A');
     e.target.value = '';
-  }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl, resetToolAfterVideoLoad]);
+  }, [loadVideoFileIntoSlot]);
+
+  const triggerVideoUploadA = useCallback(() => {
+    const input = fileInputRef.current;
+    if (!input) return;
+    input.value = '';
+    input.click();
+  }, []);
+
+  const triggerVideoUploadB = useCallback(() => {
+    const input = fileInputRefB.current;
+    if (!input) return;
+    input.value = '';
+    input.click();
+  }, []);
 
   const handleVideoUploadB = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    revokeBlobUrl(lastBlobUrlBRef.current);
-    const url = URL.createObjectURL(file);
-    lastBlobUrlBRef.current = url;
-    setVideoSrcB(url);
-    setYoutubeVideoIdB(null);
-    setGenericEmbedSrcB(null);
-    if (videoRefB.current) {
-      cleanupVideoEl(videoRefB.current);
-      videoRefB.current.src = url;
-      videoRefB.current.load();
-    }
-    setVideoBLoaded(false);
-    canvasRefB.current?.clearAll();
-    resetToolAfterVideoLoad();
+    loadVideoFileIntoSlot(file, 'B');
     e.target.value = '';
-  }, [cleanupVideoEl, revokeBlobUrl, resetToolAfterVideoLoad]);
+  }, [loadVideoFileIntoSlot]);
 
   /**
    * Direct-file handler for the RecordingHub Publer drop zone.
@@ -1434,40 +1914,8 @@ export default function Home() {
    * can hand the file straight here without rewriting the existing upload path.
    */
   const handleVideoFile = useCallback((file: File, target: 'A' | 'B') => {
-    if (target === 'A') {
-      revokeBlobUrl(lastBlobUrlARef.current);
-      const url = URL.createObjectURL(file);
-      lastBlobUrlARef.current = url;
-      setVideoSrc(url);
-      setYoutubeVideoIdA(null);
-      setGenericEmbedSrcA(null);
-      setShowTapToPlay(false);
-      if (videoRef.current) {
-        cleanupVideoEl(videoRef.current);
-        videoRef.current.src = url;
-        videoRef.current.load();
-      }
-      setProcessingStatus(null);
-      resetStroMotion();
-      canvasRef.current?.clearAll();
-      resetToolAfterVideoLoad();
-    } else {
-      revokeBlobUrl(lastBlobUrlBRef.current);
-      const url = URL.createObjectURL(file);
-      lastBlobUrlBRef.current = url;
-      setVideoSrcB(url);
-      setYoutubeVideoIdB(null);
-      setGenericEmbedSrcB(null);
-      if (videoRefB.current) {
-        cleanupVideoEl(videoRefB.current);
-        videoRefB.current.src = url;
-        videoRefB.current.load();
-      }
-      setVideoBLoaded(false);
-      canvasRefB.current?.clearAll();
-      resetToolAfterVideoLoad();
-    }
-  }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl, resetToolAfterVideoLoad]);
+    loadVideoFileIntoSlot(file, target);
+  }, [loadVideoFileIntoSlot]);
 
   // ── Hub "Alternative — Screen Record" flow ────────────────────────────────
 
@@ -1605,18 +2053,8 @@ export default function Home() {
     setIsDragOverA(false);
     const file = e.dataTransfer.files?.[0];
     if (!file || !file.type.startsWith('video/')) return;
-    revokeBlobUrl(lastBlobUrlARef.current);
-    const url = URL.createObjectURL(file);
-    lastBlobUrlARef.current = url;
-    setVideoSrc(url);
-    setYoutubeVideoIdA(null);
-    setGenericEmbedSrcA(null);
-    setShowTapToPlay(false);
-    if (videoRef.current) { cleanupVideoEl(videoRef.current); videoRef.current.src = url; videoRef.current.load(); }
-    setProcessingStatus(null);
-    resetStroMotion();
-    canvasRef.current?.clearAll();
-  }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl]);
+    loadVideoFileIntoSlot(file, 'A');
+  }, [loadVideoFileIntoSlot]);
 
   const handleDragOverB = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -1631,16 +2069,8 @@ export default function Home() {
     setIsDragOverB(false);
     const file = e.dataTransfer.files?.[0];
     if (!file || !file.type.startsWith('video/')) return;
-    revokeBlobUrl(lastBlobUrlBRef.current);
-    const url = URL.createObjectURL(file);
-    lastBlobUrlBRef.current = url;
-    setVideoSrcB(url);
-    setYoutubeVideoIdB(null);
-    setGenericEmbedSrcB(null);
-    if (videoRefB.current) { cleanupVideoEl(videoRefB.current); videoRefB.current.src = url; videoRefB.current.load(); }
-    setVideoBLoaded(false);
-    canvasRefB.current?.clearAll();
-  }, [cleanupVideoEl, revokeBlobUrl]);
+    loadVideoFileIntoSlot(file, 'B');
+  }, [loadVideoFileIntoSlot]);
 
   // ── Video B sync engine (keeps B in lockstep with A) ──────────────────────
   // Two layers:
@@ -2026,6 +2456,7 @@ export default function Home() {
     setGenericEmbedSrcA(null);
     ytPlayerARef.current = null;
     setShowTapToPlay(false);
+    setVideoLoadErrorA(null);
     sessionCaptureBlobRef.current = null;
     sessionMp4BlobRef.current = null;
     setCaptureDownloadStatus('idle');
@@ -2036,8 +2467,8 @@ export default function Home() {
 
   const handleAddVideoB = useCallback(() => {
     setUrlTarget('B');
-    fileInputRefB.current?.click();
-  }, []);
+    triggerVideoUploadB();
+  }, [triggerVideoUploadB]);
 
   const removeVideoB = useCallback(() => {
     revokeBlobUrl(lastBlobUrlBRef.current);
@@ -3155,21 +3586,32 @@ export default function Home() {
   }, [playBothEnabled, videoBLoaded, videoBDuration]);
 
   const analysisTimelineExtras = useMemo(() => {
-    const biomechPhaseMarkers = biomechPhases.length > 0
-      ? biomechPhases.map((p) => ({
-          id: p.id,
-          label: p.label,
-          short: p.short,
-          time: p.timeSec,
-        }))
+    const biomechSampleMarkers = biomechActive && biomechHtml5Only
+      ? (aiMetricsDraft?.frames.length
+          ? aiMetricsDraft.frames.map((f) => ({
+              id: `biomech-frame-${f.index}`,
+              time: f.timeSec,
+              label: String(f.index + 1),
+            }))
+          : biomechEffectiveSampleTimes.map((time, i) => ({
+              id: `biomech-frame-${i}`,
+              time,
+              label: String(i + 1),
+            })))
       : null;
 
     const stroFrameStopMarkers = stroMotionActive && stroMotionHtml5Only
-      ? (stroMotionResult?.sampleTimes ?? stroSampleTimes).map((time, i) => ({
-          id: `stro-stop-${i}`,
-          time,
-          label: String(i + 1),
-        }))
+      ? (stroMotionDraft?.frames.length
+          ? stroMotionDraft.frames.map((f) => ({
+              id: `stro-stop-${f.index}`,
+              time: f.timeSec,
+              label: String(f.index + 1),
+            }))
+          : stroEffectiveSampleTimes.map((time, i) => ({
+              id: `stro-stop-${i}`,
+              time,
+              label: String(i + 1),
+            })))
       : null;
 
     if (biomechActive && biomechHtml5Only) {
@@ -3177,15 +3619,34 @@ export default function Home() {
         trimRange: { start: biomechTrimStart, end: biomechTrimEnd } as { start: number; end: number },
         trimAccent: '#34C759',
         onCurrentTime: setBiomechVideoTime,
-        phaseMarkers: biomechPhaseMarkers,
-        selectedPhaseMarkerId: biomechSelectedPhaseId,
-        onPhaseMarkerSelect: setBiomechSelectedPhaseId,
-        onPhaseMarkerChange: (id: string, time: number) => {
-          updateBiomechPhaseTime(id, time, biomechTrimStart, biomechTrimEnd);
+        phaseMarkers: null as null,
+        selectedPhaseMarkerId: null as null,
+        onPhaseMarkerSelect: undefined,
+        onPhaseMarkerChange: undefined,
+        phaseMarkerBounds: null as null,
+        sampleMarkers: biomechSampleMarkers,
+        onSampleMarkerSelect: (_id: string, time: number) => {
+          const idx = Number(_id.replace('biomech-frame-', ''));
+          setBiomechVideoTime(time);
+          if (Number.isFinite(idx)) setBiomechActiveFrameIndex(idx);
+          void seekBiomechVideo(time);
         },
-        phaseMarkerBounds: { start: biomechTrimStart, end: biomechTrimEnd },
-        sampleMarkers: null as null,
-        onSampleMarkerSelect: undefined,
+        onSampleMarkerChange: (id: string, time: number) => {
+          const idx = Number(id.replace('biomech-frame-', ''));
+          if (!Number.isFinite(idx)) return;
+          setBiomechSampleTimesOverride((prev) => {
+            const base = prev ?? [...biomechEffectiveSampleTimes];
+            const next = [...base];
+            if (idx >= 0 && idx < next.length) next[idx] = time;
+            return enforceMonotonicSampleTimes(next, biomechTrimStart, biomechTrimEnd);
+          });
+          updateBiomechFrameTime(idx, time);
+          setBiomechActiveFrameIndex(idx);
+          setBiomechVideoTime(time);
+          void seekBiomechVideo(time);
+        },
+        sampleMarkerBounds: { start: biomechTrimStart, end: biomechTrimEnd },
+        defaultZoomToTrim: true,
       };
     }
     if (stroMotionActive && stroMotionHtml5Only) {
@@ -3193,23 +3654,34 @@ export default function Home() {
         trimRange: { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number },
         trimAccent: '#FF9500',
         onCurrentTime: setStroVideoTime,
-        phaseMarkers: biomechPhaseMarkers,
-        selectedPhaseMarkerId: biomechSelectedPhaseId,
-        onPhaseMarkerSelect: setBiomechSelectedPhaseId,
-        onPhaseMarkerChange: biomechPhases.length > 0
-          ? (id: string, time: number) => {
-              updateBiomechPhaseTime(id, time, biomechTrimStart, biomechTrimEnd);
-            }
-          : undefined,
-        phaseMarkerBounds: biomechPhases.length > 0
-          ? { start: biomechTrimStart, end: biomechTrimEnd }
-          : { start: stroStartFrame, end: stroEndFrame },
+        phaseMarkers: null as null,
+        selectedPhaseMarkerId: null as null,
+        onPhaseMarkerSelect: undefined,
+        onPhaseMarkerChange: undefined,
+        phaseMarkerBounds: null as null,
         sampleMarkers: stroFrameStopMarkers,
         onSampleMarkerSelect: (_id: string, time: number) => {
+          const idx = Number(_id.replace('stro-stop-', ''));
           setStroVideoTime(time);
-          const idx = stroFrameStops.findIndex((s) => Math.abs(s.timeSec - time) < 0.001);
-          if (idx >= 0) setStroActiveFrameStopIndex(stroFrameStops[idx].index);
+          if (Number.isFinite(idx)) setStroActiveFrameIndex(idx);
+          void seekStroVideo(time);
         },
+        onSampleMarkerChange: (id: string, time: number) => {
+          const idx = Number(id.replace('stro-stop-', ''));
+          if (!Number.isFinite(idx)) return;
+          setStroSampleTimesOverride((prev) => {
+            const base = prev ?? [...stroEffectiveSampleTimes];
+            const next = [...base];
+            if (idx >= 0 && idx < next.length) next[idx] = time;
+            return enforceMonotonicSampleTimes(next, stroStartFrame, stroEndFrame);
+          });
+          updateStroFrameTime(idx, time);
+          setStroActiveFrameIndex(idx);
+          setStroVideoTime(time);
+          void seekStroVideo(time);
+        },
+        sampleMarkerBounds: { start: stroStartFrame, end: stroEndFrame },
+        defaultZoomToTrim: true,
       };
     }
     return {
@@ -3223,22 +3695,29 @@ export default function Home() {
       phaseMarkerBounds: null as null,
       sampleMarkers: null as null,
       onSampleMarkerSelect: undefined,
+      onSampleMarkerChange: undefined,
+      sampleMarkerBounds: null as null,
+      defaultZoomToTrim: false,
     };
   }, [
     biomechActive,
     biomechHtml5Only,
     biomechTrimStart,
     biomechTrimEnd,
-    biomechPhases,
-    biomechSelectedPhaseId,
-    updateBiomechPhaseTime,
+    aiMetricsDraft,
+    biomechEffectiveSampleTimes,
+    seekBiomechVideo,
+    updateBiomechFrameTime,
+    setBiomechActiveFrameIndex,
     stroMotionActive,
     stroMotionHtml5Only,
+    stroMotionDraft,
     stroStartFrame,
     stroEndFrame,
-    stroSampleTimes,
-    stroMotionResult,
-    stroFrameStops,
+    stroEffectiveSampleTimes,
+    seekStroVideo,
+    updateStroFrameTime,
+    setStroActiveFrameIndex,
   ]);
 
   const renderTimelineDock = () => (
@@ -3261,6 +3740,7 @@ export default function Home() {
                 compareSlot={hasVideoBContent ? playbackTarget : undefined}
                 onCompareSlotChange={hasVideoBContent ? setPlaybackTarget : undefined}
                 compareAbDisabled={!canPlaybackSyncBoth}
+                onPlayBlocked={handlePlayBlocked}
               />
             )
           : (videoSrc || youtubeVideoIdA || genericEmbedSrcA) && (
@@ -3281,6 +3761,7 @@ export default function Home() {
                 compareAbDisabled={!canPlaybackSyncBoth}
                 beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
                 beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
+                onPlayBlocked={handlePlayBlocked}
                 trimRange={analysisTimelineExtras.trimRange}
                 trimAccent={analysisTimelineExtras.trimAccent}
                 onCurrentTime={analysisTimelineExtras.onCurrentTime}
@@ -3291,6 +3772,9 @@ export default function Home() {
                 phaseMarkerBounds={analysisTimelineExtras.phaseMarkerBounds}
                 sampleMarkers={analysisTimelineExtras.sampleMarkers}
                 onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
+                onSampleMarkerChange={analysisTimelineExtras.onSampleMarkerChange}
+                sampleMarkerBounds={analysisTimelineExtras.sampleMarkerBounds}
+                defaultZoomToTrim={analysisTimelineExtras.defaultZoomToTrim}
               />
             )
       ) : (
@@ -3312,6 +3796,7 @@ export default function Home() {
             compareAbDisabled={!canPlaybackSyncBoth}
             beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
             beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
+            onPlayBlocked={handlePlayBlocked}
             trimRange={analysisTimelineExtras.trimRange}
             trimAccent={analysisTimelineExtras.trimAccent}
             onCurrentTime={analysisTimelineExtras.onCurrentTime}
@@ -3322,6 +3807,9 @@ export default function Home() {
             phaseMarkerBounds={analysisTimelineExtras.phaseMarkerBounds}
             sampleMarkers={analysisTimelineExtras.sampleMarkers}
             onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
+            onSampleMarkerChange={analysisTimelineExtras.onSampleMarkerChange}
+            sampleMarkerBounds={analysisTimelineExtras.sampleMarkerBounds}
+            defaultZoomToTrim={analysisTimelineExtras.defaultZoomToTrim}
           />
         )
       ))}
@@ -3397,6 +3885,8 @@ export default function Home() {
     onToggleCollapsed:               !isMobile ? toggleToolbarCollapsed : undefined,
     showCollapseControl:             !isMobile,
     onCleanSession:                  resetSession,
+    onSaveReport:                    () => setSessionSaveModalOpen(true),
+    saveReportEnabled:               sessionDraftHasContent,
     drawContextActive,
     onExitDrawContext:               exitDrawContext,
     onOpenDrawContext:               () => {
@@ -3468,6 +3958,32 @@ export default function Home() {
     () => !!(videoSrc || youtubeVideoIdA || genericEmbedSrcA),
     [videoSrc, youtubeVideoIdA, genericEmbedSrcA],
   );
+
+  /** Uploaded MP4/WebM — native <video> shows frames; canvas composites StroMotion layers when masks exist. */
+  const html5FileUpload = Boolean(videoSrc && !youtubeVideoIdA && !genericEmbedSrcA);
+  const stroDraftPreviewActive = Boolean(
+    stroMotionActive &&
+    stroMotionHtml5Only &&
+    stroMotionDraft &&
+    countFramesWithPreviewMask(stroMotionDraft.frames) > 0,
+  );
+  const stroCompositeActive = stroDraftPreviewActive;
+  const useNativeHtml5Video = html5FileUpload && !stroCompositeActive;
+  const paintVideoOnCanvasA = Boolean(
+    (html5FileUpload && stroCompositeActive) ||
+    (embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)),
+  );
+  const html5VideoStyle: React.CSSProperties = {
+    position: 'absolute',
+    inset: 0,
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain',
+    pointerEvents: 'none',
+    zIndex: useNativeHtml5Video ? 1 : 0,
+    transform: 'translateZ(0)',
+    WebkitTransform: 'translateZ(0)',
+  };
 
   /** Enter AB sync as soon as slot B is filled so compare mode is obvious. */
   useEffect(() => {
@@ -3605,19 +4121,15 @@ export default function Home() {
       }}
     >
 
-      {/* ── Two hidden video elements at root — never unmount ── */}
-      <video
-        ref={videoRef}
-        playsInline
-        preload={videoSrc?.startsWith('blob:') ? 'metadata' : 'auto'}
-        style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
-      />
+      {/* ── Hidden decoders — slot B + webcam; slot A video lives in the panel ── */}
       <video
         ref={videoRefB}
+        src={videoSrcB ?? undefined}
+        crossOrigin={videoSrcB?.startsWith('/api/') ? 'anonymous' : undefined}
         playsInline
         muted
         preload="auto"
-        style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
+        style={hiddenDecoderVideoStyle}
         onLoadedMetadata={() => {
           const v = videoRefB.current;
           if (v) {
@@ -3656,6 +4168,45 @@ export default function Home() {
               width: '100%',
             }}
           >
+          {contextPlayerId ? (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '8px 14px',
+                background: 'rgba(0,122,255,0.12)',
+                borderBottom: '1px solid rgba(0,122,255,0.25)',
+                flexShrink: 0,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>
+                Session for {contextPlayerName ?? 'player'}
+                {contextSessionId ? (
+                  <span style={{ marginLeft: 8, fontWeight: 400, opacity: 0.75, fontSize: 11 }}>
+                    (draft)
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => router.push(`/players/${contextPlayerId}`)}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: '#fff',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                View player
+              </button>
+            </div>
+          ) : null}
           <div
             style={{
               flex: layoutMode === 'reels' ? '0 0 auto' : 1,
@@ -3758,12 +4309,28 @@ export default function Home() {
                 onDragLeave={handleDragLeaveA}
                 onDrop={handleDropA}
               >
+                {/* In-panel decoder — visible for uploads; canvas composites embeds / StroMotion */}
+                <video
+                  ref={videoRef}
+                  src={videoSrc ?? undefined}
+                  crossOrigin={videoSrc?.startsWith('/api/') ? 'anonymous' : undefined}
+                  playsInline
+                  muted
+                  preload="auto"
+                  style={html5VideoStyle}
+                />
                 <CanvasOverlay
                   ref={canvasRef}
                   videoRef={videoRef}
                   webcamVideoRef={webcamVideoRef}
-                  renderVideo={hasVideoAContent && (embedLiveVideoA || (!youtubeVideoIdA && !genericEmbedSrcA))}
-                  transparentWhenNoVideo={!hasVideoAContent || ((!!youtubeVideoIdA || !!genericEmbedSrcA) && !embedLiveVideoA)}
+                  renderVideo={paintVideoOnCanvasA}
+                  nativeVideoUnderlay={useNativeHtml5Video}
+                  transparentWhenNoVideo={
+                    useNativeHtml5Video ||
+                    (!paintVideoOnCanvasA &&
+                      (!hasVideoAContent ||
+                        ((!!youtubeVideoIdA || !!genericEmbedSrcA) && !embedLiveVideoA)))
+                  }
                   youtubePose={
                     youtubeVideoIdA && !embedLiveVideoA
                       ? { videoId: youtubeVideoIdA, controllerRef: playbackControllerARef }
@@ -3785,8 +4352,11 @@ export default function Home() {
                   webcamPipMode={webcamPipMode}
                   webcamOpacity={webcamOpacity}
                   webcamActive={webcamActive && markupTarget !== 'B'}
-                  stroMotionResult={stroMotionResult}
-                  stroMotionSubjectBox={stroSubjectBox}
+                  stroMotionResult={null}
+                  stroMotionDraft={stroMotionDraft}
+                  stroMotionCanvasPreview={stroDraftPreviewActive}
+                  stroMotionUseExportMasks={stroAllFramesExportReady || stroMotionStatus === 'ready'}
+                  stroMotionSubjectBox={null}
                   stroMotionFrameStops={stroMotionFrameStopsForCanvas}
                   stroMotionVisibleCount={stroVisibleCount}
                   stroMotionShowSkeleton={stroShowSkeleton}
@@ -3807,6 +4377,7 @@ export default function Home() {
                   panModeEnabled={panModeEnabled}
                   onPanModeToggle={() => setPanModeEnabled((p) => !p)}
                   onObjMultiplierRegionSelected={() => setObjMultiplierHasRegion(true)}
+                  videoSourceKey={videoSrc}
                 />
                 {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (
                   urlLoadPhase && urlTarget === 'A' ? (
@@ -3863,7 +4434,8 @@ export default function Home() {
                           Retry
                         </button>
                         <button
-                          onClick={() => { setUrlLoadError(null); fileInputRef.current?.click(); }}
+                          type="button"
+                          onClick={() => { setUrlLoadError(null); triggerVideoUploadA(); }}
                           style={{ padding: '8px 20px', borderRadius: 10, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontSize: 14, fontWeight: 500, cursor: 'pointer', pointerEvents: 'auto' }}
                         >
                           Upload instead
@@ -3877,14 +4449,14 @@ export default function Home() {
                     display: 'flex', flexDirection: 'column',
                     alignItems: 'center', justifyContent: 'center',
                     pointerEvents: 'none',
-                    zIndex: 10,
+                    zIndex: 120,
                     background: 'transparent',
                   }}>
                     {webcamActive ? (
                       <button
                         type="button"
                         data-tour-id="tour-upload"
-                        onClick={() => fileInputRef.current?.click()}
+                        onClick={triggerVideoUploadA}
                         style={{
                           position: 'absolute',
                           top: layoutMode === 'reels' ? 12 : 0,
@@ -3922,7 +4494,27 @@ export default function Home() {
                       pointerEvents: 'none',
                       maxWidth: 420,
                     }}>
-                    <button type="button" data-tour-id="tour-upload" onClick={() => fileInputRef.current?.click()} style={{ minHeight: 52, minWidth: 200, padding: '0 24px', borderRadius: 14, border: '1px solid #E5E5E5', background: '#FFFFFF', fontSize: 15, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, pointerEvents: 'auto' }}>
+                    <button
+                      type="button"
+                      data-tour-id="tour-upload"
+                      onClick={triggerVideoUploadA}
+                      style={{
+                        minHeight: 52,
+                        minWidth: 200,
+                        padding: '0 24px',
+                        borderRadius: 14,
+                        border: '1px solid #E5E5E5',
+                        background: '#FFFFFF',
+                        fontSize: 15,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        pointerEvents: 'auto',
+                      }}
+                    >
                       <Upload size={20} /> Upload Video
                     </button>
                     <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8e8e93', textAlign: 'center', maxWidth: 320 }}>
@@ -4105,7 +4697,7 @@ export default function Home() {
                       showCaptureDownloadFallback={embedCaptureConsecutiveFailures >= 3}
                       captureFallbackDownloadHref={captureFallbackStreamUrl}
                       onStartRecording={(o) => startEmbedCaptureRecording('A', o)}
-                      onUploadInstead={() => fileInputRef.current?.click()}
+                      onUploadInstead={triggerVideoUploadA}
                     />
                     {renderVideoSlotPills()}
                   </>
@@ -4125,7 +4717,47 @@ export default function Home() {
                   </div>
                 )}
                 {/* ── Safari "Tap to Play" overlay ─────────────────────────────── */}
-                {showTapToPlay && (videoSrc || youtubeVideoIdA) && (
+                {videoLoadErrorA ? (
+                  <div
+                    style={{
+                      position: 'absolute', inset: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: 'rgba(0,0,0,0.72)',
+                      zIndex: 130,
+                      padding: 24,
+                    }}
+                  >
+                    <div style={{
+                      maxWidth: 320,
+                      textAlign: 'center',
+                      color: '#fff',
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                    }}>
+                      <div>{videoLoadErrorA}</div>
+                      <button
+                        type="button"
+                        onClick={triggerVideoUploadA}
+                        style={{
+                          padding: '10px 18px',
+                          borderRadius: 10,
+                          border: 'none',
+                          background: '#007AFF',
+                          color: '#fff',
+                          fontSize: 14,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Try another file
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {showTapToPlay && videoSrc && !videoLoadErrorA ? (
                   <div
                     role="button"
                     aria-label="Tap to play video"
@@ -4133,25 +4765,14 @@ export default function Home() {
                       position: 'absolute', inset: 0,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       background: 'rgba(0,0,0,0.55)',
-                      zIndex: 10,
+                      zIndex: 130,
                       cursor: 'pointer',
+                      touchAction: 'manipulation',
                     }}
-                    onClick={() => {
-                      if (youtubeVideoIdA) {
-                        try {
-                          ytPlayerARef.current?.playVideo?.();
-                        } catch (err: unknown) {
-                          console.warn('[CoachLab] Tap-to-Play (YouTube) failed:', err);
-                        }
-                        setShowTapToPlay(false);
-                        return;
-                      }
-                      const v = videoRef.current;
-                      if (!v) return;
-                      v.play().catch((err: unknown) => {
-                        console.warn('[CoachLab] Tap-to-Play failed:', err);
-                      });
-                      setShowTapToPlay(false);
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      void attemptHtml5Play('A');
                     }}
                   >
                     <div style={{
@@ -4168,7 +4789,7 @@ export default function Home() {
                       ▶ Tap to Play
                     </div>
                   </div>
-                )}
+                ) : null}
                 {(videoSrcB || youtubeVideoIdB || genericEmbedSrcB) && (
                   <div style={{
                     position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
@@ -4400,6 +5021,7 @@ export default function Home() {
                       poseFrameSkip={1}
                       panModeEnabled={panModeEnabled}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
+                      videoSourceKey={videoSrcB}
                     />
                     <EmbedCapturePanel
                       visible={!!(youtubeVideoIdB || genericEmbedSrcB) && !videoSrcB}
@@ -4433,7 +5055,7 @@ export default function Home() {
                       showCaptureDownloadFallback={embedCaptureConsecutiveFailures >= 3}
                       captureFallbackDownloadHref={captureFallbackStreamUrl}
                       onStartRecording={(o) => startEmbedCaptureRecording('B', o)}
-                      onUploadInstead={() => fileInputRefB.current?.click()}
+                      onUploadInstead={triggerVideoUploadB}
                     />
                     <button
                       type="button"
@@ -4836,6 +5458,143 @@ export default function Home() {
         </div>
       )}
 
+      {stroEditingFrameIndex !== null && stroMotionDraft ? (() => {
+        const frame = stroMotionDraft.frames[stroEditingFrameIndex];
+        const isProposingThisFrame =
+          stroProposingFrame && stroProposingFrameIndex === stroEditingFrameIndex;
+        const workingMask = frame?.working ?? frame?.aiSnapshot ?? frame?.readyMask ?? null;
+
+        if (isProposingThisFrame || !frame?.sourceFrame || !workingMask) {
+          return (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 10050,
+                background: 'rgba(0,0,0,0.78)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 16,
+              }}
+            >
+              <div
+                style={{
+                  width: 'min(480px, 100%)',
+                  background: '#1c1c1e',
+                  borderRadius: 14,
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  padding: 24,
+                  color: '#fff',
+                  textAlign: 'center',
+                }}
+              >
+                <strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
+                  {isProposingThisFrame ? 'Removing background…' : 'Preparing frame…'}
+                </strong>
+                <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.65)' }}>
+                  {isProposingThisFrame
+                    ? 'Auto background removal runs on the selected area. The editor opens when ready.'
+                    : 'If this takes more than a few seconds, close and try Select Area again.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleStroCloseFrameEditor}
+                  style={{
+                    marginTop: 16,
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.18)',
+                    background: 'rgba(255,255,255,0.06)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <FrameMaskEditor
+            key={frame.index}
+            sourceFrame={frame.sourceFrame}
+            mask={workingMask}
+            frameLabel={frame.label}
+            frameIndex={frame.index}
+            frameTotal={stroMotionDraft.frames.length}
+            frameStatus={frame.status}
+            proposalEmpty={!maskHasContent(frame.aiSnapshot) && !maskHasContent(frame.working)}
+            backgroundPlate={stroMotionDraft.backgroundPlate}
+            onMaskChange={(mask) => updateFrameMask(frame.index, mask)}
+            onReset={() => resetFrameMask(frame.index)}
+            onRegenerate={() => {
+              void reproposeFrameMask(frame.index).then(() => {
+                void canvasRef.current?.waitForRender?.();
+              });
+            }}
+            onMarkReady={() => {
+              if (!handleStroMarkReady(frame.index)) return;
+              void canvasRef.current?.waitForRender?.();
+            }}
+            onMarkReadyAndNext={() => {
+              handleStroMarkReadyAndNext(frame.index);
+              void canvasRef.current?.waitForRender?.();
+            }}
+            onClose={handleStroCloseFrameEditor}
+            isRegenerating={stroProposingFrame && stroProposingFrameIndex === frame.index}
+          />
+        );
+      })() : null}
+
+      <StroMotionPreviewModal
+        open={stroPreviewModalOpen}
+        onClose={() => {
+          setStroPreviewModalOpen(false);
+          setStroPreviewError(null);
+        }}
+        pngUrl={stroPreviewPngUrl}
+        videoUrl={stroPreviewVideoUrl}
+        videoExportSupported={stroVideoExportSupported}
+        isGenerating={stroGenerating}
+        isBuildingVideo={stroIsBuildingVideoPreview}
+        errorMessage={stroPreviewError}
+        onBuildVideo={() => { void handleStroBuildVideoPreview(); }}
+        onDownloadPng={handleStroDownloadPng}
+        onDownloadVideo={handleStroDownloadVideo}
+      />
+
+      {biomechEditingFrameIndex !== null && aiMetricsDraft ? (() => {
+        const frame = aiMetricsDraft.frames[biomechEditingFrameIndex];
+        const working = frame ? getWorkingMeasurements(frame) : null;
+        if (!frame || !working) return null;
+        return (
+          <FrameMeasurementEditor
+            key={frame.index}
+            frameLabel={frame.label}
+            timeSec={frame.timeSec}
+            frameStatus={frame.status}
+            measurements={working}
+            enabledModules={biomechEnabledModules}
+            onMeasurementsChange={(m) => updateBiomechFrameMeasurements(frame.index, m)}
+            onReset={() => resetBiomechFrameMeasurements(frame.index)}
+            onRepropose={() => {
+              void reproposeBiomechFrameMeasurements(frame.index);
+            }}
+            onMarkReady={() => {
+              markBiomechFrameReady(frame.index);
+              invalidateBiomechReport();
+              setBiomechFrameCards([]);
+              setBiomechReportAnalysis(null);
+            }}
+            onClose={() => setBiomechEditingFrameIndex(null)}
+            isReproposing={biomechProposingFrame && biomechProposingFrameIndex === frame.index}
+          />
+        );
+      })() : null}
+
       <SaveReportModal
         open={captureSaveModalOpen}
         onClose={() => {
@@ -4846,6 +5605,20 @@ export default function Home() {
         bodyText=""
         youtubeUrl={captureYoutubeUrl}
         source="analysis_capture"
+      />
+
+      <SaveSessionModal
+        open={sessionSaveModalOpen}
+        onClose={() => setSessionSaveModalOpen(false)}
+        draft={sessionDraft}
+        defaultTitle={sessionDraft.title || `${localDateTimeForFolder()} — Analysis`}
+        fixedPlayerId={contextPlayerId ?? undefined}
+        fixedPlayerName={contextPlayerName ?? undefined}
+        existingSessionId={contextSessionId ?? undefined}
+        onSaved={(_sessionId, playerId) => {
+          resetSessionDraft();
+          router.push(`/players/${playerId}`);
+        }}
       />
 
       <PrecisionDrawInstructions
@@ -4937,7 +5710,11 @@ export default function Home() {
           }}
         >
           {stroMotionProcessing
-            ? `Stromotion: extracting frames… ${stroMotionProgress.current} / ${stroMotionProgress.total}`
+            ? stroProposingFrame
+              ? `StroMotion: proposing mask… ${stroMotionProgress.current} / ${stroMotionProgress.total}`
+              : stroGenerating
+                ? 'StroMotion: generating composite…'
+                : processingStatus
             : processingStatus}
         </div>
       )}

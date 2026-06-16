@@ -1,15 +1,19 @@
 # CoachLab V1 — Product Specification (Source of Truth)
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Date:** June 2026  
-**Status:** Pre-launch reference — documentation & audit pass  
-**Scope:** Specification update + pre-development audit (no implementation in this document)
+**Status:** Implementation audit & legacy UI reference  
+
+> **Authoritative product governance:** [`COACHLAB_V1_PRODUCT_FREEZE.md`](./COACHLAB_V1_PRODUCT_FREEZE.md)  
+> If anything in this file conflicts with the Product Freeze, **the freeze wins**.
 
 ---
 
 ## Document purpose
 
-This document is the **permanent source of truth** for CoachLab V1 before further feature work (Stromotion, AI Metrics). It reflects:
+This document captures **implementation audit notes** and legacy UI structure. Product direction, priorities, and Coach Override rules live in **`COACHLAB_V1_PRODUCT_FREEZE.md`**.
+
+Historically this file reflected:
 
 - Current implemented architecture (as of commit `1b431e5`)
 - Intended final V1 product direction

@@ -1,290 +1,338 @@
 'use client';
 
+import { renderStroMotionDraftComposite } from '@/lib/stroMotionDraft/compositeFromDraft';
+import { exportStroMotionDraftPng } from '@/lib/stroMotionDraft/exportDraft';
+import { clearStroMotionDraft } from '@/lib/stroMotionDraft/clearDraft';
+import { cloneAlphaMask } from '@/lib/stroMotionDraft/maskUtils';
+import { countExportReadyFrames, maskHasContent, statusAfterMaskEdit } from '@/lib/stroMotionDraft/frameMask';
+import { hydrateDraftBitmapsForExport } from '@/lib/stroMotionDraft/exportDraft';
+import { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
+import { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
+import type {
+  AlphaMask,
+  StroMotionDraft,
+  StroMotionFrameStatus,
+  StroMotionObjectType,
+} from '@/lib/stroMotionDraft/types';
+import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 import { useCallback, useRef, useState } from 'react';
-import {
-  clearStroMotionResult,
-  computeGhostSampleTimes,
-  extractStroMotionObjectComposite,
-  logStroMotionExtractDiagnostics,
-  stroMotionCacheKey,
-  type StroMotionDiagnostics,
-  type StroMotionResult,
-  type StroMotionStatus,
-  type StroMotionSubjectBox,
-} from '@/lib/stroMotion';
-import {
-  trackObjectFrameStops,
-  type StroMotionFrameStop,
-} from '@/lib/stroMotionObjectTrack';
 
-export type { StroMotionFrameStop };
-
-export interface StroMotionExtractParams {
-  startSec: number;
-  endSec: number;
-  ghostCount: number;
-  subjectBox: StroMotionSubjectBox;
-  sampleTimes?: number[];
-  frameStops?: StroMotionFrameStop[];
-}
+export type StroMotionHookStatus = 'idle' | 'configuring' | 'proposing' | 'generating' | 'ready';
 
 export interface StroMotionProgress {
   current: number;
   total: number;
 }
 
+export interface SyncDraftParams {
+  objectType: StroMotionObjectType;
+  backgroundTimeSec: number;
+  sampleTimes: number[];
+}
+
 export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>) {
-  const [result, setResult] = useState<StroMotionResult | null>(null);
-  const [status, setStatus] = useState<StroMotionStatus>('idle');
+  const [draft, setDraft] = useState<StroMotionDraft | null>(null);
+  const [status, setStatus] = useState<StroMotionHookStatus>('idle');
+  const [objectType, setObjectType] = useState<StroMotionObjectType>('racket');
+  const [activeFrameIndex, setActiveFrameIndex] = useState<number | null>(null);
+  const [proposingFrameIndex, setProposingFrameIndex] = useState<number | null>(null);
   const [progress, setProgress] = useState<StroMotionProgress>({ current: 0, total: 0 });
-  const [frameStops, setFrameStops] = useState<StroMotionFrameStop[]>([]);
-  const [isTracking, setIsTracking] = useState(false);
-  const extractGenRef = useRef(0);
-  const cacheRef = useRef<Map<string, StroMotionResult>>(new Map());
+  const draftRef = useRef<StroMotionDraft | null>(null);
+  draftRef.current = draft;
 
-  const evictCachedResult = useCallback((target: StroMotionResult | null) => {
-    if (!target) return;
-    for (const [key, cached] of cacheRef.current.entries()) {
-      if (cached === target) {
-        cacheRef.current.delete(key);
-        break;
-      }
-    }
-  }, []);
-
-  const clearGhosts = useCallback(() => {
-    setResult((prev) => {
-      if (prev) {
-        evictCachedResult(prev);
-        clearStroMotionResult(prev);
-      }
+  const clearDraftState = useCallback(() => {
+    setDraft((prev) => {
+      if (prev) clearStroMotionDraft(prev);
       return null;
     });
-    for (const entry of cacheRef.current.values()) {
-      clearStroMotionResult(entry);
-    }
-    cacheRef.current.clear();
-    setFrameStops([]);
+    setActiveFrameIndex(null);
+    setProposingFrameIndex(null);
     setProgress({ current: 0, total: 0 });
-    setStatus('idle');
-  }, [evictCachedResult]);
-
-  const invalidateCache = useCallback(() => {
-    for (const entry of cacheRef.current.values()) {
-      clearStroMotionResult(entry);
-    }
-    cacheRef.current.clear();
   }, []);
 
-  const clearFrameStops = useCallback(() => {
-    setFrameStops([]);
-    invalidateCache();
-  }, [invalidateCache]);
+  const clearAll = useCallback(() => {
+    clearDraftState();
+    setStatus('idle');
+    setObjectType('racket');
+  }, [clearDraftState]);
 
-  const detectFrameStops = useCallback(async (params: {
-    startSec: number;
-    endSec: number;
-    ghostCount: number;
-    seedBox: StroMotionSubjectBox;
-    sampleTimes?: number[];
-  }): Promise<StroMotionFrameStop[]> => {
+  const invalidatePreview = useCallback(() => {
+    setStatus((prev) => (prev === 'ready' ? 'configuring' : prev));
+  }, []);
+
+  const syncDraft = useCallback(async (params: SyncDraftParams): Promise<StroMotionDraft | null> => {
     const video = videoRef.current;
-    if (!video || params.endSec <= params.startSec) return [];
+    if (!video) return null;
 
-    const sampleTimes = params.sampleTimes?.length
-      ? params.sampleTimes
-      : computeGhostSampleTimes(params.startSec, params.endSec, params.ghostCount);
+    const next = await ensureStroMotionDraft(video, {
+      objectType: params.objectType,
+      backgroundTimeSec: params.backgroundTimeSec,
+      sampleTimes: params.sampleTimes,
+      previous: draftRef.current,
+    });
 
-    setIsTracking(true);
-    setProgress({ current: 0, total: sampleTimes.length });
+    if (!next) return null;
+
+    setDraft((current) => {
+      if (!current) return next;
+      if (Math.abs(current.backgroundTimeSec - next.backgroundTimeSec) > 0.001) return next;
+      if (current.objectType !== next.objectType) return next;
+
+      const mergedFrames = next.frames.map((f, i) => {
+        const cur = current.frames[i];
+        if (
+          cur &&
+          cur.sourceFrame &&
+          (maskHasContent(cur.working) || maskHasContent(cur.readyMask) || maskHasContent(cur.aiSnapshot)) &&
+          Math.abs(cur.timeSec - f.timeSec) < 0.05 &&
+          cur.selectionBox
+        ) {
+          return {
+            ...f,
+            selectionBox: cur.selectionBox,
+            sourceFrame: cur.sourceFrame,
+            aiSnapshot: cur.aiSnapshot,
+            working: cur.working,
+            readyMask: cur.readyMask,
+            status: cur.status,
+            label: cur.label || f.label,
+          };
+        }
+        return f;
+      });
+      return { ...next, frames: mergedFrames };
+    });
     setStatus('configuring');
+    return next;
+  }, [videoRef]);
+
+  const invalidateFrameAt = useCallback((frameIndex: number, timeSec?: number) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const frames = prev.frames.map((f) => {
+        if (f.index !== frameIndex) return f;
+        if (f.sourceFrame) {
+          try { f.sourceFrame.close(); } catch { /* closed */ }
+        }
+        return {
+          ...f,
+          timeSec: timeSec ?? f.timeSec,
+          status: 'pending' as StroMotionFrameStatus,
+          selectionBox: null,
+          sourceFrame: null,
+          aiSnapshot: null,
+          working: null,
+          readyMask: null,
+        };
+      });
+      const sampleTimes = [...prev.sampleTimes];
+      if (timeSec !== undefined && frameIndex >= 0 && frameIndex < sampleTimes.length) {
+        sampleTimes[frameIndex] = timeSec;
+      }
+      return { ...prev, frames, sampleTimes };
+    });
+    invalidatePreview();
+  }, [invalidatePreview]);
+
+  const updateFrameTime = useCallback((frameIndex: number, timeSec: number) => {
+    invalidateFrameAt(frameIndex, timeSec);
+  }, [invalidateFrameAt]);
+
+  const updateFrameLabel = useCallback((frameIndex: number, label: string) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const frames = prev.frames.map((f) =>
+        f.index === frameIndex ? { ...f, label } : f,
+      );
+      return { ...prev, frames };
+    });
+  }, []);
+
+  const selectAreaForFrame = useCallback(async (
+    frameIndex: number,
+    selectionBox: StroMotionSubjectBox,
+  ): Promise<boolean> => {
+    const video = videoRef.current;
+    const current = draftRef.current;
+    if (!video || !current) return false;
+
+    const frame = current.frames[frameIndex];
+    if (!frame) return false;
+
+    setProposingFrameIndex(frameIndex);
+    setProgress({ current: 0, total: 1 });
+    setStatus('proposing');
 
     try {
-      const stops = await trackObjectFrameStops(
+      const proposal = await proposeFrameMask(
         video,
-        sampleTimes,
-        params.seedBox,
-        (current, total) => setProgress({ current, total }),
+        frame.timeSec,
+        selectionBox,
+        current.backgroundTimeSec,
+        current.objectType,
       );
-      setFrameStops(stops);
-      invalidateCache();
-      setResult((prev) => {
-        if (prev) {
-          evictCachedResult(prev);
-          clearStroMotionResult(prev);
+
+      if (!proposal) return false;
+
+      const hasProposal = maskHasContent(proposal.aiSnapshot);
+
+      setDraft((prev) => {
+        if (!prev) {
+          proposal.sourceFrame.close();
+          return prev;
         }
-        return null;
-      });
-      setStatus('configuring');
-      return stops;
-    } finally {
-      setIsTracking(false);
-    }
-  }, [evictCachedResult, invalidateCache, videoRef]);
-
-  const updateFrameStopBox = useCallback((index: number, box: StroMotionSubjectBox) => {
-    setFrameStops((prev) =>
-      prev.map((s) =>
-        s.index === index
-          ? { ...s, box, userConfirmed: true, autoDetected: false }
-          : s,
-      ),
-    );
-    invalidateCache();
-    setResult((prev) => {
-      if (prev) {
-        evictCachedResult(prev);
-        clearStroMotionResult(prev);
-      }
-      return null;
-    });
-  }, [evictCachedResult, invalidateCache]);
-
-  const confirmFrameStop = useCallback((index: number) => {
-    setFrameStops((prev) =>
-      prev.map((s) => (s.index === index ? { ...s, userConfirmed: true } : s)),
-    );
-  }, []);
-
-  const extractFrames = useCallback(
-    async (params: StroMotionExtractParams): Promise<StroMotionResult | null> => {
-      const video = videoRef.current;
-      if (!video) return null;
-      if (params.endSec <= params.startSec) return null;
-      if (params.subjectBox.width <= 0 || params.subjectBox.height <= 0) return null;
-
-      const sampleTimes = params.sampleTimes?.length
-        ? params.sampleTimes
-        : computeGhostSampleTimes(params.startSec, params.endSec, params.ghostCount);
-
-      const perFrameBoxes = params.frameStops?.length === sampleTimes.length
-        ? params.frameStops.map((s) => ({ timeSec: s.timeSec, box: s.box }))
-        : undefined;
-
-      const cacheKey = stroMotionCacheKey({
-        subjectBox: params.subjectBox,
-        startSec: params.startSec,
-        endSec: params.endSec,
-        ghostCount: params.ghostCount,
-      }) + ':object:' + JSON.stringify(perFrameBoxes ?? null);
-
-      const cached = cacheRef.current.get(cacheKey);
-      if (cached) {
-        setResult((prev) => {
-          if (prev && prev !== cached) {
-            evictCachedResult(prev);
-            clearStroMotionResult(prev);
+        const frames = prev.frames.map((f) => {
+          if (f.index !== frameIndex) return f;
+          if (f.sourceFrame) {
+            try { f.sourceFrame.close(); } catch { /* closed */ }
           }
-          return cached;
+          return {
+            ...f,
+            selectionBox,
+            sourceFrame: proposal.sourceFrame,
+            aiSnapshot: proposal.aiSnapshot,
+            working: proposal.working,
+            readyMask: null,
+            status: 'edited' as StroMotionFrameStatus,
+          };
         });
-        setStatus('ready');
-        setProgress({ current: cached.ghostLayers.length + 1, total: cached.ghostLayers.length + 1 });
-        return cached;
-      }
-
-      const gen = ++extractGenRef.current;
-
-      setResult((prev) => {
-        if (prev) {
-          evictCachedResult(prev);
-          clearStroMotionResult(prev);
-        }
-        return null;
+        return { ...prev, frames };
       });
-      setStatus('extracting');
-      setProgress({ current: 0, total: sampleTimes.length + 2 });
+      invalidatePreview();
+      return true;
+    } catch (err) {
+      console.error('[StroMotion] Mask proposal failed:', err);
+      return false;
+    } finally {
+      setProposingFrameIndex(null);
+      setProgress({ current: 0, total: 0 });
+      setStatus('configuring');
+    }
+  }, [invalidatePreview, videoRef]);
 
-      const isCancelled = () => extractGenRef.current !== gen;
-
-      try {
-        const composite = await extractStroMotionObjectComposite(
-          video,
-          params.startSec,
-          params.endSec,
-          params.ghostCount,
-          params.subjectBox,
-          (current, total) => {
-            if (isCancelled()) return;
-            setProgress({ current, total });
-          },
-          isCancelled,
-          sampleTimes,
-          perFrameBoxes,
-        );
-
-        if (isCancelled() || !composite) {
-          if (composite) clearStroMotionResult(composite);
-          return null;
-        }
-
-        await logStroMotionExtractDiagnostics(composite);
-
-        cacheRef.current.clear();
-        cacheRef.current.set(cacheKey, composite);
-
-        setResult(composite);
-        setStatus('ready');
-        return composite;
-      } catch {
-        if (!isCancelled()) {
-          setResult((prev) => {
-            clearStroMotionResult(prev);
-            return null;
-          });
-          setStatus('configuring');
-        }
-        return null;
-      } finally {
-        if (extractGenRef.current === gen) {
-          setProgress((p) => (p.total > 0 ? p : { current: 0, total: 0 }));
-        }
-      }
-    },
-    [evictCachedResult, videoRef],
-  );
-
-  const cancelExtraction = useCallback(() => {
-    extractGenRef.current += 1;
-    setStatus((prev) => (prev === 'extracting' ? 'configuring' : prev));
-    setProgress({ current: 0, total: 0 });
-  }, []);
-
-  const setAnimating = useCallback((animating: boolean) => {
-    setStatus((prev) => {
-      if (animating) return 'animating';
-      if (prev === 'animating') return result ? 'ready' : 'configuring';
-      return prev;
+  const updateFrameMask = useCallback((frameIndex: number, mask: AlphaMask) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const frames = prev.frames.map((f) =>
+        f.index === frameIndex
+          ? { ...f, working: mask, readyMask: null, status: statusAfterMaskEdit(f.status) }
+          : f,
+      );
+      return { ...prev, frames };
     });
-  }, [result]);
+    invalidatePreview();
+  }, [invalidatePreview]);
+
+  const resetFrameMask = useCallback((frameIndex: number) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const frames = prev.frames.map((f) =>
+        f.index === frameIndex && f.aiSnapshot
+          ? {
+              ...f,
+              working: cloneAlphaMask(f.aiSnapshot),
+              readyMask: null,
+              status: 'edited' as StroMotionFrameStatus,
+            }
+          : f,
+      );
+      return { ...prev, frames };
+    });
+    invalidatePreview();
+  }, [invalidatePreview]);
+
+  const reproposeFrameMask = useCallback(async (frameIndex: number): Promise<boolean> => {
+    const current = draftRef.current;
+    const frame = current?.frames[frameIndex];
+    if (!frame?.selectionBox) return false;
+    return selectAreaForFrame(frameIndex, frame.selectionBox);
+  }, [selectAreaForFrame]);
+
+  const markFrameReady = useCallback((frameIndex: number): boolean => {
+    const current = draftRef.current;
+    const frame = current?.frames[frameIndex];
+    const mask = frame?.working ?? frame?.readyMask ?? frame?.aiSnapshot;
+    if (!mask || !maskHasContent(mask)) return false;
+
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const frames = prev.frames.map((f) => {
+        if (f.index !== frameIndex) return f;
+        return {
+          ...f,
+          readyMask: cloneAlphaMask(mask),
+          status: 'ready' as StroMotionFrameStatus,
+        };
+      });
+      return { ...prev, frames };
+    });
+    invalidatePreview();
+    return true;
+  }, [invalidatePreview]);
+
+  const generatePreview = useCallback(async (draftOverride?: StroMotionDraft): Promise<string | null> => {
+    const video = videoRef.current;
+    const current = draftOverride ?? draftRef.current;
+    if (!video || !current || current.frames.length === 0) return null;
+    if (countExportReadyFrames(current.frames) !== current.frames.length) return null;
+
+    setStatus('generating');
+    setProgress({ current: 0, total: 1 });
+    try {
+      const pngUrl = await exportStroMotionDraftPng(video, current);
+      setStatus('ready');
+      return pngUrl;
+    } catch (err) {
+      console.error('[StroMotion] Generate PNG failed:', err);
+      setStatus('configuring');
+      return null;
+    } finally {
+      setProgress({ current: 0, total: 0 });
+    }
+  }, [videoRef]);
+
+  const hydrateDraftForExport = useCallback(async (): Promise<StroMotionDraft | null> => {
+    const video = videoRef.current;
+    const current = draftRef.current;
+    if (!video || !current) return null;
+    const hydrated = await hydrateDraftBitmapsForExport(video, current);
+    setDraft(hydrated);
+    return hydrated;
+  }, [videoRef]);
 
   const setConfiguring = useCallback((configuring: boolean) => {
     setStatus((prev) => {
       if (configuring && (prev === 'idle' || prev === 'configuring')) return 'configuring';
-      if (!configuring && prev === 'configuring') return frameStops.length ? 'configuring' : 'idle';
+      if (!configuring && prev === 'configuring') return draftRef.current ? 'configuring' : 'idle';
       return prev;
     });
-  }, [frameStops.length]);
-
-  const diagnostics: StroMotionDiagnostics | null = result?.diagnostics ?? null;
+  }, []);
 
   return {
-    result,
+    draft,
     status,
-    isProcessing: status === 'extracting',
-    isTracking,
+    objectType,
+    setObjectType,
+    activeFrameIndex,
+    setActiveFrameIndex,
+    proposingFrameIndex,
+    isProposingFrame: proposingFrameIndex !== null,
+    isGenerating: status === 'generating',
+    isProcessing: status === 'proposing' || status === 'generating',
     progress,
-    diagnostics,
-    frameStops,
-    setFrameStops,
-    clearFrameStops,
-    detectFrameStops,
-    updateFrameStopBox,
-    confirmFrameStop,
-    clearGhosts,
-    extractFrames,
-    cancelExtraction,
-    invalidateCache,
-    setAnimating,
+    syncDraft,
+    updateFrameTime,
+    updateFrameLabel,
+    selectAreaForFrame,
+    updateFrameMask,
+    resetFrameMask,
+    reproposeFrameMask,
+    markFrameReady,
+    generatePreview,
+    hydrateDraftForExport,
+    invalidatePreview,
+    clearAll,
     setConfiguring,
+    renderStroMotionDraftComposite,
   };
 }

@@ -134,6 +134,8 @@ export default function PreciseTimeline({
   /** Called synchronously before play/pause on the primary source (AB sync hook). */
   beforePlay,
   beforePause,
+  /** Called when HTML5 video.play() is rejected (Safari autoplay policy). */
+  onPlayBlocked,
   trimRange = null,
   trimAccent = '#FF9500',
   onCurrentTime,
@@ -144,6 +146,9 @@ export default function PreciseTimeline({
   phaseMarkerBounds = null,
   sampleMarkers = null,
   onSampleMarkerSelect,
+  onSampleMarkerChange,
+  sampleMarkerBounds = null,
+  defaultZoomToTrim = false,
 }: {
   source: Source;
   defaultFps?: number;
@@ -158,6 +163,7 @@ export default function PreciseTimeline({
   compareAbDisabled?: boolean;
   beforePlay?: () => void;
   beforePause?: () => void;
+  onPlayBlocked?: () => void;
   trimRange?: { start: number; end: number } | null;
   trimAccent?: string;
   onCurrentTime?: (t: number) => void;
@@ -169,6 +175,10 @@ export default function PreciseTimeline({
   /** Stromotion frame-stop balls — one per multiplied object position */
   sampleMarkers?: Array<{ id: string; time: number; label?: string }> | null;
   onSampleMarkerSelect?: (id: string, time: number) => void;
+  onSampleMarkerChange?: (id: string, time: number) => void;
+  sampleMarkerBounds?: { start: number; end: number } | null;
+  /** When true, zoom the scrub bar to the trim range (with padding) on load */
+  defaultZoomToTrim?: boolean;
 }) {
   const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
@@ -307,6 +317,8 @@ export default function PreciseTimeline({
   const scrubTrackRef = useRef<HTMLDivElement | null>(null);
   const scrubbingRef = useRef(false);
   const phaseDragIdRef = useRef<string | null>(null);
+  const sampleDragIdRef = useRef<string | null>(null);
+  const [viewWindow, setViewWindow] = useState<{ start: number; end: number } | null>(null);
   /** Live scrub thumb position while dragging (before frame-ready commit). */
   const [scrubPreviewT, setScrubPreviewT] = useState<number | null>(null);
   const pendingScrubTimeRef = useRef<number | null>(null);
@@ -501,8 +513,47 @@ export default function PreciseTimeline({
     if (!el || !dur) return null;
     const r = el.getBoundingClientRect();
     const raw = clamp((clientX - r.left) / Math.max(1, r.width), 0, 1);
-    return raw * dur;
-  }, []);
+    const vStart = viewWindow?.start ?? 0;
+    const vEnd = viewWindow?.end ?? dur;
+    const span = Math.max(vEnd - vStart, 0.001);
+    return clamp(vStart + raw * span, 0, dur);
+  }, [viewWindow]);
+
+  useEffect(() => {
+    if (!defaultZoomToTrim || !trimRange || d <= 0) {
+      if (!defaultZoomToTrim) setViewWindow(null);
+      return;
+    }
+    const span = trimRange.end - trimRange.start;
+    const pad = Math.max(0.08, span * 0.12);
+    setViewWindow({
+      start: Math.max(0, trimRange.start - pad),
+      end: Math.min(d, trimRange.end + pad),
+    });
+  }, [defaultZoomToTrim, trimRange, d]);
+
+  const zoomToTrim = useCallback(() => {
+    if (!trimRange || d <= 0) return;
+    const span = trimRange.end - trimRange.start;
+    const pad = Math.max(0.08, span * 0.12);
+    setViewWindow({
+      start: Math.max(0, trimRange.start - pad),
+      end: Math.min(d, trimRange.end + pad),
+    });
+  }, [trimRange, d]);
+
+  const zoomFull = useCallback(() => setViewWindow(null), []);
+
+  const zoomBy = useCallback((factor: number) => {
+    if (d <= 0) return;
+    const vStart = viewWindow?.start ?? 0;
+    const vEnd = viewWindow?.end ?? d;
+    const center = (vStart + vEnd) / 2;
+    const span = Math.max(vEnd - vStart, 0.08);
+    const newSpan = clamp(span * factor, 0.08, d);
+    const start = clamp(center - newSpan / 2, 0, Math.max(0, d - newSpan));
+    setViewWindow({ start, end: start + newSpan });
+  }, [d, viewWindow]);
 
   const queueScrubAtClientX = useCallback((clientX: number) => {
     const next = timeFromClientX(clientX);
@@ -568,8 +619,21 @@ export default function PreciseTimeline({
       if (!v) return;
       if (v.paused) {
         beforePlay?.();
-        setIsPlaying(true);
-        v.play().catch(() => setIsPlaying(false));
+        void (async () => {
+          try {
+            await v.play();
+            setIsPlaying(true);
+          } catch {
+            try {
+              v.muted = true;
+              await v.play();
+              setIsPlaying(true);
+            } catch {
+              setIsPlaying(false);
+              onPlayBlocked?.();
+            }
+          }
+        })();
       } else {
         beforePause?.();
         setIsPlaying(false);
@@ -591,7 +655,7 @@ export default function PreciseTimeline({
     } catch {
       /* YT player may be mid-destroy during embed → file swap */
     }
-  }, [beforePause, beforePlay, isPlaying, source]);
+  }, [beforePause, beforePlay, isPlaying, onPlayBlocked, source]);
 
   const stepFrame = useCallback((dir: 1 | -1, mult = 1) => {
     if (stepInFlightRef.current) return;
@@ -634,10 +698,14 @@ export default function PreciseTimeline({
   }, [stepFrame, togglePlay]);
 
   const displayT = scrubPreviewT ?? t;
-  const pct = d > 0 ? (displayT / d) * 100 : 0;
-  const trimStartPct = trimRange && d > 0 ? (trimRange.start / d) * 100 : 0;
-  const trimEndPct = trimRange && d > 0 ? (trimRange.end / d) * 100 : 0;
+  const viewStart = viewWindow?.start ?? 0;
+  const viewEnd = viewWindow?.end ?? d;
+  const viewSpan = Math.max(viewEnd - viewStart, 0.001);
+  const pct = d > 0 ? clamp(((displayT - viewStart) / viewSpan) * 100, 0, 100) : 0;
+  const trimStartPct = trimRange && d > 0 ? clamp(((trimRange.start - viewStart) / viewSpan) * 100, 0, 100) : 0;
+  const trimEndPct = trimRange && d > 0 ? clamp(((trimRange.end - viewStart) / viewSpan) * 100, 0, 100) : 0;
   const trimWidthPct = Math.max(0, trimEndPct - trimStartPct);
+  const timeToPct = (time: number) => clamp(((time - viewStart) / viewSpan) * 100, 0, 100);
 
   const shellStyle: React.CSSProperties = useMemo(() => ({
     pointerEvents: 'auto',
@@ -804,7 +872,7 @@ export default function PreciseTimeline({
           </>
         ) : null}
         {phaseMarkers && d > 0 ? phaseMarkers.map((m) => {
-          const pctM = (m.time / d) * 100;
+          const pctM = timeToPct(m.time);
           const selected = m.id === selectedPhaseMarkerId;
           return (
             <div
@@ -858,12 +926,34 @@ export default function PreciseTimeline({
           );
         }) : null}
         {sampleMarkers && d > 0 ? sampleMarkers.map((m) => {
-          const pctM = (m.time / d) * 100;
+          const pctM = timeToPct(m.time);
           return (
-            <button
+            <div
               key={m.id}
-              type="button"
-              title={`Frame stop ${m.label ?? ''} @ ${formatTimeShort(m.time)}`}
+              role="button"
+              tabIndex={0}
+              title={`Frame stop ${m.label ?? ''} @ ${formatTimeShort(m.time)} — drag to adjust`}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                sampleDragIdRef.current = m.id;
+                onSampleMarkerSelect?.(m.id, m.time);
+                (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                if (sampleDragIdRef.current !== m.id) return;
+                if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+                e.stopPropagation();
+                const next = timeFromClientX(e.clientX);
+                if (next === null || !onSampleMarkerChange) return;
+                const lo = sampleMarkerBounds?.start ?? 0;
+                const hi = sampleMarkerBounds?.end ?? d;
+                onSampleMarkerChange(m.id, clamp(next, lo, hi));
+              }}
+              onPointerUp={(e) => {
+                if (sampleDragIdRef.current !== m.id) return;
+                sampleDragIdRef.current = null;
+                try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+              }}
               onClick={(e) => {
                 e.stopPropagation();
                 onSampleMarkerSelect?.(m.id, m.time);
@@ -880,10 +970,9 @@ export default function PreciseTimeline({
                 background: 'linear-gradient(145deg, #D4FF00 0%, #9ACD00 55%, #6B8E00 100%)',
                 border: '2px solid rgba(255,255,255,0.9)',
                 boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
-                cursor: 'pointer',
+                cursor: 'ew-resize',
                 zIndex: 4,
-                padding: 0,
-                touchAction: 'manipulation',
+                touchAction: 'none',
               }}
             />
           );
@@ -945,6 +1034,15 @@ export default function PreciseTimeline({
         </button>
         <button onClick={() => stepFrame(-1)} style={btnStyle} title={`Back 1 frame (←) @ ${selectedFps}fps`}>◀</button>
         <button onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
+
+        {trimRange ? (
+          <>
+            <button type="button" onClick={() => zoomBy(0.65)} style={{ ...btnStyle, minWidth: 36, fontSize: 16 }} title="Zoom in">+</button>
+            <button type="button" onClick={() => zoomBy(1.5)} style={{ ...btnStyle, minWidth: 36, fontSize: 16 }} title="Zoom out">−</button>
+            <button type="button" onClick={zoomToTrim} style={{ ...btnStyle, minWidth: 52, fontSize: 11 }} title="Fit trim range">Fit</button>
+            <button type="button" onClick={zoomFull} style={{ ...btnStyle, minWidth: 44, fontSize: 11 }} title="Full timeline">All</button>
+          </>
+        ) : null}
 
         <div style={{ minWidth: 130, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
           <div style={{ lineHeight: 1.1 }}>{formatTime(displayT)}</div>

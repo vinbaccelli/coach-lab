@@ -77,6 +77,66 @@ export async function samplePosesInTrimRange(
   return samples;
 }
 
+export async function samplePosesAtTimes(
+  video: HTMLVideoElement,
+  timesSec: number[],
+  onProgress?: (p: number) => void,
+): Promise<PoseSample[]> {
+  if (timesSec.length === 0 || video.videoWidth === 0) return [];
+
+  const detector = await acquirePoseDetector();
+  if (!detector) return [];
+
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return [];
+
+  const origTime = video.currentTime;
+  const wasPaused = video.paused;
+  video.pause();
+
+  const samples: PoseSample[] = [];
+
+  for (let i = 0; i < timesSec.length; i++) {
+    await seekVideo(video, timesSec[i]);
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    } catch {
+      samples.push({ timeSec: timesSec[i], keypoints: null });
+      onProgress?.((i + 1) / timesSec.length);
+      continue;
+    }
+    try {
+      const poses = await detector.estimatePoses(canvas, { flipHorizontal: false });
+      const raw = poses?.[0]?.keypoints;
+      const keypoints: PoseKeypoint[] | null = raw?.length
+        ? raw.map((kp: { x: number; y: number; score?: number; name?: string }) => ({
+            x: kp.x,
+            y: kp.y,
+            score: kp.score ?? 0,
+            name: kp.name ?? '',
+          }))
+        : null;
+      samples.push({ timeSec: timesSec[i], keypoints });
+    } catch {
+      samples.push({ timeSec: timesSec[i], keypoints: null });
+    }
+    onProgress?.((i + 1) / timesSec.length);
+    if (i % 2 === 0) await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+  }
+
+  try {
+    await seekVideo(video, origTime);
+  } catch {
+    video.currentTime = origTime;
+  }
+  if (!wasPaused) void video.play();
+
+  return samples;
+}
+
 export function nearestPoseSample(
   samples: PoseSample[],
   timeSec: number,

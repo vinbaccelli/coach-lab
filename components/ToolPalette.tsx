@@ -30,6 +30,7 @@ import {
   Home,
   GripHorizontal,
   BarChart3,
+  FolderOpen,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -97,6 +98,9 @@ interface ToolPaletteProps {
   showCollapseControl?: boolean;
   /** Full workspace reset (videos + drawings). */
   onCleanSession?: () => void;
+  /** Save analysis report to player history. */
+  onSaveReport?: () => void;
+  saveReportEnabled?: boolean;
   /** Mobile: denser icon targets to maximize canvas. */
   denseMobile?: boolean;
   /** Compare mode: which video panel receives markup / undo / clear. */
@@ -466,6 +470,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onToggleCollapsed,
     showCollapseControl = false,
     onCleanSession,
+    onSaveReport,
+    saveReportEnabled = false,
     denseMobile = false,
     markupTarget = 'A',
     onMarkupTargetChange,
@@ -551,6 +557,15 @@ export default function ToolPalette(props: ToolPaletteProps) {
       }}
     >
       <div style={{ height: 1, background: '#D1D1D6', margin: '8px 0' }} />
+      {onSaveReport ? (
+        <Row
+          k="save-report"
+          icon={<FolderOpen size={denseMobile || io ? 16 : 20} />}
+          label="Save report"
+          onPress={() => { if (saveReportEnabled) onSaveReport(); }}
+          sub={saveReportEnabled ? undefined : 'Run analysis first'}
+        />
+      ) : null}
       <Row k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} label="Undo" onPress={onUndo} />
       <Row k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} label="Redo" onPress={onRedo} />
       <Row k="cl" destructive icon={<Trash2 size={denseMobile || io ? 16 : 20} />} label="Clear all" onPress={onClear} />
@@ -1187,7 +1202,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
           />
           <Row k="sm-t" icon={<Layers size={18} />} label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
-          <Row k="bio-t" icon={<BarChart3 size={18} />} label="Biomechanics" onPress={() => push('aimetrics')} />
+          <Row k="bio-t" icon={<BarChart3 size={18} />} label="AI Metrics" onPress={() => push('aimetrics')} />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
@@ -1229,7 +1244,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <BackHeader title="Biomechanics" icon={<BarChart3 size={18} />} />
+          <BackHeader title="AI Metrics" icon={<BarChart3 size={18} />} />
           {biomechanicsPanel ?? (
             !io ? (
               <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
