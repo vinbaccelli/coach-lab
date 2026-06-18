@@ -498,22 +498,22 @@ function FrameCard({
         </button>
       </div>
 
-      {/* Actions row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px 10px' }}>
+      {/* Actions */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '0 14px 10px' }}>
         {/* Jump & Draw */}
         <button
           type="button"
           title="Jump to this frame"
           onClick={onJumpAndDraw}
           style={{
-            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            padding: '10px 0', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+            padding: '10px 12px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
             border: '1px solid #007AFF',
             background: isActive ? '#007AFF' : 'rgba(0,122,255,0.06)',
             color: isActive ? '#fff' : '#007AFF',
           }}
         >
-          <Pen size={14} /> Jump
+          <Pen size={14} /> Jump to frame
         </button>
 
         {/* Skeleton stamp */}
@@ -522,15 +522,15 @@ function FrameCard({
           title={showSkeleton ? 'Stamp selected joints with angles' : 'Stamp all joints with angles'}
           onClick={onStampSkeleton}
           style={{
-            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            padding: '10px 0', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+            padding: '10px 12px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
             border: frame.hasSkeletonStamp ? '1px solid #5856D6' : '1px solid #D1D1D6',
             background: frame.hasSkeletonStamp ? 'rgba(88,86,214,0.1)' : '#fff',
             color: frame.hasSkeletonStamp ? '#5856D6' : '#6E6E73',
           }}
         >
           <PersonStanding size={14} />
-          {frame.hasSkeletonStamp ? 'Stamped' : 'Stamp'}
+          {frame.hasSkeletonStamp ? 'Stamped ✓' : 'Stamp skeleton'}
         </button>
 
         {/* Capture */}
@@ -540,15 +540,15 @@ function FrameCard({
           onClick={onCapture}
           disabled={isCapturing}
           style={{
-            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            padding: '10px 0', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+            padding: '10px 12px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
             border: hasCaptured ? '1px solid rgba(22,163,74,0.5)' : '1px solid #D1D1D6',
             background: hasCaptured ? 'rgba(22,163,74,0.08)' : '#fff',
             color: hasCaptured ? '#16a34a' : '#6E6E73',
           }}
         >
           {isCapturing ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={14} />}
-          {hasCaptured ? 'Re-cap' : 'Capture'}
+          {hasCaptured ? 'Re-capture' : 'Capture frame'}
         </button>
       </div>
 

@@ -376,7 +376,7 @@ export default function StroMotionPanel({
       ) : null}
 
       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Object Type</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6, marginBottom: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
         {OBJECT_TYPES.map(({ id, label }) => (
           <button
             key={id}
@@ -384,14 +384,15 @@ export default function StroMotionPanel({
             disabled={disabled || isGenerating || isProposingFrame || isExportingVideo}
             onClick={() => onObjectTypeChange(id)}
             style={{
-              padding: '8px 6px',
-              borderRadius: 8,
+              padding: '10px 12px',
+              borderRadius: 10,
               border: objectType === id ? '2px solid var(--cl-accent, #007AFF)' : '1px solid var(--cl-border, #ddd)',
               background: objectType === id ? 'rgba(0,122,255,0.1)' : 'var(--cl-surface, #fff)',
               fontWeight: 700,
-              fontSize: 12,
+              fontSize: 13,
               cursor: disabled || isGenerating ? 'not-allowed' : 'pointer',
               opacity: disabled || isGenerating ? 0.5 : 1,
+              textAlign: 'left',
             }}
           >
             {label}
@@ -474,7 +475,7 @@ export default function StroMotionPanel({
                   <div style={{ fontSize: 10, color: 'var(--cl-text-muted)', fontFamily: 'ui-monospace, monospace', marginBottom: 6 }}>
                     {formatTimeShort(frame.timeSec)}
                   </div>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     <button
                       type="button"
                       style={{
@@ -545,7 +546,7 @@ export default function StroMotionPanel({
 
       {/* Background plate selector */}
       <div style={{ fontSize: 12, fontWeight: 600, margin: '10px 0 4px' }}>Background plate</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
         {(['start', 'end'] as const).map((bg) => (
           <button
             key={bg}
@@ -553,10 +554,10 @@ export default function StroMotionPanel({
             disabled={disabled || isGenerating || isExportingVideo}
             onClick={() => onBackgroundChange?.(bg)}
             style={{
-              padding: '8px 6px', borderRadius: 8,
+              padding: '10px 12px', borderRadius: 10,
               border: background === bg ? '2px solid var(--cl-accent, #007AFF)' : '1px solid var(--cl-border, #ddd)',
               background: background === bg ? 'rgba(0,122,255,0.1)' : 'var(--cl-surface, #fff)',
-              fontWeight: 700, fontSize: 12, cursor: 'pointer',
+              fontWeight: 700, fontSize: 13, cursor: 'pointer', textAlign: 'left',
             }}
           >
             {bg === 'start' ? '← Start frame' : 'End frame →'}
@@ -566,7 +567,7 @@ export default function StroMotionPanel({
 
       {/* Video animation order */}
       <div style={{ fontSize: 12, fontWeight: 600, margin: '8px 0 4px' }}>Video animation</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
         {([['forward', 'Forward →'], ['reverse', '← Reverse']] as const).map(([ord, label]) => (
           <button
             key={ord}
@@ -574,10 +575,10 @@ export default function StroMotionPanel({
             disabled={disabled || isGenerating || isExportingVideo}
             onClick={() => onVideoOrderChange?.(ord)}
             style={{
-              padding: '8px 6px', borderRadius: 8,
+              padding: '10px 12px', borderRadius: 10,
               border: videoOrder === ord ? '2px solid var(--cl-accent, #007AFF)' : '1px solid var(--cl-border, #ddd)',
               background: videoOrder === ord ? 'rgba(0,122,255,0.1)' : 'var(--cl-surface, #fff)',
-              fontWeight: 700, fontSize: 11, cursor: 'pointer',
+              fontWeight: 700, fontSize: 13, cursor: 'pointer', textAlign: 'left',
             }}
           >
             {label}
@@ -610,7 +611,7 @@ export default function StroMotionPanel({
           <button type="button" onClick={onOpenPreview} style={primaryBtnStyle}>
             Review image &amp; video
           </button>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <img
               src={previewPngUrl}
               alt="StroMotion preview"
