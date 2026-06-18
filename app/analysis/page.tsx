@@ -471,6 +471,10 @@ function Home() {
   const [drawContextActive, setDrawContextActive] = useState(false);
   const [isMobile, setIsMobile]             = useState(false);
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
+  const [showMobileToolStrip, setShowMobileToolStrip] = useState(false);
+  const reelsDesktopEarly = !isMobile && layoutMode === 'reels';
+  const phoneToolbarLayout = isMobile || showMobileToolStrip || reelsDesktopEarly;
+  const compactToolbarRail = phoneToolbarLayout || (!isMobile && toolbarCollapsed);
   /** Large tap targets only on real phones — desktop 9:16 preview keeps compact UI */
   const touchChrome                         = isMobile;
 
@@ -1159,7 +1163,7 @@ function Home() {
 
   const stroMotionPanelEl = (
     <StroMotionPanel
-      compact={isMobile || toolbarCollapsed}
+      compact
       objectType={stroObjectType}
       onObjectTypeChange={handleStroObjectTypeChange}
       currentTime={stroVideoTime}
@@ -1581,7 +1585,7 @@ function Home() {
 
   const biomechanicsPanelEl = (
     <BiomechanicsPanel
-      compact={isMobile || toolbarCollapsed}
+      compact
       currentTime={biomechVideoTime}
       duration={biomechVideoDuration}
       strokeType={biomechStrokeType}
@@ -1741,7 +1745,6 @@ function Home() {
     return () => mq.removeEventListener('change', fn);
   }, []);
   /** Mobile + tablet: in-flow tool rail (precision toggle lives here). */
-  const [showMobileToolStrip, setShowMobileToolStrip] = useState(false);
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1024px)');
     const fn = () => setShowMobileToolStrip(mq.matches);
@@ -1777,12 +1780,7 @@ function Home() {
     });
   }, []);
 
-  const reelsDesktopEarly = !isMobile && layoutMode === 'reels';
-  const phoneToolbarLayout = isMobile || showMobileToolStrip || reelsDesktopEarly;
-
   const [toolbarLabelsExpanded, setToolbarLabelsExpanded] = useState(false);
-
-  const compactToolbarRail = phoneToolbarLayout || (!isMobile && toolbarCollapsed);
 
   const toolbarWidthPx = useMemo(() => {
     if (isMobile) return TOOLBAR_MOBILE_FIXED_W;
