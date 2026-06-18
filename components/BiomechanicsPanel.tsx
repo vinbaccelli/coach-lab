@@ -465,23 +465,23 @@ function FrameCard({
       )}
 
       {/* Frame header row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px' }}>
         {/* Index bubble */}
         <div style={{
-          width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
+          width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
           background: isActive ? '#007AFF' : '#E5E5EA',
           color: isActive ? '#fff' : '#6E6E73',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 11, fontWeight: 700,
+          fontSize: 14, fontWeight: 700,
         }}>
           {frame.index + 1}
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#1D1D1F', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#1D1D1F', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {frame.label}
           </div>
-          <div style={{ fontSize: 11, color: '#6E6E73' }}>{formatTimeShort(frame.timeSec)}</div>
+          <div style={{ fontSize: 12, color: '#6E6E73' }}>{formatTimeShort(frame.timeSec)}</div>
         </div>
 
         {/* Remove */}
@@ -489,28 +489,28 @@ function FrameCard({
           type="button"
           title="Remove frame"
           onClick={onRemove}
-          style={{ ...iconBtn, width: 28, height: 28, color: '#FF3B30', border: '1px solid rgba(255,59,48,0.3)' }}
+          style={{ ...iconBtn, width: 34, height: 34, color: '#FF3B30', border: '1px solid rgba(255,59,48,0.3)' }}
         >
-          <Trash2 size={13} />
+          <Trash2 size={15} />
         </button>
       </div>
 
       {/* Actions row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px 8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px 10px' }}>
         {/* Jump & Draw */}
         <button
           type="button"
           title="Jump to this frame"
           onClick={onJumpAndDraw}
           style={{
-            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-            padding: '6px 0', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            padding: '10px 0', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
             border: '1px solid #007AFF',
             background: isActive ? '#007AFF' : 'rgba(0,122,255,0.06)',
             color: isActive ? '#fff' : '#007AFF',
           }}
         >
-          <Pen size={12} /> Jump
+          <Pen size={14} /> Jump
         </button>
 
         {/* Skeleton stamp */}
@@ -519,14 +519,14 @@ function FrameCard({
           title={showSkeleton ? 'Stamp selected joints with angles' : 'Stamp all joints with angles'}
           onClick={onStampSkeleton}
           style={{
-            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-            padding: '6px 0', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            padding: '10px 0', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
             border: frame.hasSkeletonStamp ? '1px solid #5856D6' : '1px solid #D1D1D6',
             background: frame.hasSkeletonStamp ? 'rgba(88,86,214,0.1)' : '#fff',
             color: frame.hasSkeletonStamp ? '#5856D6' : '#6E6E73',
           }}
         >
-          <PersonStanding size={12} />
+          <PersonStanding size={14} />
           {frame.hasSkeletonStamp ? 'Stamped' : 'Stamp'}
         </button>
 
@@ -537,21 +537,21 @@ function FrameCard({
           onClick={onCapture}
           disabled={isCapturing}
           style={{
-            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-            padding: '6px 0', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            padding: '10px 0', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
             border: hasCaptured ? '1px solid rgba(22,163,74,0.5)' : '1px solid #D1D1D6',
             background: hasCaptured ? 'rgba(22,163,74,0.08)' : '#fff',
             color: hasCaptured ? '#16a34a' : '#6E6E73',
           }}
         >
-          {isCapturing ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={12} />}
+          {isCapturing ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={14} />}
           {hasCaptured ? 'Re-cap' : 'Capture'}
         </button>
       </div>
 
       {/* Measurement checkboxes */}
-      <div style={{ borderTop: '1px solid #F2F2F7', padding: '6px 10px 8px', display: 'flex', flexDirection: 'column', gap: 5 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>
+      <div style={{ borderTop: '1px solid #F2F2F7', padding: '10px 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>
           Measurements
         </div>
         {measurementRows.map(({ key, label, tool, icon }) => {
@@ -559,11 +559,10 @@ function FrameCard({
           return (
             <label
               key={key}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '4px 0' }}
               onClick={(e) => {
                 e.preventDefault();
                 if (!done) {
-                  // Activate the tool and jump to frame so user can draw
                   onJumpAndDraw();
                   onActivateTool?.(tool);
                 }
@@ -571,14 +570,14 @@ function FrameCard({
               }}
             >
               <div style={{
-                width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-                border: done ? '1.5px solid #007AFF' : '1.5px solid #D1D1D6',
+                width: 22, height: 22, borderRadius: 5, flexShrink: 0,
+                border: done ? '2px solid #007AFF' : '2px solid #D1D1D6',
                 background: done ? '#007AFF' : '#fff',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                {done && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                {done && <svg width="12" height="10" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
               </div>
-              <span style={{ fontSize: 11, color: done ? '#007AFF' : '#6E6E73', fontWeight: done ? 600 : 400, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 13, color: done ? '#007AFF' : '#6E6E73', fontWeight: done ? 600 : 400, display: 'flex', alignItems: 'center', gap: 6 }}>
                 {icon} {label}
               </span>
             </label>

@@ -1377,8 +1377,8 @@ function Home() {
           const filename = `${userId}/reports/${Date.now()}-frame${idx}.png`;
           const path = await uploadDataUrl('analysis-screenshots', filename, dataUrl);
           if (path) {
-            const pub = supabase.storage.from('analysis-screenshots').getPublicUrl(path).data.publicUrl;
-            screenshotUrls.push(pub);
+            const { data: signed } = await supabase.storage.from('analysis-screenshots').createSignedUrl(path, 60 * 60 * 24 * 365);
+            if (signed?.signedUrl) screenshotUrls.push(signed.signedUrl);
           }
         }
       }
@@ -1400,9 +1400,9 @@ function Home() {
         }),
       ];
 
-      const targetPlayerId = playerId ?? screenshotPlayerList[0]?.id ?? null;
+      const targetPlayerId = playerId ?? biomechReportPlayerList[0]?.id ?? null;
       if (targetPlayerId) {
-        await fetch(`/api/players/${targetPlayerId}/entries`, {
+        const res = await fetch(`/api/players/${targetPlayerId}/entries`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1414,11 +1414,20 @@ function Home() {
             metadata: { strokeType: biomechStrokeType, frameCount: aiMetricsDraft.frames.length },
           }),
         });
+        if (!res.ok) {
+          console.error('Failed to save report:', await res.text());
+        }
+      } else {
+        // No player selected — download report as text file
+        const blob = new Blob([bodyLines.join('\n')], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        downloadDataURL(url, `ai-metrics-report-${Date.now()}.txt`);
+        URL.revokeObjectURL(url);
       }
     } finally {
       setBiomechSavingReport(false);
     }
-  }, [aiMetricsDraft, biomechCapturedImages, biomechFrameNotes, biomechMeasurements, biomechStrokeType]);
+  }, [aiMetricsDraft, biomechCapturedImages, biomechFrameNotes, biomechMeasurements, biomechStrokeType, biomechReportPlayerList]);
 
   const resetBiomech = useCallback(() => {
     biomechClearingRef.current = true;
@@ -1530,7 +1539,8 @@ function Home() {
       const filename = `${userId}/${Date.now()}.png`;
       const path = await uploadDataUrl('analysis-screenshots', filename, screenshotDataUrl);
       if (path) {
-        const publicUrl = supabase.storage.from('analysis-screenshots').getPublicUrl(path).data.publicUrl;
+        const { data: signed } = await supabase.storage.from('analysis-screenshots').createSignedUrl(path, 60 * 60 * 24 * 365);
+        const imageUrl = signed?.signedUrl ?? path;
         await fetch(`/api/players/${playerId}/entries`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1538,7 +1548,7 @@ function Home() {
             category: 'technique',
             folder_label: `Analysis ${localDateTimeForFolder()}`,
             body_text: 'Screenshot from analysis session.',
-            screenshots: [publicUrl],
+            screenshots: [imageUrl],
             source: 'analysis-screenshot',
           }),
         });

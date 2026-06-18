@@ -251,30 +251,41 @@ export function useAIMetrics(videoRef: React.RefObject<HTMLVideoElement | null>)
 
   const addFrame = useCallback((timeSec: number) => {
     setDraft((prev) => {
-      if (!prev) return prev;
-      const newIndex = prev.frames.length;
       const newFrame: AIMetricsFrameDraft = {
-        index: newIndex,
+        index: 0,
         timeSec,
-        label: `Frame ${newIndex + 1}`,
+        label: 'Frame 1',
         status: 'pending',
         poseSample: null,
         ai: null,
         coach: null,
         ready: null,
-        enabledModules: { ...prev.enabledModules },
+        enabledModules: prev?.enabledModules ? { ...prev.enabledModules } : { ...DEFAULT_ENABLED_MODULES },
         skeletonStamp: null,
         coachDrawingJson: null,
       };
-      // Insert in sorted order by time
+      if (!prev) {
+        // After Clear: create a fresh draft with just this one frame
+        return {
+          strokeType: strokeType,
+          trimStartSec: trimStartSec,
+          trimEndSec: trimEndSec,
+          sampleTimes: [timeSec],
+          enabledModules: { ...DEFAULT_ENABLED_MODULES },
+          frames: [newFrame],
+          customSteps: effectiveCustomSteps,
+        } as AIMetricsDraft;
+      }
+      newFrame.index = prev.frames.length;
+      newFrame.label = `Frame ${prev.frames.length + 1}`;
       const allFrames = [...prev.frames, newFrame].sort((a, b) => a.timeSec - b.timeSec);
-      // Re-index after sort
       const frames = allFrames.map((f, i) => ({ ...f, index: i }));
       const sampleTimes = frames.map((f) => f.timeSec);
       return { ...prev, frames, sampleTimes };
     });
+    setStatus('configuring');
     invalidateReport();
-  }, [invalidateReport]);
+  }, [invalidateReport, strokeType, trimStartSec, trimEndSec, effectiveCustomSteps]);
 
   const removeFrame = useCallback((frameIndex: number) => {
     setDraft((prev) => {
