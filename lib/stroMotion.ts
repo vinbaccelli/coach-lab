@@ -215,11 +215,8 @@ export function normalizeSubjectBox(box: StroMotionSubjectBox): StroMotionSubjec
 }
 
 /** Dartfish opacity: oldest 20%, middle 35–80%, final 100%. Newest draws on top. */
-export function temporalGhostOpacity(index: number, total: number): number {
-  if (total <= 1 || index >= total - 1) return 1.0;
-  if (total === 2) return 0.2;
-  const t = index / (total - 2);
-  return 0.2 + t * 0.6;
+export function temporalGhostOpacity(_index: number, _total: number): number {
+  return 1.0;
 }
 
 export function stroMotionCacheKey(params: {

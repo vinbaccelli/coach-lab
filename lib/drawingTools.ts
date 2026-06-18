@@ -23,7 +23,8 @@ export type ToolType =
   | 'jointChain'
   | 'erase'
   | 'zoom'
-  | 'objectMultiplier';
+  | 'objectMultiplier'
+  | 'ruler';
 
 export interface DrawingOptions {
   color: string;

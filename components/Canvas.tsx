@@ -26,7 +26,7 @@ import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
-import { renderStroMotionDraftComposite, type StroMotionDraft } from '@/lib/stroMotionDraft';
+import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 
 /** Poll interval while waiting for a ref-backed <video> to mount. */
@@ -137,6 +137,8 @@ export interface CanvasHandle {
   getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
+  /** Cancel an in-progress StroMotion region selection; fires the pending callback with null */
+  cancelStroMotionRegionSelect: () => void;
   resetCropZoom: () => void;
   /** Crop region (canvas-normalized 0..1) for export/recording */
   getCropRegion: () => { x: number; y: number; w: number; h: number } | null;
@@ -151,11 +153,23 @@ export interface CanvasHandle {
   getObjMultiplierFrameCount: () => number;
   /** Wait until the next canvas paint completes */
   waitForRender: () => Promise<void>;
+  /**
+   * Stamp auto-generated angle/line measurements from skeleton keypoints onto
+   * the drawing canvas. Each line/angle is a regular editable stroke/angle-meas.
+   * Keypoints use MediaPipe pixel coords (relative to videoNativeW/H).
+   */
+  stampAutoMeasurements: (
+    keypoints: Array<{ x: number; y: number; score: number; name: string }>,
+    videoNativeW: number,
+    videoNativeH: number,
+  ) => void;
   /** Record animated Stromotion build-up to a downloadable video (Chrome/desktop) */
   exportStroMotionVideo: () => Promise<{ ok: boolean; reason?: string; blob?: Blob; url?: string }>;
   canvasSupportsStroMotionVideoExport: () => boolean;
   /** Set visible ghost count immediately (bypasses React prop lag for export) */
   setStroMotionVisibleCount: (count: number | undefined) => void;
+  /** Force canvas preview mode on/off immediately (bypasses React prop lag during video export) */
+  setStroMotionCanvasPreview: (on: boolean) => void;
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -190,6 +204,12 @@ export interface CanvasProps {
   stroMotionCanvasPreview?: boolean;
   /** When true, composite uses export-ready masks only (post-Generate). */
   stroMotionUseExportMasks?: boolean;
+  /** Background plate selection for composite ('start' = first frame, 'end' = last frame). */
+  stroMotionBackground?: 'start' | 'end';
+  /** Animation order for composite frames. */
+  stroMotionVideoOrder?: 'forward' | 'reverse';
+  /** End-frame bitmap — required when stroMotionBackground === 'end'. */
+  stroMotionEndPlate?: ImageBitmap | null;
   /** Subject box preview before generate (video-normalized 0..1) */
   stroMotionSubjectBox?: StroMotionSubjectBox | null;
   /** Per-frame object boxes during coach verification */
@@ -1479,6 +1499,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionDraft,
       stroMotionCanvasPreview = false,
       stroMotionUseExportMasks = false,
+      stroMotionBackground = 'start',
+      stroMotionVideoOrder = 'forward',
+      stroMotionEndPlate,
       stroMotionSubjectBox,
       stroMotionFrameStops,
       stroMotionVisibleCount,
@@ -1639,6 +1662,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const stroMotionDraftRef = useRef<StroMotionDraft | null>(stroMotionDraft ?? null);
     const stroMotionCanvasPreviewRef = useRef(stroMotionCanvasPreview);
     const stroMotionUseExportMasksRef = useRef(stroMotionUseExportMasks);
+    const stroMotionBackgroundRef = useRef(stroMotionBackground);
+    const stroMotionVideoOrderRef = useRef(stroMotionVideoOrder);
+    const stroMotionEndPlateRef = useRef<ImageBitmap | null>(stroMotionEndPlate ?? null);
+    // Overlay mode: ghost frames drawn over live video (no background plate). Used during video export.
+    const stroMotionOverlayModeRef = useRef(false);
     const stroMotionSubjectBoxRef = useRef<StroMotionSubjectBox | null>(stroMotionSubjectBox ?? null);
     const stroMotionFrameStopsRef = useRef(stroMotionFrameStops ?? null);
     const stroMotionVisibleCountRef = useRef(stroMotionVisibleCount);
@@ -1818,6 +1846,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { stroMotionDraftRef.current = stroMotionDraft ?? null; renderDirtyRef.current = true; }, [stroMotionDraft]);
     useEffect(() => { stroMotionCanvasPreviewRef.current = stroMotionCanvasPreview; renderDirtyRef.current = true; }, [stroMotionCanvasPreview]);
     useEffect(() => { stroMotionUseExportMasksRef.current = stroMotionUseExportMasks; renderDirtyRef.current = true; }, [stroMotionUseExportMasks]);
+    useEffect(() => { stroMotionBackgroundRef.current = stroMotionBackground; renderDirtyRef.current = true; }, [stroMotionBackground]);
+    useEffect(() => { stroMotionVideoOrderRef.current = stroMotionVideoOrder; renderDirtyRef.current = true; }, [stroMotionVideoOrder]);
+    useEffect(() => { stroMotionEndPlateRef.current = stroMotionEndPlate ?? null; renderDirtyRef.current = true; }, [stroMotionEndPlate]);
     useEffect(() => { stroMotionSubjectBoxRef.current = stroMotionSubjectBox ?? null; renderDirtyRef.current = true; }, [stroMotionSubjectBox]);
     useEffect(() => { stroMotionFrameStopsRef.current = stroMotionFrameStops ?? null; renderDirtyRef.current = true; }, [stroMotionFrameStops]);
     useEffect(() => { stroMotionVisibleCountRef.current = stroMotionVisibleCount; renderDirtyRef.current = true; }, [stroMotionVisibleCount]);
@@ -2239,6 +2270,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         stroRegionStartRef.current = null;
         stroRegionCurrentRef.current = null;
       },
+      cancelStroMotionRegionSelect: () => {
+        if (!isSelectingStroRegionRef.current) return;
+        stroRegionCallbackRef.current?.(null);
+        isSelectingStroRegionRef.current = false;
+        stroRegionCallbackRef.current = null;
+        stroRegionStartRef.current = null;
+        stroRegionCurrentRef.current = null;
+        renderDirtyRef.current = true;
+      },
       resetCropZoom: () => {
         zoomRef.current = 1.0;
         panXRef.current = 0;
@@ -2351,60 +2391,237 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         stroMotionVisibleCountRef.current = count;
         renderDirtyRef.current = true;
       },
+      setStroMotionCanvasPreview: (on) => {
+        stroMotionCanvasPreviewRef.current = on;
+        renderDirtyRef.current = true;
+      },
       exportStroMotionVideo: async () => {
         const canvas = canvasRef.current;
         if (!canvas) return { ok: false, reason: 'no-canvas' };
         if (!canvasSupportsVideoExport(canvas)) return { ok: false, reason: 'unsupported' };
         const draft = stroMotionDraftRef.current;
-        const frames = draft?.frames ?? stroMotionResultRef.current?.ghostLayers ?? [];
-        if (frames.length === 0) return { ok: false, reason: 'no-frames' };
+        const video = videoRef.current;
+        if (!draft || draft.frames.length === 0 || !video) return { ok: false, reason: 'no-frames' };
 
+        const sampleTimes = draft.sampleTimes;
+        const videoOrder = stroMotionVideoOrderRef.current;
+        const startTime = Math.min(...sampleTimes);
+        const endTime = Math.max(...sampleTimes);
+        const fps = 24;
+        const totalSteps = Math.max(1, Math.ceil((endTime - startTime) * fps));
+        const finalHoldMs = 2000;
+        const intervalMs = Math.round(1000 / fps);
+
+        const vw = draft.videoWidth || video.videoWidth;
+        const vh = draft.videoHeight || video.videoHeight;
+        if (!vw || !vh) return { ok: false, reason: 'no-video-size' };
+
+        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+          ? 'video/webm;codecs=vp9'
+          : MediaRecorder.isTypeSupported('video/webm')
+            ? 'video/webm'
+            : 'video/mp4';
+
+        // Off-screen composite canvas (matches video resolution)
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = vw;
+        offCanvas.height = vh;
+        const offCtx = offCanvas.getContext('2d');
+        if (!offCtx) return { ok: false, reason: 'no-context' };
+
+        // We record from the MAIN canvas to preserve existing aspect-ratio letterboxing,
+        // but we need to draw each composite frame to it. Use the existing render infra.
+        const savedPreview = stroMotionCanvasPreviewRef.current;
+        const savedOverlay = stroMotionOverlayModeRef.current;
         const savedVisible = stroMotionVisibleCountRef.current;
-        let parityBase = stroMotionResultRef.current?.diagnostics.exportParity ?? null;
-        try {
-          stroMotionVisibleCountRef.current = undefined;
-          renderDirtyRef.current = true;
-          await new Promise<void>((resolve) => {
-            renderWaitersRef.current.push(resolve);
-            renderDirtyRef.current = true;
-          });
-          await new Promise<void>((resolve) => {
-            renderWaitersRef.current.push(resolve);
-            renderDirtyRef.current = true;
-          });
-          const previewHash = await hashCanvasContent(canvas);
-          setStroMotionPreviewHash(previewHash);
-          if (parityBase) parityBase = recordExportParity(parityBase, 'preview', previewHash);
+        const savedEndPlate = stroMotionEndPlateRef.current;
+        stroMotionCanvasPreviewRef.current = true;
+        stroMotionOverlayModeRef.current = false; // use live bitmap as background plate
 
-          const blob = await exportStroMotionVideo(canvas, {
-            frameCount: frames.length,
-            download: false,
-            renderFrame: async (visibleCount) => {
-              stroMotionVisibleCountRef.current = visibleCount;
-              renderDirtyRef.current = true;
-              await new Promise<void>((resolve) => {
-                renderWaitersRef.current.push(resolve);
-                renderDirtyRef.current = true;
-              });
-              await new Promise<void>((resolve) => {
-                renderWaitersRef.current.push(resolve);
-                renderDirtyRef.current = true;
-              });
-              if (visibleCount === frames.length && parityBase) {
-                const videoHash = await hashCanvasContent(canvas);
-                parityBase = recordExportParity(parityBase, 'video', videoHash);
-              }
-            },
-          });
-          if (!blob) return { ok: false, reason: 'record-failed' };
+        const waitRender = () => new Promise<void>((resolve) => {
+          renderWaitersRef.current.push(resolve);
+          renderDirtyRef.current = true;
+        });
+
+        const stream = (canvas as unknown as { captureStream(f: number): MediaStream }).captureStream(fps);
+        const recorder = new MediaRecorder(stream, { mimeType });
+        const chunks: Blob[] = [];
+        recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+        try {
+          recorder.start();
+
+          for (let step = 0; step <= totalSteps; step++) {
+            const t = startTime + (step / totalSteps) * (endTime - startTime);
+            const clampedT = Math.min(t, endTime);
+
+            // Capture video frame at this exact time
+            let liveBitmap: ImageBitmap | null = null;
+            try {
+              liveBitmap = await captureVideoFrameAtTime(video, clampedT);
+            } catch {
+              // fallback: use start background plate
+              liveBitmap = null;
+            }
+
+            // Use the live frame as the background plate by temporarily swapping endPlate
+            // and background mode to 'end', since endPlate overrides backgroundPlate
+            if (liveBitmap) {
+              stroMotionEndPlateRef.current = liveBitmap;
+              stroMotionBackgroundRef.current = 'end';
+            } else {
+              stroMotionBackgroundRef.current = 'start';
+            }
+
+            // Compute visible ghost count
+            let visibleCount: number;
+            if (videoOrder === 'reverse') {
+              visibleCount = sampleTimes.filter((st) => st > clampedT - 0.001).length;
+            } else {
+              visibleCount = sampleTimes.filter((st) => st <= clampedT + 0.001).length;
+            }
+            stroMotionVisibleCountRef.current = visibleCount;
+
+            await waitRender();
+            await waitRender();
+
+            if (liveBitmap) {
+              try { liveBitmap.close(); } catch { /* ok */ }
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, intervalMs));
+          }
+
+          // Hold final frame
+          await new Promise((resolve) => setTimeout(resolve, finalHoldMs));
+
+          recorder.stop();
+          await new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
+
+          const blob = new Blob(chunks, { type: mimeType });
           const url = URL.createObjectURL(blob);
           return { ok: true, blob, url };
         } catch {
           return { ok: false, reason: 'record-failed' };
         } finally {
           stroMotionVisibleCountRef.current = savedVisible;
+          stroMotionCanvasPreviewRef.current = savedPreview;
+          stroMotionOverlayModeRef.current = savedOverlay;
+          stroMotionEndPlateRef.current = savedEndPlate;
+          stroMotionBackgroundRef.current = stroMotionBackground; // restore from prop
           renderDirtyRef.current = true;
         }
+      },
+      stampAutoMeasurements: (keypoints, videoNativeW, videoNativeH) => {
+        const canvas = canvasRef.current;
+        if (!canvas || !keypoints.length) return;
+
+        const W = canvas.width;
+        const H = canvas.height;
+        // Scale keypoints (video pixels) → canvas pixels via letterbox transform
+        const sc = Math.min(W / videoNativeW, H / videoNativeH);
+        const dw = videoNativeW * sc;
+        const dh = videoNativeH * sc;
+        const dx = (W - dw) / 2;
+        const dy = (H - dh) / 2;
+
+        const toCanvas = (kp: { x: number; y: number }): { x: number; y: number } => ({
+          x: dx + (kp.x / videoNativeW) * dw,
+          y: dy + (kp.y / videoNativeH) * dh,
+        });
+
+        const SCORE_MIN = 0.25;
+        const kp = (idx: number) => {
+          const k = keypoints[idx];
+          return k && k.score >= SCORE_MIN ? toCanvas(k) : null;
+        };
+
+        // MediaPipe indices
+        const LS = kp(5);  // left shoulder
+        const RS = kp(6);  // right shoulder
+        const LE = kp(7);  // left elbow
+        const RE = kp(8);  // right elbow
+        const LW = kp(9);  // left wrist
+        const RW = kp(10); // right wrist
+        const LH = kp(11); // left hip
+        const RH = kp(12); // right hip
+        const LK = kp(13); // left knee
+        const RK = kp(14); // right knee
+        const LA = kp(15); // left ankle
+        const RA = kp(16); // right ankle
+
+        const color = drawingOptsRef.current.color;
+        const lw = Math.max(2, drawingOptsRef.current.lineWidth);
+
+        const angleBetween = (a: {x:number;y:number}, vertex: {x:number;y:number}, b: {x:number;y:number}): number => {
+          const ax = a.x - vertex.x, ay = a.y - vertex.y;
+          const bx = b.x - vertex.x, by = b.y - vertex.y;
+          const dot = ax * bx + ay * by;
+          const mag = Math.sqrt(ax*ax+ay*ay) * Math.sqrt(bx*bx+by*by);
+          if (mag === 0) return 0;
+          return Math.round(Math.acos(Math.max(-1, Math.min(1, dot/mag))) * 180 / Math.PI);
+        };
+
+        const newStrokes: Stroke[] = [];
+        const newAngles: AngleMeas[] = [];
+
+        // Shoulder line
+        if (LS && RS) {
+          newStrokes.push({ tool: 'line', p1: LS, p2: RS, color, lw, dashed: false });
+          const mx = (LS.x + RS.x) / 2, my = Math.min(LS.y, RS.y) - 14;
+          newStrokes.push({ tool: 'text', pos: { x: mx, y: my }, text: 'Shoulders', color, fontSize: 13 });
+        }
+
+        // Hip line
+        if (LH && RH) {
+          newStrokes.push({ tool: 'line', p1: LH, p2: RH, color, lw, dashed: false });
+          const mx = (LH.x + RH.x) / 2, my = Math.min(LH.y, RH.y) - 14;
+          newStrokes.push({ tool: 'text', pos: { x: mx, y: my }, text: 'Hips', color, fontSize: 13 });
+        }
+
+        // Shoulder–Hip separation angle (at left shoulder)
+        if (LS && RS && LH && RH) {
+          // Vector from L-shoulder to R-shoulder, and from L-shoulder to L-hip
+          const deg = angleBetween(RS, LS, LH);
+          newAngles.push({ v: LS, p1: RS, p2: LH, deg, color, lw });
+        }
+
+        // Left elbow angle
+        if (LS && LE && LW) {
+          const deg = angleBetween(LS, LE, LW);
+          newAngles.push({ v: LE, p1: LS, p2: LW, deg, color, lw });
+        }
+
+        // Right elbow angle
+        if (RS && RE && RW) {
+          const deg = angleBetween(RS, RE, RW);
+          newAngles.push({ v: RE, p1: RS, p2: RW, deg, color, lw });
+        }
+
+        // Left knee angle
+        if (LH && LK && LA) {
+          const deg = angleBetween(LH, LK, LA);
+          newAngles.push({ v: LK, p1: LH, p2: LA, deg, color, lw });
+        }
+
+        // Right knee angle
+        if (RH && RK && RA) {
+          const deg = angleBetween(RH, RK, RA);
+          newAngles.push({ v: RK, p1: RH, p2: RA, deg, color, lw });
+        }
+
+        // Foot direction labels (ankle → knee vectors as short lines)
+        if (LK && LA) {
+          newStrokes.push({ tool: 'line', p1: LA, p2: LK, color, lw: Math.max(1, lw - 1), dashed: true });
+        }
+        if (RK && RA) {
+          newStrokes.push({ tool: 'line', p1: RA, p2: RK, color, lw: Math.max(1, lw - 1), dashed: true });
+        }
+
+        strokesRef.current = [...strokesRef.current, ...newStrokes];
+        angleMeasRef.current = [...angleMeasRef.current, ...newAngles];
+        pushHistory();
+        renderDirtyRef.current = true;
       },
     }), [onProcessingStatus, pushHistory, videoRef]);
 
@@ -3014,7 +3231,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Space key for pan mode ──────────────────────────────────────────────
 
     useEffect(() => {
-      const onKeyDown = (e: KeyboardEvent) => { if (e.code === 'Space') spaceHeldRef.current = true; };
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.code === 'Space') spaceHeldRef.current = true;
+        if (e.key === 'Escape' && isSelectingStroRegionRef.current) {
+          stroRegionCallbackRef.current?.(null);
+          isSelectingStroRegionRef.current = false;
+          stroRegionCallbackRef.current = null;
+          stroRegionStartRef.current = null;
+          stroRegionCurrentRef.current = null;
+        }
+      };
       const onKeyUp   = (e: KeyboardEvent) => {
         if (e.code === 'Space') {
           spaceHeldRef.current = false;
@@ -3118,6 +3344,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         ctx.clearRect(0, 0, W, H);
 
         // ── Apply zoom/pan transform ──────────────────────────────────────
+        // When the video is a native underlay element (not drawn on canvas),
+        // sync its CSS transform so it zooms/pans in lockstep with drawings.
+        if (nativeVideoUnderlayRef.current && videoRef.current) {
+          const z = zoomRef.current;
+          const px = panXRef.current;
+          const py = panYRef.current;
+          if (z <= ZOOM_MIN + 0.001 && px === 0 && py === 0) {
+            videoRef.current.style.transform = 'translateZ(0)';
+            videoRef.current.style.transformOrigin = '';
+          } else {
+            videoRef.current.style.transformOrigin = 'center center';
+            videoRef.current.style.transform = `translate(${px}px, ${py}px) scale(${z}) translateZ(0)`;
+          }
+        }
+
         ctx.save();
         ctx.translate(W / 2 + panXRef.current, H / 2 + panYRef.current);
         ctx.scale(zoomRef.current, zoomRef.current);
@@ -3151,6 +3392,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               visibleCount,
               previewMode: !stroMotionUseExportMasksRef.current,
               dest: { x: dx, y: dy, w: dw, h: dh },
+              background: stroMotionBackgroundRef.current,
+              videoOrder: stroMotionVideoOrderRef.current,
+              endPlate: stroMotionEndPlateRef.current,
+              overlayMode: stroMotionOverlayModeRef.current,
             });
 
             if (stroMotionShowSkeletonRef.current && stroComposite?.ghostPoses?.length) {
@@ -3280,6 +3525,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             visibleCount,
             previewMode: !stroMotionUseExportMasksRef.current,
             dest: { x: dx, y: dy, w: dw, h: dh },
+            background: stroMotionBackgroundRef.current,
+            videoOrder: stroMotionVideoOrderRef.current,
+            endPlate: stroMotionEndPlateRef.current,
+            overlayMode: stroMotionOverlayModeRef.current,
           });
         } else if (yt && ytDim.w > 0 && ytDim.h > 0) {
           vW = ytDim.w;
@@ -3335,7 +3584,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         // ── StroMotion subject / frame-stop box preview (before generate) ───
         const stroFrameStopsPreview = stroMotionFrameStopsRef.current;
-        if (!stroMotionResultRef.current && stroFrameStopsPreview?.length && dw > 0 && dh > 0) {
+        if (!stroMotionResultRef.current && !stroMotionCanvasPreviewRef.current && stroFrameStopsPreview?.length && dw > 0 && dh > 0) {
           for (const stop of stroFrameStopsPreview) {
             const sx = dx + stop.box.x * dw;
             const sy = dy + stop.box.y * dh;

@@ -71,9 +71,9 @@ export async function proposeFrameMask(
   const box = normalizeObjectBox(selectionBox);
   const sourceFrame = await captureVideoFrameAtTime(video, timeSec);
 
-  let aiSnapshot = objectType === 'player'
-    ? await buildMatteAlphaMask(sourceFrame)
-    : await matteMaskInSelection(sourceFrame, box, vw, vh);
+  // Always constrain to the selection box for precision regardless of object type.
+  // Full-frame matting for 'player' produced too much bleed outside the drawn box.
+  let aiSnapshot = await matteMaskInSelection(sourceFrame, box, vw, vh);
 
   if (!maskHasContent(aiSnapshot)) {
     aiSnapshot = fillBoxMask(vw, vh, box);

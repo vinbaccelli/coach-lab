@@ -17,7 +17,12 @@ export interface EnsureAIMetricsDraftParams {
   previous?: AIMetricsDraft | null;
 }
 
-function emptyFrame(index: number, timeSec: number, label?: string): AIMetricsFrameDraft {
+function emptyFrame(
+  index: number,
+  timeSec: number,
+  label?: string,
+  enabledModules?: Record<string, boolean>,
+): AIMetricsFrameDraft {
   return {
     index,
     timeSec,
@@ -27,6 +32,9 @@ function emptyFrame(index: number, timeSec: number, label?: string): AIMetricsFr
     ai: null,
     coach: null,
     ready: null,
+    enabledModules: (enabledModules as Record<import('@/lib/aiMetricsDraft/types').AIMetricsModuleId, boolean>) ?? { ...DEFAULT_ENABLED_MODULES },
+    skeletonStamp: null,
+    coachDrawingJson: null,
   };
 }
 
@@ -60,9 +68,17 @@ export function ensureAIMetricsDraft(params: EnsureAIMetricsDraftParams): AIMetr
       prev.ai &&
       prev.poseSample
     ) {
-      return { ...prev, index, timeSec, label };
+      return {
+        ...prev,
+        index,
+        timeSec,
+        label,
+        enabledModules: prev.enabledModules ?? { ...DEFAULT_ENABLED_MODULES },
+        skeletonStamp: prev.skeletonStamp ?? null,
+        coachDrawingJson: prev.coachDrawingJson ?? null,
+      };
     }
-    return emptyFrame(index, timeSec, label);
+    return emptyFrame(index, timeSec, label, params.previous?.enabledModules);
   });
 
   return {

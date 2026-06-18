@@ -10,9 +10,11 @@ import { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
 import { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
 import type {
   AlphaMask,
+  StroMotionBackground,
   StroMotionDraft,
   StroMotionFrameStatus,
   StroMotionObjectType,
+  StroMotionVideoOrder,
 } from '@/lib/stroMotionDraft/types';
 import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 import { useCallback, useRef, useState } from 'react';
@@ -270,16 +272,22 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     return true;
   }, [invalidatePreview]);
 
-  const generatePreview = useCallback(async (draftOverride?: StroMotionDraft): Promise<string | null> => {
+  const generatePreview = useCallback(async (
+    options?: { background?: StroMotionBackground; videoOrder?: StroMotionVideoOrder; endTimeSec?: number; draftOverride?: StroMotionDraft },
+  ): Promise<string | null> => {
     const video = videoRef.current;
-    const current = draftOverride ?? draftRef.current;
+    const current = options?.draftOverride ?? draftRef.current;
     if (!video || !current || current.frames.length === 0) return null;
     if (countExportReadyFrames(current.frames) !== current.frames.length) return null;
 
     setStatus('generating');
     setProgress({ current: 0, total: 1 });
     try {
-      const pngUrl = await exportStroMotionDraftPng(video, current);
+      const pngUrl = await exportStroMotionDraftPng(video, current, {
+        background: options?.background,
+        videoOrder: options?.videoOrder,
+        endTimeSec: options?.endTimeSec,
+      });
       setStatus('ready');
       return pngUrl;
     } catch (err) {

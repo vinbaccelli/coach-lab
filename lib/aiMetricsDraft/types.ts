@@ -3,9 +3,12 @@
 import type {
   PhaseDefinition,
   PhaseMeasurements,
+  PoseKeypoint,
   PoseSample,
   StrokeType,
 } from '@/lib/biomechanics/types';
+
+export type { PoseKeypoint };
 import {
   STRO_MOTION_DEFAULT_FRAME_COUNT,
   STRO_MOTION_FRAME_COUNTS,
@@ -52,6 +55,15 @@ export interface AIMetricsFrameDraft {
   coach: PhaseMeasurements | null;
   /** Snapshot used for export when status is ready */
   ready: PhaseMeasurements | null;
+  /** Which measurement modules are enabled for this specific frame */
+  enabledModules: Record<AIMetricsModuleId, boolean>;
+  /**
+   * Skeleton pose snapshot stamped onto this frame — drawn as a permanent
+   * overlay in the exported card (not a live overlay).
+   */
+  skeletonStamp: PoseSample | null;
+  /** Serialised Fabric.js canvas state for per-frame coach drawings */
+  coachDrawingJson: string | null;
 }
 
 export interface AIMetricsDraft {

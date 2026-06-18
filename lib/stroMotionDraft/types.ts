@@ -44,7 +44,12 @@ export interface StroMotionDraft {
 
 export type BrushMode = 'add' | 'remove' | 'flood-remove';
 
-/** V1 frame counts (product freeze: typically 4–7). */
-export const STRO_MOTION_FRAME_COUNTS = [4, 5, 6, 7] as const;
+/** Which frame is used as the still background plate for the composite. */
+export type StroMotionBackground = 'start' | 'end';
+
+/** Order in which ghost masks accumulate in the video animation. */
+export type StroMotionVideoOrder = 'forward' | 'reverse';
+
+export const STRO_MOTION_FRAME_COUNTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;
 export type StroMotionFrameCount = (typeof STRO_MOTION_FRAME_COUNTS)[number];
 export const STRO_MOTION_DEFAULT_FRAME_COUNT: StroMotionFrameCount = 5;

@@ -18,10 +18,12 @@ import {
 import { proposeFrameMeasurements } from '@/lib/aiMetricsDraft/proposeFrameMeasurements';
 import type {
   AIMetricsDraft,
+  AIMetricsFrameDraft,
   AIMetricsFrameStatus,
   AIMetricsModuleId,
 } from '@/lib/aiMetricsDraft/types';
 import { DEFAULT_ENABLED_MODULES } from '@/lib/aiMetricsDraft/types';
+import type { PoseSample } from '@/lib/biomechanics/types';
 import { useCallback, useRef, useState } from 'react';
 
 export type AIMetricsHookStatus = 'idle' | 'configuring' | 'proposing' | 'generating' | 'ready';
@@ -247,6 +249,71 @@ export function useAIMetrics(videoRef: React.RefObject<HTMLVideoElement | null>)
     invalidateReport();
   }, [invalidateReport]);
 
+  const addFrame = useCallback((timeSec: number) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const newIndex = prev.frames.length;
+      const newFrame: AIMetricsFrameDraft = {
+        index: newIndex,
+        timeSec,
+        label: `Frame ${newIndex + 1}`,
+        status: 'pending',
+        poseSample: null,
+        ai: null,
+        coach: null,
+        ready: null,
+        enabledModules: { ...prev.enabledModules },
+        skeletonStamp: null,
+        coachDrawingJson: null,
+      };
+      // Insert in sorted order by time
+      const allFrames = [...prev.frames, newFrame].sort((a, b) => a.timeSec - b.timeSec);
+      // Re-index after sort
+      const frames = allFrames.map((f, i) => ({ ...f, index: i }));
+      const sampleTimes = frames.map((f) => f.timeSec);
+      return { ...prev, frames, sampleTimes };
+    });
+    invalidateReport();
+  }, [invalidateReport]);
+
+  const removeFrame = useCallback((frameIndex: number) => {
+    setDraft((prev) => {
+      if (!prev || prev.frames.length <= 1) return prev;
+      const frames = prev.frames
+        .filter((f) => f.index !== frameIndex)
+        .map((f, i) => ({ ...f, index: i }));
+      const sampleTimes = frames.map((f) => f.timeSec);
+      return { ...prev, frames, sampleTimes };
+    });
+    invalidateReport();
+  }, [invalidateReport]);
+
+  const updateFrameEnabledModule = useCallback((
+    frameIndex: number,
+    moduleId: AIMetricsModuleId,
+    enabled: boolean,
+  ) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const frames = prev.frames.map((f) =>
+        f.index === frameIndex
+          ? { ...f, enabledModules: { ...f.enabledModules, [moduleId]: enabled } }
+          : f,
+      );
+      return { ...prev, frames };
+    });
+  }, []);
+
+  const setFrameSkeletonStamp = useCallback((frameIndex: number, stamp: PoseSample | null) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const frames = prev.frames.map((f) =>
+        f.index === frameIndex ? { ...f, skeletonStamp: stamp } : f,
+      );
+      return { ...prev, frames };
+    });
+  }, []);
+
   const generateReport = useCallback(() => {
     const current = draftRef.current;
     if (!current || !allFramesReady(current.frames)) return null;
@@ -317,9 +384,13 @@ export function useAIMetrics(videoRef: React.RefObject<HTMLVideoElement | null>)
     showSkeleton,
     setShowSkeleton,
     syncDraft,
+    addFrame,
+    removeFrame,
     updateFrameTime,
     updateFrameLabel,
     updateEnabledModule,
+    updateFrameEnabledModule,
+    setFrameSkeletonStamp,
     proposeMeasurementsForFrame,
     updateFrameMeasurements,
     resetFrameMeasurements,

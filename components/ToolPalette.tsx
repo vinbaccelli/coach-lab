@@ -31,6 +31,11 @@ import {
   GripHorizontal,
   BarChart3,
   FolderOpen,
+  Ruler,
+  Camera,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -126,6 +131,16 @@ interface ToolPaletteProps {
   /** @deprecated Use stroMotionPanel — legacy toggle only */
   stroMotionEnabled?: boolean;
   onStroMotionToggle?: () => void;
+  /** Auth button slot (rendered at bottom of every screen's footer) */
+  authContent?: React.ReactNode;
+  /** Quick screenshot → docs. When provided, shows a camera button in the footer. */
+  onScreenshotSave?: () => void;
+  /** True while screenshot save is in progress */
+  screenshotSaving?: boolean;
+  /** Canvas zoom controls */
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onZoomReset?: () => void;
 }
 
 const PRESET_COLORS = ['#FFFFFF', '#1D1D1F', '#FF3B30', '#007AFF'] as const;
@@ -133,7 +148,7 @@ const PRESET_COLORS = ['#FFFFFF', '#1D1D1F', '#FF3B30', '#007AFF'] as const;
 // Tools surfaced on the Draw sub-screen. Used so opening Draw highlights a tool
 // (and so leaving Draw can return the canvas to a neutral select state).
 const DRAW_SCREEN_TOOLS: ToolType[] = [
-  'pen', 'line', 'arrow', 'angle', 'arrowAngle', 'rect', 'circle', 'manualSwing', 'jointChain', 'text',
+  'pen', 'line', 'arrow', 'angle', 'arrowAngle', 'rect', 'circle', 'manualSwing', 'jointChain', 'text', 'ruler',
 ];
 
 type NavScreen =
@@ -214,6 +229,58 @@ function JointChainIcon({ size = 18 }: { size?: number }) {
       <circle cx="18" cy="17" r="2.5" stroke="currentColor" strokeWidth="2" />
       <path d="M8 15.5 L10.5 9.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       <path d="M13.5 9.5 L16 15.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// ── Body-part icons ─────────────────────────────────────────────────────────
+
+function RightArmIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg {...svgIconProps(size)}>
+      {/* shoulder → elbow → wrist going right */}
+      <circle cx="4" cy="10" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="12" cy="7" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="20" cy="13" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <line x1="6" y1="10" x2="10" y2="7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <line x1="14" y1="7.5" x2="18" y2="13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function LeftArmIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg {...svgIconProps(size)}>
+      <circle cx="20" cy="10" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="12" cy="7" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="4" cy="13" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <line x1="18" y1="10" x2="14" y2="7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <line x1="10" y1="7.5" x2="6" y2="13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RightLegIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg {...svgIconProps(size)}>
+      {/* hip → knee → ankle going right-down */}
+      <circle cx="8" cy="4" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="13" cy="12" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="18" cy="20" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <line x1="9.5" y1="5.5" x2="12" y2="10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <line x1="14" y1="13.5" x2="17" y2="18.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function LeftLegIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg {...svgIconProps(size)}>
+      <circle cx="16" cy="4" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="11" cy="12" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="6" cy="20" r="2.2" stroke="currentColor" strokeWidth="1.8" />
+      <line x1="14.5" y1="5.5" x2="12" y2="10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <line x1="10" y1="13.5" x2="7" y2="18.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }
@@ -395,6 +462,7 @@ function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolea
     touchAction: 'manipulation',
     transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease',
     whiteSpace: 'nowrap',
+    overflow: 'hidden',
   };
   if (io) {
     return {
@@ -488,6 +556,12 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onNavigate,
     stroMotionEnabled = false,
     onStroMotionToggle,
+    authContent,
+    onScreenshotSave,
+    screenshotSaving = false,
+    onZoomIn,
+    onZoomOut,
+    onZoomReset,
   } = props;
 
   const iconOnlyMode = compactToolbarChrome
@@ -628,6 +702,22 @@ export default function ToolPalette(props: ToolPaletteProps) {
         </span>
         {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
       </Link>
+      {onScreenshotSave ? (
+        <Row
+          k="screenshot"
+          icon={screenshotSaving
+            ? <span style={{ width: denseMobile || io ? 16 : 20, height: denseMobile || io ? 16 : 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width={denseMobile || io ? 16 : 20} height={denseMobile || io ? 16 : 20} style={{ animation: 'spin 1s linear infinite' }}>
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
+                </svg>
+              </span>
+            : <Camera size={denseMobile || io ? 16 : 20} />
+          }
+          label={screenshotSaving ? 'Saving…' : 'Save screenshot'}
+          onPress={screenshotSaving ? () => {} : onScreenshotSave}
+        />
+      ) : null}
+      {authContent ? <div style={{ marginTop: 4 }}>{authContent}</div> : null}
     </div>
   );
 
@@ -865,7 +955,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             height: 28,
             alignItems: 'center',
             justifyContent: 'center',
-            color: checked ? '#007AFF' : '#1D1D1F',
+            color: checked ? '#FFFFFF' : '#1D1D1F',
           }}
         >
           {icon}
@@ -890,7 +980,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 height: io ? 28 : undefined,
                 justifyContent: 'center',
                 alignItems: 'center',
-                color: checked ? '#007AFF' : '#1D1D1F',
+                color: checked ? '#FFFFFF' : '#1D1D1F',
               }}
             >
               {icon}
@@ -1077,6 +1167,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} label="Swing path" onPress={() => setTool('manualSwing')} />
           <Row k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} label="Joint chain" onPress={() => setTool('jointChain')} />
           <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => setTool('text')} />
+          <Row k="ruler" active={activeTool === 'ruler'} icon={<Ruler size={18} />} label="Ruler" onPress={() => setTool('ruler')} />
           <Row
             k="st-d"
             icon={<Palette size={18} />}
@@ -1109,80 +1200,51 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
+          {/* On/Off toggle */}
           {onSkeletonOverlayPausedChange !== undefined && (
-            io ? (
-              <Row
-                k="sov"
-                active={!skeletonOverlayPaused}
-                icon={<PersonStanding size={18} />}
-                label="Skeleton on/off"
-                onPress={() => onSkeletonOverlayPausedChange()}
-              />
-            ) : (
-            <label
-              key="sov"
-              aria-label="Skeleton on/off"
-              style={{
-                ...rb(!skeletonOverlayPaused, pressedKey === 'sov', io),
-                cursor: 'pointer',
-                transform: pressedKey === 'sov' ? 'scale(0.95)' : undefined,
-              }}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                fire('sov', () => onSkeletonOverlayPausedChange());
-              }}
-            >
-              <input type="checkbox" readOnly checked={!skeletonOverlayPaused} style={{ width: 18, height: 18 }} />
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Skeleton on/off</span>
-            </label>
-            )
+            <Row
+              k="sov"
+              active={!skeletonOverlayPaused}
+              icon={<PersonStanding size={io ? 18 : 20} />}
+              label="Skeleton on / off"
+              onPress={() => onSkeletonOverlayPausedChange()}
+            />
           )}
-          {!io ? (
-          <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
-            AI pose overlay follows the player. Keep the video playing for best results.
-          </p>
-          ) : null}
-          <button
-            type="button"
-            aria-label="Refresh pose overlay"
-            style={{
-              ...rb(false, pressedKey === 'reskel', io),
-              color: '#FF3B30',
-              borderColor: '#D1D1D6',
-              background: '#FFFFFF',
-              ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
-            }}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              fire('reskel', () => onResetSkeleton());
-            }}
-          >
-            <RefreshCw size={18} />
-            {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Refresh pose overlay</span>}
-          </button>
+          {/* Refresh */}
+          <Row
+            k="reskel"
+            icon={<RefreshCw size={io ? 16 : 18} />}
+            label="Refresh pose overlay"
+            onPress={() => onResetSkeleton()}
+            destructive
+          />
+          {/* Style options */}
           {onSkeletonShowAnglesChange !== undefined &&
             chk('sa', 'Show angle labels', skeletonShowAngles ?? true, onSkeletonShowAnglesChange, <Activity size={18} strokeWidth={2} />)}
-          {onSkeletonShowHeadLineChange !== undefined &&
-            chk('sh', 'Show head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange, <Minus size={18} strokeWidth={2} />)}
           {onSkeletonClassicColorsChange !== undefined &&
             chk(
               'sc',
-              skeletonClassicColors ?? true ? 'Colourful skeleton' : 'Simple blue skeleton',
+              skeletonClassicColors ?? true ? 'Colourful' : 'Simple blue',
               skeletonClassicColors ?? true,
               onSkeletonClassicColorsChange,
               <Palette size={18} strokeWidth={2} />,
             )}
-          {!io ? (
-          <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', padding: '8px 4px 0' }}>Body parts</div>
-          ) : null}
+          {onSkeletonShowHeadLineChange !== undefined &&
+            chk('sh', 'Head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange, <Minus size={18} strokeWidth={2} />)}
+          {/* Body parts — each on its own row */}
           {onSkeletonShowRightArmChange !== undefined &&
-            chk('ra', 'Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange, <ArrowRight size={18} strokeWidth={2} />)}
+            chk('ra', 'Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange, <RightArmIcon size={18} />)}
           {onSkeletonShowLeftArmChange !== undefined &&
-            chk('la', 'Left arm', skeletonShowLeftArm ?? true, onSkeletonShowLeftArmChange, <ArrowRight size={18} strokeWidth={2} style={{ transform: 'scaleX(-1)' }} />)}
+            chk('la', 'Left arm', skeletonShowLeftArm ?? true, onSkeletonShowLeftArmChange, <LeftArmIcon size={18} />)}
           {onSkeletonShowRightLegChange !== undefined &&
-            chk('rl', 'Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange, <TrendingUp size={18} strokeWidth={2} />)}
+            chk('rl', 'Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange, <RightLegIcon size={18} />)}
           {onSkeletonShowLeftLegChange !== undefined &&
-            chk('ll', 'Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange, <TrendingUp size={18} strokeWidth={2} style={{ transform: 'scaleX(-1)' }} />)}
+            chk('ll', 'Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange, <LeftLegIcon size={18} />)}
+          {!io ? (
+            <p style={{ margin: '4px 4px 0', fontSize: 11, lineHeight: 1.45, color: textMuted }}>
+              Pose follows the player live. Works best with an uploaded video file.
+            </p>
+          ) : null}
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
@@ -1268,9 +1330,25 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <div data-tour-id="tour-draw-tools" style={io ? { display: 'flex', justifyContent: 'center', width: '100%' } : undefined}>
           <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
         </div>
-        <div style={io ? { display: 'flex', justifyContent: 'center', width: '100%' } : undefined}>
-          <Row k="tools-h" icon={<LayoutGrid size={denseMobile ? 16 : 20} />} label="Tools" onPress={() => push('tools')} />
-        </div>
+        <Row
+          k="sk-h"
+          active={activeTool === 'skeleton'}
+          icon={<PersonStanding size={denseMobile ? 16 : 20} />}
+          label="Skeleton"
+          onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
+        />
+        <Row
+          k="sm-h"
+          icon={<Layers size={denseMobile ? 16 : 20} />}
+          label="Stromotion"
+          onPress={() => { onExitDrawContext?.(); push('stromotion'); }}
+        />
+        <Row
+          k="aim-h"
+          icon={<BarChart3 size={denseMobile ? 16 : 20} />}
+          label="AI Metrics"
+          onPress={() => push('aimetrics')}
+        />
         {recordingHubContent ? (
           <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
             <Row

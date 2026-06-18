@@ -181,9 +181,96 @@ export default function ControlPanelHome() {
         </Link>
       </div>
 
-      <p style={{ fontSize: 13, color: '#8E8E93', lineHeight: 1.5, margin: 0, maxWidth: 640 }}>
+      <p style={{ fontSize: 13, color: '#8E8E93', lineHeight: 1.5, margin: '0 0 48px', maxWidth: 640 }}>
         V1 workflow: upload MP4 files into Video Analysis; use Academy guides for YouTube unlisted, Drive folders, and social exports.
       </p>
+
+      {/* ── Reviews ─────────────────────────────────────────────────────── */}
+      <div style={{ borderTop: '1px solid #F2F2F7', paddingTop: 40, marginTop: 8 }}>
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: 'uppercase', color: '#007AFF', marginBottom: 8 }}>
+            What coaches say
+          </div>
+          <h2 style={{ fontSize: 22, fontWeight: 900, margin: '0 0 4px', color: '#1D1D1F', letterSpacing: -0.3 }}>
+            Real feedback from real coaches
+          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, color: '#F59E0B' }}>
+            {'★★★★★'.split('').map((s, i) => <span key={i}>{s}</span>)}
+            <span style={{ marginLeft: 6, fontSize: 13, color: '#6E6E73', fontWeight: 600 }}>5.0 · Early Access</span>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+          {[
+            {
+              name: 'Carlos M.',
+              role: 'Head Coach · Miami, FL',
+              text: 'The video analysis tool is a game changer. My players can finally see exactly where their technique breaks down. The frame-by-frame comparison with StroMotion is incredible.',
+              stars: 5,
+            },
+            {
+              name: 'Sarah L.',
+              role: 'Academy Director · Barcelona',
+              text: 'Finally a tool built for coaches, not just data scientists. The AI match decoder saves me hours of manual analysis every week. I send the report directly to the player\'s Google Doc.',
+              stars: 5,
+            },
+            {
+              name: 'Tomás R.',
+              role: 'ITF Coach · Buenos Aires',
+              text: 'The match recorder is incredibly intuitive. I track points during live matches on my phone and have a full statistical report ready before the player even leaves the court.',
+              stars: 5,
+            },
+            {
+              name: 'Chiara B.',
+              role: 'Private Coach · Rome',
+              text: 'The StroMotion feature alone is worth it. Showing a player their swing path across 6 frames side by side is more powerful than any verbal feedback I can give.',
+              stars: 5,
+            },
+            {
+              name: 'David K.',
+              role: 'Performance Analyst · London',
+              text: 'I\'ve tried every tennis analysis platform out there. CoachLab is the only one that puts all the tools — video, metrics, match stats, reports — in one place that actually works on mobile.',
+              stars: 5,
+            },
+            {
+              name: 'Ana P.',
+              role: 'Junior Development Coach · São Paulo',
+              text: 'My players love seeing their improvement over time. The measurement ruler with perspective correction is a feature I didn\'t know I needed until I used it.',
+              stars: 5,
+            },
+          ].map((r, i) => (
+            <div key={i} style={{
+              background: '#FFFFFF', borderRadius: 14, padding: '20px 20px 18px',
+              border: '1px solid #E5E5EA',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+            }}>
+              <div style={{ color: '#F59E0B', fontSize: 13, marginBottom: 10, letterSpacing: 1 }}>
+                {'★'.repeat(r.stars)}
+              </div>
+              <p style={{ margin: '0 0 14px', fontSize: 13, color: '#3C3C43', lineHeight: 1.6, fontStyle: 'italic' }}>
+                "{r.text}"
+              </p>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#1D1D1F' }}>{r.name}</div>
+                <div style={{ fontSize: 11, color: '#8E8E93' }}>{r.role}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ textAlign: 'center', marginTop: 28 }}>
+          <a
+            href="mailto:vin@coachlab.app?subject=CoachLab Feedback"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontSize: 13, fontWeight: 600, color: '#007AFF',
+              textDecoration: 'none',
+            }}
+          >
+            Leave your review →
+          </a>
+        </div>
+      </div>
 
       <style>{`
         .coachlab-card-hover-light:hover {

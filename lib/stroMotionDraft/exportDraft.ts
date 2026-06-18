@@ -3,7 +3,7 @@
 import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureFrame';
 import { renderStroMotionDraftComposite } from '@/lib/stroMotionDraft/compositeFromDraft';
 import { countExportReadyFrames, getCompositeMask } from '@/lib/stroMotionDraft/frameMask';
-import type { StroMotionDraft, StroMotionFrameDraft } from '@/lib/stroMotionDraft/types';
+import type { StroMotionBackground, StroMotionDraft, StroMotionFrameDraft, StroMotionVideoOrder } from '@/lib/stroMotionDraft/types';
 
 function closeBitmap(bitmap: ImageBitmap | null | undefined): void {
   if (!bitmap) return;
@@ -26,18 +26,15 @@ export async function hydrateDraftBitmapsForExport(
     let sourceFrame = frame.sourceFrame;
     try {
       sourceFrame = await captureVideoFrameAtTime(video, frame.timeSec);
-      if (frame.sourceFrame && frame.sourceFrame !== sourceFrame) {
-        closeBitmap(frame.sourceFrame);
-      }
     } catch {
       sourceFrame = frame.sourceFrame;
     }
     frames.push({ ...frame, sourceFrame });
   }
 
-  if (draft.backgroundPlate && draft.backgroundPlate !== backgroundPlate) {
-    closeBitmap(draft.backgroundPlate);
-  }
+  // Do NOT close old bitmaps here — the Canvas render loop may still hold references
+  // to them via stroMotionDraftRef.current. Closing eagerly causes InvalidStateError
+  // on drawImage. Let GC handle the old ones after React commits the new draft.
 
   return {
     ...draft,
@@ -51,6 +48,7 @@ export async function hydrateDraftBitmapsForExport(
 export async function exportStroMotionDraftPng(
   video: HTMLVideoElement,
   draft: StroMotionDraft,
+  options?: { background?: StroMotionBackground; videoOrder?: StroMotionVideoOrder; endTimeSec?: number },
 ): Promise<string> {
   if (countExportReadyFrames(draft.frames) !== draft.frames.length) {
     throw new Error('All frames must be marked Ready before export.');
@@ -65,10 +63,18 @@ export async function exportStroMotionDraftPng(
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D unavailable');
 
+  let endPlate: ImageBitmap | null = null;
+  if (options?.background === 'end' && options.endTimeSec !== undefined) {
+    try { endPlate = await captureVideoFrameAtTime(video, options.endTimeSec); } catch { /* fallback to start */ }
+  }
+
   renderStroMotionDraftComposite(ctx, hydrated, {
     dest: { x: 0, y: 0, w, h },
     previewMode: false,
     resolveMask: getCompositeMask,
+    background: options?.background ?? 'start',
+    videoOrder: options?.videoOrder ?? 'forward',
+    endPlate,
   });
 
   return canvas.toDataURL('image/png');

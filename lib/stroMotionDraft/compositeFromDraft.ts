@@ -6,7 +6,7 @@ import {
   type StroMotionOpacityMode,
 } from '@/lib/stroMotion';
 import { getExportMask, getPreviewMask } from '@/lib/stroMotionDraft/frameMask';
-import type { AlphaMask, StroMotionDraft, StroMotionFrameDraft } from '@/lib/stroMotionDraft/types';
+import type { AlphaMask, StroMotionBackground, StroMotionDraft, StroMotionFrameDraft, StroMotionVideoOrder } from '@/lib/stroMotionDraft/types';
 
 function renderMaskedFrame(
   ctx: CanvasRenderingContext2D,
@@ -18,11 +18,39 @@ function renderMaskedFrame(
 ): void {
   const sw = source.width;
   const sh = source.height;
-  const mw = mask.width;
-  const mh = mask.height;
+  let mw = mask.width;
+  let mh = mask.height;
+
+  // If mask dimensions don't match source, rescale mask data to match source
+  let effectiveMask = mask;
   if (sw !== mw || sh !== mh) {
-    console.warn('[StroMotion] Mask/source size mismatch', { sw, sh, mw, mh });
-    return;
+    const rescaleCanvas = document.createElement('canvas');
+    rescaleCanvas.width = sw;
+    rescaleCanvas.height = sh;
+    const rctx = rescaleCanvas.getContext('2d');
+    if (!rctx) return;
+    // Draw mask as greyscale RGBA onto a temporary canvas at source dimensions
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = mw;
+    maskCanvas.height = mh;
+    const mctx = maskCanvas.getContext('2d');
+    if (!mctx) return;
+    const maskImageData = mctx.createImageData(mw, mh);
+    for (let i = 0; i < mw * mh; i++) {
+      const v = mask.data[i];
+      maskImageData.data[i * 4] = v;
+      maskImageData.data[i * 4 + 1] = v;
+      maskImageData.data[i * 4 + 2] = v;
+      maskImageData.data[i * 4 + 3] = 255;
+    }
+    mctx.putImageData(maskImageData, 0, 0);
+    rctx.drawImage(maskCanvas, 0, 0, sw, sh);
+    const rescaled = rctx.getImageData(0, 0, sw, sh);
+    const data = new Uint8ClampedArray(sw * sh);
+    for (let i = 0; i < sw * sh; i++) data[i] = rescaled.data[i * 4];
+    effectiveMask = { width: sw, height: sh, data };
+    mw = sw;
+    mh = sh;
   }
 
   const w = mw;
@@ -32,11 +60,11 @@ function renderMaskedFrame(
   const sctx = scratch.getContext('2d');
   if (!sctx) return;
 
-  sctx.drawImage(source, 0, 0, w, h);
+  try { sctx.drawImage(source, 0, 0, w, h); } catch { return; }
   const imageData = sctx.getImageData(0, 0, w, h);
   const px = imageData.data;
   for (let i = 0; i < w * h; i++) {
-    const a = mask.data[i];
+    const a = effectiveMask.data[i];
     px[i * 4 + 3] = Math.round((px[i * 4 + 3] * a) / 255);
   }
   sctx.putImageData(imageData, 0, 0);
@@ -58,6 +86,17 @@ export interface StroMotionDraftCompositeOptions {
   dest: { x: number; y: number; w: number; h: number };
   /** Override mask resolution (export uses composite-ready masks). */
   resolveMask?: (frame: StroMotionFrameDraft) => AlphaMask | null;
+  /** Which captured frame to use as the background plate. Default: 'start'. */
+  background?: StroMotionBackground;
+  /** Accumulation order for video animation. Default: 'forward'. */
+  videoOrder?: StroMotionVideoOrder;
+  /** End-frame bitmap — required when background === 'end'. */
+  endPlate?: ImageBitmap | null;
+  /**
+   * When true, skip drawing the background plate — ghost masks are composited
+   * directly over whatever is already on ctx (e.g. the live video frame).
+   */
+  overlayMode?: boolean;
 }
 
 export function renderStroMotionDraftComposite(
@@ -72,26 +111,40 @@ export function renderStroMotionDraftComposite(
     previewMode = false,
     dest,
     resolveMask,
+    background = 'start',
+    videoOrder = 'forward',
+    endPlate = null,
+    overlayMode = false,
   } = options;
 
   const pickMask = resolveMask
     ?? ((frame: StroMotionFrameDraft) => (previewMode ? getPreviewMask(frame) : getExportMask(frame)));
 
-  const count = Math.min(visibleCount, draft.frames.length);
+  const allFrames = draft.frames;
+  const count = Math.min(visibleCount, allFrames.length);
   if (count <= 0) return;
-  const total = draft.frames.length;
+  const total = allFrames.length;
+
+  // For reverse order: frame[n-1] is "current position", earlier frames are ghosts waiting ahead.
+  // We paint in reverse — oldest/furthest frames first (bottom), newest on top.
+  const orderedFrames = videoOrder === 'reverse' ? [...allFrames].reverse() : allFrames;
 
   ctx.save();
   ctx.globalAlpha = 1;
-  ctx.drawImage(draft.backgroundPlate, dest.x, dest.y, dest.w, dest.h);
+
+  if (!overlayMode) {
+    const bgPlate = background === 'end' && endPlate ? endPlate : draft.backgroundPlate;
+    try { ctx.drawImage(bgPlate, dest.x, dest.y, dest.w, dest.h); } catch { ctx.restore(); return; }
+  }
 
   const scratch = document.createElement('canvas');
   for (let i = 0; i < count; i++) {
-    const frame = draft.frames[i];
+    const frame = orderedFrames[i];
     const mask = pickMask(frame);
     if (!frame.sourceFrame || !mask) continue;
 
     const isLast = i === count - 1;
+    // In reverse mode, the "current" frame (last painted) is the earliest time
     const ghostAlpha = isLast
       ? 1.0
       : fadeMode === 'temporal'

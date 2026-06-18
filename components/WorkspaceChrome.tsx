@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
-import { LayoutGrid, LogOut } from 'lucide-react';
+import { LayoutGrid, LogIn, LogOut } from 'lucide-react';
 
 type Props = {
   children: React.ReactNode;
@@ -38,6 +38,19 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
     router.push('/login');
     router.refresh();
   }, [router, supabase]);
+
+  const signIn = useCallback(async () => {
+    if (!supabase) return;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(window.location.pathname)}`,
+        scopes: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
+        queryParams: { access_type: 'offline', prompt: 'consent' },
+      },
+    });
+    if (error) console.error('Sign in error:', error.message);
+  }, [supabase]);
 
   return (
     <div
@@ -111,49 +124,40 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
         <span style={{ flex: 1, minWidth: 8 }} />
 
         {supabase ? (
-          <>
-            <span
-              style={{
-                fontSize: 12,
-                color: '#6E6E73',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                maxWidth: 'min(100%, 220px)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-              title={email ?? ''}
-            >
-              {email ?? '…'}
-            </span>
-
+          email ? (
+            <>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: '#6E6E73',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  maxWidth: 'min(100%, 220px)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={email}
+              >
+                {email}
+              </span>
+              <button
+                type="button"
+                onClick={signOut}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #D1D1D6', background: '#FFFFFF', color: '#1D1D1F', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+              >
+                <LogOut size={15} /> Sign out
+              </button>
+            </>
+          ) : (
             <button
               type="button"
-              onClick={signOut}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                height: 40,
-                padding: '0 14px',
-                borderRadius: 10,
-                border: '1px solid #D1D1D6',
-                background: '#FFFFFF',
-                color: '#1D1D1F',
-                fontSize: 13,
-                fontWeight: 500,
-                cursor: 'pointer',
-              }}
+              onClick={() => void signIn()}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px', borderRadius: 10, border: '1px solid #D1D1D6', background: '#007AFF', color: '#FFFFFF', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
             >
-              <LogOut size={16} />
-              Sign out
+              <LogIn size={15} /> Sign in with Google
             </button>
-          </>
-        ) : (
-          <span style={{ fontSize: 12, color: '#8E8E93' }}>
-            Configure Supabase env vars to enable login.
-          </span>
-        )}
+          )
+        ) : null}
       </header>
 
       <main

@@ -144,68 +144,79 @@ export default function ManualMatchRecorder() {
           <label style={lb}>Match date</label>
           <input type="date" value={matchDate} onChange={(e) => setMatchDate(e.target.value)} style={inp} />
 
-          <div style={{ marginTop: 16, fontWeight: 800, fontSize: 13 }}>Match format</div>
-          <label style={lb}>Sets</label>
-          <select
-            value={format.bestOf}
-            onChange={(e) => setFormat((f) => ({ ...f, bestOf: Number(e.target.value) as 1 | 3 | 5 }))}
-            style={inp}
-          >
-            <option value={1}>Best of 1</option>
-            <option value={3}>Best of 3</option>
-            <option value={5}>Best of 5</option>
-          </select>
-          <label style={lb}>Games per set</label>
-          <select
-            value={format.gamesPerSet}
-            onChange={(e) => setFormat((f) => ({ ...f, gamesPerSet: Number(e.target.value) as 6 | 4 }))}
-            style={inp}
-          >
-            <option value={6}>Standard (6 games)</option>
-            <option value={4}>Short set (4 games)</option>
-          </select>
-          <label style={lb}>Tiebreak at deadlock (6-6 or 4-4)</label>
-          <select
-            value={format.tiebreakAtDeadlock ? 'yes' : 'no'}
-            onChange={(e) => setFormat((f) => ({ ...f, tiebreakAtDeadlock: e.target.value === 'yes' }))}
-            style={inp}
-          >
-            <option value="yes">Yes</option>
-            <option value="no">No</option>
-          </select>
-          <label style={lb}>Tiebreak format</label>
-          <select
-            value={format.tiebreakTarget}
-            onChange={(e) => setFormat((f) => ({ ...f, tiebreakTarget: Number(e.target.value) as 7 | 10 }))}
-            style={inp}
-          >
-            <option value={7}>First to 7 (win by 2)</option>
-            <option value={10}>Match tiebreak — first to 10 (win by 2)</option>
-          </select>
-          <label style={lb}>Final set</label>
-          <select
-            value={format.finalSetRule}
-            onChange={(e) =>
-              setFormat((f) => ({
-                ...f,
-                finalSetRule: e.target.value as MatchFormatConfig['finalSetRule'],
-              }))
-            }
-            style={inp}
-          >
-            <option value="standard">Final set tiebreak (same as above)</option>
-            <option value="no_tb">No tiebreak in final set</option>
-            <option value="super_tb">Super tiebreak (10 pts) in deciding set</option>
-          </select>
-          <label style={lb}>Ad scoring</label>
-          <select
-            value={format.noAd ? 'noad' : 'ad'}
-            onChange={(e) => setFormat((f) => ({ ...f, noAd: e.target.value === 'noad' }))}
-            style={inp}
-          >
-            <option value="ad">Ad (deuce / advantage)</option>
-            <option value="noad">No-Ad (sudden death at deuce)</option>
-          </select>
+          <div style={{ marginTop: 16, fontWeight: 800, fontSize: 13, marginBottom: 10 }}>Match format</div>
+
+          {/* ── Quick-select preset cards ── */}
+          {([
+            { label: '1 Set', sub: '6 games · TB to 7', cfg: { bestOf: 1, gamesPerSet: 6, tiebreakAtDeadlock: true, tiebreakTarget: 7, finalSetRule: 'standard', noAd: false } },
+            { label: '1 Set No-Ad', sub: '6 games · TB to 7 · no deuce', cfg: { bestOf: 1, gamesPerSet: 6, tiebreakAtDeadlock: true, tiebreakTarget: 7, finalSetRule: 'standard', noAd: true } },
+            { label: '2 Sets + Supertiebreak', sub: 'Best of 3 · 3rd set = 10-pt TB', cfg: { bestOf: 3, gamesPerSet: 6, tiebreakAtDeadlock: true, tiebreakTarget: 7, finalSetRule: 'super_tb', noAd: false } },
+            { label: 'Best of 3', sub: '6 games · TB to 7', cfg: { bestOf: 3, gamesPerSet: 6, tiebreakAtDeadlock: true, tiebreakTarget: 7, finalSetRule: 'standard', noAd: false } },
+            { label: 'Best of 3 No-Ad', sub: '6 games · TB to 7 · no deuce', cfg: { bestOf: 3, gamesPerSet: 6, tiebreakAtDeadlock: true, tiebreakTarget: 7, finalSetRule: 'standard', noAd: true } },
+            { label: 'Best of 5', sub: '6 games · TB to 7 · final set advantage', cfg: { bestOf: 5, gamesPerSet: 6, tiebreakAtDeadlock: true, tiebreakTarget: 7, finalSetRule: 'no_tb', noAd: false } },
+            { label: 'Pro Set (8 games)', sub: 'First to 8 · TB to 7 at 8-8', cfg: { bestOf: 1, gamesPerSet: 4, tiebreakAtDeadlock: true, tiebreakTarget: 7, finalSetRule: 'standard', noAd: false } },
+            { label: 'Short Set (4 games)', sub: '4 games · TB to 7', cfg: { bestOf: 1, gamesPerSet: 4, tiebreakAtDeadlock: true, tiebreakTarget: 7, finalSetRule: 'standard', noAd: false } },
+            { label: 'Match Tiebreak Only', sub: 'Single supertiebreak to 10', cfg: { bestOf: 1, gamesPerSet: 6, tiebreakAtDeadlock: true, tiebreakTarget: 10, finalSetRule: 'super_tb', noAd: false } },
+          ] as { label: string; sub: string; cfg: MatchFormatConfig }[]).map((preset) => {
+            const isActive = JSON.stringify(format) === JSON.stringify(preset.cfg);
+            return (
+              <button
+                key={preset.label}
+                type="button"
+                onClick={() => setFormat(preset.cfg)}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
+                  width: '100%', padding: '10px 12px', marginBottom: 6,
+                  borderRadius: 10,
+                  border: isActive ? '2px solid #007AFF' : '1.5px solid #ccc',
+                  background: isActive ? 'rgba(0,122,255,0.08)' : '#fff',
+                  color: '#111', cursor: 'pointer', textAlign: 'left',
+                }}
+              >
+                <span style={{ fontWeight: 700, fontSize: 14, color: isActive ? '#007AFF' : '#111' }}>{preset.label}</span>
+                <span style={{ fontSize: 12, color: '#666', marginTop: 1 }}>{preset.sub}</span>
+              </button>
+            );
+          })}
+
+          {/* ── Advanced toggles ── */}
+          <details style={{ marginTop: 10 }}>
+            <summary style={{ fontSize: 12, color: '#666', cursor: 'pointer', userSelect: 'none', marginBottom: 8 }}>
+              Advanced customisation
+            </summary>
+            <label style={lb}>Sets</label>
+            <select value={format.bestOf} onChange={(e) => setFormat((f) => ({ ...f, bestOf: Number(e.target.value) as 1 | 3 | 5 }))} style={inp}>
+              <option value={1}>Best of 1</option>
+              <option value={3}>Best of 3</option>
+              <option value={5}>Best of 5</option>
+            </select>
+            <label style={lb}>Games per set</label>
+            <select value={format.gamesPerSet} onChange={(e) => setFormat((f) => ({ ...f, gamesPerSet: Number(e.target.value) as 6 | 4 }))} style={inp}>
+              <option value={6}>Standard (6 games)</option>
+              <option value={4}>Short set (4 games)</option>
+            </select>
+            <label style={lb}>Tiebreak at deadlock</label>
+            <select value={format.tiebreakAtDeadlock ? 'yes' : 'no'} onChange={(e) => setFormat((f) => ({ ...f, tiebreakAtDeadlock: e.target.value === 'yes' }))} style={inp}>
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </select>
+            <label style={lb}>Tiebreak target</label>
+            <select value={format.tiebreakTarget} onChange={(e) => setFormat((f) => ({ ...f, tiebreakTarget: Number(e.target.value) as 7 | 10 }))} style={inp}>
+              <option value={7}>First to 7 (win by 2)</option>
+              <option value={10}>Match tiebreak — first to 10 (win by 2)</option>
+            </select>
+            <label style={lb}>Final set rule</label>
+            <select value={format.finalSetRule} onChange={(e) => setFormat((f) => ({ ...f, finalSetRule: e.target.value as MatchFormatConfig['finalSetRule'] }))} style={inp}>
+              <option value="standard">Tiebreak (same as above)</option>
+              <option value="no_tb">Advantage set (no tiebreak)</option>
+              <option value="super_tb">Super tiebreak to 10</option>
+            </select>
+            <label style={lb}>Ad scoring</label>
+            <select value={format.noAd ? 'noad' : 'ad'} onChange={(e) => setFormat((f) => ({ ...f, noAd: e.target.value === 'noad' }))} style={inp}>
+              <option value="ad">Ad (deuce / advantage)</option>
+              <option value="noad">No-Ad (sudden death at deuce)</option>
+            </select>
+          </details>
 
           <button
             type="button"

@@ -8,11 +8,10 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { flushSync } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Camera, Plus, Trash2, Upload } from 'lucide-react';
-import { createPortal } from 'react-dom';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
@@ -29,7 +28,7 @@ import PrecisionDrawInstructions, {
 import YouTubeEmbed from '@/components/YouTubeEmbed';
 import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
-import { downloadDataURL } from '@/lib/drawingTools';
+import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
 import { useAIMetrics } from '@/hooks/useAIMetrics';
 import StroMotionPanel from '@/components/StroMotionPanel';
@@ -54,6 +53,7 @@ import {
 } from '@/lib/stroMotion';
 import {
   allFramesReady,
+  captureVideoFrameAtTime,
   countExportReadyFrames,
   countFramesWithPreviewMask,
   exportStroMotionDraftPng,
@@ -61,7 +61,9 @@ import {
   maskHasContent,
   STRO_MOTION_DEFAULT_FRAME_COUNT,
   STRO_MOTION_FRAME_COUNTS,
+  type StroMotionBackground,
   type StroMotionFrameCount,
+  type StroMotionVideoOrder,
 } from '@/lib/stroMotionDraft';
 import FrameMaskEditor from '@/components/stroMotion/FrameMaskEditor';
 import StroMotionPreviewModal from '@/components/stroMotion/StroMotionPreviewModal';
@@ -83,7 +85,12 @@ import {
 import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 import SaveReportModal from '@/components/shared/SaveReportModal';
+import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
+import RulerOverlay from '@/components/ruler/RulerOverlay';
+import FrameMetricsReportModal, { type FrameMetricsReportFrame } from '@/components/frameMetrics/FrameMetricsReportModal';
+import { uploadDataUrl } from '@/lib/supabase/storage';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 // Dynamic import prevents TensorFlow / Fabric from loading server-side
 const CanvasOverlay = dynamic(() => import('@/components/Canvas'), { ssr: false });
@@ -188,7 +195,7 @@ function ReelsDesktopShell({
   );
 }
 
-export default function Home() {
+function Home() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const contextPlayerId = searchParams.get('playerId');
@@ -463,6 +470,7 @@ export default function Home() {
   const [isDragOverB, setIsDragOverB]       = useState(false);
   const [drawContextActive, setDrawContextActive] = useState(false);
   const [isMobile, setIsMobile]             = useState(false);
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
   /** Large tap targets only on real phones — desktop 9:16 preview keeps compact UI */
   const touchChrome                         = isMobile;
 
@@ -477,6 +485,9 @@ export default function Home() {
   const [stroVideoDuration, setStroVideoDuration] = useState(0);
   const [stroVisibleCount, setStroVisibleCount] = useState<number | undefined>(undefined);
   const [stroShowSkeleton, setStroShowSkeleton] = useState(false);
+  const [stroBackground, setStroBackground] = useState<'start' | 'end'>('start');
+  const [stroVideoOrder, setStroVideoOrder] = useState<'forward' | 'reverse'>('forward');
+  const [stroEndPlate, setStroEndPlate] = useState<ImageBitmap | null>(null);
   const [stroSampleTimesOverride, setStroSampleTimesOverride] = useState<number[] | null>(null);
   const [stroPreviewPngUrl, setStroPreviewPngUrl] = useState<string | null>(null);
   const [stroEditingFrameIndex, setStroEditingFrameIndex] = useState<number | null>(null);
@@ -537,6 +548,7 @@ export default function Home() {
     !genericEmbedSrcB;
 
   // AI Metrics (coach override — frame time + optional labels)
+  const biomechClearingRef = useRef(false);
   const [biomechActive, setBiomechActive] = useState(false);
   const [biomechVideoTime, setBiomechVideoTime] = useState(0);
   const [biomechVideoDuration, setBiomechVideoDuration] = useState(0);
@@ -546,6 +558,13 @@ export default function Home() {
   const [biomechReportAnalysis, setBiomechReportAnalysis] = useState<import('@/lib/biomechanics/types').BiomechanicsAnalysis | null>(null);
   const [biomechEditingFrameIndex, setBiomechEditingFrameIndex] = useState<number | null>(null);
   const biomechHtml5Only = stroMotionHtml5Only;
+  /** Per-frame captured screenshots: frameIndex → data URL */
+  const [biomechCapturedImages, setBiomechCapturedImages] = useState<Record<number, string>>({});
+  /** Per-frame user notes: frameIndex → string */
+  const [biomechFrameNotes, setBiomechFrameNotes] = useState<Record<number, string>>({});
+  const [biomechMeasurements, setBiomechMeasurements] = useState<Record<number, { footDirection?: boolean; racketDirection?: boolean; footDistance?: boolean }>>({});
+  /** Whether the Frame Metrics report modal is open */
+  const [biomechReportModalOpen, setBiomechReportModalOpen] = useState(false);
 
   const {
     draft: aiMetricsDraft,
@@ -571,8 +590,12 @@ export default function Home() {
     showSkeleton: biomechShowSkeleton,
     setShowSkeleton: setBiomechShowSkeleton,
     syncDraft: syncAIMetricsDraft,
+    addFrame: addBiomechFrame,
+    removeFrame: removeBiomechFrame,
     updateFrameTime: updateBiomechFrameTime,
     updateEnabledModule: updateBiomechEnabledModule,
+    updateFrameEnabledModule: updateBiomechFrameEnabledModule,
+    setFrameSkeletonStamp: setBiomechFrameSkeletonStamp,
     proposeMeasurementsForFrame: proposeBiomechFrameMeasurements,
     updateFrameMeasurements: updateBiomechFrameMeasurements,
     resetFrameMeasurements: resetBiomechFrameMeasurements,
@@ -636,7 +659,7 @@ export default function Home() {
   const [objMultiplierProgress, setObjMultiplierProgress] = useState<string | null>(null);
 
   // Derived: skeleton / ball trail enabled when their tool is active
-  const skeletonEnabled  = activeTool === 'skeleton' || (biomechActive && biomechHtml5Only && biomechShowSkeleton);
+  const skeletonEnabled  = activeTool === 'skeleton' || (biomechActive && biomechHtml5Only && biomechShowSkeleton) || (stroMotionActive && stroShowSkeleton);
   /** When false, pose still runs but overlay is hidden (coach can turn off drawing without Clear All). */
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const ballTrailEnabled = activeTool === 'ballShadow';
@@ -666,6 +689,7 @@ export default function Home() {
     setDrawContextActive(false);
   }, []);
 
+  /** Full reset — used when navigating away or changing video. Exits StroMotion mode. */
   const resetStroMotion = useCallback(() => {
     clearStroMotionAll();
     setStroMotionActive(false);
@@ -683,6 +707,25 @@ export default function Home() {
     setStroIsBuildingVideoPreview(false);
     setStroEditingFrameIndex(null);
   }, [clearStroMotionAll, setStroMotionConfiguring, stroPreviewVideoUrl]);
+
+  /** Soft clear — used by the panel's Clear button. Stays in StroMotion mode. */
+  const softClearStroMotion = useCallback(() => {
+    clearStroMotionAll();
+    setStroSelectingObject(false);
+    setStroSelectingFrameIndex(null);
+    setStroVisibleCount(undefined);
+    canvasRef.current?.setStroMotionVisibleCount?.(undefined);
+    setStroSampleTimesOverride(null);
+    setStroBackground('start');
+    setStroVideoOrder('forward');
+    if (stroPreviewVideoUrl) URL.revokeObjectURL(stroPreviewVideoUrl);
+    stroPreviewVideoBlobRef.current = null;
+    setStroPreviewPngUrl(null);
+    setStroPreviewVideoUrl(null);
+    setStroPreviewModalOpen(false);
+    setStroIsBuildingVideoPreview(false);
+    setStroEditingFrameIndex(null);
+  }, [clearStroMotionAll, stroPreviewVideoUrl]);
 
   const refreshStroPreviewFromDraft = useCallback(async () => {
     const video = videoRef.current;
@@ -744,6 +787,22 @@ export default function Home() {
     [stroMotionDraft],
   );
 
+  // Capture end-frame plate whenever endFrame or video changes
+  useEffect(() => {
+    if (!stroMotionActive || !stroMotionHtml5Only || !videoSrc) return;
+    const v = videoRef.current;
+    if (!v) return;
+    let cancelled = false;
+    captureVideoFrameAtTime(v, stroEndFrame).then((bitmap) => {
+      if (cancelled) { try { bitmap.close(); } catch { /* closed */ } return; }
+      setStroEndPlate((prev) => {
+        if (prev) try { prev.close(); } catch { /* closed */ }
+        return bitmap;
+      });
+    }).catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, [stroMotionActive, stroMotionHtml5Only, videoSrc, stroEndFrame]);
+
   useEffect(() => {
     if (!stroMotionActive || !stroMotionHtml5Only) return;
     if (stroEndFrame <= stroStartFrame) return;
@@ -786,7 +845,7 @@ export default function Home() {
     setStroSelectingObject(false);
     setStroSelectingFrameIndex(null);
     if (!region) {
-      setProcessingStatus('Draw a larger box around the object.');
+      setProcessingStatus('Selection cancelled — click Select Area to try again.');
       return;
     }
     setProcessingStatus('Removing background…');
@@ -816,8 +875,7 @@ export default function Home() {
     setStroActiveFrameIndex(index);
     setStroSelectingFrameIndex(index);
     setStroSelectingObject(true);
-    setStroEditingFrameIndex(index);
-    setProcessingStatus('Draw a box around the object…');
+    setProcessingStatus('Draw a box around the object on the video…');
     void seekStroVideo(timeSec).then(() => {
       canvasRef.current?.startStroMotionRegionSelect?.((region) => {
         finishStroRegionSelect(index, region);
@@ -926,11 +984,24 @@ export default function Home() {
       label: f.label,
       status: f.status,
       hasMeasurements: frameHasMeasurements(f),
+      hasSkeletonStamp: !!f.skeletonStamp,
+      enabledModules: f.enabledModules,
+      capturedImageUrl: biomechCapturedImages[f.index],
+      notes: biomechFrameNotes[f.index],
+      footDirectionDone: biomechMeasurements[f.index]?.footDirection,
+      racketDirectionDone: biomechMeasurements[f.index]?.racketDirection,
+      footDistanceDone: biomechMeasurements[f.index]?.footDistance,
     })),
-    [aiMetricsDraft],
+    [aiMetricsDraft, biomechCapturedImages, biomechFrameNotes, biomechMeasurements],
   );
 
   useEffect(() => {
+    // Skip one cycle right after Clear so the draft stays null instead of
+    // being immediately re-populated by the sample-times reset.
+    if (biomechClearingRef.current) {
+      biomechClearingRef.current = false;
+      return;
+    }
     if (!biomechActive || !biomechHtml5Only) return;
     if (biomechTrimEnd <= biomechTrimStart) return;
     syncAIMetricsDraft({
@@ -979,7 +1050,7 @@ export default function Home() {
     setStroPreviewModalOpen(true);
 
     await hydrateStroDraftForExport();
-    const pngUrl = await generateStroPreview();
+    const pngUrl = await generateStroPreview({ background: stroBackground, videoOrder: stroVideoOrder, endTimeSec: stroEndFrame });
     if (!pngUrl) {
       setStroPreviewError('Could not build the StroMotion image. Close and try Generate again.');
       return;
@@ -995,12 +1066,14 @@ export default function Home() {
     generateStroPreview,
     hydrateStroDraftForExport,
     stroAllFramesExportReady,
+    stroBackground,
     stroEndFrame,
     stroMotionDraft,
     stroPreviewVideoUrl,
     stroReadyCount,
     stroStartFrame,
     stroVideoExportSupported,
+    stroVideoOrder,
   ]);
 
   useEffect(() => {
@@ -1086,6 +1159,7 @@ export default function Home() {
 
   const stroMotionPanelEl = (
     <StroMotionPanel
+      compact={!isMobile && toolbarCollapsed}
       objectType={stroObjectType}
       onObjectTypeChange={handleStroObjectTypeChange}
       currentTime={stroVideoTime}
@@ -1113,7 +1187,7 @@ export default function Home() {
       videoExportSupported={stroVideoExportSupported}
       isExportingVideo={stroIsExportingVideo}
       onGenerate={() => void handleStroGenerate()}
-      onClear={resetStroMotion}
+      onClear={softClearStroMotion}
       previewPngUrl={stroPreviewPngUrl}
       previewVideoUrl={stroPreviewVideoUrl}
       isBuildingVideoPreview={stroIsBuildingVideoPreview}
@@ -1124,6 +1198,10 @@ export default function Home() {
       showSkeleton={stroShowSkeleton}
       onShowSkeletonChange={setStroShowSkeleton}
       precomputedSampleTimes={stroEffectiveSampleTimes}
+      background={stroBackground}
+      onBackgroundChange={setStroBackground}
+      videoOrder={stroVideoOrder}
+      onVideoOrderChange={setStroVideoOrder}
       disabled={!stroMotionHtml5Only}
       disabledReason={
         !stroMotionHtml5Only
@@ -1179,8 +1257,17 @@ export default function Home() {
     const timeSec = frame?.timeSec ?? biomechEffectiveSampleTimes[index];
     if (timeSec === undefined) return;
     setBiomechActiveFrameIndex(index);
-    void seekBiomechVideo(timeSec);
-  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex]);
+    void seekBiomechVideo(timeSec).then(() => {
+      // Auto-stamp skeleton measurements if pose data is available
+      const poseSample = frame?.poseSample ?? frame?.skeletonStamp ?? null;
+      const kps = poseSample?.keypoints;
+      if (!kps?.length) return;
+      const video = videoRef.current;
+      const nativeW = video?.videoWidth ?? 1280;
+      const nativeH = video?.videoHeight ?? 720;
+      canvasRef.current?.stampAutoMeasurements(kps, nativeW, nativeH);
+    });
+  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex, videoRef, canvasRef]);
 
   const handleBiomechProposeFrame = useCallback((index: number) => {
     const frame = aiMetricsDraft?.frames[index];
@@ -1257,17 +1344,234 @@ export default function Home() {
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }, [biomechReportAnalysis, biomechStrokeType]);
 
+  const [biomechSavingReport, setBiomechSavingReport] = useState(false);
+  const [biomechReportPlayerPickerOpen, setBiomechReportPlayerPickerOpen] = useState(false);
+  const [biomechReportPlayerList, setBiomechReportPlayerList] = useState<Array<{ id: string; display_name: string }>>([]);
+
+  /** Opens the player picker; actual save happens in handleBiomechSaveReportToPlayer */
+  const handleBiomechSaveReport = useCallback(async () => {
+    if (!aiMetricsDraft || biomechSavingReport) return;
+    try {
+      const res = await fetch('/api/players');
+      if (res.ok) {
+        const body = await res.json() as { players?: Array<{ id: string; display_name: string }> };
+        setBiomechReportPlayerList(body.players ?? []);
+      }
+    } catch { /* offline */ }
+    setBiomechReportPlayerPickerOpen(true);
+  }, [aiMetricsDraft, biomechSavingReport]);
+
+  const handleBiomechSaveReportToPlayer = useCallback(async (playerId: string | null) => {
+    if (!aiMetricsDraft) return;
+    setBiomechReportPlayerPickerOpen(false);
+    setBiomechSavingReport(true);
+    try {
+      const supabase = createSupabaseBrowserClient();
+      const userRes = await supabase?.auth.getUser();
+      const userId = userRes?.data?.user?.id;
+
+      // Upload captured frame images to Supabase Storage
+      const screenshotUrls: string[] = [];
+      if (supabase && userId) {
+        for (const [idx, dataUrl] of Object.entries(biomechCapturedImages)) {
+          const filename = `${userId}/reports/${Date.now()}-frame${idx}.png`;
+          const path = await uploadDataUrl('analysis-screenshots', filename, dataUrl);
+          if (path) {
+            const pub = supabase.storage.from('analysis-screenshots').getPublicUrl(path).data.publicUrl;
+            screenshotUrls.push(pub);
+          }
+        }
+      }
+
+      // Build report body text
+      const bodyLines: string[] = [
+        `**Stroke type:** ${biomechStrokeType}`,
+        `**Frames analysed:** ${aiMetricsDraft.frames.length}`,
+        '',
+        ...aiMetricsDraft.frames.map((f, i) => {
+          const notes = biomechFrameNotes[i] ?? '';
+          const meas = biomechMeasurements[i];
+          const checks = [
+            meas?.footDirection ? '✓ Foot direction' : null,
+            meas?.racketDirection ? '✓ Racket direction' : null,
+            meas?.footDistance ? '✓ Foot distance' : null,
+          ].filter(Boolean).join('  ');
+          return `**${f.label}** @ ${f.timeSec.toFixed(2)}s${checks ? `  ${checks}` : ''}${notes ? `\n${notes}` : ''}`;
+        }),
+      ];
+
+      const targetPlayerId = playerId ?? screenshotPlayerList[0]?.id ?? null;
+      if (targetPlayerId) {
+        await fetch(`/api/players/${targetPlayerId}/entries`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category: 'technique',
+            folder_label: `AI Metrics — ${localDateTimeForFolder()}`,
+            body_text: bodyLines.join('\n'),
+            screenshots: screenshotUrls,
+            source: 'ai-metrics',
+            metadata: { strokeType: biomechStrokeType, frameCount: aiMetricsDraft.frames.length },
+          }),
+        });
+      }
+    } finally {
+      setBiomechSavingReport(false);
+    }
+  }, [aiMetricsDraft, biomechCapturedImages, biomechFrameNotes, biomechMeasurements, biomechStrokeType]);
+
   const resetBiomech = useCallback(() => {
+    biomechClearingRef.current = true;
     clearBiomechAll();
-    setBiomechActive(false);
+    // Keep biomechActive=true so the draft re-initialises on next render and
+    // "Add frame" works immediately after Clear without re-navigating.
     setBiomechFrameCards([]);
     setBiomechReportAnalysis(null);
     setBiomechSampleTimesOverride(null);
     setBiomechEditingFrameIndex(null);
+    setBiomechCapturedImages({});
+    setBiomechFrameNotes({});
+    setBiomechMeasurements({});
+    setBiomechReportModalOpen(false);
   }, [clearBiomechAll]);
+
+  /** Take a screenshot of the current video + canvas for a specific frame */
+  const handleBiomechCaptureFrame = useCallback(async (frameIndex: number) => {
+    const video = videoRef.current;
+    const overlayCanvas = canvasRef.current?.getCanvas();
+    if (!video) return;
+
+    // Seek to this frame's time first
+    const frame = aiMetricsDraft?.frames[frameIndex];
+    if (frame) {
+      await seekBiomechVideo(frame.timeSec);
+      // Brief wait for frame to render
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    try {
+      let dataUrl: string;
+      if (overlayCanvas) {
+        dataUrl = captureFrame(video, overlayCanvas);
+      } else {
+        // Fallback: capture just the video frame
+        const tmp = document.createElement('canvas');
+        tmp.width = video.videoWidth || 640;
+        tmp.height = video.videoHeight || 360;
+        tmp.getContext('2d')?.drawImage(video, 0, 0);
+        dataUrl = tmp.toDataURL('image/png');
+      }
+      setBiomechCapturedImages(prev => ({ ...prev, [frameIndex]: dataUrl }));
+    } catch { /* ignore */ }
+  }, [videoRef, canvasRef, aiMetricsDraft, seekBiomechVideo]);
+
+  const handleBiomechUpdateFrameNotes = useCallback((frameIndex: number, notes: string) => {
+    setBiomechFrameNotes(prev => ({ ...prev, [frameIndex]: notes }));
+  }, []);
+
+  const [screenshotSaving, setScreenshotSaving] = useState(false);
+  const [screenshotPickerOpen, setScreenshotPickerOpen] = useState(false);
+  const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
+  const [screenshotPlayerList, setScreenshotPlayerList] = useState<Array<{ id: string; display_name: string }>>([]);
+
+  /** Capture the current frame into state and open the player picker */
+  const handleScreenshotSave = useCallback(async () => {
+    if (screenshotSaving) return;
+    setScreenshotSaving(true);
+    try {
+      const video = videoRef.current;
+      const overlayCanvas = canvasRef.current?.getCanvas();
+      if (!video) return;
+      let dataUrl: string;
+      if (overlayCanvas) {
+        dataUrl = captureFrame(video, overlayCanvas);
+      } else {
+        const tmp = document.createElement('canvas');
+        tmp.width = video.videoWidth || 640;
+        tmp.height = video.videoHeight || 360;
+        tmp.getContext('2d')?.drawImage(video, 0, 0);
+        dataUrl = tmp.toDataURL('image/png');
+      }
+      setScreenshotDataUrl(dataUrl);
+      // Fetch player list for picker
+      try {
+        const res = await fetch('/api/players');
+        if (res.ok) {
+          const body = await res.json() as { players?: Array<{ id: string; display_name: string }> };
+          setScreenshotPlayerList(body.players ?? []);
+        }
+      } catch { /* offline — picker still shows download option */ }
+      setScreenshotPickerOpen(true);
+    } finally {
+      setScreenshotSaving(false);
+    }
+  }, [screenshotSaving, videoRef, canvasRef]);
+
+  const handleScreenshotDownload = useCallback((playerName?: string) => {
+    if (!screenshotDataUrl) return;
+    const prefix = playerName ? `${playerName.replace(/[^\w]+/g, '-')}-` : '';
+    downloadDataURL(screenshotDataUrl, `${prefix}screenshot-${Date.now()}.png`);
+    setScreenshotPickerOpen(false);
+    setScreenshotDataUrl(null);
+  }, [screenshotDataUrl]);
+
+  const handleScreenshotSaveToPlayer = useCallback(async (playerId: string, playerName: string) => {
+    if (!screenshotDataUrl) return;
+    const supabase = createSupabaseBrowserClient();
+    const userRes = await supabase?.auth.getUser();
+    const userId = userRes?.data?.user?.id;
+    if (!supabase || !userId) {
+      // Fallback to download if not authenticated
+      handleScreenshotDownload(playerName);
+      return;
+    }
+    setScreenshotSaving(true);
+    try {
+      const filename = `${userId}/${Date.now()}.png`;
+      const path = await uploadDataUrl('analysis-screenshots', filename, screenshotDataUrl);
+      if (path) {
+        const publicUrl = supabase.storage.from('analysis-screenshots').getPublicUrl(path).data.publicUrl;
+        await fetch(`/api/players/${playerId}/entries`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category: 'technique',
+            folder_label: `Analysis ${localDateTimeForFolder()}`,
+            body_text: 'Screenshot from analysis session.',
+            screenshots: [publicUrl],
+            source: 'analysis-screenshot',
+          }),
+        });
+      }
+      setScreenshotPickerOpen(false);
+      setScreenshotDataUrl(null);
+    } finally {
+      setScreenshotSaving(false);
+    }
+  }, [screenshotDataUrl, handleScreenshotDownload]);
+
+  /** Open report modal: requires at least one captured frame */
+  const handleBiomechOpenReport = useCallback(() => {
+    setBiomechReportModalOpen(true);
+  }, []);
+
+  /** Assemble the report frames for the modal */
+  const biomechReportFrames = useMemo((): FrameMetricsReportFrame[] => {
+    if (!aiMetricsDraft) return [];
+    return aiMetricsDraft.frames
+      .filter(f => !!biomechCapturedImages[f.index])
+      .map(f => ({
+        index: f.index,
+        timeSec: f.timeSec,
+        label: f.label,
+        imageUrl: biomechCapturedImages[f.index]!,
+        notes: biomechFrameNotes[f.index] ?? '',
+      }));
+  }, [aiMetricsDraft, biomechCapturedImages, biomechFrameNotes]);
 
   const biomechanicsPanelEl = (
     <BiomechanicsPanel
+      compact={!isMobile && toolbarCollapsed}
       currentTime={biomechVideoTime}
       duration={biomechVideoDuration}
       strokeType={biomechStrokeType}
@@ -1300,16 +1604,34 @@ export default function Home() {
         setBiomechActiveFrameIndex(index);
       }}
       onMarkReady={handleBiomechMarkReady}
+      onRemoveFrame={removeBiomechFrame}
+      onAddFrameAtCurrentTime={() => addBiomechFrame(biomechVideoTime)}
+      onToggleFrameModule={updateBiomechFrameEnabledModule}
+      onStampSkeleton={(frameIndex) => {
+        const frame = aiMetricsDraft?.frames[frameIndex];
+        if (frame?.poseSample) {
+          setBiomechFrameSkeletonStamp(frameIndex, frame.poseSample);
+        }
+      }}
+      onActivateTool={handleToolChange}
+      onCaptureFrame={(frameIndex) => { void handleBiomechCaptureFrame(frameIndex); }}
+      onUpdateFrameNotes={handleBiomechUpdateFrameNotes}
+      onToggleMeasurement={(frameIndex, key, done) => {
+        setBiomechMeasurements(prev => ({
+          ...prev,
+          [frameIndex]: { ...prev[frameIndex], [key]: done },
+        }));
+      }}
       isProposingFrame={biomechProposingFrame}
       proposingFrameIndex={biomechProposingFrameIndex}
       isGenerating={biomechGenerating}
       readyCount={biomechReadyCount}
-      isReportReady={aiMetricsStatus === 'ready'}
-      enabledModules={biomechEnabledModules}
-      onToggleModule={updateBiomechEnabledModule}
+      isReportReady={biomechReportFrames.length > 0}
       showSkeleton={biomechShowSkeleton}
       onShowSkeletonChange={setBiomechShowSkeleton}
-      onGenerate={() => { void handleBiomechGenerateReport(); }}
+      onGenerate={handleBiomechOpenReport}
+      onSaveReport={() => { void handleBiomechSaveReport(); }}
+      isSavingReport={biomechSavingReport}
       onClear={resetBiomech}
       frameCards={biomechFrameCards}
       onDownloadFrameCard={(url, label) => {
@@ -1423,8 +1745,6 @@ export default function Home() {
   const TOOLBAR_MOBILE_W = 60;
   const TOOLBAR_MOBILE_FIXED_W = 60;
   const TOOLBAR_COMPACT_EXPANDED_W = 196;
-  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
-
   useEffect(() => {
     try {
       if (localStorage.getItem('coachlab-toolbar-collapsed') === '1') {
@@ -3543,7 +3863,9 @@ export default function Home() {
       c.resetBallTrail();
     });
     setSkeletonOverlayPaused(true);
-  }, [applyMarkupToTargets]);
+    softClearStroMotion();
+    resetBiomech();
+  }, [applyMarkupToTargets, softClearStroMotion, resetBiomech]);
 
   useEffect(() => {
     if (!hasVideoBContent) {
@@ -3857,6 +4179,7 @@ export default function Home() {
     onSkeletonShowLeftLegChange:     setSkeletonShowLeftLeg,
     stroMotionPanel: stroMotionPanelEl,
     biomechanicsPanel: biomechanicsPanelEl,
+    authContent: <AuthButton iconOnly={compactToolbarRail} />,
     onNavigate: (screen) => {
       if (screen === 'stromotion') {
         setStroMotionActive(true);
@@ -3864,6 +4187,10 @@ export default function Home() {
       } else if (screen === 'aimetrics') {
         setBiomechActive(true);
         setStroMotionActive(false);
+      } else if (screen === 'skeleton') {
+        // Activate skeleton tool + un-pause overlay so pose runs and is visible
+        handleToolChange('skeleton');
+        setSkeletonOverlayPaused(false);
       } else if (screen === 'home') {
         setStroMotionActive(false);
         setBiomechActive(false);
@@ -3885,6 +4212,8 @@ export default function Home() {
     onToggleCollapsed:               !isMobile ? toggleToolbarCollapsed : undefined,
     showCollapseControl:             !isMobile,
     onCleanSession:                  resetSession,
+    onScreenshotSave:                () => { void handleScreenshotSave(); },
+    screenshotSaving,
     onSaveReport:                    () => setSessionSaveModalOpen(true),
     saveReportEnabled:               sessionDraftHasContent,
     drawContextActive,
@@ -3965,7 +4294,9 @@ export default function Home() {
     stroMotionActive &&
     stroMotionHtml5Only &&
     stroMotionDraft &&
-    countFramesWithPreviewMask(stroMotionDraft.frames) > 0,
+    countFramesWithPreviewMask(stroMotionDraft.frames) > 0 &&
+    !stroSelectingObject &&
+    stroEditingFrameIndex === null,
   );
   const stroCompositeActive = stroDraftPreviewActive;
   const useNativeHtml5Video = html5FileUpload && !stroCompositeActive;
@@ -4356,6 +4687,9 @@ export default function Home() {
                   stroMotionDraft={stroMotionDraft}
                   stroMotionCanvasPreview={stroDraftPreviewActive}
                   stroMotionUseExportMasks={stroAllFramesExportReady || stroMotionStatus === 'ready'}
+                  stroMotionBackground={stroBackground}
+                  stroMotionVideoOrder={stroVideoOrder}
+                  stroMotionEndPlate={stroEndPlate}
                   stroMotionSubjectBox={null}
                   stroMotionFrameStops={stroMotionFrameStopsForCanvas}
                   stroMotionVisibleCount={stroVisibleCount}
@@ -4379,6 +4713,13 @@ export default function Home() {
                   onObjMultiplierRegionSelected={() => setObjMultiplierHasRegion(true)}
                   videoSourceKey={videoSrc}
                 />
+                {activeTool === 'ruler' && (
+                  <RulerOverlay
+                    containerWidth={canvasSize.width}
+                    containerHeight={canvasSize.height}
+                    onClose={() => setActiveTool('select')}
+                  />
+                )}
                 {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (
                   urlLoadPhase && urlTarget === 'A' ? (
                     <div style={{
@@ -5528,6 +5869,7 @@ export default function Home() {
             frameStatus={frame.status}
             proposalEmpty={!maskHasContent(frame.aiSnapshot) && !maskHasContent(frame.working)}
             backgroundPlate={stroMotionDraft.backgroundPlate}
+            selectionBox={frame.selectionBox}
             onMaskChange={(mask) => updateFrameMask(frame.index, mask)}
             onReset={() => resetFrameMask(frame.index)}
             onRegenerate={() => {
@@ -5565,6 +5907,139 @@ export default function Home() {
         onDownloadPng={handleStroDownloadPng}
         onDownloadVideo={handleStroDownloadVideo}
       />
+
+      {/* ── Screenshot player picker ─────────────────────────────────── */}
+      {screenshotPickerOpen && screenshotDataUrl && createPortal(
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9999,
+            background: 'rgba(0,0,0,0.55)', display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+            padding: 20,
+          }}
+          onClick={() => { setScreenshotPickerOpen(false); setScreenshotDataUrl(null); }}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 18, padding: 24,
+              width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+              display: 'flex', flexDirection: 'column', gap: 16,
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: '#1D1D1F' }}>Save Screenshot</span>
+              <button
+                type="button"
+                onClick={() => { setScreenshotPickerOpen(false); setScreenshotDataUrl(null); }}
+                style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6E6E73', lineHeight: 1 }}
+              >×</button>
+            </div>
+            <img src={screenshotDataUrl} alt="Screenshot preview" style={{ width: '100%', borderRadius: 10, objectFit: 'cover', maxHeight: 180 }} />
+            <p style={{ margin: 0, fontSize: 13, color: '#6E6E73' }}>
+              {screenshotPlayerList.length > 0 ? 'Save to a player\'s docs or download directly.' : 'No players found — download directly.'}
+            </p>
+            {screenshotPlayerList.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto' }}>
+                {screenshotPlayerList.map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    disabled={screenshotSaving}
+                    onClick={() => { void handleScreenshotSaveToPlayer(p.id, p.display_name); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '10px 14px', borderRadius: 10,
+                      border: '1px solid #E5E5EA', background: '#F9F9F9',
+                      color: '#1D1D1F', fontSize: 13, fontWeight: 500,
+                      cursor: screenshotSaving ? 'not-allowed' : 'pointer', textAlign: 'left',
+                      opacity: screenshotSaving ? 0.6 : 1,
+                    }}
+                  >
+                    <span style={{ width: 28, height: 28, borderRadius: '50%', background: '#007AFF', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+                      {p.display_name.charAt(0).toUpperCase()}
+                    </span>
+                    <span style={{ flex: 1 }}>{p.display_name}</span>
+                    <span style={{ fontSize: 11, color: '#6E6E73' }}>→ save to docs</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => handleScreenshotDownload()}
+              style={{
+                padding: '10px 0', borderRadius: 10,
+                border: '1px solid #D1D1D6', background: '#F2F2F7',
+                color: '#1D1D1F', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              Download without player
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      <FrameMetricsReportModal
+        open={biomechReportModalOpen}
+        onClose={() => setBiomechReportModalOpen(false)}
+        frames={biomechReportFrames}
+        onSaveToDoc={async (framesWithNotes) => {
+          framesWithNotes.forEach(f => {
+            setBiomechFrameNotes(prev => ({ ...prev, [f.index]: f.notes }));
+          });
+          await handleBiomechSaveReport();
+        }}
+        isSaving={biomechSavingReport}
+      />
+
+      {/* Report player picker modal */}
+      {biomechReportPlayerPickerOpen && createPortal(
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={() => setBiomechReportPlayerPickerOpen(false)}
+        >
+          <div
+            style={{ background: '#fff', borderRadius: 18, padding: 24, width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', gap: 14 }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: '#1D1D1F' }}>Save Report to Player</span>
+              <button type="button" onClick={() => setBiomechReportPlayerPickerOpen(false)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6E6E73' }}>×</button>
+            </div>
+            <p style={{ margin: 0, fontSize: 13, color: '#6E6E73' }}>
+              {biomechReportPlayerList.length > 0 ? 'Choose which player\'s docs to save this AI Metrics report into.' : 'No players found — create one first in the Players section.'}
+            </p>
+            {biomechReportPlayerList.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }}>
+                {biomechReportPlayerList.map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => { void handleBiomechSaveReportToPlayer(p.id); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10, border: '1px solid #E5E5EA', background: '#F9F9F9', color: '#1D1D1F', fontSize: 13, fontWeight: 500, cursor: 'pointer', textAlign: 'left' }}
+                  >
+                    <span style={{ width: 30, height: 30, borderRadius: '50%', background: '#5856D6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
+                      {p.display_name.charAt(0).toUpperCase()}
+                    </span>
+                    <span style={{ flex: 1 }}>{p.display_name}</span>
+                    <span style={{ fontSize: 11, color: '#6E6E73' }}>→ docs</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => { void handleBiomechSaveReportToPlayer(null); }}
+              style={{ padding: '10px 0', borderRadius: 10, border: '1px solid #D1D1D6', background: '#F2F2F7', color: '#1D1D1F', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+            >
+              Save without player
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {biomechEditingFrameIndex !== null && aiMetricsDraft ? (() => {
         const frame = aiMetricsDraft.frames[biomechEditingFrameIndex];
@@ -5688,13 +6163,12 @@ export default function Home() {
           aria-live="polite"
           style={{
             position: 'fixed',
-            // Drop below the recording pill (z250) when both are visible.
             top: `calc(env(safe-area-inset-top, 0px) + 12px + ${isRecording ? 52 : 0}px)`,
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 240,
-            maxWidth: 'min(420px, calc(100vw - 24px))',
-            padding: '10px 16px',
+            maxWidth: 'min(480px, calc(100vw - 24px))',
+            padding: stroSelectingObject ? '10px 12px 10px 16px' : '10px 16px',
             borderRadius: 12,
             background: 'rgba(250, 249, 247, 0.97)',
             border: '1px solid #E5E5E5',
@@ -5705,17 +6179,43 @@ export default function Home() {
             boxShadow: '0 12px 36px rgba(0,0,0,0.12)',
             backdropFilter: 'blur(14px)',
             WebkitBackdropFilter: 'blur(14px)',
-            pointerEvents: 'none',
+            pointerEvents: stroSelectingObject ? 'auto' : 'none',
             textAlign: 'center',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
           }}
         >
-          {stroMotionProcessing
-            ? stroProposingFrame
-              ? `StroMotion: proposing mask… ${stroMotionProgress.current} / ${stroMotionProgress.total}`
-              : stroGenerating
-                ? 'StroMotion: generating composite…'
-                : processingStatus
-            : processingStatus}
+          <span style={{ flex: 1 }}>
+            {stroMotionProcessing
+              ? stroProposingFrame
+                ? `StroMotion: proposing mask… ${stroMotionProgress.current} / ${stroMotionProgress.total}`
+                : stroGenerating
+                  ? 'StroMotion: generating composite…'
+                  : processingStatus
+              : processingStatus}
+          </span>
+          {stroSelectingObject ? (
+            <button
+              type="button"
+              onClick={() => {
+                canvasRef.current?.cancelStroMotionRegionSelect?.();
+              }}
+              style={{
+                flexShrink: 0,
+                padding: '4px 10px',
+                borderRadius: 7,
+                border: '1px solid #D1D1D6',
+                background: 'transparent',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                color: '#1A1A1A',
+              }}
+            >
+              Cancel
+            </button>
+          ) : null}
         </div>
       )}
 
@@ -5734,5 +6234,13 @@ export default function Home() {
 
       <GuidedTour suppressFloatingHelp />
     </div>
+  );
+}
+
+export default function AnalysisPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <Home />
+    </React.Suspense>
   );
 }

@@ -548,12 +548,13 @@ export default function PreciseTimeline({
     if (d <= 0) return;
     const vStart = viewWindow?.start ?? 0;
     const vEnd = viewWindow?.end ?? d;
-    const center = (vStart + vEnd) / 2;
     const span = Math.max(vEnd - vStart, 0.08);
     const newSpan = clamp(span * factor, 0.08, d);
-    const start = clamp(center - newSpan / 2, 0, Math.max(0, d - newSpan));
+    // Anchor zoom on the current playhead so the viewed position stays centred
+    const anchor = clamp(t, 0, d);
+    const start = clamp(anchor - newSpan / 2, 0, Math.max(0, d - newSpan));
     setViewWindow({ start, end: start + newSpan });
-  }, [d, viewWindow]);
+  }, [d, viewWindow, t]);
 
   const queueScrubAtClientX = useCallback((clientX: number) => {
     const next = timeFromClientX(clientX);
@@ -1029,20 +1030,19 @@ export default function PreciseTimeline({
             </option>
           </select>
         ) : null}
+        {/* Zoom controls first — always visible even on narrow phone screens */}
+        <button type="button" onClick={() => zoomBy(0.65)} style={{ ...btnStyle, minWidth: 36, fontSize: 16 }} title="Zoom in (+)">+</button>
+        <button type="button" onClick={() => zoomBy(1.5)} style={{ ...btnStyle, minWidth: 36, fontSize: 16 }} title="Zoom out (−)">−</button>
+        {trimRange ? (
+          <button type="button" onClick={zoomToTrim} style={{ ...btnStyle, minWidth: 40, fontSize: 11 }} title="Fit trim range">Fit</button>
+        ) : null}
+        <button type="button" onClick={zoomFull} style={{ ...btnStyle, minWidth: 40, fontSize: 11 }} title="Full timeline">All</button>
+
         <button onClick={togglePlay} style={{ ...btnStyle, minWidth: phoneChrome ? 40 : 52, background: isPlaying ? accent : 'rgba(255,255,255,0.08)' }} title="Play/Pause (Space)">
           {isPlaying ? '⏸' : '▶'}
         </button>
         <button onClick={() => stepFrame(-1)} style={btnStyle} title={`Back 1 frame (←) @ ${selectedFps}fps`}>◀</button>
         <button onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
-
-        {trimRange ? (
-          <>
-            <button type="button" onClick={() => zoomBy(0.65)} style={{ ...btnStyle, minWidth: 36, fontSize: 16 }} title="Zoom in">+</button>
-            <button type="button" onClick={() => zoomBy(1.5)} style={{ ...btnStyle, minWidth: 36, fontSize: 16 }} title="Zoom out">−</button>
-            <button type="button" onClick={zoomToTrim} style={{ ...btnStyle, minWidth: 52, fontSize: 11 }} title="Fit trim range">Fit</button>
-            <button type="button" onClick={zoomFull} style={{ ...btnStyle, minWidth: 44, fontSize: 11 }} title="Full timeline">All</button>
-          </>
-        ) : null}
 
         <div style={{ minWidth: 130, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
           <div style={{ lineHeight: 1.1 }}>{formatTime(displayT)}</div>
