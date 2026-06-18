@@ -110,13 +110,29 @@ function StroFrameSubPanel({
   onClose: () => void;
 }) {
   const rect = anchorEl.getBoundingClientRect();
+  const panelW = Math.min(200, window.innerWidth - rect.right - 16);
   const left = rect.right + 8;
   const top = Math.min(rect.top, window.innerHeight - 220);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  React.useEffect(() => {
+    const handler = (e: MouseEvent | TouchEvent) => {
+      const target = e instanceof TouchEvent ? e.touches[0]?.target : e.target;
+      if (panelRef.current && !panelRef.current.contains(target as Node) && !anchorEl.contains(target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('touchstart', handler);
+    return () => { document.removeEventListener('mousedown', handler); document.removeEventListener('touchstart', handler); };
+  }, [onClose, anchorEl]);
 
   const panel = (
     <div
+      ref={panelRef}
       style={{
-        position: 'fixed', left, top, zIndex: 9999, width: 190,
+        position: 'fixed', left, top, zIndex: 9999, width: Math.max(panelW, 160),
         background: '#FFF', borderRadius: 14, border: '1px solid #E5E5EA',
         boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
         padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8,
