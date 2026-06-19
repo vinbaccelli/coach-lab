@@ -2,7 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { BoxSelect, Check, Download, Layers, Minus, Plus, Trash2 } from 'lucide-react';
+import { BoxSelect, Check, Download, Layers, Minus, Plus, Sparkles, Trash2 } from 'lucide-react';
 import {
   STRO_MOTION_FRAME_COUNTS,
   type StroMotionFrameCount,
@@ -93,6 +93,8 @@ export interface StroMotionPanelProps {
   onBackgroundChange?: (bg: StroMotionBackground) => void;
   videoOrder?: StroMotionVideoOrder;
   onVideoOrderChange?: (order: StroMotionVideoOrder) => void;
+  /** Auto-detect selection areas for all frames using skeleton keypoints */
+  onAutoSelectAll?: () => void;
   /** When true, renders a compact icon-only vertical strip for the collapsed toolbar rail */
   compact?: boolean;
 }
@@ -267,6 +269,7 @@ export default function StroMotionPanel({
   onBackgroundChange,
   videoOrder = 'forward',
   onVideoOrderChange,
+  onAutoSelectAll,
   compact = false,
 }: StroMotionPanelProps) {
   const allReady = frames.length > 0 && readyCount === frames.length;
@@ -329,6 +332,13 @@ export default function StroMotionPanel({
             anchorEl={openFrameIndex === frame.index ? openFrameAnchor : null}
           />
         ))}
+
+        {/* Auto-detect from skeleton */}
+        {onAutoSelectAll && frames.length > 0 && (
+          <button type="button" disabled={!!disabled || isGenerating || isProposingFrame} onClick={onAutoSelectAll} title="Auto-detect player in all frames" style={ib()}>
+            <Sparkles size={18} strokeWidth={2} />
+          </button>
+        )}
 
         <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
 

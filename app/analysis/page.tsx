@@ -1270,6 +1270,15 @@ function Home() {
       isExportingVideo={stroIsExportingVideo}
       onGenerate={() => void handleStroGenerate()}
       onClear={softClearStroMotion}
+      onAutoSelectAll={async () => {
+        const draft = stroMotionDraft;
+        if (!draft) return;
+        for (const frame of draft.frames) {
+          if (!frame.selectionBox) {
+            await autoSelectStroFrameFromSkeleton(frame.index);
+          }
+        }
+      }}
       previewPngUrl={stroPreviewPngUrl}
       previewVideoUrl={stroPreviewVideoUrl}
       isBuildingVideoPreview={stroIsBuildingVideoPreview}
