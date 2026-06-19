@@ -325,6 +325,16 @@ export function useAIMetrics(videoRef: React.RefObject<HTMLVideoElement | null>)
     });
   }, []);
 
+  const setFrameDrawingJson = useCallback((frameIndex: number, json: string | null) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const frames = prev.frames.map((f) =>
+        f.index === frameIndex ? { ...f, coachDrawingJson: json } : f,
+      );
+      return { ...prev, frames };
+    });
+  }, []);
+
   const generateReport = useCallback(() => {
     const current = draftRef.current;
     if (!current || !allFramesReady(current.frames)) return null;
@@ -423,6 +433,7 @@ export function useAIMetrics(videoRef: React.RefObject<HTMLVideoElement | null>)
     generateReport,
     invalidateReport,
     clearAll,
+    setFrameDrawingJson,
     autoProposeAllFrames,
     readyCount: draft ? countReadyFrames(draft.frames) : 0,
     enabledModules: draft?.enabledModules ?? DEFAULT_ENABLED_MODULES,

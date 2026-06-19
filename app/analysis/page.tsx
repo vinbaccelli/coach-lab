@@ -613,6 +613,7 @@ function Home() {
     generateReport: generateBiomechReport,
     invalidateReport: invalidateBiomechReport,
     clearAll: clearBiomechAll,
+    setFrameDrawingJson: setBiomechFrameDrawingJson,
     autoProposeAllFrames: autoProposeAllBiomechFrames,
     readyCount: biomechReadyCount,
     enabledModules: biomechEnabledModules,
@@ -1340,13 +1341,15 @@ function Home() {
 
     // Save current frame's drawings before switching
     if (biomechActiveFrameIndex !== null && canvasRef.current) {
-      biomechFrameDrawingsRef.current[biomechActiveFrameIndex] = canvasRef.current.exportStrokes();
+      const json = canvasRef.current.exportStrokes();
+      biomechFrameDrawingsRef.current[biomechActiveFrameIndex] = json;
+      setBiomechFrameDrawingJson(biomechActiveFrameIndex, json);
     }
 
     setBiomechActiveFrameIndex(index);
     void seekBiomechVideo(timeSec).then(() => {
       // Restore target frame's drawings (or clear if none saved)
-      const saved = biomechFrameDrawingsRef.current[index];
+      const saved = biomechFrameDrawingsRef.current[index] ?? frame?.coachDrawingJson;
       if (saved) {
         canvasRef.current?.importStrokes(saved);
       } else {
