@@ -11,8 +11,11 @@ import {
   Plus,
   PlusCircle,
   Ruler,
+  Sparkles,
   Trash2,
   PersonStanding,
+  Activity,
+  Target,
 } from 'lucide-react';
 import {
   AIMETRICS_FRAME_COUNTS,
@@ -64,6 +67,31 @@ function AngleArrowIcon({ size = 16 }: { size?: number }) {
 
 // ── Compact frame sub-panel — fixed portal, appears to the right of toolbar ─
 
+type MeasurementKey = 'skeletonStamp' | 'jointAngles' | 'racketVector' | 'stringbedDirection' | 'measurements' | 'hipShoulderDiff' | string;
+
+const MEASUREMENT_ITEMS: { key: MeasurementKey; label: string; tool: ToolType | 'stamp'; icon: React.ReactNode }[] = [
+  { key: 'skeletonStamp', label: 'Skeleton stamp', tool: 'stamp', icon: <PersonStanding size={13} /> },
+  { key: 'jointAngles', label: 'Joint angles', tool: 'stamp', icon: <Activity size={13} /> },
+  { key: 'racketVector', label: 'Racket vector', tool: 'arrowAngle', icon: <AngleArrowIcon size={13} /> },
+  { key: 'stringbedDirection', label: 'Stringbed direction', tool: 'arrowAngle', icon: <Target size={13} /> },
+  { key: 'measurements', label: 'Measurements', tool: 'ruler', icon: <Ruler size={13} /> },
+  { key: 'hipShoulderDiff', label: 'Hip/shoulder diff', tool: 'arrowAngle', icon: <AngleArrowIcon size={13} /> },
+];
+
+function getDoneMap(frame: BiomechFrameRow): Record<string, boolean | undefined> {
+  return {
+    skeletonStamp: frame.skeletonStampDone ?? frame.hasSkeletonStamp,
+    jointAngles: frame.jointAnglesDone,
+    racketVector: frame.racketVectorDone,
+    stringbedDirection: frame.stringbedDirectionDone,
+    measurements: frame.measurementsDone,
+    hipShoulderDiff: frame.hipShoulderDiffDone,
+    footDirection: frame.footDirectionDone,
+    racketDirection: frame.racketDirectionDone,
+    footDistance: frame.footDistanceDone,
+  };
+}
+
 interface CompactFrameSubPanelProps {
   frame: BiomechFrameRow;
   anchorEl: HTMLElement;
@@ -71,23 +99,14 @@ interface CompactFrameSubPanelProps {
   onJumpAndDraw: () => void;
   onStampSkeleton: () => void;
   onActivateTool?: (tool: ToolType) => void;
-  onToggleMeasurement?: (key: 'footDirection' | 'racketDirection' | 'footDistance', done: boolean) => void;
+  onToggleMeasurement?: (key: string, done: boolean) => void;
   onClose: () => void;
 }
 
 function CompactFrameSubPanel({
   frame, anchorEl, onJumpAndDraw, onStampSkeleton, onActivateTool, onToggleMeasurement, onClose,
 }: CompactFrameSubPanelProps) {
-  const measurementRows: { key: 'footDirection' | 'racketDirection' | 'footDistance'; label: string; tool: ToolType; icon: React.ReactNode }[] = [
-    { key: 'footDirection', label: 'Foot direction', tool: 'arrowAngle', icon: <AngleArrowIcon size={13} /> },
-    { key: 'racketDirection', label: 'Racket direction', tool: 'arrowAngle', icon: <AngleArrowIcon size={13} /> },
-    { key: 'footDistance', label: 'Foot distance', tool: 'ruler', icon: <Ruler size={13} /> },
-  ];
-  const doneMap: Record<string, boolean | undefined> = {
-    footDirection: frame.footDirectionDone,
-    racketDirection: frame.racketDirectionDone,
-    footDistance: frame.footDistanceDone,
-  };
+  const doneMap = getDoneMap(frame);
 
   const rect = anchorEl.getBoundingClientRect();
   const panelW = Math.min(220, window.innerWidth - rect.right - 16);
@@ -130,17 +149,9 @@ function CompactFrameSubPanel({
         <Pen size={14} /> Jump to frame
       </button>
 
-      <button
-        type="button"
-        onClick={onStampSkeleton}
-        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: frame.hasSkeletonStamp ? '1px solid #5856D6' : '1px solid #D1D1D6', background: frame.hasSkeletonStamp ? 'rgba(88,86,214,0.1)' : '#fff', color: frame.hasSkeletonStamp ? '#5856D6' : '#6E6E73' }}
-      >
-        <PersonStanding size={14} /> {frame.hasSkeletonStamp ? 'Stamped ✓' : 'Stamp skeleton'}
-      </button>
-
-      <div style={{ borderTop: '1px solid #F2F2F7', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: 0.5 }}>Measurements</div>
-        {measurementRows.map(({ key, label, tool, icon }) => {
+      <div style={{ borderTop: '1px solid #F2F2F7', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: 0.5 }}>Analysis tools</div>
+        {MEASUREMENT_ITEMS.map(({ key, label, tool, icon }) => {
           const done = !!doneMap[key];
           return (
             <label
@@ -148,7 +159,12 @@ function CompactFrameSubPanel({
               style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', padding: '2px 0' }}
               onClick={(e) => {
                 e.preventDefault();
-                if (!done) { onJumpAndDraw(); onActivateTool?.(tool); }
+                if (tool === 'stamp') {
+                  onJumpAndDraw();
+                  onStampSkeleton();
+                } else {
+                  if (!done) { onJumpAndDraw(); onActivateTool?.(tool as ToolType); }
+                }
                 onToggleMeasurement?.(key, !done);
               }}
             >
@@ -189,7 +205,7 @@ interface CompactStripProps {
   onSelectFrame: (index: number) => void;
   onStampSkeleton: (index: number) => void;
   onActivateTool?: (tool: ToolType) => void;
-  onToggleMeasurement?: (frameIndex: number, key: 'footDirection' | 'racketDirection' | 'footDistance', done: boolean) => void;
+  onToggleMeasurement?: (frameIndex: number, key: string, done: boolean) => void;
 }
 
 function FrameCompactIcon({
@@ -204,7 +220,7 @@ function FrameCompactIcon({
   onSelectFrame: (i: number) => void;
   onStampSkeleton: (i: number) => void;
   onActivateTool?: (t: ToolType) => void;
-  onToggleMeasurement?: (fi: number, key: 'footDirection' | 'racketDirection' | 'footDistance', done: boolean) => void;
+  onToggleMeasurement?: (fi: number, key: string, done: boolean) => void;
   onClose: () => void;
   anchorEl: HTMLElement | null;
 }) {
@@ -332,6 +348,12 @@ export interface BiomechFrameRow {
   /** Screenshot data URL set after user captures this frame */
   capturedImageUrl?: string;
   /** Measurement checkboxes state */
+  skeletonStampDone?: boolean;
+  jointAnglesDone?: boolean;
+  racketVectorDone?: boolean;
+  stringbedDirectionDone?: boolean;
+  measurementsDone?: boolean;
+  hipShoulderDiffDone?: boolean;
   footDirectionDone?: boolean;
   racketDirectionDone?: boolean;
   footDistanceDone?: boolean;
@@ -381,7 +403,7 @@ export interface BiomechanicsPanelProps {
   /** Update the measurement notes for a frame */
   onUpdateFrameNotes?: (frameIndex: number, notes: string) => void;
   /** Toggle measurement checkbox for a frame */
-  onToggleMeasurement?: (frameIndex: number, key: 'footDirection' | 'racketDirection' | 'footDistance', done: boolean) => void;
+  onToggleMeasurement?: (frameIndex: number, key: string, done: boolean) => void;
   isProposingFrame: boolean;
   proposingFrameIndex: number | null;
   isGenerating: boolean;
@@ -425,21 +447,11 @@ function FrameCard({
   onRemove: () => void;
   onStampSkeleton: () => void;
   onActivateTool?: (tool: ToolType) => void;
-  onToggleMeasurement?: (key: 'footDirection' | 'racketDirection' | 'footDistance', done: boolean) => void;
+  onToggleMeasurement?: (key: string, done: boolean) => void;
 }) {
   const hasCaptured = !!frame.capturedImageUrl;
 
-  const measurementRows: { key: 'footDirection' | 'racketDirection' | 'footDistance'; label: string; tool: ToolType; icon: React.ReactNode }[] = [
-    { key: 'footDirection', label: 'Foot direction', tool: 'arrowAngle', icon: <AngleArrowIcon size={14} /> },
-    { key: 'racketDirection', label: 'Racket direction', tool: 'arrowAngle', icon: <AngleArrowIcon size={14} /> },
-    { key: 'footDistance', label: 'Foot distance', tool: 'ruler', icon: <Ruler size={14} /> },
-  ];
-
-  const doneMap: Record<string, boolean | undefined> = {
-    footDirection: frame.footDirectionDone,
-    racketDirection: frame.racketDirectionDone,
-    footDistance: frame.footDistanceDone,
-  };
+  const doneMap = getDoneMap(frame);
 
   return (
     <div style={{
@@ -516,23 +528,6 @@ function FrameCard({
           <Pen size={14} /> Jump to frame
         </button>
 
-        {/* Skeleton stamp */}
-        <button
-          type="button"
-          title={showSkeleton ? 'Stamp selected joints with angles' : 'Stamp all joints with angles'}
-          onClick={onStampSkeleton}
-          style={{
-            width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-            padding: '10px 12px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            border: frame.hasSkeletonStamp ? '1px solid #5856D6' : '1px solid #D1D1D6',
-            background: frame.hasSkeletonStamp ? 'rgba(88,86,214,0.1)' : '#fff',
-            color: frame.hasSkeletonStamp ? '#5856D6' : '#6E6E73',
-          }}
-        >
-          <PersonStanding size={14} />
-          {frame.hasSkeletonStamp ? 'Stamped ✓' : 'Stamp skeleton'}
-        </button>
-
         {/* Capture */}
         <button
           type="button"
@@ -552,12 +547,12 @@ function FrameCard({
         </button>
       </div>
 
-      {/* Measurement checkboxes */}
-      <div style={{ borderTop: '1px solid #F2F2F7', padding: '10px 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {/* Analysis tools */}
+      <div style={{ borderTop: '1px solid #F2F2F7', padding: '10px 14px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>
-          Measurements
+          Analysis tools
         </div>
-        {measurementRows.map(({ key, label, tool, icon }) => {
+        {MEASUREMENT_ITEMS.map(({ key, label, tool, icon }) => {
           const done = !!doneMap[key];
           return (
             <label
@@ -565,9 +560,11 @@ function FrameCard({
               style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '4px 0' }}
               onClick={(e) => {
                 e.preventDefault();
-                if (!done) {
+                if (tool === 'stamp') {
                   onJumpAndDraw();
-                  onActivateTool?.(tool);
+                  onStampSkeleton();
+                } else {
+                  if (!done) { onJumpAndDraw(); onActivateTool?.(tool as ToolType); }
                 }
                 onToggleMeasurement?.(key, !done);
               }}
@@ -700,7 +697,7 @@ export default function BiomechanicsPanel({
       {/* Header */}
       <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #F2F2F7' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <span style={{ fontSize: 15, fontWeight: 700, color: '#1D1D1F' }}>Frame Metrics</span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: '#1D1D1F' }}>Metrics</span>
           {frames.length > 0 && (
             <button type="button" onClick={onClear} style={{ ...iconBtn, color: '#FF3B30', border: '1px solid rgba(255,59,48,0.25)', width: 30, height: 30 }}>
               <Trash2 size={13} />

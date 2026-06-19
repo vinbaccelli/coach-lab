@@ -571,7 +571,7 @@ function Home() {
   const [biomechCapturedImages, setBiomechCapturedImages] = useState<Record<number, string>>({});
   /** Per-frame user notes: frameIndex → string */
   const [biomechFrameNotes, setBiomechFrameNotes] = useState<Record<number, string>>({});
-  const [biomechMeasurements, setBiomechMeasurements] = useState<Record<number, { footDirection?: boolean; racketDirection?: boolean; footDistance?: boolean }>>({});
+  const [biomechMeasurements, setBiomechMeasurements] = useState<Record<number, Record<string, boolean>>>({});
   /** Whether the Frame Metrics report modal is open */
   const [biomechReportModalOpen, setBiomechReportModalOpen] = useState(false);
 
@@ -1039,6 +1039,12 @@ function Home() {
       enabledModules: f.enabledModules,
       capturedImageUrl: biomechCapturedImages[f.index],
       notes: biomechFrameNotes[f.index],
+      skeletonStampDone: biomechMeasurements[f.index]?.skeletonStamp,
+      jointAnglesDone: biomechMeasurements[f.index]?.jointAngles,
+      racketVectorDone: biomechMeasurements[f.index]?.racketVector,
+      stringbedDirectionDone: biomechMeasurements[f.index]?.stringbedDirection,
+      measurementsDone: biomechMeasurements[f.index]?.measurements,
+      hipShoulderDiffDone: biomechMeasurements[f.index]?.hipShoulderDiff,
       footDirectionDone: biomechMeasurements[f.index]?.footDirection,
       racketDirectionDone: biomechMeasurements[f.index]?.racketDirection,
       footDistanceDone: biomechMeasurements[f.index]?.footDistance,
