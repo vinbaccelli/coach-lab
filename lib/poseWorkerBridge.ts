@@ -68,6 +68,7 @@ export class PoseWorkerBridge {
 
   private fallbackDetector: any = null;
   private idleId: number | null = null;
+  private _focusPoint: { x: number; y: number } | null = null;
 
   constructor(opts?: { frameSkip?: number; onStatus?: (msg: string) => void }) {
     this._frameSkip = opts?.frameSkip ?? 0;
@@ -125,6 +126,14 @@ export class PoseWorkerBridge {
 
   resetSmoothing() {
     this.smoothPrev = null;
+  }
+
+  setFocusPoint(pt: { x: number; y: number } | null) {
+    this._focusPoint = pt;
+  }
+
+  get focusPoint() {
+    return this._focusPoint;
   }
 
   dispose() {
@@ -257,7 +266,7 @@ export class PoseWorkerBridge {
             this.inFlight = false;
             return;
           }
-          this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId: this.frameCount }, [bmp]);
+          this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId: this.frameCount, focusPoint: this._focusPoint }, [bmp]);
         })
         .catch(() => {
           this.inFlight = false;

@@ -67,32 +67,51 @@ self.onmessage = async (e: MessageEvent) => {
       const bitmap: ImageBitmap = data.bitmap;
       const fullW = bitmap.width;
       const fullH = bitmap.height;
+      const focus: { x: number; y: number } | null = data.focusPoint ?? null;
 
-      // Center-crop to ~65% of the frame to focus on the main player
-      const cropRatio = 0.65;
-      const cropW = Math.round(fullW * cropRatio);
-      const cropH = Math.round(fullH * cropRatio);
-      const cropX = Math.round((fullW - cropW) / 2);
-      const cropY = Math.round((fullH - cropH) / 2);
+      let cropX = 0, cropY = 0, cropW = fullW, cropH = fullH;
 
-      const cropped = await createImageBitmap(bitmap, cropX, cropY, cropW, cropH);
-      bitmap.close();
+      if (focus) {
+        // Crop around the user's click point (~60% of frame)
+        const ratio = 0.6;
+        cropW = Math.round(fullW * ratio);
+        cropH = Math.round(fullH * ratio);
+        cropX = Math.round(Math.max(0, Math.min(fullW - cropW, focus.x * fullW - cropW / 2)));
+        cropY = Math.round(Math.max(0, Math.min(fullH - cropH, focus.y * fullH - cropH / 2)));
+      }
 
-      const poses = await detector.estimatePoses(cropped, { flipHorizontal: false });
-      cropped.close();
+      let source: ImageBitmap;
+      if (focus) {
+        source = await createImageBitmap(bitmap, cropX, cropY, cropW, cropH);
+        bitmap.close();
+      } else {
+        source = bitmap;
+      }
 
-      // Map keypoints back to full-frame coordinates
+      const poses = await detector.estimatePoses(source, { flipHorizontal: false });
+
       const raw = poses?.[0]?.keypoints;
-      const scaleX = cropW / (cropped.width || cropW);
-      const scaleY = cropH / (cropped.height || cropH);
-      const keypoints =
-        raw?.map((kp: any) => ({
+      let keypoints;
+      if (focus && raw) {
+        // Map keypoints back to full-frame coordinates
+        const scaleX = cropW / source.width;
+        const scaleY = cropH / source.height;
+        keypoints = raw.map((kp: any) => ({
           x: kp.x * scaleX + cropX,
           y: kp.y * scaleY + cropY,
           score: kp.score ?? 0,
           name: kp.name ?? '',
+        }));
+      } else {
+        keypoints = raw?.map((kp: any) => ({
+          x: kp.x,
+          y: kp.y,
+          score: kp.score ?? 0,
+          name: kp.name ?? '',
         })) ?? null;
+      }
 
+      source.close();
       self.postMessage({ type: 'result', keypoints, frameId: data.frameId });
     } catch {
       if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
