@@ -295,7 +295,20 @@ export class PoseWorkerBridge {
     const run = async () => {
       try {
         const poses = await det.estimatePoses(video, { flipHorizontal: false });
-        const raw = poses?.[0]?.keypoints as PoseKeypoint[] | undefined;
+        // Pick the largest person (biggest keypoint spread) to avoid spectators
+        let best = poses?.[0];
+        if (poses && poses.length > 1) {
+          let bestArea = 0;
+          for (const pose of poses) {
+            const kps = (pose.keypoints as PoseKeypoint[])?.filter(k => k.score >= 0.2) ?? [];
+            if (kps.length < 4) continue;
+            const xs = kps.map(k => k.x);
+            const ys = kps.map(k => k.y);
+            const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+            if (area > bestArea) { bestArea = area; best = pose; }
+          }
+        }
+        const raw = best?.keypoints as PoseKeypoint[] | undefined;
         this.deliverKeypoints(raw?.length ? raw : null);
       } catch {
         this.deliverKeypoints(null);

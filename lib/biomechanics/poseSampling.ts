@@ -1,6 +1,22 @@
 import { acquirePoseDetector } from '@/lib/sharedPoseDetector';
 import type { PoseKeypoint, PoseSample } from '@/lib/biomechanics/types';
 
+function pickLargestPose(poses: Array<{ keypoints: Array<{ x: number; y: number; score?: number }> }>): typeof poses[0] | null {
+  if (!poses?.length) return null;
+  if (poses.length === 1) return poses[0];
+  let best = poses[0];
+  let bestArea = 0;
+  for (const pose of poses) {
+    const kps = pose.keypoints?.filter(k => (k.score ?? 0) >= 0.2) ?? [];
+    if (kps.length < 4) continue;
+    const xs = kps.map(k => k.x);
+    const ys = kps.map(k => k.y);
+    const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+    if (area > bestArea) { bestArea = area; best = pose; }
+  }
+  return best;
+}
+
 async function seekVideo(video: HTMLVideoElement, time: number): Promise<void> {
   const t = Math.max(0, Math.min(time, Math.max(0, video.duration - 1e-6)));
   if (Math.abs(video.currentTime - t) < 0.001) return;
@@ -54,7 +70,7 @@ export async function samplePosesInTrimRange(
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     try {
       const poses = await detector.estimatePoses(canvas, { flipHorizontal: false });
-      const raw = poses?.[0]?.keypoints;
+      const raw = pickLargestPose(poses)?.keypoints;
       const keypoints: PoseKeypoint[] | null = raw?.length
         ? raw.map((kp: { x: number; y: number; score?: number; name?: string }) => ({
             x: kp.x,
@@ -110,7 +126,7 @@ export async function samplePosesAtTimes(
     }
     try {
       const poses = await detector.estimatePoses(canvas, { flipHorizontal: false });
-      const raw = poses?.[0]?.keypoints;
+      const raw = pickLargestPose(poses)?.keypoints;
       const keypoints: PoseKeypoint[] | null = raw?.length
         ? raw.map((kp: { x: number; y: number; score?: number; name?: string }) => ({
             x: kp.x,

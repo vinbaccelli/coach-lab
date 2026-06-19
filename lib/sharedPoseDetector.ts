@@ -24,7 +24,7 @@ export async function acquirePoseDetector(
     const pd = await import('@tensorflow-models/pose-detection');
     const det = await pd.createDetector(
       pd.SupportedModels.MoveNet,
-      { modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING },
+      { modelType: pd.movenet.modelType.MULTIPOSE_LIGHTNING, enableTracking: true },
     );
     detector = det;
     detectorPromise = null;
