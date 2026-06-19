@@ -72,46 +72,48 @@ self.onmessage = async (e: MessageEvent) => {
       let cropX = 0, cropY = 0, cropW = fullW, cropH = fullH;
 
       if (focus) {
-        // Crop around the user's click point (~60% of frame)
-        const ratio = 0.6;
+        // Crop around the user's click point (~80% of frame)
+        const ratio = 0.8;
         cropW = Math.round(fullW * ratio);
         cropH = Math.round(fullH * ratio);
         cropX = Math.round(Math.max(0, Math.min(fullW - cropW, focus.x * fullW - cropW / 2)));
         cropY = Math.round(Math.max(0, Math.min(fullH - cropH, focus.y * fullH - cropH / 2)));
       }
 
-      let source: ImageBitmap;
+      let keypoints = null;
+
       if (focus) {
-        source = await createImageBitmap(bitmap, cropX, cropY, cropW, cropH);
-        bitmap.close();
+        // Try cropped detection first
+        const cropped = await createImageBitmap(bitmap, cropX, cropY, cropW, cropH);
+        const poses = await detector.estimatePoses(cropped, { flipHorizontal: false });
+        cropped.close();
+        const raw = poses?.[0]?.keypoints;
+        if (raw && raw.some((kp: any) => (kp.score ?? 0) >= 0.3)) {
+          const scaleX = cropW / (cropW || 1);
+          const scaleY = cropH / (cropH || 1);
+          keypoints = raw.map((kp: any) => ({
+            x: kp.x * scaleX + cropX,
+            y: kp.y * scaleY + cropY,
+            score: kp.score ?? 0,
+            name: kp.name ?? '',
+          }));
+        } else {
+          // Crop failed — fallback to full frame
+          const poses2 = await detector.estimatePoses(bitmap, { flipHorizontal: false });
+          const raw2 = poses2?.[0]?.keypoints;
+          keypoints = raw2?.map((kp: any) => ({
+            x: kp.x, y: kp.y, score: kp.score ?? 0, name: kp.name ?? '',
+          })) ?? null;
+        }
       } else {
-        source = bitmap;
-      }
-
-      const poses = await detector.estimatePoses(source, { flipHorizontal: false });
-
-      const raw = poses?.[0]?.keypoints;
-      let keypoints;
-      if (focus && raw) {
-        // Map keypoints back to full-frame coordinates
-        const scaleX = cropW / source.width;
-        const scaleY = cropH / source.height;
-        keypoints = raw.map((kp: any) => ({
-          x: kp.x * scaleX + cropX,
-          y: kp.y * scaleY + cropY,
-          score: kp.score ?? 0,
-          name: kp.name ?? '',
-        }));
-      } else {
+        const poses = await detector.estimatePoses(bitmap, { flipHorizontal: false });
+        const raw = poses?.[0]?.keypoints;
         keypoints = raw?.map((kp: any) => ({
-          x: kp.x,
-          y: kp.y,
-          score: kp.score ?? 0,
-          name: kp.name ?? '',
+          x: kp.x, y: kp.y, score: kp.score ?? 0, name: kp.name ?? '',
         })) ?? null;
       }
 
-      source.close();
+      bitmap.close();
       self.postMessage({ type: 'result', keypoints, frameId: data.frameId });
     } catch {
       if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
