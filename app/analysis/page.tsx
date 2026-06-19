@@ -1248,6 +1248,7 @@ function Home() {
   const stroMotionPanelEl = (
     <StroMotionPanel
       compact
+      showLabels={!compactToolbarRail}
       objectType={stroObjectType}
       onObjectTypeChange={handleStroObjectTypeChange}
       currentTime={stroVideoTime}
@@ -1698,6 +1699,7 @@ function Home() {
   const biomechanicsPanelEl = (
     <BiomechanicsPanel
       compact
+      showLabels={!compactToolbarRail}
       currentTime={biomechVideoTime}
       duration={biomechVideoDuration}
       strokeType={biomechStrokeType}

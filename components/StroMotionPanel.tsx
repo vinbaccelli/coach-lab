@@ -97,6 +97,8 @@ export interface StroMotionPanelProps {
   onAutoSelectAll?: () => void;
   /** When true, renders a compact icon-only vertical strip for the collapsed toolbar rail */
   compact?: boolean;
+  /** Show text labels beside icons (expanded toolbar) */
+  showLabels?: boolean;
 }
 
 function StroFrameSubPanel({
@@ -271,6 +273,7 @@ export default function StroMotionPanel({
   onVideoOrderChange,
   onAutoSelectAll,
   compact = false,
+  showLabels = false,
 }: StroMotionPanelProps) {
   const allReady = frames.length > 0 && readyCount === frames.length;
   const canGenerate = !disabled && !isGenerating && !isProposingFrame && allReady;
@@ -285,22 +288,45 @@ export default function StroMotionPanel({
   const [openFrameAnchor, setOpenFrameAnchor] = useState<HTMLElement | null>(null);
 
   if (compact) {
-    const ib = (active = false, destructive = false): React.CSSProperties => ({
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      width: 44, height: 44, borderRadius: 10, cursor: 'pointer',
-      border: active ? '1px solid #007AFF' : '1px solid #D1D1D6',
-      background: active ? '#007AFF' : '#FFFFFF',
-      color: destructive ? '#FF3B30' : active ? '#FFFFFF' : '#1D1D1F',
-      margin: '0 auto',
-    });
+    const ib = (active = false, destructive = false): React.CSSProperties => showLabels
+      ? {
+          display: 'flex', alignItems: 'center', gap: 10,
+          width: '100%', minHeight: 44, padding: '8px 12px', borderRadius: 10, cursor: 'pointer',
+          border: active ? '1px solid #007AFF' : '1px solid #D1D1D6',
+          background: active ? '#007AFF' : '#FFFFFF',
+          color: destructive ? '#FF3B30' : active ? '#FFFFFF' : '#1D1D1F',
+          fontSize: 13, fontWeight: 500,
+        }
+      : {
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 44, height: 44, borderRadius: 10, cursor: 'pointer',
+          border: active ? '1px solid #007AFF' : '1px solid #D1D1D6',
+          background: active ? '#007AFF' : '#FFFFFF',
+          color: destructive ? '#FF3B30' : active ? '#FFFFFF' : '#1D1D1F',
+          margin: '0 auto',
+        };
+
+    const LB = ({ icon, label }: { icon: React.ReactNode; label: string }) => showLabels
+      ? <><span style={{ display: 'flex', width: 20, justifyContent: 'center', flexShrink: 0 }}>{icon}</span><span>{label}</span></>
+      : <>{icon}</>;
+
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center', padding: '4px 0', position: 'relative' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: showLabels ? 6 : 4, alignItems: showLabels ? 'stretch' : 'center', padding: '4px 0', position: 'relative' }}>
         {disabled && (
-          <div style={{ fontSize: 10, color: '#FF3B30', textAlign: 'center', padding: '0 4px', lineHeight: 1.3, marginBottom: 2 }}>
-            Upload video first
+          <div style={{ fontSize: showLabels ? 12 : 10, color: '#FF3B30', textAlign: showLabels ? 'left' : 'center', padding: '0 4px', lineHeight: 1.3, marginBottom: 2 }}>
+            {showLabels ? 'Upload a video file first.' : 'Upload\nvideo\nfirst'}
           </div>
         )}
-        {/* Frame count: + / number / - vertical */}
+        {/* Frame count */}
+        {showLabels ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F' }}>Frames</span>
+            <button type="button" disabled={disabled || !canDecrement} onClick={() => canDecrement && onFrameCountChange(STRO_MOTION_FRAME_COUNTS[frameCountIdx - 1])} style={{ ...ib(), width: 36, height: 36, padding: 0, justifyContent: 'center', gap: 0 }}><Minus size={14} /></button>
+            <span style={{ fontSize: 18, fontWeight: 800, minWidth: 28, textAlign: 'center', color: '#1D1D1F' }}>{frameCount}</span>
+            <button type="button" disabled={disabled || !canIncrement} onClick={() => canIncrement && onFrameCountChange(STRO_MOTION_FRAME_COUNTS[frameCountIdx + 1])} style={{ ...ib(), width: 36, height: 36, padding: 0, justifyContent: 'center', gap: 0 }}><Plus size={14} /></button>
+          </div>
+        ) : (
+        <>
         <button type="button" disabled={disabled || !canIncrement} onClick={() => canIncrement && onFrameCountChange(STRO_MOTION_FRAME_COUNTS[frameCountIdx + 1])} style={ib()} title="More frames">
           <Plus size={18} strokeWidth={2} />
         </button>
@@ -333,40 +359,100 @@ export default function StroMotionPanel({
           />
         ))}
 
-        {/* Auto-detect from skeleton */}
         {onAutoSelectAll && frames.length > 0 && (
-          <button type="button" disabled={!!disabled || isGenerating || isProposingFrame} onClick={onAutoSelectAll} title="Auto-detect player in all frames" style={ib()}>
+          <button type="button" disabled={!!disabled || isGenerating || isProposingFrame} onClick={onAutoSelectAll} title="Auto-detect" style={ib()}>
             <Sparkles size={18} strokeWidth={2} />
           </button>
         )}
 
         <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
 
-        {/* Object type cycle */}
         <button type="button" onClick={() => { const idx = OBJECT_TYPES.findIndex(o => o.id === objectType); onObjectTypeChange(OBJECT_TYPES[(idx + 1) % OBJECT_TYPES.length].id); }} title={`Object: ${objectType}`} style={ib()}>
           <BoxSelect size={18} strokeWidth={2} />
         </button>
 
-        {/* Background toggle */}
         {onBackgroundChange ? (
-          <button type="button" onClick={() => onBackgroundChange(background === 'start' ? 'end' : 'start')} title={`Background: ${background}`} style={ib(background === 'end')}>
+          <button type="button" onClick={() => onBackgroundChange(background === 'start' ? 'end' : 'start')} title={`BG: ${background}`} style={ib(background === 'end')}>
             <Layers size={18} strokeWidth={2} />
           </button>
         ) : null}
 
         <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
 
-        {/* Generate */}
-        <button type="button" disabled={!canGenerate} onClick={onGenerate} title="Generate StroMotion" style={ib()}>
+        <button type="button" disabled={!canGenerate} onClick={onGenerate} title="Generate" style={ib()}>
           <Check size={18} strokeWidth={2} />
         </button>
 
-        {/* Clear */}
         {(frames.length > 0 || isPreviewReady) ? (
           <button type="button" onClick={onClear} title="Clear" style={ib(false, true)}>
             <Trash2 size={18} strokeWidth={2} />
           </button>
         ) : null}
+        </>
+        )}
+
+        {/* Labeled mode: frame buttons + actions with text */}
+        {showLabels && (
+          <>
+          <div style={{ height: 1, background: '#D1D1D6', width: '100%', margin: '4px 0' }} />
+
+          {frames.map((frame) => {
+            const selecting = isSelectingArea && selectingFrameIndex === frame.index;
+            const hasContent = frame.hasMask || frame.hasSelection;
+            return (
+              <button
+                key={frame.index}
+                type="button"
+                disabled={!!disabled || isGenerating}
+                onClick={() => { onSelectFrame(frame.index); onSelectArea(frame.index); }}
+                style={{
+                  ...ib(selecting),
+                  border: selecting ? '1px solid #007AFF' : hasContent ? '1px solid #34C759' : '1px solid #D1D1D6',
+                  background: selecting ? '#007AFF' : hasContent ? 'rgba(52,199,89,0.06)' : '#FFF',
+                  color: selecting ? '#FFF' : hasContent ? '#34C759' : '#1D1D1F',
+                }}
+              >
+                <span style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: selecting ? 'rgba(255,255,255,0.2)' : '#E5E5EA', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: selecting ? '#FFF' : '#6E6E73' }}>
+                  {frame.index + 1}
+                </span>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{frame.label}</span>
+                <span style={{ fontSize: 11, opacity: 0.6 }}>{formatTimeShort(frame.timeSec)}</span>
+                {hasContent && <span style={{ fontSize: 10, fontWeight: 700, color: '#34C759' }}>✓</span>}
+              </button>
+            );
+          })}
+
+          {onAutoSelectAll && frames.length > 0 && (
+            <button type="button" disabled={!!disabled || isGenerating || isProposingFrame} onClick={onAutoSelectAll} style={ib()}>
+              <LB icon={<Sparkles size={18} />} label="AI auto-detect" />
+            </button>
+          )}
+
+          <div style={{ height: 1, background: '#D1D1D6', width: '100%', margin: '4px 0' }} />
+
+          <button type="button" onClick={() => { const idx = OBJECT_TYPES.findIndex(o => o.id === objectType); onObjectTypeChange(OBJECT_TYPES[(idx + 1) % OBJECT_TYPES.length].id); }} style={ib()}>
+            <LB icon={<BoxSelect size={18} />} label={`Object: ${objectType}`} />
+          </button>
+
+          {onBackgroundChange ? (
+            <button type="button" onClick={() => onBackgroundChange(background === 'start' ? 'end' : 'start')} style={ib(background === 'end')}>
+              <LB icon={<Layers size={18} />} label={`BG: ${background} frame`} />
+            </button>
+          ) : null}
+
+          <div style={{ height: 1, background: '#D1D1D6', width: '100%', margin: '4px 0' }} />
+
+          <button type="button" disabled={!canGenerate} onClick={onGenerate} style={ib()}>
+            <LB icon={<Check size={18} />} label="Generate StroMotion" />
+          </button>
+
+          {(frames.length > 0 || isPreviewReady) ? (
+            <button type="button" onClick={onClear} style={ib(false, true)}>
+              <LB icon={<Trash2 size={18} />} label="Clear" />
+            </button>
+          ) : null}
+          </>
+        )}
       </div>
     );
   }

@@ -206,6 +206,7 @@ interface CompactStripProps {
   onStampSkeleton: (index: number) => void;
   onActivateTool?: (tool: ToolType) => void;
   onToggleMeasurement?: (frameIndex: number, key: string, done: boolean) => void;
+  showLabels?: boolean;
 }
 
 function FrameCompactIcon({
@@ -266,33 +267,108 @@ function CompactStrip({
   frames, frameCount, onDecrement, onIncrement, canDecrement, canIncrement,
   onAddFrame, onGenerate, canGenerate, isReportReady, onSaveReport, onClear, hasClearable,
   showSkeleton, onSelectFrame, onStampSkeleton, onActivateTool, onToggleMeasurement,
+  showLabels = false,
 }: CompactStripProps) {
   const [openFrameIndex, setOpenFrameIndex] = useState<number | null>(null);
   const [openFrameAnchor, setOpenFrameAnchor] = useState<HTMLElement | null>(null);
 
-  const ib = (active = false, destructive = false): React.CSSProperties => ({
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    width: 44, height: 44, borderRadius: 10, cursor: 'pointer',
-    border: active ? '1px solid #007AFF' : '1px solid #D1D1D6',
-    background: active ? '#007AFF' : '#FFFFFF',
-    color: destructive ? '#FF3B30' : active ? '#FFFFFF' : '#1D1D1F',
-    margin: '0 auto',
-    position: 'relative' as const,
-  });
+  const ib = (active = false, destructive = false): React.CSSProperties => showLabels
+    ? {
+        display: 'flex', alignItems: 'center', gap: 10,
+        width: '100%', minHeight: 44, padding: '8px 12px', borderRadius: 10, cursor: 'pointer',
+        border: active ? '1px solid #007AFF' : '1px solid #D1D1D6',
+        background: active ? '#007AFF' : '#FFFFFF',
+        color: destructive ? '#FF3B30' : active ? '#FFFFFF' : '#1D1D1F',
+        fontSize: 13, fontWeight: 500,
+      }
+    : {
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 44, height: 44, borderRadius: 10, cursor: 'pointer',
+        border: active ? '1px solid #007AFF' : '1px solid #D1D1D6',
+        background: active ? '#007AFF' : '#FFFFFF',
+        color: destructive ? '#FF3B30' : active ? '#FFFFFF' : '#1D1D1F',
+        margin: '0 auto',
+      };
+
+  const LB = ({ icon, label }: { icon: React.ReactNode; label: string }) => showLabels
+    ? <><span style={{ display: 'flex', width: 20, justifyContent: 'center', flexShrink: 0 }}>{icon}</span><span>{label}</span></>
+    : <>{icon}</>;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center', padding: '4px 0', position: 'relative' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: showLabels ? 6 : 4, alignItems: showLabels ? 'stretch' : 'center', padding: showLabels ? '4px 0' : '4px 0', position: 'relative' }}>
       {/* Frame count stepper */}
-      <button type="button" disabled={!canIncrement} onClick={onIncrement} style={ib()} title="More frames"><Plus size={18} /></button>
-      <span style={{ fontSize: 16, fontWeight: 700, textAlign: 'center', color: '#1D1D1F', lineHeight: 1.4, width: 44, display: 'block' }}>{frameCount}</span>
-      <button type="button" disabled={!canDecrement} onClick={onDecrement} style={ib()} title="Fewer frames"><Minus size={18} /></button>
+      {showLabels ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F' }}>Frames</span>
+          <button type="button" disabled={!canDecrement} onClick={onDecrement} style={{ ...ib(), width: 36, height: 36, padding: 0, justifyContent: 'center', gap: 0 }}><Minus size={14} /></button>
+          <span style={{ fontSize: 18, fontWeight: 800, minWidth: 28, textAlign: 'center', color: '#1D1D1F' }}>{frameCount}</span>
+          <button type="button" disabled={!canIncrement} onClick={onIncrement} style={{ ...ib(), width: 36, height: 36, padding: 0, justifyContent: 'center', gap: 0 }}><Plus size={14} /></button>
+        </div>
+      ) : (
+        <>
+          <button type="button" disabled={!canIncrement} onClick={onIncrement} style={ib()} title="More frames"><Plus size={18} /></button>
+          <span style={{ fontSize: 16, fontWeight: 700, textAlign: 'center', color: '#1D1D1F', lineHeight: 1.4, width: 44, display: 'block' }}>{frameCount}</span>
+          <button type="button" disabled={!canDecrement} onClick={onDecrement} style={ib()} title="Fewer frames"><Minus size={18} /></button>
+        </>
+      )}
 
-      <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
+      <div style={{ height: 1, background: '#D1D1D6', width: showLabels ? '100%' : 32, margin: '4px auto' }} />
 
-      {/* Per-frame icon buttons */}
+      {/* Per-frame buttons */}
       {frames.map((frame) => {
         const isOpen = openFrameIndex === frame.index;
-        const hasDone = frame.footDirectionDone || frame.racketDirectionDone || frame.footDistanceDone;
+        const doneMap = getDoneMap(frame);
+        const doneCount = MEASUREMENT_ITEMS.filter(m => !!doneMap[m.key]).length;
+        const hasDone = doneCount > 0;
+
+        if (showLabels) {
+          return (
+            <div key={frame.index} style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenFrameAnchor(null);
+                  setOpenFrameIndex(isOpen ? null : frame.index);
+                  onSelectFrame(frame.index);
+                }}
+                style={{
+                  ...ib(isOpen),
+                  border: isOpen ? '1px solid #007AFF' : hasDone ? '1px solid #5856D6' : '1px solid #D1D1D6',
+                  background: isOpen ? '#007AFF' : hasDone ? 'rgba(88,86,214,0.06)' : '#FFF',
+                  color: isOpen ? '#FFF' : hasDone ? '#5856D6' : '#1D1D1F',
+                }}
+              >
+                <span style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: isOpen ? 'rgba(255,255,255,0.2)' : '#E5E5EA', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: isOpen ? '#FFF' : '#6E6E73' }}>
+                  {frame.index + 1}
+                </span>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{frame.label}</span>
+                <span style={{ fontSize: 11, opacity: 0.6 }}>{formatTimeShort(frame.timeSec)}</span>
+                {doneCount > 0 && <span style={{ fontSize: 10, fontWeight: 700 }}>{doneCount}/{MEASUREMENT_ITEMS.length}</span>}
+              </button>
+              {isOpen && (
+                <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {MEASUREMENT_ITEMS.map(({ key, label, tool, icon }) => {
+                    const done = !!doneMap[key];
+                    return (
+                      <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '4px 8px' }} onClick={(e) => {
+                        e.preventDefault();
+                        if (tool === 'stamp') { onSelectFrame(frame.index); onStampSkeleton(frame.index); }
+                        else if (!done) { onSelectFrame(frame.index); onActivateTool?.(tool as ToolType); }
+                        onToggleMeasurement?.(frame.index, key, !done);
+                      }}>
+                        <div style={{ width: 18, height: 18, borderRadius: 4, flexShrink: 0, border: done ? '1.5px solid #007AFF' : '1.5px solid #D1D1D6', background: done ? '#007AFF' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {done && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                        </div>
+                        <span style={{ fontSize: 12, color: done ? '#007AFF' : '#6E6E73', fontWeight: done ? 600 : 400, display: 'flex', alignItems: 'center', gap: 4 }}>{icon} {label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        }
+
         return (
           <FrameCompactIcon
             key={frame.index}
@@ -315,21 +391,25 @@ function CompactStrip({
       })}
 
       {/* Add frame */}
-      <button type="button" onClick={onAddFrame} title="Add frame at playhead" style={ib()}><PlusCircle size={18} /></button>
+      <button type="button" onClick={onAddFrame} title="Add frame at playhead" style={ib()}>
+        <LB icon={<PlusCircle size={18} />} label="Add frame" />
+      </button>
 
-      <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
+      <div style={{ height: 1, background: '#D1D1D6', width: showLabels ? '100%' : 32, margin: '4px auto' }} />
 
       {/* Generate report */}
       <button type="button" disabled={!canGenerate} onClick={onGenerate} title="Generate report" style={ib()}>
-        <FileText size={18} />
+        <LB icon={<FileText size={18} />} label="Generate report" />
       </button>
       {isReportReady && onSaveReport ? (
         <button type="button" onClick={onSaveReport} title="Save to Player Docs" style={ib()}>
-          <FileText size={18} />
+          <LB icon={<FileText size={18} />} label="Save to docs" />
         </button>
       ) : null}
       {hasClearable ? (
-        <button type="button" onClick={onClear} title="Clear all frames" style={ib(false, true)}><Trash2 size={18} /></button>
+        <button type="button" onClick={onClear} title="Clear" style={ib(false, true)}>
+          <LB icon={<Trash2 size={18} />} label="Clear" />
+        </button>
       ) : null}
     </div>
   );
@@ -370,6 +450,7 @@ export interface BiomechFrameCard {
 
 export interface BiomechanicsPanelProps {
   compact?: boolean;
+  showLabels?: boolean;
   currentTime: number;
   duration: number;
   strokeType: StrokeType;
@@ -592,6 +673,7 @@ function FrameCard({
 
 export default function BiomechanicsPanel({
   compact = false,
+  showLabels = false,
   currentTime: _currentTime,
   frameCount,
   onFrameCountChange,
@@ -687,6 +769,7 @@ export default function BiomechanicsPanel({
         onStampSkeleton={onStampSkeleton}
         onActivateTool={onActivateTool}
         onToggleMeasurement={onToggleMeasurement}
+        showLabels={showLabels}
       />
     );
   }
