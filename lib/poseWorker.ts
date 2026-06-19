@@ -34,9 +34,8 @@ async function init() {
 
     const pd = await import('@tensorflow-models/pose-detection');
     detector = await pd.createDetector(pd.SupportedModels.MoveNet, {
-      modelType: pd.movenet.modelType.MULTIPOSE_LIGHTNING,
+      modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
       enableSmoothing: false,
-      enableTracking: true,
     });
 
     ready = true;
@@ -69,21 +68,7 @@ self.onmessage = async (e: MessageEvent) => {
       const poses = await detector.estimatePoses(bitmap, { flipHorizontal: false });
       bitmap.close();
 
-      // Pick the largest person (biggest keypoint spread) — avoids detecting spectators
-      let best = poses?.[0];
-      if (poses && poses.length > 1) {
-        let bestArea = 0;
-        for (const pose of poses) {
-          const kps = pose.keypoints?.filter((k: any) => (k.score ?? 0) >= 0.2) ?? [];
-          if (kps.length < 4) continue;
-          const xs = kps.map((k: any) => k.x);
-          const ys = kps.map((k: any) => k.y);
-          const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
-          if (area > bestArea) { bestArea = area; best = pose; }
-        }
-      }
-
-      const raw = best?.keypoints;
+      const raw = poses?.[0]?.keypoints;
       const keypoints =
         raw?.map((kp: any) => ({
           x: kp.x,

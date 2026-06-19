@@ -47,7 +47,7 @@ export async function getPoseDetector(): Promise<PoseDetector | null> {
       const pd = await import('@tensorflow-models/pose-detection');
       detector = await pd.createDetector(
         pd.SupportedModels.MoveNet,
-        { modelType: pd.movenet.modelType.MULTIPOSE_LIGHTNING, enableTracking: true },
+        { modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING },
       );
       if (process.env.NODE_ENV !== 'production') {
       }
@@ -83,28 +83,13 @@ export async function detectPoseOnCurrentFrame(
 
   try {
     const poses = await detector.estimatePoses(video, { flipHorizontal: false });
-    if (poses && poses.length > 0) {
-      // Pick the largest person (biggest keypoint spread)
-      let best = poses[0];
-      if (poses.length > 1) {
-        let bestArea = 0;
-        for (const pose of poses) {
-          const kps = pose.keypoints?.filter((k: { score?: number }) => (k.score ?? 0) >= 0.2) ?? [];
-          if (kps.length < 4) continue;
-          const xs = kps.map((k: { x: number }) => k.x);
-          const ys = kps.map((k: { y: number }) => k.y);
-          const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
-          if (area > bestArea) { bestArea = area; best = pose; }
-        }
-      }
-      if (best?.keypoints) {
-        return best.keypoints.map((kp) => ({
-          x: kp.x,
-          y: kp.y,
-          score: kp.score ?? 0,
-          name: kp.name ?? '',
-        }));
-      }
+    if (poses && poses.length > 0 && poses[0].keypoints) {
+      return poses[0].keypoints.map((kp) => ({
+        x: kp.x,
+        y: kp.y,
+        score: kp.score ?? 0,
+        name: kp.name ?? '',
+      }));
     }
     return null;
   } catch (e) {
