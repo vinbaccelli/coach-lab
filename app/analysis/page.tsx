@@ -565,6 +565,7 @@ function Home() {
   const [biomechEditingFrameIndex, setBiomechEditingFrameIndex] = useState<number | null>(null);
   const [biomechPhaseMarkers, setBiomechPhaseMarkers] = useState<Array<{ id: string; label: string; short?: string; time: number }> | null>(null);
   const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
+  const biomechFrameDrawingsRef = useRef<Record<number, string>>({});
   const biomechHtml5Only = stroMotionHtml5Only;
   /** Per-frame captured screenshots: frameIndex → data URL */
   const [biomechCapturedImages, setBiomechCapturedImages] = useState<Record<number, string>>({});
@@ -1336,18 +1337,32 @@ function Home() {
     const frame = aiMetricsDraft?.frames[index];
     const timeSec = frame?.timeSec ?? biomechEffectiveSampleTimes[index];
     if (timeSec === undefined) return;
+
+    // Save current frame's drawings before switching
+    if (biomechActiveFrameIndex !== null && canvasRef.current) {
+      biomechFrameDrawingsRef.current[biomechActiveFrameIndex] = canvasRef.current.exportStrokes();
+    }
+
     setBiomechActiveFrameIndex(index);
     void seekBiomechVideo(timeSec).then(() => {
-      // Auto-stamp skeleton measurements if pose data is available
-      const poseSample = frame?.poseSample ?? frame?.skeletonStamp ?? null;
-      const kps = poseSample?.keypoints;
-      if (!kps?.length) return;
-      const video = videoRef.current;
-      const nativeW = video?.videoWidth ?? 1280;
-      const nativeH = video?.videoHeight ?? 720;
-      canvasRef.current?.stampAutoMeasurements(kps, nativeW, nativeH);
+      // Restore target frame's drawings (or clear if none saved)
+      const saved = biomechFrameDrawingsRef.current[index];
+      if (saved) {
+        canvasRef.current?.importStrokes(saved);
+      } else {
+        // No saved drawings — stamp skeleton measurements if pose data available
+        canvasRef.current?.clearAll();
+        const poseSample = frame?.poseSample ?? frame?.skeletonStamp ?? null;
+        const kps = poseSample?.keypoints;
+        if (kps?.length) {
+          const video = videoRef.current;
+          const nativeW = video?.videoWidth ?? 1280;
+          const nativeH = video?.videoHeight ?? 720;
+          canvasRef.current?.stampAutoMeasurements(kps, nativeW, nativeH);
+        }
+      }
     });
-  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex, videoRef, canvasRef]);
+  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex, biomechActiveFrameIndex, videoRef, canvasRef]);
 
   const handleBiomechProposeFrame = useCallback((index: number) => {
     const frame = aiMetricsDraft?.frames[index];
@@ -1523,6 +1538,7 @@ function Home() {
     setBiomechMeasurements({});
     setBiomechPhaseMarkers(null);
     setBiomechSelectedPhaseId(null);
+    biomechFrameDrawingsRef.current = {};
     setBiomechReportModalOpen(false);
   }, [clearBiomechAll]);
 

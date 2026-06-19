@@ -163,6 +163,10 @@ export interface CanvasHandle {
     videoNativeW: number,
     videoNativeH: number,
   ) => void;
+  /** Export current strokes as a serializable JSON array for per-frame persistence */
+  exportStrokes: () => string;
+  /** Import strokes from a previously exported JSON string, replacing current strokes */
+  importStrokes: (json: string) => void;
   /** Record animated Stromotion build-up to a downloadable video (Chrome/desktop) */
   exportStroMotionVideo: () => Promise<{ ok: boolean; reason?: string; blob?: Blob; url?: string }>;
   canvasSupportsStroMotionVideoExport: () => boolean;
@@ -1530,6 +1534,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
 
     // Drawing state refs
@@ -2512,6 +2517,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           renderDirtyRef.current = true;
         }
       },
+      exportStrokes: () => {
+        return JSON.stringify(strokesRef.current);
+      },
+      importStrokes: (json: string) => {
+        try {
+          const parsed = JSON.parse(json);
+          if (Array.isArray(parsed)) {
+            strokesRef.current = parsed;
+            historyRef.current = [parsed];
+            historyIdxRef.current = 0;
+            renderDirtyRef.current = true;
+          }
+        } catch { /* invalid JSON — ignore */ }
+      },
       stampAutoMeasurements: (keypoints, videoNativeW, videoNativeH) => {
         const canvas = canvasRef.current;
         if (!canvas || !keypoints.length) return;
@@ -3266,7 +3285,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         const canvas = canvasRef.current;
         if (!canvas) return;
-        const ctx = canvas.getContext('2d', { alpha: true });
+        if (!ctxRef.current) ctxRef.current = canvas.getContext('2d', { alpha: true });
+        const ctx = ctxRef.current;
         if (!ctx) return;
 
         const W = canvas.width;
