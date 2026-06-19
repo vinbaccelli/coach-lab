@@ -608,6 +608,7 @@ function Home() {
     generateReport: generateBiomechReport,
     invalidateReport: invalidateBiomechReport,
     clearAll: clearBiomechAll,
+    autoProposeAllFrames: autoProposeAllBiomechFrames,
     readyCount: biomechReadyCount,
     enabledModules: biomechEnabledModules,
   } = useAIMetrics(videoRef);
@@ -1025,6 +1026,18 @@ function Home() {
     biomechCustomSteps,
     syncAIMetricsDraft,
   ]);
+
+  // Auto-propose measurements for all pending frames when draft has frames without pose data
+  const biomechAutoProposedRef = useRef(false);
+  useEffect(() => {
+    if (!biomechActive || !biomechHtml5Only || !aiMetricsDraft) return;
+    const hasPending = aiMetricsDraft.frames.some(f => !f.poseSample);
+    if (!hasPending || biomechAutoProposedRef.current) return;
+    biomechAutoProposedRef.current = true;
+    void autoProposeAllBiomechFrames().then(() => {
+      biomechAutoProposedRef.current = false;
+    });
+  }, [biomechActive, biomechHtml5Only, aiMetricsDraft, autoProposeAllBiomechFrames]);
 
   useEffect(() => {
     if (stroMotionActive && stroMotionHtml5Only && !stroMotionProcessing) {

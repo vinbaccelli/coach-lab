@@ -371,6 +371,19 @@ export function useAIMetrics(videoRef: React.RefObject<HTMLVideoElement | null>)
     });
   }, [strokeType, customSteps]);
 
+  const autoProposeAllFrames = useCallback(async (): Promise<number> => {
+    const current = draftRef.current;
+    if (!current) return 0;
+    const pending = current.frames.filter(f => !f.poseSample);
+    if (pending.length === 0) return 0;
+    let count = 0;
+    for (const frame of pending) {
+      const ok = await proposeMeasurementsForFrame(frame.index);
+      if (ok) count++;
+    }
+    return count;
+  }, [proposeMeasurementsForFrame]);
+
   return {
     draft,
     status,
@@ -410,6 +423,7 @@ export function useAIMetrics(videoRef: React.RefObject<HTMLVideoElement | null>)
     generateReport,
     invalidateReport,
     clearAll,
+    autoProposeAllFrames,
     readyCount: draft ? countReadyFrames(draft.frames) : 0,
     enabledModules: draft?.enabledModules ?? DEFAULT_ENABLED_MODULES,
   };

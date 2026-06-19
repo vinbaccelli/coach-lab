@@ -114,8 +114,30 @@ function LinkIcon({ type }: { type?: string }) {
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
-export default function CoachPublicProfile({ slug }: { slug: string }) {
-  const profile = PROFILES[slug] ?? { ...FALLBACK, slug };
+interface DbProfile {
+  slug: string;
+  name: string;
+  tagline: string;
+  bio: string;
+  avatarUrl?: string;
+  accentColor: string;
+  services: ServiceItem[];
+  links: LinkItem[];
+}
+
+export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; dbProfile?: DbProfile | null }) {
+  const staticProfile = PROFILES[slug];
+  const profile: CoachProfileData = dbProfile
+    ? {
+        ...dbProfile,
+        socials: {
+          instagram: dbProfile.links.find(l => l.icon === 'instagram')?.url,
+          youtube: dbProfile.links.find(l => l.icon === 'youtube')?.url,
+          website: dbProfile.links.find(l => l.icon === 'globe')?.url,
+          email: dbProfile.links.find(l => l.icon === 'mail')?.url?.replace('mailto:', ''),
+        },
+      }
+    : staticProfile ?? { ...FALLBACK, slug };
   const { accentColor } = profile;
 
   return (
