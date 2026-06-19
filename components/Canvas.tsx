@@ -2722,7 +2722,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => {
       if (!skeletonEnabled) return;
       if (youtubePoseRef.current) return;
-      if (!renderVideoRef.current) return;
       const video = videoRef.current;
       if (!video) return;
 

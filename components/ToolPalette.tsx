@@ -1264,7 +1264,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
           />
           <Row k="sm-t" icon={<Layers size={18} />} label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
-          <Row k="bio-t" icon={<BarChart3 size={18} />} label="AI Metrics" onPress={() => push('aimetrics')} />
+          <Row k="bio-t" icon={<BarChart3 size={18} />} label="Metrics" onPress={() => push('aimetrics')} />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
@@ -1306,7 +1306,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <BackHeader title="AI Metrics" icon={<BarChart3 size={18} />} />
+          <BackHeader title="Metrics" icon={<BarChart3 size={18} />} />
           {biomechanicsPanel ?? (
             !io ? (
               <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
@@ -1346,7 +1346,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <Row
           k="aim-h"
           icon={<BarChart3 size={denseMobile ? 16 : 20} />}
-          label="AI Metrics"
+          label="Metrics"
           onPress={() => push('aimetrics')}
         />
         {recordingHubContent ? (

@@ -4058,7 +4058,7 @@ function Home() {
 
     if (biomechActive && biomechHtml5Only) {
       return {
-        trimRange: { start: biomechTrimStart, end: biomechTrimEnd } as { start: number; end: number },
+        trimRange: aiMetricsDraft?.frames.length ? { start: biomechTrimStart, end: biomechTrimEnd } as { start: number; end: number } : null,
         trimAccent: '#34C759',
         onCurrentTime: setBiomechVideoTime,
         phaseMarkers: biomechPhaseMarkers,
