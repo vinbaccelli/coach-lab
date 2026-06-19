@@ -4095,7 +4095,7 @@ function Home() {
     }
     if (stroMotionActive && stroMotionHtml5Only) {
       return {
-        trimRange: { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number },
+        trimRange: stroMotionDraft?.frames.length ? { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number } : null,
         trimAccent: '#FF9500',
         onCurrentTime: setStroVideoTime,
         phaseMarkers: null as null,
@@ -4310,9 +4310,9 @@ function Home() {
         setBiomechActive(true);
         setStroMotionActive(false);
       } else if (screen === 'skeleton') {
-        // Activate skeleton tool + un-pause overlay so pose runs and is visible
         handleToolChange('skeleton');
         setSkeletonOverlayPaused(false);
+        canvasRef.current?.resetSkeleton();
       } else if (screen === 'home') {
         setStroMotionActive(false);
         setBiomechActive(false);
