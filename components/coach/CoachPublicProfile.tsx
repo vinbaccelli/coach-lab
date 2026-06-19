@@ -8,7 +8,6 @@ import {
   Globe,
   Mail,
   ExternalLink,
-  Star,
   MessageCircle,
 } from 'lucide-react';
 
@@ -291,22 +290,16 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
             Worked with {profile.name.split(' ')[0]}? Leave a review
           </p>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-            <a href="https://g.page/r/coachlab/review" target="_blank" rel="noreferrer" style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px',
-              borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
-              background: 'transparent', color: 'rgba(255,255,255,0.7)',
-              textDecoration: 'none', fontSize: 13, fontWeight: 600,
-            }}>
-              <Star size={14} /> Google
-            </a>
-            <a href="mailto:vin@coachlab.app?subject=Feedback" style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px',
-              borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
-              background: 'transparent', color: 'rgba(255,255,255,0.7)',
-              textDecoration: 'none', fontSize: 13, fontWeight: 600,
-            }}>
-              <MessageCircle size={14} /> Email
-            </a>
+            {profile.socials.email && (
+              <a href={`mailto:${profile.socials.email}?subject=Feedback for ${profile.name}`} style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px',
+                borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
+                background: 'transparent', color: 'rgba(255,255,255,0.7)',
+                textDecoration: 'none', fontSize: 13, fontWeight: 600,
+              }}>
+                <MessageCircle size={14} /> Leave Feedback
+              </a>
+            )}
           </div>
         </div>
 

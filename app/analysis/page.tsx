@@ -1113,11 +1113,11 @@ function Home() {
 
   const handleStroGenerate = useCallback(async () => {
     if (stroEndFrame <= stroStartFrame) {
-      alert('End frame must be after start frame.');
+      setProcessingStatus('End frame must be after start frame.');
       return;
     }
     if (!stroMotionDraft || !stroAllFramesExportReady) {
-      alert(`Mark every frame Ready with a visible mask before generating (${stroReadyCount}/${stroMotionDraft?.frames.length ?? 0} ready).`);
+      setProcessingStatus(`Mark every frame Ready with a visible mask before generating (${stroReadyCount}/${stroMotionDraft?.frames.length ?? 0} ready).`);
       return;
     }
     setStroVisibleCount(undefined);
@@ -1188,11 +1188,11 @@ function Home() {
       void exportStroMotionDraftPng(video, stroMotionDraft).then((url) => {
         downloadDataURL(url, `stromotion-${Date.now()}.png`);
       }).catch(() => {
-        alert('Could not export PNG. Generate StroMotion first.');
+        setProcessingStatus('Could not export PNG. Generate StroMotion first.');
       });
       return;
     }
-    alert('Generate StroMotion first.');
+    setProcessingStatus('Generate StroMotion first.');
   }, [stroMotionDraft, stroPreviewPngUrl]);
 
   const handleStroEditFrame = useCallback((index: number) => {
@@ -1210,13 +1210,13 @@ function Home() {
 
   const handleStroBuildVideoPreview = useCallback(async () => {
     if (!stroMotionDraft) {
-      alert('Generate StroMotion first.');
+      setProcessingStatus('Generate StroMotion first.');
       return;
     }
     if (!stroVideoExportSupported) return;
     const ok = await buildStroVideoPreview();
     if (!ok) {
-      alert('Video preview failed. Try again or download PNG instead.');
+      setProcessingStatus('Video preview failed. Try again or download PNG instead.');
       return;
     }
     setStroPreviewModalOpen(true);
@@ -1225,7 +1225,7 @@ function Home() {
   const handleStroDownloadVideo = useCallback(() => {
     const blob = stroPreviewVideoBlobRef.current;
     if (!blob) {
-      alert('Build the video preview first.');
+      setProcessingStatus('Build the video preview first.');
       return;
     }
     const url = URL.createObjectURL(blob);
@@ -2700,7 +2700,7 @@ function Home() {
       });
     } catch (err) {
       console.error('[page] Webcam access denied:', err);
-      alert('Could not access webcam. Please check browser permissions.');
+      setProcessingStatus('Could not access webcam. Please check browser permissions.');
     }
   }, []);
 
@@ -2717,7 +2717,7 @@ function Home() {
       setMicMuted(false);
     } catch (err) {
       console.error('[page] Mic access denied:', err);
-      alert('Could not access microphone. Please check browser permissions.');
+      setProcessingStatus('Could not access microphone. Please check browser permissions.');
     }
   }, []);
 
@@ -2949,7 +2949,7 @@ function Home() {
     const ctrl = playbackControllerARef.current;
     const dur = youtubeVideoIdA ? ctrl?.getDuration() : video?.duration;
     if (!Number.isFinite(dur) || !dur || dur <= 0) {
-      alert('No video loaded. Upload a video or paste a YouTube URL first.');
+      setProcessingStatus('No video loaded. Upload a video or paste a YouTube URL first.');
       return;
     }
 
@@ -2972,7 +2972,7 @@ function Home() {
     }
 
     if (swings.length === 0) {
-      alert('No swings detected. Play the video first, or enable Skeleton tool for AI-based detection.');
+      setProcessingStatus('No swings detected. Play the video first, or enable Skeleton tool for AI-based detection.');
       return;
     }
     const items = swings.map((s, i) =>
@@ -2989,7 +2989,7 @@ function Home() {
   const handleRacketMultiplier = useCallback(async () => {
     const swings = canvasRef.current?.getDetectedSwings() ?? [];
     if (swings.length === 0) {
-      alert('No swings detected yet. Enable Skeleton tool and play the video first.');
+      setProcessingStatus('No swings detected yet. Enable Skeleton tool and play the video first.');
       return;
     }
     const items = swings.map((s, i) =>
@@ -3006,14 +3006,14 @@ function Home() {
     if (isNaN(swingIdx) || swingIdx < 0 || swingIdx >= swings.length) return;
     const frames = canvasRef.current?.getSkeletonFrames() ?? [];
     if (frames.length === 0) {
-      alert('No skeleton frames available. Play the video with Skeleton tool enabled first.');
+      setProcessingStatus('No skeleton frames available. Play the video with Skeleton tool enabled first.');
       return;
     }
     const { extractRacketTrail } = await import('@/lib/racketMultiplier');
     const swing = swings[swingIdx];
     const trail = extractRacketTrail(frames, swing.startTime, swing.endTime);
     if (trail.positions.length === 0) {
-      alert('No wrist positions found in this swing segment.');
+      setProcessingStatus('No wrist positions found in this swing segment.');
       return;
     }
     canvasRef.current?.setRacketTrail(trail);
@@ -3023,7 +3023,7 @@ function Home() {
   const handleObjMultiplierCapture = useCallback(async () => {
     const region = canvasRef.current?.getObjMultiplierRegion();
     if (!region) {
-      alert('Draw a rectangle on the video first to select a region.');
+      setProcessingStatus('Draw a rectangle on the video first to select a region.');
       return;
     }
     setObjMultiplierProgress('Capturing…');
@@ -3035,7 +3035,7 @@ function Home() {
       setObjMultiplierProgress(count ? `${count} frames captured` : null);
     } catch {
       setObjMultiplierProgress(null);
-      alert('Object multiplier capture failed. Try again.');
+      setProcessingStatus('Object multiplier capture failed. Try again.');
     }
   }, [objMultiplierFrameCount]);
 
@@ -3890,7 +3890,7 @@ function Home() {
       setShowCaptureSaveToast(false);
       setCaptureSaveModalOpen(true);
     } catch (e: unknown) {
-      window.alert(e instanceof Error ? e.message : 'YouTube upload failed');
+      setProcessingStatus(e instanceof Error ? e.message : 'YouTube upload failed');
     } finally {
       setCaptureYoutubeBusy(false);
     }

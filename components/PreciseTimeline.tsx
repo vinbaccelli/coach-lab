@@ -9,17 +9,21 @@ function clamp(n: number, a: number, b: number) {
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds)) return '00:00';
-  const mins = Math.floor(seconds / 60);
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
   const ms = Math.floor((seconds - Math.floor(seconds)) * 1000);
-  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+  const time = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+  return hrs > 0 ? `${hrs}:${time}` : time;
 }
 
 function formatTimeShort(seconds: number): string {
   if (!Number.isFinite(seconds)) return '0:00';
-  const mins = Math.floor(seconds / 60);
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
+  const time = `${mins}:${secs.toString().padStart(2, '0')}`;
+  return hrs > 0 ? `${hrs}:${time}` : time;
 }
 
 function getMarkerInterval(duration: number): number {
