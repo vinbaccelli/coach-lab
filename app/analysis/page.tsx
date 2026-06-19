@@ -4022,32 +4022,20 @@ function Home() {
   }, [playBothEnabled, videoBLoaded, videoBDuration]);
 
   const analysisTimelineExtras = useMemo(() => {
-    const biomechSampleMarkers = biomechActive && biomechHtml5Only
-      ? (aiMetricsDraft?.frames.length
-          ? aiMetricsDraft.frames.map((f) => ({
-              id: `biomech-frame-${f.index}`,
-              time: f.timeSec,
-              label: String(f.index + 1),
-            }))
-          : biomechEffectiveSampleTimes.map((time, i) => ({
-              id: `biomech-frame-${i}`,
-              time,
-              label: String(i + 1),
-            })))
+    const biomechSampleMarkers = biomechActive && biomechHtml5Only && aiMetricsDraft?.frames.length
+      ? aiMetricsDraft.frames.map((f) => ({
+            id: `biomech-frame-${f.index}`,
+            time: f.timeSec,
+            label: String(f.index + 1),
+          }))
       : null;
 
-    const stroFrameStopMarkers = stroMotionActive && stroMotionHtml5Only
-      ? (stroMotionDraft?.frames.length
-          ? stroMotionDraft.frames.map((f) => ({
-              id: `stro-stop-${f.index}`,
-              time: f.timeSec,
-              label: String(f.index + 1),
-            }))
-          : stroEffectiveSampleTimes.map((time, i) => ({
-              id: `stro-stop-${i}`,
-              time,
-              label: String(i + 1),
-            })))
+    const stroFrameStopMarkers = stroMotionActive && stroMotionHtml5Only && stroMotionDraft?.frames.length
+      ? stroMotionDraft.frames.map((f) => ({
+            id: `stro-stop-${f.index}`,
+            time: f.timeSec,
+            label: String(f.index + 1),
+          }))
       : null;
 
     if (biomechActive && biomechHtml5Only) {

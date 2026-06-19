@@ -119,8 +119,8 @@ function StroFrameSubPanel({
 
   // eslint-disable-next-line react-hooks/rules-of-hooks
   React.useEffect(() => {
-    const handler = (e: MouseEvent | TouchEvent) => {
-      const target = e instanceof TouchEvent ? e.touches[0]?.target : e.target;
+    const handler = (e: Event) => {
+      const target = 'touches' in e ? (e as globalThis.TouchEvent).touches[0]?.target : (e as MouseEvent).target;
       if (panelRef.current && !panelRef.current.contains(target as Node) && !anchorEl.contains(target as Node)) {
         onClose();
       }
