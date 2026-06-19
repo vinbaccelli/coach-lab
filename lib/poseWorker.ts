@@ -65,14 +65,30 @@ self.onmessage = async (e: MessageEvent) => {
 
     try {
       const bitmap: ImageBitmap = data.bitmap;
-      const poses = await detector.estimatePoses(bitmap, { flipHorizontal: false });
+      const fullW = bitmap.width;
+      const fullH = bitmap.height;
+
+      // Center-crop to ~65% of the frame to focus on the main player
+      const cropRatio = 0.65;
+      const cropW = Math.round(fullW * cropRatio);
+      const cropH = Math.round(fullH * cropRatio);
+      const cropX = Math.round((fullW - cropW) / 2);
+      const cropY = Math.round((fullH - cropH) / 2);
+
+      const cropped = await createImageBitmap(bitmap, cropX, cropY, cropW, cropH);
       bitmap.close();
 
+      const poses = await detector.estimatePoses(cropped, { flipHorizontal: false });
+      cropped.close();
+
+      // Map keypoints back to full-frame coordinates
       const raw = poses?.[0]?.keypoints;
+      const scaleX = cropW / (cropped.width || cropW);
+      const scaleY = cropH / (cropped.height || cropH);
       const keypoints =
         raw?.map((kp: any) => ({
-          x: kp.x,
-          y: kp.y,
+          x: kp.x * scaleX + cropX,
+          y: kp.y * scaleY + cropY,
           score: kp.score ?? 0,
           name: kp.name ?? '',
         })) ?? null;
