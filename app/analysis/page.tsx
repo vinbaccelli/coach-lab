@@ -90,6 +90,8 @@ import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import RulerOverlay from '@/components/ruler/RulerOverlay';
 import FrameMetricsReportModal, { type FrameMetricsReportFrame } from '@/components/frameMetrics/FrameMetricsReportModal';
 import { uploadDataUrl } from '@/lib/supabase/storage';
+import { proposePhaseMarkers } from '@/lib/biomechanics/phaseDetection';
+import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
 // Dynamic import prevents TensorFlow / Fabric from loading server-side
@@ -561,6 +563,8 @@ function Home() {
   const [biomechFrameCards, setBiomechFrameCards] = useState<Array<{ id: string; label: string; timeSec: number; imageUrl: string }>>([]);
   const [biomechReportAnalysis, setBiomechReportAnalysis] = useState<import('@/lib/biomechanics/types').BiomechanicsAnalysis | null>(null);
   const [biomechEditingFrameIndex, setBiomechEditingFrameIndex] = useState<number | null>(null);
+  const [biomechPhaseMarkers, setBiomechPhaseMarkers] = useState<Array<{ id: string; label: string; short?: string; time: number }> | null>(null);
+  const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
   const biomechHtml5Only = stroMotionHtml5Only;
   /** Per-frame captured screenshots: frameIndex → data URL */
   const [biomechCapturedImages, setBiomechCapturedImages] = useState<Record<number, string>>({});
@@ -873,6 +877,46 @@ function Home() {
       });
   }, [selectStroAreaForFrame, stroObjectType]);
 
+  const autoSelectStroFrameFromSkeleton = useCallback(async (index: number): Promise<boolean> => {
+    const frame = stroMotionDraft?.frames[index];
+    if (!frame || frame.selectionBox) return false;
+    const timeSec = frame.timeSec;
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0) return false;
+
+    // Get skeleton keypoints near this frame time
+    const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
+    const nearest = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>((best, f) => {
+      if (!best || Math.abs(f.timeSeconds - timeSec) < Math.abs(best.timeSeconds - timeSec)) return f;
+      return best;
+    }, null);
+
+    if (!nearest?.keypoints?.length) return false;
+
+    const validKps = nearest.keypoints.filter(kp => kp.score >= 0.2);
+    if (validKps.length < 4) return false;
+
+    // Compute bounding box from keypoints with 25% padding
+    const xs = validKps.map(kp => kp.x);
+    const ys = validKps.map(kp => kp.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const padX = (maxX - minX) * 0.25;
+    const padY = (maxY - minY) * 0.25;
+    const region = {
+      x: Math.max(0, minX - padX),
+      y: Math.max(0, minY - padY),
+      w: Math.min(video.videoWidth, maxX + padX) - Math.max(0, minX - padX),
+      h: Math.min(video.videoHeight, maxY + padY) - Math.max(0, minY - padY),
+    };
+
+    await seekStroVideo(timeSec);
+    finishStroRegionSelect(index, region);
+    return true;
+  }, [stroMotionDraft, videoRef, canvasRef, seekStroVideo, finishStroRegionSelect]);
+
   const handleStroSelectArea = useCallback((index: number) => {
     const frame = stroMotionDraft?.frames[index];
     const timeSec = frame?.timeSec ?? stroEffectiveSampleTimes[index];
@@ -1038,6 +1082,25 @@ function Home() {
       biomechAutoProposedRef.current = false;
     });
   }, [biomechActive, biomechHtml5Only, aiMetricsDraft, autoProposeAllBiomechFrames]);
+
+  // Auto-propose stroke phase markers from skeleton data
+  useEffect(() => {
+    if (!biomechActive || !biomechHtml5Only) { setBiomechPhaseMarkers(null); return; }
+    if (biomechTrimEnd <= biomechTrimStart) return;
+    const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
+    if (skFrames.length < 3) return;
+    const samples = skeletonFramesToSamples(skFrames);
+    const markers = proposePhaseMarkers(
+      biomechStrokeType,
+      samples,
+      biomechTrimStart,
+      biomechTrimEnd,
+      biomechStrokeType === 'custom' ? biomechCustomSteps : undefined,
+    );
+    if (markers.length > 0) {
+      setBiomechPhaseMarkers(markers.map(m => ({ id: m.id, label: m.label, short: m.short, time: m.timeSec })));
+    }
+  }, [biomechActive, biomechHtml5Only, biomechTrimStart, biomechTrimEnd, biomechStrokeType, biomechCustomSteps]);
 
   useEffect(() => {
     if (stroMotionActive && stroMotionHtml5Only && !stroMotionProcessing) {
@@ -1458,6 +1521,8 @@ function Home() {
     setBiomechCapturedImages({});
     setBiomechFrameNotes({});
     setBiomechMeasurements({});
+    setBiomechPhaseMarkers(null);
+    setBiomechSelectedPhaseId(null);
     setBiomechReportModalOpen(false);
   }, [clearBiomechAll]);
 
@@ -3962,11 +4027,13 @@ function Home() {
         trimRange: { start: biomechTrimStart, end: biomechTrimEnd } as { start: number; end: number },
         trimAccent: '#34C759',
         onCurrentTime: setBiomechVideoTime,
-        phaseMarkers: null as null,
-        selectedPhaseMarkerId: null as null,
-        onPhaseMarkerSelect: undefined,
-        onPhaseMarkerChange: undefined,
-        phaseMarkerBounds: null as null,
+        phaseMarkers: biomechPhaseMarkers,
+        selectedPhaseMarkerId: biomechSelectedPhaseId,
+        onPhaseMarkerSelect: (id: string) => setBiomechSelectedPhaseId(id),
+        onPhaseMarkerChange: (id: string, time: number) => {
+          setBiomechPhaseMarkers(prev => prev?.map(m => m.id === id ? { ...m, time } : m) ?? null);
+        },
+        phaseMarkerBounds: { start: biomechTrimStart, end: biomechTrimEnd },
         sampleMarkers: biomechSampleMarkers,
         onSampleMarkerSelect: (_id: string, time: number) => {
           const idx = Number(_id.replace('biomech-frame-', ''));
