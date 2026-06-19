@@ -65,55 +65,18 @@ self.onmessage = async (e: MessageEvent) => {
 
     try {
       const bitmap: ImageBitmap = data.bitmap;
-      const fullW = bitmap.width;
-      const fullH = bitmap.height;
-      const focus: { x: number; y: number } | null = data.focusPoint ?? null;
-
-      let cropX = 0, cropY = 0, cropW = fullW, cropH = fullH;
-
-      if (focus) {
-        // Crop around the user's click point (~80% of frame)
-        const ratio = 0.8;
-        cropW = Math.round(fullW * ratio);
-        cropH = Math.round(fullH * ratio);
-        cropX = Math.round(Math.max(0, Math.min(fullW - cropW, focus.x * fullW - cropW / 2)));
-        cropY = Math.round(Math.max(0, Math.min(fullH - cropH, focus.y * fullH - cropH / 2)));
-      }
-
-      let keypoints = null;
-
-      if (focus) {
-        // Try cropped detection first
-        const cropped = await createImageBitmap(bitmap, cropX, cropY, cropW, cropH);
-        const poses = await detector.estimatePoses(cropped, { flipHorizontal: false });
-        cropped.close();
-        const raw = poses?.[0]?.keypoints;
-        if (raw && raw.some((kp: any) => (kp.score ?? 0) >= 0.3)) {
-          const scaleX = cropW / (cropW || 1);
-          const scaleY = cropH / (cropH || 1);
-          keypoints = raw.map((kp: any) => ({
-            x: kp.x * scaleX + cropX,
-            y: kp.y * scaleY + cropY,
-            score: kp.score ?? 0,
-            name: kp.name ?? '',
-          }));
-        } else {
-          // Crop failed — fallback to full frame
-          const poses2 = await detector.estimatePoses(bitmap, { flipHorizontal: false });
-          const raw2 = poses2?.[0]?.keypoints;
-          keypoints = raw2?.map((kp: any) => ({
-            x: kp.x, y: kp.y, score: kp.score ?? 0, name: kp.name ?? '',
-          })) ?? null;
-        }
-      } else {
-        const poses = await detector.estimatePoses(bitmap, { flipHorizontal: false });
-        const raw = poses?.[0]?.keypoints;
-        keypoints = raw?.map((kp: any) => ({
-          x: kp.x, y: kp.y, score: kp.score ?? 0, name: kp.name ?? '',
-        })) ?? null;
-      }
-
+      const poses = await detector.estimatePoses(bitmap, { flipHorizontal: false });
       bitmap.close();
+
+      const raw = poses?.[0]?.keypoints;
+      const keypoints =
+        raw?.map((kp: any) => ({
+          x: kp.x,
+          y: kp.y,
+          score: kp.score ?? 0,
+          name: kp.name ?? '',
+        })) ?? null;
+
       self.postMessage({ type: 'result', keypoints, frameId: data.frameId });
     } catch {
       if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
