@@ -631,15 +631,27 @@ export default function ToolPalette(props: ToolPaletteProps) {
       }}
     >
       <div style={{ height: 1, background: '#D1D1D6', margin: '8px 0' }} />
-      {onSaveReport ? (
+      {onScreenshotSave ? (
         <Row
-          k="save-report"
-          icon={<FolderOpen size={denseMobile || io ? 16 : 20} />}
-          label="Save report"
-          onPress={() => { if (saveReportEnabled) onSaveReport(); }}
-          sub={saveReportEnabled ? undefined : 'Run analysis first'}
+          k="screenshot"
+          icon={screenshotSaving
+            ? <span style={{ width: denseMobile || io ? 16 : 20, height: denseMobile || io ? 16 : 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width={denseMobile || io ? 16 : 20} height={denseMobile || io ? 16 : 20} style={{ animation: 'spin 1s linear infinite' }}>
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
+                </svg>
+              </span>
+            : <Camera size={denseMobile || io ? 16 : 20} />
+          }
+          label={screenshotSaving ? 'Saving…' : 'Screenshot'}
+          onPress={screenshotSaving ? () => {} : onScreenshotSave}
         />
       ) : null}
+      <Row
+        k="aim-f"
+        icon={<BarChart3 size={denseMobile || io ? 16 : 20} />}
+        label="Metrics"
+        onPress={() => push('aimetrics')}
+      />
       <Row k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} label="Undo" onPress={onUndo} />
       <Row k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} label="Redo" onPress={onRedo} />
       <Row k="cl" destructive icon={<Trash2 size={denseMobile || io ? 16 : 20} />} label="Clear all" onPress={onClear} />
@@ -702,21 +714,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
         </span>
         {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
       </Link>
-      {onScreenshotSave ? (
-        <Row
-          k="screenshot"
-          icon={screenshotSaving
-            ? <span style={{ width: denseMobile || io ? 16 : 20, height: denseMobile || io ? 16 : 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width={denseMobile || io ? 16 : 20} height={denseMobile || io ? 16 : 20} style={{ animation: 'spin 1s linear infinite' }}>
-                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
-                </svg>
-              </span>
-            : <Camera size={denseMobile || io ? 16 : 20} />
-          }
-          label={screenshotSaving ? 'Saving…' : 'Save screenshot'}
-          onPress={screenshotSaving ? () => {} : onScreenshotSave}
-        />
-      ) : null}
       {authContent ? <div style={{ marginTop: 4 }}>{authContent}</div> : null}
     </div>
   );
@@ -1342,12 +1339,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
           icon={<Layers size={denseMobile ? 16 : 20} />}
           label="Stromotion"
           onPress={() => { onExitDrawContext?.(); push('stromotion'); }}
-        />
-        <Row
-          k="aim-h"
-          icon={<BarChart3 size={denseMobile ? 16 : 20} />}
-          label="Metrics"
-          onPress={() => push('aimetrics')}
         />
         {recordingHubContent ? (
           <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
