@@ -1374,7 +1374,7 @@ function Home() {
         }
       }
     });
-  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex, biomechActiveFrameIndex, videoRef, canvasRef]);
+  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex, setBiomechFrameDrawingJson, biomechActiveFrameIndex, videoRef, canvasRef]);
 
   const handleBiomechProposeFrame = useCallback((index: number) => {
     const frame = aiMetricsDraft?.frames[index];
