@@ -1729,9 +1729,16 @@ function Home() {
       onToggleFrameModule={updateBiomechFrameEnabledModule}
       onStampSkeleton={(frameIndex) => {
         const frame = aiMetricsDraft?.frames[frameIndex];
-        if (frame?.poseSample) {
-          setBiomechFrameSkeletonStamp(frameIndex, frame.poseSample);
+        const poseSample = frame?.poseSample;
+        if (!poseSample?.keypoints?.length) {
+          setProcessingStatus('No skeleton data for this frame — play the video with Skeleton enabled first.');
+          return;
         }
+        setBiomechFrameSkeletonStamp(frameIndex, poseSample);
+        const video = videoRef.current;
+        const nativeW = video?.videoWidth ?? 1280;
+        const nativeH = video?.videoHeight ?? 720;
+        canvasRef.current?.stampAutoMeasurements(poseSample.keypoints, nativeW, nativeH);
       }}
       onActivateTool={handleToolChange}
       onCaptureFrame={(frameIndex) => { void handleBiomechCaptureFrame(frameIndex); }}
@@ -1741,6 +1748,17 @@ function Home() {
           ...prev,
           [frameIndex]: { ...prev[frameIndex], [key]: done },
         }));
+        // Auto-draw the measurement using skeleton keypoints when checking
+        if (done) {
+          const frame = aiMetricsDraft?.frames[frameIndex];
+          const kps = frame?.poseSample?.keypoints;
+          if (kps?.length) {
+            const video = videoRef.current;
+            const nativeW = video?.videoWidth ?? 1280;
+            const nativeH = video?.videoHeight ?? 720;
+            canvasRef.current?.stampAutoMeasurements(kps, nativeW, nativeH);
+          }
+        }
       }}
       isProposingFrame={biomechProposingFrame}
       proposingFrameIndex={biomechProposingFrameIndex}
