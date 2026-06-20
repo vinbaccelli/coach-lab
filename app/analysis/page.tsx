@@ -673,6 +673,8 @@ function Home() {
   const skeletonEnabled  = activeTool === 'skeleton' || (biomechActive && biomechHtml5Only && biomechShowSkeleton) || (stroMotionActive && stroShowSkeleton);
   /** When false, pose still runs but overlay is hidden (coach can turn off drawing without Clear All). */
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
+  const [skeletonConfirmOpen, setSkeletonConfirmOpen] = useState(false);
+  const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
   const ballTrailEnabled = activeTool === 'ballShadow';
 
   const skeletonParts = useMemo(() => ({
@@ -4325,6 +4327,8 @@ function Home() {
         handleToolChange('skeleton');
         setSkeletonOverlayPaused(false);
         canvasRef.current?.resetSkeleton();
+        setSkeletonWaitingForClick(false);
+        setTimeout(() => setSkeletonConfirmOpen(true), 2500);
       } else if (screen === 'home') {
         setStroMotionActive(false);
         setBiomechActive(false);
@@ -4810,6 +4814,7 @@ function Home() {
                   skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
+                  onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); }}
                   isRecording={isRecording}
                   circleSpinning={circleSpinning}
                   outlineEraserSize={outlineEraserSize}
@@ -6127,6 +6132,66 @@ function Home() {
         }}
         isSaving={biomechSavingReport}
       />
+
+      {/* Skeleton confirmation popup */}
+      {skeletonConfirmOpen && createPortal(
+        <div
+          style={{
+            position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 9500, background: '#1D1D1F', borderRadius: 16,
+            padding: '16px 24px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
+            maxWidth: 320, width: '90%',
+          }}
+        >
+          <span style={{ fontSize: 14, fontWeight: 600, color: '#fff', textAlign: 'center' }}>
+            Is the skeleton over the player?
+          </span>
+          <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+            <button
+              type="button"
+              onClick={() => { setSkeletonConfirmOpen(false); setSkeletonWaitingForClick(false); }}
+              style={{
+                flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
+                background: '#34C759', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              }}
+            >
+              Yes ✓
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSkeletonConfirmOpen(false);
+                setSkeletonWaitingForClick(true);
+                setProcessingStatus('Click on the player to focus the skeleton');
+              }}
+              style={{
+                flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
+                background: '#FF3B30', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              }}
+            >
+              No — click player
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* Waiting for click indicator */}
+      {skeletonWaitingForClick && createPortal(
+        <div
+          style={{
+            position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 9500, background: '#007AFF', borderRadius: 12,
+            padding: '12px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>
+            👆 Click on the player to lock skeleton
+          </span>
+        </div>,
+        document.body,
+      )}
 
       {/* Report player picker modal */}
       {biomechReportPlayerPickerOpen && createPortal(

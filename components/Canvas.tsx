@@ -195,6 +195,7 @@ export interface CanvasProps {
   /** When false, skeleton pose may still run but overlay is not drawn. */
   skeletonDrawEnabled?: boolean;
   onProcessingStatus?: (msg: string | null) => void;
+  onSkeletonFocusSet?: () => void;
   isRecording?: boolean;
   circleSpinning?: boolean;
   outlineEraserSize?: number;
@@ -1493,6 +1494,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       skeletonDrawEnabled = true,
       ballTrailEnabled = false,
       onProcessingStatus,
+      onSkeletonFocusSet,
       isRecording = false,
       circleSpinning = false,
       outlineEraserSize = 0,
@@ -5168,9 +5170,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const normY = (pos.y - bounds.dy) / bounds.dh;
             if (normX >= 0 && normX <= 1 && normY >= 0 && normY <= 1) {
               poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
-              onProcessingStatus?.(`Skeleton focus: ${Math.round(normX*100)}%, ${Math.round(normY*100)}%`);
+              onProcessingStatus?.('Skeleton locked on player');
               skeletonSuppressedRef.current = false;
               renderDirtyRef.current = true;
+              onSkeletonFocusSet?.();
             } else {
               onProcessingStatus?.('Click on the player in the video');
             }
