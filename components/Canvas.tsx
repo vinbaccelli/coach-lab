@@ -5157,7 +5157,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // Skeleton tool: no special click behavior (detection runs automatically)
+      // ── Skeleton tool: click to lock detection on the player ────────────
+      if (tool === 'skeleton' && !zoomed) {
+        const video = videoRef.current;
+        if (video && video.videoWidth > 0) {
+          const bounds = videoBoundsRef.current;
+          if (bounds && bounds.dw > 0 && bounds.dh > 0) {
+            const normX = (pos.x - bounds.dx) / bounds.dw;
+            const normY = (pos.y - bounds.dy) / bounds.dh;
+            if (normX >= 0 && normX <= 1 && normY >= 0 && normY <= 1) {
+              poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
+              onProcessingStatus?.('Skeleton locked on player');
+              renderDirtyRef.current = true;
+            }
+          }
+        }
+        e.preventDefault();
+        return;
+      }
 
       // ── Select tool: stroke / joint selection ───────────────────────────
       if (tool === 'select') {

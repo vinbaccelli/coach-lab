@@ -65,18 +65,47 @@ self.onmessage = async (e: MessageEvent) => {
 
     try {
       const bitmap: ImageBitmap = data.bitmap;
-      const poses = await detector.estimatePoses(bitmap, { flipHorizontal: false });
-      bitmap.close();
+      const focus: { x: number; y: number } | null = data.focusPoint ?? null;
 
+      let cropX = 0, cropY = 0, cropW = bitmap.width, cropH = bitmap.height;
+      const useCrop = !!focus;
+
+      if (focus) {
+        const ratio = 0.6;
+        cropW = Math.round(bitmap.width * ratio);
+        cropH = Math.round(bitmap.height * ratio);
+        cropX = Math.round(Math.max(0, Math.min(bitmap.width - cropW, focus.x * bitmap.width - cropW / 2)));
+        cropY = Math.round(Math.max(0, Math.min(bitmap.height - cropH, focus.y * bitmap.height - cropH / 2)));
+      }
+
+      let source: ImageBitmap;
+      if (useCrop) {
+        source = await createImageBitmap(bitmap, cropX, cropY, cropW, cropH);
+        bitmap.close();
+      } else {
+        source = bitmap;
+      }
+
+      const poses = await detector.estimatePoses(source, { flipHorizontal: false });
       const raw = poses?.[0]?.keypoints;
-      const keypoints =
-        raw?.map((kp: any) => ({
-          x: kp.x,
-          y: kp.y,
+
+      let keypoints;
+      if (useCrop && raw) {
+        const sx = cropW / source.width;
+        const sy = cropH / source.height;
+        keypoints = raw.map((kp: any) => ({
+          x: kp.x * sx + cropX,
+          y: kp.y * sy + cropY,
           score: kp.score ?? 0,
           name: kp.name ?? '',
+        }));
+      } else {
+        keypoints = raw?.map((kp: any) => ({
+          x: kp.x, y: kp.y, score: kp.score ?? 0, name: kp.name ?? '',
         })) ?? null;
+      }
 
+      source.close();
       self.postMessage({ type: 'result', keypoints, frameId: data.frameId });
     } catch {
       if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
