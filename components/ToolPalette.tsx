@@ -686,16 +686,17 @@ export default function ToolPalette(props: ToolPaletteProps) {
         href="/"
         aria-label="Control Panel"
         style={{
-          display: 'flex', alignItems: 'center', justifyContent: io ? 'center' : 'flex-start',
-          textDecoration: 'none', padding: io ? 4 : '6px 8px', borderRadius: 8,
-          ...(io ? { width: 44, margin: '0 auto' } : {}),
+          ...rb(false, false, io, denseMobile),
+          textDecoration: 'none',
+          color: 'inherit',
+          ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
         }}
         onPointerDown={() => haptic()}
       >
-        {io
-          ? <img src="/logo-square.png" alt="CoachLab" style={{ width: 32, height: 32, borderRadius: 6 }} />
-          : <img src="/logo-rect.png" alt="CoachLab.ai" style={{ height: 22, width: 'auto' }} />
-        }
+        <span style={{ display: 'flex', width: iconBox, height: iconBox, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <ToolbarIcon size={denseMobile ? 16 : 18}><Home /></ToolbarIcon>
+        </span>
+        {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
       </Link>
       {authContent ? <div style={{ marginTop: 4 }}>{authContent}</div> : null}
     </div>
@@ -703,6 +704,13 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   const ToolbarLead = () => (
     <>
+      {/* Logo */}
+      <div style={{ display: 'flex', justifyContent: io ? 'center' : 'flex-start', padding: io ? '2px 0' : '2px 4px 6px' }}>
+        {io
+          ? <img src="/logo-square.png" alt="CoachLab" style={{ width: 36, height: 36, borderRadius: 7 }} />
+          : <img src="/logo-rect.png" alt="CoachLab.ai" style={{ height: 24, width: 'auto' }} />
+        }
+      </div>
       {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
         <button
           type="button"
