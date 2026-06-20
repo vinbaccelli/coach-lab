@@ -139,6 +139,8 @@ export interface CanvasHandle {
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
   /** Cancel an in-progress StroMotion region selection; fires the pending callback with null */
   cancelStroMotionRegionSelect: () => void;
+  /** Enable skeleton click-to-focus mode (next click on video sets focus point) */
+  setSkeletonWaitingForClick: (v: boolean) => void;
   resetCropZoom: () => void;
   /** Crop region (canvas-normalized 0..1) for export/recording */
   getCropRegion: () => { x: number; y: number; w: number; h: number } | null;
@@ -203,6 +205,8 @@ export interface CanvasProps {
   /** Position of the measurement column (normalized 0-1). Default: top-right */
   measurementColumnPos?: { x: number; y: number };
   onMeasurementColumnDrag?: (pos: { x: number; y: number }) => void;
+  /** When true, skeleton click-to-focus works even when skeleton isn't the active tool */
+  skeletonKeepAlive?: boolean;
   isRecording?: boolean;
   circleSpinning?: boolean;
   outlineEraserSize?: number;
@@ -1547,6 +1551,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       measurementColumnItems,
       measurementColumnPos,
       onMeasurementColumnDrag,
+      skeletonKeepAlive = false,
       isRecording = false,
       circleSpinning = false,
       outlineEraserSize = 0,
@@ -1595,6 +1600,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
     const mcPosRef = useRef<{ x: number; y: number }>({ x: 0.85, y: 0.02 });
     const mcDraggingRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+    const skeletonWaitingForClickRef = useRef(false);
+    const skeletonKeepAliveRef = useRef(skeletonKeepAlive);
+    useEffect(() => { skeletonKeepAliveRef.current = skeletonKeepAlive; }, [skeletonKeepAlive]);
 
     // Drawing state refs
     const strokesRef      = useRef<Stroke[]>([]);
@@ -2575,6 +2583,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           stroMotionBackgroundRef.current = stroMotionBackground; // restore from prop
           renderDirtyRef.current = true;
         }
+      },
+      setSkeletonWaitingForClick: (v: boolean) => {
+        skeletonWaitingForClickRef.current = v;
       },
       exportStrokes: () => {
         return JSON.stringify(strokesRef.current);
@@ -5310,8 +5321,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
-      // ── Skeleton tool: click to lock detection on the player ────────────
-      if (tool === 'skeleton') {
+      // ── Skeleton: click to lock detection on the player ─────────────────
+      if (tool === 'skeleton' || (skeletonKeepAlive && skeletonWaitingForClickRef.current)) {
         const video = videoRef.current;
         if (video && video.videoWidth > 0) {
           const bounds = videoBoundsRef.current;
@@ -5323,6 +5334,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
               onProcessingStatus?.('Skeleton locked on player');
               skeletonSuppressedRef.current = false;
+              skeletonWaitingForClickRef.current = false;
               renderDirtyRef.current = true;
               onSkeletonFocusSet?.();
             } else {

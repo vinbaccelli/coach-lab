@@ -133,6 +133,11 @@ interface ToolPaletteProps {
   onStroMotionToggle?: () => void;
   /** Auth button slot (rendered at bottom of every screen's footer) */
   authContent?: React.ReactNode;
+  /** Data column active state */
+  dataColumnActive?: boolean;
+  onDataColumnToggle?: () => void;
+  /** AI auto-detect measurements from skeleton */
+  onAutoDetectMeasurements?: () => void;
   /** Quick screenshot → docs. When provided, shows a camera button in the footer. */
   onScreenshotSave?: () => void;
   /** True while screenshot save is in progress */
@@ -558,6 +563,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
     stroMotionEnabled = false,
     onStroMotionToggle,
     authContent,
+    dataColumnActive = false,
+    onDataColumnToggle,
+    onAutoDetectMeasurements,
     onScreenshotSave,
     screenshotSaving = false,
     onZoomIn,
@@ -1301,36 +1309,32 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => { setTool('skeleton'); push('skeleton'); }}
           />
 
-          {!io && (
-            <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 2px' }}>
-              Auto measurements
-            </div>
+          {/* Draw tools (all available inside Metrics) */}
+          <Row k="m-draw" icon={<Pen size={metricIcon} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
+
+          {/* Activate Data Column */}
+          {onDataColumnToggle && (
+            <Row
+              k="m-datacol"
+              active={dataColumnActive}
+              icon={<BarChart3 size={metricIcon} />}
+              label={dataColumnActive ? 'Data Column ON' : 'Activate Data Column'}
+              onPress={onDataColumnToggle}
+            />
           )}
 
-          <Row k="m-shoulder" icon={<AngleToolIcon size={metricIcon} />} label="Shoulder angle" onPress={() => { setTool('arrowAngle'); }} />
-          <Row k="m-hip" icon={<AngleToolIcon size={metricIcon} />} label="Hip angle" onPress={() => { setTool('arrowAngle'); }} />
-          <Row k="m-diff" icon={<Activity size={metricIcon} />} label="Shoulder–Hip diff" onPress={() => {}} />
-          <Row k="m-foot-dir" icon={<ArrowRight size={metricIcon} />} label="Foot direction" onPress={() => { setTool('arrowAngle'); }} />
-          <Row k="m-head" icon={<Minus size={metricIcon} />} label="Head direction" onPress={() => { setTool('arrowAngle'); }} />
-          <Row k="m-foot-dist" icon={<Ruler size={metricIcon} />} label="Foot distance" onPress={() => { setTool('ruler'); }} />
-
-          {!io && (
-            <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 2px' }}>
-              Manual measurements
-            </div>
+          {/* AI auto-detect from skeleton */}
+          {onAutoDetectMeasurements && (
+            <Row k="m-aidetect" icon={<Sparkles size={metricIcon} />} label="AI Detect Angles" onPress={onAutoDetectMeasurements} />
           )}
-
-          <Row k="m-racket" icon={<ArrowAngleToolIcon size={metricIcon} />} label="Racket angle" onPress={() => { setTool('arrowAngle'); }} />
-          <Row k="m-stringbed" icon={<Crosshair size={metricIcon} />} label="Stringbed direction" onPress={() => { setTool('arrowAngle'); }} />
 
           {!io && (
             <div style={{ height: 1, background: '#D1D1D6', margin: '8px 0' }} />
           )}
 
-          {/* Frame Capture toggle — shows green balls + biomech panel */}
+          {/* Frame Capture */}
           <Row
             k="m-capture"
-            active={!!biomechanicsPanel}
             icon={<Camera size={metricIcon} />}
             label="Frame Capture"
             onPress={() => { push('framecapture'); }}

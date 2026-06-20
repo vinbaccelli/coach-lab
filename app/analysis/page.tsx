@@ -680,6 +680,7 @@ function Home() {
   const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
   const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
   const [pendingMeasurementName, setPendingMeasurementName] = useState('');
+  const [dataColumnActive, setDataColumnActive] = useState(false);
   const ballTrailEnabled = activeTool === 'ballShadow';
 
   const skeletonParts = useMemo(() => ({
@@ -4364,6 +4365,35 @@ function Home() {
     onToggleCollapsed:               !isMobile ? toggleToolbarCollapsed : undefined,
     showCollapseControl:             !isMobile,
     onCleanSession:                  resetSession,
+    dataColumnActive,
+    onDataColumnToggle:              () => setDataColumnActive(v => !v),
+    onAutoDetectMeasurements:        () => {
+      const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
+      if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
+      const latest = skFrames[skFrames.length - 1];
+      const kps = latest?.keypoints;
+      if (!kps?.length) return;
+      const { computePhaseMeasurements } = require('@/lib/biomechanics/measurements');
+      const meas = computePhaseMeasurements('auto', 'AI Detect', 0, kps);
+      const items: typeof measurementColumn = [];
+      if (meas.jointAngles.leftElbowDeg != null) items.push({ id: `ai-le-${Date.now()}`, label: 'L Elbow', value: Math.round(meas.jointAngles.leftElbowDeg), unit: '°', type: 'angle' });
+      if (meas.jointAngles.rightElbowDeg != null) items.push({ id: `ai-re-${Date.now()}`, label: 'R Elbow', value: Math.round(meas.jointAngles.rightElbowDeg), unit: '°', type: 'angle' });
+      if (meas.jointAngles.leftKneeDeg != null) items.push({ id: `ai-lk-${Date.now()}`, label: 'L Knee', value: Math.round(meas.jointAngles.leftKneeDeg), unit: '°', type: 'angle' });
+      if (meas.jointAngles.rightKneeDeg != null) items.push({ id: `ai-rk-${Date.now()}`, label: 'R Knee', value: Math.round(meas.jointAngles.rightKneeDeg), unit: '°', type: 'angle' });
+      if (meas.jointAngles.leftShoulderDeg != null) items.push({ id: `ai-ls-${Date.now()}`, label: 'L Shoulder', value: Math.round(meas.jointAngles.leftShoulderDeg), unit: '°', type: 'angle' });
+      if (meas.jointAngles.rightShoulderDeg != null) items.push({ id: `ai-rs-${Date.now()}`, label: 'R Shoulder', value: Math.round(meas.jointAngles.rightShoulderDeg), unit: '°', type: 'angle' });
+      if (meas.shoulderHipSeparationDeg != null) items.push({ id: `ai-shd-${Date.now()}`, label: 'Shoulder-Hip Diff', value: Math.round(meas.shoulderHipSeparationDeg), unit: '°', type: 'angle' });
+      if (meas.footDirection.leftAnkleDeg != null) items.push({ id: `ai-lf-${Date.now()}`, label: 'L Foot Dir', value: Math.round(meas.footDirection.leftAnkleDeg), unit: '°', type: 'angle' });
+      if (meas.footDirection.rightAnkleDeg != null) items.push({ id: `ai-rf-${Date.now()}`, label: 'R Foot Dir', value: Math.round(meas.footDirection.rightAnkleDeg), unit: '°', type: 'angle' });
+      if (meas.footSpacing?.distancePx != null) items.push({ id: `ai-fd-${Date.now()}`, label: 'Foot Distance', value: Math.round(meas.footSpacing.distancePx), unit: 'px', type: 'ruler' });
+      if (items.length > 0) {
+        setDataColumnActive(true);
+        setMeasurementColumn(prev => [...prev, ...items]);
+        setProcessingStatus(`AI detected ${items.length} measurements`);
+      } else {
+        setProcessingStatus('No measurements detected — ensure skeleton is tracking the player');
+      }
+    },
     onScreenshotSave:                () => { void handleScreenshotSave(); },
     screenshotSaving,
     onSaveReport:                    () => setSessionSaveModalOpen(true),
@@ -4828,13 +4858,16 @@ function Home() {
                   skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
+                  skeletonKeepAlive={skeletonKeepAlive}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); }}
                   measurementColumnItems={measurementColumn.length > 0 ? measurementColumn : null}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
                   onMeasurementCommit={(m) => {
-                    setPendingMeasurement(m);
-                    setPendingMeasurementName(m.type === 'angle' ? 'Angle' : m.type === 'arrowAngle' ? 'Arrow angle' : 'Distance');
+                    if (dataColumnActive) {
+                      setPendingMeasurement(m);
+                      setPendingMeasurementName(m.type === 'angle' ? 'Angle' : m.type === 'arrowAngle' ? 'Arrow angle' : 'Distance');
+                    }
                   }}
                   isRecording={isRecording}
                   circleSpinning={circleSpinning}
@@ -6252,6 +6285,7 @@ function Home() {
               onClick={() => {
                 setSkeletonConfirmOpen(false);
                 setSkeletonWaitingForClick(true);
+                canvasRef.current?.setSkeletonWaitingForClick(true);
                 setProcessingStatus('Click on the player to focus the skeleton');
               }}
               style={{
