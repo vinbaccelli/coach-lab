@@ -1187,7 +1187,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
+          <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
           {/* On/Off toggle */}
           {onSkeletonOverlayPausedChange !== undefined && (
             <Row
