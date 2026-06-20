@@ -211,6 +211,7 @@ interface CompactStripProps {
   onActivateTool?: (tool: ToolType) => void;
   onToggleMeasurement?: (frameIndex: number, key: string, done: boolean) => void;
   showLabels?: boolean;
+  biomechActiveFrameIndex?: number | null;
 }
 
 function FrameCompactIcon({
@@ -271,7 +272,7 @@ function CompactStrip({
   frames, frameCount, onDecrement, onIncrement, canDecrement, canIncrement,
   onAddFrame, onGenerate, canGenerate, isReportReady, onSaveReport, onClear, hasClearable,
   showSkeleton, onSelectFrame, onStampSkeleton, onActivateTool, onToggleMeasurement,
-  showLabels = false,
+  showLabels = false, biomechActiveFrameIndex = null,
 }: CompactStripProps) {
   const [openFrameIndex, setOpenFrameIndex] = useState<number | null>(null);
   const [openFrameAnchor, setOpenFrameAnchor] = useState<HTMLElement | null>(null);
@@ -318,79 +319,48 @@ function CompactStrip({
 
       <div style={{ height: 1, background: '#D1D1D6', width: showLabels ? '100%' : 32, margin: '4px auto' }} />
 
-      {/* Per-frame buttons */}
+      {/* Per-frame buttons — click to jump to that frame */}
       {frames.map((frame) => {
-        const isOpen = openFrameIndex === frame.index;
-        const doneMap = getDoneMap(frame);
-        const doneCount = MEASUREMENT_ITEMS.filter(m => !!doneMap[m.key]).length;
-        const hasDone = doneCount > 0;
-
+        const isActive = biomechActiveFrameIndex === frame.index;
         if (showLabels) {
           return (
-            <div key={frame.index} style={{ position: 'relative' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setOpenFrameAnchor(null);
-                  setOpenFrameIndex(isOpen ? null : frame.index);
-                  onSelectFrame(frame.index);
-                }}
-                style={{
-                  ...ib(isOpen),
-                  border: isOpen ? '1px solid #007AFF' : hasDone ? '1px solid #5856D6' : '1px solid #D1D1D6',
-                  background: isOpen ? '#007AFF' : hasDone ? 'rgba(88,86,214,0.06)' : '#FFF',
-                  color: isOpen ? '#FFF' : hasDone ? '#5856D6' : '#1D1D1F',
-                }}
-              >
-                <span style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: isOpen ? 'rgba(255,255,255,0.2)' : '#E5E5EA', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: isOpen ? '#FFF' : '#6E6E73' }}>
-                  {frame.index + 1}
-                </span>
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{frame.label}</span>
-                <span style={{ fontSize: 11, opacity: 0.6 }}>{formatTimeShort(frame.timeSec)}</span>
-                {doneCount > 0 && <span style={{ fontSize: 10, fontWeight: 700 }}>{doneCount}/{MEASUREMENT_ITEMS.length}</span>}
-              </button>
-              {isOpen && (
-                <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {MEASUREMENT_ITEMS.map(({ key, label, tool, icon }) => {
-                    const done = !!doneMap[key];
-                    return (
-                      <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '4px 8px' }} onClick={(e) => {
-                        e.preventDefault();
-                        if (tool === 'stamp') { onSelectFrame(frame.index); onStampSkeleton(frame.index); }
-                        else if (!done) { onSelectFrame(frame.index); onActivateTool?.(tool as ToolType); }
-                        onToggleMeasurement?.(frame.index, key, !done);
-                      }}>
-                        <div style={{ width: 18, height: 18, borderRadius: 4, flexShrink: 0, border: done ? '1.5px solid #007AFF' : '1.5px solid #D1D1D6', background: done ? '#007AFF' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          {done && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                        </div>
-                        <span style={{ fontSize: 12, color: done ? '#007AFF' : '#6E6E73', fontWeight: done ? 600 : 400, display: 'flex', alignItems: 'center', gap: 4 }}>{icon} {label}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <button
+              key={frame.index}
+              type="button"
+              onClick={() => onSelectFrame(frame.index)}
+              style={{
+                ...ib(isActive),
+                border: isActive ? '1px solid #007AFF' : '1px solid #D1D1D6',
+              }}
+            >
+              <span style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: isActive ? 'rgba(255,255,255,0.2)' : '#E5E5EA', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: isActive ? '#FFF' : '#6E6E73' }}>
+                {frame.index + 1}
+              </span>
+              <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{frame.label}</span>
+              <span style={{ fontSize: 11, opacity: 0.6 }}>{formatTimeShort(frame.timeSec)}</span>
+              {!!frame.capturedImageUrl && <span style={{ fontSize: 10, fontWeight: 700, color: '#34C759' }}>📷</span>}
+            </button>
           );
         }
-
         return (
-          <FrameCompactIcon
+          <button
             key={frame.index}
-            frame={frame}
-            isOpen={isOpen}
-            hasDone={!!hasDone}
-            showSkeleton={showSkeleton}
-            onToggle={(el) => {
-              setOpenFrameAnchor(isOpen ? null : el);
-              setOpenFrameIndex(isOpen ? null : frame.index);
+            type="button"
+            title={`Frame ${frame.index + 1} — ${formatTimeShort(frame.timeSec)}`}
+            onClick={() => onSelectFrame(frame.index)}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexDirection: 'column', gap: 1,
+              width: 44, height: 44, borderRadius: 10, cursor: 'pointer',
+              border: isActive ? '1px solid #007AFF' : '1px solid #D1D1D6',
+              background: isActive ? '#007AFF' : '#FFF',
+              color: isActive ? '#FFF' : '#1D1D1F',
+              margin: '0 auto',
             }}
-            onSelectFrame={onSelectFrame}
-            onStampSkeleton={onStampSkeleton}
-            onActivateTool={onActivateTool}
-            onToggleMeasurement={onToggleMeasurement}
-            onClose={() => { setOpenFrameIndex(null); setOpenFrameAnchor(null); }}
-            anchorEl={isOpen ? openFrameAnchor : null}
-          />
+          >
+            <span style={{ fontSize: 14, fontWeight: 800, lineHeight: 1 }}>{frame.index + 1}</span>
+            {!!frame.capturedImageUrl && <span style={{ fontSize: 8, lineHeight: 1 }}>📷</span>}
+          </button>
         );
       })}
 
@@ -632,42 +602,9 @@ function FrameCard({
         </button>
       </div>
 
-      {/* Analysis tools */}
-      <div style={{ borderTop: '1px solid #F2F2F7', padding: '10px 14px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>
-          Analysis tools
-        </div>
-        {MEASUREMENT_ITEMS.map(({ key, label, tool, icon }) => {
-          const done = !!doneMap[key];
-          return (
-            <label
-              key={key}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '4px 0' }}
-              onClick={(e) => {
-                e.preventDefault();
-                if (tool === 'stamp') {
-                  onJumpAndDraw();
-                  onStampSkeleton();
-                } else {
-                  if (!done) { onJumpAndDraw(); onActivateTool?.(tool as ToolType); }
-                }
-                onToggleMeasurement?.(key, !done);
-              }}
-            >
-              <div style={{
-                width: 22, height: 22, borderRadius: 5, flexShrink: 0,
-                border: done ? '2px solid #007AFF' : '2px solid #D1D1D6',
-                background: done ? '#007AFF' : '#fff',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                {done && <svg width="12" height="10" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-              </div>
-              <span style={{ fontSize: 13, color: done ? '#007AFF' : '#6E6E73', fontWeight: done ? 600 : 400, display: 'flex', alignItems: 'center', gap: 6 }}>
-                {icon} {label}
-              </span>
-            </label>
-          );
-        })}
+      {/* Tip: use Draw tools + Data Column to add measurements to this frame */}
+      <div style={{ borderTop: '1px solid #F2F2F7', padding: '8px 14px', fontSize: 11, color: '#AEAEB2', lineHeight: 1.4 }}>
+        Use Metrics → Draw tools to add measurements. Activate Data Column to capture values.
       </div>
     </div>
   );
@@ -774,6 +711,7 @@ export default function BiomechanicsPanel({
         onActivateTool={onActivateTool}
         onToggleMeasurement={onToggleMeasurement}
         showLabels={showLabels}
+        biomechActiveFrameIndex={activeFrameIndex}
       />
     );
   }
