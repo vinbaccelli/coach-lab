@@ -1603,6 +1603,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonWaitingForClickRef = useRef(false);
     const skeletonKeepAliveRef = useRef(skeletonKeepAlive);
     useEffect(() => { skeletonKeepAliveRef.current = skeletonKeepAlive; }, [skeletonKeepAlive]);
+    const onMeasurementCommitRef = useRef(onMeasurementCommit);
+    useEffect(() => { onMeasurementCommitRef.current = onMeasurementCommit; }, [onMeasurementCommit]);
 
     // Drawing state refs
     const strokesRef      = useRef<Stroke[]>([]);
@@ -4919,7 +4921,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             liveAngleRef.current = null;
             pushHistory();
             notifyDrawCommitted();
-            onMeasurementCommit?.({ type: 'angle', value: Math.round(commitDeg), unit: '°' });
+            onMeasurementCommitRef.current?.({ type: 'angle', value: Math.round(commitDeg), unit: '°' });
           }
           break;
 
@@ -5108,18 +5110,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const dx = s.p2.x - s.p1.x;
           const dy = s.p2.y - s.p1.y;
           const deg = Math.round(((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360);
-          onMeasurementCommit?.({ type: 'arrowAngle', value: deg, unit: '°' });
+          onMeasurementCommitRef.current?.({ type: 'arrowAngle', value: deg, unit: '°' });
         } else if (toolName === 'ruler' && s.p1 && s.p2) {
           const dist = Math.round(Math.hypot(s.p2.x - s.p1.x, s.p2.y - s.p1.y));
-          onMeasurementCommit?.({ type: 'ruler', value: dist, unit: 'px' });
+          onMeasurementCommitRef.current?.({ type: 'ruler', value: dist, unit: 'px' });
         } else if (toolName === 'line' && s.p1 && s.p2) {
           const dx = s.p2.x - s.p1.x;
           const dy = s.p2.y - s.p1.y;
           const deg = Math.round(((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360);
-          onMeasurementCommit?.({ type: 'angle', value: deg, unit: '°' });
+          onMeasurementCommitRef.current?.({ type: 'angle', value: deg, unit: '°' });
         }
       }
-    }, [pushHistory, notifyDrawCommitted, onMeasurementCommit]);
+    }, [pushHistory, notifyDrawCommitted]);
 
     /**
      * Discard any tentative single-finger interaction so that claiming a

@@ -1371,9 +1371,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
         <ToolbarLead />
         <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
-        <div data-tour-id="tour-draw-tools" style={io ? { display: 'flex', justifyContent: 'center', width: '100%' } : undefined}>
-          <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
-        </div>
         <Row
           k="met-h"
           active={activeTool === 'skeleton'}
