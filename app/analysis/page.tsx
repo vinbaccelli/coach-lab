@@ -1502,12 +1502,16 @@ function Home() {
         `**Stroke type:** ${biomechStrokeType}`,
         `**Frames analysed:** ${aiMetricsDraft.frames.length}`,
         '',
-        ...aiMetricsDraft.frames.map((f, i) => {
-          const notes = biomechFrameNotes[i] ?? '';
-          const meas = biomechMeasurements[i];
+        ...aiMetricsDraft.frames.map((f) => {
+          const notes = biomechFrameNotes[f.index] ?? '';
+          const meas = biomechMeasurements[f.index];
           const checks = [
+            meas?.skeletonStamp ? '✓ Skeleton' : null,
+            meas?.jointAngles ? '✓ Joint angles' : null,
+            meas?.racketVector ? '✓ Racket vector' : null,
+            meas?.stringbedDirection ? '✓ Stringbed' : null,
+            meas?.hipShoulderDiff ? '✓ Hip/shoulder' : null,
             meas?.footDirection ? '✓ Foot direction' : null,
-            meas?.racketDirection ? '✓ Racket direction' : null,
             meas?.footDistance ? '✓ Foot distance' : null,
           ].filter(Boolean).join('  ');
           return `**${f.label}** @ ${f.timeSec.toFixed(2)}s${checks ? `  ${checks}` : ''}${notes ? `\n${notes}` : ''}`;

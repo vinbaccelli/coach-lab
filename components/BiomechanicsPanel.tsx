@@ -76,6 +76,8 @@ const MEASUREMENT_ITEMS: { key: MeasurementKey; label: string; tool: ToolType | 
   { key: 'stringbedDirection', label: 'Stringbed direction', tool: 'arrowAngle', icon: <Target size={13} /> },
   { key: 'measurements', label: 'Measurements', tool: 'ruler', icon: <Ruler size={13} /> },
   { key: 'hipShoulderDiff', label: 'Hip/shoulder diff', tool: 'arrowAngle', icon: <AngleArrowIcon size={13} /> },
+  { key: 'footDirection', label: 'Foot direction', tool: 'arrowAngle', icon: <AngleArrowIcon size={13} /> },
+  { key: 'footDistance', label: 'Foot distance', tool: 'ruler', icon: <Ruler size={13} /> },
 ];
 
 function getDoneMap(frame: BiomechFrameRow): Record<string, boolean | undefined> {

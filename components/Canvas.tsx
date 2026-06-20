@@ -139,8 +139,6 @@ export interface CanvasHandle {
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
   /** Cancel an in-progress StroMotion region selection; fires the pending callback with null */
   cancelStroMotionRegionSelect: () => void;
-  /** Set skeleton focus point (normalized 0-1 coords). User clicks on the player to select them. */
-  setSkeletonFocus: (pt: { x: number; y: number } | null) => void;
   resetCropZoom: () => void;
   /** Crop region (canvas-normalized 0..1) for export/recording */
   getCropRegion: () => { x: number; y: number; w: number; h: number } | null;
@@ -2518,11 +2516,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           stroMotionBackgroundRef.current = stroMotionBackground; // restore from prop
           renderDirtyRef.current = true;
         }
-      },
-      setSkeletonFocus: (pt) => {
-        poseBridgeRef.current?.setFocusPoint(pt);
-        if (pt) onProcessingStatus?.(`Skeleton locked on (${Math.round(pt.x * 100)}%, ${Math.round(pt.y * 100)}%)`);
-        else onProcessingStatus?.('Skeleton focus cleared');
       },
       exportStrokes: () => {
         return JSON.stringify(strokesRef.current);

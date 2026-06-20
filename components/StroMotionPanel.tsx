@@ -119,7 +119,6 @@ function StroFrameSubPanel({
   const top = Math.min(rect.top, window.innerHeight - 220);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   React.useEffect(() => {
     const handler = (e: Event) => {
       const target = 'touches' in e ? (e as globalThis.TouchEvent).touches[0]?.target : (e as MouseEvent).target;
@@ -281,10 +280,7 @@ export default function StroMotionPanel({
   const canDecrement = frameCountIdx > 0;
   const canIncrement = frameCountIdx >= 0 && frameCountIdx < STRO_MOTION_FRAME_COUNTS.length - 1;
 
-  // ── Compact icon-only strip ──────────────────────────────────────────────
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   const [openFrameIndex, setOpenFrameIndex] = useState<number | null>(null);
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   const [openFrameAnchor, setOpenFrameAnchor] = useState<HTMLElement | null>(null);
 
   if (compact) {
