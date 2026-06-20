@@ -196,6 +196,10 @@ export interface CanvasProps {
   skeletonDrawEnabled?: boolean;
   onProcessingStatus?: (msg: string | null) => void;
   onSkeletonFocusSet?: () => void;
+  /** Called when a drawing measurement is committed (angle, ruler, etc.) */
+  onMeasurementCommit?: (measurement: { type: 'angle' | 'ruler' | 'arrowAngle'; value: number; unit: string }) => void;
+  /** Measurements to render in the right-side column overlay */
+  measurementColumnItems?: Array<{ id: string; label: string; value: number; unit: string }> | null;
   isRecording?: boolean;
   circleSpinning?: boolean;
   outlineEraserSize?: number;
@@ -1536,6 +1540,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       ballTrailEnabled = false,
       onProcessingStatus,
       onSkeletonFocusSet,
+      onMeasurementCommit,
+      measurementColumnItems,
       isRecording = false,
       circleSpinning = false,
       outlineEraserSize = 0,
@@ -1581,6 +1587,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const streamRef = useRef<MediaStream | null>(null);
     const watermarkRef = useRef<HTMLImageElement | null>(null);
     const watermarkLoadedRef = useRef(false);
+    const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
 
     // Drawing state refs
     const strokesRef      = useRef<Stroke[]>([]);
@@ -3320,6 +3327,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    useEffect(() => { measurementColumnRef.current = measurementColumnItems ?? null; renderDirtyRef.current = true; }, [measurementColumnItems]);
+
     // ── Watermark logo ───────────────────────────────────────────────────
     useEffect(() => {
       const img = new Image();
@@ -4224,6 +4233,40 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
+        // ── Measurement column (right side) ─────────────────────────────
+        const mcItems = measurementColumnRef.current;
+        if (mcItems && mcItems.length > 0) {
+          const mcW = 130;
+          const mcLineH = 24;
+          const mcH = mcItems.length * mcLineH + 16;
+          const mcX = W - mcW - 16;
+          const mcY = 16;
+
+          ctx.save();
+          ctx.fillStyle = 'rgba(0,0,0,0.7)';
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(mcX, mcY, mcW, mcH, 10);
+          else ctx.rect(mcX, mcY, mcW, mcH);
+          ctx.fill();
+
+          ctx.font = 'bold 10px -apple-system, sans-serif';
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          ctx.fillText('MEASUREMENTS', mcX + 8, mcY + 12);
+
+          ctx.font = '12px -apple-system, sans-serif';
+          for (let i = 0; i < mcItems.length; i++) {
+            const item = mcItems[i];
+            const y = mcY + 24 + i * mcLineH;
+            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.fillText(item.label, mcX + 8, y);
+            ctx.fillStyle = '#93C5FD';
+            ctx.font = 'bold 13px -apple-system, sans-serif';
+            ctx.fillText(`${item.value}${item.unit}`, mcX + mcW - 8 - ctx.measureText(`${item.value}${item.unit}`).width, y);
+            ctx.font = '12px -apple-system, sans-serif';
+          }
+          ctx.restore();
+        }
+
         // ── Watermark logo (bottom-right corner) ──────────────────────────
         if (watermarkLoadedRef.current && watermarkRef.current) {
           const wm = watermarkRef.current;
@@ -4836,6 +4879,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 spinning: circleSpinningRef.current || undefined,
               },
             ];
+            const commitDeg = calcAngleDeg(p1, v, pos);
             anglePhaseRef.current = 0;
             setAngleUiPhase(0);
             angleVRef.current   = null;
@@ -4843,6 +4887,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             liveAngleRef.current = null;
             pushHistory();
             notifyDrawCommitted();
+            onMeasurementCommit?.({ type: 'angle', value: Math.round(commitDeg), unit: '°' });
           }
           break;
 
@@ -5023,7 +5068,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (isContextualStrokeTool(active.tool)) {
         notifyDrawCommitted();
       }
-    }, [pushHistory, notifyDrawCommitted]);
+      // Report measurement to the column
+      const toolName = active.tool as string;
+      if (toolName === 'arrowAngle' || toolName === 'ruler') {
+        const s = active as any;
+        if (toolName === 'arrowAngle' && s.pts?.length >= 3) {
+          const deg = calcAngleDeg(s.pts[0], s.pts[1], s.pts[2]);
+          onMeasurementCommit?.({ type: 'arrowAngle', value: Math.round(deg), unit: '°' });
+        } else if (toolName === 'ruler' && s.p1 && s.p2) {
+          const dist = Math.round(Math.hypot(s.p2.x - s.p1.x, s.p2.y - s.p1.y));
+          onMeasurementCommit?.({ type: 'ruler', value: dist, unit: 'px' });
+        }
+      }
+    }, [pushHistory, notifyDrawCommitted, onMeasurementCommit]);
 
     /**
      * Discard any tentative single-finger interaction so that claiming a

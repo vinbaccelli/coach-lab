@@ -564,6 +564,7 @@ function Home() {
   const [biomechReportAnalysis, setBiomechReportAnalysis] = useState<import('@/lib/biomechanics/types').BiomechanicsAnalysis | null>(null);
   const [biomechEditingFrameIndex, setBiomechEditingFrameIndex] = useState<number | null>(null);
   const [biomechPhaseMarkers, setBiomechPhaseMarkers] = useState<Array<{ id: string; label: string; short?: string; time: number }> | null>(null);
+  const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number; unit: string; type: string }>>([]);
   const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
   const biomechFrameDrawingsRef = useRef<Record<number, string>>({});
   const biomechHtml5Only = stroMotionHtml5Only;
@@ -4816,6 +4817,16 @@ function Home() {
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); }}
+                  measurementColumnItems={measurementColumn.length > 0 ? measurementColumn : null}
+                  onMeasurementCommit={(m) => {
+                    setMeasurementColumn(prev => [...prev, {
+                      id: `m-${Date.now()}`,
+                      label: m.type === 'angle' ? 'Angle' : m.type === 'arrowAngle' ? 'Arrow angle' : 'Distance',
+                      value: m.value,
+                      unit: m.unit,
+                      type: m.type,
+                    }]);
+                  }}
                   isRecording={isRecording}
                   circleSpinning={circleSpinning}
                   outlineEraserSize={outlineEraserSize}
