@@ -672,12 +672,14 @@ function Home() {
   const [objMultiplierHasRegion, setObjMultiplierHasRegion] = useState(false);
   const [objMultiplierProgress, setObjMultiplierProgress] = useState<string | null>(null);
 
-  // Derived: skeleton / ball trail enabled when their tool is active
-  const skeletonEnabled  = activeTool === 'skeleton' || (biomechActive && biomechHtml5Only && biomechShowSkeleton) || (stroMotionActive && stroShowSkeleton);
-  /** When false, pose still runs but overlay is hidden (coach can turn off drawing without Clear All). */
+  // Skeleton persists across tool changes once enabled from Metrics
+  const [skeletonKeepAlive, setSkeletonKeepAlive] = useState(false);
+  const skeletonEnabled  = activeTool === 'skeleton' || skeletonKeepAlive || (biomechActive && biomechHtml5Only && biomechShowSkeleton) || (stroMotionActive && stroShowSkeleton);
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const [skeletonConfirmOpen, setSkeletonConfirmOpen] = useState(false);
   const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
+  const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
+  const [pendingMeasurementName, setPendingMeasurementName] = useState('');
   const ballTrailEnabled = activeTool === 'ballShadow';
 
   const skeletonParts = useMemo(() => ({
@@ -1572,6 +1574,7 @@ function Home() {
     biomechFrameDrawingsRef.current = {};
     biomechFrameMeasurementsRef.current = {};
     setMeasurementColumn([]);
+    setSkeletonKeepAlive(false);
     setBiomechReportModalOpen(false);
   }, [clearBiomechAll]);
 
@@ -4335,12 +4338,14 @@ function Home() {
       } else if (screen === 'skeleton') {
         handleToolChange('skeleton');
         setSkeletonOverlayPaused(false);
+        setSkeletonKeepAlive(true);
         canvasRef.current?.resetSkeleton();
         setSkeletonWaitingForClick(false);
         setTimeout(() => setSkeletonConfirmOpen(true), 2500);
       } else if (screen === 'home') {
         setStroMotionActive(false);
         setBiomechActive(false);
+        setSkeletonKeepAlive(false);
       }
     },
     skeletonOverlayPaused,
@@ -4828,13 +4833,8 @@ function Home() {
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
                   onMeasurementCommit={(m) => {
-                    setMeasurementColumn(prev => [...prev, {
-                      id: `m-${Date.now()}`,
-                      label: m.type === 'angle' ? 'Angle' : m.type === 'arrowAngle' ? 'Arrow angle' : 'Distance',
-                      value: m.value,
-                      unit: m.unit,
-                      type: m.type,
-                    }]);
+                    setPendingMeasurement(m);
+                    setPendingMeasurementName(m.type === 'angle' ? 'Angle' : m.type === 'arrowAngle' ? 'Arrow angle' : 'Distance');
                   }}
                   isRecording={isRecording}
                   circleSpinning={circleSpinning}
@@ -6153,6 +6153,74 @@ function Home() {
         }}
         isSaving={biomechSavingReport}
       />
+
+      {/* Measurement naming prompt */}
+      {pendingMeasurement && createPortal(
+        <div style={{
+          position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9500, background: '#1D1D1F', borderRadius: 16,
+          padding: '16px 20px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+          display: 'flex', flexDirection: 'column', gap: 10, width: 280,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>
+              {pendingMeasurement.value}{pendingMeasurement.unit}
+            </span>
+            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>{pendingMeasurement.type}</span>
+          </div>
+          <input
+            type="text"
+            placeholder="Name this measurement..."
+            value={pendingMeasurementName}
+            onChange={e => setPendingMeasurementName(e.target.value)}
+            autoFocus
+            onKeyDown={e => {
+              if (e.key === 'Enter' && pendingMeasurementName.trim()) {
+                setMeasurementColumn(prev => [...prev, {
+                  id: `m-${Date.now()}`,
+                  label: pendingMeasurementName.trim(),
+                  value: pendingMeasurement.value,
+                  unit: pendingMeasurement.unit,
+                  type: pendingMeasurement.type,
+                }]);
+                setPendingMeasurement(null);
+                setPendingMeasurementName('');
+              }
+            }}
+            style={{
+              padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)',
+              background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: 13, outline: 'none',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" onClick={() => {
+              if (pendingMeasurementName.trim()) {
+                setMeasurementColumn(prev => [...prev, {
+                  id: `m-${Date.now()}`,
+                  label: pendingMeasurementName.trim(),
+                  value: pendingMeasurement.value,
+                  unit: pendingMeasurement.unit,
+                  type: pendingMeasurement.type,
+                }]);
+              }
+              setPendingMeasurement(null);
+              setPendingMeasurementName('');
+            }} style={{
+              flex: 1, padding: '8px 0', borderRadius: 8, border: 'none',
+              background: '#007AFF', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            }}>
+              Add to column
+            </button>
+            <button type="button" onClick={() => { setPendingMeasurement(null); setPendingMeasurementName(''); }} style={{
+              padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)',
+              background: 'transparent', color: 'rgba(255,255,255,0.7)', fontSize: 13, cursor: 'pointer',
+            }}>
+              Skip
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {/* Skeleton confirmation popup */}
       {skeletonConfirmOpen && createPortal(

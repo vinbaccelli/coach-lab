@@ -5078,14 +5078,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       // Report measurement to the column
       const toolName = active.tool as string;
-      if (toolName === 'arrowAngle' || toolName === 'ruler') {
+      if (toolName === 'arrowAngle' || toolName === 'arrow' || toolName === 'ruler' || toolName === 'line') {
         const s = active as any;
-        if (toolName === 'arrowAngle' && s.pts?.length >= 3) {
-          const deg = calcAngleDeg(s.pts[0], s.pts[1], s.pts[2]);
-          onMeasurementCommit?.({ type: 'arrowAngle', value: Math.round(deg), unit: '°' });
+        if ((toolName === 'arrowAngle' || toolName === 'arrow') && s.p1 && s.p2) {
+          const dx = s.p2.x - s.p1.x;
+          const dy = s.p2.y - s.p1.y;
+          const deg = Math.round(((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360);
+          onMeasurementCommit?.({ type: 'arrowAngle', value: deg, unit: '°' });
         } else if (toolName === 'ruler' && s.p1 && s.p2) {
           const dist = Math.round(Math.hypot(s.p2.x - s.p1.x, s.p2.y - s.p1.y));
           onMeasurementCommit?.({ type: 'ruler', value: dist, unit: 'px' });
+        } else if (toolName === 'line' && s.p1 && s.p2) {
+          const dx = s.p2.x - s.p1.x;
+          const dy = s.p2.y - s.p1.y;
+          const deg = Math.round(((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360);
+          onMeasurementCommit?.({ type: 'angle', value: deg, unit: '°' });
         }
       }
     }, [pushHistory, notifyDrawCommitted, onMeasurementCommit]);
