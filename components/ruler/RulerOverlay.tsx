@@ -26,13 +26,15 @@ interface Props {
   containerWidth: number;
   containerHeight: number;
   onClose: () => void;
+  /** Report a completed measurement to the data column */
+  onMeasurement?: (value: number, unit: string) => void;
 }
 
 type CalibStep = 'pick-preset' | 'place-points' | 'done';
 
 let measureIdCounter = 0;
 
-export default function RulerOverlay({ containerWidth, containerHeight, onClose }: Props) {
+export default function RulerOverlay({ containerWidth, containerHeight, onClose, onMeasurement }: Props) {
   const [mode, setMode] = useState<RulerMode>('calibrate');
   const [calibStep, setCalibStep] = useState<CalibStep>('pick-preset');
   const [selectedPreset, setSelectedPreset] = useState<RulerPreset | null>(null);
@@ -121,9 +123,10 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose 
       ...prev,
       { id: `m${++measureIdCounter}`, p1: drawStart, p2: end, distanceM: distM },
     ]);
+    onMeasurement?.(Math.round(distM * 100) / 100, 'm');
     setDrawStart(null);
     setDrawCurrent(null);
-  }, [drawStart, calibration, getSvgPoint]);
+  }, [drawStart, calibration, getSvgPoint, onMeasurement]);
 
   const resetCalibration = useCallback(() => {
     setCalibration(null);

@@ -4911,6 +4911,12 @@ function Home() {
                     containerWidth={canvasSize.width}
                     containerHeight={canvasSize.height}
                     onClose={() => setActiveTool('select')}
+                    onMeasurement={(value, unit) => {
+                      if (dataColumnActive) {
+                        setPendingMeasurement({ type: 'ruler', value, unit });
+                        setPendingMeasurementName('Distance');
+                      }
+                    }}
                   />
                 )}
                 {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (
