@@ -713,10 +713,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const ToolbarLead = () => (
     <>
       {/* Logo */}
-      <div style={{ display: 'flex', justifyContent: io ? 'center' : 'flex-start', padding: io ? '2px 0' : '2px 4px 6px' }}>
+      <div style={{ display: 'flex', justifyContent: io ? 'center' : 'flex-start', padding: io ? '2px 0' : '4px 4px 8px' }}>
         {io
           ? <img src="/logo-square.png" alt="CoachLab" style={{ width: 36, height: 36, borderRadius: 7 }} />
-          : <img src="/logo-rect.png" alt="CoachLab.ai" style={{ height: 24, width: 'auto' }} />
+          : <img src="/logo-rect.png" alt="CoachLab.ai" style={{ height: 32, width: 'auto' }} />
         }
       </div>
       {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
