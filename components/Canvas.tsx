@@ -5158,18 +5158,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // ── Skeleton tool: click to lock detection on the player ────────────
-      if (tool === 'skeleton' && !zoomed) {
+      if (tool === 'skeleton') {
         const video = videoRef.current;
         if (video && video.videoWidth > 0) {
           const bounds = videoBoundsRef.current;
           if (bounds && bounds.dw > 0 && bounds.dh > 0) {
+            // pos is in logical canvas space; convert to normalized 0-1 video coords
             const normX = (pos.x - bounds.dx) / bounds.dw;
             const normY = (pos.y - bounds.dy) / bounds.dh;
             if (normX >= 0 && normX <= 1 && normY >= 0 && normY <= 1) {
               poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
-              onProcessingStatus?.('Skeleton locked on player');
+              onProcessingStatus?.(`Skeleton focus: ${Math.round(normX*100)}%, ${Math.round(normY*100)}%`);
+              skeletonSuppressedRef.current = false;
               renderDirtyRef.current = true;
+            } else {
+              onProcessingStatus?.('Click on the player in the video');
             }
+          } else {
+            onProcessingStatus?.('Video not ready — play first then click the player');
           }
         }
         e.preventDefault();
