@@ -1617,6 +1617,7 @@ function Home() {
   const [screenshotPickerOpen, setScreenshotPickerOpen] = useState(false);
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
   const [screenshotPlayerList, setScreenshotPlayerList] = useState<Array<{ id: string; display_name: string }>>([]);
+  const [screenshotNewPlayerName, setScreenshotNewPlayerName] = useState<string | null>(null);
 
   /** Capture the current frame into state and open the player picker */
   const handleScreenshotSave = useCallback(async () => {
@@ -1694,6 +1695,24 @@ function Home() {
       setScreenshotSaving(false);
     }
   }, [screenshotDataUrl, handleScreenshotDownload]);
+
+  const handleScreenshotCreateAndSave = useCallback(async () => {
+    if (!screenshotNewPlayerName?.trim() || !screenshotDataUrl) return;
+    setScreenshotSaving(true);
+    try {
+      const res = await fetch('/api/players', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ display_name: screenshotNewPlayerName.trim() }),
+      });
+      if (!res.ok) return;
+      const { player } = await res.json() as { player: { id: string; display_name: string } };
+      setScreenshotNewPlayerName(null);
+      await handleScreenshotSaveToPlayer(player.id, player.display_name);
+    } finally {
+      setScreenshotSaving(false);
+    }
+  }, [screenshotNewPlayerName, screenshotDataUrl, handleScreenshotSaveToPlayer]);
 
   /** Open report modal: requires at least one captured frame */
   const handleBiomechOpenReport = useCallback(() => {
@@ -6138,8 +6157,33 @@ function Home() {
             </div>
             <img src={screenshotDataUrl} alt="Screenshot preview" style={{ width: '100%', borderRadius: 10, objectFit: 'cover', maxHeight: 180 }} />
             <p style={{ margin: 0, fontSize: 13, color: '#6E6E73' }}>
-              {screenshotPlayerList.length > 0 ? 'Save to a player\'s docs or download directly.' : 'No players found — download directly.'}
+              Save to a player's docs, create a new player, or download directly.
             </p>
+            {/* Create new player inline */}
+            {!screenshotNewPlayerName && (
+              <button type="button" onClick={() => setScreenshotNewPlayerName(' ')} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 10,
+                border: '1px dashed #007AFF', background: 'rgba(0,122,255,0.04)',
+                color: '#007AFF', fontSize: 13, fontWeight: 600, cursor: 'pointer', width: '100%',
+              }}>
+                <Plus size={16} /> Create new player
+              </button>
+            )}
+            {screenshotNewPlayerName !== null && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input type="text" placeholder="Player name..." autoFocus
+                  value={screenshotNewPlayerName.trim() ? screenshotNewPlayerName : ''}
+                  onChange={e => setScreenshotNewPlayerName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && screenshotNewPlayerName.trim()) handleScreenshotCreateAndSave(); }}
+                  style={{ flex: 1, padding: '8px 12px', borderRadius: 8, border: '1px solid #D1D1D6', fontSize: 13 }}
+                />
+                <button type="button" disabled={!screenshotNewPlayerName.trim() || screenshotSaving}
+                  onClick={handleScreenshotCreateAndSave}
+                  style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#007AFF', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                  Save
+                </button>
+              </div>
+            )}
             {screenshotPlayerList.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto' }}>
                 {screenshotPlayerList.map(p => (

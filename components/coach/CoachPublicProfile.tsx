@@ -9,6 +9,7 @@ import {
   Mail,
   ExternalLink,
   MessageCircle,
+  Star,
 } from 'lucide-react';
 
 // ── Static profile data per slug ──────────────────────────────────────────
@@ -28,7 +29,7 @@ interface LinkItem {
   id: string;
   label: string;
   url: string;
-  icon?: 'instagram' | 'youtube' | 'globe' | 'mail' | 'external';
+  icon?: 'instagram' | 'youtube' | 'globe' | 'mail' | 'external' | 'whatsapp' | 'trustpilot' | 'google';
 }
 
 interface CoachProfileData {
@@ -40,7 +41,7 @@ interface CoachProfileData {
   accentColor: string;
   services: ServiceItem[];
   links: LinkItem[];
-  socials: { instagram?: string; youtube?: string; website?: string; email?: string };
+  socials: { instagram?: string; youtube?: string; website?: string; email?: string; whatsapp?: string; trustpilot?: string; googleReviews?: string };
 }
 
 const PROFILES: Record<string, CoachProfileData> = {
@@ -109,6 +110,8 @@ function LinkIcon({ type }: { type?: string }) {
   if (type === 'youtube') return <Youtube size={size} />;
   if (type === 'globe') return <Globe size={size} />;
   if (type === 'mail') return <Mail size={size} />;
+  if (type === 'whatsapp') return <MessageCircle size={size} />;
+  if (type === 'trustpilot' || type === 'google') return <Star size={size} />;
   return <ExternalLink size={size} />;
 }
 
