@@ -4252,36 +4252,49 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // ── Measurement column (draggable) ──────────────────────────────
+        // ── Data column (draggable, persistent when active) ─────────────
         const mcItems = measurementColumnRef.current;
-        if (mcItems && mcItems.length > 0) {
-          const mcW = 140;
-          const mcLineH = 24;
-          const mcH = mcItems.length * mcLineH + 20;
+        if (mcItems !== null) {
+          const mcW = 150;
+          const mcLineH = 22;
+          const hasItems = mcItems.length > 0;
+          const mcH = hasItems ? mcItems.length * mcLineH + 28 : 48;
           const mcX = Math.round(mcPosRef.current.x * W);
           const mcY = Math.round(mcPosRef.current.y * H);
 
           ctx.save();
-          ctx.fillStyle = 'rgba(0,0,0,0.7)';
+          ctx.fillStyle = 'rgba(0,0,0,0.75)';
           ctx.beginPath();
           if (ctx.roundRect) ctx.roundRect(mcX, mcY, mcW, mcH, 10);
           else ctx.rect(mcX, mcY, mcW, mcH);
           ctx.fill();
 
+          // Header
           ctx.font = 'bold 10px -apple-system, sans-serif';
-          ctx.fillStyle = 'rgba(255,255,255,0.5)';
-          ctx.fillText('MEASUREMENTS', mcX + 8, mcY + 12);
+          ctx.fillStyle = 'rgba(255,255,255,0.4)';
+          ctx.fillText('DATA COLUMN', mcX + 8, mcY + 14);
 
-          ctx.font = '12px -apple-system, sans-serif';
-          for (let i = 0; i < mcItems.length; i++) {
-            const item = mcItems[i];
-            const y = mcY + 24 + i * mcLineH;
-            ctx.fillStyle = 'rgba(255,255,255,0.6)';
-            ctx.fillText(item.label, mcX + 8, y);
-            ctx.fillStyle = '#93C5FD';
-            ctx.font = 'bold 13px -apple-system, sans-serif';
-            ctx.fillText(`${item.value}${item.unit}`, mcX + mcW - 8 - ctx.measureText(`${item.value}${item.unit}`).width, y);
-            ctx.font = '12px -apple-system, sans-serif';
+          // Drag handle dots
+          ctx.fillStyle = 'rgba(255,255,255,0.25)';
+          for (let d = 0; d < 3; d++) ctx.fillRect(mcX + mcW - 18 + d * 5, mcY + 10, 2, 2);
+
+          if (hasItems) {
+            ctx.font = '11px -apple-system, sans-serif';
+            for (let i = 0; i < mcItems.length; i++) {
+              const item = mcItems[i];
+              const y = mcY + 28 + i * mcLineH;
+              ctx.fillStyle = 'rgba(255,255,255,0.6)';
+              ctx.fillText(item.label, mcX + 8, y);
+              ctx.fillStyle = '#93C5FD';
+              ctx.font = 'bold 12px -apple-system, sans-serif';
+              const valText = `${item.value}${item.unit}`;
+              ctx.fillText(valText, mcX + mcW - 8 - ctx.measureText(valText).width, y);
+              ctx.font = '11px -apple-system, sans-serif';
+            }
+          } else {
+            ctx.font = '11px -apple-system, sans-serif';
+            ctx.fillStyle = 'rgba(255,255,255,0.3)';
+            ctx.fillText('Draw to add measurements', mcX + 8, mcY + 34);
           }
           ctx.restore();
         }
@@ -5306,11 +5319,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // ── Measurement column drag ──────────────────────────────────────
       const mcItemsNow = measurementColumnRef.current;
-      if (mcItemsNow && mcItemsNow.length > 0) {
+      if (mcItemsNow !== null) {
         const canvas = canvasRef.current;
         if (canvas) {
           const cW = canvas.width, cH = canvas.height;
-          const mW = 140, mLineH = 24, mH = mcItemsNow.length * mLineH + 20;
+          const mW = 150, mLineH = 22, mH = mcItemsNow.length > 0 ? mcItemsNow.length * mLineH + 28 : 48;
           const mX = mcPosRef.current.x * cW, mY = mcPosRef.current.y * cH;
           if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + mH) {
             mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
@@ -5322,7 +5335,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // ── Skeleton: click to lock detection on the player ─────────────────
-      if (tool === 'skeleton' || (skeletonKeepAlive && skeletonWaitingForClickRef.current)) {
+      if (tool === 'skeleton' || skeletonKeepAliveRef.current) {
         const video = videoRef.current;
         if (video && video.videoWidth > 0) {
           const bounds = videoBoundsRef.current;

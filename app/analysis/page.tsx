@@ -4860,7 +4860,7 @@ function Home() {
                   onProcessingStatus={setProcessingStatus}
                   skeletonKeepAlive={skeletonKeepAlive}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); }}
-                  measurementColumnItems={measurementColumn.length > 0 ? measurementColumn : null}
+                  measurementColumnItems={dataColumnActive ? measurementColumn : null}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
                   onMeasurementCommit={(m) => {
