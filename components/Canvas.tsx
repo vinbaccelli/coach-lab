@@ -2294,6 +2294,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (historyIdxRef.current < historyRef.current.length - 1) {
           historyIdxRef.current++;
           strokesRef.current = [...historyRef.current[historyIdxRef.current]];
+          skeletonSuppressedRef.current = true;
           renderDirtyRef.current = true;
         }
       },
@@ -2590,7 +2591,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         skeletonWaitingForClickRef.current = v;
       },
       exportStrokes: () => {
-        return JSON.stringify(strokesRef.current);
+        try { return JSON.stringify(strokesRef.current); }
+        catch { return '[]'; }
       },
       importStrokes: (json: string) => {
         try {
@@ -3355,6 +3357,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const img = new Image();
       img.src = '/logo-square.png';
       img.onload = () => { watermarkRef.current = img; watermarkLoadedRef.current = true; };
+      img.onerror = () => { watermarkLoadedRef.current = false; };
     }, []);
 
     // ── Render loop ────────────────────────────────────────────────────────
@@ -4261,8 +4264,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const mcLineH = 22;
           const hasItems = mcItems.length > 0;
           const mcH = hasItems ? mcItems.length * mcLineH + 28 : 48;
-          const mcX = Math.round(mcPosRef.current.x * W);
-          const mcY = Math.round(mcPosRef.current.y * H);
+          const mcX = Math.round(Math.min(mcPosRef.current.x * W, W - mcW - 4));
+          const mcY = Math.round(Math.min(mcPosRef.current.y * H, H - mcH - 4));
 
           ctx.save();
           ctx.fillStyle = 'rgba(0,0,0,0.75)';

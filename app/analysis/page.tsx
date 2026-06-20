@@ -1575,6 +1575,7 @@ function Home() {
     biomechFrameDrawingsRef.current = {};
     biomechFrameMeasurementsRef.current = {};
     setMeasurementColumn([]);
+    setDataColumnActive(false);
     setSkeletonKeepAlive(false);
     setBiomechReportModalOpen(false);
   }, [clearBiomechAll]);
@@ -1675,19 +1676,29 @@ function Home() {
       const filename = `${userId}/${Date.now()}.png`;
       const path = await uploadDataUrl('analysis-screenshots', filename, screenshotDataUrl);
       if (path) {
-        const { data: signed } = await supabase.storage.from('analysis-screenshots').createSignedUrl(path, 60 * 60 * 24 * 365);
-        const imageUrl = signed?.signedUrl ?? path;
-        await fetch(`/api/players/${playerId}/entries`, {
+        const { data: signed, error: signErr } = await supabase.storage.from('analysis-screenshots').createSignedUrl(path, 60 * 60 * 24 * 365);
+        if (signErr || !signed?.signedUrl) {
+          setProcessingStatus('Failed to create image URL — try again');
+          return;
+        }
+        const res = await fetch(`/api/players/${playerId}/entries`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             category: 'technique',
             folder_label: `Analysis ${localDateTimeForFolder()}`,
             body_text: 'Screenshot from analysis session.',
-            screenshots: [imageUrl],
+            screenshots: [signed.signedUrl],
             source: 'analysis-screenshot',
           }),
         });
+        if (!res.ok) {
+          setProcessingStatus('Failed to save screenshot — try again');
+          return;
+        }
+      } else {
+        setProcessingStatus('Upload failed — try again');
+        return;
       }
       setScreenshotPickerOpen(false);
       setScreenshotDataUrl(null);
@@ -1705,7 +1716,7 @@ function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: screenshotNewPlayerName.trim() }),
       });
-      if (!res.ok) return;
+      if (!res.ok) { setProcessingStatus('Failed to create player — check the name and try again'); return; }
       const { player } = await res.json() as { player: { id: string; display_name: string } };
       setScreenshotNewPlayerName(null);
       await handleScreenshotSaveToPlayer(player.id, player.display_name);

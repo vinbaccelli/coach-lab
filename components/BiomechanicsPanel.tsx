@@ -110,7 +110,9 @@ function CompactFrameSubPanel({
 }: CompactFrameSubPanelProps) {
   const doneMap = getDoneMap(frame);
 
+  if (!anchorEl.isConnected) { onClose(); return null; }
   const rect = anchorEl.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) { onClose(); return null; }
   const panelW = Math.min(220, window.innerWidth - rect.right - 16);
   const left = rect.right + 8;
   const top = Math.min(rect.top, window.innerHeight - 340);
