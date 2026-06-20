@@ -506,7 +506,7 @@ function drawSkeletonOverlay(
     for (const kp of keypoints) {
       if (kp && kp.score >= scoreThreshold) maxX = Math.max(maxX, kp.x * sx);
     }
-    const colX = Math.min(maxX + 20, canvasW - 100);
+    const colX = Math.min(maxX + 50, canvasW - 110);
     let colY = 0;
     // Find top of player
     for (const kp of keypoints) {

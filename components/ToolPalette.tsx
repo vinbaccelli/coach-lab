@@ -127,7 +127,7 @@ interface ToolPaletteProps {
   /** Biomechanics analysis panel (V1 primary workflow). */
   biomechanicsPanel?: React.ReactNode;
   /** Called when the user navigates to a toolbar screen. */
-  onNavigate?: (screen: 'home' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
+  onNavigate?: (screen: 'home' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'framecapture' | 'webcam') => void;
   /** @deprecated Use stroMotionPanel — legacy toggle only */
   stroMotionEnabled?: boolean;
   onStroMotionToggle?: () => void;
@@ -162,6 +162,7 @@ type NavScreen =
   | 'tools'
   | 'stromotion'
   | 'aimetrics'
+  | 'framecapture'
   | 'webcam';
 
 const TOOLBAR_ICON_PROPS = {
@@ -1287,27 +1288,73 @@ export default function ToolPalette(props: ToolPaletteProps) {
   }
 
   if (top === 'aimetrics') {
+    const metricIcon = denseMobile || io ? 16 : 18;
     return (
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
+          <ToolbarLead />
           <BackHeader title="Metrics" icon={<BarChart3 size={18} />} />
-          {/* Skeleton sub-screen button */}
+
+          {/* Skeleton sub-screen */}
           <Row
             k="sk-met"
             active={activeTool === 'skeleton'}
-            icon={<PersonStanding size={io ? 18 : 20} />}
+            icon={<PersonStanding size={metricIcon} />}
             label="Skeleton"
             onPress={() => { setTool('skeleton'); push('skeleton'); }}
           />
+
           {!io && (
-            <div style={{ height: 1, background: '#D1D1D6', margin: '4px 0' }} />
+            <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 2px' }}>
+              Auto measurements
+            </div>
           )}
-          {/* Biomechanics panel (frame capture + measurements) */}
+
+          <Row k="m-shoulder" icon={<AngleToolIcon size={metricIcon} />} label="Shoulder angle" onPress={() => { setTool('arrowAngle'); }} />
+          <Row k="m-hip" icon={<AngleToolIcon size={metricIcon} />} label="Hip angle" onPress={() => { setTool('arrowAngle'); }} />
+          <Row k="m-diff" icon={<Activity size={metricIcon} />} label="Shoulder–Hip diff" onPress={() => {}} />
+          <Row k="m-foot-dir" icon={<ArrowRight size={metricIcon} />} label="Foot direction" onPress={() => { setTool('arrowAngle'); }} />
+          <Row k="m-head" icon={<Minus size={metricIcon} />} label="Head direction" onPress={() => { setTool('arrowAngle'); }} />
+          <Row k="m-foot-dist" icon={<Ruler size={metricIcon} />} label="Foot distance" onPress={() => { setTool('ruler'); }} />
+
+          {!io && (
+            <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '8px 4px 2px' }}>
+              Manual measurements
+            </div>
+          )}
+
+          <Row k="m-racket" icon={<ArrowAngleToolIcon size={metricIcon} />} label="Racket angle" onPress={() => { setTool('arrowAngle'); }} />
+          <Row k="m-stringbed" icon={<Crosshair size={metricIcon} />} label="Stringbed direction" onPress={() => { setTool('arrowAngle'); }} />
+
+          {!io && (
+            <div style={{ height: 1, background: '#D1D1D6', margin: '8px 0' }} />
+          )}
+
+          {/* Frame Capture toggle — shows green balls + biomech panel */}
+          <Row
+            k="m-capture"
+            active={!!biomechanicsPanel}
+            icon={<Camera size={metricIcon} />}
+            label="Frame Capture"
+            onPress={() => { push('framecapture'); }}
+          />
+        </ToolbarScrollArea>
+        <GlobalActionsFooter />
+      </div>
+    );
+  }
+
+  if (top === ('framecapture')) {
+    return (
+      <div style={shellStyle}>
+        <CollapseControl />
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
+          <BackHeader title="Frame Capture" icon={<Camera size={18} />} />
           {biomechanicsPanel ?? (
             !io ? (
               <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
-                Add frames, stamp skeleton, and capture measurements.
+                Add green balls on the timeline to capture frozen frames with measurements.
               </p>
             ) : null
           )}
