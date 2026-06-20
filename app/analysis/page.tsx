@@ -2089,6 +2089,8 @@ function Home() {
       v.muted = true;
       await v.play();
       if (v.paused) throw new Error('Video remained paused after play()');
+      // Unmute after autoplay succeeds — user interaction has happened
+      v.muted = false;
       setShowTapToPlay(false);
       await canvas?.waitForRender?.();
       return true;
