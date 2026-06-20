@@ -1579,6 +1579,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
+    const watermarkRef = useRef<HTMLImageElement | null>(null);
+    const watermarkLoadedRef = useRef(false);
 
     // Drawing state refs
     const strokesRef      = useRef<Stroke[]>([]);
@@ -3318,6 +3320,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // ── Watermark logo ───────────────────────────────────────────────────
+    useEffect(() => {
+      const img = new Image();
+      img.src = '/logo-square.svg';
+      img.onload = () => { watermarkRef.current = img; watermarkLoadedRef.current = true; };
+    }, []);
+
     // ── Render loop ────────────────────────────────────────────────────────
 
     useEffect(() => {
@@ -4212,6 +4221,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.fillRect(8, 8, m.width + 12, 22);
           ctx.fillStyle = '#fff';
           ctx.fillText(label, 14, 24);
+          ctx.restore();
+        }
+
+        // ── Watermark logo (bottom-right corner) ──────────────────────────
+        if (watermarkLoadedRef.current && watermarkRef.current) {
+          const wm = watermarkRef.current;
+          const wmSize = Math.max(28, Math.min(44, Math.round(W / 28)));
+          const wmX = W - wmSize - 8;
+          const wmY = H - wmSize - 8;
+          ctx.save();
+          ctx.globalAlpha = 0.5;
+          ctx.drawImage(wm, wmX, wmY, wmSize, wmSize);
           ctx.restore();
         }
 

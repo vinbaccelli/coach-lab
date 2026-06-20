@@ -1,0 +1,14 @@
+<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="120" height="120" rx="22" fill="#1D1D1F"/>
+  <!-- Video player frame -->
+  <rect x="18" y="30" width="84" height="60" rx="8" stroke="white" stroke-width="3" fill="none"/>
+  <!-- Play/pause icons top -->
+  <polygon points="55,22 55,16 60,19" fill="white"/>
+  <rect x="64" y="16" width="2.5" height="6" rx="1" fill="white"/>
+  <rect x="69" y="16" width="2.5" height="6" rx="1" fill="white"/>
+  <!-- Timeline dot -->
+  <circle cx="78" cy="19" r="3" fill="#FF3B30"/>
+  <!-- CL text -->
+  <text x="36" y="72" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="32" font-weight="800" fill="white">C</text>
+  <text x="60" y="72" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="32" font-weight="800" fill="#FF3B30">L</text>
+</svg>
