@@ -646,12 +646,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
           onPress={screenshotSaving ? () => {} : onScreenshotSave}
         />
       ) : null}
-      <Row
-        k="aim-f"
-        icon={<BarChart3 size={denseMobile || io ? 16 : 20} />}
-        label="Metrics"
-        onPress={() => push('aimetrics')}
-      />
       <Row k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} label="Undo" onPress={onUndo} />
       <Row k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} label="Redo" onPress={onRedo} />
       <Row k="cl" destructive icon={<Trash2 size={denseMobile || io ? 16 : 20} />} label="Clear all" onPress={onClear} />
@@ -1254,14 +1248,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Tools" icon={<LayoutGrid size={18} />} />
-          <Row
-            k="sk-t"
-            icon={<PersonStanding size={18} />}
-            label="Skeleton"
-            onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
-          />
+          <Row k="met-t" icon={<BarChart3 size={18} />} label="Metrics" onPress={() => push('aimetrics')} />
           <Row k="sm-t" icon={<Layers size={18} />} label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
-          <Row k="bio-t" icon={<BarChart3 size={18} />} label="Metrics" onPress={() => push('aimetrics')} />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
@@ -1304,10 +1292,22 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Metrics" icon={<BarChart3 size={18} />} />
+          {/* Skeleton sub-screen button */}
+          <Row
+            k="sk-met"
+            active={activeTool === 'skeleton'}
+            icon={<PersonStanding size={io ? 18 : 20} />}
+            label="Skeleton"
+            onPress={() => { setTool('skeleton'); push('skeleton'); }}
+          />
+          {!io && (
+            <div style={{ height: 1, background: '#D1D1D6', margin: '4px 0' }} />
+          )}
+          {/* Biomechanics panel (frame capture + measurements) */}
           {biomechanicsPanel ?? (
             !io ? (
               <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
-                Select stroke type, trim to one stroke, detect phases, then verify markers on the timeline.
+                Add frames, stamp skeleton, and capture measurements.
               </p>
             ) : null
           )}
@@ -1328,11 +1328,11 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row k="dr" icon={<Pen size={denseMobile ? 16 : 20} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
         </div>
         <Row
-          k="sk-h"
+          k="met-h"
           active={activeTool === 'skeleton'}
-          icon={<PersonStanding size={denseMobile ? 16 : 20} />}
-          label="Skeleton"
-          onPress={() => { onExitDrawContext?.(); setTool('skeleton'); push('skeleton'); }}
+          icon={<BarChart3 size={denseMobile ? 16 : 20} />}
+          label="Metrics"
+          onPress={() => { onExitDrawContext?.(); push('aimetrics'); }}
         />
         <Row
           k="sm-h"

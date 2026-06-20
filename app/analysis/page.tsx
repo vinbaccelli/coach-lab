@@ -4323,6 +4323,8 @@ function Home() {
       } else if (screen === 'aimetrics') {
         setBiomechActive(true);
         setStroMotionActive(false);
+        handleToolChange('skeleton');
+        setSkeletonOverlayPaused(false);
       } else if (screen === 'skeleton') {
         handleToolChange('skeleton');
         setSkeletonOverlayPaused(false);
