@@ -40,7 +40,7 @@ export default function ControlPanelHome() {
     <div style={shell}>
       <div style={{ marginBottom: 22 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
-          <img src="/logo-square.png" alt="CoachLab" style={{ width: 40, height: 40, borderRadius: 8 }} />
+          <img src="/logo-rect.png" alt="CoachLab.ai" style={{ height: 32, width: 'auto' }} />
           <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 600, letterSpacing: '-0.03em', color: '#1D1D1F' }}>
             Control Panel
           </h1>
