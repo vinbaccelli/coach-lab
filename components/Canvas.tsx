@@ -200,6 +200,9 @@ export interface CanvasProps {
   onMeasurementCommit?: (measurement: { type: 'angle' | 'ruler' | 'arrowAngle'; value: number; unit: string }) => void;
   /** Measurements to render in the right-side column overlay */
   measurementColumnItems?: Array<{ id: string; label: string; value: number; unit: string }> | null;
+  /** Position of the measurement column (normalized 0-1). Default: top-right */
+  measurementColumnPos?: { x: number; y: number };
+  onMeasurementColumnDrag?: (pos: { x: number; y: number }) => void;
   isRecording?: boolean;
   circleSpinning?: boolean;
   outlineEraserSize?: number;
@@ -1542,6 +1545,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       onSkeletonFocusSet,
       onMeasurementCommit,
       measurementColumnItems,
+      measurementColumnPos,
+      onMeasurementColumnDrag,
       isRecording = false,
       circleSpinning = false,
       outlineEraserSize = 0,
@@ -1588,6 +1593,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const watermarkRef = useRef<HTMLImageElement | null>(null);
     const watermarkLoadedRef = useRef(false);
     const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
+    const mcPosRef = useRef<{ x: number; y: number }>({ x: 0.85, y: 0.02 });
+    const mcDraggingRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
 
     // Drawing state refs
     const strokesRef      = useRef<Stroke[]>([]);
@@ -3328,6 +3335,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     }, []);
 
     useEffect(() => { measurementColumnRef.current = measurementColumnItems ?? null; renderDirtyRef.current = true; }, [measurementColumnItems]);
+    useEffect(() => { if (measurementColumnPos) mcPosRef.current = measurementColumnPos; }, [measurementColumnPos]);
 
     // ── Watermark logo ───────────────────────────────────────────────────
     useEffect(() => {
@@ -4233,14 +4241,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // ── Measurement column (right side) ─────────────────────────────
+        // ── Measurement column (draggable) ──────────────────────────────
         const mcItems = measurementColumnRef.current;
         if (mcItems && mcItems.length > 0) {
-          const mcW = 130;
+          const mcW = 140;
           const mcLineH = 24;
-          const mcH = mcItems.length * mcLineH + 16;
-          const mcX = W - mcW - 16;
-          const mcY = 16;
+          const mcH = mcItems.length * mcLineH + 20;
+          const mcX = Math.round(mcPosRef.current.x * W);
+          const mcY = Math.round(mcPosRef.current.y * H);
 
           ctx.save();
           ctx.fillStyle = 'rgba(0,0,0,0.7)';
@@ -5278,6 +5286,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // ── Measurement column drag ──────────────────────────────────────
+      const mcItemsNow = measurementColumnRef.current;
+      if (mcItemsNow && mcItemsNow.length > 0) {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const cW = canvas.width, cH = canvas.height;
+          const mW = 140, mLineH = 24, mH = mcItemsNow.length * mLineH + 20;
+          const mX = mcPosRef.current.x * cW, mY = mcPosRef.current.y * cH;
+          if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + mH) {
+            mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
+            isDraggingRef.current = true;
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+
       // ── Skeleton tool: click to lock detection on the player ────────────
       if (tool === 'skeleton') {
         const video = videoRef.current;
@@ -5536,6 +5561,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         });
       }
 
+      // ── Measurement column drag ──────────────────────────────────────
+      if (mcDraggingRef.current && isDraggingRef.current) {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const dx = pos.x - mcDraggingRef.current.startX;
+          const dy = pos.y - mcDraggingRef.current.startY;
+          mcPosRef.current = {
+            x: Math.max(0, Math.min(0.9, mcDraggingRef.current.origX + dx / canvas.width)),
+            y: Math.max(0, Math.min(0.9, mcDraggingRef.current.origY + dy / canvas.height)),
+          };
+          renderDirtyRef.current = true;
+        }
+        return;
+      }
+
       // ── Pinch consumers (own the gesture; nothing else runs) ──────────────
       const touchPts = [...activePointersRef.current.values()].filter((p) => p.pointerType === 'touch');
       if ((canvasPinchRef.current || webcamPinchRef.current) && touchPts.length >= 2) {
@@ -5772,6 +5812,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const remainingTouch = [...activePointersRef.current.values()].filter(
         (p) => p.pointerType === 'touch',
       ).length;
+
+      // ── End measurement column drag ────────────────────────────────────
+      if (mcDraggingRef.current) {
+        mcDraggingRef.current = null;
+        isDraggingRef.current = false;
+        onMeasurementColumnDrag?.(mcPosRef.current);
+        try { (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+        return;
+      }
 
       // ── End an active pinch once a finger lifts ───────────────────────────
       if (canvasPinchRef.current || webcamPinchRef.current) {

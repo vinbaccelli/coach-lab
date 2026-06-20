@@ -567,6 +567,8 @@ function Home() {
   const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number; unit: string; type: string }>>([]);
   const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
   const biomechFrameDrawingsRef = useRef<Record<number, string>>({});
+  const biomechFrameMeasurementsRef = useRef<Record<number, typeof measurementColumn>>({});
+  const [measurementColumnPos, setMeasurementColumnPos] = useState<{ x: number; y: number }>({ x: 0.82, y: 0.02 });
   const biomechHtml5Only = stroMotionHtml5Only;
   /** Per-frame captured screenshots: frameIndex → data URL */
   const [biomechCapturedImages, setBiomechCapturedImages] = useState<Record<number, string>>({});
@@ -1358,14 +1360,17 @@ function Home() {
     const timeSec = frame?.timeSec ?? biomechEffectiveSampleTimes[index];
     if (timeSec === undefined) return;
 
-    // Save current frame's drawings before switching
+    // Save current frame's drawings and measurements before switching
     if (biomechActiveFrameIndex !== null && canvasRef.current) {
       const json = canvasRef.current.exportStrokes();
       biomechFrameDrawingsRef.current[biomechActiveFrameIndex] = json;
       setBiomechFrameDrawingJson(biomechActiveFrameIndex, json);
+      biomechFrameMeasurementsRef.current[biomechActiveFrameIndex] = [...measurementColumn];
     }
 
     setBiomechActiveFrameIndex(index);
+    setMeasurementColumn(biomechFrameMeasurementsRef.current[index] ?? []);
+
     void seekBiomechVideo(timeSec).then(() => {
       // Restore target frame's drawings (or clear if none saved)
       const saved = biomechFrameDrawingsRef.current[index] ?? frame?.coachDrawingJson;
@@ -1565,6 +1570,8 @@ function Home() {
     setBiomechPhaseMarkers(null);
     setBiomechSelectedPhaseId(null);
     biomechFrameDrawingsRef.current = {};
+    biomechFrameMeasurementsRef.current = {};
+    setMeasurementColumn([]);
     setBiomechReportModalOpen(false);
   }, [clearBiomechAll]);
 
@@ -4818,6 +4825,8 @@ function Home() {
                   onProcessingStatus={setProcessingStatus}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); }}
                   measurementColumnItems={measurementColumn.length > 0 ? measurementColumn : null}
+                  measurementColumnPos={measurementColumnPos}
+                  onMeasurementColumnDrag={setMeasurementColumnPos}
                   onMeasurementCommit={(m) => {
                     setMeasurementColumn(prev => [...prev, {
                       id: `m-${Date.now()}`,
