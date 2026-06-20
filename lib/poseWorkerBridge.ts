@@ -255,15 +255,21 @@ export class PoseWorkerBridge {
   private sendToWorker(video: HTMLVideoElement) {
     if (!this.worker || !globalWorkerReady) return;
     this.inFlight = true;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
     try {
-      createImageBitmap(video)
+      // Downscale to 480px wide — MoveNet internally resizes to 192x192 anyway
+      const maxW = 480;
+      const scale = vw > maxW ? maxW / vw : 1;
+      const opts = scale < 1 ? { resizeWidth: Math.round(vw * scale), resizeHeight: Math.round(vh * scale) } : undefined;
+      createImageBitmap(video, opts as any)
         .then((bmp) => {
           if (this.disposed || !this.worker) {
             bmp.close();
             this.inFlight = false;
             return;
           }
-          this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId: this.frameCount, focusPoint: this._focusPoint }, [bmp]);
+          this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId: this.frameCount, focusPoint: this._focusPoint, srcWidth: vw, srcHeight: vh }, [bmp]);
         })
         .catch(() => {
           this.inFlight = false;

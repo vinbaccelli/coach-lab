@@ -66,16 +66,20 @@ self.onmessage = async (e: MessageEvent) => {
     try {
       const bitmap: ImageBitmap = data.bitmap;
       const focus: { x: number; y: number } | null = data.focusPoint ?? null;
+      const srcW: number = data.srcWidth || bitmap.width;
+      const srcH: number = data.srcHeight || bitmap.height;
+      const bmpW = bitmap.width;
+      const bmpH = bitmap.height;
 
-      let cropX = 0, cropY = 0, cropW = bitmap.width, cropH = bitmap.height;
+      let cropX = 0, cropY = 0, cropW = bmpW, cropH = bmpH;
       const useCrop = !!focus;
 
       if (focus) {
         const ratio = 0.6;
-        cropW = Math.round(bitmap.width * ratio);
-        cropH = Math.round(bitmap.height * ratio);
-        cropX = Math.round(Math.max(0, Math.min(bitmap.width - cropW, focus.x * bitmap.width - cropW / 2)));
-        cropY = Math.round(Math.max(0, Math.min(bitmap.height - cropH, focus.y * bitmap.height - cropH / 2)));
+        cropW = Math.round(bmpW * ratio);
+        cropH = Math.round(bmpH * ratio);
+        cropX = Math.round(Math.max(0, Math.min(bmpW - cropW, focus.x * bmpW - cropW / 2)));
+        cropY = Math.round(Math.max(0, Math.min(bmpH - cropH, focus.y * bmpH - cropH / 2)));
       }
 
       let source: ImageBitmap;
@@ -89,19 +93,21 @@ self.onmessage = async (e: MessageEvent) => {
       const poses = await detector.estimatePoses(source, { flipHorizontal: false });
       const raw = poses?.[0]?.keypoints;
 
+      // Scale keypoints back to original video resolution
+      const upX = srcW / bmpW;
+      const upY = srcH / bmpH;
+
       let keypoints;
       if (useCrop && raw) {
-        const sx = cropW / source.width;
-        const sy = cropH / source.height;
         keypoints = raw.map((kp: any) => ({
-          x: kp.x * sx + cropX,
-          y: kp.y * sy + cropY,
+          x: (kp.x + cropX) * upX,
+          y: (kp.y + cropY) * upY,
           score: kp.score ?? 0,
           name: kp.name ?? '',
         }));
       } else {
         keypoints = raw?.map((kp: any) => ({
-          x: kp.x, y: kp.y, score: kp.score ?? 0, name: kp.name ?? '',
+          x: kp.x * upX, y: kp.y * upY, score: kp.score ?? 0, name: kp.name ?? '',
         })) ?? null;
       }
 

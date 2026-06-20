@@ -494,15 +494,29 @@ function drawSkeletonOverlay(
   }
 
   if (showAngles) {
-    const ANGLES: [number, number, number][] = [
-      [7, 5, 9], [8, 6, 10], [13, 11, 15], [14, 12, 16],
+    const ANGLE_DEFS: { indices: [number, number, number]; label: string }[] = [
+      { indices: [7, 5, 9], label: 'L Elbow' },
+      { indices: [8, 6, 10], label: 'R Elbow' },
+      { indices: [13, 11, 15], label: 'L Knee' },
+      { indices: [14, 12, 16], label: 'R Knee' },
     ];
 
-    ctx.font = 'bold 13px -apple-system, sans-serif';
-    ctx.shadowColor = 'rgba(0,0,0,0.9)';
-    ctx.shadowBlur = 3;
+    // Find rightmost keypoint to position the measurement column
+    let maxX = 0;
+    for (const kp of keypoints) {
+      if (kp && kp.score >= scoreThreshold) maxX = Math.max(maxX, kp.x * sx);
+    }
+    const colX = Math.min(maxX + 20, canvasW - 100);
+    let colY = 0;
+    // Find top of player
+    for (const kp of keypoints) {
+      if (kp && kp.score >= scoreThreshold && (colY === 0 || kp.y * sy < colY)) colY = kp.y * sy;
+    }
+    colY = Math.max(10, colY - 10);
 
-    for (const [vi, ai, bi] of ANGLES) {
+    const measurements: { name: string; value: string }[] = [];
+
+    for (const { indices: [vi, ai, bi], label } of ANGLE_DEFS) {
       if (!isJointVisible(vi, parts, keypoints[vi]?.name) || !isJointVisible(ai, parts, keypoints[ai]?.name) || !isJointVisible(bi, parts, keypoints[bi]?.name)) continue;
       const v = keypoints[vi];
       const a = keypoints[ai];
@@ -520,17 +534,44 @@ function drawSkeletonOverlay(
       if (mag < 1) continue;
 
       const deg = Math.round(Math.acos(Math.min(1, Math.max(-1, dot / mag))) * 180 / Math.PI);
-      const label = `${deg}°`;
-      const m = ctx.measureText(label);
-      const lx = vx + 8, ly = vy - 8;
 
-      ctx.fillStyle = classicColors ? 'rgba(0,0,0,0.7)' : 'rgba(0,0,0,0.65)';
-      ctx.fillRect(lx - 2, ly - 13, m.width + 4, 16);
-      ctx.fillStyle = classicColors ? '#FFD700' : '#93C5FD';
-      ctx.fillText(label, lx, ly);
+      // Draw thin line from joint to column
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 0.5;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(vx, vy);
+      ctx.lineTo(colX, colY + measurements.length * 22 + 8);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      measurements.push({ name: label, value: `${deg}°` });
     }
 
-    ctx.shadowBlur = 0;
+    // Draw measurement column panel
+    if (measurements.length > 0) {
+      const panelH = measurements.length * 22 + 12;
+      const panelW = 90;
+
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = 4;
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.beginPath();
+      ctx.roundRect(colX - 4, colY - 6, panelW, panelH, 8);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      ctx.font = 'bold 11px -apple-system, sans-serif';
+      for (let i = 0; i < measurements.length; i++) {
+        const y = colY + i * 22 + 12;
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillText(measurements[i].name, colX + 2, y);
+        ctx.fillStyle = classicColors ? '#FFD700' : '#93C5FD';
+        ctx.font = 'bold 13px -apple-system, sans-serif';
+        ctx.fillText(measurements[i].value, colX + 55, y);
+        ctx.font = 'bold 11px -apple-system, sans-serif';
+      }
+    }
   }
 
   ctx.restore();
