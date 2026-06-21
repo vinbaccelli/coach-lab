@@ -622,6 +622,13 @@ function Home() {
     enabledModules: biomechEnabledModules,
   } = useAIMetrics(videoRef);
 
+  // Auto-save measurement column to current frame whenever it changes
+  useEffect(() => {
+    if (biomechActiveFrameIndex !== null) {
+      biomechFrameMeasurementsRef.current[biomechActiveFrameIndex] = [...measurementColumn];
+    }
+  }, [measurementColumn, biomechActiveFrameIndex]);
+
   const biomechDefaultSampleTimes = useMemo(
     () => computeGhostSampleTimes(biomechTrimStart, biomechTrimEnd, biomechFrameCount),
     [biomechTrimStart, biomechTrimEnd, biomechFrameCount],
@@ -4444,9 +4451,12 @@ function Home() {
         const next = !v;
         if (next && !biomechActive) {
           setBiomechActive(true);
-          if (biomechActiveFrameIndex === null) {
-            addBiomechFrame(videoRef.current?.currentTime ?? 0);
-          }
+        }
+        if (next && biomechActiveFrameIndex === null) {
+          const t = videoRef.current?.currentTime ?? 0;
+          addBiomechFrame(t);
+          setBiomechActiveFrameIndex(0);
+          if (videoRef.current) { videoRef.current.pause(); }
         }
         return next;
       });
@@ -4454,10 +4464,18 @@ function Home() {
     onUndoMeasurement:               () => setMeasurementColumn(prev => prev.slice(0, -1)),
     onClearMeasurements:             () => { setMeasurementColumn([]); setProcessingStatus('Data column cleared'); },
     onAddNote:                       () => {
-      const note = prompt('Enter note:');
-      if (note?.trim()) {
-        setMeasurementColumn(prev => [...prev, { id: `note-${Date.now()}`, label: note.trim(), value: 0, unit: '', type: 'note' }]);
-      }
+      const label = prompt('Label (left side):');
+      if (!label?.trim()) return;
+      const valueStr = prompt('Value (right side, leave empty for text-only):');
+      const numVal = valueStr ? parseFloat(valueStr) : 0;
+      const unit = valueStr && !isNaN(numVal) ? (prompt('Unit (°, px, m, etc):') ?? '') : '';
+      setMeasurementColumn(prev => [...prev, {
+        id: `note-${Date.now()}`,
+        label: label.trim(),
+        value: isNaN(numVal) ? 0 : numVal,
+        unit: unit,
+        type: 'note',
+      }]);
     },
     measurementColumnItems:          measurementColumn,
     onDeleteMeasurement:             (id: string) => setMeasurementColumn(prev => prev.filter(m => m.id !== id)),

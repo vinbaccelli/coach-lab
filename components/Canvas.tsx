@@ -4289,10 +4289,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const item = mcItems[i];
               const y = mcY + 28 + i * mcLineH;
               if (item.value === 0 && !item.unit) {
-                // Note entry — just show label text
+                // Text-only note
                 ctx.fillStyle = 'rgba(255,255,255,0.8)';
                 ctx.font = 'italic 11px -apple-system, sans-serif';
                 ctx.fillText(item.label, mcX + 8, y);
+                ctx.font = '11px -apple-system, sans-serif';
+              } else if (item.unit === '' && item.value !== 0) {
+                // Note with label:number (no unit)
+                ctx.fillStyle = 'rgba(255,255,255,0.6)';
+                ctx.fillText(item.label, mcX + 8, y);
+                ctx.fillStyle = '#93C5FD';
+                ctx.font = 'bold 12px -apple-system, sans-serif';
+                ctx.fillText(`${item.value}`, mcX + mcW - 8 - ctx.measureText(`${item.value}`).width, y);
                 ctx.font = '11px -apple-system, sans-serif';
               } else {
                 ctx.fillStyle = 'rgba(255,255,255,0.6)';
