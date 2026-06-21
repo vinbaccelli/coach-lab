@@ -6548,7 +6548,7 @@ function Home() {
           <div style={{ display: 'flex', gap: 10, width: '100%' }}>
             <button
               type="button"
-              onClick={() => { setSkeletonConfirmOpen(false); setSkeletonWaitingForClick(false); setSkeletonLocked(true); }}
+              onClick={() => { setSkeletonConfirmOpen(false); setSkeletonWaitingForClick(false); setSkeletonLocked(true); canvasRef.current?.setSkeletonWaitingForClick(false); }}
               style={{
                 flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
                 background: '#34C759', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer',
@@ -6560,6 +6560,7 @@ function Home() {
               type="button"
               onClick={() => {
                 setSkeletonConfirmOpen(false);
+                setSkeletonLocked(false);
                 setSkeletonWaitingForClick(true);
                 canvasRef.current?.setSkeletonWaitingForClick(true);
                 setProcessingStatus('Click on the player to focus the skeleton');
