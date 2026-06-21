@@ -4450,6 +4450,7 @@ function Home() {
       setDataColumnActive(v => {
         const next = !v;
         if (next && !biomechActive) {
+          setBiomechFrameCount(1 as AIMetricsFrameCount);
           setBiomechActive(true);
         }
         if (next && biomechActiveFrameIndex === null) {
@@ -4482,6 +4483,12 @@ function Home() {
     onAutoDetectMeasurements:        () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
+      // Ensure we have a frame to attach measurements to
+      if (!biomechActive) { setBiomechFrameCount(1 as AIMetricsFrameCount); setBiomechActive(true); }
+      if (biomechActiveFrameIndex === null) {
+        addBiomechFrame(videoRef.current?.currentTime ?? 0);
+        setBiomechActiveFrameIndex(0);
+      }
       const latest = skFrames[skFrames.length - 1];
       const kps = latest?.keypoints;
       if (!kps?.length) return;
@@ -5007,6 +5014,15 @@ function Home() {
                   measurementColumnItems={dataColumnVisible ? measurementColumn : null}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
+                  onMeasurementAdd={() => {
+                    const label = prompt('Label:');
+                    if (!label?.trim()) return;
+                    const valStr = prompt('Value (empty for text-only):');
+                    const val = valStr ? parseFloat(valStr) : 0;
+                    const unit = valStr && !isNaN(val) ? (prompt('Unit (°, px, m):') ?? '') : '';
+                    setMeasurementColumn(prev => [...prev, { id: `n-${Date.now()}`, label: label.trim(), value: isNaN(val) ? 0 : val, unit, type: 'note' }]);
+                  }}
+                  onMeasurementRemoveLast={() => setMeasurementColumn(prev => prev.slice(0, -1))}
                   onMeasurementCommit={(m) => {
                     if (dataColumnVisible) {
                       setPendingMeasurement(m);

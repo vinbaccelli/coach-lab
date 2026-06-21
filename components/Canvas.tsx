@@ -205,6 +205,8 @@ export interface CanvasProps {
   /** Position of the measurement column (normalized 0-1). Default: top-right */
   measurementColumnPos?: { x: number; y: number };
   onMeasurementColumnDrag?: (pos: { x: number; y: number }) => void;
+  onMeasurementAdd?: () => void;
+  onMeasurementRemoveLast?: () => void;
   /** When true, skeleton click-to-focus works even when skeleton isn't the active tool */
   skeletonKeepAlive?: boolean;
   isRecording?: boolean;
@@ -1551,6 +1553,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       measurementColumnItems,
       measurementColumnPos,
       onMeasurementColumnDrag,
+      onMeasurementAdd,
+      onMeasurementRemoveLast,
       skeletonKeepAlive = false,
       isRecording = false,
       circleSpinning = false,
@@ -4263,7 +4267,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const mcW = 150;
           const mcLineH = 22;
           const hasItems = mcItems.length > 0;
-          const mcH = hasItems ? mcItems.length * mcLineH + 28 : 48;
+          const mcH = (hasItems ? mcItems.length * mcLineH + 28 : 48) + 22;
           const mcX = Math.round(Math.min(mcPosRef.current.x * W, W - mcW - 4));
           const mcY = Math.round(Math.min(mcPosRef.current.y * H, H - mcH - 4));
 
@@ -4317,6 +4321,30 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.fillStyle = 'rgba(255,255,255,0.3)';
             ctx.fillText('Draw to add measurements', mcX + 8, mcY + 34);
           }
+
+          // + and − buttons at bottom of column
+          const btnY = mcY + mcH - 2;
+          const btnSize = 18;
+          // + button (bottom-left)
+          ctx.fillStyle = 'rgba(255,255,255,0.15)';
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(mcX + 4, btnY, btnSize, btnSize, 4);
+          else ctx.rect(mcX + 4, btnY, btnSize, btnSize);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(255,255,255,0.6)';
+          ctx.font = 'bold 14px -apple-system, sans-serif';
+          ctx.fillText('+', mcX + 9, btnY + 14);
+
+          // − button (next to +)
+          ctx.fillStyle = 'rgba(255,255,255,0.15)';
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(mcX + 26, btnY, btnSize, btnSize, 4);
+          else ctx.rect(mcX + 26, btnY, btnSize, btnSize);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(255,59,48,0.7)';
+          ctx.font = 'bold 14px -apple-system, sans-serif';
+          ctx.fillText('−', mcX + 31, btnY + 14);
+
           ctx.restore();
         }
 
@@ -5345,7 +5373,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (canvas) {
           const cW = canvas.width, cH = canvas.height;
           const mW = 150, mLineH = 22, mH = mcItemsNow.length > 0 ? mcItemsNow.length * mLineH + 28 : 48;
-          const mX = mcPosRef.current.x * cW, mY = mcPosRef.current.y * cH;
+          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
+          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
+          const btnY = mY + mH - 2;
+          const btnSize = 18;
+
+          // Check + button click
+          if (pos.x >= mX + 4 && pos.x <= mX + 4 + btnSize && pos.y >= btnY && pos.y <= btnY + btnSize) {
+            onMeasurementAdd?.();
+            e.preventDefault();
+            return;
+          }
+          // Check − button click
+          if (pos.x >= mX + 26 && pos.x <= mX + 26 + btnSize && pos.y >= btnY && pos.y <= btnY + btnSize) {
+            onMeasurementRemoveLast?.();
+            e.preventDefault();
+            return;
+          }
+
+          // Drag the column
           if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + mH) {
             mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
             isDraggingRef.current = true;
