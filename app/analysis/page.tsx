@@ -6314,6 +6314,28 @@ function Home() {
               Skip
             </button>
           </div>
+          {/* Differential: if there's a previous arrowAngle in the column, offer to compute difference */}
+          {pendingMeasurement.type === 'arrowAngle' && measurementColumn.some(m => m.type === 'arrowAngle') && (() => {
+            const lastAngle = [...measurementColumn].reverse().find(m => m.type === 'arrowAngle');
+            if (!lastAngle) return null;
+            const diff = Math.abs(pendingMeasurement.value - lastAngle.value);
+            return (
+              <button type="button" onClick={() => {
+                setMeasurementColumn(prev => [
+                  ...prev,
+                  { id: `m-${Date.now()}-a`, label: pendingMeasurementName.trim() || 'Angle 2', value: pendingMeasurement.value, unit: '°', type: 'arrowAngle' },
+                  { id: `m-${Date.now()}-d`, label: `${lastAngle.label} ↔ ${pendingMeasurementName.trim() || 'Angle 2'} diff`, value: Math.round(diff), unit: '°', type: 'differential' },
+                ]);
+                setPendingMeasurement(null);
+                setPendingMeasurementName('');
+              }} style={{
+                width: '100%', padding: '8px 0', borderRadius: 8, border: 'none',
+                background: '#5856D6', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              }}>
+                Differential with "{lastAngle.label}": {Math.round(diff)}°
+              </button>
+            );
+          })()}
         </div>,
         document.body,
       )}

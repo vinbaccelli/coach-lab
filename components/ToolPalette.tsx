@@ -655,9 +655,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
           onPress={screenshotSaving ? () => {} : onScreenshotSave}
         />
       ) : null}
-      <Row k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} label="Undo" onPress={onUndo} />
-      <Row k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} label="Redo" onPress={onRedo} />
-      <Row k="cl" destructive icon={<Trash2 size={denseMobile || io ? 16 : 20} />} label="Clear all" onPress={onClear} />
+      <Row k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} tooltip="Undo the last drawing action" label="Undo" onPress={onUndo} />
+      <Row k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} tooltip="Redo the last undone action" label="Redo" onPress={onRedo} />
+      <Row k="cl" destructive icon={<Trash2 size={denseMobile || io ? 16 : 20} />} tooltip="Clear all drawings, skeleton, markers, and data" label="Clear all" onPress={onClear} />
       {onCleanSession ? (
         <button
           type="button"
@@ -793,6 +793,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onPress,
     sub,
     destructive,
+    tooltip,
   }: {
     k: string;
     active?: boolean;
@@ -801,6 +802,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onPress: () => void;
     sub?: string;
     destructive?: boolean;
+    tooltip?: string;
   }) => {
     const pressed = pressedKey === k;
     const rowStyle = {
@@ -821,6 +823,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <button
           type="button"
           aria-label={sub ? `${label} — ${sub}` : label}
+          title={tooltip ?? label}
           data-active={active ? 'true' : undefined}
           data-destructive={destructive ? 'true' : undefined}
           style={rowStyle}
@@ -846,6 +849,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     return (
       <button
         type="button"
+        title={tooltip ?? label}
         data-active={active ? 'true' : undefined}
         data-destructive={destructive ? 'true' : undefined}
         style={rowStyle}
@@ -1151,19 +1155,20 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead />
           <BackHeader title="Draw" icon={<Pen size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
-          <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} label="Pen" onPress={() => setTool('pen')} />
-          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} label="Line" onPress={() => setTool('line')} />
-          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} label="Arrow" onPress={() => setTool('arrow')} />
+          <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} tooltip="Freehand drawing tool" label="Pen" onPress={() => setTool('pen')} />
+          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} tooltip="Draw a straight line" label="Line" onPress={() => setTool('line')} />
+          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} tooltip="Draw an arrow with direction" label="Arrow" onPress={() => setTool('arrow')} />
           <div data-tour-id="tour-angle">
-            <Row k="angle-d" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} label="Angle" onPress={() => setTool('angle')} />
+            <Row k="angle-d" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} tooltip="Measure angle between three points (click vertex, then two arms)" label="Angle" onPress={() => setTool('angle')} />
           </div>
-          <Row k="aa-d" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} label="Angle arrow" onPress={() => setTool('arrowAngle')} />
-          <Row k="rect" active={activeTool === 'rect'} icon={<Square size={18} />} label="Rectangle" onPress={() => setTool('rect')} />
-          <Row k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} label="Circle" onPress={() => setTool('circle')} />
-          <Row k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} label="Swing path" onPress={() => setTool('manualSwing')} />
-          <Row k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} label="Joint chain" onPress={() => setTool('jointChain')} />
-          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} label="Text" onPress={() => setTool('text')} />
-          <Row k="ruler" active={activeTool === 'ruler'} icon={<Ruler size={18} />} label="Ruler" onPress={() => setTool('ruler')} />
+          <Row k="aa-d" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} tooltip="Draw an arrow that measures direction angle" label="Angle arrow" onPress={() => setTool('arrowAngle')} />
+          <Row k="rect" active={activeTool === 'rect'} icon={<Square size={18} />} tooltip="Draw a rectangle" label="Rectangle" onPress={() => setTool('rect')} />
+          <Row k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} tooltip="Draw a circle or ellipse" label="Circle" onPress={() => setTool('circle')} />
+          <Row k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} tooltip="Trace the racket swing path" label="Swing path" onPress={() => setTool('manualSwing')} />
+          <Row k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} tooltip="Connect joint points to measure body alignment" label="Joint chain" onPress={() => setTool('jointChain')} />
+          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
+          <Row k="ruler" active={activeTool === 'ruler'} icon={<Ruler size={18} />} tooltip="Measure real-world distances (calibrate first)" label="Ruler" onPress={() => setTool('ruler')} />
+          <Row k="anglediff" icon={<Activity size={18} />} tooltip="Draw two angle arrows (e.g. hips then shoulders) — the angle difference is auto-calculated" label="Angle differential" onPress={() => setTool('arrowAngle')} />
           <Row
             k="st-d"
             icon={<Palette size={18} />}
@@ -1182,8 +1187,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Angle" icon={<AngleToolIcon size={18} />} />
-          <Row k="angle" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} label="Angle" onPress={() => setTool('angle')} />
-          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} label="Angle arrow" onPress={() => setTool('arrowAngle')} />
+          <Row k="angle" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} tooltip="Measure angle between three points" label="Angle" onPress={() => setTool('angle')} />
+          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} tooltip="Draw an arrow that measures direction angle" label="Angle arrow" onPress={() => setTool('arrowAngle')} />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
@@ -1253,8 +1258,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Tools" icon={<LayoutGrid size={18} />} />
-          <Row k="met-t" icon={<BarChart3 size={18} />} label="Metrics" onPress={() => push('aimetrics')} />
-          <Row k="sm-t" icon={<Layers size={18} />} label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
+          <Row k="met-t" icon={<BarChart3 size={18} />} tooltip="Skeleton, drawing tools, measurements, and frame capture" label="Metrics" onPress={() => push('aimetrics')} />
+          <Row k="sm-t" icon={<Layers size={18} />} tooltip="Create multi-frame ghost overlay composites" label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>
@@ -1310,7 +1315,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           />
 
           {/* Draw tools (all available inside Metrics) */}
-          <Row k="m-draw" icon={<Pen size={metricIcon} />} label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
+          <Row k="m-draw" icon={<Pen size={metricIcon} />} tooltip="All drawing and measurement tools (pen, angle, ruler, etc.)" label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
 
           {/* Activate Data Column */}
           {onDataColumnToggle && (
@@ -1325,7 +1330,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
           {/* AI auto-detect from skeleton */}
           {onAutoDetectMeasurements && (
-            <Row k="m-aidetect" icon={<Sparkles size={metricIcon} />} label="AI Detect Angles" onPress={onAutoDetectMeasurements} />
+            <Row k="m-aidetect" icon={<Sparkles size={metricIcon} />} tooltip="Auto-detect joint angles, hip-shoulder differential, and foot direction from skeleton" label="AI Detect Angles" onPress={onAutoDetectMeasurements} />
           )}
 
           {!io && (
@@ -1370,7 +1375,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <CollapseControl />
       <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
         <ToolbarLead />
-        <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
+        <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} tooltip="Select and move drawn shapes" label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
         <Row
           k="met-h"
           active={activeTool === 'skeleton'}
