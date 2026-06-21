@@ -209,6 +209,8 @@ export interface CanvasProps {
   onMeasurementRemoveLast?: () => void;
   /** When true, skeleton click-to-focus works even when skeleton isn't the active tool */
   skeletonKeepAlive?: boolean;
+  /** When true, skeleton is locked on player — clicks don't change focus */
+  skeletonLocked?: boolean;
   isRecording?: boolean;
   circleSpinning?: boolean;
   outlineEraserSize?: number;
@@ -1556,6 +1558,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       onMeasurementAdd,
       onMeasurementRemoveLast,
       skeletonKeepAlive = false,
+      skeletonLocked = false,
       isRecording = false,
       circleSpinning = false,
       outlineEraserSize = 0,
@@ -1607,6 +1610,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonWaitingForClickRef = useRef(false);
     const skeletonKeepAliveRef = useRef(skeletonKeepAlive);
     useEffect(() => { skeletonKeepAliveRef.current = skeletonKeepAlive; }, [skeletonKeepAlive]);
+    const skeletonLockedRef = useRef(skeletonLocked);
+    useEffect(() => { skeletonLockedRef.current = skeletonLocked; }, [skeletonLocked]);
     const onMeasurementCommitRef = useRef(onMeasurementCommit);
     useEffect(() => { onMeasurementCommitRef.current = onMeasurementCommit; }, [onMeasurementCommit]);
     const onMeasurementAddRef = useRef(onMeasurementAdd);
@@ -4271,7 +4276,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const mcW = 150;
           const mcLineH = 22;
           const hasItems = mcItems.length > 0;
-          const mcH = (hasItems ? mcItems.length * mcLineH + 28 : 48) + 22;
+          const mcH = hasItems ? mcItems.length * mcLineH + 28 : 48;
           const mcX = Math.round(Math.min(mcPosRef.current.x * W, W - mcW - 4));
           const mcY = Math.round(Math.min(mcPosRef.current.y * H, H - mcH - 4));
 
@@ -4325,29 +4330,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.fillStyle = 'rgba(255,255,255,0.3)';
             ctx.fillText('Draw to add measurements', mcX + 8, mcY + 34);
           }
-
-          // + and − buttons at bottom of column
-          const btnY = mcY + mcH - 2;
-          const btnSize = 18;
-          // + button (bottom-left)
-          ctx.fillStyle = 'rgba(255,255,255,0.15)';
-          ctx.beginPath();
-          if (ctx.roundRect) ctx.roundRect(mcX + 4, btnY, btnSize, btnSize, 4);
-          else ctx.rect(mcX + 4, btnY, btnSize, btnSize);
-          ctx.fill();
-          ctx.fillStyle = 'rgba(255,255,255,0.6)';
-          ctx.font = 'bold 14px -apple-system, sans-serif';
-          ctx.fillText('+', mcX + 9, btnY + 14);
-
-          // − button (next to +)
-          ctx.fillStyle = 'rgba(255,255,255,0.15)';
-          ctx.beginPath();
-          if (ctx.roundRect) ctx.roundRect(mcX + 26, btnY, btnSize, btnSize, 4);
-          else ctx.rect(mcX + 26, btnY, btnSize, btnSize);
-          ctx.fill();
-          ctx.fillStyle = 'rgba(255,59,48,0.7)';
-          ctx.font = 'bold 14px -apple-system, sans-serif';
-          ctx.fillText('−', mcX + 31, btnY + 14);
 
           ctx.restore();
         }
@@ -5376,24 +5358,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (canvas) {
           const cW = canvas.width, cH = canvas.height;
-          const mW = 150, mLineH = 22, mH = (mcItemsNow.length > 0 ? mcItemsNow.length * mLineH + 28 : 48) + 22;
+          const mW = 150, mLineH = 22, mH = mcItemsNow.length > 0 ? mcItemsNow.length * mLineH + 28 : 48;
           const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
           const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
-          const btnY = mY + mH - 22;
-          const btnSize = 18;
-
-          // Check + button click
-          if (pos.x >= mX + 4 && pos.x <= mX + 4 + btnSize && pos.y >= btnY && pos.y <= btnY + btnSize) {
-            onMeasurementAddRef.current?.();
-            e.preventDefault();
-            return;
-          }
-          // Check − button click
-          if (pos.x >= mX + 26 && pos.x <= mX + 26 + btnSize && pos.y >= btnY && pos.y <= btnY + btnSize) {
-            onMeasurementRemoveLastRef.current?.();
-            e.preventDefault();
-            return;
-          }
 
           // Drag the column
           if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + mH) {
@@ -5406,7 +5373,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // ── Skeleton: click to lock detection on the player ─────────────────
-      if (tool === 'skeleton' || skeletonWaitingForClickRef.current) {
+      if (!skeletonLockedRef.current && (tool === 'skeleton' || skeletonWaitingForClickRef.current)) {
         const video = videoRef.current;
         if (video && video.videoWidth > 0) {
           const bounds = videoBoundsRef.current;

@@ -133,6 +133,9 @@ interface ToolPaletteProps {
   onStroMotionToggle?: () => void;
   /** Auth button slot (rendered at bottom of every screen's footer) */
   authContent?: React.ReactNode;
+  /** Skeleton locked on player */
+  skeletonLocked?: boolean;
+  onSkeletonLockToggle?: () => void;
   /** Data column active state */
   dataColumnActive?: boolean;
   onDataColumnToggle?: () => void;
@@ -573,6 +576,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     stroMotionEnabled = false,
     onStroMotionToggle,
     authContent,
+    skeletonLocked: skeletonLockedProp = false,
+    onSkeletonLockToggle,
     dataColumnActive = false,
     onDataColumnToggle,
     onAutoDetectMeasurements,
@@ -1325,9 +1330,19 @@ export default function ToolPalette(props: ToolPaletteProps) {
             k="sk-met"
             active={activeTool === 'skeleton'}
             icon={<PersonStanding size={metricIcon} />}
+            tooltip="AI pose detection — tracks player joints and angles"
             label="Skeleton"
             onPress={() => { setTool('skeleton'); push('skeleton'); }}
           />
+          {skeletonLockedProp && onSkeletonLockToggle && (
+            <Row
+              k="sk-unlock"
+              icon={<Crosshair size={metricIcon} />}
+              tooltip="Unlock skeleton to click on a different player"
+              label="Unlock skeleton"
+              onPress={onSkeletonLockToggle}
+            />
+          )}
 
           {/* Draw tools (all available inside Metrics) */}
           <Row k="m-draw" icon={<Pen size={metricIcon} />} tooltip="All drawing and measurement tools (pen, angle, ruler, etc.)" label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />

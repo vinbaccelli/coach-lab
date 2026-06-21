@@ -685,6 +685,7 @@ function Home() {
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const [skeletonConfirmOpen, setSkeletonConfirmOpen] = useState(false);
   const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
+  const [skeletonLocked, setSkeletonLocked] = useState(false);
   const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
   const [pendingMeasurementName, setPendingMeasurementName] = useState('');
   const [dataColumnActive, setDataColumnActive] = useState(false);
@@ -1608,6 +1609,7 @@ function Home() {
     setMeasurementColumn([]);
     setDataColumnActive(false);
     setSkeletonKeepAlive(false);
+    setSkeletonLocked(false);
     setBiomechReportModalOpen(false);
   }, [clearBiomechAll]);
 
@@ -4446,6 +4448,8 @@ function Home() {
     showCollapseControl:             !isMobile,
     onCleanSession:                  resetSession,
     dataColumnActive,
+    skeletonLocked,
+    onSkeletonLockToggle:            () => { setSkeletonLocked(false); setSkeletonWaitingForClick(true); canvasRef.current?.setSkeletonWaitingForClick(true); setProcessingStatus('Click on the player to refocus skeleton'); },
     onDataColumnToggle:              () => {
       setDataColumnActive(v => {
         const next = !v;
@@ -5010,7 +5014,8 @@ function Home() {
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
                   skeletonKeepAlive={skeletonKeepAlive}
-                  onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); }}
+                  skeletonLocked={skeletonLocked}
+                  onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); setSkeletonLocked(true); }}
                   measurementColumnItems={dataColumnVisible ? measurementColumn : null}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
@@ -5078,6 +5083,40 @@ function Home() {
                       }
                     }}
                   />
+                )}
+                {/* Data column HTML overlay buttons */}
+                {dataColumnVisible && (
+                  <div style={{
+                    position: 'absolute',
+                    right: Math.round((1 - measurementColumnPos.x) * 100) + '%',
+                    top: Math.round(measurementColumnPos.y * 100) + '%',
+                    marginRight: -146,
+                    zIndex: 15,
+                    pointerEvents: 'none',
+                  }}>
+                    <div style={{
+                      marginTop: (measurementColumn.length > 0 ? measurementColumn.length * 22 + 28 : 48) + 2,
+                      display: 'flex', gap: 4, pointerEvents: 'auto',
+                    }}>
+                      <button type="button" onClick={() => {
+                        const label = prompt('Label:');
+                        if (!label?.trim()) return;
+                        const valStr = prompt('Value (empty for text-only):');
+                        const val = valStr ? parseFloat(valStr) : 0;
+                        const unit = valStr && !isNaN(val) ? (prompt('Unit (°, px, m):') ?? '') : '';
+                        setMeasurementColumn(prev => [...prev, { id: `n-${Date.now()}`, label: label.trim(), value: isNaN(val) ? 0 : val, unit, type: 'note' }]);
+                      }} style={{
+                        width: 24, height: 24, borderRadius: 6, border: 'none',
+                        background: 'rgba(255,255,255,0.2)', color: '#fff',
+                        fontSize: 16, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
+                      }}>+</button>
+                      <button type="button" onClick={() => setMeasurementColumn(prev => prev.slice(0, -1))} style={{
+                        width: 24, height: 24, borderRadius: 6, border: 'none',
+                        background: 'rgba(255,59,48,0.3)', color: '#FF3B30',
+                        fontSize: 16, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
+                      }}>−</button>
+                    </div>
+                  </div>
                 )}
                 {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (
                   urlLoadPhase && urlTarget === 'A' ? (
@@ -6485,7 +6524,7 @@ function Home() {
           <div style={{ display: 'flex', gap: 10, width: '100%' }}>
             <button
               type="button"
-              onClick={() => { setSkeletonConfirmOpen(false); setSkeletonWaitingForClick(false); }}
+              onClick={() => { setSkeletonConfirmOpen(false); setSkeletonWaitingForClick(false); setSkeletonLocked(true); }}
               style={{
                 flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
                 background: '#34C759', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer',
