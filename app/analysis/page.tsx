@@ -4476,17 +4476,22 @@ function Home() {
       if (meas.jointAngles.rightKneeDeg != null) items.push({ id: `ai-rk-${Date.now()}`, label: 'R Knee', value: Math.round(meas.jointAngles.rightKneeDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.leftShoulderDeg != null) items.push({ id: `ai-ls-${Date.now()}`, label: 'L Shoulder', value: Math.round(meas.jointAngles.leftShoulderDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.rightShoulderDeg != null) items.push({ id: `ai-rs-${Date.now()}`, label: 'R Shoulder', value: Math.round(meas.jointAngles.rightShoulderDeg), unit: '°', type: 'angle' });
-      // Shoulder and hip line angles + differential
+      // Shoulder and hip line angles (L→R direction) + differential
       const lShoulder = kps[5], rShoulder = kps[6], lHip = kps[11], rHip = kps[12];
+      let shoulderDeg: number | null = null;
+      let hipDeg: number | null = null;
       if (lShoulder?.score >= 0.2 && rShoulder?.score >= 0.2) {
-        const shoulderAngle = Math.round(((Math.atan2(rShoulder.y - lShoulder.y, rShoulder.x - lShoulder.x) * 180 / Math.PI) + 360) % 360);
-        items.push({ id: `ai-sa-${Date.now()}`, label: 'Shoulder Line', value: shoulderAngle, unit: '°', type: 'arrowAngle' });
+        shoulderDeg = Math.round(Math.atan2(rShoulder.y - lShoulder.y, rShoulder.x - lShoulder.x) * 180 / Math.PI);
+        items.push({ id: `ai-sa-${Date.now()}`, label: 'Shoulder (L→R)', value: shoulderDeg, unit: '°', type: 'arrowAngle' });
       }
       if (lHip?.score >= 0.2 && rHip?.score >= 0.2) {
-        const hipAngle = Math.round(((Math.atan2(rHip.y - lHip.y, rHip.x - lHip.x) * 180 / Math.PI) + 360) % 360);
-        items.push({ id: `ai-ha-${Date.now()}`, label: 'Hip Line', value: hipAngle, unit: '°', type: 'arrowAngle' });
+        hipDeg = Math.round(Math.atan2(rHip.y - lHip.y, rHip.x - lHip.x) * 180 / Math.PI);
+        items.push({ id: `ai-ha-${Date.now()}`, label: 'Hip (L→R)', value: hipDeg, unit: '°', type: 'arrowAngle' });
       }
-      if (meas.shoulderHipSeparationDeg != null) items.push({ id: `ai-shd-${Date.now()}`, label: 'Shoulder-Hip Diff', value: Math.round(meas.shoulderHipSeparationDeg), unit: '°', type: 'differential' });
+      if (shoulderDeg !== null && hipDeg !== null) {
+        const diff = Math.abs(shoulderDeg - hipDeg);
+        items.push({ id: `ai-shd-${Date.now()}`, label: 'Shoulder-Hip Diff', value: Math.round(diff), unit: '°', type: 'differential' });
+      }
       // Head direction
       const nose = kps[0], lEar = kps[3], rEar = kps[4];
       if (nose?.score >= 0.2 && ((lEar?.score >= 0.2) || (rEar?.score >= 0.2))) {
