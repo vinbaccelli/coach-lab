@@ -1609,6 +1609,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonKeepAliveRef.current = skeletonKeepAlive; }, [skeletonKeepAlive]);
     const onMeasurementCommitRef = useRef(onMeasurementCommit);
     useEffect(() => { onMeasurementCommitRef.current = onMeasurementCommit; }, [onMeasurementCommit]);
+    const onMeasurementAddRef = useRef(onMeasurementAdd);
+    useEffect(() => { onMeasurementAddRef.current = onMeasurementAdd; }, [onMeasurementAdd]);
+    const onMeasurementRemoveLastRef = useRef(onMeasurementRemoveLast);
+    useEffect(() => { onMeasurementRemoveLastRef.current = onMeasurementRemoveLast; }, [onMeasurementRemoveLast]);
 
     // Drawing state refs
     const strokesRef      = useRef<Stroke[]>([]);
@@ -5380,13 +5384,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
           // Check + button click
           if (pos.x >= mX + 4 && pos.x <= mX + 4 + btnSize && pos.y >= btnY && pos.y <= btnY + btnSize) {
-            onMeasurementAdd?.();
+            onMeasurementAddRef.current?.();
             e.preventDefault();
             return;
           }
           // Check − button click
           if (pos.x >= mX + 26 && pos.x <= mX + 26 + btnSize && pos.y >= btnY && pos.y <= btnY + btnSize) {
-            onMeasurementRemoveLast?.();
+            onMeasurementRemoveLastRef.current?.();
             e.preventDefault();
             return;
           }
