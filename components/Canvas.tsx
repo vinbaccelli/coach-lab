@@ -5402,13 +5402,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // ── Skeleton: click to lock detection on the player ─────────────────
-      // Fires on skeleton tool OR when user clicked "No" on confirmation popup
       if (tool === 'skeleton' || skeletonWaitingForClickRef.current) {
         const video = videoRef.current;
         if (video && video.videoWidth > 0) {
           const bounds = videoBoundsRef.current;
           if (bounds && bounds.dw > 0 && bounds.dh > 0) {
-            // pos is in logical canvas space; convert to normalized 0-1 video coords
             const normX = (pos.x - bounds.dx) / bounds.dw;
             const normY = (pos.y - bounds.dy) / bounds.dh;
             if (normX >= 0 && normX <= 1 && normY >= 0 && normY <= 1) {
@@ -5418,15 +5416,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               skeletonWaitingForClickRef.current = false;
               renderDirtyRef.current = true;
               onSkeletonFocusSet?.();
-            } else {
-              onProcessingStatus?.('Click on the player in the video');
             }
-          } else {
-            onProcessingStatus?.('Video not ready — play first then click the player');
           }
         }
-        e.preventDefault();
-        return;
+        // Only block event if skeleton is the active tool
+        if (tool === 'skeleton') { e.preventDefault(); return; }
+        // Otherwise fall through to let drawing tools handle the click
       }
 
       // ── Select tool: stroke / joint selection ───────────────────────────
