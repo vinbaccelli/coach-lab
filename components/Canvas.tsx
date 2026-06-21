@@ -5372,10 +5372,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (canvas) {
           const cW = canvas.width, cH = canvas.height;
-          const mW = 150, mLineH = 22, mH = mcItemsNow.length > 0 ? mcItemsNow.length * mLineH + 28 : 48;
+          const mW = 150, mLineH = 22, mH = (mcItemsNow.length > 0 ? mcItemsNow.length * mLineH + 28 : 48) + 22;
           const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
           const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
-          const btnY = mY + mH - 2;
+          const btnY = mY + mH - 22;
           const btnSize = 18;
 
           // Check + button click
