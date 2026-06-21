@@ -5348,7 +5348,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // ── Skeleton: click to lock detection on the player ─────────────────
-      if (tool === 'skeleton') {
+      // Fires on skeleton tool OR when user clicked "No" on confirmation popup
+      if (tool === 'skeleton' || skeletonWaitingForClickRef.current) {
         const video = videoRef.current;
         if (video && video.videoWidth > 0) {
           const bounds = videoBoundsRef.current;
