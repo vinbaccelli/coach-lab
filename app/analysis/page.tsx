@@ -4438,6 +4438,8 @@ function Home() {
     onCleanSession:                  resetSession,
     dataColumnActive,
     onDataColumnToggle:              () => setDataColumnActive(v => !v),
+    onUndoMeasurement:               () => setMeasurementColumn(prev => prev.slice(0, -1)),
+    onClearMeasurements:             () => { setMeasurementColumn([]); setProcessingStatus('Data column cleared'); },
     onAutoDetectMeasurements:        () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }

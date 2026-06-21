@@ -138,6 +138,10 @@ interface ToolPaletteProps {
   onDataColumnToggle?: () => void;
   /** AI auto-detect measurements from skeleton */
   onAutoDetectMeasurements?: () => void;
+  /** Undo last measurement from data column */
+  onUndoMeasurement?: () => void;
+  /** Clear all measurements from data column */
+  onClearMeasurements?: () => void;
   /** Quick screenshot → docs. When provided, shows a camera button in the footer. */
   onScreenshotSave?: () => void;
   /** True while screenshot save is in progress */
@@ -566,6 +570,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     dataColumnActive = false,
     onDataColumnToggle,
     onAutoDetectMeasurements,
+    onUndoMeasurement,
+    onClearMeasurements,
     onScreenshotSave,
     screenshotSaving = false,
     onZoomIn,
@@ -1326,6 +1332,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
               label={dataColumnActive ? 'Data Column ON' : 'Activate Data Column'}
               onPress={onDataColumnToggle}
             />
+          )}
+
+          {/* Undo / Clear measurements */}
+          {dataColumnActive && onUndoMeasurement && (
+            <Row k="m-undolast" icon={<Undo2 size={metricIcon} />} tooltip="Remove the last measurement from the data column" label="Undo last measurement" onPress={onUndoMeasurement} />
+          )}
+          {dataColumnActive && onClearMeasurements && (
+            <Row k="m-clearcol" icon={<Trash2 size={metricIcon} />} tooltip="Clear all measurements from the data column" label="Clear column" onPress={onClearMeasurements} destructive />
           )}
 
           {/* AI auto-detect from skeleton */}
