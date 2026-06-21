@@ -689,6 +689,7 @@ function Home() {
   const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
   const [pendingMeasurementName, setPendingMeasurementName] = useState('');
   const [dataColumnActive, setDataColumnActive] = useState(false);
+  const [columnDeleteMode, setColumnDeleteMode] = useState(false);
   // Data column is shown when explicitly activated OR when a frame is selected
   const dataColumnVisible = dataColumnActive || (biomechActive && biomechActiveFrameIndex !== null);
   const ballTrailEnabled = activeTool === 'ballShadow';
@@ -5094,11 +5095,33 @@ function Home() {
                     zIndex: 15,
                     pointerEvents: 'none',
                   }}>
+                    {/* Delete mode: show − next to each row */}
+                    {columnDeleteMode && measurementColumn.length > 0 && (
+                      <div style={{
+                        marginTop: 20,
+                        marginLeft: -18,
+                        display: 'flex', flexDirection: 'column', gap: 0,
+                        pointerEvents: 'auto',
+                      }}>
+                        {measurementColumn.map((item, i) => (
+                          <button key={item.id} type="button" onClick={() => {
+                            setMeasurementColumn(prev => prev.filter(m => m.id !== item.id));
+                            if (measurementColumn.length <= 1) setColumnDeleteMode(false);
+                          }} style={{
+                            width: 16, height: 22, border: 'none', background: 'transparent',
+                            color: '#FF3B30', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                            lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center',
+                          }}>−</button>
+                        ))}
+                      </div>
+                    )}
+                    {/* + and − toggle buttons */}
                     <div style={{
-                      marginTop: (measurementColumn.length > 0 ? measurementColumn.length * 22 + 28 : 48) + 2,
+                      marginTop: columnDeleteMode ? 4 : (measurementColumn.length > 0 ? measurementColumn.length * 22 + 28 : 48) + 2,
                       display: 'flex', gap: 4, pointerEvents: 'auto',
                     }}>
                       <button type="button" onClick={() => {
+                        setColumnDeleteMode(false);
                         const label = prompt('Label:');
                         if (!label?.trim()) return;
                         const valStr = prompt('Value (empty for text-only):');
@@ -5110,9 +5133,10 @@ function Home() {
                         background: 'rgba(255,255,255,0.2)', color: '#fff',
                         fontSize: 16, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
                       }}>+</button>
-                      <button type="button" onClick={() => setMeasurementColumn(prev => prev.slice(0, -1))} style={{
+                      <button type="button" onClick={() => setColumnDeleteMode(d => !d)} style={{
                         width: 24, height: 24, borderRadius: 6, border: 'none',
-                        background: 'rgba(255,59,48,0.3)', color: '#FF3B30',
+                        background: columnDeleteMode ? 'rgba(255,59,48,0.5)' : 'rgba(255,59,48,0.3)',
+                        color: '#FF3B30',
                         fontSize: 16, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
                       }}>−</button>
                     </div>
