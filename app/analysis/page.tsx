@@ -906,15 +906,37 @@ function Home() {
     const validKps = nearest.keypoints.filter(kp => kp.score >= 0.2);
     if (validKps.length < 4) return false;
 
-    // Compute bounding box from keypoints with 25% padding
-    const xs = validKps.map(kp => kp.x);
-    const ys = validKps.map(kp => kp.y);
+    // Extend bounding box along dominant arm to include racket
+    const kps = nearest.keypoints;
+    const rWrist = kps[10]; // right wrist
+    const lWrist = kps[9];  // left wrist
+    const rElbow = kps[8];
+    const lElbow = kps[7];
+
+    // Pick dominant arm (the one further from body center = likely holding racket)
+    const bodyX = validKps.reduce((s, k) => s + k.x, 0) / validKps.length;
+    const rDist = rWrist?.score >= 0.2 ? Math.abs(rWrist.x - bodyX) : 0;
+    const lDist = lWrist?.score >= 0.2 ? Math.abs(lWrist.x - bodyX) : 0;
+    const domWrist = rDist > lDist ? rWrist : lWrist;
+    const domElbow = rDist > lDist ? rElbow : lElbow;
+
+    // Extend racket tip: project 2.5x from elbow through wrist
+    const racketPoints: Array<{ x: number; y: number }> = [];
+    if (domWrist?.score >= 0.2 && domElbow?.score >= 0.2) {
+      const dx = domWrist.x - domElbow.x;
+      const dy = domWrist.y - domElbow.y;
+      racketPoints.push({ x: domWrist.x + dx * 1.5, y: domWrist.y + dy * 1.5 });
+    }
+
+    const allPoints = [...validKps, ...racketPoints];
+    const xs = allPoints.map(kp => kp.x);
+    const ys = allPoints.map(kp => kp.y);
     const minX = Math.min(...xs);
     const maxX = Math.max(...xs);
     const minY = Math.min(...ys);
     const maxY = Math.max(...ys);
-    const padX = (maxX - minX) * 0.25;
-    const padY = (maxY - minY) * 0.25;
+    const padX = (maxX - minX) * 0.2;
+    const padY = (maxY - minY) * 0.2;
     const region = {
       x: Math.max(0, minX - padX),
       y: Math.max(0, minY - padY),
@@ -4364,6 +4386,23 @@ function Home() {
       if (screen === 'stromotion') {
         setStroMotionActive(true);
         setBiomechActive(false);
+        // Auto-detect: if skeleton data exists, try auto-selecting areas for all frames
+        setTimeout(() => {
+          const draft = stroMotionDraft;
+          if (!draft?.frames.length) return;
+          const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
+          if (skFrames.length < 3) return;
+          const unselected = draft.frames.filter(f => !f.selectionBox);
+          if (unselected.length > 0) {
+            setProcessingStatus(`AI auto-detecting player in ${unselected.length} frames...`);
+            (async () => {
+              for (const frame of unselected) {
+                await autoSelectStroFrameFromSkeleton(frame.index);
+              }
+              setProcessingStatus('AI detection complete — verify and adjust each frame');
+            })();
+          }
+        }, 500);
       } else if (screen === 'aimetrics') {
         setStroMotionActive(false);
       } else if (screen === 'framecapture') {
@@ -4414,10 +4453,37 @@ function Home() {
       if (meas.jointAngles.rightKneeDeg != null) items.push({ id: `ai-rk-${Date.now()}`, label: 'R Knee', value: Math.round(meas.jointAngles.rightKneeDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.leftShoulderDeg != null) items.push({ id: `ai-ls-${Date.now()}`, label: 'L Shoulder', value: Math.round(meas.jointAngles.leftShoulderDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.rightShoulderDeg != null) items.push({ id: `ai-rs-${Date.now()}`, label: 'R Shoulder', value: Math.round(meas.jointAngles.rightShoulderDeg), unit: '°', type: 'angle' });
-      if (meas.shoulderHipSeparationDeg != null) items.push({ id: `ai-shd-${Date.now()}`, label: 'Shoulder-Hip Diff', value: Math.round(meas.shoulderHipSeparationDeg), unit: '°', type: 'angle' });
+      // Shoulder and hip line angles + differential
+      const lShoulder = kps[5], rShoulder = kps[6], lHip = kps[11], rHip = kps[12];
+      if (lShoulder?.score >= 0.2 && rShoulder?.score >= 0.2) {
+        const shoulderAngle = Math.round(((Math.atan2(rShoulder.y - lShoulder.y, rShoulder.x - lShoulder.x) * 180 / Math.PI) + 360) % 360);
+        items.push({ id: `ai-sa-${Date.now()}`, label: 'Shoulder Line', value: shoulderAngle, unit: '°', type: 'arrowAngle' });
+      }
+      if (lHip?.score >= 0.2 && rHip?.score >= 0.2) {
+        const hipAngle = Math.round(((Math.atan2(rHip.y - lHip.y, rHip.x - lHip.x) * 180 / Math.PI) + 360) % 360);
+        items.push({ id: `ai-ha-${Date.now()}`, label: 'Hip Line', value: hipAngle, unit: '°', type: 'arrowAngle' });
+      }
+      if (meas.shoulderHipSeparationDeg != null) items.push({ id: `ai-shd-${Date.now()}`, label: 'Shoulder-Hip Diff', value: Math.round(meas.shoulderHipSeparationDeg), unit: '°', type: 'differential' });
+      // Head direction
+      const nose = kps[0], lEar = kps[3], rEar = kps[4];
+      if (nose?.score >= 0.2 && ((lEar?.score >= 0.2) || (rEar?.score >= 0.2))) {
+        const earMidX = lEar?.score >= 0.2 && rEar?.score >= 0.2 ? (lEar.x + rEar.x) / 2 : (lEar?.score >= 0.2 ? lEar.x : rEar!.x);
+        const earMidY = lEar?.score >= 0.2 && rEar?.score >= 0.2 ? (lEar.y + rEar.y) / 2 : (lEar?.score >= 0.2 ? lEar.y : rEar!.y);
+        const headAngle = Math.round(((Math.atan2(nose.y - earMidY, nose.x - earMidX) * 180 / Math.PI) + 360) % 360);
+        items.push({ id: `ai-hd-${Date.now()}`, label: 'Head Direction', value: headAngle, unit: '°', type: 'arrowAngle' });
+      }
       if (meas.footDirection.leftAnkleDeg != null) items.push({ id: `ai-lf-${Date.now()}`, label: 'L Foot Dir', value: Math.round(meas.footDirection.leftAnkleDeg), unit: '°', type: 'angle' });
       if (meas.footDirection.rightAnkleDeg != null) items.push({ id: `ai-rf-${Date.now()}`, label: 'R Foot Dir', value: Math.round(meas.footDirection.rightAnkleDeg), unit: '°', type: 'angle' });
       if (meas.footSpacing?.distancePx != null) items.push({ id: `ai-fd-${Date.now()}`, label: 'Foot Distance', value: Math.round(meas.footSpacing.distancePx), unit: 'px', type: 'ruler' });
+      // Racket angle (estimated from dominant wrist extension)
+      const rW = kps[10], lW = kps[9], rE = kps[8], lE = kps[7];
+      const bodyCenter = (lShoulder?.score >= 0.2 && rShoulder?.score >= 0.2) ? (lShoulder.x + rShoulder.x) / 2 : 0;
+      const domW = (rW?.score >= 0.2 && lW?.score >= 0.2) ? (Math.abs(rW.x - bodyCenter) > Math.abs(lW.x - bodyCenter) ? rW : lW) : (rW?.score >= 0.2 ? rW : lW);
+      const domE = (rW?.score >= 0.2 && lW?.score >= 0.2) ? (Math.abs(rW.x - bodyCenter) > Math.abs(lW.x - bodyCenter) ? rE : lE) : (rW?.score >= 0.2 ? rE : lE);
+      if (domW?.score >= 0.2 && domE?.score >= 0.2) {
+        const racketAngle = Math.round(((Math.atan2(domW.y - domE.y, domW.x - domE.x) * 180 / Math.PI) + 360) % 360);
+        items.push({ id: `ai-ra-${Date.now()}`, label: 'Racket Angle (est.)', value: racketAngle, unit: '°', type: 'arrowAngle' });
+      }
       if (items.length > 0) {
         setDataColumnActive(true);
         setMeasurementColumn(prev => [...prev, ...items]);
