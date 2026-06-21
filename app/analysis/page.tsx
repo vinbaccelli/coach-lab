@@ -681,6 +681,8 @@ function Home() {
   const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
   const [pendingMeasurementName, setPendingMeasurementName] = useState('');
   const [dataColumnActive, setDataColumnActive] = useState(false);
+  // Data column is shown when explicitly activated OR when a frame is selected
+  const dataColumnVisible = dataColumnActive || (biomechActive && biomechActiveFrameIndex !== null);
   const ballTrailEnabled = activeTool === 'ballShadow';
 
   const skeletonParts = useMemo(() => ({
@@ -4437,9 +4439,28 @@ function Home() {
     showCollapseControl:             !isMobile,
     onCleanSession:                  resetSession,
     dataColumnActive,
-    onDataColumnToggle:              () => setDataColumnActive(v => !v),
+    onDataColumnToggle:              () => {
+      setDataColumnActive(v => {
+        const next = !v;
+        if (next && !biomechActive) {
+          setBiomechActive(true);
+          if (biomechActiveFrameIndex === null) {
+            addBiomechFrame(videoRef.current?.currentTime ?? 0);
+          }
+        }
+        return next;
+      });
+    },
     onUndoMeasurement:               () => setMeasurementColumn(prev => prev.slice(0, -1)),
     onClearMeasurements:             () => { setMeasurementColumn([]); setProcessingStatus('Data column cleared'); },
+    onAddNote:                       () => {
+      const note = prompt('Enter note:');
+      if (note?.trim()) {
+        setMeasurementColumn(prev => [...prev, { id: `note-${Date.now()}`, label: note.trim(), value: 0, unit: '', type: 'note' }]);
+      }
+    },
+    measurementColumnItems:          measurementColumn,
+    onDeleteMeasurement:             (id: string) => setMeasurementColumn(prev => prev.filter(m => m.id !== id)),
     onAutoDetectMeasurements:        () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
@@ -4960,11 +4981,11 @@ function Home() {
                   onProcessingStatus={setProcessingStatus}
                   skeletonKeepAlive={skeletonKeepAlive}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); }}
-                  measurementColumnItems={dataColumnActive ? measurementColumn : null}
+                  measurementColumnItems={dataColumnVisible ? measurementColumn : null}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
                   onMeasurementCommit={(m) => {
-                    if (dataColumnActive) {
+                    if (dataColumnVisible) {
                       setPendingMeasurement(m);
                       setPendingMeasurementName(m.type === 'angle' ? 'Angle' : m.type === 'arrowAngle' ? 'Arrow angle' : 'Distance');
                     }

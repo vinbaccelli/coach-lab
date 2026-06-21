@@ -4288,13 +4288,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             for (let i = 0; i < mcItems.length; i++) {
               const item = mcItems[i];
               const y = mcY + 28 + i * mcLineH;
-              ctx.fillStyle = 'rgba(255,255,255,0.6)';
-              ctx.fillText(item.label, mcX + 8, y);
-              ctx.fillStyle = '#93C5FD';
-              ctx.font = 'bold 12px -apple-system, sans-serif';
-              const valText = `${item.value}${item.unit}`;
-              ctx.fillText(valText, mcX + mcW - 8 - ctx.measureText(valText).width, y);
-              ctx.font = '11px -apple-system, sans-serif';
+              if (item.value === 0 && !item.unit) {
+                // Note entry — just show label text
+                ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                ctx.font = 'italic 11px -apple-system, sans-serif';
+                ctx.fillText(item.label, mcX + 8, y);
+                ctx.font = '11px -apple-system, sans-serif';
+              } else {
+                ctx.fillStyle = 'rgba(255,255,255,0.6)';
+                ctx.fillText(item.label, mcX + 8, y);
+                ctx.fillStyle = '#93C5FD';
+                ctx.font = 'bold 12px -apple-system, sans-serif';
+                const valText = `${item.value}${item.unit}`;
+                ctx.fillText(valText, mcX + mcW - 8 - ctx.measureText(valText).width, y);
+                ctx.font = '11px -apple-system, sans-serif';
+              }
             }
           } else {
             ctx.font = '11px -apple-system, sans-serif';

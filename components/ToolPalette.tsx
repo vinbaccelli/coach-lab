@@ -142,6 +142,12 @@ interface ToolPaletteProps {
   onUndoMeasurement?: () => void;
   /** Clear all measurements from data column */
   onClearMeasurements?: () => void;
+  /** Add a manual note to the data column */
+  onAddNote?: () => void;
+  /** Current measurement column items for display in toolbar */
+  measurementColumnItems?: Array<{ id: string; label: string; value: number; unit: string }>;
+  /** Delete a specific measurement by id */
+  onDeleteMeasurement?: (id: string) => void;
   /** Quick screenshot → docs. When provided, shows a camera button in the footer. */
   onScreenshotSave?: () => void;
   /** True while screenshot save is in progress */
@@ -572,6 +578,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onAutoDetectMeasurements,
     onUndoMeasurement,
     onClearMeasurements,
+    onAddNote,
+    measurementColumnItems: measurementItems,
+    onDeleteMeasurement,
     onScreenshotSave,
     screenshotSaving = false,
     onZoomIn,
@@ -719,10 +728,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const ToolbarLead = () => (
     <>
       {/* Logo */}
-      <div style={{ display: 'flex', justifyContent: io ? 'center' : 'flex-start', padding: io ? '2px 0' : '4px 4px 8px' }}>
+      <div style={{ display: 'flex', justifyContent: io ? 'center' : 'center', padding: io ? '2px 0' : '6px 8px 10px' }}>
         {io
           ? <img src="/logo-square.png" alt="CoachLab" style={{ width: 36, height: 36, borderRadius: 7 }} />
-          : <img src="/logo-rect.png" alt="CoachLab.ai" style={{ height: 32, width: 'auto' }} />
+          : <img src="/logo-rect.png" alt="CoachLab.ai" style={{ width: '100%', maxWidth: 200, height: 'auto' }} />
         }
       </div>
       {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
@@ -1334,12 +1343,31 @@ export default function ToolPalette(props: ToolPaletteProps) {
             />
           )}
 
-          {/* Undo / Clear measurements */}
+          {/* Column management */}
+          {dataColumnActive && !io && measurementItems && measurementItems.length > 0 && (
+            <div style={{ border: '1px solid #E5E5EA', borderRadius: 10, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: 0.5 }}>Column entries</div>
+              {measurementItems.map(item => (
+                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
+                  <span style={{ flex: 1, fontSize: 11, color: '#1D1D1F', fontWeight: 500 }}>{item.label}</span>
+                  <span style={{ fontSize: 11, color: '#007AFF', fontWeight: 700 }}>{item.value}{item.unit}</span>
+                  {onDeleteMeasurement && (
+                    <button type="button" onClick={() => onDeleteMeasurement(item.id)} style={{ background: 'none', border: 'none', color: '#FF3B30', cursor: 'pointer', padding: 2, lineHeight: 1 }}>
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {dataColumnActive && onAddNote && (
+            <Row k="m-addnote" icon={<Type size={metricIcon} />} tooltip="Add a text note to the data column" label="Add note" onPress={onAddNote} />
+          )}
           {dataColumnActive && onUndoMeasurement && (
-            <Row k="m-undolast" icon={<Undo2 size={metricIcon} />} tooltip="Remove the last measurement from the data column" label="Undo last measurement" onPress={onUndoMeasurement} />
+            <Row k="m-undolast" icon={<Undo2 size={metricIcon} />} tooltip="Remove the last entry" label="Undo last" onPress={onUndoMeasurement} />
           )}
           {dataColumnActive && onClearMeasurements && (
-            <Row k="m-clearcol" icon={<Trash2 size={metricIcon} />} tooltip="Clear all measurements from the data column" label="Clear column" onPress={onClearMeasurements} destructive />
+            <Row k="m-clearcol" icon={<Trash2 size={metricIcon} />} tooltip="Clear all entries" label="Clear column" onPress={onClearMeasurements} destructive />
           )}
 
           {/* AI auto-detect from skeleton */}
