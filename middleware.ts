@@ -13,7 +13,10 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith('/auth/callback') ||
     pathname.startsWith('/favicon') ||
     pathname.startsWith('/icons') ||
-    pathname.startsWith('/manifest')
+    pathname.startsWith('/manifest') ||
+    pathname.startsWith('/pricing') ||
+    pathname.startsWith('/coaches') ||
+    pathname.startsWith('/coach/')
   ) {
     return res;
   }
