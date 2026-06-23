@@ -27,6 +27,7 @@ import {
   type PhaseDefinition,
   type StrokeType,
 } from '@/lib/biomechanics';
+import { STROKE_TYPE_LABELS, PRESET_STROKE_TYPES } from '@/lib/biomechanics/strokePhases';
 import type { ToolType } from '@/lib/drawingTools';
 
 function formatTimeShort(seconds: number): string {
@@ -728,6 +729,26 @@ export default function BiomechanicsPanel({
               <Trash2 size={13} />
             </button>
           )}
+        </div>
+
+        {/* Stroke type selector */}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+          {PRESET_STROKE_TYPES.map(t => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => _onStrokeTypeChange(t)}
+              style={{
+                padding: '5px 10px', borderRadius: 8, fontSize: 11, fontWeight: 600,
+                border: _strokeType === t ? '1.5px solid #007AFF' : '1px solid #E5E5EA',
+                background: _strokeType === t ? 'rgba(0,122,255,0.1)' : '#F9F9F9',
+                color: _strokeType === t ? '#007AFF' : '#6E6E73',
+                cursor: 'pointer',
+              }}
+            >
+              {STROKE_TYPE_LABELS[t]}
+            </button>
+          ))}
         </div>
 
         {/* Frame count stepper */}
