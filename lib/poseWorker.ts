@@ -41,8 +41,7 @@ async function init() {
 
     ready = true;
     self.postMessage({ type: 'ready' });
-    if (process.env.NODE_ENV !== 'production') {
-    }
+    console.log('[PoseWorker] Model loaded and ready');
   } catch (err: any) {
     console.error('[PoseWorker] Init failed:', err);
     self.postMessage({ type: 'error', message: err?.message || 'Worker init failed' });
@@ -90,6 +89,7 @@ self.onmessage = async (e: MessageEvent) => {
       }
 
       const poses = await detector.estimatePoses(source, { flipHorizontal: false });
+      if (!poses || poses.length === 0) console.warn('[PoseWorker] No poses detected in frame', data.frameId);
 
       const bestPose = selectBestPose(poses, prevCentroid);
       const raw = bestPose?.keypoints;
@@ -122,7 +122,8 @@ self.onmessage = async (e: MessageEvent) => {
 
       source.close();
       self.postMessage({ type: 'result', keypoints, frameId: data.frameId });
-    } catch {
+    } catch (err) {
+      console.error('[PoseWorker] detect error:', err);
       if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
       self.postMessage({ type: 'result', keypoints: null, frameId: data.frameId });
     }
