@@ -198,7 +198,17 @@ export class PoseWorkerBridge {
           console.warn('[PoseWorkerBridge] Worker init timed out — falling back to main thread');
           terminateGlobalPoseWorker();
           if (activeBridge === this && !this.disposed) this.initMainThread();
-        }, 15_000);
+        }, 8_000);
+
+        const progressInterval = setInterval(() => {
+          if (globalWorkerReady || !globalWorker) {
+            clearInterval(progressInterval);
+            return;
+          }
+          if (activeBridge && !activeBridge.disposed) {
+            activeBridge.statusCb?.('Downloading pose model…');
+          }
+        }, 1500);
 
         w.onmessage = (e: MessageEvent) => {
           const { data } = e;
@@ -219,6 +229,11 @@ export class PoseWorkerBridge {
             }
             if (process.env.NODE_ENV !== 'production') {
               console.log('[PoseWorkerBridge] Worker mode active (shared)');
+            }
+          } else if (data.type === 'status') {
+            const br = activeBridge;
+            if (br && !br.disposed) {
+              br.statusCb?.(data.message);
             }
           } else if (data.type === 'error') {
             if (globalInitTimeout) {

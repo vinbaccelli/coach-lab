@@ -31,8 +31,8 @@ interface CoachLinkRow {
   sort_order: number;
 }
 
-export default async function CoachPage({ params }: { params: { slug: string } }) {
-  const { slug } = params;
+export default async function CoachPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
 
   let supabase: Awaited<ReturnType<typeof createSupabaseServerClient>> | null = null;
   try { supabase = await createSupabaseServerClient(); } catch { /* env not configured */ }

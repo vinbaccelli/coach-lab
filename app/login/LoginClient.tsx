@@ -77,6 +77,21 @@ export default function LoginClient({ redirect }: { redirect: string }) {
         <p style={{ marginTop: 14, fontSize: 11, opacity: 0.65 }}>
           By continuing you agree to store your videos as Unlisted in your YouTube account when importing from URLs.
         </p>
+
+        <a
+          href="/pricing"
+          style={{
+            display: 'block',
+            textAlign: 'center',
+            marginTop: 12,
+            fontSize: 12,
+            fontWeight: 600,
+            color: '#007AFF',
+            textDecoration: 'none',
+          }}
+        >
+          View Pricing →
+        </a>
       </div>
     </div>
   );

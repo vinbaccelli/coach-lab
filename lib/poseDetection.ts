@@ -29,7 +29,6 @@ let detector: PoseDetector | null = null;
 let loading = false;
 let loadPromise: Promise<PoseDetector | null> | null = null;
 
-/** Load the MoveNet SINGLEPOSE_LIGHTNING detector (singleton, lazy). */
 export async function getPoseDetector(): Promise<PoseDetector | null> {
   if (detector) return detector;
   if (loading && loadPromise) return loadPromise;
@@ -84,7 +83,7 @@ export async function detectPoseOnCurrentFrame(
   try {
     const poses = await detector.estimatePoses(video, { flipHorizontal: false });
     if (poses && poses.length > 0 && poses[0].keypoints) {
-      return poses[0].keypoints.map((kp) => ({
+      return poses[0].keypoints.map((kp: Keypoint) => ({
         x: kp.x,
         y: kp.y,
         score: kp.score ?? 0,

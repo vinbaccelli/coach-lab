@@ -15,9 +15,10 @@ import { Camera, Plus, Trash2, Upload } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
-import { RecordingHubContent } from '@/components/RecordingHub';
+const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
-import PostRecordingCropModal, { type CropAspect, type PixelRegion } from '@/components/PostRecordingCropModal';
+import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModal';
+const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
 import { exportCroppedVideo } from '@/lib/cropExport';
 import GuidedTour from '@/components/GuidedTour';
 import { terminateGlobalPoseWorker, warmupMoveNetWorker } from '@/lib/poseWorkerBridge';
@@ -31,10 +32,10 @@ import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
 import { useAIMetrics } from '@/hooks/useAIMetrics';
-import StroMotionPanel from '@/components/StroMotionPanel';
-import BiomechanicsPanel from '@/components/BiomechanicsPanel';
-import FrameMeasurementEditor from '@/components/aiMetrics/FrameMeasurementEditor';
-import SaveSessionModal from '@/components/sessions/SaveSessionModal';
+const StroMotionPanel = React.lazy(() => import('@/components/StroMotionPanel'));
+const BiomechanicsPanel = React.lazy(() => import('@/components/BiomechanicsPanel'));
+const FrameMeasurementEditor = React.lazy(() => import('@/components/aiMetrics/FrameMeasurementEditor'));
+const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
 import { renderMeasurementCard } from '@/lib/biomechanics';
 import {
@@ -65,8 +66,8 @@ import {
   type StroMotionFrameCount,
   type StroMotionVideoOrder,
 } from '@/lib/stroMotionDraft';
-import FrameMaskEditor from '@/components/stroMotion/FrameMaskEditor';
-import StroMotionPreviewModal from '@/components/stroMotion/StroMotionPreviewModal';
+const FrameMaskEditor = React.lazy(() => import('@/components/stroMotion/FrameMaskEditor'));
+const StroMotionPreviewModal = React.lazy(() => import('@/components/stroMotion/StroMotionPreviewModal'));
 import { normalizeWebUrlInput, resolveEmbedTarget } from '@/lib/embedUrl';
 import {
   createHtml5VideoController,
@@ -84,11 +85,12 @@ import {
 } from '@/lib/embedCaptureSession';
 import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
-import SaveReportModal from '@/components/shared/SaveReportModal';
+const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportModal'));
 import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import RulerOverlay from '@/components/ruler/RulerOverlay';
-import FrameMetricsReportModal, { type FrameMetricsReportFrame } from '@/components/frameMetrics/FrameMetricsReportModal';
+import type { FrameMetricsReportFrame } from '@/components/frameMetrics/FrameMetricsReportModal';
+const FrameMetricsReportModal = React.lazy(() => import('@/components/frameMetrics/FrameMetricsReportModal'));
 import { uploadDataUrl } from '@/lib/supabase/storage';
 import { proposePhaseMarkers } from '@/lib/biomechanics/phaseDetection';
 import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
@@ -1924,10 +1926,14 @@ function Home() {
     };
   }, []);
 
-  /** Preload MoveNet in a worker once per analysis session (no UI toggle required). */
+  /** Load MoveNet worker only when skeleton is first enabled. */
+  const skeletonWarmedUp = useRef(false);
   useEffect(() => {
-    warmupMoveNetWorker();
-  }, []);
+    if (skeletonEnabled && !skeletonWarmedUp.current) {
+      skeletonWarmedUp.current = true;
+      warmupMoveNetWorker();
+    }
+  }, [skeletonEnabled]);
 
   useEffect(() => {
     if (activeTool === 'objectMultiplier') {

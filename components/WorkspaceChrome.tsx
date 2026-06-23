@@ -140,6 +140,12 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
               >
                 {email}
               </span>
+              <Link
+                href="/pricing"
+                style={{ fontSize: 12, fontWeight: 600, color: '#007AFF', textDecoration: 'none', padding: '0 4px' }}
+              >
+                Pricing
+              </Link>
               <button
                 type="button"
                 onClick={signOut}

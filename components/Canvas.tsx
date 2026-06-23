@@ -6538,6 +6538,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 </span>
                 <button
                   type="button"
+                  aria-label="Use AI-detected object region for StroMotion"
+                  title="Use the detected racket/object region"
                   style={{
                     fontSize: 13,
                     fontWeight: 600,
@@ -6566,6 +6568,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 </button>
                 <button
                   type="button"
+                  aria-label="Draw object region manually instead of using AI detection"
+                  title="Ignore the detected region and draw your own box around the object"
                   style={{
                     fontSize: 13,
                     fontWeight: 600,

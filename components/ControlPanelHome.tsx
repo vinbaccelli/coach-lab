@@ -39,7 +39,7 @@ export default function ControlPanelHome() {
   return (
     <div style={shell}>
       <div style={{ marginBottom: 22 }}>
-        <img src="/logo-rect.png" alt="CoachLab.ai" style={{ height: 36, width: 'auto', marginBottom: 8 }} />
+        <img src="/logo-rect.svg" alt="CoachLab.academy" style={{ height: 36, width: 'auto', marginBottom: 8 }} />
         <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 600, letterSpacing: '-0.03em', color: '#1D1D1F' }}>
           Control Panel
         </h1>
@@ -47,6 +47,47 @@ export default function ControlPanelHome() {
           Your coaching workspace: open the video lab, manage players and documents, log matches by hand, or run the AI decoder.
           Everything routes into each player&apos;s profile when you connect storage and APIs later.
         </p>
+      </div>
+
+      {/* ── App Screenshots Carousel ────────────────────────────────── */}
+      <div style={{ marginBottom: 28, overflow: 'hidden' }}>
+        <div
+          style={{
+            display: 'flex', gap: 14, overflowX: 'auto', scrollSnapType: 'x mandatory',
+            paddingBottom: 8, WebkitOverflowScrolling: 'touch',
+          }}
+        >
+          {[
+            { label: 'Video Analysis', desc: 'Draw, measure, skeleton overlay — all in one canvas', bg: '#007AFF' },
+            { label: 'AI Skeleton', desc: 'Real-time MoveNet pose estimation with angle readouts', bg: '#5856D6' },
+            { label: 'StroMotion', desc: 'Multi-frame composite overlays for stroke sequencing', bg: '#FF9500' },
+            { label: 'Match Decoder', desc: 'AI-powered stats from SwingVision or manual reports', bg: '#FF3B30' },
+            { label: 'Player Timeline', desc: 'Every session, screenshot, and report in one place', bg: '#34C759' },
+          ].map((item, i) => (
+            <div
+              key={i}
+              style={{
+                flexShrink: 0, width: 'min(280px, 75vw)', scrollSnapAlign: 'start',
+                borderRadius: 16, overflow: 'hidden',
+                background: `linear-gradient(135deg, ${item.bg}22, ${item.bg}08)`,
+                border: `1px solid ${item.bg}30`,
+                padding: 20, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
+                minHeight: 160,
+              }}
+            >
+              <div style={{
+                width: '100%', height: 80, borderRadius: 10, marginBottom: 12,
+                background: `linear-gradient(160deg, ${item.bg}40, ${item.bg}15)`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11, color: item.bg, fontWeight: 600, opacity: 0.6,
+              }}>
+                Screenshot placeholder
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#1D1D1F', marginBottom: 4 }}>{item.label}</div>
+              <div style={{ fontSize: 12, color: '#6E6E73', lineHeight: 1.4 }}>{item.desc}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: '#1D1D1F' }}>
@@ -171,20 +212,77 @@ export default function ControlPanelHome() {
           </p>
         </Link>
 
-        <Link href="/billing" style={{ ...cardBase, minHeight: 112 }} className="coachlab-card-hover-light">
+        <Link href="/pricing" style={{ ...cardBase, minHeight: 112 }} className="coachlab-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <CreditCard size={20} strokeWidth={2.25} />
-            <span style={{ fontSize: 15, fontWeight: 800 }}>Subscription</span>
+            <span style={{ fontSize: 15, fontWeight: 800 }}>Pricing &amp; Subscribe</span>
           </div>
           <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
-            €15/month or €120/year via Stripe — connect your account when you&apos;re ready.
+            $20/month or $200/year — see what&apos;s included and subscribe via Stripe.
           </p>
         </Link>
       </div>
 
-      <p style={{ fontSize: 13, color: '#8E8E93', lineHeight: 1.5, margin: '0 0 48px', maxWidth: 640 }}>
+      <p style={{ fontSize: 13, color: '#8E8E93', lineHeight: 1.5, margin: '0 0 32px', maxWidth: 640 }}>
         V1 workflow: upload MP4 files into Video Analysis; use Academy guides for YouTube unlisted, Drive folders, and social exports.
       </p>
+
+      {/* ── Competitor Comparison ─────────────────────────────────────── */}
+      <div style={{ marginBottom: 48 }}>
+        <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 800, color: '#1D1D1F', letterSpacing: -0.3 }}>
+          How CoachLab compares
+        </h2>
+        <p style={{ margin: '0 0 16px', fontSize: 13, color: '#6E6E73' }}>
+          All-in-one coaching platform vs. single-purpose tools.
+        </p>
+        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', borderRadius: 14, border: '1px solid #E5E5EA' }}>
+          <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse', fontSize: 12, background: '#FFF' }}>
+            <thead>
+              <tr style={{ borderBottom: '2px solid #E5E5EA' }}>
+                <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#6E6E73', fontSize: 11 }}>Feature</th>
+                {['CoachLab', 'Dartfish', 'CoachNow', 'OnForm', 'VisualEyes', 'Yogger', 'SwingCoach'].map((name, i) => (
+                  <th key={name} style={{
+                    padding: '12px 10px', textAlign: 'center', fontWeight: 700, fontSize: 11,
+                    color: i === 0 ? '#007AFF' : '#1D1D1F',
+                    background: i === 0 ? 'rgba(0,122,255,0.06)' : undefined,
+                  }}>{name}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {([
+                ['Video analysis + drawing', true, true, true, true, true, false, true],
+                ['AI skeleton detection', true, false, false, true, false, false, false],
+                ['StroMotion composites', true, true, false, false, false, false, false],
+                ['AI match decoding', true, false, false, false, false, true, false],
+                ['Player database', true, false, true, false, false, false, false],
+                ['Screenshot export', true, true, true, true, true, false, true],
+                ['Coach public profile', true, false, true, false, false, false, false],
+                ['Free tier', true, false, true, true, false, true, true],
+                ['Price', '$20/mo', '$30+/mo', '$30/mo', '$15/mo', '$20/mo', 'Free', '$5/mo'],
+              ] as Array<[string, ...Array<boolean | string>]>).map((row, ri) => (
+                <tr key={ri} style={{ borderBottom: '1px solid #F2F2F7' }}>
+                  <td style={{ padding: '10px 14px', fontWeight: 600, color: '#1D1D1F', whiteSpace: 'nowrap' }}>{row[0]}</td>
+                  {row.slice(1).map((val, ci) => (
+                    <td key={ci} style={{
+                      padding: '10px 10px', textAlign: 'center',
+                      background: ci === 0 ? 'rgba(0,122,255,0.06)' : undefined,
+                      fontWeight: ci === 0 ? 700 : 400,
+                    }}>
+                      {typeof val === 'boolean'
+                        ? val
+                          ? <span style={{ color: '#34C759', fontSize: 16 }}>✓</span>
+                          : <span style={{ color: '#D1D1D6', fontSize: 16 }}>—</span>
+                        : <span style={{ fontSize: 12, color: ci === 0 ? '#007AFF' : '#6E6E73', fontWeight: ci === 0 ? 700 : 500 }}>{val}</span>
+                      }
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {/* ── Reviews ─────────────────────────────────────────────────────── */}
       <div style={{ borderTop: '1px solid #F2F2F7', paddingTop: 40, marginTop: 8 }}>
@@ -261,7 +359,7 @@ export default function ControlPanelHome() {
 
         <div style={{ textAlign: 'center', marginTop: 28 }}>
           <a
-            href="mailto:vin@coachlab.app?subject=CoachLab Feedback"
+            href="mailto:vin@coachlab.academy?subject=CoachLab Feedback"
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
               fontSize: 13, fontWeight: 600, color: '#007AFF',

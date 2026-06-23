@@ -672,6 +672,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             : <Camera size={denseMobile || io ? 16 : 20} />
           }
           label={screenshotSaving ? 'Saving…' : 'Screenshot'}
+          tooltip="Capture the current frame with drawings and save to player"
           onPress={screenshotSaving ? () => {} : onScreenshotSave}
         />
       ) : null}
@@ -735,8 +736,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
       {/* Logo */}
       <div style={{ display: 'flex', justifyContent: io ? 'center' : 'center', padding: io ? '2px 0' : '6px 8px 10px' }}>
         {io
-          ? <img src="/logo-square.png" alt="CoachLab" style={{ width: 36, height: 36, borderRadius: 7 }} />
-          : <img src="/logo-rect.png" alt="CoachLab.ai" style={{ width: '100%', maxWidth: 200, height: 'auto' }} />
+          ? <img src="/logo-square.svg" alt="CoachLab" style={{ width: 36, height: 36, borderRadius: 7 }} />
+          : <img src="/logo-rect.svg" alt="CoachLab.academy" style={{ width: '100%', maxWidth: 200, height: 'auto' }} />
         }
       </div>
       {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
@@ -954,6 +955,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     <label
       key={key}
       aria-label={label}
+      title={label}
       aria-checked={checked}
       role="checkbox"
       style={{
@@ -1193,6 +1195,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             k="st-d"
             icon={<Palette size={18} />}
             label="Style"
+            tooltip="Change line color, thickness, and dash style for drawing tools"
             onPress={() => push('style')}
           />
         </ToolbarScrollArea>
@@ -1228,6 +1231,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               active={!skeletonOverlayPaused}
               icon={<PersonStanding size={io ? 18 : 20} />}
               label="Skeleton on / off"
+              tooltip="Toggle the AI skeleton overlay on or off while keeping detection running"
               onPress={() => onSkeletonOverlayPausedChange()}
             />
           )}
@@ -1236,6 +1240,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             k="reskel"
             icon={<RefreshCw size={io ? 16 : 18} />}
             label="Refresh pose overlay"
+            tooltip="Reset skeleton detection — re-detects the player from the current frame"
             onPress={() => onResetSkeleton()}
             destructive
           />
@@ -1254,13 +1259,13 @@ export default function ToolPalette(props: ToolPaletteProps) {
             chk('sh', 'Head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange, <Minus size={18} strokeWidth={2} />)}
           {/* Body parts — each on its own row */}
           {onSkeletonShowRightArmChange !== undefined &&
-            chk('ra', 'Right arm', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange, <RightArmIcon size={18} />)}
+            chk('ra', 'Right arm — show/hide shoulder, elbow, wrist', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange, <RightArmIcon size={18} />)}
           {onSkeletonShowLeftArmChange !== undefined &&
-            chk('la', 'Left arm', skeletonShowLeftArm ?? true, onSkeletonShowLeftArmChange, <LeftArmIcon size={18} />)}
+            chk('la', 'Left arm — show/hide shoulder, elbow, wrist', skeletonShowLeftArm ?? true, onSkeletonShowLeftArmChange, <LeftArmIcon size={18} />)}
           {onSkeletonShowRightLegChange !== undefined &&
-            chk('rl', 'Right leg', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange, <RightLegIcon size={18} />)}
+            chk('rl', 'Right leg — show/hide hip, knee, ankle', skeletonShowRightLeg ?? true, onSkeletonShowRightLegChange, <RightLegIcon size={18} />)}
           {onSkeletonShowLeftLegChange !== undefined &&
-            chk('ll', 'Left leg', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange, <LeftLegIcon size={18} />)}
+            chk('ll', 'Left leg — show/hide hip, knee, ankle', skeletonShowLeftLeg ?? true, onSkeletonShowLeftLegChange, <LeftLegIcon size={18} />)}
           {!io ? (
             <p style={{ margin: '4px 4px 0', fontSize: 11, lineHeight: 1.45, color: textMuted }}>
               Pose follows the player live. Works best with an uploaded video file.
@@ -1399,6 +1404,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             k="m-capture"
             icon={<Camera size={metricIcon} />}
             label="Frame Capture"
+            tooltip="Save the current frame as a screenshot to a player's timeline"
             onPress={() => { push('framecapture'); }}
           />
         </ToolbarScrollArea>

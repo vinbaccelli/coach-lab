@@ -4,6 +4,7 @@ import ServiceWorkerRegistration from './ServiceWorkerRegistration';
 import InstallPrompt from '../components/InstallPrompt';
 import { RecordingProvider } from '../contexts/RecordingContext';
 import PersistentWebcamOverlay from '../components/PersistentWebcamOverlay';
+import FloatingRecordingIndicator from '../components/FloatingRecordingIndicator';
 
 export const metadata: Metadata = {
   title: 'CoachLab – Coaching intelligence platform',
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <RecordingProvider>
           {children}
           <PersistentWebcamOverlay />
+          <FloatingRecordingIndicator />
         </RecordingProvider>
         <InstallPrompt />
       </body>

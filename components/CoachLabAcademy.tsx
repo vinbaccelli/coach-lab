@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { FileText, Plus, Trash2, Upload, ExternalLink } from 'lucide-react';
+import AcademyForum from '@/components/academy/AcademyForum';
 import { isAdmin } from '@/lib/admin';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { uploadDataUrl } from '@/lib/supabase/storage';
@@ -200,34 +201,8 @@ export default function CoachLabAcademy() {
 
       {loading && <p style={body}>Loading resources…</p>}
 
-      {/* Static guides (always shown) */}
-      <h3 style={sectionTitle}>Video Workflow Guides</h3>
-
-      <h3 style={{ ...sectionTitle, fontSize: 12, marginTop: 8 }}>1. YouTube workflow</h3>
-      <ul style={list}>
-        <li>Upload athlete footage to YouTube as <strong>Unlisted</strong> for privacy.</li>
-        <li>Download the MP4, then import into CoachLab.</li>
-        <li>Trim before upload for faster analysis.</li>
-      </ul>
-
-      <h3 style={{ ...sectionTitle, fontSize: 12 }}>2. Instagram workflow</h3>
-      <ul style={list}>
-        <li>Save Reels to your device (screen recording or creator export).</li>
-        <li>Transfer via AirDrop, Drive, or email.</li>
-        <li>Import the saved MP4 with <strong>Upload Video</strong>.</li>
-      </ul>
-
-      <h3 style={{ ...sectionTitle, fontSize: 12 }}>3. Video organization</h3>
-      <ul style={list}>
-        <li>Folder per athlete: <em>Raw</em>, <em>CoachLab exports</em>, <em>Published</em>.</li>
-        <li>Name files: <code>Athlete_Date_skill.mp4</code>.</li>
-      </ul>
-
-      <h3 style={{ ...sectionTitle, fontSize: 12 }}>4. Copyright &amp; usage</h3>
-      <ul style={list}>
-        <li>Only analyze footage you have rights to use.</li>
-        <li>Get consent and keep originals private.</li>
-      </ul>
+      {/* Q&A Forum */}
+      <AcademyForum />
     </div>
   );
 }

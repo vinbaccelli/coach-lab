@@ -78,7 +78,7 @@ const PROFILES: Record<string, CoachProfileData> = {
       },
     ],
     links: [
-      { id: 'coachlab', label: 'Try CoachLab Free', url: 'https://coachlab.app/analysis', icon: 'globe' },
+      { id: 'coachlab', label: 'Try CoachLab Free', url: 'https://coachlab.academy/analysis', icon: 'globe' },
       { id: 'youtube', label: 'YouTube — Technique Videos', url: 'https://youtube.com/@vinbaccelli', icon: 'youtube' },
       { id: 'instagram', label: 'Instagram', url: 'https://instagram.com/vinbaccelli', icon: 'instagram' },
       { id: 'website', label: 'vinbaccelli.com', url: 'https://vinbaccelli.com', icon: 'external' },
@@ -87,7 +87,7 @@ const PROFILES: Record<string, CoachProfileData> = {
       instagram: 'https://instagram.com/vinbaccelli',
       youtube: 'https://youtube.com/@vinbaccelli',
       website: 'https://vinbaccelli.com',
-      email: 'vin@coachlab.app',
+      email: 'vin@coachlab.academy',
     },
   },
 };

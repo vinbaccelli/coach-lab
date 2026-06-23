@@ -402,13 +402,14 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
           {/* Remove B button */}
           <button
             onClick={onRemoveVideoB}
+            aria-label="Remove comparison Video B"
             style={{
               ...btnStyle,
               background: '#FFE5E5',
               color: '#EF4444',
               fontSize: 16,
             }}
-            title="Remove Video B"
+            title="Remove Video B from split-screen comparison"
           >
             ✕
           </button>
@@ -458,6 +459,8 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
       }}>
         <span style={{ fontSize: 10, color: '#9ca3af', fontWeight: 600 }}>Speed:</span>
         <select
+          aria-label="Playback speed"
+          title="Change video playback speed"
           value={[0.05, 0.1, 0.25, 0.5, 1, 1.5, 2].includes(playbackRate) ? String(playbackRate) : 'custom'}
           onChange={(e) => {
             if (e.target.value === 'custom') return;
@@ -496,13 +499,14 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
           Frame:
         </span>
         <select
+          aria-label="Frame rate for frame stepping"
           value={[10, 30, 60, 120].includes(frameMode) ? String(frameMode) : 'custom'}
           onChange={(e) => {
             if (e.target.value === 'custom') return;
             const fm = Number(e.target.value);
             setFrameMode(fm);
           }}
-          title={`← → steps by ${frameSizeMs}ms per frame`}
+          title={`Frame step rate — ← → steps by ${frameSizeMs}ms per frame`}
           style={{ height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, fontWeight: 600, border: '1px solid #E8E8ED', background: '#fff', cursor: 'pointer' }}
         >
           <option value="10">10fps</option>

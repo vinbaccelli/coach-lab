@@ -200,7 +200,7 @@ export default function ExportModal({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <h2 className="text-base font-semibold text-gray-800">Export</h2>
-          <button onClick={handleClose} className="btn-ghost rounded-lg p-1.5">
+          <button onClick={handleClose} className="btn-ghost rounded-lg p-1.5" aria-label="Close export modal" title="Close">
             <X size={18} />
           </button>
         </div>
@@ -233,16 +233,16 @@ export default function ExportModal({
                   <img src={screenshotUrl} alt="Screenshot preview"
                     className="w-full rounded-lg border border-gray-200 object-contain max-h-56" />
                   <div className="flex gap-2">
-                    <button onClick={downloadScreenshot} className="btn-primary flex-1 gap-1.5">
+                    <button onClick={downloadScreenshot} className="btn-primary flex-1 gap-1.5" aria-label="Download screenshot as PNG" title="Download screenshot as PNG">
                       <Download size={14} /> Download PNG
                     </button>
-                    <button onClick={() => setScreenshotUrl(null)} className="btn-outline flex-1 gap-1.5">
+                    <button onClick={() => setScreenshotUrl(null)} className="btn-outline flex-1 gap-1.5" aria-label="Retake screenshot" title="Retake screenshot">
                       Retake
                     </button>
                   </div>
                 </div>
               ) : (
-                <button onClick={captureScreenshot} disabled={isCapturing} className="btn-primary gap-2 py-2.5">
+                <button onClick={captureScreenshot} disabled={isCapturing} className="btn-primary gap-2 py-2.5" aria-label="Capture screenshot of current frame" title="Capture the current frame with all drawings">
                   {isCapturing ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}
                   Capture Screenshot
                 </button>
@@ -347,16 +347,16 @@ export default function ExportModal({
                 <div className="flex flex-col gap-3">
                   <video src={clipUrl} controls className="w-full rounded-lg border border-gray-200" style={{ maxHeight: 200 }} />
                   <div className="flex gap-2">
-                    <button onClick={downloadClip} className="btn-primary flex-1 gap-1.5">
+                    <button onClick={downloadClip} className="btn-primary flex-1 gap-1.5" aria-label="Download recorded clip" title="Download recorded video clip">
                       <Download size={14} /> Download {clipBlob?.type.includes('mp4') ? 'MP4' : 'WebM'}
                     </button>
-                    <button onClick={() => { setClipUrl(null); setClipBlob(null); }} className="btn-outline flex-1">
+                    <button onClick={() => { setClipUrl(null); setClipBlob(null); }} className="btn-outline flex-1" aria-label="Discard clip and record again" title="Discard and re-record">
                       Discard
                     </button>
                   </div>
                 </div>
               ) : (
-                <button onClick={recordClip} disabled={isRecordingClip || !!mp4Progress} className="btn-primary gap-2 py-2.5">
+                <button onClick={recordClip} disabled={isRecordingClip || !!mp4Progress} className="btn-primary gap-2 py-2.5" aria-label="Record video clip" title="Record a short video clip from the current position">
                   {isRecordingClip ? (
                     <><Loader2 size={15} className="animate-spin" />Recording {clipDuration}s…</>
                   ) : mp4Progress ? (

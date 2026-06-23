@@ -36,7 +36,7 @@ export default async function CoachesPage() {
         position: 'sticky', top: 0, zIndex: 20,
       }}>
         <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
-          <img src="/logo-square.png" alt="CoachLab" style={{ width: 28, height: 28, borderRadius: 6 }} />
+          <img src="/logo-square.svg" alt="CoachLab" style={{ width: 28, height: 28, borderRadius: 6 }} />
           <span style={{ fontSize: 14, fontWeight: 800, color: '#fff', letterSpacing: -0.3 }}>
             Coach<span style={{ color: '#FF3B30' }}>Lab</span>
           </span>
@@ -121,7 +121,7 @@ export default async function CoachesPage() {
 
         <div style={{ textAlign: 'center', marginTop: 40 }}>
           <Link href="/" style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)', textDecoration: 'none' }}>
-            Powered by CoachLab.ai
+            Powered by CoachLab.academy
           </Link>
         </div>
       </div>

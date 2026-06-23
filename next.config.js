@@ -1,13 +1,13 @@
 'use strict';
 
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+});
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   async headers() {
     return [
-      /**
-       * API routes should not inherit strict COEP from pages — it can interfere with `fetch`/proxies
-       * while the Analysis shell still uses credentialless COEP for TF/WebGPU canvas isolation.
-       */
       {
         source: '/api/:path*',
         headers: [
@@ -34,4 +34,4 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+module.exports = withBundleAnalyzer(nextConfig);

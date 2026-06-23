@@ -14,12 +14,14 @@
 
 let detector: any = null;
 let ready = false;
+let prevCentroid: { x: number; y: number } | null = null;
 
 async function init() {
   try {
     if (process.env.NODE_ENV !== 'production') {
     }
 
+    self.postMessage({ type: 'status', message: 'Loading TensorFlow WASM…' });
     const tf = await import('@tensorflow/tfjs-core');
     const wasmBackend = await import('@tensorflow/tfjs-backend-wasm');
 
@@ -29,9 +31,8 @@ async function init() {
 
     await tf.setBackend('wasm');
     await tf.ready();
-    if (process.env.NODE_ENV !== 'production') {
-    }
 
+    self.postMessage({ type: 'status', message: 'Loading pose detection model…' });
     const pd = await import('@tensorflow-models/pose-detection');
     detector = await pd.createDetector(pd.SupportedModels.MoveNet, {
       modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
@@ -89,7 +90,19 @@ self.onmessage = async (e: MessageEvent) => {
       }
 
       const poses = await detector.estimatePoses(source, { flipHorizontal: false });
-      const raw = poses?.[0]?.keypoints;
+
+      const bestPose = selectBestPose(poses, prevCentroid);
+      const raw = bestPose?.keypoints;
+
+      if (raw) {
+        const cx = raw.reduce((s: number, k: any) => s + (k.x ?? 0), 0) / raw.length;
+        const cy = raw.reduce((s: number, k: any) => s + (k.y ?? 0), 0) / raw.length;
+        prevCentroid = { x: cx, y: cy };
+      }
+
+      if (poses.length > 1) {
+        console.log(`[PoseWorker] ${poses.length} people detected, selected index ${poses.indexOf(bestPose)}`);
+      }
 
       let keypoints;
       if (useCrop && raw) {
@@ -115,3 +128,51 @@ self.onmessage = async (e: MessageEvent) => {
     }
   }
 };
+
+function selectBestPose(
+  poses: any[],
+  prev: { x: number; y: number } | null,
+): any | null {
+  if (!poses || poses.length === 0) return null;
+  if (poses.length === 1) return poses[0];
+
+  let best = poses[0];
+  let bestScore = -Infinity;
+
+  for (const pose of poses) {
+    const kps = pose.keypoints;
+    if (!kps || kps.length === 0) continue;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let validCount = 0;
+    let cx = 0, cy = 0;
+    for (const kp of kps) {
+      if ((kp.score ?? 0) < 0.15) continue;
+      validCount++;
+      cx += kp.x;
+      cy += kp.y;
+      if (kp.x < minX) minX = kp.x;
+      if (kp.y < minY) minY = kp.y;
+      if (kp.x > maxX) maxX = kp.x;
+      if (kp.y > maxY) maxY = kp.y;
+    }
+    if (validCount === 0) continue;
+
+    const area = (maxX - minX) * (maxY - minY);
+    cx /= validCount;
+    cy /= validCount;
+
+    let score = area;
+    if (prev) {
+      const dist = Math.sqrt((cx - prev.x) ** 2 + (cy - prev.y) ** 2);
+      score = area / (1 + dist * 0.01);
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = pose;
+    }
+  }
+
+  return best;
+}
