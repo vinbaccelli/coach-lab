@@ -5373,8 +5373,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // ── Skeleton: click to lock detection on the player ─────────────────
-      if (!skeletonLockedRef.current && (tool === 'skeleton' || skeletonWaitingForClickRef.current)) {
-        if (process.env.NODE_ENV !== 'production') console.log('[Skeleton click]', { tool, locked: skeletonLockedRef.current, waiting: skeletonWaitingForClickRef.current, hasBridge: !!poseBridgeRef.current });
+      const skeletonClickable = !skeletonLockedRef.current && (tool === 'skeleton' || skeletonWaitingForClickRef.current || skeletonEnabledRef.current);
+      if (skeletonClickable) {
+        console.log('[Skeleton click]', { tool, locked: skeletonLockedRef.current, waiting: skeletonWaitingForClickRef.current, hasBridge: !!poseBridgeRef.current, enabled: skeletonEnabledRef.current });
         const video = videoRef.current;
         if (video && video.videoWidth > 0) {
           const bounds = videoBoundsRef.current;
@@ -5382,7 +5383,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const normX = (pos.x - bounds.dx) / bounds.dw;
             const normY = (pos.y - bounds.dy) / bounds.dh;
             if (normX >= 0 && normX <= 1 && normY >= 0 && normY <= 1) {
-              if (process.env.NODE_ENV !== 'production') console.log('[Skeleton focus SET]', { normX, normY, hasBridge: !!poseBridgeRef.current });
+              console.log('[Skeleton focus SET]', { normX, normY, hasBridge: !!poseBridgeRef.current });
               poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
               onProcessingStatus?.('Skeleton locked on player');
               skeletonSuppressedRef.current = false;
