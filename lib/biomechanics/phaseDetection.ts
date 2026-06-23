@@ -110,9 +110,9 @@ export function proposePhaseMarkers(
     } else {
       const ratio = templateRatioForPhase(def.id, strokeType, defs);
       const contactRatio = (contactTime - trimStartSec) / (trimEndSec - trimStartSec);
-      const adjusted = def.id === 'recovery'
+      const adjusted = def.id === 'finish'
         ? Math.max(ratio, contactRatio + 0.12)
-        : def.id === 'finish' || def.id === 'pronation' || def.id === 'extension'
+        : def.id === 'extension'
           ? contactRatio + (ratio - 0.68) * 0.5
           : ratio * contactRatio / 0.68;
       targetTime = timeAtRatio(trimStartSec, trimEndSec, clamp(adjusted, 0.02, 0.98));
