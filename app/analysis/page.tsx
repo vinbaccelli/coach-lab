@@ -21,7 +21,7 @@ import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModa
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
 import { exportCroppedVideo } from '@/lib/cropExport';
 import GuidedTour from '@/components/GuidedTour';
-import { terminateGlobalPoseWorker, warmupMoveNetWorker } from '@/lib/poseWorkerBridge';
+import { terminateGlobalPoseWorker } from '@/lib/poseWorkerBridge';
 import PrecisionDrawInstructions, {
   hasSeenPrecisionInstructions,
   markPrecisionInstructionsSeen,
@@ -1926,14 +1926,8 @@ function Home() {
     };
   }, []);
 
-  /** Load MoveNet worker only when skeleton is first enabled. */
-  const skeletonWarmedUp = useRef(false);
-  useEffect(() => {
-    if (skeletonEnabled && !skeletonWarmedUp.current) {
-      skeletonWarmedUp.current = true;
-      warmupMoveNetWorker();
-    }
-  }, [skeletonEnabled]);
+  // Skeleton worker is created on-demand by Canvas when skeletonEnabled flips.
+  // No separate warmup needed — the Canvas PoseWorkerBridge handles init.
 
   useEffect(() => {
     if (activeTool === 'objectMultiplier') {
