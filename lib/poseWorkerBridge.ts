@@ -187,6 +187,12 @@ export class PoseWorkerBridge {
         return;
       }
 
+      // Worker exists but still loading — just wait for it
+      if (globalWorker && !globalWorkerReady) {
+        this.statusCb?.('Loading pose model…');
+        return;
+      }
+
       this.statusCb?.('Loading pose model (worker)…');
 
       if (!globalWorker) {

@@ -21,7 +21,7 @@ import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModa
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
 import { exportCroppedVideo } from '@/lib/cropExport';
 import GuidedTour from '@/components/GuidedTour';
-import { terminateGlobalPoseWorker } from '@/lib/poseWorkerBridge';
+import { terminateGlobalPoseWorker, warmupMoveNetWorker } from '@/lib/poseWorkerBridge';
 import PrecisionDrawInstructions, {
   hasSeenPrecisionInstructions,
   markPrecisionInstructionsSeen,
@@ -1933,8 +1933,9 @@ function Home() {
     };
   }, []);
 
-  // Skeleton worker is created on-demand by Canvas when skeletonEnabled flips.
-  // No separate warmup needed — the Canvas PoseWorkerBridge handles init.
+  // Preload TF.js model in background so skeleton is fast when toggled.
+  // The warmup creates the global worker; Canvas's bridge reuses it.
+  useEffect(() => { warmupMoveNetWorker(); }, []);
 
   // Auto-show data column when skeleton is enabled
   useEffect(() => {
