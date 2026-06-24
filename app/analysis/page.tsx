@@ -1941,21 +1941,43 @@ function Home() {
     if (skeletonEnabled) setDataColumnActive(true);
   }, [skeletonEnabled]);
 
-  // Live skeleton angle updates → data column
-  const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number }>) => {
-    if (!dataColumnActive) return;
+  // Live skeleton angle updates → data column (throttled to avoid render storms)
+  const liveAnglesRef = useRef<Array<{ label: string; deg: number }>>([]);
+  const angleThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ALL_ANGLE_LABELS = ['L Elbow', 'R Elbow', 'L Knee', 'R Knee'];
+
+  const flushAnglesToColumn = useCallback(() => {
+    const current = liveAnglesRef.current;
+    const angleMap = new Map(current.map(a => [a.label, a.deg]));
+    const angleItems = ALL_ANGLE_LABELS.map(label => ({
+      id: `skel-${label}`,
+      label,
+      value: angleMap.get(label) ?? 0,
+      unit: '°',
+      type: 'skeleton-angle',
+    }));
     setMeasurementColumn(prev => {
       const nonAngle = prev.filter(m => m.type !== 'skeleton-angle');
-      const angleItems = angles.map(a => ({
-        id: `skel-${a.label}`,
-        label: a.label,
-        value: a.deg,
-        unit: '°',
-        type: 'skeleton-angle',
-      }));
       return [...nonAngle, ...angleItems];
     });
-  }, [dataColumnActive]);
+  }, []);
+
+  const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number }>) => {
+    liveAnglesRef.current = angles;
+    if (!angleThrottleRef.current) {
+      angleThrottleRef.current = setTimeout(() => {
+        angleThrottleRef.current = null;
+        flushAnglesToColumn();
+      }, 500);
+    }
+  }, [flushAnglesToColumn]);
+
+  // Initialize all 4 angles when skeleton enables
+  useEffect(() => {
+    if (skeletonEnabled && dataColumnActive) {
+      flushAnglesToColumn();
+    }
+  }, [skeletonEnabled, dataColumnActive, flushAnglesToColumn]);
 
   useEffect(() => {
     if (activeTool === 'objectMultiplier') {

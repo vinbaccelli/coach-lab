@@ -5504,10 +5504,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
-      // ── Skeleton: click to lock detection on the player ─────────────────
-      const skeletonClickable = tool === 'skeleton' || skeletonWaitingForClickRef.current || skeletonEnabledRef.current;
-      if (skeletonClickable) {
-        console.log('[Skeleton click]', { tool, locked: skeletonLockedRef.current, waiting: skeletonWaitingForClickRef.current, hasBridge: !!poseBridgeRef.current, enabled: skeletonEnabledRef.current });
+      // ── Skeleton: click to set focus on the player ─────────────────────
+      // Only intercepts when skeleton IS the active tool, or explicitly
+      // waiting for a click (the "No — click player" flow).
+      if (tool === 'skeleton' || skeletonWaitingForClickRef.current) {
         const video = videoRef.current;
         if (video && video.videoWidth > 0) {
           const bounds = videoBoundsRef.current;
@@ -5518,17 +5518,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               console.log('[Skeleton focus SET]', { normX, normY, hasBridge: !!poseBridgeRef.current });
               pendingFocusRef.current = { x: normX, y: normY };
               poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
-              onProcessingStatus?.('Skeleton locked on player');
+              poseBridgeRef.current?.resetSmoothing();
+              onProcessingStatus?.('Skeleton focused on player');
               skeletonSuppressedRef.current = false;
               skeletonWaitingForClickRef.current = false;
               renderDirtyRef.current = true;
               onSkeletonFocusSet?.();
+              e.preventDefault();
+              return;
             }
           }
         }
-        // Only block event if skeleton is the active tool
-        if (tool === 'skeleton') { e.preventDefault(); return; }
-        // Otherwise fall through to let drawing tools handle the click
       }
 
       // ── Select tool: stroke / joint selection ───────────────────────────
