@@ -295,7 +295,7 @@ export default function StroMotionPanel({
         }
       : {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          width: 44, height: 44, borderRadius: 10, cursor: 'pointer',
+          width: 36, height: 36, borderRadius: 8, cursor: 'pointer',
           border: active ? '1px solid #007AFF' : '1px solid #D1D1D6',
           background: active ? '#007AFF' : '#FFFFFF',
           color: destructive ? '#FF3B30' : active ? '#FFFFFF' : '#1D1D1F',
@@ -324,11 +324,11 @@ export default function StroMotionPanel({
         ) : (
         <>
         <button type="button" disabled={disabled || !canIncrement} onClick={() => canIncrement && onFrameCountChange(STRO_MOTION_FRAME_COUNTS[frameCountIdx + 1])} style={ib()} title="More frames">
-          <Plus size={18} strokeWidth={2} />
+          <Plus size={14} strokeWidth={2} />
         </button>
-        <span style={{ fontSize: 16, fontWeight: 700, color: '#1D1D1F', textAlign: 'center', width: 44, display: 'block', lineHeight: 1.4 }}>{frameCount}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: '#1D1D1F', textAlign: 'center', width: 36, display: 'block', lineHeight: 1.4 }}>{frameCount}</span>
         <button type="button" disabled={disabled || !canDecrement} onClick={() => canDecrement && onFrameCountChange(STRO_MOTION_FRAME_COUNTS[frameCountIdx - 1])} style={ib()} title="Fewer frames">
-          <Minus size={18} strokeWidth={2} />
+          <Minus size={14} strokeWidth={2} />
         </button>
 
         <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
@@ -357,31 +357,31 @@ export default function StroMotionPanel({
 
         {onAutoSelectAll && frames.length > 0 && (
           <button type="button" disabled={!!disabled || isGenerating || isProposingFrame} onClick={onAutoSelectAll} title="Auto-detect" style={ib()}>
-            <Sparkles size={18} strokeWidth={2} />
+            <Sparkles size={14} strokeWidth={2} />
           </button>
         )}
 
         <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
 
         <button type="button" onClick={() => { const idx = OBJECT_TYPES.findIndex(o => o.id === objectType); onObjectTypeChange(OBJECT_TYPES[(idx + 1) % OBJECT_TYPES.length].id); }} title={`Object: ${objectType}`} style={ib()}>
-          <BoxSelect size={18} strokeWidth={2} />
+          <BoxSelect size={14} strokeWidth={2} />
         </button>
 
         {onBackgroundChange ? (
           <button type="button" onClick={() => onBackgroundChange(background === 'start' ? 'end' : 'start')} title={`BG: ${background}`} style={ib(background === 'end')}>
-            <Layers size={18} strokeWidth={2} />
+            <Layers size={14} strokeWidth={2} />
           </button>
         ) : null}
 
-        <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
+        <div style={{ height: 1, background: '#D1D1D6', width: 28, margin: '4px auto' }} />
 
         <button type="button" disabled={!canGenerate} onClick={onGenerate} title="Generate" style={ib()}>
-          <Check size={18} strokeWidth={2} />
+          <Check size={14} strokeWidth={2} />
         </button>
 
         {(frames.length > 0 || isPreviewReady) ? (
           <button type="button" onClick={onClear} title="Clear" style={ib(false, true)}>
-            <Trash2 size={18} strokeWidth={2} />
+            <Trash2 size={14} strokeWidth={2} />
           </button>
         ) : null}
         </>

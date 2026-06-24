@@ -4428,8 +4428,6 @@ function Home() {
         setTimeout(() => setSkeletonConfirmOpen(true), 2500);
       } else if (screen === 'home') {
         setStroMotionActive(false);
-        setBiomechActive(false);
-        setSkeletonKeepAlive(false);
       }
     },
     skeletonOverlayPaused,
