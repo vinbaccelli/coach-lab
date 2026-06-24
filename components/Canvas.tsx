@@ -200,6 +200,10 @@ export interface CanvasProps {
   onSkeletonFocusSet?: () => void;
   /** Called each frame with live skeleton angle values for the data column */
   onSkeletonAnglesUpdate?: (angles: Array<{ label: string; deg: number }>) => void;
+  /** Editable angle-arrow traces drawn on the canvas (from AI Detect) */
+  angleTraces?: Array<{ id: string; label: string; x1: number; y1: number; x2: number; y2: number; color: string }>;
+  /** Called when user drags a trace endpoint */
+  onAngleTraceDrag?: (id: string, endpoint: 'start' | 'end', x: number, y: number) => void;
   /** Called when a drawing measurement is committed (angle, ruler, etc.) */
   onMeasurementCommit?: (measurement: { type: 'angle' | 'ruler' | 'arrowAngle'; value: number; unit: string }) => void;
   /** Measurements to render in the right-side column overlay */
@@ -1554,6 +1558,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       onProcessingStatus,
       onSkeletonFocusSet,
       onSkeletonAnglesUpdate,
+      angleTraces,
+      onAngleTraceDrag,
       onMeasurementCommit,
       measurementColumnItems,
       measurementColumnPos,
@@ -1619,6 +1625,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { onMeasurementCommitRef.current = onMeasurementCommit; }, [onMeasurementCommit]);
     const onSkeletonAnglesUpdateRef = useRef(onSkeletonAnglesUpdate);
     useEffect(() => { onSkeletonAnglesUpdateRef.current = onSkeletonAnglesUpdate; }, [onSkeletonAnglesUpdate]);
+    const angleTracesRef = useRef(angleTraces);
+    useEffect(() => { angleTracesRef.current = angleTraces; renderDirtyRef.current = true; }, [angleTraces]);
+    const onAngleTraceDragRef = useRef(onAngleTraceDrag);
+    useEffect(() => { onAngleTraceDragRef.current = onAngleTraceDrag; }, [onAngleTraceDrag]);
     const onMeasurementAddRef = useRef(onMeasurementAdd);
     useEffect(() => { onMeasurementAddRef.current = onMeasurementAdd; }, [onMeasurementAdd]);
     const onMeasurementRemoveLastRef = useRef(onMeasurementRemoveLast);
@@ -3831,6 +3841,62 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
+        // ── Editable angle-arrow traces (from AI Detect) ─────────────────
+        const traces = angleTracesRef.current;
+        if (traces?.length && vW > 0 && vH > 0) {
+          const tsx = dw / vW;
+          const tsy = dh / vH;
+          ctx.save();
+          ctx.translate(dx, dy);
+          for (const tr of traces) {
+            const ax = tr.x1 * tsx, ay = tr.y1 * tsy;
+            const bx = tr.x2 * tsx, by = tr.y2 * tsy;
+
+            // Arrow line
+            ctx.strokeStyle = tr.color;
+            ctx.lineWidth = 2.5;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(bx, by);
+            ctx.stroke();
+
+            // Arrowhead
+            const angle = Math.atan2(by - ay, bx - ax);
+            const headLen = 10;
+            ctx.beginPath();
+            ctx.moveTo(bx, by);
+            ctx.lineTo(bx - headLen * Math.cos(angle - 0.4), by - headLen * Math.sin(angle - 0.4));
+            ctx.moveTo(bx, by);
+            ctx.lineTo(bx - headLen * Math.cos(angle + 0.4), by - headLen * Math.sin(angle + 0.4));
+            ctx.stroke();
+
+            // Draggable endpoints (circles)
+            for (const [px, py] of [[ax, ay], [bx, by]] as [number, number][]) {
+              ctx.fillStyle = tr.color;
+              ctx.beginPath();
+              ctx.arc(px, py, 6, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.strokeStyle = '#fff';
+              ctx.lineWidth = 1.5;
+              ctx.stroke();
+            }
+
+            // Angle label at midpoint
+            const deg = Math.round(((Math.atan2(tr.y2 - tr.y1, tr.x2 - tr.x1) * 180 / Math.PI) + 360) % 360);
+            const mx = (ax + bx) / 2, my = (ay + by) / 2;
+            ctx.font = 'bold 11px -apple-system, sans-serif';
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            const tw = ctx.measureText(`${tr.label} ${deg}°`).width;
+            ctx.fillRect(mx - tw / 2 - 4, my - 16, tw + 8, 18);
+            ctx.fillStyle = tr.color;
+            ctx.textAlign = 'center';
+            ctx.fillText(`${tr.label} ${deg}°`, mx, my - 3);
+            ctx.textAlign = 'start';
+          }
+          ctx.restore();
+        }
+
         // ── Racket auto-detect preview (green dashed = suggested region) ─
         const rsNorm = racketSuggestNormRef.current;
         if (
@@ -5393,6 +5459,41 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + mH) {
             mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
             isDraggingRef.current = true;
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+
+      // ── Angle trace endpoint drag ────────────────────────────────────
+      const tracesNow = angleTracesRef.current;
+      if (tracesNow?.length && videoBoundsRef.current) {
+        const vb = videoBoundsRef.current;
+        const tsx = vb.dw / (videoRef.current?.videoWidth || 1);
+        const tsy = vb.dh / (videoRef.current?.videoHeight || 1);
+        const hitR = 12;
+        for (const tr of tracesNow) {
+          const ax = tr.x1 * tsx + vb.dx, ay = tr.y1 * tsy + vb.dy;
+          const bx = tr.x2 * tsx + vb.dx, by = tr.y2 * tsy + vb.dy;
+          const distA = Math.sqrt((pos.x - ax) ** 2 + (pos.y - ay) ** 2);
+          const distB = Math.sqrt((pos.x - bx) ** 2 + (pos.y - by) ** 2);
+          if (distA < hitR || distB < hitR) {
+            const endpoint = distA < distB ? 'start' : 'end';
+            const traceId = tr.id;
+            isDraggingRef.current = true;
+            const onMove = (me: PointerEvent) => {
+              const mp = getPosFromPointerEvent(me as any);
+              const nx = (mp.x - vb.dx) / tsx;
+              const ny = (mp.y - vb.dy) / tsy;
+              onAngleTraceDragRef.current?.(traceId, endpoint, nx, ny);
+            };
+            const onUp = () => {
+              isDraggingRef.current = false;
+              window.removeEventListener('pointermove', onMove);
+              window.removeEventListener('pointerup', onUp);
+            };
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp);
             e.preventDefault();
             return;
           }

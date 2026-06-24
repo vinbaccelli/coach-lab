@@ -694,6 +694,11 @@ function Home() {
   const [dataColumnActive, setDataColumnActive] = useState(false);
   const [columnDeleteMode, setColumnDeleteMode] = useState(false);
   const [phasesPickerOpen, setPhasesPickerOpen] = useState(false);
+  const [angleTraces, setAngleTraces] = useState<Array<{
+    id: string; label: string;
+    x1: number; y1: number; x2: number; y2: number;
+    color: string;
+  }>>([]);
   // Data column is shown when explicitly activated OR when a frame is selected
   const dataColumnVisible = dataColumnActive || (biomechActive && biomechActiveFrameIndex !== null);
   const ballTrailEnabled = activeTool === 'ballShadow';
@@ -4421,6 +4426,19 @@ function Home() {
       if (screen === 'stromotion') {
         setStroMotionActive(true);
         setBiomechActive(false);
+        // Import phase markers as StroMotion frame times if available
+        if (biomechPhaseMarkers && biomechPhaseMarkers.length > 0) {
+          const phaseTimes = biomechPhaseMarkers.map(m => m.time).sort((a, b) => a - b);
+          const first = phaseTimes[0];
+          const last = phaseTimes[phaseTimes.length - 1];
+          if (first < last) {
+            setStroStartFrame(Math.max(0, first - 0.5));
+            setStroEndFrame(last + 0.5);
+            setStroFrameCount(phaseTimes.length as any);
+            setStroSampleTimesOverride(phaseTimes);
+            setProcessingStatus(`Imported ${phaseTimes.length} phase markers as StroMotion frames`);
+          }
+        }
         // Auto-detect: if skeleton data exists, try auto-selecting areas for all frames
         setTimeout(() => {
           const draft = stroMotionDraft;
@@ -4564,10 +4582,28 @@ function Home() {
         const racketAngle = Math.round(((Math.atan2(domW.y - domE.y, domW.x - domE.x) * 180 / Math.PI) + 360) % 360);
         items.push({ id: `ai-ra-${Date.now()}`, label: 'Racket Angle (est.)', value: racketAngle, unit: '°', type: 'arrowAngle' });
       }
+      // Build editable angle-arrow traces for key lines
+      const traces: typeof angleTraces = [];
+      if (lShoulder?.score >= 0.2 && rShoulder?.score >= 0.2) {
+        traces.push({ id: 'trace-shoulder', label: 'Shoulder', x1: lShoulder.x, y1: lShoulder.y, x2: rShoulder.x, y2: rShoulder.y, color: '#FF9500' });
+      }
+      if (lHip?.score >= 0.2 && rHip?.score >= 0.2) {
+        traces.push({ id: 'trace-hip', label: 'Hip', x1: lHip.x, y1: lHip.y, x2: rHip.x, y2: rHip.y, color: '#34C759' });
+      }
+      if (nose?.score >= 0.2 && ((lEar?.score >= 0.2) || (rEar?.score >= 0.2))) {
+        const earX = lEar?.score >= 0.2 && rEar?.score >= 0.2 ? (lEar.x + rEar.x) / 2 : (lEar?.score >= 0.2 ? lEar.x : rEar!.x);
+        const earY = lEar?.score >= 0.2 && rEar?.score >= 0.2 ? (lEar.y + rEar.y) / 2 : (lEar?.score >= 0.2 ? lEar.y : rEar!.y);
+        traces.push({ id: 'trace-head', label: 'Head Dir', x1: earX, y1: earY, x2: nose.x, y2: nose.y, color: '#AF52DE' });
+      }
+      if (domW?.score >= 0.2 && domE?.score >= 0.2) {
+        traces.push({ id: 'trace-racket', label: 'Racket', x1: domE.x, y1: domE.y, x2: domW.x, y2: domW.y, color: '#FF2D55' });
+      }
+      setAngleTraces(traces);
+
       if (items.length > 0) {
         setDataColumnActive(true);
         setMeasurementColumn(prev => [...prev, ...items]);
-        setProcessingStatus(`AI detected ${items.length} measurements`);
+        setProcessingStatus(`AI detected ${items.length} measurements — drag arrow endpoints to adjust`);
       } else {
         setProcessingStatus('No measurements detected — ensure skeleton is tracking the player');
       }
@@ -5040,6 +5076,33 @@ function Home() {
                   skeletonLocked={skeletonLocked}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); setSkeletonLocked(true); }}
                   onSkeletonAnglesUpdate={handleSkeletonAnglesUpdate}
+                  angleTraces={angleTraces}
+                  onAngleTraceDrag={(id, endpoint, x, y) => {
+                    setAngleTraces(prev => prev.map(t => {
+                      if (t.id !== id) return t;
+                      if (endpoint === 'start') return { ...t, x1: x, y1: y };
+                      return { ...t, x2: x, y2: y };
+                    }));
+                    // Update measurement column with recalculated angle
+                    setAngleTraces(prev => {
+                      const tr = prev.find(t => t.id === id);
+                      if (!tr) return prev;
+                      const deg = Math.round(((Math.atan2(tr.y2 - tr.y1, tr.x2 - tr.x1) * 180 / Math.PI) + 360) % 360);
+                      const labelMap: Record<string, string> = {
+                        'trace-shoulder': 'Shoulder (L→R)',
+                        'trace-hip': 'Hip (L→R)',
+                        'trace-head': 'Head Direction',
+                        'trace-racket': 'Racket Angle (est.)',
+                      };
+                      const mLabel = labelMap[id];
+                      if (mLabel) {
+                        setMeasurementColumn(mc => mc.map(m =>
+                          m.label === mLabel ? { ...m, value: deg } : m
+                        ));
+                      }
+                      return prev;
+                    });
+                  }}
                   measurementColumnItems={dataColumnVisible ? measurementColumn : null}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
