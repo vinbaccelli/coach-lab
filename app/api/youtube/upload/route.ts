@@ -23,7 +23,7 @@ export async function POST(req: Request) {
 
   const form = await req.formData();
   const file = form.get('video') as File | null;
-  const title = (form.get('title') as string) || 'Coach Lab analysis';
+  const title = (form.get('title') as string) || 'AngleMotion analysis';
 
   if (!file) return NextResponse.json({ error: 'Missing video file' }, { status: 400 });
 
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
       requestBody: {
         snippet: {
           title,
-          description: 'Uploaded from Coach Lab',
+          description: 'Uploaded from AngleMotion',
           categoryId: '17',
         },
         status: {

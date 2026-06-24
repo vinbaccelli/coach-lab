@@ -1,5 +1,5 @@
 /**
- * Helpers for uploading CoachLab assets to Supabase Storage.
+ * Helpers for uploading AngleMotion assets to Supabase Storage.
  */
 import { createSupabaseBrowserClient } from './browser';
 

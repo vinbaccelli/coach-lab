@@ -126,7 +126,7 @@ export default function PlayersHomeClient() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
           {players.map((p) => (
-            <Link key={p.id} href={`/players/${p.id}`} style={cardBase} className="coachlab-player-card">
+            <Link key={p.id} href={`/players/${p.id}`} style={cardBase} className="anglemotion-player-card">
               <div
                 style={{
                   width: 52,
@@ -161,7 +161,7 @@ export default function PlayersHomeClient() {
       )}
 
       <style>{`
-        .coachlab-player-card:hover {
+        .anglemotion-player-card:hover {
           transform: translateY(-2px);
           box-shadow: 0 12px 30px rgba(0,0,0,0.12);
         }

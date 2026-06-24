@@ -194,8 +194,8 @@ export default function EmbedCapturePanel({
       }}
     >
       <style>{`
-        @keyframes coachlab-spin { to { transform: rotate(360deg); } }
-        @keyframes coachlab-rec-pulse {
+        @keyframes anglemotion-spin { to { transform: rotate(360deg); } }
+        @keyframes anglemotion-rec-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.3; }
         }
@@ -213,7 +213,7 @@ export default function EmbedCapturePanel({
           {showCaptureDownloadFallback ? (
             <p style={{ margin: '0 0 14px', fontSize: 12, color: '#44403c', lineHeight: 1.55 }}>
               Having trouble with screen capture? You can download this video directly and upload it to
-              CoachLab — it only takes a moment.
+              AngleMotion — it only takes a moment.
               {captureFallbackDownloadHref ? (
                 <>
                   {' '}
@@ -279,7 +279,7 @@ export default function EmbedCapturePanel({
                 borderRadius: '50%',
                 background: '#EF4444',
                 flexShrink: 0,
-                animation: 'coachlab-rec-pulse 1.2s ease-in-out infinite',
+                animation: 'anglemotion-rec-pulse 1.2s ease-in-out infinite',
               }}
             />
             <span style={{ fontWeight: 700, fontSize: 15, color: '#1A1A1A' }}>
@@ -334,7 +334,7 @@ export default function EmbedCapturePanel({
             border: '2px solid rgba(26,26,26,0.15)',
             borderTopColor: '#1A1A1A',
             borderRadius: '50%',
-            animation: 'coachlab-spin 0.7s linear infinite',
+            animation: 'anglemotion-spin 0.7s linear infinite',
           }} />
           <span style={{ fontWeight: 600, color: '#1A1A1A' }}>
             {stepStatus || 'Processing your video\u2026'}
@@ -348,7 +348,7 @@ export default function EmbedCapturePanel({
             border: '2px solid rgba(26,26,26,0.15)',
             borderTopColor: '#1A1A1A',
             borderRadius: '50%',
-            animation: 'coachlab-spin 0.7s linear infinite',
+            animation: 'anglemotion-spin 0.7s linear infinite',
           }} />
           <span style={{ fontWeight: 600, color: '#1A1A1A' }}>Loading video\u2026</span>
         </div>

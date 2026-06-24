@@ -1,6 +1,6 @@
 {
-  "name": "Coach Lab",
-  "short_name": "Coach Lab",
+  "name": "AngleMotion",
+  "short_name": "AngleMotion",
   "description": "Sports Video Analysis - Frame by frame annotation and pose detection for tennis coaches",
   "display": "standalone",
   "scope": "/",

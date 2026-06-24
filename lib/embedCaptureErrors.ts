@@ -47,7 +47,7 @@ export function formatTabCaptureError(err: unknown): string {
     return 'This browser cannot record from a tab the way we need. Try Chrome or Edge on a desktop computer.';
   }
   if (name === 'SecurityError') {
-    return 'Recording needs a secure connection (HTTPS). Open CoachLab from https:// or try another network.';
+    return 'Recording needs a secure connection (HTTPS). Open AngleMotion from https:// or try another network.';
   }
   if (name === 'InvalidStateError') {
     return 'Recording could not start yet — wait a second, then tap Capture again. If it keeps happening, stop any other screen recording or tab-share, refresh this page, and try once more.';

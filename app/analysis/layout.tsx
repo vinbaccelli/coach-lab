@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Video analysis – CoachLab',
+  title: 'Video analysis – AngleMotion',
   description:
     'Annotate video with drawing tools, skeleton overlay, split-screen, zoom, slow motion, and recording.',
 };

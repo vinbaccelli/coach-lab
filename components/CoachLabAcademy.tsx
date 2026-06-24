@@ -28,7 +28,7 @@ const list: React.CSSProperties = {
   margin: '0 0 14px', paddingLeft: 18, fontSize: 12, lineHeight: 1.55, color: '#4B5563',
 };
 
-export default function CoachLabAcademy() {
+export default function AngleMotionAcademy() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [resources, setResources] = useState<AcademyResource[]>([]);
   const [loading, setLoading] = useState(true);

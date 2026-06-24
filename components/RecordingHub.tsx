@@ -471,7 +471,7 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           document.body,
         )}
 
-      <div data-tour-id="recording-hub" className={io ? 'coachlab-recording-hub--icon-only' : undefined} style={gridStyle}>
+      <div data-tour-id="recording-hub" className={io ? 'anglemotion-recording-hub--icon-only' : undefined} style={gridStyle}>
         {recorderError ? (
           io ? (
             <button

@@ -184,8 +184,8 @@ export default function PreciseTimeline({
   /** When true, zoom the scrub bar to the trim range (with padding) on load */
   defaultZoomToTrim?: boolean;
 }) {
-  const STORAGE_MODE_KEY = 'coachlab.timeline.fpsMode';
-  const STORAGE_CUSTOM_KEY = 'coachlab.timeline.customFps';
+  const STORAGE_MODE_KEY = 'anglemotion.timeline.fpsMode';
+  const STORAGE_CUSTOM_KEY = 'anglemotion.timeline.customFps';
 
   const [fpsMode, setFpsMode] = useState<'auto' | '30' | '60' | '120' | 'custom'>('30');
   const [customFps, setCustomFps] = useState(defaultFps);

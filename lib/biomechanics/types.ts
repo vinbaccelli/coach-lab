@@ -1,4 +1,4 @@
-/** CoachLab V1 — biomechanical analysis types (measurements only, no scores). */
+/** AngleMotion V1 — biomechanical analysis types (measurements only, no scores). */
 
 export type StrokeType =
   | 'forehand'

@@ -2024,7 +2024,7 @@ function Home() {
   const TOOLBAR_COMPACT_EXPANDED_W = 196;
   useEffect(() => {
     try {
-      if (localStorage.getItem('coachlab-toolbar-collapsed') === '1') {
+      if (localStorage.getItem('anglemotion-toolbar-collapsed') === '1') {
         setToolbarCollapsed(true);
       }
     } catch {
@@ -2036,7 +2036,7 @@ function Home() {
     setToolbarCollapsed((c) => {
       const next = !c;
       try {
-        localStorage.setItem('coachlab-toolbar-collapsed', next ? '1' : '0');
+        localStorage.setItem('anglemotion-toolbar-collapsed', next ? '1' : '0');
       } catch {
         /* noop */
       }
@@ -2209,7 +2209,7 @@ function Home() {
       await canvas?.waitForRender?.();
       return true;
     } catch (err: unknown) {
-      console.warn('[CoachLab] HTML5 play failed:', err);
+      console.warn('[AngleMotion] HTML5 play failed:', err);
       setShowTapToPlay(true);
       return false;
     }
@@ -2248,11 +2248,11 @@ function Home() {
   // the dock's padding-bottom on mobile contains that env() value.
   useEffect(() => {
     document.documentElement.style.setProperty(
-      '--coachlab-banner-bottom',
-      `calc(${toolbarBottomReservePx}px + var(--coachlab-install-banner-height, 0px))`,
+      '--anglemotion-banner-bottom',
+      `calc(${toolbarBottomReservePx}px + var(--anglemotion-install-banner-height, 0px))`,
     );
     return () => {
-      document.documentElement.style.removeProperty('--coachlab-banner-bottom');
+      document.documentElement.style.removeProperty('--anglemotion-banner-bottom');
     };
   }, [toolbarBottomReservePx]);
 
@@ -2914,7 +2914,7 @@ function Home() {
   const handleScreenshotEntireArea = useCallback(() => {
     const canvas = canvasRef.current?.getCanvas();
     if (!canvas) return;
-    downloadDataURL(canvas.toDataURL('image/png'), `coach-lab-screenshot-${Date.now()}.png`);
+    downloadDataURL(canvas.toDataURL('image/png'), `angle-motion-screenshot-${Date.now()}.png`);
   }, []);
 
   const handleScreenshotSelectArea = useCallback((region: ViewportRegion) => {
@@ -2938,7 +2938,7 @@ function Home() {
     crop.width = Math.max(1, Math.round(sw));
     crop.height = Math.max(1, Math.round(sh));
     crop.getContext('2d')?.drawImage(canvas, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
-    downloadDataURL(crop.toDataURL('image/png'), `coach-lab-screenshot-${Date.now()}.png`);
+    downloadDataURL(crop.toDataURL('image/png'), `angle-motion-screenshot-${Date.now()}.png`);
   }, []);
 
   const handleScreenRecordComplete = useCallback((blob: Blob, ext: string) => {
@@ -2959,7 +2959,7 @@ function Home() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `coach-lab-recording-${Date.now()}.${ext}`;
+    a.download = `angle-motion-recording-${Date.now()}.${ext}`;
     a.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }, []);
@@ -3013,7 +3013,7 @@ function Home() {
     const url = URL.createObjectURL(pack.blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `coach-lab-recording-${Date.now()}.${pack.ext}`;
+    a.download = `angle-motion-recording-${Date.now()}.${pack.ext}`;
     a.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
     screenRecordBlobRef.current = null;
@@ -3764,7 +3764,7 @@ function Home() {
                 setCaptureDownloadStatus('ready_webm');
               }
             } catch (convErr) {
-              console.warn('[CoachLab capture] MP4 conversion failed:', convErr);
+              console.warn('[AngleMotion capture] MP4 conversion failed:', convErr);
               if (conversionGen !== captureMp4ConversionGenRef.current) return;
               sessionMp4BlobRef.current = null;
               setCaptureDownloadStatus('ready_webm');
@@ -4031,7 +4031,7 @@ function Home() {
     const a = document.createElement('a');
     const href = URL.createObjectURL(blob);
     a.href = href;
-    a.download = `coach-lab-capture.${ext}`;
+    a.download = `angle-motion-capture.${ext}`;
     a.click();
     URL.revokeObjectURL(href);
   }, [captureDownloadStatus]);
@@ -4053,8 +4053,8 @@ function Home() {
       const ext = captureDownloadStatus === 'ready_mp4' ? 'mp4' : 'webm';
       const mime = blob.type || (ext === 'mp4' ? 'video/mp4' : 'video/webm');
       const fd = new FormData();
-      fd.append('video', new File([blob], `coach-lab-capture.${ext}`, { type: mime }));
-      fd.append('title', `Coach Lab analysis ${localDateTimeForFolder()}`);
+      fd.append('video', new File([blob], `angle-motion-capture.${ext}`, { type: mime }));
+      fd.append('title', `AngleMotion analysis ${localDateTimeForFolder()}`);
       const res = await fetch('/api/youtube/upload', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Upload failed');
@@ -4822,7 +4822,7 @@ function Home() {
     return (
       <aside
         data-tour-id="video-toolbar"
-        className="coachlab-video-toolbar"
+        className="anglemotion-video-toolbar"
         style={{
           flexShrink: 0,
           width: toolbarWidthPx,
@@ -4855,7 +4855,7 @@ function Home() {
 
   return (
     <div
-      className="coachlab-analysis-root"
+      className="anglemotion-analysis-root"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -5389,7 +5389,7 @@ function Home() {
                       <Upload size={20} /> Upload Video
                     </button>
                     <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8e8e93', textAlign: 'center', maxWidth: 320 }}>
-                      or drag and drop a video file here. See Coach Lab Academy in the Control Panel for import workflows.
+                      or drag and drop a video file here. See AngleMotion Academy in the Control Panel for import workflows.
                     </span>
                     </div>
                     )}
@@ -6049,7 +6049,7 @@ function Home() {
             {embedCaptureConsecutiveFailures >= 3 ? (
               <span style={{ fontSize: 12, color: '#57534e', lineHeight: 1.5 }}>
                 Having trouble with screen capture? You can download this video directly and upload it to
-                CoachLab — it only takes a moment.
+                AngleMotion — it only takes a moment.
                 {captureFallbackStreamUrl ? (
                   <>
                     {' '}

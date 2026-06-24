@@ -29,7 +29,7 @@ const CATEGORIES = [
   { value: 'general', label: 'General' },
   { value: 'technique', label: 'Technique' },
   { value: 'equipment', label: 'Equipment' },
-  { value: 'coachlab', label: 'CoachLab' },
+  { value: 'anglemotion', label: 'AngleMotion' },
 ];
 
 const pill: React.CSSProperties = {

@@ -45,7 +45,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
         color: '#fff',
         backdropFilter: 'blur(12px)',
       }}>
-        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>Coach Lab</h1>
+        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>AngleMotion</h1>
         <p style={{ margin: '8px 0 16px', opacity: 0.85, fontSize: 13, lineHeight: 1.5 }}>
           Sign in to open your control panel: video analysis, player database, and match tools.
         </p>

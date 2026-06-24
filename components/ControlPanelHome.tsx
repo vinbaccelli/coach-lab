@@ -39,7 +39,7 @@ export default function ControlPanelHome() {
   return (
     <div style={shell}>
       <div style={{ marginBottom: 22 }}>
-        <img src="/logo-rect.svg" alt="CoachLab.academy" style={{ height: 36, width: 'auto', marginBottom: 8 }} />
+        <img src="/logo-rect.svg" alt="anglemotion.com" style={{ height: 36, width: 'auto', marginBottom: 8 }} />
         <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 600, letterSpacing: '-0.03em', color: '#1D1D1F' }}>
           Control Panel
         </h1>
@@ -94,7 +94,7 @@ export default function ControlPanelHome() {
         Primary tools
       </h2>
       <div
-        className="coachlab-control-grid-primary"
+        className="anglemotion-control-grid-primary"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))',
@@ -102,7 +102,7 @@ export default function ControlPanelHome() {
           marginBottom: 28,
         }}
       >
-        <Link href="/analysis" style={cardBase} className="coachlab-card-hover-light">
+        <Link href="/analysis" style={cardBase} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ color: '#007AFF' }}>
               <Video size={22} strokeWidth={2.25} />
@@ -115,20 +115,20 @@ export default function ControlPanelHome() {
           </p>
         </Link>
 
-        <Link href="/academy" style={cardBase} className="coachlab-card-hover-light">
+        <Link href="/academy" style={cardBase} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ color: '#0D9488' }}>
               <GraduationCap size={22} strokeWidth={2.25} />
             </span>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>Coach Lab Academy</span>
+            <span style={{ fontSize: 16, fontWeight: 800 }}>AngleMotion Academy</span>
           </div>
           <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
             YouTube &amp; Instagram workflows, Drive organization, copyright guidelines, and the recommended
-            CoachLab setup — replace fragile URL pasting with a clear import strategy.
+            AngleMotion setup — replace fragile URL pasting with a clear import strategy.
           </p>
         </Link>
 
-        <Link href="/players" style={cardBase} className="coachlab-card-hover-light">
+        <Link href="/players" style={cardBase} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ color: '#16A34A' }}>
               <Users size={22} strokeWidth={2.25} />
@@ -146,7 +146,7 @@ export default function ControlPanelHome() {
         Match intelligence
       </h2>
       <div
-        className="coachlab-control-grid-match"
+        className="anglemotion-control-grid-match"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))',
@@ -154,7 +154,7 @@ export default function ControlPanelHome() {
           marginBottom: 28,
         }}
       >
-        <Link href="/match-report" style={cardBase} className="coachlab-card-hover-light">
+        <Link href="/match-report" style={cardBase} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ color: '#D97706' }}>
               <ClipboardList size={22} strokeWidth={2.25} />
@@ -167,7 +167,7 @@ export default function ControlPanelHome() {
           </p>
         </Link>
 
-        <Link href="/decoder" style={cardBase} className="coachlab-card-hover-light">
+        <Link href="/decoder" style={cardBase} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ color: '#7C3AED' }}>
               <Sparkles size={22} strokeWidth={2.25} />
@@ -192,17 +192,17 @@ export default function ControlPanelHome() {
           marginBottom: 24,
         }}
       >
-        <Link href="/profile" style={{ ...cardBase, minHeight: 112 }} className="coachlab-card-hover-light">
+        <Link href="/profile" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <UserCircle size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Coach profile</span>
           </div>
           <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
-            Services, pricing, payment links — your public-facing coaching identity inside CoachLab.
+            Services, pricing, payment links — your public-facing coaching identity inside AngleMotion.
           </p>
         </Link>
 
-        <Link href="/catalog" style={{ ...cardBase, minHeight: 112 }} className="coachlab-card-hover-light">
+        <Link href="/catalog" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Globe size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Public catalog</span>
@@ -212,7 +212,7 @@ export default function ControlPanelHome() {
           </p>
         </Link>
 
-        <Link href="/pricing" style={{ ...cardBase, minHeight: 112 }} className="coachlab-card-hover-light">
+        <Link href="/pricing" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <CreditCard size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Pricing &amp; Subscribe</span>
@@ -230,7 +230,7 @@ export default function ControlPanelHome() {
       {/* ── Competitor Comparison ─────────────────────────────────────── */}
       <div style={{ marginBottom: 48 }}>
         <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 800, color: '#1D1D1F', letterSpacing: -0.3 }}>
-          How CoachLab compares
+          How AngleMotion compares
         </h2>
         <p style={{ margin: '0 0 16px', fontSize: 13, color: '#6E6E73' }}>
           All-in-one coaching platform vs. single-purpose tools.
@@ -240,7 +240,7 @@ export default function ControlPanelHome() {
             <thead>
               <tr style={{ borderBottom: '2px solid #E5E5EA' }}>
                 <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#6E6E73', fontSize: 11 }}>Feature</th>
-                {['CoachLab', 'Dartfish', 'CoachNow', 'OnForm', 'VisualEyes', 'Yogger', 'SwingCoach'].map((name, i) => (
+                {['AngleMotion', 'Dartfish', 'CoachNow', 'OnForm', 'VisualEyes', 'Yogger', 'SwingCoach'].map((name, i) => (
                   <th key={name} style={{
                     padding: '12px 10px', textAlign: 'center', fontWeight: 700, fontSize: 11,
                     color: i === 0 ? '#007AFF' : '#1D1D1F',
@@ -328,7 +328,7 @@ export default function ControlPanelHome() {
             {
               name: 'David K.',
               role: 'Performance Analyst · London',
-              text: 'I\'ve tried every tennis analysis platform out there. CoachLab is the only one that puts all the tools — video, metrics, match stats, reports — in one place that actually works on mobile.',
+              text: 'I\'ve tried every tennis analysis platform out there. AngleMotion is the only one that puts all the tools — video, metrics, match stats, reports — in one place that actually works on mobile.',
               stars: 5,
             },
             {
@@ -359,7 +359,7 @@ export default function ControlPanelHome() {
 
         <div style={{ textAlign: 'center', marginTop: 28 }}>
           <a
-            href="mailto:vin@coachlab.academy?subject=CoachLab Feedback"
+            href="mailto:vin@anglemotion.com?subject=AngleMotion Feedback"
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
               fontSize: 13, fontWeight: 600, color: '#007AFF',
@@ -372,14 +372,14 @@ export default function ControlPanelHome() {
       </div>
 
       <style>{`
-        .coachlab-card-hover-light:hover {
+        .anglemotion-card-hover-light:hover {
           border-color: rgba(0, 122, 255, 0.35);
           box-shadow: none;
           transform: translateY(-1px);
         }
         @media (max-width: 640px) {
-          .coachlab-control-grid-primary,
-          .coachlab-control-grid-match {
+          .anglemotion-control-grid-primary,
+          .anglemotion-control-grid-match {
             grid-template-columns: 1fr !important;
           }
         }

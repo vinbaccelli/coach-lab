@@ -122,7 +122,7 @@ async function cancellableSleep(ms: number, getCancelled?: () => boolean): Promi
 }
 
 function fail(step: string, raw: unknown, friendly: string): { ok: false; message: string } {
-  console.error(`[CoachLab capture] FAILED at "${step}":`, raw);
+  console.error(`[AngleMotion capture] FAILED at "${step}":`, raw);
   return { ok: false, message: friendly };
 }
 
@@ -630,7 +630,7 @@ export async function runEmbedTabCaptureFlow(args: {
     try {
       onPostStreamReady?.();
     } catch (e) {
-      console.warn('[CoachLab capture] onPostStreamReady:', e);
+      console.warn('[AngleMotion capture] onPostStreamReady:', e);
     }
 
     for (let n = 3; n >= 1; n--) {
@@ -769,7 +769,7 @@ export async function runEmbedTabCaptureFlow(args: {
           try { onRecordingStarted?.(); } catch { /* noop */ }
           onStepStatus?.('Recording — do not switch tabs');
         } catch (startErr) {
-          console.error('[CoachLab capture] first recorder.startCapture() failed:', startErr);
+          console.error('[AngleMotion capture] first recorder.startCapture() failed:', startErr);
           // Tear down the first recorder before swapping in a new one to avoid
           // leaving two MediaRecorder instances attached to the same stream.
           try {

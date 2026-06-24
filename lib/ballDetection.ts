@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Ball Detection module for Coach Lab.
+ * Ball Detection module for AngleMotion.
  *
  * Real-time approach: detect ball on live video frames during playback.
  * Uses HSL color analysis to locate a tennis ball (bright yellow-green).

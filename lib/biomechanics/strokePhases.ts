@@ -1,6 +1,6 @@
 import type { PhaseDefinition, StrokeType } from '@/lib/biomechanics/types';
 
-/** Phase structure per preset analysis type — matches CoachLab eBook. */
+/** Phase structure per preset analysis type — matches AngleMotion eBook. */
 export const STROKE_PHASE_DEFINITIONS: Record<Exclude<StrokeType, 'custom'>, PhaseDefinition[]> = {
   // Part I: Spin Groundstrokes (G1–G8)
   forehand: [

@@ -7,8 +7,8 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
 
-const LS_IOS_KEY     = 'coachlab-pwa-ios-dismissed';
-const LS_ANDROID_KEY = 'coachlab-pwa-android-dismissed';
+const LS_IOS_KEY     = 'anglemotion-pwa-ios-dismissed';
+const LS_ANDROID_KEY = 'anglemotion-pwa-android-dismissed';
 
 export default function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -39,7 +39,7 @@ export default function InstallPrompt() {
   useEffect(() => {
     const el = bannerRef.current;
     if (!el || (!showAndroid && !showIOS)) {
-      document.documentElement.style.removeProperty('--coachlab-install-banner-height');
+      document.documentElement.style.removeProperty('--anglemotion-install-banner-height');
       return;
     }
 
@@ -47,7 +47,7 @@ export default function InstallPrompt() {
       const h = el.getBoundingClientRect().height;
       const gap = 12;
       document.documentElement.style.setProperty(
-        '--coachlab-install-banner-height',
+        '--anglemotion-install-banner-height',
         `${Math.ceil(h + gap)}px`,
       );
     };
@@ -59,7 +59,7 @@ export default function InstallPrompt() {
     return () => {
       ro?.disconnect();
       window.removeEventListener('resize', apply);
-      document.documentElement.style.removeProperty('--coachlab-install-banner-height');
+      document.documentElement.style.removeProperty('--anglemotion-install-banner-height');
     };
   }, [showAndroid, showIOS]);
 
@@ -96,7 +96,7 @@ export default function InstallPrompt() {
         zIndex: 40,
         width: 'calc(100% - 32px)',
         maxWidth: '384px',
-        bottom: 'calc(var(--coachlab-banner-bottom, 100px) + env(safe-area-inset-bottom, 0px))',
+        bottom: 'calc(var(--anglemotion-banner-bottom, 100px) + env(safe-area-inset-bottom, 0px))',
       }}
     >
       <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200 p-4 flex items-start gap-3">
@@ -108,7 +108,7 @@ export default function InstallPrompt() {
           {showAndroid ? (
             <>
               <p className="text-sm font-semibold text-gray-900 leading-snug">
-                Install Coach Lab
+                Install AngleMotion
               </p>
               <p className="text-xs text-gray-500 mt-0.5">
                 Add to your home screen for the best experience.
@@ -128,7 +128,7 @@ export default function InstallPrompt() {
               </p>
               <p className="text-xs text-gray-500 mt-0.5">
                 Tap <span className="font-medium">Share</span> ↑ then{' '}
-                <span className="font-medium">&quot;Add to Home Screen&quot;</span> to install Coach Lab.
+                <span className="font-medium">&quot;Add to Home Screen&quot;</span> to install AngleMotion.
               </p>
             </>
           )}

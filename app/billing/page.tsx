@@ -5,7 +5,7 @@ export default function BillingPage() {
     <WorkspaceChrome pageLabel="Subscription">
       <div style={{ padding: '20px 16px 40px', maxWidth: 640, margin: '0 auto' }}>
         <p style={{ margin: '0 0 16px', fontSize: 14, lineHeight: 1.55, opacity: 0.85 }}>
-          CoachLab is planned at <strong>€15/month</strong> or <strong>€120/year</strong> via Stripe. Checkout, customer portal, and webhook-driven access will connect here.
+          AngleMotion is planned at <strong>€15/month</strong> or <strong>€120/year</strong> via Stripe. Checkout, customer portal, and webhook-driven access will connect here.
         </p>
         <div
           style={{

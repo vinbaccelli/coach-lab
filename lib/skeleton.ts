@@ -1,5 +1,5 @@
 /**
- * Skeleton overlay module for Coach Lab.
+ * Skeleton overlay module for AngleMotion.
  *
  * Joints are stored in normalized coordinates (0–1 relative to canvas width/height).
  * Rendering is done on a plain 2D canvas, independent of the Fabric.js drawing layer.

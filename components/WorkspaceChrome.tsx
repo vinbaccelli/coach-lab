@@ -104,7 +104,7 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
           >
             <LayoutGrid size={18} color="#fff" />
           </span>
-          CoachLab
+          AngleMotion
         </Link>
 
         {pageLabel ? (
@@ -173,7 +173,7 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
           overflowY: 'auto',
           WebkitOverflowScrolling: 'touch',
           paddingBottom:
-            'calc(var(--coachlab-install-banner-height, 0px) + env(safe-area-inset-bottom, 0px))',
+            'calc(var(--anglemotion-install-banner-height, 0px) + env(safe-area-inset-bottom, 0px))',
         }}
       >
         {children}

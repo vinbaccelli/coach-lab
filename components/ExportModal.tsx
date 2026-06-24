@@ -67,7 +67,7 @@ export default function ExportModal({
 
   const downloadScreenshot = useCallback(() => {
     if (!screenshotUrl) return;
-    downloadDataURL(screenshotUrl, `coach-lab-screenshot-${Date.now()}.png`);
+    downloadDataURL(screenshotUrl, `angle-motion-screenshot-${Date.now()}.png`);
   }, [screenshotUrl]);
 
   const recordClip = useCallback(async () => {
@@ -180,7 +180,7 @@ export default function ExportModal({
   const downloadClip = useCallback(() => {
     if (clipBlob) {
       const ext = clipBlob.type.includes('mp4') ? 'mp4' : 'webm';
-      downloadBlob(clipBlob, `coach-lab-clip-${Date.now()}.${ext}`);
+      downloadBlob(clipBlob, `angle-motion-clip-${Date.now()}.${ext}`);
     }
   }, [clipBlob]);
 

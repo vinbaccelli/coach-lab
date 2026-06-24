@@ -13,7 +13,7 @@ const features = [
   'Screenshot save to player docs',
   'Manual Match Report → Google Docs',
   'AI Match Decoder (SwingVision)',
-  'CoachLab Academy (PDFs + guides)',
+  'AngleMotion Academy (PDFs + guides)',
   'Coach public profile page',
   'Player database with folders',
   'Recording Hub (screen + webcam + mic)',
@@ -59,7 +59,7 @@ export default function PricingPage() {
         position: 'sticky', top: 0, zIndex: 20,
       }}>
         <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
-          <img src="/logo-square.svg" alt="CoachLab" style={{ width: 28, height: 28, borderRadius: 6 }} />
+          <img src="/logo-square.svg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
           <span style={{ fontSize: 14, fontWeight: 800, color: '#fff' }}>
             Coach<span style={{ color: '#FF3B30' }}>Lab</span>.ai
           </span>
@@ -74,7 +74,7 @@ export default function PricingPage() {
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '60px 20px 80px', textAlign: 'center' }}>
         <h1 style={{ margin: '0 0 8px', fontSize: 36, fontWeight: 900, letterSpacing: -0.5 }}>
-          CoachLab Pro
+          AngleMotion Pro
         </h1>
         <p style={{ margin: '0 0 40px', fontSize: 16, color: 'rgba(255,255,255,0.6)' }}>
           The complete video analysis platform for tennis coaches
@@ -154,7 +154,7 @@ export default function PricingPage() {
 
         <div style={{ marginTop: 40 }}>
           <Link href="/" style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)', textDecoration: 'none' }}>
-            Powered by CoachLab.academy
+            Powered by anglemotion.com
           </Link>
         </div>
       </div>

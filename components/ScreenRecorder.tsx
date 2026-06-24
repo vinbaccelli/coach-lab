@@ -182,7 +182,7 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
         onRecordingComplete(outBlob, outExt);
       } else {
         const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const suggestedName = `coach-lab-${ts}.${outExt}`;
+        const suggestedName = `angle-motion-${ts}.${outExt}`;
         const handle = saveHandleRef.current;
         if (handle && typeof handle.createWritable === 'function') {
           try {
@@ -534,7 +534,7 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
           const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
           // We prefer MP4. If conversion fails we may still write WebM, but naming MP4 is ok—fallback download uses correct ext.
           (window as any).showSaveFilePicker({
-            suggestedName: `coach-lab-${ts}.mp4`,
+            suggestedName: `angle-motion-${ts}.mp4`,
             types: [
               { description: 'MP4 Video', accept: { 'video/mp4': ['.mp4'] } },
               { description: 'WebM Video', accept: { 'video/webm': ['.webm'] } },

@@ -7,14 +7,14 @@ import PersistentWebcamOverlay from '../components/PersistentWebcamOverlay';
 import FloatingRecordingIndicator from '../components/FloatingRecordingIndicator';
 
 export const metadata: Metadata = {
-  title: 'CoachLab – Coaching intelligence platform',
+  title: 'AngleMotion – Coaching intelligence platform',
   description:
     'Control panel for tennis and sports coaching: video analysis, player database, match reports, and AI-assisted match intelligence — with YouTube-backed video and Google sign-in.',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'Coach Lab',
+    title: 'AngleMotion',
   },
   icons: {
     icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],

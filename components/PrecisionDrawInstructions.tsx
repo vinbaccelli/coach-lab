@@ -2,7 +2,7 @@
 
 import React from 'react';
 
-const STORAGE_KEY = 'coachlab.precisionDraw.instructionsSeen';
+const STORAGE_KEY = 'anglemotion.precisionDraw.instructionsSeen';
 
 export function hasSeenPrecisionInstructions(): boolean {
   if (typeof window === 'undefined') return true;

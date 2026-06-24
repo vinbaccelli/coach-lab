@@ -1,6 +1,6 @@
 'use client';
 
-/** MoveNet / BlazePose-style indices used across Coach Lab. */
+/** MoveNet / BlazePose-style indices used across AngleMotion. */
 export const POSE_IDX = {
   LEFT_SHOULDER: 5,
   RIGHT_SHOULDER: 6,

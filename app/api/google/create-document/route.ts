@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   const docs = google.docs({ version: 'v1', auth: oauth2 });
   const drive = google.drive({ version: 'v3', auth: oauth2 });
 
-  const docTitle = title?.trim() || 'Coach Lab — Match report';
+  const docTitle = title?.trim() || 'AngleMotion — Match report';
 
   try {
     const created = await docs.documents.create({

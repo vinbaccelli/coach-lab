@@ -29,7 +29,7 @@ const ALL_STEPS: ReadonlyArray<TourStep> = [
     target: 'tour-upload',
     title: 'Upload video',
     description:
-      'Import MP4 files from your device. Coach Lab Academy (Control Panel) explains YouTube, Instagram, and Drive workflows.',
+      'Import MP4 files from your device. AngleMotion Academy (Control Panel) explains YouTube, Instagram, and Drive workflows.',
     placement: 'bottom',
   },
   {
@@ -129,7 +129,7 @@ const SPOTLIGHT_PADDING = 8;
 const SPOTLIGHT_RADIUS = 12;
 const TOOLTIP_GAP = 14;
 
-const LS_KEY = 'coachlab-tour-seen';
+const LS_KEY = 'anglemotion-tour-seen';
 const AUTO_SHOW_DELAY_MS = 2_000;
 
 interface Rect {
@@ -351,8 +351,8 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
 
   useEffect(() => {
     const onExternalOpen = () => openTourFromHelp();
-    window.addEventListener('coachlab-open-guided-tour', onExternalOpen);
-    return () => window.removeEventListener('coachlab-open-guided-tour', onExternalOpen);
+    window.addEventListener('anglemotion-open-guided-tour', onExternalOpen);
+    return () => window.removeEventListener('anglemotion-open-guided-tour', onExternalOpen);
   }, [openTourFromHelp]);
 
   const next = useCallback(() => {
@@ -408,7 +408,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
   }, [targetRect]);
 
   const helpBottom =
-    'calc(var(--coachlab-banner-bottom, 100px) + var(--coachlab-install-banner-height, 0px) + 12px + env(safe-area-inset-bottom, 0px))';
+    'calc(var(--anglemotion-banner-bottom, 100px) + var(--anglemotion-install-banner-height, 0px) + 12px + env(safe-area-inset-bottom, 0px))';
 
   if (!mounted) return null;
 
@@ -447,7 +447,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
         fontWeight: 700,
         fontFamily: 'inherit',
         animation: !seenBefore && !welcomeOpen && !tourOpen
-          ? 'coachlab-tour-pulse 1.6s ease-in-out infinite'
+          ? 'anglemotion-tour-pulse 1.6s ease-in-out infinite'
           : 'none',
         WebkitTapHighlightColor: 'transparent',
       }}
@@ -472,7 +472,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
       <div
         role="dialog"
         aria-modal="true"
-        aria-labelledby="coachlab-welcome-title"
+        aria-labelledby="anglemotion-welcome-title"
         onClick={(e) => e.stopPropagation()}
         style={{
           position: 'fixed',
@@ -489,8 +489,8 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
           fontFamily: 'inherit',
         }}
       >
-        <h2 id="coachlab-welcome-title" style={{ margin: '0 0 10px', fontSize: 22, fontWeight: 800, lineHeight: 1.25 }}>
-          Welcome to CoachLab
+        <h2 id="anglemotion-welcome-title" style={{ margin: '0 0 10px', fontSize: 22, fontWeight: 800, lineHeight: 1.25 }}>
+          Welcome to AngleMotion
         </h2>
         <p style={{ margin: '0 0 20px', fontSize: 15, lineHeight: 1.5, color: '#4B5563' }}>
           Let us show you around.
@@ -710,7 +710,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
 
   return createPortal(
     <>
-      <style>{`@keyframes coachlab-tour-pulse {
+      <style>{`@keyframes anglemotion-tour-pulse {
         0%, 100% { box-shadow: 0 6px 24px rgba(0,0,0,0.28), 0 0 0 0 rgba(53,103,154,0.55); }
         50%      { box-shadow: 0 6px 24px rgba(0,0,0,0.28), 0 0 0 14px rgba(53,103,154,0); }
       }`}</style>

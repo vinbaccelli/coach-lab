@@ -1,4 +1,4 @@
-const CACHE_NAME = 'coach-lab-v1';
+const CACHE_NAME = 'angle-motion-v1';
 const OFFLINE_URL = '/offline.html';
 
 const PRECACHE_ASSETS = [

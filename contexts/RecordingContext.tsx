@@ -206,7 +206,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
   const downloadRecording = useCallback(() => {
     if (previewBlob) {
       const ext = getSupportedMimeType().includes('mp4') ? 'mp4' : 'webm';
-      downloadBlob(previewBlob, `coach-lab-recording.${ext}`);
+      downloadBlob(previewBlob, `angle-motion-recording.${ext}`);
     }
   }, [previewBlob]);
 

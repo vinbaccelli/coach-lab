@@ -1,5 +1,5 @@
 /**
- * Ball trail module for Coach Lab.
+ * Ball trail module for AngleMotion.
  *
  * Trail points are stored in normalized coordinates (0–1) with a video timestamp.
  * The visible trail is determined by `currentTime` — only points within the last

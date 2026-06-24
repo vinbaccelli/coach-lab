@@ -48,14 +48,14 @@ const PROFILES: Record<string, CoachProfileData> = {
   vinbaccelli: {
     slug: 'vinbaccelli',
     name: 'Vin Baccelli',
-    tagline: 'Tennis Coach · CoachLab Founder · High Performance Analyst',
+    tagline: 'Tennis Coach · AngleMotion Founder · High Performance Analyst',
     bio: 'Professional tennis coach and data analyst. I combine on-court training with advanced video analysis and SwingVision metrics to help players of all levels improve faster. Based in Miami — coaching online worldwide.',
     accentColor: '#007AFF',
     services: [
       {
         id: 'video-analysis',
         title: 'Video Analysis Session',
-        description: 'Full match or practice video breakdown using CoachLab. Receive a detailed PDF report with annotated screenshots, metrics, and a personalised training plan.',
+        description: 'Full match or practice video breakdown using AngleMotion. Receive a detailed PDF report with annotated screenshots, metrics, and a personalised training plan.',
         price: '$79',
         ctaLabel: 'Book Video Analysis',
         ctaUrl: 'https://buy.stripe.com/video-analysis',
@@ -78,7 +78,7 @@ const PROFILES: Record<string, CoachProfileData> = {
       },
     ],
     links: [
-      { id: 'coachlab', label: 'Try CoachLab Free', url: 'https://coachlab.academy/analysis', icon: 'globe' },
+      { id: 'anglemotion', label: 'Try AngleMotion Free', url: 'https://anglemotion.com/analysis', icon: 'globe' },
       { id: 'youtube', label: 'YouTube — Technique Videos', url: 'https://youtube.com/@vinbaccelli', icon: 'youtube' },
       { id: 'instagram', label: 'Instagram', url: 'https://instagram.com/vinbaccelli', icon: 'instagram' },
       { id: 'website', label: 'vinbaccelli.com', url: 'https://vinbaccelli.com', icon: 'external' },
@@ -87,7 +87,7 @@ const PROFILES: Record<string, CoachProfileData> = {
       instagram: 'https://instagram.com/vinbaccelli',
       youtube: 'https://youtube.com/@vinbaccelli',
       website: 'https://vinbaccelli.com',
-      email: 'vin@coachlab.academy',
+      email: 'vin@anglemotion.com',
     },
   },
 };
@@ -149,7 +149,7 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
       color: '#fff',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     }}>
-      {/* CoachLab nav bar */}
+      {/* AngleMotion nav bar */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '12px 20px', borderBottom: '1px solid rgba(255,255,255,0.07)',
@@ -306,10 +306,10 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
           </div>
         </div>
 
-        {/* CoachLab footer attribution */}
+        {/* AngleMotion footer attribution */}
         <div style={{ textAlign: 'center', marginTop: 32 }}>
           <Link href="/" style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)', textDecoration: 'none' }}>
-            Powered by CoachLab
+            Powered by AngleMotion
           </Link>
         </div>
       </div>

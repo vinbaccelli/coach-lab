@@ -6824,7 +6824,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           data-tour-id="tour-zoom"
           style={{
             position: 'absolute',
-            bottom: 'calc(var(--coachlab-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))',
+            bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))',
             right: 'calc(12px + env(safe-area-inset-right, 0px))',
             display: 'flex',
             flexDirection: 'column',
@@ -6847,7 +6847,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 } catch {
                   /* noop */
                 }
-                window.dispatchEvent(new CustomEvent('coachlab-open-guided-tour'));
+                window.dispatchEvent(new CustomEvent('anglemotion-open-guided-tour'));
               }}
               style={{
                 ...zoomControlBtnStyle,

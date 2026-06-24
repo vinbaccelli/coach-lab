@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Pose Detection module for Coach Lab.
+ * Pose Detection module for AngleMotion.
  *
  * Real-time approach: run estimatePoses on the live video element during
  * normal playback, not pre-processing. This avoids frame-by-frame seeking

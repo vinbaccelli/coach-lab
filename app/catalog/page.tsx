@@ -5,7 +5,7 @@ export default function PublicCatalogPage() {
     <WorkspaceChrome pageLabel="Public catalog">
       <div style={{ padding: '20px 16px 40px', maxWidth: 800, margin: '0 auto' }}>
         <p style={{ margin: '0 0 16px', fontSize: 14, lineHeight: 1.55, opacity: 0.85 }}>
-          Optional discoverability: showcase your programs, surface reviews from Trustpilot and Google, and link Instagram, YouTube, and your website. Coaches keep direct relationships and pricing — CoachLab does not take a cut.
+          Optional discoverability: showcase your programs, surface reviews from Trustpilot and Google, and link Instagram, YouTube, and your website. Coaches keep direct relationships and pricing — AngleMotion does not take a cut.
         </p>
         <div
           style={{

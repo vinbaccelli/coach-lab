@@ -404,7 +404,7 @@ const shell: React.CSSProperties = {
   background: 'transparent',
   borderRadius: 12,
   overflow: 'hidden',
-  animation: 'coachlabToolbarScreenIn 200ms ease-out',
+  animation: 'anglemotionToolbarScreenIn 200ms ease-out',
 };
 
 const scrollArea: React.CSSProperties = {
@@ -425,7 +425,7 @@ function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties
   if (mobileChrome) {
     base = {
       ...base,
-      paddingBottom: 'calc(8px + var(--coachlab-install-banner-height, 0px))',
+      paddingBottom: 'calc(8px + var(--anglemotion-install-banner-height, 0px))',
     };
   }
   return base;
@@ -442,7 +442,7 @@ function ToolbarScrollArea({
 }) {
   return (
     <div
-      className={io ? 'coachlab-toolbar-scroll coachlab-toolbar-scroll--icon-only' : 'coachlab-toolbar-scroll'}
+      className={io ? 'anglemotion-toolbar-scroll anglemotion-toolbar-scroll--icon-only' : 'anglemotion-toolbar-scroll'}
       style={scrollAreaFor(io, mobileChrome)}
     >
       {children}
@@ -626,12 +626,12 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onNavigate?.(x);
   }, [onNavigate]);
   useEffect(() => {
-    const id = 'coachlab-toolbar-keyframes';
+    const id = 'anglemotion-toolbar-keyframes';
     if (typeof document === 'undefined' || document.getElementById(id)) return;
     const el = document.createElement('style');
     el.id = id;
     el.textContent =
-      '@keyframes coachlabToolbarScreenIn{from{opacity:.92;transform:translateX(8px)}to{opacity:1;transform:none}}';
+      '@keyframes anglemotionToolbarScreenIn{from{opacity:.92;transform:translateX(8px)}to{opacity:1;transform:none}}';
     document.head.appendChild(el);
   }, []);
   const resetNav = useCallback(() => setNavStack(['home']), []);
@@ -659,7 +659,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       style={{
         flexShrink: 0,
         paddingBottom: mobileChrome
-          ? 'calc(4px + env(safe-area-inset-bottom, 0px) + var(--coachlab-install-banner-height, 0px))'
+          ? 'calc(4px + env(safe-area-inset-bottom, 0px) + var(--anglemotion-install-banner-height, 0px))'
           : undefined,
       }}
     >
@@ -740,8 +740,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
       {/* Logo */}
       <div style={{ display: 'flex', justifyContent: io ? 'center' : 'center', padding: io ? '2px 0' : '6px 8px 10px' }}>
         {io
-          ? <img src="/logo-square.svg" alt="CoachLab" style={{ width: 36, height: 36, borderRadius: 7 }} />
-          : <img src="/logo-rect.svg" alt="CoachLab.academy" style={{ width: '100%', maxWidth: 200, height: 'auto' }} />
+          ? <img src="/logo-square.svg" alt="AngleMotion" style={{ width: 36, height: 36, borderRadius: 7 }} />
+          : <img src="/logo-rect.svg" alt="anglemotion.com" style={{ width: '100%', maxWidth: 200, height: 'auto' }} />
         }
       </div>
       {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (

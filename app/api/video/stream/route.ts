@@ -19,7 +19,7 @@ export async function GET(req: Request) {
   const upstream = await fetch(url, {
     // Some hosts require a UA; we keep it simple.
     headers: {
-      'User-Agent': 'CoachLab/1.0 (+Next.js proxy)',
+      'User-Agent': 'AngleMotion/1.0 (+Next.js proxy)',
       ...(range ? { Range: range } : {}),
     },
     redirect: 'follow',
