@@ -28,14 +28,8 @@ function attachWorkerResultRouting() {
   };
 }
 
-export function warmupMoveNetWorker() {
-  if (typeof window === 'undefined') return;
-  if (globalWorker && globalWorkerReady) return;
-  const b = new PoseWorkerBridge({});
-  b.onReady(() => {
-    b.dispose();
-  });
-}
+/** @deprecated — bridge handles worker lifecycle internally */
+export function warmupMoveNetWorker() {}
 
 export function terminateGlobalPoseWorker() {
   if (globalInitTimeout) {
@@ -177,8 +171,9 @@ export class PoseWorkerBridge {
 
   private tryWorker() {
     try {
+      // Fast path: worker already loaded from a previous session
       if (globalWorker && globalWorkerReady) {
-        this.statusCb?.('Skeleton ready (worker)');
+        this.statusCb?.('Skeleton ready');
         this.worker = globalWorker;
         this.mode = 'worker';
         attachWorkerResultRouting();
@@ -187,86 +182,62 @@ export class PoseWorkerBridge {
         return;
       }
 
-      // Worker exists but still loading — just wait for it
+      // Kill any stale worker that never finished loading
       if (globalWorker && !globalWorkerReady) {
-        this.statusCb?.('Loading pose model…');
-        return;
+        terminateGlobalPoseWorker();
       }
 
-      this.statusCb?.('Loading pose model (worker)…');
+      this.statusCb?.('Downloading skeleton model…');
 
-      if (!globalWorker) {
-        const w = new Worker(new URL('./poseWorker.ts', import.meta.url));
-        globalWorker = w;
-        globalWorkerReady = false;
+      const w = new Worker(new URL('./poseWorker.ts', import.meta.url));
+      globalWorker = w;
+      globalWorkerReady = false;
 
-        globalInitTimeout = setTimeout(() => {
-          console.warn('[PoseWorkerBridge] Worker init timed out — falling back to main thread');
-          terminateGlobalPoseWorker();
-          if (activeBridge === this && !this.disposed) this.initMainThread();
-        }, 8_000);
+      // 30s timeout — model download can be slow on first load
+      globalInitTimeout = setTimeout(() => {
+        console.warn('[PoseWorkerBridge] Worker timed out after 30s — falling back to main thread');
+        this.statusCb?.('Worker timed out — using fallback…');
+        terminateGlobalPoseWorker();
+        if (!this.disposed) this.initMainThread();
+      }, 30_000);
 
-        const progressInterval = setInterval(() => {
-          if (globalWorkerReady || !globalWorker) {
-            clearInterval(progressInterval);
-            return;
-          }
-          if (activeBridge && !activeBridge.disposed) {
-            activeBridge.statusCb?.('Downloading pose model…');
-          }
-        }, 1500);
-
-        w.onmessage = (e: MessageEvent) => {
-          const { data } = e;
-          if (data.type === 'ready') {
-            if (globalInitTimeout) {
-              clearTimeout(globalInitTimeout);
-              globalInitTimeout = null;
-            }
-            globalWorkerReady = true;
+      w.onmessage = (e: MessageEvent) => {
+        const { data } = e;
+        if (data.type === 'ready') {
+          if (globalInitTimeout) { clearTimeout(globalInitTimeout); globalInitTimeout = null; }
+          globalWorkerReady = true;
+          // Always notify the CURRENT active bridge (which may differ from `this`)
+          const target = activeBridge ?? this;
+          if (!target.disposed) {
+            target.worker = globalWorker;
+            target.mode = 'worker';
             attachWorkerResultRouting();
-            const br = activeBridge;
-            if (br && !br.disposed) {
-              br.mode = 'worker';
-              br.worker = globalWorker;
-              br.statusCb?.('Skeleton ready (worker)');
-              br.readyCb?.();
-              br.readyCb = null;
-            }
-            if (process.env.NODE_ENV !== 'production') {
-              console.log('[PoseWorkerBridge] Worker mode active (shared)');
-            }
-          } else if (data.type === 'status') {
-            const br = activeBridge;
-            if (br && !br.disposed) {
-              br.statusCb?.(data.message);
-            }
-          } else if (data.type === 'error') {
-            if (globalInitTimeout) {
-              clearTimeout(globalInitTimeout);
-              globalInitTimeout = null;
-            }
-            console.warn('[PoseWorkerBridge] Worker error:', data.message, '— falling back');
-            terminateGlobalPoseWorker();
-            if (activeBridge === this && !this.disposed) this.initMainThread();
+            target.statusCb?.('Skeleton ready');
+            target.readyCb?.();
+            target.readyCb = null;
           }
-        };
-
-        w.onerror = () => {
-          if (globalInitTimeout) {
-            clearTimeout(globalInitTimeout);
-            globalInitTimeout = null;
-          }
-          console.warn('[PoseWorkerBridge] Worker onerror — falling back');
+          console.log('[PoseWorkerBridge] Worker ready');
+        } else if (data.type === 'status') {
+          const target = activeBridge ?? this;
+          if (!target.disposed) target.statusCb?.(data.message);
+        } else if (data.type === 'error') {
+          if (globalInitTimeout) { clearTimeout(globalInitTimeout); globalInitTimeout = null; }
+          console.error('[PoseWorkerBridge] Worker error:', data.message);
+          this.statusCb?.('Skeleton failed — using fallback…');
           terminateGlobalPoseWorker();
-          if (activeBridge === this && !this.disposed) this.initMainThread();
-        };
+          if (!this.disposed) this.initMainThread();
+        }
+      };
 
-        w.postMessage({ type: 'init' });
-      }
+      w.onerror = () => {
+        if (globalInitTimeout) { clearTimeout(globalInitTimeout); globalInitTimeout = null; }
+        console.warn('[PoseWorkerBridge] Worker onerror — falling back');
+        this.statusCb?.('Skeleton failed — using fallback…');
+        terminateGlobalPoseWorker();
+        if (!this.disposed) this.initMainThread();
+      };
 
-      this.worker = globalWorker;
-      this.mode = 'initializing';
+      w.postMessage({ type: 'init' });
     } catch {
       console.warn('[PoseWorkerBridge] Worker creation failed — falling back');
       this.initMainThread();
