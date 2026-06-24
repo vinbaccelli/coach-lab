@@ -1724,6 +1724,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // When true, skeleton overlay + detection is temporarily suppressed (e.g. after Clear All / Undo).
     const skeletonSuppressedRef = useRef(false);
     const poseBridgeRef = useRef<PoseWorkerBridge | null>(null);
+    const pendingFocusRef = useRef<{ x: number; y: number } | null>(null);
     const renderDirtyRef = useRef(true);
     const renderWaitersRef = useRef<Array<() => void>>([]);
     const lastRenderVideoTimeRef = useRef(-1);
@@ -2803,6 +2804,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       bridge.onReady(() => {
         onProcessingStatus?.('Skeleton ready — press play');
+        if (pendingFocusRef.current) {
+          bridge.setFocusPoint(pendingFocusRef.current);
+        }
       });
 
       return () => {
@@ -5501,7 +5505,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // ── Skeleton: click to lock detection on the player ─────────────────
-      const skeletonClickable = !skeletonLockedRef.current && (tool === 'skeleton' || skeletonWaitingForClickRef.current || skeletonEnabledRef.current);
+      const skeletonClickable = tool === 'skeleton' || skeletonWaitingForClickRef.current || skeletonEnabledRef.current;
       if (skeletonClickable) {
         console.log('[Skeleton click]', { tool, locked: skeletonLockedRef.current, waiting: skeletonWaitingForClickRef.current, hasBridge: !!poseBridgeRef.current, enabled: skeletonEnabledRef.current });
         const video = videoRef.current;
@@ -5512,6 +5516,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const normY = (pos.y - bounds.dy) / bounds.dh;
             if (normX >= 0 && normX <= 1 && normY >= 0 && normY <= 1) {
               console.log('[Skeleton focus SET]', { normX, normY, hasBridge: !!poseBridgeRef.current });
+              pendingFocusRef.current = { x: normX, y: normY };
               poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
               onProcessingStatus?.('Skeleton locked on player');
               skeletonSuppressedRef.current = false;
