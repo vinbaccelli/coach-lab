@@ -34,6 +34,7 @@ import { useStroMotion } from '@/hooks/useStroMotion';
 import { useAIMetrics } from '@/hooks/useAIMetrics';
 const StroMotionPanel = React.lazy(() => import('@/components/StroMotionPanel'));
 const BiomechanicsPanel = React.lazy(() => import('@/components/BiomechanicsPanel'));
+const PhasesPicker = React.lazy(() => import('@/components/PhasesPicker'));
 const FrameMeasurementEditor = React.lazy(() => import('@/components/aiMetrics/FrameMeasurementEditor'));
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
@@ -570,7 +571,7 @@ function Home() {
   const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
   const biomechFrameDrawingsRef = useRef<Record<number, string>>({});
   const biomechFrameMeasurementsRef = useRef<Record<number, typeof measurementColumn>>({});
-  const [measurementColumnPos, setMeasurementColumnPos] = useState<{ x: number; y: number }>({ x: 0.82, y: 0.02 });
+  const [measurementColumnPos, setMeasurementColumnPos] = useState<{ x: number; y: number }>({ x: 0.68, y: 0.02 });
   const biomechHtml5Only = stroMotionHtml5Only;
   /** Per-frame captured screenshots: frameIndex → data URL */
   const [biomechCapturedImages, setBiomechCapturedImages] = useState<Record<number, string>>({});
@@ -692,6 +693,7 @@ function Home() {
   const [pendingMeasurementName, setPendingMeasurementName] = useState('');
   const [dataColumnActive, setDataColumnActive] = useState(false);
   const [columnDeleteMode, setColumnDeleteMode] = useState(false);
+  const [phasesPickerOpen, setPhasesPickerOpen] = useState(false);
   // Data column is shown when explicitly activated OR when a frame is selected
   const dataColumnVisible = dataColumnActive || (biomechActive && biomechActiveFrameIndex !== null);
   const ballTrailEnabled = activeTool === 'ballShadow';
@@ -1928,6 +1930,27 @@ function Home() {
 
   // Skeleton worker is created on-demand by Canvas when skeletonEnabled flips.
   // No separate warmup needed — the Canvas PoseWorkerBridge handles init.
+
+  // Auto-show data column when skeleton is enabled
+  useEffect(() => {
+    if (skeletonEnabled) setDataColumnActive(true);
+  }, [skeletonEnabled]);
+
+  // Live skeleton angle updates → data column
+  const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number }>) => {
+    if (!dataColumnActive) return;
+    setMeasurementColumn(prev => {
+      const nonAngle = prev.filter(m => m.type !== 'skeleton-angle');
+      const angleItems = angles.map(a => ({
+        id: `skel-${a.label}`,
+        label: a.label,
+        value: a.deg,
+        unit: '°',
+        type: 'skeleton-angle',
+      }));
+      return [...nonAngle, ...angleItems];
+    });
+  }, [dataColumnActive]);
 
   useEffect(() => {
     if (activeTool === 'objectMultiplier') {
@@ -4483,6 +4506,7 @@ function Home() {
     },
     measurementColumnItems:          measurementColumn,
     onDeleteMeasurement:             (id: string) => setMeasurementColumn(prev => prev.filter(m => m.id !== id)),
+    onOpenPhases:                    () => setPhasesPickerOpen(true),
     onAutoDetectMeasurements:        () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
@@ -5015,6 +5039,7 @@ function Home() {
                   skeletonKeepAlive={skeletonKeepAlive}
                   skeletonLocked={skeletonLocked}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); setSkeletonLocked(true); }}
+                  onSkeletonAnglesUpdate={handleSkeletonAnglesUpdate}
                   measurementColumnItems={dataColumnVisible ? measurementColumn : null}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
@@ -6830,6 +6855,23 @@ function Home() {
         )}
 
       <GuidedTour suppressFloatingHelp />
+
+      {phasesPickerOpen && (
+        <React.Suspense fallback={null}>
+          <PhasesPicker
+            open={phasesPickerOpen}
+            onClose={() => setPhasesPickerOpen(false)}
+            onSelect={(preset) => {
+              setBiomechActive(true);
+              if (preset.type === 'preset') {
+                setBiomechStrokeType(preset.strokeType);
+              } else {
+                setBiomechFrameCount(preset.count as any);
+              }
+            }}
+          />
+        </React.Suspense>
+      )}
     </div>
   );
 }

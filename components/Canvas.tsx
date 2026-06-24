@@ -198,6 +198,8 @@ export interface CanvasProps {
   skeletonDrawEnabled?: boolean;
   onProcessingStatus?: (msg: string | null) => void;
   onSkeletonFocusSet?: () => void;
+  /** Called each frame with live skeleton angle values for the data column */
+  onSkeletonAnglesUpdate?: (angles: Array<{ label: string; deg: number }>) => void;
   /** Called when a drawing measurement is committed (angle, ruler, etc.) */
   onMeasurementCommit?: (measurement: { type: 'angle' | 'ruler' | 'arrowAngle'; value: number; unit: string }) => void;
   /** Measurements to render in the right-side column overlay */
@@ -1551,6 +1553,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       ballTrailEnabled = false,
       onProcessingStatus,
       onSkeletonFocusSet,
+      onSkeletonAnglesUpdate,
       onMeasurementCommit,
       measurementColumnItems,
       measurementColumnPos,
@@ -1614,6 +1617,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonLockedRef.current = skeletonLocked; }, [skeletonLocked]);
     const onMeasurementCommitRef = useRef(onMeasurementCommit);
     useEffect(() => { onMeasurementCommitRef.current = onMeasurementCommit; }, [onMeasurementCommit]);
+    const onSkeletonAnglesUpdateRef = useRef(onSkeletonAnglesUpdate);
+    useEffect(() => { onSkeletonAnglesUpdateRef.current = onSkeletonAnglesUpdate; }, [onSkeletonAnglesUpdate]);
     const onMeasurementAddRef = useRef(onMeasurementAdd);
     useEffect(() => { onMeasurementAddRef.current = onMeasurementAdd; }, [onMeasurementAdd]);
     const onMeasurementRemoveLastRef = useRef(onMeasurementRemoveLast);
@@ -3795,11 +3800,33 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.save();
             ctx.translate(dx, dy);
             drawSkeletonOverlay(ctx, latestKeypointsRef.current, vW, vH, dw, dh, {
-              showAngles: skeletonShowAnglesRef.current,
+              showAngles: false,
               showHeadLine: skeletonShowHeadLineRef.current,
               classicColors: skeletonClassicColorsRef.current,
               parts: skeletonPartsRef.current,
             });
+            if (onSkeletonAnglesUpdateRef.current) {
+              const kps = latestKeypointsRef.current;
+              const scoreMin = 0.2;
+              const angleDefs = [
+                { indices: [7, 5, 9], label: 'L Elbow' },
+                { indices: [8, 6, 10], label: 'R Elbow' },
+                { indices: [13, 11, 15], label: 'L Knee' },
+                { indices: [14, 12, 16], label: 'R Knee' },
+              ];
+              const angles: Array<{ label: string; deg: number }> = [];
+              for (const { indices: [vi, ai, bi], label } of angleDefs) {
+                const v = kps[vi], a = kps[ai], b = kps[bi];
+                if (!v || !a || !b || v.score < scoreMin || a.score < scoreMin || b.score < scoreMin) continue;
+                const v1x = a.x - v.x, v1y = a.y - v.y;
+                const v2x = b.x - v.x, v2y = b.y - v.y;
+                const mag = Math.sqrt(v1x * v1x + v1y * v1y) * Math.sqrt(v2x * v2x + v2y * v2y);
+                if (mag < 1) continue;
+                const deg = Math.round(Math.acos(Math.min(1, Math.max(-1, (v1x * v2x + v1y * v2y) / mag))) * 180 / Math.PI);
+                angles.push({ label, deg });
+              }
+              onSkeletonAnglesUpdateRef.current(angles);
+            }
             ctx.restore();
           }
         }

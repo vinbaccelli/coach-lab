@@ -36,6 +36,7 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
+  Target,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 
@@ -141,6 +142,8 @@ interface ToolPaletteProps {
   onDataColumnToggle?: () => void;
   /** AI auto-detect measurements from skeleton */
   onAutoDetectMeasurements?: () => void;
+  /** Open phases picker to add timeline phase divisions */
+  onOpenPhases?: () => void;
   /** Undo last measurement from data column */
   onUndoMeasurement?: () => void;
   /** Clear all measurements from data column */
@@ -581,6 +584,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     dataColumnActive = false,
     onDataColumnToggle,
     onAutoDetectMeasurements,
+    onOpenPhases,
     onUndoMeasurement,
     onClearMeasurements,
     onAddNote,
@@ -1393,6 +1397,11 @@ export default function ToolPalette(props: ToolPaletteProps) {
           {/* AI auto-detect from skeleton */}
           {onAutoDetectMeasurements && (
             <Row k="m-aidetect" icon={<Sparkles size={metricIcon} />} tooltip="Auto-detect joint angles, hip-shoulder differential, and foot direction from skeleton" label="AI Detect Angles" onPress={onAutoDetectMeasurements} />
+          )}
+
+          {/* Phases — timeline divisions */}
+          {onOpenPhases && (
+            <Row k="m-phases" icon={<Target size={metricIcon} />} tooltip="Add phase divisions on the timeline (stroke steps from eBook)" label="Phases" onPress={onOpenPhases} />
           )}
 
           {!io && (
