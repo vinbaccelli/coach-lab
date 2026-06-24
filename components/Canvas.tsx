@@ -5505,9 +5505,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // ── Skeleton: click to set focus on the player ─────────────────────
-      // Only intercepts when skeleton IS the active tool, or explicitly
-      // waiting for a click (the "No — click player" flow).
-      if (tool === 'skeleton' || skeletonWaitingForClickRef.current) {
+      // Intercepts when: skeleton is the active tool, explicitly waiting
+      // for a click, or skeleton is enabled and the user is on Select tool
+      // (not drawing). Drawing tools take priority over skeleton focus.
+      const skeletonCanFocus = tool === 'skeleton' || skeletonWaitingForClickRef.current || (skeletonEnabledRef.current && tool === 'select');
+      if (skeletonCanFocus) {
         const video = videoRef.current;
         if (video && video.videoWidth > 0) {
           const bounds = videoBoundsRef.current;
