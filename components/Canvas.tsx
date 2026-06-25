@@ -125,6 +125,8 @@ export interface CanvasHandle {
   clearAll: () => void;
   resetSkeleton: () => void;
   resetBallTrail: () => void;
+  getOverlayAdjustments: () => Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>;
+  setOverlayAdjustments: (adj: Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>) => void;
   getCanvas: () => HTMLCanvasElement | null;
   /** Backward-compat alias for ExportModal */
   getCompositeCanvas: () => HTMLCanvasElement | null;
@@ -2283,6 +2285,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderDirtyRef.current = true;
         onProcessingStatus?.(null);
       },
+      getOverlayAdjustments: () => ({ ...overlayAdjustmentsRef.current }),
+      setOverlayAdjustments: (adj) => { overlayAdjustmentsRef.current = adj; renderDirtyRef.current = true; },
       resetBallTrail: () => {
         cachedBallRef.current = [];
         ballProcessingRef.current = false;
@@ -5491,27 +5495,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // ── Measurement column drag ──────────────────────────────────────
-      const mcItemsNow = measurementColumnRef.current;
-      if (mcItemsNow !== null) {
-        const canvas = canvasRef.current;
-        if (canvas) {
-          const cW = canvas.width, cH = canvas.height;
-          const mW = 150, mLineH = 22, mH = mcItemsNow.length > 0 ? mcItemsNow.length * mLineH + 28 : 48;
-          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
-          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
-
-          // Drag the column
-          if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + mH) {
-            mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
-            isDraggingRef.current = true;
-            e.preventDefault();
-            return;
-          }
-        }
-      }
-
-      // ── Measurement overlay endpoint drag ─────────────────────────────
+      // ── Measurement overlay endpoint drag (BEFORE column drag) ────────
       if (showMeasurementOverlaysRef.current && latestKeypointsRef.current?.length && videoBoundsRef.current) {
         const kps = latestKeypointsRef.current;
         const vb = videoBoundsRef.current;
@@ -5575,6 +5559,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             };
             window.addEventListener('pointermove', onMove);
             window.addEventListener('pointerup', onUp);
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+
+      // ── Measurement column drag ──────────────────────────────────────
+      const mcItemsNow = measurementColumnRef.current;
+      if (mcItemsNow !== null) {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const cW = canvas.width, cH = canvas.height;
+          const mW = 150, mLineH = 22, mH = mcItemsNow.length > 0 ? mcItemsNow.length * mLineH + 28 : 48;
+          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
+          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
+          if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + mH) {
+            mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
+            isDraggingRef.current = true;
             e.preventDefault();
             return;
           }

@@ -695,6 +695,13 @@ function Home() {
   const [columnDeleteMode, setColumnDeleteMode] = useState(false);
   const [phasesPickerOpen, setPhasesPickerOpen] = useState(false);
   const [showMeasurementOverlays, setShowMeasurementOverlays] = useState(false);
+
+  // Per-phase scoped state storage
+  const phaseColumnsRef = useRef<Record<string, Array<{ id: string; label: string; value: number; unit: string; type: string }>>>({});
+  const phaseOverlaysRef = useRef<Record<string, boolean>>({});
+  const phaseOverlayAdjRef = useRef<Record<string, Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>>>({});
+  const phaseDrawingsRef = useRef<Record<string, string>>({});
+
   // Data column is shown when explicitly activated OR when a frame is selected
   const dataColumnVisible = dataColumnActive || (biomechActive && biomechActiveFrameIndex !== null);
   const ballTrailEnabled = activeTool === 'ballShadow';
@@ -1937,6 +1944,16 @@ function Home() {
   useEffect(() => {
     if (skeletonEnabled) setDataColumnActive(true);
   }, [skeletonEnabled]);
+
+  // Auto-save measurement column to active phase
+  useEffect(() => {
+    if (biomechSelectedPhaseId) {
+      const nonAngle = measurementColumn.filter(m => m.type !== 'skeleton-angle');
+      if (nonAngle.length > 0) {
+        phaseColumnsRef.current[biomechSelectedPhaseId] = nonAngle;
+      }
+    }
+  }, [measurementColumn, biomechSelectedPhaseId]);
 
   // Live skeleton angle updates → data column (throttled to avoid render storms)
   const liveAnglesRef = useRef<Array<{ label: string; deg: number }>>([]);
@@ -4202,7 +4219,37 @@ function Home() {
         onCurrentTime: setBiomechVideoTime,
         phaseMarkers: biomechPhaseMarkers,
         selectedPhaseMarkerId: biomechSelectedPhaseId,
-        onPhaseMarkerSelect: (id: string) => setBiomechSelectedPhaseId(id),
+        onPhaseMarkerSelect: (id: string) => {
+          // Save current phase's state
+          const prevId = biomechSelectedPhaseId;
+          if (prevId) {
+            phaseColumnsRef.current[prevId] = [...measurementColumn.filter(m => m.type !== 'skeleton-angle')];
+            phaseOverlaysRef.current[prevId] = showMeasurementOverlays;
+            phaseOverlayAdjRef.current[prevId] = canvasRef.current?.getOverlayAdjustments?.() ?? {};
+            phaseDrawingsRef.current[prevId] = canvasRef.current?.exportStrokes?.() ?? '';
+          }
+          // Restore target phase's state
+          const savedCol = phaseColumnsRef.current[id];
+          setMeasurementColumn(prev => {
+            const liveAngles = prev.filter(m => m.type === 'skeleton-angle');
+            return [...liveAngles, ...(savedCol ?? [])];
+          });
+          setShowMeasurementOverlays(phaseOverlaysRef.current[id] ?? false);
+          canvasRef.current?.setOverlayAdjustments?.(phaseOverlayAdjRef.current[id] ?? {});
+          const savedDrawings = phaseDrawingsRef.current[id];
+          if (savedDrawings) {
+            canvasRef.current?.importStrokes?.(savedDrawings);
+          } else {
+            canvasRef.current?.clearAll?.();
+          }
+          // Seek video to phase time
+          const marker = biomechPhaseMarkers?.find(m => m.id === id);
+          if (marker && videoRef.current) {
+            videoRef.current.currentTime = marker.time;
+            videoRef.current.pause();
+          }
+          setBiomechSelectedPhaseId(id);
+        },
         onPhaseMarkerChange: (id: string, time: number) => {
           setBiomechPhaseMarkers(prev => prev?.map(m => m.id === id ? { ...m, time } : m) ?? null);
         },
@@ -4527,7 +4574,18 @@ function Home() {
         return next;
       });
     },
-    onUndoMeasurement:               () => setMeasurementColumn(prev => prev.slice(0, -1)),
+    onUndoMeasurement:               () => {
+      setMeasurementColumn(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.type === 'arrowAngle' || last?.type === 'angle' || last?.type === 'differential' || last?.type === 'ruler') {
+          const aiTypes = new Set(['angle', 'arrowAngle', 'differential', 'ruler']);
+          const nonAi = prev.filter(m => !aiTypes.has(m.type));
+          setShowMeasurementOverlays(false);
+          return nonAi;
+        }
+        return prev.slice(0, -1);
+      });
+    },
     onClearMeasurements:             () => { setMeasurementColumn([]); setProcessingStatus('Data column cleared'); },
     onAddNote:                       () => {
       const label = prompt('Label (left side):');
