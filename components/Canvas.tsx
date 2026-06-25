@@ -250,6 +250,7 @@ export interface CanvasProps {
   stroMotionShowSkeleton?: boolean;
   skeletonShowAngles?: boolean;
   skeletonShowHeadLine?: boolean;
+  skeletonShowFootLine?: boolean;
   skeletonClassicColors?: boolean;
   skeletonParts?: SkeletonPartVisibility;
   ballSampleMode?: boolean;
@@ -382,7 +383,7 @@ function drawSkeletonOverlay(
   const classicColors = opts?.classicColors !== false;
   const showFootLine  = opts?.showFootLine !== false;
   const parts: SkeletonPartVisibility = opts?.parts ?? {};
-  const jointRadius = Math.max(3, Math.min(8, Math.round(Math.min(canvasW, canvasH) / 150)));
+  const jointRadius = Math.max(1, Math.min(3, Math.round(Math.min(canvasW, canvasH) / 375)));
   const scoreThreshold = 0.2;
 
   // Limb bones: solid yellow lines (arms + legs)
@@ -406,7 +407,7 @@ function drawSkeletonOverlay(
 
   // Draw limb + structural bones in solid yellow (or blue monochrome in alternative mode)
   ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
-  ctx.lineWidth = classicColors ? 1.5 : 1.5;
+  ctx.lineWidth = 1;
 
   for (const [a, b] of [...LIMB_BONES, ...STRUCT_BONES]) {
     if (!isJointVisible(a, parts, keypoints[a]?.name) || !isJointVisible(b, parts, keypoints[b]?.name)) continue;
@@ -454,7 +455,7 @@ function drawSkeletonOverlay(
       const headY = Math.min(...ys);
       ctx.save();
       ctx.strokeStyle = classicColors ? '#39FF14' : '#007AFF';
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1;
       ctx.setLineDash([8, 6]);
       ctx.beginPath();
       ctx.moveTo(0, headY);
@@ -481,7 +482,7 @@ function drawSkeletonOverlay(
       const ext = dist * 0.4;
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
-      ctx.lineWidth = classicColors ? 2 : 1.5;
+      ctx.lineWidth = 1;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
@@ -1586,6 +1587,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionShowSkeleton = false,
       skeletonShowAngles = true,
       skeletonShowHeadLine = false,
+      skeletonShowFootLine = true,
       skeletonClassicColors = true,
       skeletonParts,
       ballSampleMode = false,
@@ -1775,6 +1777,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const stroMotionShowSkeletonRef = useRef(stroMotionShowSkeleton);
     const skeletonShowAnglesRef   = useRef(skeletonShowAngles);
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
+    const skeletonShowFootLineRef = useRef(skeletonShowFootLine);
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
     const skeletonPartsRef = useRef(skeletonParts);
     const ballSampleModeRef = useRef(ballSampleMode);
@@ -1957,6 +1960,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { stroMotionShowSkeletonRef.current = stroMotionShowSkeleton; renderDirtyRef.current = true; }, [stroMotionShowSkeleton]);
     useEffect(() => { skeletonShowAnglesRef.current   = skeletonShowAngles; },   [skeletonShowAngles]);
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; },  [skeletonShowHeadLine]);
+    useEffect(() => { skeletonShowFootLineRef.current  = skeletonShowFootLine; },  [skeletonShowFootLine]);
     useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; }, [skeletonClassicColors]);
     useEffect(() => { skeletonPartsRef.current = skeletonParts; }, [skeletonParts]);
     useEffect(() => { ballSampleModeRef.current = ballSampleMode; }, [ballSampleMode]);
@@ -3817,6 +3821,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             drawSkeletonOverlay(ctx, latestKeypointsRef.current, vW, vH, dw, dh, {
               showAngles: false,
               showHeadLine: skeletonShowHeadLineRef.current,
+              showFootLine: skeletonShowFootLineRef.current,
               classicColors: skeletonClassicColorsRef.current,
               parts: skeletonPartsRef.current,
             });
@@ -5565,16 +5570,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
-      // ── Measurement column drag ──────────────────────────────────────
+      // ── Measurement column drag (header only — top 24px) ─────────────
       const mcItemsNow = measurementColumnRef.current;
       if (mcItemsNow !== null) {
         const canvas = canvasRef.current;
         if (canvas) {
           const cW = canvas.width, cH = canvas.height;
-          const mW = 150, mLineH = 22, mH = mcItemsNow.length > 0 ? mcItemsNow.length * mLineH + 28 : 48;
+          const mW = 150;
           const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
-          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
-          if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + mH) {
+          const mY = Math.min(mcPosRef.current.y * cH, cH - 48 - 4);
+          const headerH = 24;
+          if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + headerH) {
             mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
             isDraggingRef.current = true;
             e.preventDefault();

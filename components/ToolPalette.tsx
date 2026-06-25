@@ -72,6 +72,8 @@ interface ToolPaletteProps {
   onSkeletonShowAnglesChange?: (v: boolean) => void;
   skeletonShowHeadLine?: boolean;
   onSkeletonShowHeadLineChange?: (v: boolean) => void;
+  skeletonShowFootLine?: boolean;
+  onSkeletonShowFootLineChange?: (v: boolean) => void;
   skeletonClassicColors?: boolean;
   onSkeletonClassicColorsChange?: (v: boolean) => void;
   skeletonShowRightArm?: boolean;
@@ -536,6 +538,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onSkeletonShowAnglesChange,
     skeletonShowHeadLine,
     onSkeletonShowHeadLineChange,
+    skeletonShowFootLine,
+    onSkeletonShowFootLineChange,
     skeletonClassicColors,
     onSkeletonClassicColorsChange,
     skeletonShowRightArm,
@@ -1261,6 +1265,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
             )}
           {onSkeletonShowHeadLineChange !== undefined &&
             chk('sh', 'Head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange, <Minus size={18} strokeWidth={2} />)}
+          {onSkeletonShowFootLineChange !== undefined &&
+            chk('sf', 'Foot line', skeletonShowFootLine ?? true, onSkeletonShowFootLineChange, <Minus size={18} strokeWidth={2} />)}
           {/* Body parts — each on its own row */}
           {onSkeletonShowRightArmChange !== undefined &&
             chk('ra', 'Right arm — show/hide shoulder, elbow, wrist', skeletonShowRightArm ?? true, onSkeletonShowRightArmChange, <RightArmIcon size={18} />)}

@@ -317,6 +317,7 @@ function Home() {
   const [outlineEraserSize, setOutlineEraserSize] = useState(0);
   const [skeletonShowAngles, setSkeletonShowAngles] = useState(true);
   const [skeletonShowHeadLine, setSkeletonShowHeadLine] = useState(false);
+  const [skeletonShowFootLine, setSkeletonShowFootLine] = useState(true);
   const [skeletonClassicColors, setSkeletonClassicColors] = useState(true);
   const [skeletonShowRightArm, setSkeletonShowRightArm] = useState(true);
   const [skeletonShowLeftArm, setSkeletonShowLeftArm] = useState(true);
@@ -4475,6 +4476,8 @@ function Home() {
     onSkeletonShowAnglesChange:      setSkeletonShowAngles,
     skeletonShowHeadLine,
     onSkeletonShowHeadLineChange:    setSkeletonShowHeadLine,
+    skeletonShowFootLine,
+    onSkeletonShowFootLineChange:    setSkeletonShowFootLine,
     skeletonClassicColors,
     onSkeletonClassicColorsChange:   setSkeletonClassicColors,
     skeletonShowRightArm,
@@ -5175,6 +5178,7 @@ function Home() {
                   stroMotionShowSkeleton={stroShowSkeleton}
                   skeletonShowAngles={skeletonShowAngles}
                   skeletonShowHeadLine={skeletonShowHeadLine}
+                  skeletonShowFootLine={skeletonShowFootLine}
                   skeletonClassicColors={skeletonClassicColors}
                   skeletonParts={skeletonParts}
                   ballSampleMode={ballSampleMode}
