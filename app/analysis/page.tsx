@@ -4549,11 +4549,7 @@ function Home() {
     onAutoDetectMeasurements:        () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
-      // Ensure we have a frame to attach measurements to
-      if (!biomechActive) { setBiomechFrameCount(1 as AIMetricsFrameCount); setBiomechActive(true); }
-      if (biomechActiveFrameIndex === null) {
-        addBiomechFrame(videoRef.current?.currentTime ?? 0);
-        setBiomechActiveFrameIndex(0);
+      if (false) { // phases are only created via Phases button, never from AI Detect
       }
       const latest = skFrames[skFrames.length - 1];
       const kps = latest?.keypoints;

@@ -404,7 +404,7 @@ function drawSkeletonOverlay(
 
   // Draw limb + structural bones in solid yellow (or blue monochrome in alternative mode)
   ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
-  ctx.lineWidth = classicColors ? 2.5 : 2;
+  ctx.lineWidth = classicColors ? 1.5 : 1.5;
 
   for (const [a, b] of [...LIMB_BONES, ...STRUCT_BONES]) {
     if (!isJointVisible(a, parts, keypoints[a]?.name) || !isJointVisible(b, parts, keypoints[b]?.name)) continue;
@@ -3866,14 +3866,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const bx = (x2 + (adj?.dx2 ?? 0)) * msx;
             const by = (y2 + (adj?.dy2 ?? 0)) * msy;
             ctx.strokeStyle = color;
-            ctx.lineWidth = 2.5;
+            ctx.lineWidth = 1.5;
             ctx.setLineDash([]);
             ctx.beginPath();
             ctx.moveTo(ax, ay);
             ctx.lineTo(bx, by);
             ctx.stroke();
             const angle = Math.atan2(by - ay, bx - ax);
-            const hl = 10;
+            const hl = 8;
             ctx.beginPath();
             ctx.moveTo(bx, by);
             ctx.lineTo(bx - hl * Math.cos(angle - 0.4), by - hl * Math.sin(angle - 0.4));
@@ -5517,12 +5517,28 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const vb = videoBoundsRef.current;
         const osx = vb.dw / (videoRef.current?.videoWidth || 1);
         const osy = vb.dh / (videoRef.current?.videoHeight || 1);
-        const hitR = 14;
+        const hitR = 18;
         const overlayEndpoints: Array<{ id: string; x1: number; y1: number; x2: number; y2: number }> = [];
         const sm = 0.2;
         const lS = kps[5], rS = kps[6], lH = kps[11], rH = kps[12];
+        const nose = kps[0], lEar = kps[3], rEar = kps[4];
+        const lK2 = kps[13], lA2 = kps[15], rK2 = kps[14], rA2 = kps[16];
+        const lW2 = kps[9], rW2 = kps[10], lE2 = kps[7], rE2 = kps[8];
         if (lS?.score >= sm && rS?.score >= sm) overlayEndpoints.push({ id: 'shoulder', x1: lS.x, y1: lS.y, x2: rS.x, y2: rS.y });
         if (lH?.score >= sm && rH?.score >= sm) overlayEndpoints.push({ id: 'hip', x1: lH.x, y1: lH.y, x2: rH.x, y2: rH.y });
+        if (nose?.score >= sm && ((lEar?.score >= sm) || (rEar?.score >= sm))) {
+          const earX = lEar?.score >= sm && rEar?.score >= sm ? (lEar.x + rEar.x) / 2 : (lEar?.score >= sm ? lEar.x : rEar!.x);
+          const earY = lEar?.score >= sm && rEar?.score >= sm ? (lEar.y + rEar.y) / 2 : (lEar?.score >= sm ? lEar.y : rEar!.y);
+          overlayEndpoints.push({ id: 'head', x1: earX, y1: earY, x2: nose.x, y2: nose.y });
+        }
+        if (lK2?.score >= sm && lA2?.score >= sm) overlayEndpoints.push({ id: 'lfoot', x1: lA2.x, y1: lA2.y, x2: lA2.x + (lA2.x - lK2.x) * 0.4, y2: lA2.y + (lA2.y - lK2.y) * 0.4 });
+        if (rK2?.score >= sm && rA2?.score >= sm) overlayEndpoints.push({ id: 'rfoot', x1: rA2.x, y1: rA2.y, x2: rA2.x + (rA2.x - rK2.x) * 0.4, y2: rA2.y + (rA2.y - rK2.y) * 0.4 });
+        if (lS?.score >= sm && rS?.score >= sm) {
+          const bc = (lS.x + rS.x) / 2;
+          const dW = (rW2?.score >= sm && lW2?.score >= sm) ? (Math.abs(rW2.x - bc) > Math.abs(lW2.x - bc) ? rW2 : lW2) : (rW2?.score >= sm ? rW2 : lW2);
+          const dE = (rW2?.score >= sm && lW2?.score >= sm) ? (Math.abs(rW2.x - bc) > Math.abs(lW2.x - bc) ? rE2 : lE2) : (rW2?.score >= sm ? rE2 : lE2);
+          if (dW?.score >= sm && dE?.score >= sm) overlayEndpoints.push({ id: 'racket', x1: dW.x, y1: dW.y, x2: dW.x + (dW.x - dE.x) * 0.8, y2: dW.y + (dW.y - dE.y) * 0.8 });
+        }
 
         for (const ep of overlayEndpoints) {
           const adj = overlayAdjustmentsRef.current[ep.id];
