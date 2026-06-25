@@ -1614,6 +1614,7 @@ function Home() {
     biomechFrameMeasurementsRef.current = {};
     setMeasurementColumn([]);
     setDataColumnActive(false);
+    setShowMeasurementOverlays(false);
     setSkeletonKeepAlive(false);
     setSkeletonLocked(false);
     setBiomechReportModalOpen(false);
@@ -6906,6 +6907,7 @@ function Home() {
               if (preset.type === 'preset') {
                 setBiomechStrokeType(preset.strokeType);
               } else {
+                setBiomechStrokeType('custom');
                 setBiomechFrameCount(preset.count as any);
               }
             }}

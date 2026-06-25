@@ -3855,7 +3855,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
           const drawArrow = (
             x1: number, y1: number, x2: number, y2: number,
-            color: string, label: string,
+            color: string,
           ) => {
             const ax = x1 * msx, ay = y1 * msy;
             const bx = x2 * msx, by = y2 * msy;
@@ -3874,29 +3874,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.moveTo(bx, by);
             ctx.lineTo(bx - hl * Math.cos(angle + 0.4), by - hl * Math.sin(angle + 0.4));
             ctx.stroke();
-            const deg = Math.round(((angle * 180 / Math.PI) + 360) % 360);
-            const mx = (ax + bx) / 2, my = (ay + by) / 2;
-            ctx.font = 'bold 11px -apple-system, sans-serif';
-            const txt = `${label} ${deg}°`;
-            const tw = ctx.measureText(txt).width;
-            ctx.fillStyle = 'rgba(0,0,0,0.7)';
-            ctx.fillRect(mx - tw / 2 - 4, my - 16, tw + 8, 18);
-            ctx.fillStyle = color;
-            ctx.textAlign = 'center';
-            ctx.fillText(txt, mx, my - 3);
-            ctx.textAlign = 'start';
           };
 
           // Shoulder line (L→R) — orange
           const lS = kps[5], rS = kps[6];
           if (lS?.score >= scoreMin && rS?.score >= scoreMin) {
-            drawArrow(lS.x, lS.y, rS.x, rS.y, '#FF9500', 'Shoulder');
+            drawArrow(lS.x, lS.y, rS.x, rS.y, '#FF9500');
           }
 
           // Hip line (L→R) — green
           const lH = kps[11], rH = kps[12];
           if (lH?.score >= scoreMin && rH?.score >= scoreMin) {
-            drawArrow(lH.x, lH.y, rH.x, rH.y, '#34C759', 'Hip');
+            drawArrow(lH.x, lH.y, rH.x, rH.y, '#34C759');
           }
 
           // Left foot direction (knee→ankle extended) — cyan
@@ -3904,7 +3893,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (lK?.score >= scoreMin && lA?.score >= scoreMin) {
             const dx2 = lA.x + (lA.x - lK.x) * 0.4;
             const dy2 = lA.y + (lA.y - lK.y) * 0.4;
-            drawArrow(lA.x, lA.y, dx2, dy2, '#00C7BE', 'L Foot');
+            drawArrow(lA.x, lA.y, dx2, dy2, '#00C7BE');
           }
 
           // Right foot direction (knee→ankle extended) — cyan
@@ -3912,7 +3901,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (rK?.score >= scoreMin && rA?.score >= scoreMin) {
             const dx2 = rA.x + (rA.x - rK.x) * 0.4;
             const dy2 = rA.y + (rA.y - rK.y) * 0.4;
-            drawArrow(rA.x, rA.y, dx2, dy2, '#00C7BE', 'R Foot');
+            drawArrow(rA.x, rA.y, dx2, dy2, '#00C7BE');
           }
 
           // Racket angle (dominant wrist → extended past wrist) — pink
@@ -3924,7 +3913,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             if (domW?.score >= scoreMin && domE?.score >= scoreMin) {
               const tipX = domW.x + (domW.x - domE.x) * 0.8;
               const tipY = domW.y + (domW.y - domE.y) * 0.8;
-              drawArrow(domW.x, domW.y, tipX, tipY, '#FF2D55', 'Racket');
+              drawArrow(domW.x, domW.y, tipX, tipY, '#FF2D55');
             }
           }
 

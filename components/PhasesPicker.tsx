@@ -61,30 +61,10 @@ export default function PhasesPicker({ open, onClose, onSelect }: PhasesPickerPr
           Choose a stroke preset or custom count. Phase markers will appear on the timeline — drag to adjust positions.
         </p>
 
-        {/* Presets */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
-          {presets.map(p => {
-            const steps = STROKE_PHASE_DEFINITIONS[p.strokeType];
-            return (
-              <button
-                key={p.strokeType}
-                type="button"
-                style={btnStyle}
-                onClick={() => { onSelect({ type: 'preset', strokeType: p.strokeType }); onClose(); }}
-              >
-                <span>{p.label}</span>
-                <span style={{ fontSize: 11, color: '#8E8E93', fontWeight: 500 }}>
-                  {steps.map(s => s.short).join(' → ')}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Custom count */}
+        {/* Custom count — first option */}
         <div style={{
-          padding: 16, borderRadius: 14, border: '1px solid #E5E5EA', background: '#FAFAFA',
-          display: 'flex', flexDirection: 'column', gap: 10,
+          padding: 16, borderRadius: 14, border: '1px solid #007AFF', background: 'rgba(0,122,255,0.04)',
+          display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16,
         }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: '#1D1D1F' }}>Custom</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -105,6 +85,26 @@ export default function PhasesPicker({ open, onClose, onSelect }: PhasesPickerPr
           >
             Add {customCount} phase{customCount > 1 ? 's' : ''}
           </button>
+        </div>
+
+        {/* Stroke presets */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {presets.map(p => {
+            const steps = STROKE_PHASE_DEFINITIONS[p.strokeType];
+            return (
+              <button
+                key={p.strokeType}
+                type="button"
+                style={btnStyle}
+                onClick={() => { onSelect({ type: 'preset', strokeType: p.strokeType }); onClose(); }}
+              >
+                <span>{p.label}</span>
+                <span style={{ fontSize: 11, color: '#8E8E93', fontWeight: 500 }}>
+                  {steps.map(s => s.short).join(' → ')}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
