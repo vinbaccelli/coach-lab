@@ -1,11 +1,11 @@
 import 'server-only';
 import Stripe from 'stripe';
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-05-27.dahlia',
-});
+export const stripe = process.env.STRIPE_SECRET_KEY
+  ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2026-05-27.dahlia' })
+  : (null as unknown as Stripe);
 
 export const PRICES = {
-  monthly: process.env.STRIPE_PRICE_MONTHLY!,
-  yearly: process.env.STRIPE_PRICE_YEARLY!,
+  monthly: process.env.STRIPE_PRICE_MONTHLY ?? '',
+  yearly: process.env.STRIPE_PRICE_YEARLY ?? '',
 };
