@@ -4445,17 +4445,19 @@ function Home() {
       if (screen === 'stromotion') {
         setStroMotionActive(true);
         setBiomechActive(false);
-        // Import phase markers as StroMotion frame times if available
+        // Import phase markers as StroMotion frame times ONLY if phases exist
+        // Do NOT create default frames — user must explicitly add phases first
         if (biomechPhaseMarkers && biomechPhaseMarkers.length > 0) {
           const phaseTimes = biomechPhaseMarkers.map(m => m.time).sort((a, b) => a - b);
           const first = phaseTimes[0];
           const last = phaseTimes[phaseTimes.length - 1];
           if (first < last) {
+            const count = Math.min(phaseTimes.length, 15);
             setStroStartFrame(Math.max(0, first - 0.5));
             setStroEndFrame(last + 0.5);
-            setStroFrameCount(phaseTimes.length as any);
-            setStroSampleTimesOverride(phaseTimes);
-            setProcessingStatus(`Imported ${phaseTimes.length} phase markers as StroMotion frames`);
+            setStroFrameCount(count as any);
+            setStroSampleTimesOverride(phaseTimes.slice(0, 15));
+            setProcessingStatus(`Imported ${count} phase markers as StroMotion frames`);
           }
         }
         // Auto-detect: if skeleton data exists, try auto-selecting areas for all frames

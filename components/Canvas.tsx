@@ -1624,6 +1624,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { onSkeletonAnglesUpdateRef.current = onSkeletonAnglesUpdate; }, [onSkeletonAnglesUpdate]);
     const showMeasurementOverlaysRef = useRef(showMeasurementOverlays);
     useEffect(() => { showMeasurementOverlaysRef.current = showMeasurementOverlays; renderDirtyRef.current = true; }, [showMeasurementOverlays]);
+    const overlayAdjustmentsRef = useRef<Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>>({});
+    const draggingOverlayRef = useRef<{ id: string; endpoint: 'start' | 'end' } | null>(null);
     const onMeasurementAddRef = useRef(onMeasurementAdd);
     useEffect(() => { onMeasurementAddRef.current = onMeasurementAdd; }, [onMeasurementAdd]);
     const onMeasurementRemoveLastRef = useRef(onMeasurementRemoveLast);
@@ -3854,11 +3856,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.translate(dx, dy);
 
           const drawArrow = (
+            id: string,
             x1: number, y1: number, x2: number, y2: number,
             color: string,
           ) => {
-            const ax = x1 * msx, ay = y1 * msy;
-            const bx = x2 * msx, by = y2 * msy;
+            const adj = overlayAdjustmentsRef.current[id];
+            const ax = (x1 + (adj?.dx1 ?? 0)) * msx;
+            const ay = (y1 + (adj?.dy1 ?? 0)) * msy;
+            const bx = (x2 + (adj?.dx2 ?? 0)) * msx;
+            const by = (y2 + (adj?.dy2 ?? 0)) * msy;
             ctx.strokeStyle = color;
             ctx.lineWidth = 2.5;
             ctx.setLineDash([]);
@@ -3874,18 +3880,35 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.moveTo(bx, by);
             ctx.lineTo(bx - hl * Math.cos(angle + 0.4), by - hl * Math.sin(angle + 0.4));
             ctx.stroke();
+            // Draggable endpoint circles
+            for (const [px, py] of [[ax, ay], [bx, by]] as [number, number][]) {
+              ctx.fillStyle = color;
+              ctx.globalAlpha = 0.7;
+              ctx.beginPath();
+              ctx.arc(px, py, 5, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.globalAlpha = 1;
+            }
           };
 
           // Shoulder line (L→R) — orange
           const lS = kps[5], rS = kps[6];
           if (lS?.score >= scoreMin && rS?.score >= scoreMin) {
-            drawArrow(lS.x, lS.y, rS.x, rS.y, '#FF9500');
+            drawArrow('shoulder', lS.x, lS.y, rS.x, rS.y, '#FF9500');
           }
 
           // Hip line (L→R) — green
           const lH = kps[11], rH = kps[12];
           if (lH?.score >= scoreMin && rH?.score >= scoreMin) {
-            drawArrow(lH.x, lH.y, rH.x, rH.y, '#34C759');
+            drawArrow('hip', lH.x, lH.y, rH.x, rH.y, '#34C759');
+          }
+
+          // Head direction (ear midpoint → nose) — purple
+          const nose = kps[0], lEar = kps[3], rEar = kps[4];
+          if (nose?.score >= scoreMin && ((lEar?.score >= scoreMin) || (rEar?.score >= scoreMin))) {
+            const earX = lEar?.score >= scoreMin && rEar?.score >= scoreMin ? (lEar.x + rEar.x) / 2 : (lEar?.score >= scoreMin ? lEar.x : rEar!.x);
+            const earY = lEar?.score >= scoreMin && rEar?.score >= scoreMin ? (lEar.y + rEar.y) / 2 : (lEar?.score >= scoreMin ? lEar.y : rEar!.y);
+            drawArrow('head', earX, earY, nose.x, nose.y, '#AF52DE');
           }
 
           // Left foot direction (knee→ankle extended) — cyan
@@ -3893,7 +3916,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (lK?.score >= scoreMin && lA?.score >= scoreMin) {
             const dx2 = lA.x + (lA.x - lK.x) * 0.4;
             const dy2 = lA.y + (lA.y - lK.y) * 0.4;
-            drawArrow(lA.x, lA.y, dx2, dy2, '#00C7BE');
+            drawArrow('lfoot', lA.x, lA.y, dx2, dy2, '#00C7BE');
           }
 
           // Right foot direction (knee→ankle extended) — cyan
@@ -3901,7 +3924,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (rK?.score >= scoreMin && rA?.score >= scoreMin) {
             const dx2 = rA.x + (rA.x - rK.x) * 0.4;
             const dy2 = rA.y + (rA.y - rK.y) * 0.4;
-            drawArrow(rA.x, rA.y, dx2, dy2, '#00C7BE');
+            drawArrow('rfoot', rA.x, rA.y, dx2, dy2, '#00C7BE');
           }
 
           // Racket angle (dominant wrist → extended past wrist) — pink
@@ -3913,7 +3936,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             if (domW?.score >= scoreMin && domE?.score >= scoreMin) {
               const tipX = domW.x + (domW.x - domE.x) * 0.8;
               const tipY = domW.y + (domW.y - domE.y) * 0.8;
-              drawArrow(domW.x, domW.y, tipX, tipY, '#FF2D55');
+              drawArrow('racket', domW.x, domW.y, tipX, tipY, '#FF2D55');
             }
           }
 
@@ -5488,7 +5511,59 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
-      // (Measurement overlays are drawn live from skeleton — no drag needed)
+      // ── Measurement overlay endpoint drag ─────────────────────────────
+      if (showMeasurementOverlaysRef.current && latestKeypointsRef.current?.length && videoBoundsRef.current) {
+        const kps = latestKeypointsRef.current;
+        const vb = videoBoundsRef.current;
+        const osx = vb.dw / (videoRef.current?.videoWidth || 1);
+        const osy = vb.dh / (videoRef.current?.videoHeight || 1);
+        const hitR = 14;
+        const overlayEndpoints: Array<{ id: string; x1: number; y1: number; x2: number; y2: number }> = [];
+        const sm = 0.2;
+        const lS = kps[5], rS = kps[6], lH = kps[11], rH = kps[12];
+        if (lS?.score >= sm && rS?.score >= sm) overlayEndpoints.push({ id: 'shoulder', x1: lS.x, y1: lS.y, x2: rS.x, y2: rS.y });
+        if (lH?.score >= sm && rH?.score >= sm) overlayEndpoints.push({ id: 'hip', x1: lH.x, y1: lH.y, x2: rH.x, y2: rH.y });
+
+        for (const ep of overlayEndpoints) {
+          const adj = overlayAdjustmentsRef.current[ep.id];
+          const ax = (ep.x1 + (adj?.dx1 ?? 0)) * osx + vb.dx;
+          const ay = (ep.y1 + (adj?.dy1 ?? 0)) * osy + vb.dy;
+          const bx = (ep.x2 + (adj?.dx2 ?? 0)) * osx + vb.dx;
+          const by = (ep.y2 + (adj?.dy2 ?? 0)) * osy + vb.dy;
+          const dA = Math.sqrt((pos.x - ax) ** 2 + (pos.y - ay) ** 2);
+          const dB = Math.sqrt((pos.x - bx) ** 2 + (pos.y - by) ** 2);
+          if (dA < hitR || dB < hitR) {
+            const endpoint = dA < dB ? 'start' : 'end';
+            const eid = ep.id;
+            const baseX = endpoint === 'start' ? ep.x1 : ep.x2;
+            const baseY = endpoint === 'start' ? ep.y1 : ep.y2;
+            isDraggingRef.current = true;
+            draggingOverlayRef.current = { id: eid, endpoint };
+            const onMove = (me: PointerEvent) => {
+              const mp = getPosFromPointerEvent(me as any);
+              const nx = (mp.x - vb.dx) / osx;
+              const ny = (mp.y - vb.dy) / osy;
+              const prev = overlayAdjustmentsRef.current[eid] ?? { dx1: 0, dy1: 0, dx2: 0, dy2: 0 };
+              if (endpoint === 'start') {
+                overlayAdjustmentsRef.current[eid] = { ...prev, dx1: nx - baseX, dy1: ny - baseY };
+              } else {
+                overlayAdjustmentsRef.current[eid] = { ...prev, dx2: nx - baseX, dy2: ny - baseY };
+              }
+              renderDirtyRef.current = true;
+            };
+            const onUp = () => {
+              isDraggingRef.current = false;
+              draggingOverlayRef.current = null;
+              window.removeEventListener('pointermove', onMove);
+              window.removeEventListener('pointerup', onUp);
+            };
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp);
+            e.preventDefault();
+            return;
+          }
+        }
+      }
 
       // ── Skeleton: click to set focus on the player ─────────────────────
       // Intercepts when: skeleton is the active tool, explicitly waiting
