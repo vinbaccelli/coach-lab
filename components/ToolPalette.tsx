@@ -148,6 +148,8 @@ interface ToolPaletteProps {
   onAutoDetectMeasurements?: () => void;
   /** Open phases picker to add timeline phase divisions */
   onOpenPhases?: () => void;
+  /** Generate phase screenshots + slow-mo replay */
+  onMetricsGenerate?: () => void;
   /** Undo last measurement from data column */
   onUndoMeasurement?: () => void;
   /** Clear all measurements from data column */
@@ -593,6 +595,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onDataColumnToggle,
     onAutoDetectMeasurements,
     onOpenPhases,
+    onMetricsGenerate,
     onUndoMeasurement,
     onClearMeasurements,
     onAddNote,
@@ -1414,6 +1417,11 @@ export default function ToolPalette(props: ToolPaletteProps) {
           {/* Phases — timeline divisions */}
           {onOpenPhases && (
             <Row k="m-phases" icon={<Target size={metricIcon} />} tooltip="Add phase divisions on the timeline (stroke steps from eBook)" label="Phases" onPress={onOpenPhases} />
+          )}
+
+          {/* Generate — capture phase screenshots + slow-mo replay */}
+          {onMetricsGenerate && (
+            <Row k="m-generate" icon={<Layers size={metricIcon} />} tooltip="Capture every phase and replay the stroke in slow motion" label="Generate" onPress={onMetricsGenerate} />
           )}
 
           {!io && (

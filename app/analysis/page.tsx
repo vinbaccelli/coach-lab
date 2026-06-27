@@ -35,6 +35,7 @@ import { useAIMetrics } from '@/hooks/useAIMetrics';
 const StroMotionPanel = React.lazy(() => import('@/components/StroMotionPanel'));
 const BiomechanicsPanel = React.lazy(() => import('@/components/BiomechanicsPanel'));
 const PhasesPicker = React.lazy(() => import('@/components/PhasesPicker'));
+const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/SnapshotScrollPanel'));
 const FrameMeasurementEditor = React.lazy(() => import('@/components/aiMetrics/FrameMeasurementEditor'));
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
@@ -769,6 +770,92 @@ function Home() {
     else canvasRef.current?.clearAll?.();
     if (videoRef.current) { videoRef.current.currentTime = target.timeSec; videoRef.current.pause(); }
   }, [saveActiveSnapshot, snapshots, measurementColumn]);
+
+  // ── Generate: capture phase screenshots + slow-mo replay ─────────────────
+  const [snapshotPanelOpen, setSnapshotPanelOpen] = useState(false);
+  const [replayActive, setReplayActive] = useState(false);
+  const [replayIndex, setReplayIndex] = useState<number | null>(null);
+  const replayAbortRef = useRef(false);
+
+  /** Seek the video to a time and resolve once the frame is ready. */
+  const seekVideoTo = useCallback((t: number): Promise<void> => new Promise((resolve) => {
+    const v = videoRef.current;
+    if (!v) { resolve(); return; }
+    const onSeeked = () => { v.removeEventListener('seeked', onSeeked); clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => { v.removeEventListener('seeked', onSeeked); resolve(); }, 1500);
+    v.addEventListener('seeked', onSeeked);
+    v.currentTime = t;
+  }), []);
+
+  /** Generate: for each snapshot, seek + restore its drawings + capture a screenshot. */
+  const handleGenerateSnapshots = useCallback(async () => {
+    saveActiveSnapshot();
+    const ordered = [...snapshots].sort((a, b) => a.timeSec - b.timeSec);
+    if (ordered.length === 0) { setProcessingStatus('Add phases first (AI Detect or Phases)'); return; }
+    setProcessingStatus('Capturing phase screenshots…');
+    const video = videoRef.current;
+    const overlay = canvasRef.current?.getCanvas?.();
+    const updated: Snapshot[] = [];
+    for (const snap of ordered) {
+      await seekVideoTo(snap.timeSec);
+      canvasRef.current?.setOverlayAdjustments?.(snap.overlayAdjustments ?? {});
+      if (snap.drawingsJson) canvasRef.current?.importStrokes?.(snap.drawingsJson);
+      else canvasRef.current?.clearAll?.();
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      let shot: string | undefined;
+      if (video && overlay) {
+        try { shot = captureFrame(video, overlay); } catch { shot = undefined; }
+      }
+      updated.push({ ...snap, screenshot: shot });
+    }
+    setSnapshots(prev => prev.map(s => updated.find(u => u.id === s.id) ?? s));
+    setSnapshotPanelOpen(true);
+    setProcessingStatus(`Generated ${ordered.length} phase screenshots`);
+  }, [snapshots, saveActiveSnapshot, seekVideoTo]);
+
+  /** Slow-mo replay: Freeze 3s → slow-play → snap to next → Freeze. */
+  const handleReplaySnapshots = useCallback(async () => {
+    const ordered = [...snapshots].sort((a, b) => a.timeSec - b.timeSec);
+    if (ordered.length === 0) return;
+    const v = videoRef.current;
+    if (!v) return;
+    replayAbortRef.current = false;
+    setReplayActive(true);
+    const HOLD_MS = 3000;
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < ordered.length; i++) {
+      if (replayAbortRef.current) break;
+      const snap = ordered[i];
+      // Snap to this phase, restore its state, freeze 3s
+      await seekVideoTo(snap.timeSec);
+      v.pause();
+      setReplayIndex(i);
+      selectSnapshot(snap.id);
+      await sleep(HOLD_MS);
+      if (replayAbortRef.current) break;
+      // Slow-play to the next phase
+      const next = ordered[i + 1];
+      if (next) {
+        v.playbackRate = 0.25;
+        try { await v.play(); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          const check = () => {
+            if (replayAbortRef.current || !videoRef.current) { resolve(); return; }
+            if (videoRef.current.currentTime >= next.timeSec - 0.02) { resolve(); return; }
+            requestAnimationFrame(check);
+          };
+          requestAnimationFrame(check);
+        });
+        v.pause();
+        v.playbackRate = 1;
+      }
+    }
+    if (videoRef.current) { videoRef.current.pause(); videoRef.current.playbackRate = 1; }
+    setReplayActive(false);
+    setReplayIndex(null);
+  }, [snapshots, seekVideoTo, selectSnapshot]);
+
+  const orderedSnapshots = useMemo(() => [...snapshots].sort((a, b) => a.timeSec - b.timeSec), [snapshots]);
 
   const skeletonParts = useMemo(() => ({
     rightArm: skeletonShowRightArm,
@@ -4625,6 +4712,7 @@ function Home() {
     measurementColumnItems:          measurementColumn,
     onDeleteMeasurement:             (id: string) => setMeasurementColumn(prev => prev.filter(m => m.id !== id)),
     onOpenPhases:                    () => setPhasesPickerOpen(true),
+    onMetricsGenerate:               () => { void handleGenerateSnapshots(); },
     onAutoDetectMeasurements:        () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
@@ -6977,6 +7065,19 @@ function Home() {
         )}
 
       <GuidedTour suppressFloatingHelp />
+
+      {snapshotPanelOpen && (
+        <React.Suspense fallback={null}>
+          <SnapshotScrollPanel
+            snapshots={orderedSnapshots}
+            activeIndex={replayIndex}
+            replaying={replayActive}
+            onSelectIndex={(i) => { const s = orderedSnapshots[i]; if (s) selectSnapshot(s.id); }}
+            onReplay={() => { void handleReplaySnapshots(); }}
+            onClose={() => { replayAbortRef.current = true; setSnapshotPanelOpen(false); }}
+          />
+        </React.Suspense>
+      )}
 
       {phasesPickerOpen && (
         <React.Suspense fallback={null}>
