@@ -221,8 +221,18 @@ attach to the Snapshot as an optional field rather than spawning a third model.
   `frame_markers` (`lib/sessions/`). Save flow: `useSessionDraft` →
   `buildSessionPayload` → `/api/players/[id]/sessions` + artifact upload.
 - **Notes**: per-frame notes currently in the Frame Capture model (§14.2).
-- **Google Docs**: `app/api/google/create-document` creates a shared doc from a
-  report body using the coach's OAuth token.
+  Player-level notes (`players.notes`) are seeded into the player's Google Doc.
+- **Google Docs (per-player auto-export):** `app/api/players/[id]/google-doc`
+  maintains the Drive tree `AngleMotion / Players / <Player Name> / <Doc>`. The
+  per-player Doc + folder IDs are cached on the `players` row
+  (`google_doc_id`, `google_folder_id`) so every screenshot for a player appends
+  to the same document. Each screenshot is inserted at the **top** of the body
+  with a timestamp; player notes are seeded at doc creation. Requires the
+  `documents` + `drive.file` OAuth scopes (granted at sign-in). Wired into the
+  screenshot→player flow (`handleScreenshotSaveToPlayer`) as a **best-effort**
+  step — a Docs failure never blocks the screenshot save.
+  - Legacy `app/api/google/create-document` still creates a one-off report doc
+    from a body string (used by the report path).
 - **Future persistence**: snapshots must be added to the session payload (§10).
 
 ---
@@ -380,6 +390,14 @@ Rules:
 - **Impact:** Thumbnail/pose no longer matches the frame until re-Generate.
 - **Recommended solution:** Re-capture on drag end, or invalidate the screenshot.
 
+### 14.7 Two Google Docs code paths — **PRIORITY: LOW**
+- **Description:** `app/api/google/create-document` (one-off report doc) and
+  `app/api/players/[id]/google-doc` (per-player persistent doc + folder tree)
+  both build Google clients independently.
+- **Impact:** Minor duplication of OAuth/client setup; risk of drift.
+- **Recommended solution:** Extract shared Drive/Docs client + folder helpers
+  into `lib/google/` and have both routes consume them.
+
 ---
 
 ## 15. Development Rules
@@ -396,3 +414,17 @@ Every future implementation must obey:
 7. **Update this document whenever the architecture changes** — especially when
    resolving any §14 debt item, move it to the relevant section and delete it
    from the debt list.
+
+### 15.1 Architecture Regression Audit (required before "complete")
+
+No feature is complete until both the implementation **and** this audit pass.
+Answer all six explicitly:
+
+1. **New state?** If yes, justify why it cannot belong to existing state. Any
+   *analysis* state must be a Snapshot field, never a new store.
+2. **Duplicates existing functionality?** If yes, refactor instead of duplicating.
+3. **Requires `ARCHITECTURE.md` changes?** If yes, update it in the same commit.
+4. **Technical-debt delta?** Add/remove §14 items accordingly.
+5. **Could it extend an existing system?** Prefer extending over creating new.
+6. **Cross-file consistency?** Review all modified files together — naming, state
+   management, UI behavior, and architecture must stay consistent.

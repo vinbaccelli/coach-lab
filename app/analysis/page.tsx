@@ -1930,6 +1930,19 @@ function Home() {
           setProcessingStatus('Failed to save screenshot — try again');
           return;
         }
+        // Best-effort: append to the player's Google Doc (AngleMotion/Players/<Name>).
+        // A Docs failure must not fail the screenshot save.
+        try {
+          const docRes = await fetch(`/api/players/${playerId}/google-doc`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageUrl: signed.signedUrl, timestampLabel: localDateTimeForFolder() }),
+          });
+          if (docRes.ok) setProcessingStatus(`Saved to ${playerName} + Google Doc`);
+          else setProcessingStatus(`Saved to ${playerName} (Google Doc skipped)`);
+        } catch {
+          setProcessingStatus(`Saved to ${playerName} (Google Doc skipped)`);
+        }
       } else {
         setProcessingStatus('Upload failed — try again');
         return;
