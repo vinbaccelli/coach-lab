@@ -317,6 +317,7 @@ function Home() {
   const [outlineEraserSize, setOutlineEraserSize] = useState(0);
   const [skeletonShowAngles, setSkeletonShowAngles] = useState(true);
   const [skeletonShowHeadLine, setSkeletonShowHeadLine] = useState(false);
+  const [skeletonShowHeadDirection, setSkeletonShowHeadDirection] = useState(false);
   const [skeletonShowFootLine, setSkeletonShowFootLine] = useState(true);
   const [skeletonClassicColors, setSkeletonClassicColors] = useState(true);
   const [skeletonShowRightArm, setSkeletonShowRightArm] = useState(true);
@@ -4476,6 +4477,8 @@ function Home() {
     onSkeletonShowAnglesChange:      setSkeletonShowAngles,
     skeletonShowHeadLine,
     onSkeletonShowHeadLineChange:    setSkeletonShowHeadLine,
+    skeletonShowHeadDirection,
+    onSkeletonShowHeadDirectionChange: setSkeletonShowHeadDirection,
     skeletonShowFootLine,
     onSkeletonShowFootLineChange:    setSkeletonShowFootLine,
     skeletonClassicColors,
@@ -5178,6 +5181,7 @@ function Home() {
                   stroMotionShowSkeleton={stroShowSkeleton}
                   skeletonShowAngles={skeletonShowAngles}
                   skeletonShowHeadLine={skeletonShowHeadLine}
+                  skeletonShowHeadDirection={skeletonShowHeadDirection}
                   skeletonShowFootLine={skeletonShowFootLine}
                   skeletonClassicColors={skeletonClassicColors}
                   skeletonParts={skeletonParts}
@@ -6568,7 +6572,7 @@ function Home() {
       {/* Measurement naming prompt */}
       {pendingMeasurement && createPortal(
         <div style={{
-          position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          position: 'fixed', bottom: 140, left: '50%', transform: 'translateX(-50%)',
           zIndex: 9500, background: '#1D1D1F', borderRadius: 16,
           padding: '16px 20px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
           display: 'flex', flexDirection: 'column', gap: 10, width: 280,
@@ -6659,7 +6663,7 @@ function Home() {
       {skeletonConfirmOpen && createPortal(
         <div
           style={{
-            position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+            position: 'fixed', bottom: 140, left: '50%', transform: 'translateX(-50%)',
             zIndex: 9500, background: '#1D1D1F', borderRadius: 16,
             padding: '16px 24px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
             display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
@@ -6705,7 +6709,7 @@ function Home() {
       {skeletonWaitingForClick && createPortal(
         <div
           style={{
-            position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+            position: 'fixed', bottom: 140, left: '50%', transform: 'translateX(-50%)',
             zIndex: 9500, background: '#007AFF', borderRadius: 12,
             padding: '12px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
           }}

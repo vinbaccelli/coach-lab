@@ -250,6 +250,7 @@ export interface CanvasProps {
   stroMotionShowSkeleton?: boolean;
   skeletonShowAngles?: boolean;
   skeletonShowHeadLine?: boolean;
+  skeletonShowHeadDirection?: boolean;
   skeletonShowFootLine?: boolean;
   skeletonClassicColors?: boolean;
   skeletonParts?: SkeletonPartVisibility;
@@ -370,6 +371,7 @@ function drawSkeletonOverlay(
   opts?: {
     showAngles?: boolean;
     showHeadLine?: boolean;
+    showHeadDirection?: boolean;
     classicColors?: boolean;
     showFootLine?: boolean;
     parts?: SkeletonPartVisibility;
@@ -380,6 +382,7 @@ function drawSkeletonOverlay(
 
   const showAngles    = opts?.showAngles   !== false;
   const showHeadLine  = opts?.showHeadLine === true;
+  const showHeadDirection = opts?.showHeadDirection === true;
   const classicColors = opts?.classicColors !== false;
   const showFootLine  = opts?.showFootLine !== false;
   const parts: SkeletonPartVisibility = opts?.parts ?? {};
@@ -466,27 +469,67 @@ function drawSkeletonOverlay(
     }
   }
 
-  // Foot direction lines
+  // Head direction (neck → nose forward line)
+  if (showHeadDirection) {
+    const nose = keypoints[0], lEar = keypoints[3], rEar = keypoints[4];
+    const midShoulder = (keypoints[5] && keypoints[6] && keypoints[5].score >= scoreThreshold && keypoints[6].score >= scoreThreshold)
+      ? { x: (keypoints[5].x + keypoints[6].x) / 2 * sx, y: (keypoints[5].y + keypoints[6].y) / 2 * sy } : null;
+    if (nose && nose.score >= scoreThreshold && midShoulder) {
+      const noseX = nose.x * sx, noseY = nose.y * sy;
+      const earMidX = (lEar?.score >= scoreThreshold && rEar?.score >= scoreThreshold)
+        ? ((lEar.x + rEar.x) / 2) * sx
+        : (lEar?.score >= scoreThreshold ? lEar.x * sx : rEar?.score >= scoreThreshold ? rEar.x * sx : noseX);
+      const earMidY = (lEar?.score >= scoreThreshold && rEar?.score >= scoreThreshold)
+        ? ((lEar.y + rEar.y) / 2) * sy
+        : (lEar?.score >= scoreThreshold ? lEar.y * sy : rEar?.score >= scoreThreshold ? rEar.y * sy : noseY);
+      const dirX = noseX - earMidX, dirY = noseY - earMidY;
+      const dirLen = Math.hypot(dirX, dirY);
+      if (dirLen > 1) {
+        const ext = dirLen * 1.2;
+        ctx.save();
+        ctx.strokeStyle = '#AF52DE';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(midShoulder.x, midShoulder.y);
+        ctx.lineTo(noseX, noseY);
+        ctx.lineTo(noseX + (dirX / dirLen) * ext, noseY + (dirY / dirLen) * ext);
+        ctx.stroke();
+        const angle = Math.atan2(dirY, dirX);
+        const hl = 6;
+        ctx.beginPath();
+        ctx.moveTo(noseX + (dirX / dirLen) * ext, noseY + (dirY / dirLen) * ext);
+        ctx.lineTo(noseX + (dirX / dirLen) * ext - hl * Math.cos(angle - 0.4), noseY + (dirY / dirLen) * ext - hl * Math.sin(angle - 0.4));
+        ctx.moveTo(noseX + (dirX / dirLen) * ext, noseY + (dirY / dirLen) * ext);
+        ctx.lineTo(noseX + (dirX / dirLen) * ext - hl * Math.cos(angle + 0.4), noseY + (dirY / dirLen) * ext - hl * Math.sin(angle + 0.4));
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  // Foot direction lines (ankle → toe tip, perpendicular-forward from shin)
   if (showFootLine) {
+    const lHipFoot = keypoints[11], rHipFoot = keypoints[12];
+    const facingRight = (lHipFoot && rHipFoot && lHipFoot.score >= scoreThreshold && rHipFoot.score >= scoreThreshold)
+      ? lHipFoot.x < rHipFoot.x : true;
     for (const [kneeIdx, ankleIdx] of [[13, 15], [14, 16]] as [number, number][]) {
       if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
       const knee  = keypoints[kneeIdx];
       const ankle = keypoints[ankleIdx];
       if (!knee || !ankle || knee.score < scoreThreshold || ankle.score < scoreThreshold) continue;
-      const kx = knee.x  * sx, ky = knee.y  * sy;
       const ax = ankle.x * sx, ay = ankle.y * sy;
-      const dist = Math.hypot(ax - kx, ay - ky);
-      if (dist < 1) continue;
-      const dx2 = (ax - kx) / dist;
-      const dy2 = (ay - ky) / dist;
-      const ext = dist * 0.4;
+      const shinLen = Math.hypot((ankle.x - knee.x) * sx, (ankle.y - knee.y) * sy);
+      if (shinLen < 1) continue;
+      const toeLen = shinLen * 0.35;
+      const toeAngle = facingRight ? 0.3 : Math.PI - 0.3;
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      ctx.lineTo(ax + dx2 * ext, ay + dy2 * ext);
+      ctx.lineTo(ax + Math.cos(toeAngle) * toeLen, ay + Math.sin(toeAngle) * toeLen);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
@@ -1587,6 +1630,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionShowSkeleton = false,
       skeletonShowAngles = true,
       skeletonShowHeadLine = false,
+      skeletonShowHeadDirection = false,
       skeletonShowFootLine = true,
       skeletonClassicColors = true,
       skeletonParts,
@@ -1777,6 +1821,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const stroMotionShowSkeletonRef = useRef(stroMotionShowSkeleton);
     const skeletonShowAnglesRef   = useRef(skeletonShowAngles);
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
+    const skeletonShowHeadDirectionRef = useRef(skeletonShowHeadDirection);
     const skeletonShowFootLineRef = useRef(skeletonShowFootLine);
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
     const skeletonPartsRef = useRef(skeletonParts);
@@ -1960,6 +2005,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { stroMotionShowSkeletonRef.current = stroMotionShowSkeleton; renderDirtyRef.current = true; }, [stroMotionShowSkeleton]);
     useEffect(() => { skeletonShowAnglesRef.current   = skeletonShowAngles; },   [skeletonShowAngles]);
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; },  [skeletonShowHeadLine]);
+    useEffect(() => { skeletonShowHeadDirectionRef.current = skeletonShowHeadDirection; }, [skeletonShowHeadDirection]);
     useEffect(() => { skeletonShowFootLineRef.current  = skeletonShowFootLine; },  [skeletonShowFootLine]);
     useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; }, [skeletonClassicColors]);
     useEffect(() => { skeletonPartsRef.current = skeletonParts; }, [skeletonParts]);
@@ -3821,6 +3867,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             drawSkeletonOverlay(ctx, latestKeypointsRef.current, vW, vH, dw, dh, {
               showAngles: false,
               showHeadLine: skeletonShowHeadLineRef.current,
+              showHeadDirection: skeletonShowHeadDirectionRef.current,
               showFootLine: skeletonShowFootLineRef.current,
               classicColors: skeletonClassicColorsRef.current,
               parts: skeletonPartsRef.current,

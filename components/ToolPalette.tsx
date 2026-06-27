@@ -72,6 +72,8 @@ interface ToolPaletteProps {
   onSkeletonShowAnglesChange?: (v: boolean) => void;
   skeletonShowHeadLine?: boolean;
   onSkeletonShowHeadLineChange?: (v: boolean) => void;
+  skeletonShowHeadDirection?: boolean;
+  onSkeletonShowHeadDirectionChange?: (v: boolean) => void;
   skeletonShowFootLine?: boolean;
   onSkeletonShowFootLineChange?: (v: boolean) => void;
   skeletonClassicColors?: boolean;
@@ -538,6 +540,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onSkeletonShowAnglesChange,
     skeletonShowHeadLine,
     onSkeletonShowHeadLineChange,
+    skeletonShowHeadDirection,
+    onSkeletonShowHeadDirectionChange,
     skeletonShowFootLine,
     onSkeletonShowFootLineChange,
     skeletonClassicColors,
@@ -1265,6 +1269,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
             )}
           {onSkeletonShowHeadLineChange !== undefined &&
             chk('sh', 'Head line', skeletonShowHeadLine ?? false, onSkeletonShowHeadLineChange, <Minus size={18} strokeWidth={2} />)}
+          {onSkeletonShowHeadDirectionChange !== undefined &&
+            chk('shd', 'Head direction', skeletonShowHeadDirection ?? false, onSkeletonShowHeadDirectionChange, <TrendingUp size={18} strokeWidth={2} />)}
           {onSkeletonShowFootLineChange !== undefined &&
             chk('sf', 'Foot line', skeletonShowFootLine ?? true, onSkeletonShowFootLineChange, <Minus size={18} strokeWidth={2} />)}
           {/* Body parts — each on its own row */}
