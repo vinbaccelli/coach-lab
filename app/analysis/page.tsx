@@ -4530,7 +4530,8 @@ function Home() {
         setSkeletonKeepAlive(true);
         canvasRef.current?.resetSkeleton();
         setSkeletonWaitingForClick(false);
-        // Confirm dialog will show when first keypoints arrive (via onSkeletonFirstDetection)
+        setSkeletonLocked(false);
+        skeletonFirstDetectedRef.current = false;
       } else if (screen === 'home') {
         setStroMotionActive(false);
       }
