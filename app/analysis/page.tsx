@@ -704,8 +704,24 @@ function Home() {
   const phaseOverlayAdjRef = useRef<Record<string, Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>>>({});
   const phaseDrawingsRef = useRef<Record<string, string>>({});
 
-  // Data column is shown when explicitly activated OR when a frame is selected
-  const dataColumnVisible = dataColumnActive || (biomechActive && biomechActiveFrameIndex !== null);
+  // Track current video time for phase proximity check
+  const [currentVideoTime, setCurrentVideoTime] = useState(0);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onTimeUpdate = () => setCurrentVideoTime(v.currentTime);
+    v.addEventListener('timeupdate', onTimeUpdate);
+    return () => v.removeEventListener('timeupdate', onTimeUpdate);
+  });
+
+  // Data column visible only when near the active phase (within 0.5s)
+  const isNearActivePhase = (() => {
+    if (!biomechSelectedPhaseId || !biomechPhaseMarkers?.length) return true;
+    const marker = biomechPhaseMarkers.find(m => m.id === biomechSelectedPhaseId);
+    if (!marker) return true;
+    return Math.abs(currentVideoTime - marker.time) < 0.5;
+  })();
+  const dataColumnVisible = (dataColumnActive && isNearActivePhase) || (biomechActive && biomechActiveFrameIndex !== null);
   const ballTrailEnabled = activeTool === 'ballShadow';
 
   const skeletonParts = useMemo(() => ({
@@ -4532,6 +4548,13 @@ function Home() {
         setSkeletonWaitingForClick(false);
         setSkeletonLocked(false);
         skeletonFirstDetectedRef.current = false;
+        // Auto-create phase at current time
+        if (!biomechPhaseMarkers?.length) {
+          const t = videoRef.current?.currentTime ?? 0;
+          const phaseId = `skel-${Date.now()}`;
+          setBiomechPhaseMarkers([{ id: phaseId, label: 'Skeleton', short: 'SK', time: t }]);
+          setBiomechSelectedPhaseId(phaseId);
+        }
       } else if (screen === 'home') {
         setStroMotionActive(false);
       }
@@ -5134,7 +5157,7 @@ function Home() {
                   skeletonLocked={skeletonLocked}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); setSkeletonLocked(true); }}
                   onSkeletonAnglesUpdate={handleSkeletonAnglesUpdate}
-                  showMeasurementOverlays={showMeasurementOverlays}
+                  showMeasurementOverlays={showMeasurementOverlays && isNearActivePhase}
                   measurementColumnItems={dataColumnVisible ? measurementColumn : null}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
