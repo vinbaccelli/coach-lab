@@ -1146,24 +1146,8 @@ function Home() {
     });
   }, [biomechActive, biomechHtml5Only, aiMetricsDraft, autoProposeAllBiomechFrames]);
 
-  // Auto-propose stroke phase markers from skeleton data
-  useEffect(() => {
-    if (!biomechActive || !biomechHtml5Only) { setBiomechPhaseMarkers(null); return; }
-    if (biomechTrimEnd <= biomechTrimStart) return;
-    const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
-    if (skFrames.length < 3) return;
-    const samples = skeletonFramesToSamples(skFrames);
-    const markers = proposePhaseMarkers(
-      biomechStrokeType,
-      samples,
-      biomechTrimStart,
-      biomechTrimEnd,
-      biomechStrokeType === 'custom' ? biomechCustomSteps : undefined,
-    );
-    if (markers.length > 0) {
-      setBiomechPhaseMarkers(markers.map(m => ({ id: m.id, label: m.label, short: m.short, time: m.timeSec })));
-    }
-  }, [biomechActive, biomechHtml5Only, biomechTrimStart, biomechTrimEnd, biomechStrokeType, biomechCustomSteps]);
+  // Phase markers are created explicitly via the Phases button handler.
+  // No auto-proposal — phases only appear when the user chooses them.
 
   useEffect(() => {
     if (stroMotionActive && stroMotionHtml5Only && !stroMotionProcessing) {
@@ -1626,6 +1610,7 @@ function Home() {
     setShowMeasurementOverlays(false);
     setSkeletonKeepAlive(false);
     setSkeletonLocked(false);
+    skeletonFirstDetectedRef.current = false;
     setBiomechReportModalOpen(false);
   }, [clearBiomechAll]);
 
@@ -1978,8 +1963,13 @@ function Home() {
     });
   }, []);
 
+  const skeletonFirstDetectedRef = useRef(false);
   const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number }>) => {
     liveAnglesRef.current = angles;
+    if (!skeletonFirstDetectedRef.current && angles.length > 0) {
+      skeletonFirstDetectedRef.current = true;
+      setTimeout(() => setSkeletonConfirmOpen(true), 1500);
+    }
     if (!angleThrottleRef.current) {
       angleThrottleRef.current = setTimeout(() => {
         angleThrottleRef.current = null;
@@ -4540,7 +4530,7 @@ function Home() {
         setSkeletonKeepAlive(true);
         canvasRef.current?.resetSkeleton();
         setSkeletonWaitingForClick(false);
-        setTimeout(() => setSkeletonConfirmOpen(true), 8000);
+        // Confirm dialog will show when first keypoints arrive (via onSkeletonFirstDetection)
       } else if (screen === 'home') {
         setStroMotionActive(false);
       }
@@ -4567,15 +4557,11 @@ function Home() {
     onDataColumnToggle:              () => {
       setDataColumnActive(v => {
         const next = !v;
-        if (next && !biomechActive) {
-          setBiomechFrameCount(1 as AIMetricsFrameCount);
-          setBiomechActive(true);
-        }
-        if (next && biomechActiveFrameIndex === null) {
+        if (next && !biomechPhaseMarkers?.length) {
           const t = videoRef.current?.currentTime ?? 0;
-          addBiomechFrame(t);
-          setBiomechActiveFrameIndex(0);
-          if (videoRef.current) { videoRef.current.pause(); }
+          const phaseId = `col-${Date.now()}`;
+          setBiomechPhaseMarkers([{ id: phaseId, label: 'Column', short: 'C', time: t }]);
+          setBiomechSelectedPhaseId(phaseId);
         }
         return next;
       });
@@ -4613,7 +4599,12 @@ function Home() {
     onAutoDetectMeasurements:        () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
-      if (false) { // phases are only created via Phases button, never from AI Detect
+      // Auto-create a phase at current time if none exists
+      const currentTime = videoRef.current?.currentTime ?? 0;
+      if (!biomechPhaseMarkers?.length) {
+        const phaseId = `auto-${Date.now()}`;
+        setBiomechPhaseMarkers([{ id: phaseId, label: 'AI Detect', short: 'AI', time: currentTime }]);
+        setBiomechSelectedPhaseId(phaseId);
       }
       const latest = skFrames[skFrames.length - 1];
       const kps = latest?.keypoints;
@@ -6967,13 +6958,36 @@ function Home() {
             open={phasesPickerOpen}
             onClose={() => setPhasesPickerOpen(false)}
             onSelect={(preset) => {
-              setBiomechActive(true);
+              const videoTime = videoRef.current?.currentTime ?? 0;
+              const videoDur = videoRef.current?.duration ?? 10;
+              const trimStart = biomechTrimStart > 0 ? biomechTrimStart : Math.max(0, videoTime - 2);
+              const trimEnd = biomechTrimEnd > trimStart ? biomechTrimEnd : Math.min(videoDur, videoTime + 3);
+
               if (preset.type === 'preset') {
                 setBiomechStrokeType(preset.strokeType);
+                const { getPhaseDefinitions } = require('@/lib/biomechanics/strokePhases');
+                const defs = getPhaseDefinitions(preset.strokeType);
+                const markers = defs.map((d: any, i: number) => ({
+                  id: d.id,
+                  label: d.label,
+                  short: d.short,
+                  time: trimStart + ((i + 0.5) / defs.length) * (trimEnd - trimStart),
+                }));
+                setBiomechPhaseMarkers(markers);
+                setBiomechFrameCount(Math.min(defs.length, 15) as any);
               } else {
                 setBiomechStrokeType('custom');
-                setBiomechFrameCount(preset.count as any);
+                const count = preset.count;
+                const markers = Array.from({ length: count }, (_, i) => ({
+                  id: `custom-${i}`,
+                  label: `Phase ${i + 1}`,
+                  short: `${i + 1}`,
+                  time: trimStart + ((i + 0.5) / count) * (trimEnd - trimStart),
+                }));
+                setBiomechPhaseMarkers(markers);
+                setBiomechFrameCount(Math.min(count, 15) as any);
               }
+              setBiomechActive(true);
             }}
           />
         </React.Suspense>
