@@ -741,12 +741,14 @@ function Home() {
     if (!id) return;
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
+    const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
     setSnapshots(prev => prev.map(s => s.id === id ? {
       ...s,
       column: measurementColumn.filter(m => m.type !== 'skeleton-angle'),
       overlaysOn: showMeasurementOverlays,
       overlayAdjustments,
       drawingsJson,
+      ...(skeleton ? { skeleton } : {}),
     } : s));
   }, [biomechSelectedPhaseId, measurementColumn, showMeasurementOverlays]);
 
@@ -756,6 +758,9 @@ function Home() {
     saveActiveSnapshot();
     setSnapshots(prev => [...prev, snap]);
     setBiomechSelectedPhaseId(snap.id);
+    // New snapshot starts empty — keep only live skeleton angles in the column.
+    setMeasurementColumn(prev => prev.filter(m => m.type === 'skeleton-angle'));
+    canvasRef.current?.setOverlayAdjustments?.({});
     return snap.id;
   }, [saveActiveSnapshot]);
 
@@ -4757,7 +4762,7 @@ function Home() {
       // AI Detect always creates a fresh snapshot at the current time
       const currentTime = videoRef.current?.currentTime ?? 0;
       const phaseNum = (snapshots.length + 1);
-      createSnapshot(currentTime, `Phase ${phaseNum}`, String(phaseNum));
+      const newSnapId = createSnapshot(currentTime, `Phase ${phaseNum}`, String(phaseNum));
       const latest = skFrames[skFrames.length - 1];
       const kps = latest?.keypoints;
       if (!kps?.length) return;
@@ -4812,6 +4817,21 @@ function Home() {
       if (items.length > 0) {
         setDataColumnActive(true);
         setMeasurementColumn(prev => [...prev, ...items]);
+        // Persist AI results + skeleton + derived angles into the active snapshot
+        const aiDetection: Record<string, number> = {};
+        const jointAngles: Record<string, number> = {};
+        for (const it of items) {
+          if (it.type === 'angle') jointAngles[it.label] = it.value;
+          aiDetection[it.label] = it.value;
+        }
+        setSnapshots(prev => prev.map(s => s.id === newSnapId ? {
+          ...s,
+          column: items,
+          aiDetection,
+          jointAngles,
+          skeleton: kps.map(k => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' })),
+          overlaysOn: true,
+        } : s));
         setProcessingStatus(`AI detected ${items.length} measurements`);
       } else {
         setProcessingStatus('No measurements detected — ensure skeleton is tracking the player');

@@ -137,6 +137,8 @@ export interface CanvasHandle {
   drawSwingFromSegment: (segment: SwingSegment, color: string) => void;
   setRacketTrail: (trail: RacketTrail | null) => void;
   getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
+  /** Current frame's pose keypoints (for snapshot capture). */
+  getSkeletonKeypoints: () => Array<{ x: number; y: number; score: number; name: string }> | null;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
   /** Cancel an in-progress StroMotion region selection; fires the pending callback with null */
@@ -2413,6 +2415,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         racketTrailRef.current = trail;
       },
       getSkeletonFrames: () => skeletonFramesRef.current,
+      getSkeletonKeypoints: () => latestKeypointsRef.current ? [...latestKeypointsRef.current] : null,
       startStroMotionRegionSelect: (cb) => {
         isSelectingStroRegionRef.current = true;
         stroRegionCallbackRef.current = cb;

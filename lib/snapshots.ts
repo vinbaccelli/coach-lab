@@ -25,6 +25,13 @@ export interface OverlayAdjustment {
   dy2: number;
 }
 
+export interface SnapshotKeypoint {
+  x: number;
+  y: number;
+  score: number;
+  name: string;
+}
+
 export interface Snapshot {
   id: string;
   timeSec: number;
@@ -36,6 +43,12 @@ export interface Snapshot {
   overlayAdjustments: Record<string, OverlayAdjustment>;
   screenshot?: string;
   notes?: string;
+  /** Pose keypoints captured at this frame. */
+  skeleton?: SnapshotKeypoint[];
+  /** Raw AI-detected values (angles, distances) keyed by metric. */
+  aiDetection?: Record<string, number>;
+  /** Derived joint angles keyed by joint label. */
+  jointAngles?: Record<string, number>;
 }
 
 let snapshotCounter = 0;
