@@ -3392,7 +3392,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Watermark logo ───────────────────────────────────────────────────
     useEffect(() => {
       const img = new Image();
-      img.src = '/logo-square.png';
+      img.src = '/logo-square-new.jpg';
       img.onload = () => { watermarkRef.current = img; watermarkLoadedRef.current = true; };
       img.onerror = () => { watermarkLoadedRef.current = false; };
     }, []);

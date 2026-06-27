@@ -744,8 +744,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
       {/* Logo */}
       <div style={{ display: 'flex', justifyContent: io ? 'center' : 'center', padding: io ? '2px 0' : '6px 8px 10px' }}>
         {io
-          ? <img src="/logo-square.svg" alt="AngleMotion" style={{ width: 36, height: 36, borderRadius: 7 }} />
-          : <img src="/logo-rect.svg" alt="anglemotion.com" style={{ width: '100%', maxWidth: 200, height: 'auto' }} />
+          ? <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 36, height: 36, borderRadius: 7 }} />
+          : <img src="/logo-rect-new.jpg" alt="Anglemotion" style={{ width: '100%', maxWidth: 180, height: 'auto', borderRadius: 6 }} />
         }
       </div>
       {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
