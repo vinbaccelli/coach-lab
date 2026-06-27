@@ -4540,7 +4540,7 @@ function Home() {
         setSkeletonKeepAlive(true);
         canvasRef.current?.resetSkeleton();
         setSkeletonWaitingForClick(false);
-        setTimeout(() => setSkeletonConfirmOpen(true), 2500);
+        setTimeout(() => setSkeletonConfirmOpen(true), 8000);
       } else if (screen === 'home') {
         setStroMotionActive(false);
       }

@@ -487,49 +487,43 @@ function drawSkeletonOverlay(
       if (dirLen > 1) {
         const ext = dirLen * 1.2;
         ctx.save();
-        ctx.strokeStyle = '#AF52DE';
+        ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
         ctx.lineWidth = 1;
-        ctx.setLineDash([]);
+        ctx.setLineDash([4, 3]);
         ctx.beginPath();
         ctx.moveTo(midShoulder.x, midShoulder.y);
         ctx.lineTo(noseX, noseY);
         ctx.lineTo(noseX + (dirX / dirLen) * ext, noseY + (dirY / dirLen) * ext);
         ctx.stroke();
-        const angle = Math.atan2(dirY, dirX);
-        const hl = 6;
-        ctx.beginPath();
-        ctx.moveTo(noseX + (dirX / dirLen) * ext, noseY + (dirY / dirLen) * ext);
-        ctx.lineTo(noseX + (dirX / dirLen) * ext - hl * Math.cos(angle - 0.4), noseY + (dirY / dirLen) * ext - hl * Math.sin(angle - 0.4));
-        ctx.moveTo(noseX + (dirX / dirLen) * ext, noseY + (dirY / dirLen) * ext);
-        ctx.lineTo(noseX + (dirX / dirLen) * ext - hl * Math.cos(angle + 0.4), noseY + (dirY / dirLen) * ext - hl * Math.sin(angle + 0.4));
-        ctx.stroke();
+        ctx.setLineDash([]);
         ctx.restore();
       }
     }
   }
 
-  // Foot direction lines (ankle → toe tip, perpendicular-forward from shin)
+  // Foot direction lines (ankle → toe tip)
   if (showFootLine) {
-    const lHipFoot = keypoints[11], rHipFoot = keypoints[12];
-    const facingRight = (lHipFoot && rHipFoot && lHipFoot.score >= scoreThreshold && rHipFoot.score >= scoreThreshold)
-      ? lHipFoot.x < rHipFoot.x : true;
-    for (const [kneeIdx, ankleIdx] of [[13, 15], [14, 16]] as [number, number][]) {
+    for (const [kneeIdx, ankleIdx, hipIdx] of [[13, 15, 11], [14, 16, 12]] as [number, number, number][]) {
       if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
       const knee  = keypoints[kneeIdx];
       const ankle = keypoints[ankleIdx];
+      const hip   = keypoints[hipIdx];
       if (!knee || !ankle || knee.score < scoreThreshold || ankle.score < scoreThreshold) continue;
       const ax = ankle.x * sx, ay = ankle.y * sy;
-      const shinLen = Math.hypot((ankle.x - knee.x) * sx, (ankle.y - knee.y) * sy);
+      const kx = knee.x * sx, ky = knee.y * sy;
+      const shinLen = Math.hypot(ax - kx, ay - ky);
       if (shinLen < 1) continue;
       const toeLen = shinLen * 0.35;
-      const toeAngle = facingRight ? 0.3 : Math.PI - 0.3;
+      // Determine forward direction: use hip→ankle horizontal direction
+      const hipX = (hip && hip.score >= scoreThreshold) ? hip.x * sx : kx;
+      const fwd = ax >= hipX ? 1 : -1;
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      ctx.lineTo(ax + Math.cos(toeAngle) * toeLen, ay + Math.sin(toeAngle) * toeLen);
+      ctx.lineTo(ax + fwd * toeLen, ay + toeLen * 0.15);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
