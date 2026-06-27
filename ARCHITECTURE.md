@@ -8,6 +8,9 @@
 >
 > **Last reviewed:** after the Snapshot architecture migration + production
 > readiness review.
+>
+> **Companion doc:** `DECISIONS.md` records *why* these architectural choices
+> were made (ADR log). This document covers *how* the system works.
 
 ---
 
