@@ -709,13 +709,19 @@ function Home() {
   const [phasesPickerOpen, setPhasesPickerOpen] = useState(false);
   const [showMeasurementOverlays, setShowMeasurementOverlays] = useState(false);
 
-  // Track current video time via rAF poll (fires even while paused, unlike 'timeupdate')
+  // Track current video time via rAF poll (fires even while paused, unlike 'timeupdate').
+  // Throttled to ~10 Hz and only commits on a meaningful delta to avoid 60 fps
+  // re-renders of the whole analysis tree during playback.
   const [currentVideoTime, setCurrentVideoTime] = useState(0);
   useEffect(() => {
     let raf = 0;
-    const poll = () => {
-      const v = videoRef.current;
-      if (v) setCurrentVideoTime(prev => (Math.abs(prev - v.currentTime) > 0.02 ? v.currentTime : prev));
+    let lastTick = 0;
+    const poll = (now: number) => {
+      if (now - lastTick >= 100) {
+        lastTick = now;
+        const v = videoRef.current;
+        if (v) setCurrentVideoTime(prev => (Math.abs(prev - v.currentTime) > 0.05 ? v.currentTime : prev));
+      }
       raf = requestAnimationFrame(poll);
     };
     raf = requestAnimationFrame(poll);
@@ -2126,11 +2132,20 @@ function Home() {
     if (skeletonEnabled) setDataColumnActive(true);
   }, [skeletonEnabled]);
 
-  // Auto-save measurement column into the active snapshot
+  // Auto-save measurement column into the active snapshot.
+  // Skips when the non-angle column is structurally unchanged so the live
+  // skeleton-angle flushes (every 500ms) don't churn the snapshots array.
   useEffect(() => {
     if (!biomechSelectedPhaseId) return;
     const nonAngle = measurementColumn.filter(m => m.type !== 'skeleton-angle');
-    setSnapshots(prev => prev.map(s => s.id === biomechSelectedPhaseId ? { ...s, column: nonAngle } : s));
+    setSnapshots(prev => {
+      const cur = prev.find(s => s.id === biomechSelectedPhaseId);
+      if (!cur) return prev;
+      const same = cur.column.length === nonAngle.length
+        && cur.column.every((c, i) => c.id === nonAngle[i].id && c.value === nonAngle[i].value);
+      if (same) return prev;
+      return prev.map(s => s.id === biomechSelectedPhaseId ? { ...s, column: nonAngle } : s);
+    });
   }, [measurementColumn, biomechSelectedPhaseId]);
 
   // Live skeleton angle updates → data column (throttled to avoid render storms)
