@@ -9,8 +9,9 @@
 > **Last reviewed:** after the Snapshot architecture migration + production
 > readiness review.
 >
-> **Companion doc:** `DECISIONS.md` records *why* these architectural choices
-> were made (ADR log). This document covers *how* the system works.
+> **Companion docs:** `DECISIONS.md` records *why* these choices were made (ADR
+> log); `ROADMAP.md` records *what* remains to be built (P0–P3, mapped to the §14
+> debt register). This document covers *how* the system works.
 
 ---
 
