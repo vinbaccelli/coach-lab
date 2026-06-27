@@ -11,7 +11,8 @@
 >
 > **Companion docs:** `DECISIONS.md` records *why* these choices were made (ADR
 > log); `ROADMAP.md` records *what* remains to be built (P0–P3, mapped to the §14
-> debt register). This document covers *how* the system works.
+> debt register); `CONTRIBUTING.md` is the mandatory *workflow* every change must
+> follow. This document covers *how* the system works.
 
 ---
 
