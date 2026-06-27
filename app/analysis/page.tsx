@@ -816,8 +816,11 @@ function Home() {
     setProcessingStatus(`Generated ${ordered.length} phase screenshots`);
   }, [snapshots, saveActiveSnapshot, seekVideoTo]);
 
-  /** Slow-mo replay: Freeze 3s → slow-play → snap to next → Freeze. */
-  const handleReplaySnapshots = useCallback(async () => {
+  const [generateVideoUrl, setGenerateVideoUrl] = useState<string | null>(null);
+  const [generateRecording, setGenerateRecording] = useState(false);
+
+  /** Slow-mo replay: Freeze 3s → slow-play → snap to next → Freeze. Optionally records to a Blob. */
+  const handleReplaySnapshots = useCallback(async (recorder?: MediaRecorder | null) => {
     const ordered = [...snapshots].sort((a, b) => a.timeSec - b.timeSec);
     if (ordered.length === 0) return;
     const v = videoRef.current;
@@ -854,9 +857,43 @@ function Home() {
       }
     }
     if (videoRef.current) { videoRef.current.pause(); videoRef.current.playbackRate = 1; }
+    if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* noop */ } }
     setReplayActive(false);
     setReplayIndex(null);
   }, [snapshots, seekVideoTo, selectSnapshot]);
+
+  /** Record the slow-mo replay to an MP4 file via canvas captureStream + ffmpeg. */
+  const recordReplayToMp4 = useCallback(async () => {
+    if (!snapshots.length || generateRecording) return;
+    const stream = canvasRef.current?.captureStream?.(30);
+    if (!stream) { setProcessingStatus('Recording not supported on this device'); return; }
+    const mimeCandidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+    const mime = mimeCandidates.find(m => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) ?? '';
+    let recorder: MediaRecorder;
+    try { recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined); }
+    catch { setProcessingStatus('Recording failed to start'); return; }
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    const done = new Promise<Blob>((resolve) => {
+      recorder.onstop = () => resolve(new Blob(chunks, { type: mime.includes('mp4') ? 'video/mp4' : 'video/webm' }));
+    });
+    setGenerateRecording(true);
+    setProcessingStatus('Recording slow-mo replay…');
+    recorder.start();
+    await handleReplaySnapshots(recorder);
+    const webmBlob = await done;
+    setProcessingStatus('Converting to MP4…');
+    let finalBlob = webmBlob;
+    if (!webmBlob.type.includes('mp4')) {
+      const conv = await convertWebmBlobToMp4(webmBlob);
+      if (conv.ok) finalBlob = conv.blob;
+    }
+    if (generateVideoUrl) URL.revokeObjectURL(generateVideoUrl);
+    const url = URL.createObjectURL(finalBlob);
+    setGenerateVideoUrl(url);
+    setGenerateRecording(false);
+    setProcessingStatus('Replay video ready — download below');
+  }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots]);
 
   const orderedSnapshots = useMemo(() => [...snapshots].sort((a, b) => a.timeSec - b.timeSec), [snapshots]);
 
@@ -7072,9 +7109,17 @@ function Home() {
           <SnapshotScrollPanel
             snapshots={orderedSnapshots}
             activeIndex={replayIndex}
-            replaying={replayActive}
+            replaying={replayActive || generateRecording}
+            videoUrl={generateVideoUrl}
             onSelectIndex={(i) => { const s = orderedSnapshots[i]; if (s) selectSnapshot(s.id); }}
-            onReplay={() => { void handleReplaySnapshots(); }}
+            onReplay={() => { void recordReplayToMp4(); }}
+            onDownloadVideo={() => {
+              if (!generateVideoUrl) return;
+              const a = document.createElement('a');
+              a.href = generateVideoUrl;
+              a.download = `anglemotion-replay-${Date.now()}.mp4`;
+              a.click();
+            }}
             onClose={() => { replayAbortRef.current = true; setSnapshotPanelOpen(false); }}
           />
         </React.Suspense>
