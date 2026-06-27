@@ -484,6 +484,9 @@ function Home() {
   const reelsDesktopEarly = !isMobile && layoutMode === 'reels';
   const phoneToolbarLayout = isMobile || showMobileToolStrip || reelsDesktopEarly;
   const compactToolbarRail = phoneToolbarLayout || (!isMobile && toolbarCollapsed);
+  const [toolbarLabelsExpanded, setToolbarLabelsExpanded] = useState(false);
+  // Embedded panels (StroMotion/Biomech) show labels when the toolbar shows labels.
+  const panelShowLabels = !compactToolbarRail || toolbarLabelsExpanded;
   /** Large tap targets only on real phones — desktop 9:16 preview keeps compact UI */
   const touchChrome                         = isMobile;
 
@@ -1436,7 +1439,7 @@ function Home() {
   const stroMotionPanelEl = (
     <StroMotionPanel
       compact
-      showLabels={!compactToolbarRail}
+      showLabels={panelShowLabels}
       objectType={stroObjectType}
       onObjectTypeChange={handleStroObjectTypeChange}
       currentTime={stroVideoTime}
@@ -1930,7 +1933,7 @@ function Home() {
   const biomechanicsPanelEl = (
     <BiomechanicsPanel
       compact
-      showLabels={!compactToolbarRail}
+      showLabels={panelShowLabels}
       currentTime={biomechVideoTime}
       duration={biomechVideoDuration}
       strokeType={biomechStrokeType}
@@ -2195,8 +2198,6 @@ function Home() {
       return next;
     });
   }, []);
-
-  const [toolbarLabelsExpanded, setToolbarLabelsExpanded] = useState(false);
 
   const toolbarWidthPx = useMemo(() => {
     if (isMobile) return TOOLBAR_MOBILE_FIXED_W;
