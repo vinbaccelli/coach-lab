@@ -53,6 +53,7 @@ import {
   normalizeSubjectBox,
   subjectBoxFromRegion,
 } from '@/lib/stroMotion';
+import { makeSnapshot, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
 import {
   allFramesReady,
   captureVideoFrameAtTime,
@@ -568,9 +569,15 @@ function Home() {
   const [biomechFrameCards, setBiomechFrameCards] = useState<Array<{ id: string; label: string; timeSec: number; imageUrl: string }>>([]);
   const [biomechReportAnalysis, setBiomechReportAnalysis] = useState<import('@/lib/biomechanics/types').BiomechanicsAnalysis | null>(null);
   const [biomechEditingFrameIndex, setBiomechEditingFrameIndex] = useState<number | null>(null);
-  const [biomechPhaseMarkers, setBiomechPhaseMarkers] = useState<Array<{ id: string; label: string; short?: string; time: number }> | null>(null);
+  // ── Snapshot model: single source of truth for Metrics analysis ──────────
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number; unit: string; type: string }>>([]);
   const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
+  // Derived phase markers (green balls) consumed by PreciseTimeline.
+  const biomechPhaseMarkers = useMemo(
+    () => (snapshots.length ? toPhaseMarkers(snapshots) : null),
+    [snapshots],
+  );
   const biomechFrameDrawingsRef = useRef<Record<number, string>>({});
   const biomechFrameMeasurementsRef = useRef<Record<number, typeof measurementColumn>>({});
   const [measurementColumnPos, setMeasurementColumnPos] = useState<{ x: number; y: number }>({ x: 0.68, y: 0.02 });
@@ -698,31 +705,70 @@ function Home() {
   const [phasesPickerOpen, setPhasesPickerOpen] = useState(false);
   const [showMeasurementOverlays, setShowMeasurementOverlays] = useState(false);
 
-  // Per-phase scoped state storage
-  const phaseColumnsRef = useRef<Record<string, Array<{ id: string; label: string; value: number; unit: string; type: string }>>>({});
-  const phaseOverlaysRef = useRef<Record<string, boolean>>({});
-  const phaseOverlayAdjRef = useRef<Record<string, Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>>>({});
-  const phaseDrawingsRef = useRef<Record<string, string>>({});
-
-  // Track current video time for phase proximity check
+  // Track current video time via rAF poll (fires even while paused, unlike 'timeupdate')
   const [currentVideoTime, setCurrentVideoTime] = useState(0);
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    const onTimeUpdate = () => setCurrentVideoTime(v.currentTime);
-    v.addEventListener('timeupdate', onTimeUpdate);
-    return () => v.removeEventListener('timeupdate', onTimeUpdate);
-  });
+    let raf = 0;
+    const poll = () => {
+      const v = videoRef.current;
+      if (v) setCurrentVideoTime(prev => (Math.abs(prev - v.currentTime) > 0.02 ? v.currentTime : prev));
+      raf = requestAnimationFrame(poll);
+    };
+    raf = requestAnimationFrame(poll);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
-  // Data column visible only when near the active phase (within 0.5s)
+  // Data column visible only when the playhead is on the active snapshot (within 0.3s)
+  const activeSnapshot = useMemo(
+    () => snapshots.find(s => s.id === biomechSelectedPhaseId) ?? null,
+    [snapshots, biomechSelectedPhaseId],
+  );
   const isNearActivePhase = (() => {
-    if (!biomechSelectedPhaseId || !biomechPhaseMarkers?.length) return true;
-    const marker = biomechPhaseMarkers.find(m => m.id === biomechSelectedPhaseId);
-    if (!marker) return true;
-    return Math.abs(currentVideoTime - marker.time) < 0.5;
+    if (!activeSnapshot) return true;
+    return Math.abs(currentVideoTime - activeSnapshot.timeSec) < 0.3;
   })();
   const dataColumnVisible = (dataColumnActive && isNearActivePhase) || (biomechActive && biomechActiveFrameIndex !== null);
   const ballTrailEnabled = activeTool === 'ballShadow';
+
+  // ── Snapshot helpers ─────────────────────────────────────────────────────
+  /** Persist the live canvas/column state into the currently-active snapshot. */
+  const saveActiveSnapshot = useCallback(() => {
+    const id = biomechSelectedPhaseId;
+    if (!id) return;
+    const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
+    const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
+    setSnapshots(prev => prev.map(s => s.id === id ? {
+      ...s,
+      column: measurementColumn.filter(m => m.type !== 'skeleton-angle'),
+      overlaysOn: showMeasurementOverlays,
+      overlayAdjustments,
+      drawingsJson,
+    } : s));
+  }, [biomechSelectedPhaseId, measurementColumn, showMeasurementOverlays]);
+
+  /** Create a new snapshot at a time, make it active. Returns the new id. */
+  const createSnapshot = useCallback((timeSec: number, label: string, short: string): string => {
+    const snap = makeSnapshot(timeSec, label, short);
+    saveActiveSnapshot();
+    setSnapshots(prev => [...prev, snap]);
+    setBiomechSelectedPhaseId(snap.id);
+    return snap.id;
+  }, [saveActiveSnapshot]);
+
+  /** Switch to an existing snapshot: save current, restore target, seek video. */
+  const selectSnapshot = useCallback((id: string) => {
+    saveActiveSnapshot();
+    const target = snapshots.find(s => s.id === id);
+    setBiomechSelectedPhaseId(id);
+    if (!target) return;
+    const liveAngles = measurementColumn.filter(m => m.type === 'skeleton-angle');
+    setMeasurementColumn([...liveAngles, ...target.column]);
+    setShowMeasurementOverlays(target.overlaysOn);
+    canvasRef.current?.setOverlayAdjustments?.(target.overlayAdjustments ?? {});
+    if (target.drawingsJson) canvasRef.current?.importStrokes?.(target.drawingsJson);
+    else canvasRef.current?.clearAll?.();
+    if (videoRef.current) { videoRef.current.currentTime = target.timeSec; videoRef.current.pause(); }
+  }, [saveActiveSnapshot, snapshots, measurementColumn]);
 
   const skeletonParts = useMemo(() => ({
     rightArm: skeletonShowRightArm,
@@ -1617,7 +1663,7 @@ function Home() {
     setBiomechCapturedImages({});
     setBiomechFrameNotes({});
     setBiomechMeasurements({});
-    setBiomechPhaseMarkers(null);
+    setSnapshots([]);
     setBiomechSelectedPhaseId(null);
     biomechFrameDrawingsRef.current = {};
     biomechFrameMeasurementsRef.current = {};
@@ -1948,14 +1994,11 @@ function Home() {
     if (skeletonEnabled) setDataColumnActive(true);
   }, [skeletonEnabled]);
 
-  // Auto-save measurement column to active phase
+  // Auto-save measurement column into the active snapshot
   useEffect(() => {
-    if (biomechSelectedPhaseId) {
-      const nonAngle = measurementColumn.filter(m => m.type !== 'skeleton-angle');
-      if (nonAngle.length > 0) {
-        phaseColumnsRef.current[biomechSelectedPhaseId] = nonAngle;
-      }
-    }
+    if (!biomechSelectedPhaseId) return;
+    const nonAngle = measurementColumn.filter(m => m.type !== 'skeleton-angle');
+    setSnapshots(prev => prev.map(s => s.id === biomechSelectedPhaseId ? { ...s, column: nonAngle } : s));
   }, [measurementColumn, biomechSelectedPhaseId]);
 
   // Live skeleton angle updates → data column (throttled to avoid render storms)
@@ -4227,39 +4270,9 @@ function Home() {
         onCurrentTime: setBiomechVideoTime,
         phaseMarkers: biomechPhaseMarkers,
         selectedPhaseMarkerId: biomechSelectedPhaseId,
-        onPhaseMarkerSelect: (id: string) => {
-          // Save current phase's state
-          const prevId = biomechSelectedPhaseId;
-          if (prevId) {
-            phaseColumnsRef.current[prevId] = [...measurementColumn.filter(m => m.type !== 'skeleton-angle')];
-            phaseOverlaysRef.current[prevId] = showMeasurementOverlays;
-            phaseOverlayAdjRef.current[prevId] = canvasRef.current?.getOverlayAdjustments?.() ?? {};
-            phaseDrawingsRef.current[prevId] = canvasRef.current?.exportStrokes?.() ?? '';
-          }
-          // Restore target phase's state
-          const savedCol = phaseColumnsRef.current[id];
-          setMeasurementColumn(prev => {
-            const liveAngles = prev.filter(m => m.type === 'skeleton-angle');
-            return [...liveAngles, ...(savedCol ?? [])];
-          });
-          setShowMeasurementOverlays(phaseOverlaysRef.current[id] ?? false);
-          canvasRef.current?.setOverlayAdjustments?.(phaseOverlayAdjRef.current[id] ?? {});
-          const savedDrawings = phaseDrawingsRef.current[id];
-          if (savedDrawings) {
-            canvasRef.current?.importStrokes?.(savedDrawings);
-          } else {
-            canvasRef.current?.clearAll?.();
-          }
-          // Seek video to phase time
-          const marker = biomechPhaseMarkers?.find(m => m.id === id);
-          if (marker && videoRef.current) {
-            videoRef.current.currentTime = marker.time;
-            videoRef.current.pause();
-          }
-          setBiomechSelectedPhaseId(id);
-        },
+        onPhaseMarkerSelect: (id: string) => selectSnapshot(id),
         onPhaseMarkerChange: (id: string, time: number) => {
-          setBiomechPhaseMarkers(prev => prev?.map(m => m.id === id ? { ...m, time } : m) ?? null);
+          setSnapshots(prev => prev.map(s => s.id === id ? { ...s, timeSec: time } : s));
         },
         phaseMarkerBounds: { start: biomechTrimStart, end: biomechTrimEnd },
         sampleMarkers: biomechSampleMarkers,
@@ -4548,13 +4561,7 @@ function Home() {
         setSkeletonWaitingForClick(false);
         setSkeletonLocked(false);
         skeletonFirstDetectedRef.current = false;
-        // Auto-create phase at current time
-        if (!biomechPhaseMarkers?.length) {
-          const t = videoRef.current?.currentTime ?? 0;
-          const phaseId = `skel-${Date.now()}`;
-          setBiomechPhaseMarkers([{ id: phaseId, label: 'Skeleton', short: 'SK', time: t }]);
-          setBiomechSelectedPhaseId(phaseId);
-        }
+        // Skeleton does NOT create a snapshot — it modifies the active one.
       } else if (screen === 'home') {
         setStroMotionActive(false);
       }
@@ -4581,11 +4588,9 @@ function Home() {
     onDataColumnToggle:              () => {
       setDataColumnActive(v => {
         const next = !v;
-        if (next && !biomechPhaseMarkers?.length) {
+        if (next && !snapshots.length) {
           const t = videoRef.current?.currentTime ?? 0;
-          const phaseId = `col-${Date.now()}`;
-          setBiomechPhaseMarkers([{ id: phaseId, label: 'Column', short: 'C', time: t }]);
-          setBiomechSelectedPhaseId(phaseId);
+          createSnapshot(t, 'Column', 'C');
         }
         return next;
       });
@@ -4623,13 +4628,10 @@ function Home() {
     onAutoDetectMeasurements:        () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
-      // Auto-create a phase at current time if none exists
+      // AI Detect always creates a fresh snapshot at the current time
       const currentTime = videoRef.current?.currentTime ?? 0;
-      if (!biomechPhaseMarkers?.length) {
-        const phaseId = `auto-${Date.now()}`;
-        setBiomechPhaseMarkers([{ id: phaseId, label: 'AI Detect', short: 'AI', time: currentTime }]);
-        setBiomechSelectedPhaseId(phaseId);
-      }
+      const phaseNum = (snapshots.length + 1);
+      createSnapshot(currentTime, `Phase ${phaseNum}`, String(phaseNum));
       const latest = skFrames[skFrames.length - 1];
       const kps = latest?.keypoints;
       if (!kps?.length) return;
@@ -6987,30 +6989,26 @@ function Home() {
               const trimStart = biomechTrimStart > 0 ? biomechTrimStart : Math.max(0, videoTime - 2);
               const trimEnd = biomechTrimEnd > trimStart ? biomechTrimEnd : Math.min(videoDur, videoTime + 3);
 
+              let newSnaps: Snapshot[];
               if (preset.type === 'preset') {
                 setBiomechStrokeType(preset.strokeType);
                 const { getPhaseDefinitions } = require('@/lib/biomechanics/strokePhases');
                 const defs = getPhaseDefinitions(preset.strokeType);
-                const markers = defs.map((d: any, i: number) => ({
-                  id: d.id,
-                  label: d.label,
-                  short: d.short,
-                  time: trimStart + ((i + 0.5) / defs.length) * (trimEnd - trimStart),
-                }));
-                setBiomechPhaseMarkers(markers);
+                newSnaps = defs.map((d: any, i: number) => {
+                  const s = makeSnapshot(trimStart + ((i + 0.5) / defs.length) * (trimEnd - trimStart), d.label, d.short);
+                  return s;
+                });
                 setBiomechFrameCount(Math.min(defs.length, 15) as any);
               } else {
                 setBiomechStrokeType('custom');
                 const count = preset.count;
-                const markers = Array.from({ length: count }, (_, i) => ({
-                  id: `custom-${i}`,
-                  label: `Phase ${i + 1}`,
-                  short: `${i + 1}`,
-                  time: trimStart + ((i + 0.5) / count) * (trimEnd - trimStart),
-                }));
-                setBiomechPhaseMarkers(markers);
+                newSnaps = Array.from({ length: count }, (_, i) =>
+                  makeSnapshot(trimStart + ((i + 0.5) / count) * (trimEnd - trimStart), `Phase ${i + 1}`, String(i + 1)),
+                );
                 setBiomechFrameCount(Math.min(count, 15) as any);
               }
+              setSnapshots(newSnaps);
+              setBiomechSelectedPhaseId(newSnaps[0]?.id ?? null);
               setBiomechActive(true);
             }}
           />
