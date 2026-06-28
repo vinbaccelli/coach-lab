@@ -99,6 +99,8 @@ interface Snapshot {
   timeSec: number;                              // timeline anchor (== videoFrame/timestamp)
   label: string;                                // "Contact", "Phase 1"
   short: string;                                // "C", "1"
+  mediaId?: string;                             // reference to the MediaAsset (playback identity) — see §9.1
+
   column: SnapshotMeasurement[];                // measurements + manual notes (NOT live angles)
   drawingsJson: string;                         // serialized Fabric strokes
   overlaysOn: boolean;                          // measurement angle-arrow overlays visible
@@ -263,6 +265,37 @@ attach to the Snapshot as an optional field rather than spawning a third model.
 **Not allowed:** any *persistent analysis data* outside the Snapshot for the
 Phases flow. The Frame Capture model (§14.2) currently violates this and is
 tracked as debt.
+
+### 9.1 Media Layer (playback identity, decoupled from analysis)
+
+Video playback identity lives in a separate **MediaAsset** model
+(`lib/media/mediaAsset.ts`) — never inside the Snapshot.
+
+```ts
+interface MediaAsset {
+  id: string;
+  localUrl: string | null;   // blob URL — instant playback, never persisted
+  remoteUrl: string | null;  // Supabase signed URL — persistent
+  status: 'uploading' | 'ready' | 'failed';
+  metadata?: { duration?: number; fps?: number; size?: number };
+}
+```
+
+- **Principle:** *Snapshots define analysis; MediaAssets define playback
+  identity; playback resolves the best available source.*
+- **Resolver:** `getVideoSource(asset) = remoteUrl ?? localUrl ?? null`. All
+  slot-A playback source decisions go through it.
+- **Dual-source flow (in-session):** on file select → create a MediaAsset with
+  `localUrl` (blob) + `status:'uploading'`, play immediately; upload the file to
+  the `player-videos` Supabase bucket in the background; on success set
+  `remoteUrl` + `status:'ready'` and swap the live `<video>` to the resolved
+  source **preserving playhead + play state** (no timeline reset, no Snapshot
+  change); on failure keep `localUrl` (`status:'failed'`).
+- **Snapshot link:** Snapshots store only `mediaId` (§3 schema). They never hold
+  `File`, `Blob`, or object URLs.
+- **Scope:** in-session correctness only. Cross-session reload restore (rehydrate
+  the video from `remoteUrl` + restore snapshots) is **P0-1** (§10, §14.1).
+- **Requires:** a `player-videos` storage bucket in Supabase.
 
 ---
 

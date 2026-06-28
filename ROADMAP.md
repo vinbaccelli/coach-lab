@@ -26,13 +26,25 @@
 - **Complexity:** L
 - **Status:** Planned
 
-### P0-2 · Session save/load using Snapshot
+### P0-2 · Media Persistence Layer (dual-source MediaAsset) — in-session
+- **Description:** `MediaAsset` model (`lib/media/mediaAsset.ts`) with
+  `localUrl`/`remoteUrl`/`status` + `getVideoSource` resolver. On upload: instant
+  blob playback → background Supabase upload (`player-videos` bucket) → seamless
+  swap to persistent URL preserving playhead. Snapshots reference `mediaId` only.
+- **Why it matters:** Removes the ephemeral-blob coupling and gives a durable
+  video URL — the seam reload-restore (P0-1) builds on.
+- **Dependencies:** `player-videos` Supabase bucket.
+- **Maps to:** ARCHITECTURE §9.1, §3 (mediaId), DECISIONS ADR-011.
+- **Complexity:** M
+- **Status:** Complete (in-session scope; cross-session reload restore is P0-1)
+
+### P0-2b · Session save/load using Snapshot
 - **Description:** Replace the legacy `aiMetricsDraft.frameMarkers` source in
   `lib/sessions/buildSessionPayload.ts` with snapshot-derived markers; write/read
-  `snapshots` JSONB on `player_sessions`.
+  `snapshots` (+ `MediaAsset.remoteUrl`) JSONB on `player_sessions`.
 - **Why it matters:** Saved sessions currently capture the wrong (legacy) phase
   data, disconnected from the snapshots the coach actually created.
-- **Dependencies:** P0-1.
+- **Dependencies:** P0-1, P0-2.
 - **Maps to:** ARCHITECTURE §8, §10, §14.1.
 - **Complexity:** M
 - **Status:** Planned

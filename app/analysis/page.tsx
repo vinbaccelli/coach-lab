@@ -55,6 +55,7 @@ import {
   subjectBoxFromRegion,
 } from '@/lib/stroMotion';
 import { makeSnapshot, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
+import { makeMediaAsset, uploadMediaAsset, getVideoSource, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
   captureVideoFrameAtTime,
@@ -295,6 +296,9 @@ function Home() {
   const [canvasSize, setCanvasSize]       = useState({ width: 800, height: 450 });
   const [videoSrc, setVideoSrc]           = useState<string | null>(null);
   const [videoSrcB, setVideoSrcB]         = useState<string | null>(null);
+  // Media Layer: dual-source asset for slot A. Snapshots reference it by id only.
+  const [mediaAssetA, setMediaAssetA]     = useState<MediaAsset | null>(null);
+  const currentMediaIdRef                 = useRef<string | null>(null);
   const [canvasSizeB, setCanvasSizeB]     = useState({ width: 800, height: 450 });
   const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('comet');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
@@ -761,6 +765,7 @@ function Home() {
   /** Create a new snapshot at a time, make it active. Returns the new id. */
   const createSnapshot = useCallback((timeSec: number, label: string, short: string): string => {
     const snap = makeSnapshot(timeSec, label, short);
+    if (currentMediaIdRef.current) snap.mediaId = currentMediaIdRef.current;
     saveActiveSnapshot();
     setSnapshots(prev => [...prev, snap]);
     setBiomechSelectedPhaseId(snap.id);
@@ -2625,6 +2630,44 @@ function Home() {
       resetStroMotion();
       canvasRef.current?.clearAll();
       resetToolAfterVideoLoad();
+      // ── Media Layer: instant local playback + background persistent upload ──
+      const asset = makeMediaAsset(url, file.size);
+      currentMediaIdRef.current = asset.id;
+      setMediaAssetA(asset);
+      void (async () => {
+        const userRes = await createSupabaseBrowserClient()?.auth.getUser();
+        const userId = userRes?.data?.user?.id;
+        if (!userId) { setMediaAssetA(a => a && a.id === asset.id ? { ...a, status: 'failed' } : a); return; }
+        const result = await uploadMediaAsset(file, userId);
+        // Ignore if a different video has since been loaded.
+        if (currentMediaIdRef.current !== asset.id) return;
+        if (result.ok) {
+          const updated: MediaAsset = { ...asset, remoteUrl: result.remoteUrl, status: 'ready' };
+          setMediaAssetA(a => a && a.id === asset.id ? updated : a);
+          // Seamless swap via the resolver (remoteUrl preferred), preserving
+          // playhead + play state. Timeline/snapshots are time-based, unaffected.
+          const resolved = getVideoSource(updated);
+          const v = videoRef.current;
+          if (v && resolved && lastBlobUrlARef.current === url) {
+            const t = v.currentTime;
+            const wasPlaying = !v.paused;
+            lastBlobUrlARef.current = resolved;
+            setVideoSrc(resolved);
+            const restore = () => {
+              v.currentTime = t;
+              if (wasPlaying) v.play().catch(() => {});
+              v.removeEventListener('loadeddata', restore);
+            };
+            v.addEventListener('loadeddata', restore);
+            // Revoke the now-unused blob after the swap settles.
+            setTimeout(() => { try { URL.revokeObjectURL(url); } catch { /* noop */ } }, 1000);
+          }
+          setProcessingStatus('Video saved to cloud');
+        } else {
+          setMediaAssetA(a => a && a.id === asset.id ? { ...a, status: 'failed' } : a);
+          setProcessingStatus('Cloud upload failed — using local video');
+        }
+      })();
     } else {
       lastBlobUrlBRef.current = url;
       setVideoSrcB(url);
@@ -7191,15 +7234,18 @@ function Home() {
                 const defs = getPhaseDefinitions(preset.strokeType);
                 newSnaps = defs.map((d: any, i: number) => {
                   const s = makeSnapshot(trimStart + ((i + 0.5) / defs.length) * (trimEnd - trimStart), d.label, d.short);
+                  if (currentMediaIdRef.current) s.mediaId = currentMediaIdRef.current;
                   return s;
                 });
                 setBiomechFrameCount(Math.min(defs.length, 15) as any);
               } else {
                 setBiomechStrokeType('custom');
                 const count = preset.count;
-                newSnaps = Array.from({ length: count }, (_, i) =>
-                  makeSnapshot(trimStart + ((i + 0.5) / count) * (trimEnd - trimStart), `Phase ${i + 1}`, String(i + 1)),
-                );
+                newSnaps = Array.from({ length: count }, (_, i) => {
+                  const s = makeSnapshot(trimStart + ((i + 0.5) / count) * (trimEnd - trimStart), `Phase ${i + 1}`, String(i + 1));
+                  if (currentMediaIdRef.current) s.mediaId = currentMediaIdRef.current;
+                  return s;
+                });
                 setBiomechFrameCount(Math.min(count, 15) as any);
               }
               setSnapshots(newSnaps);

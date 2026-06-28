@@ -252,6 +252,38 @@ single-analysis-model invariant and keeps each concern where it belongs.
 
 ---
 
+## ADR-011 — Media playback identity is a separate MediaAsset, not part of Snapshot
+
+- **Date / commit:** P0-2 Media Layer
+- **Status:** Accepted
+
+**Context.** Uploaded videos used ephemeral `blob:` URLs (`createObjectURL`) that
+die on reload, and the video source was entangled with analysis state. We needed
+instant playback on upload, background persistence, and a clean seam for future
+reload-restore — without coupling video lifecycle to Snapshots.
+
+**Decision.** Introduce a dual-source `MediaAsset` model (`localUrl` for instant
+playback, `remoteUrl` for persistence, `status`) with a `getVideoSource` resolver
+(`remoteUrl ?? localUrl`). Playback starts on the local blob, uploads to Supabase
+in the background, then swaps to the persistent URL preserving playhead/play
+state. Snapshots reference only `mediaId` — never `File`, `Blob`, or object URLs.
+
+**Consequences.** Media and analysis are decoupled; playback never blocks on
+upload; Snapshots stay deterministic and serialization-friendly. Cross-session
+reload restore is intentionally deferred to P0-1 (this layer only guarantees
+in-session correctness). Requires a `player-videos` Supabase bucket.
+
+**Alternatives considered.** (a) Store the video URL on the Snapshot — rejected:
+pollutes the analysis model with playback/upload state. (b) Upload-first, no blob
+— rejected: blocks playback for minutes on large/mobile uploads. (c) Keep blob
+only — rejected: that is the bug (dies on reload).
+
+**Why preferred.** A dedicated media identity with a resolver gives instant UX,
+durable storage, and a single decoupled seam that P0-1 can build on — while
+keeping Snapshot the sole analysis model.
+
+---
+
 # Future Decisions
 
 Copy this template for every significant decision. Keep records append-only;

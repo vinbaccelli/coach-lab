@@ -37,6 +37,8 @@ export interface Snapshot {
   timeSec: number;
   label: string;
   short: string;
+  /** Reference to the MediaAsset this snapshot was analysed against (playback identity). */
+  mediaId?: string;
   column: SnapshotMeasurement[];
   drawingsJson: string;
   overlaysOn: boolean;
