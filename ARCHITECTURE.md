@@ -38,6 +38,33 @@ player database, and report export.
 - **Long-term maintainability.** New analysis capabilities become *fields on the
   Snapshot*, not new state stores. See §13.
 
+### 1.1 V1 Scope & Priority (current product decision)
+
+> **AngleMotion V1 is an analysis application first, not a cloud platform.** The
+> editing session is **local**. V1 prioritizes a stable coaching workflow over
+> cloud persistence, and keeps infrastructure cost as close to zero as possible.
+
+**In scope for V1**
+- Local editing session: Recording/Upload → Metrics → Snapshots → Generate →
+  final export.
+- **Export strategy = Google Drive + YouTube** (the user's own accounts, not our
+  infrastructure). Final video either **downloads as MP4** or **uploads directly
+  to the user's YouTube account**.
+- After export, optionally attach the lesson to **No Player** or an **Existing
+  Player**, which **auto-updates that player's Timeline Google Doc** (§8.1) with
+  timestamp, YouTube link, snapshot screenshots, notes, measurements, and AI
+  Detect values. **Google Drive is the user's archive.**
+
+**Explicitly OUT of scope for V1** (deferred, not cancelled — do not build until
+this priority changes):
+- **Cloud Snapshot persistence** (serialize/restore `snapshots[]` to a DB). See
+  §10, §14.1.
+- **Storing videos on Supabase.** The Media Layer's remote-upload path (§9.1) is
+  **dormant in V1** — playback stays on the local blob.
+
+Snapshots remain the application's working model **during the editing session
+only**. They are not persisted to the cloud in V1.
+
 ---
 
 ## 2. Global Architecture
@@ -129,8 +156,9 @@ interface Snapshot {
   no-op writes). AI Detect writes `column`, `aiDetection`, `jointAngles`,
   `skeleton`, `overlaysOn` into the snapshot it creates (using the returned id).
 - **Switching** (`selectSnapshot(id)`): `saveActiveSnapshot()` → restore target's
-  column/overlays/adjustments/drawings → seek video to `timeSec` → pause →
-  set active. Atomic; no cross-snapshot leakage.
+  drawings (`importStrokes`) → overlayAdjustments → skeleton (`setSkeletonKeypoints`)
+  → column → overlaysOn → seek video to `timeSec` → pause → set active.
+  Atomic; no cross-snapshot leakage.
 - **Deletion**: currently only via full reset (`resetSession` → `setSnapshots([])`)
   or Phases replacement. Per-snapshot delete is not yet exposed.
 - **Serialization / Restoration**: **NOT YET IMPLEMENTED** — see §10 and §14.1.
@@ -152,11 +180,11 @@ All Metrics tools integrate through the active snapshot. Sub-screens live in
 |------|----------|----------------------|
 | **Draw** | Freehand/line/arrow/angle/etc. | Strokes → `drawingsJson` via Canvas `exportStrokes`/`importStrokes`. Modifies active snapshot only. |
 | **Skeleton** | Live MoveNet pose overlay | Renders from Canvas `latestKeypointsRef`; captured into `snapshot.skeleton` on save/AI-detect. Does NOT create a snapshot. |
-| **AI Detect** | Computes joint angles, shoulder/hip lines, foot/racket direction | **Creates** a snapshot; writes `column` + `aiDetection` + `jointAngles` + `skeleton`; enables overlays. |
+| **AI Detect** | Computes joint angles, shoulder/hip lines, foot/racket direction. All results are **editable** — click a column row to modify a value; changes update `column`, `aiDetection`, and `jointAngles` in the active snapshot immediately. | **Creates** a snapshot; writes `column` + `aiDetection` + `jointAngles` + `skeleton`; enables overlays. |
 | **Phases** | Preset (8-step FH/BH/serve, 2-step volley) or custom 1–20 | **Creates** N snapshots spread across the trim range. |
 | **Columns** | Right-side data column | Derived from `activeSnapshot.column` + live skeleton angles. Visible only when paused within 0.3 s of the active snapshot. |
 | **Measurements** | Angle/ruler/differential rows | Stored as `column` items (`type` distinguishes kind). |
-| **Angle tools / Overlays** | Editable arrow overlays from skeleton | `overlaysOn` + draggable endpoints in `overlayAdjustments`. |
+| **Angle tools / Overlays** | Editable arrow overlays from skeleton. Unified visual style: single color (`#FFD700`), thin dashed lines, draggable endpoints. | `overlaysOn` + draggable endpoints in `overlayAdjustments`. |
 
 **Behavior rules (frozen):** Skeleton and Draw modify the active snapshot only;
 AI Detect and Phases create snapshots; column derives from the snapshot.
@@ -240,7 +268,37 @@ attach to the Snapshot as an optional field rather than spawning a third model.
   step — a Docs failure never blocks the screenshot save.
   - Legacy `app/api/google/create-document` still creates a one-off report doc
     from a body string (used by the report path).
-- **Future persistence**: snapshots must be added to the session payload (§10).
+- **Post-V1 cloud persistence**: serializing snapshots to the session payload
+  (§10) is **deferred past V1** (§1.1). V1 does not write analysis state to a DB.
+
+### 8.1 Lesson Export & Archive (V1 strategy)
+
+V1's "save" is an **export to the user's own Google account**, not cloud DB
+persistence. After Generate produces the final video:
+
+```
+Final export
+   ├─ Download MP4                      (local file)
+   └─ Upload to user's YouTube account  (their account, returns a video link)
+        ↓
+   Attach lesson to:  No Player  |  Existing Player
+        ↓ (if a player is chosen)
+   Auto-update that player's Timeline Google Doc with:
+     • Timestamp
+     • YouTube link (if uploaded)
+     • Snapshot screenshots
+     • Notes
+     • Measurements
+     • AI Detect values
+```
+
+- The Timeline Google Doc is the existing per-player doc maintained by
+  `app/api/players/[id]/google-doc` (§8) — the lesson is appended as a new dated
+  entry. **Google Drive is the archive of record.**
+- "No Player" means the user keeps only the MP4 / YouTube link; nothing is written
+  to a player doc.
+- This flow uses the user's own YouTube + Drive quota, keeping our infra cost ~0.
+- **Status:** target architecture for V1; not yet implemented (see ROADMAP).
 
 ---
 
@@ -281,29 +339,45 @@ interface MediaAsset {
 }
 ```
 
+> ⚠️ **V1 scope (§1.1):** the **remote-upload path is DORMANT in V1.** V1 does
+> not store videos on Supabase. The MediaAsset *structure* (dual-source +
+> resolver) stays as the seam, but in V1 `remoteUrl` stays `null` and playback
+> runs on `localUrl` only. The Supabase upload behavior below is retained as the
+> **post-V1 target** and must not be re-enabled until the priority changes.
+
 - **Principle:** *Snapshots define analysis; MediaAssets define playback
   identity; playback resolves the best available source.*
 - **Resolver:** `getVideoSource(asset) = remoteUrl ?? localUrl ?? null`. All
-  slot-A playback source decisions go through it.
-- **Dual-source flow (in-session):** on file select → create a MediaAsset with
-  `localUrl` (blob) + `status:'uploading'`, play immediately; upload the file to
-  the `player-videos` Supabase bucket in the background; on success set
-  `remoteUrl` + `status:'ready'` and swap the live `<video>` to the resolved
-  source **preserving playhead + play state** (no timeline reset, no Snapshot
-  change); on failure keep `localUrl` (`status:'failed'`).
+  slot-A playback source decisions go through it. In V1 this always resolves to
+  `localUrl` (remote is dormant).
+- **V1 flow (local only):** on file select → create a MediaAsset with `localUrl`
+  (blob), play immediately. No upload, no swap. Session is local for its lifetime.
+- **Post-V1 dual-source flow (deferred):** additionally upload the file to the
+  `player-videos` Supabase bucket in the background; on success set `remoteUrl` +
+  `status:'ready'` and swap the live `<video>` to the resolved source
+  **preserving playhead + play state**; on failure keep `localUrl`
+  (`status:'failed'`). **Do not enable in V1.**
 - **Snapshot link:** Snapshots store only `mediaId` (§3 schema). They never hold
   `File`, `Blob`, or object URLs.
 - **Scope:** in-session correctness only. Cross-session reload restore (rehydrate
-  the video from `remoteUrl` + restore snapshots) is **P0-1** (§10, §14.1).
-- **Requires:** a `player-videos` storage bucket in Supabase.
+  the video from `remoteUrl` + restore snapshots) is **deferred past V1** (§10,
+  §14.1).
+- **Requires (post-V1 only):** a `player-videos` storage bucket in Supabase. Not
+  needed for V1.
 
 ---
 
-## 10. Session Persistence — Intended Architecture
+## 10. Session Persistence — Post-V1 Architecture
 
-**Intended:** Snapshots are serialized into the session payload and fully
-restored on load, so a saved analysis re-opens with identical phases, columns,
-drawings, overlays, skeleton, and AI detection.
+> ⚠️ **DEFERRED PAST V1 (§1.1).** Cloud Snapshot persistence is **not** part of
+> V1. In V1 the editing session is local and ephemeral; durable output comes from
+> the **Drive + YouTube export** strategy (§8.1), not from serializing snapshots
+> to a database. The design below is retained as the post-V1 target. Do not build
+> it until the V1 priority changes.
+
+**Intended (post-V1):** Snapshots are serialized into the session payload and
+fully restored on load, so a saved analysis re-opens with identical phases,
+columns, drawings, overlays, skeleton, and AI detection.
 
 **Required shape:** add `snapshots: Snapshot[]` to the session create/patch
 payload (`lib/sessions/types.ts`, `buildSessionPayload.ts`, `db.ts`), persist as
@@ -312,10 +386,12 @@ JSONB on `player_sessions`, and hydrate back into `setSnapshots` on session open
 screenshots should be uploaded to storage and referenced by URL rather than
 inlined.
 
-> ⚠️ **Outstanding Technical Debt.** The current implementation does **not**
-> serialize or restore snapshots. Session save still reads `frameMarkers` from
-> the legacy `aiMetricsDraft`, not from snapshots. Snapshots are component-state
-> only and are lost on reload/navigation. See §14.1.
+> ℹ️ **V1 status (intentional).** The current implementation does **not**
+> serialize or restore snapshots, and session save still reads `frameMarkers`
+> from the legacy `aiMetricsDraft`. In V1 this is **by design** (§1.1): the
+> editing session is local and ephemeral, and durability is delivered by the
+> Drive + YouTube export (§8.1). This becomes debt to pay down only when the
+> post-V1 persistence priority is activated. See §14.1.
 
 ---
 
@@ -382,14 +458,17 @@ Rules:
 
 ## 14. Technical Debt
 
-### 14.1 Snapshot persistence — **PRIORITY: HIGH**
+### 14.1 Snapshot persistence — **DEFERRED PAST V1** (was HIGH)
 - **Description:** Snapshots are not serialized to the session or restored on
   load; session save still uses legacy `aiMetricsDraft.frameMarkers`.
-- **Impact:** Coaches lose all phase analysis on reload/navigation; "save/load
-  restores identical Snapshot model" is unmet.
-- **Recommended solution:** Add `snapshots` JSONB to `player_sessions`; wire
-  through `lib/sessions/{types,buildSessionPayload,db}.ts`; upload screenshots to
-  storage; hydrate into `setSnapshots` on open.
+- **V1 decision (§1.1):** This is **intentional** for V1. The editing session is
+  local; durability is delivered by the Drive + YouTube export (§8.1), not by
+  cloud snapshot persistence. Not debt to pay down in V1.
+- **Impact (accepted in V1):** the in-memory session is lost on reload/navigation
+  by design; coaches export the lesson before leaving.
+- **Recommended solution (post-V1 only):** Add `snapshots` JSONB to
+  `player_sessions`; wire through `lib/sessions/{types,buildSessionPayload,db}.ts`;
+  upload screenshots to storage; hydrate into `setSnapshots` on open.
 
 ### 14.2 Legacy Frame Capture model — **PRIORITY: MEDIUM**
 - **Description:** The separate Frame Capture screen + report use
@@ -401,13 +480,13 @@ Rules:
   snapshots, then delete the legacy refs. Kept intact for now to avoid breaking
   the working save-to-player report.
 
-### 14.3 Skeleton rendering source — **PRIORITY: LOW**
-- **Description:** `snapshot.skeleton` is captured but never read back for
-  rendering; the on-screen skeleton always comes from live re-detection.
-- **Impact:** "Restore" relies on re-detection at the seeked frame, not stored
-  data; a snapshot can render a slightly different pose than when captured.
-- **Recommended solution:** When paused on a snapshot, render from
-  `snapshot.skeleton` instead of live keypoints.
+### 14.3 Skeleton rendering source — **PARTIALLY RESOLVED**
+- **Description:** `snapshot.skeleton` is now restored into Canvas via
+  `setSkeletonKeypoints` on phase switch. The stored pose renders immediately
+  after switching, so overlays align with the captured data.
+- **Remaining:** Live re-detection may overwrite the restored pose once the video
+  frame loads and the detector runs again. Full solution: suppress live detection
+  while paused on a snapshot. Low priority — the initial render is correct.
 
 ### 14.4 Phase replacement UX — **PRIORITY: MEDIUM**
 - **Description:** The Phases picker does `setSnapshots(newSnaps)`, silently

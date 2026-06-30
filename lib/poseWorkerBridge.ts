@@ -122,6 +122,26 @@ export class PoseWorkerBridge {
     this.smoothPrev = null;
   }
 
+  /**
+   * Clear transient in-flight/pending state. Called when the skeleton is
+   * re-enabled and an existing bridge is reused, so a frame left in-flight by a
+   * previous disable can never permanently block new sends. Safe on a healthy
+   * bridge — the worker processes sequentially and clears inFlight per result.
+   */
+  resume() {
+    this.inFlight = false;
+    this.pendingResendVideo = null;
+    // Re-claim worker-result routing. A single shared worker delivers results
+    // only to the last-active bridge (set in the constructor). A reused bridge
+    // (skeleton re-enabled without reconstruction) must re-assert itself, or its
+    // results would be routed to another bridge — or nowhere — and the skeleton
+    // would never come back. Root cause of the repeated-toggle desync.
+    if (!this.disposed) {
+      activeBridge = this;
+      if (this.mode === 'worker') attachWorkerResultRouting();
+    }
+  }
+
   setFocusPoint(pt: { x: number; y: number } | null) {
     this._focusPoint = pt;
   }

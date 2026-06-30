@@ -49,49 +49,40 @@ export default function ControlPanelHome() {
         </p>
       </div>
 
-      {/* ── App Screenshots Carousel ────────────────────────────────── */}
-      <div style={{ marginBottom: 28, overflow: 'hidden' }}>
-        <div
-          style={{
-            display: 'flex', gap: 14, overflowX: 'auto', scrollSnapType: 'x mandatory',
-            paddingBottom: 8, WebkitOverflowScrolling: 'touch',
-          }}
-        >
-          {[
-            { label: 'Video Analysis', desc: 'Draw, measure, skeleton overlay — all in one canvas', bg: '#007AFF' },
-            { label: 'AI Skeleton', desc: 'Real-time MoveNet pose estimation with angle readouts', bg: '#5856D6' },
-            { label: 'StroMotion', desc: 'Multi-frame composite overlays for stroke sequencing', bg: '#FF9500' },
-            { label: 'Match Decoder', desc: 'AI-powered stats from SwingVision or manual reports', bg: '#FF3B30' },
-            { label: 'Player Timeline', desc: 'Every session, screenshot, and report in one place', bg: '#34C759' },
-          ].map((item, i) => (
-            <div
-              key={i}
-              style={{
-                flexShrink: 0, width: 'min(280px, 75vw)', scrollSnapAlign: 'start',
-                borderRadius: 16, overflow: 'hidden',
-                background: `linear-gradient(135deg, ${item.bg}22, ${item.bg}08)`,
-                border: `1px solid ${item.bg}30`,
-                padding: 20, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
-                minHeight: 160,
-              }}
-            >
-              <div style={{
-                width: '100%', height: 80, borderRadius: 10, marginBottom: 12,
-                background: `linear-gradient(160deg, ${item.bg}40, ${item.bg}15)`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 11, color: item.bg, fontWeight: 600, opacity: 0.6,
-              }}>
-                Screenshot placeholder
-              </div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#1D1D1F', marginBottom: 4 }}>{item.label}</div>
-              <div style={{ fontSize: 12, color: '#6E6E73', lineHeight: 1.4 }}>{item.desc}</div>
-            </div>
-          ))}
+      {/* ── Primary entry point: Video Analysis ─────────────────────────── */}
+      <Link
+        href="/analysis"
+        className="anglemotion-card-hover-light"
+        style={{
+          ...cardBase,
+          marginBottom: 28,
+          minHeight: 'auto',
+          padding: 24,
+          border: '1px solid #007AFF',
+          background: 'linear-gradient(135deg, rgba(0,122,255,0.10), rgba(0,122,255,0.03))',
+          boxShadow: '0 2px 12px rgba(0,122,255,0.10)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 44, height: 44, borderRadius: 12, background: '#007AFF', color: '#fff',
+          }}>
+            <Video size={24} strokeWidth={2.25} />
+          </span>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' }}>Video Analysis</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#007AFF' }}>Primary tool · open the lab</div>
+          </div>
         </div>
-      </div>
+        <p style={{ margin: '4px 0 0', fontSize: 14, lineHeight: 1.55, color: '#3C3C43' }}>
+          Draw, measure angles, skeleton overlay, split-screen compare, zoom, slow motion, frame stepping, record with webcam or mic.
+          Import videos by file upload.
+        </p>
+      </Link>
 
-      <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: '#1D1D1F' }}>
-        Primary tools
+      <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: '#8E8E93', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        More tools
       </h2>
       <div
         className="anglemotion-control-grid-primary"
@@ -102,25 +93,12 @@ export default function ControlPanelHome() {
           marginBottom: 28,
         }}
       >
-        <Link href="/analysis" style={cardBase} className="anglemotion-card-hover-light">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ color: '#007AFF' }}>
-              <Video size={22} strokeWidth={2.25} />
-            </span>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>Video Analysis</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
-            Draw, measure angles, skeleton overlay, split-screen compare, zoom, slow motion, frame stepping, record with webcam or mic.
-            Import videos by file upload.
-          </p>
-        </Link>
-
-        <Link href="/academy" style={cardBase} className="anglemotion-card-hover-light">
+        <Link href="/academy" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ color: '#0D9488' }}>
-              <GraduationCap size={22} strokeWidth={2.25} />
+              <GraduationCap size={20} strokeWidth={2.25} />
             </span>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>AngleMotion Academy</span>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>AngleMotion Academy</span>
           </div>
           <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
             YouTube &amp; Instagram workflows, Drive organization, copyright guidelines, and the recommended
@@ -128,12 +106,12 @@ export default function ControlPanelHome() {
           </p>
         </Link>
 
-        <Link href="/players" style={cardBase} className="anglemotion-card-hover-light">
+        <Link href="/players" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ color: '#16A34A' }}>
-              <Users size={22} strokeWidth={2.25} />
+              <Users size={20} strokeWidth={2.25} />
             </span>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>Player database</span>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>Player database</span>
           </div>
           <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
             Technical sheet, match analysis timeline, and technical analysis with embedded YouTube / SwingVision clips.
@@ -142,7 +120,7 @@ export default function ControlPanelHome() {
         </Link>
       </div>
 
-      <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: '#1D1D1F' }}>
+      <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: '#8E8E93', textTransform: 'uppercase', letterSpacing: 0.5 }}>
         Match intelligence
       </h2>
       <div

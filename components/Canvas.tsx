@@ -60,6 +60,13 @@ const PRECISION_CURSOR_FADE_MS = 220;
 /** Ripple duration at synthetic click (ms) */
 const PRECISION_RIPPLE_MS = 420;
 
+/**
+ * Dark yellow used for AI-detected angle/measurement overlays. Deliberately
+ * darker than the skeleton's bright #FFD700 (classic) / cyan so the AI overlay
+ * reads as a separate layer rather than merging with the skeleton.
+ */
+const AI_OVERLAY_COLOR = '#B8860B';
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type Pt = { x: number; y: number };
@@ -139,6 +146,8 @@ export interface CanvasHandle {
   getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
   /** Current frame's pose keypoints (for snapshot capture). */
   getSkeletonKeypoints: () => Array<{ x: number; y: number; score: number; name: string }> | null;
+  /** Restore skeleton keypoints from a snapshot (for phase switching). */
+  setSkeletonKeypoints: (kps: Array<{ x: number; y: number; score: number; name: string }> | null, provenance?: 'snapshot' | 'frame') => void;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
   /** Cancel an in-progress StroMotion region selection; fires the pending callback with null */
@@ -204,21 +213,43 @@ export interface CanvasProps {
   onSkeletonFocusSet?: () => void;
   /** Called each frame with live skeleton angle values for the data column */
   onSkeletonAnglesUpdate?: (angles: Array<{ label: string; deg: number }>) => void;
+  /**
+   * Step 1 Mode Guard: when false (snapshot/frame domain active), live pose
+   * detection still feeds the time-indexed cache but must NOT write the
+   * displayed keypoints — the active domain owns the displayed pose.
+   */
+  /**
+   * Active analysis mode → pose-display ownership (provenance). Live sources
+   * (worker + cache) may write the *displayed* skeleton only while 'live';
+   * snapshot/frame poses are restored once and stay visually immutable. Does
+   * NOT affect cache writes — only display writes.
+   */
+  poseMode?: 'live' | 'snapshot' | 'frame';
   /** When true, draw live measurement overlays (shoulder/hip lines, foot direction) from skeleton */
   showMeasurementOverlays?: boolean;
   /** Called when a drawing measurement is committed (angle, ruler, etc.) */
   onMeasurementCommit?: (measurement: { type: 'angle' | 'ruler' | 'arrowAngle'; value: number; unit: string }) => void;
   /** Measurements to render in the right-side column overlay */
   measurementColumnItems?: Array<{ id: string; label: string; value: number; unit: string }> | null;
+  /**
+   * Header label for the data column. Reflects the locked owner: the phase
+   * label in snapshot mode, "FRAME N" in frame mode, or "DATA COLUMN" when live.
+   * Visual-only — does not affect column data.
+   */
+  measurementColumnTitle?: string;
   /** Position of the measurement column (normalized 0-1). Default: top-right */
   measurementColumnPos?: { x: number; y: number };
   onMeasurementColumnDrag?: (pos: { x: number; y: number }) => void;
+  onMeasurementItemEdit?: (id: string, newValue: number) => void;
   onMeasurementAdd?: () => void;
   onMeasurementRemoveLast?: () => void;
   /** When true, skeleton click-to-focus works even when skeleton isn't the active tool */
   skeletonKeepAlive?: boolean;
   /** When true, skeleton is locked on player — clicks don't change focus */
   skeletonLocked?: boolean;
+  /** When true, an active "click-to-focus" session is open: every click on the
+   *  video re-aims the focus and the session stays open until explicit confirm. */
+  skeletonWaitingForClick?: boolean;
   isRecording?: boolean;
   circleSpinning?: boolean;
   outlineEraserSize?: number;
@@ -1598,15 +1629,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       onProcessingStatus,
       onSkeletonFocusSet,
       onSkeletonAnglesUpdate,
+      poseMode = 'live',
       showMeasurementOverlays = false,
       onMeasurementCommit,
       measurementColumnItems,
+      measurementColumnTitle = 'DATA COLUMN',
       measurementColumnPos,
       onMeasurementColumnDrag,
+      onMeasurementItemEdit,
       onMeasurementAdd,
       onMeasurementRemoveLast,
       skeletonKeepAlive = false,
       skeletonLocked = false,
+      skeletonWaitingForClick = false,
       isRecording = false,
       circleSpinning = false,
       outlineEraserSize = 0,
@@ -1656,16 +1691,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const watermarkLoadedRef = useRef(false);
     const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
     const mcPosRef = useRef<{ x: number; y: number }>({ x: 0.85, y: 0.02 });
+    const mcTitleRef = useRef<string>(measurementColumnTitle);
     const mcDraggingRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
     const skeletonWaitingForClickRef = useRef(false);
     const skeletonKeepAliveRef = useRef(skeletonKeepAlive);
     useEffect(() => { skeletonKeepAliveRef.current = skeletonKeepAlive; }, [skeletonKeepAlive]);
     const skeletonLockedRef = useRef(skeletonLocked);
     useEffect(() => { skeletonLockedRef.current = skeletonLocked; }, [skeletonLocked]);
+    // Drive the click-to-focus session flag from the prop so the canvas ref can
+    // never drift out of sync with page state (a prior bug: some handlers cleared
+    // the page state but not this ref, leaving the canvas stuck swallowing clicks).
+    useEffect(() => { skeletonWaitingForClickRef.current = skeletonWaitingForClick; }, [skeletonWaitingForClick]);
     const onMeasurementCommitRef = useRef(onMeasurementCommit);
     useEffect(() => { onMeasurementCommitRef.current = onMeasurementCommit; }, [onMeasurementCommit]);
     const onSkeletonAnglesUpdateRef = useRef(onSkeletonAnglesUpdate);
     useEffect(() => { onSkeletonAnglesUpdateRef.current = onSkeletonAnglesUpdate; }, [onSkeletonAnglesUpdate]);
+    // Perf: the angle math + emit only need to run when the keypoints array
+    // reference actually changes (the worker replaces it per result). Skips
+    // redundant trig + setState churn on render ticks driven by other sources.
+    const lastEmittedKpsRef = useRef<unknown>(null);
+    // Step 1 Mode Guard: gates worker pose writes to the *displayed* keypoints.
+    // Provenance of the *displayed* pose. Live sources (worker + cache /
+    // syncFromCache) may write the display only while provenance is 'live'.
+    // A restore (setSkeletonKeypoints) stamps 'snapshot'/'frame' synchronously;
+    // mode changes update it via the effect below.
+    const poseModeRef = useRef(poseMode);
+    const poseProvenanceRef = useRef<'live' | 'snapshot' | 'frame'>(poseMode);
+    useEffect(() => {
+      poseModeRef.current = poseMode;
+      poseProvenanceRef.current = poseMode;
+      renderDirtyRef.current = true;
+    }, [poseMode]);
     const showMeasurementOverlaysRef = useRef(showMeasurementOverlays);
     useEffect(() => { showMeasurementOverlaysRef.current = showMeasurementOverlays; renderDirtyRef.current = true; }, [showMeasurementOverlays]);
     const overlayAdjustmentsRef = useRef<Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>>({});
@@ -2320,6 +2376,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         ballTrackRef.current = [];
         isBallDetectingRef.current = false;
         cropRegionRef.current = null;
+        overlayAdjustmentsRef.current = {};
         onProcessingStatus?.(null);
         pushHistory();
       },
@@ -2416,6 +2473,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       },
       getSkeletonFrames: () => skeletonFramesRef.current,
       getSkeletonKeypoints: () => latestKeypointsRef.current ? [...latestKeypointsRef.current] : null,
+      setSkeletonKeypoints: (kps, provenance) => {
+        latestKeypointsRef.current = kps ? [...kps] : null;
+        // Stamp ownership synchronously (caller's mode), so a seek fired right
+        // after a restore can't let live/cache overwrite the restored pose.
+        poseProvenanceRef.current = provenance ?? poseModeRef.current;
+        skeletonSuppressedRef.current = !kps;
+        renderDirtyRef.current = true;
+      },
       startStroMotionRegionSelect: (cb) => {
         isSelectingStroRegionRef.current = true;
         stroRegionCallbackRef.current = cb;
@@ -2795,6 +2860,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       },
     }), [onProcessingStatus, pushHistory, videoRef]);
 
+    // ── Capability gate for the live skeleton display ──────────────────────
+    // Replaces the former `poseProvenanceRef.current === 'live'` MODE gate.
+    // The live worker may own the displayed pose whenever it CAN render —
+    // capability, not mode: worker active, video loaded, feature enabled, and
+    // not locked off. This holds in every analysis mode (live / snapshot /
+    // frame). Mode-ownership of the DATA column is unchanged and still lives in
+    // page.tsx; this only governs the rendered skeleton overlay.
+    const liveSkeletonActive = () => {
+      const v = videoRef.current;
+      return poseLoopActiveRef.current        // skeleton enabled & loop running (false when locked off)
+        && !!poseBridgeRef.current            // worker/bridge present
+        && !!v && v.videoWidth > 0;           // video loaded
+    };
+
     // ── Skeleton: PoseWorkerBridge lifecycle ───────────────────────────────
     // Creates/disposes the bridge when skeleton is toggled. The bridge handles
     // worker-vs-main-thread fallback internally; the render loop just calls
@@ -2816,6 +2895,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       if (poseBridgeRef.current) {
+        // Reusing an existing bridge across a disable→enable cycle: clear any
+        // stuck in-flight/pending frame so detection always resumes.
+        poseBridgeRef.current.resume();
         poseLoopActiveRef.current = true;
         return;
       }
@@ -2829,13 +2911,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       bridge.onResult((keypoints) => {
         if (skeletonSuppressedRef.current || !skeletonDrawEnabledRef.current) {
-          latestKeypointsRef.current = null;
+          // Capability gate: clear the live pose when the live skeleton is active.
+          if (liveSkeletonActive()) latestKeypointsRef.current = null;
           return;
         }
         if (keypoints) {
-          latestKeypointsRef.current = keypoints;
-          renderDirtyRef.current = true;
-
+          // Cache stays warm regardless of mode (time-indexed history).
           const v = videoRef.current;
           if (v) {
             const nowT = v.currentTime;
@@ -2847,6 +2928,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               }
             }
           }
+          // Capability gate: the live worker owns the displayed pose whenever
+          // it can render — in every analysis mode, not just live.
+          if (liveSkeletonActive()) {
+            latestKeypointsRef.current = keypoints;
+            renderDirtyRef.current = true;
+          }
         }
       });
 
@@ -2854,6 +2941,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         onProcessingStatus?.('Skeleton ready — press play');
         if (pendingFocusRef.current) {
           bridge.setFocusPoint(pendingFocusRef.current);
+        }
+        // If skeleton was enabled while already paused, the scheduler's one-shot
+        // detect ran before the model was ready (no-op). Snap once now.
+        const v = videoRef.current;
+        if (v?.paused && liveSkeletonActive()) {
+          bridge.resetSmoothing();
+          bridge.sendFrame(v);
         }
       });
 
@@ -2880,13 +2974,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!video) return;
 
       poseLoopActiveRef.current = true;
-      let pausedTimer: number | undefined;
 
       const cancelScheduled = () => {
-        if (pausedTimer !== undefined) {
-          window.clearTimeout(pausedTimer as number);
-          pausedTimer = undefined;
-        }
         const v = videoRef.current;
         const s = poseScheduleRef.current;
         if (!s) return;
@@ -2898,18 +2987,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         poseScheduleRef.current = null;
       };
 
+      // While PLAYING: drive detection from presented frames (rVFC) / rAF.
+      // While PAUSED: do NOT poll. requestVideoFrameCallback never fires while
+      // paused (which stalled updates after pause), and re-inferring a static
+      // frame is wasted work. Paused frames are detected event-driven below.
       const scheduleNext = () => {
         if (!poseLoopActiveRef.current) return;
         const v = videoRef.current;
-        if (!v) return;
-
-        if (v.paused) {
-          pausedTimer = window.setTimeout(() => {
-            pausedTimer = undefined;
-            sendFrame();
-          }, 118) as unknown as number;
-          return;
-        }
+        if (!v || v.paused) return;
 
         if (typeof v.requestVideoFrameCallback !== 'function') {
           const id = requestAnimationFrame(() => { poseScheduleRef.current = null; sendFrame(); });
@@ -2935,11 +3020,35 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         scheduleNext();
       };
 
-      scheduleNext();
+      // One immediate, exact detection of the current static frame. Resets
+      // smoothing so the pose snaps to this frame instead of EMA-converging.
+      const detectStaticFrame = () => {
+        if (!poseLoopActiveRef.current) return;
+        const v = videoRef.current;
+        const bridge = poseBridgeRef.current;
+        if (!v || !bridge || !v.paused) return;
+        bridge.frameSkip = poseFrameSkipRef.current;
+        bridge.resetSmoothing();
+        bridge.sendFrame(v);
+      };
+
+      const onPause = () => detectStaticFrame();
+      const onSeeked = () => { if (videoRef.current?.paused) detectStaticFrame(); };
+      const onPlay = () => { cancelScheduled(); scheduleNext(); };
+
+      video.addEventListener('pause', onPause);
+      video.addEventListener('seeked', onSeeked);
+      video.addEventListener('play', onPlay);
+
+      // Bootstrap: start the play loop if playing, else snap once if paused.
+      if (video.paused) detectStaticFrame(); else scheduleNext();
 
       return () => {
         poseLoopActiveRef.current = false;
         cancelScheduled();
+        video.removeEventListener('pause', onPause);
+        video.removeEventListener('seeked', onSeeked);
+        video.removeEventListener('play', onPlay);
       };
     }, [skeletonEnabled, videoRef]);
 
@@ -2962,7 +3071,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             bestDist = dist;
           }
         }
-        if (bestDist <= 0.12) {
+        // Cache (skeletonFramesRef) stays warm for scrub, but only writes the
+        // DISPLAY pose while the live skeleton is active (capability gate). When
+        // the live worker is off, a restored snapshot/frame pose is left intact.
+        if (bestDist <= 0.12 && liveSkeletonActive()) {
           latestKeypointsRef.current = best.keypoints;
           renderDirtyRef.current = true;
         }
@@ -3245,7 +3357,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         rafId = requestAnimationFrame(poseLoop);
 
         if (skeletonSuppressedRef.current || !skeletonDrawEnabledRef.current) {
-          latestKeypointsRef.current = null;
+          // Capability gate: clear the live pose when the live skeleton is active.
+          if (liveSkeletonActive()) latestKeypointsRef.current = null;
           return;
         }
         if (inFlight) return;
@@ -3278,11 +3391,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                   { alpha: 0.35, minScore: 0.22 },
                 );
                 const buf = bufferSmoothKeypoints(youtubeSmoothBufRef.current, merged, 5);
-                latestKeypointsRef.current = buf;
-                // YouTube path must mark the canvas dirty itself (the HTML5
-                // bridge does this in onResult); otherwise the overlay would
-                // not refresh once the blanket "playing" render trigger is gone.
-                renderDirtyRef.current = true;
+                // Capability gate: the live worker owns the displayed pose
+                // whenever it can render — in every analysis mode.
+                if (liveSkeletonActive()) {
+                  latestKeypointsRef.current = buf;
+                  // YouTube path must mark the canvas dirty itself (the HTML5
+                  // bridge does this in onResult); otherwise the overlay would
+                  // not refresh once the blanket "playing" render trigger is gone.
+                  renderDirtyRef.current = true;
+                }
 
                 const playing = ctrl?.isPlaying?.() ?? false;
                 const lastFrame = skeletonFramesRef.current.at(-1);
@@ -3294,7 +3411,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 }
               }
             } catch {
-              if (lastGood?.length) latestKeypointsRef.current = lastGood;
+              // Capability gate: the live worker owns the displayed pose.
+              if (liveSkeletonActive() && lastGood?.length) latestKeypointsRef.current = lastGood;
             }
           }
         } finally {
@@ -3430,6 +3548,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     }, []);
 
     useEffect(() => { measurementColumnRef.current = measurementColumnItems ?? null; renderDirtyRef.current = true; }, [measurementColumnItems]);
+    useEffect(() => { mcTitleRef.current = measurementColumnTitle; renderDirtyRef.current = true; }, [measurementColumnTitle]);
     useEffect(() => { if (measurementColumnPos) mcPosRef.current = measurementColumnPos; }, [measurementColumnPos]);
 
     // ── Watermark logo ───────────────────────────────────────────────────
@@ -3869,7 +3988,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               classicColors: skeletonClassicColorsRef.current,
               parts: skeletonPartsRef.current,
             });
-            if (onSkeletonAnglesUpdateRef.current) {
+            if (onSkeletonAnglesUpdateRef.current && latestKeypointsRef.current !== lastEmittedKpsRef.current) {
+              lastEmittedKpsRef.current = latestKeypointsRef.current;
               const kps = latestKeypointsRef.current;
               const scoreMin = 0.2;
               const angleDefs = [
@@ -3908,79 +4028,78 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.save();
           ctx.translate(dx, dy);
 
+          // AI angle overlays are a distinct layer from the skeleton (which uses
+          // bright #FFD700 / cyan): dark yellow + dashed, matching the arrowAngle
+          // styling system ([8,6] dash) so the two never visually merge.
+          const OVERLAY_COLOR = AI_OVERLAY_COLOR;
+
           const drawArrow = (
             id: string,
             x1: number, y1: number, x2: number, y2: number,
-            color: string,
           ) => {
             const adj = overlayAdjustmentsRef.current[id];
             const ax = (x1 + (adj?.dx1 ?? 0)) * msx;
             const ay = (y1 + (adj?.dy1 ?? 0)) * msy;
             const bx = (x2 + (adj?.dx2 ?? 0)) * msx;
             const by = (y2 + (adj?.dy2 ?? 0)) * msy;
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([]);
+            ctx.strokeStyle = OVERLAY_COLOR;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([8, 6]);
             ctx.beginPath();
             ctx.moveTo(ax, ay);
             ctx.lineTo(bx, by);
             ctx.stroke();
-            const angle = Math.atan2(by - ay, bx - ax);
-            const hl = 8;
-            ctx.beginPath();
-            ctx.moveTo(bx, by);
-            ctx.lineTo(bx - hl * Math.cos(angle - 0.4), by - hl * Math.sin(angle - 0.4));
-            ctx.moveTo(bx, by);
-            ctx.lineTo(bx - hl * Math.cos(angle + 0.4), by - hl * Math.sin(angle + 0.4));
-            ctx.stroke();
-            // Draggable endpoint circles
+            ctx.setLineDash([]);
+            // Draggable endpoint handles — small + subtle so they read as the
+            // arrow's endpoints, consistent with the Angle Arrow styling (the
+            // line, not the dots, carries the measurement).
             for (const [px, py] of [[ax, ay], [bx, by]] as [number, number][]) {
-              ctx.fillStyle = color;
-              ctx.globalAlpha = 0.7;
+              ctx.fillStyle = OVERLAY_COLOR;
+              ctx.globalAlpha = 0.5;
               ctx.beginPath();
-              ctx.arc(px, py, 5, 0, Math.PI * 2);
+              ctx.arc(px, py, 2.5, 0, Math.PI * 2);
               ctx.fill();
               ctx.globalAlpha = 1;
             }
           };
 
-          // Shoulder line (L→R) — orange
+          // Shoulder line (L→R)
           const lS = kps[5], rS = kps[6];
           if (lS?.score >= scoreMin && rS?.score >= scoreMin) {
-            drawArrow('shoulder', lS.x, lS.y, rS.x, rS.y, '#FF9500');
+            drawArrow('shoulder', lS.x, lS.y, rS.x, rS.y);
           }
 
-          // Hip line (L→R) — green
+          // Hip line (L→R)
           const lH = kps[11], rH = kps[12];
           if (lH?.score >= scoreMin && rH?.score >= scoreMin) {
-            drawArrow('hip', lH.x, lH.y, rH.x, rH.y, '#34C759');
+            drawArrow('hip', lH.x, lH.y, rH.x, rH.y);
           }
 
-          // Head direction (ear midpoint → nose) — purple
+          // Head direction (ear midpoint → nose)
           const nose = kps[0], lEar = kps[3], rEar = kps[4];
           if (nose?.score >= scoreMin && ((lEar?.score >= scoreMin) || (rEar?.score >= scoreMin))) {
             const earX = lEar?.score >= scoreMin && rEar?.score >= scoreMin ? (lEar.x + rEar.x) / 2 : (lEar?.score >= scoreMin ? lEar.x : rEar!.x);
             const earY = lEar?.score >= scoreMin && rEar?.score >= scoreMin ? (lEar.y + rEar.y) / 2 : (lEar?.score >= scoreMin ? lEar.y : rEar!.y);
-            drawArrow('head', earX, earY, nose.x, nose.y, '#AF52DE');
+            drawArrow('head', earX, earY, nose.x, nose.y);
           }
 
-          // Left foot direction (knee→ankle extended) — cyan
+          // Left foot direction (knee→ankle extended)
           const lK = kps[13], lA = kps[15];
           if (lK?.score >= scoreMin && lA?.score >= scoreMin) {
             const dx2 = lA.x + (lA.x - lK.x) * 0.4;
             const dy2 = lA.y + (lA.y - lK.y) * 0.4;
-            drawArrow('lfoot', lA.x, lA.y, dx2, dy2, '#00C7BE');
+            drawArrow('lfoot', lA.x, lA.y, dx2, dy2);
           }
 
-          // Right foot direction (knee→ankle extended) — cyan
+          // Right foot direction (knee→ankle extended)
           const rK = kps[14], rA = kps[16];
           if (rK?.score >= scoreMin && rA?.score >= scoreMin) {
             const dx2 = rA.x + (rA.x - rK.x) * 0.4;
             const dy2 = rA.y + (rA.y - rK.y) * 0.4;
-            drawArrow('rfoot', rA.x, rA.y, dx2, dy2, '#00C7BE');
+            drawArrow('rfoot', rA.x, rA.y, dx2, dy2);
           }
 
-          // Racket angle (dominant wrist → extended past wrist) — pink
+          // Racket angle (dominant wrist → extended past wrist)
           const lW = kps[9], rW = kps[10], lE = kps[7], rE = kps[8];
           if (lS?.score >= scoreMin && rS?.score >= scoreMin) {
             const bodyCenter = (lS.x + rS.x) / 2;
@@ -3989,7 +4108,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             if (domW?.score >= scoreMin && domE?.score >= scoreMin) {
               const tipX = domW.x + (domW.x - domE.x) * 0.8;
               const tipY = domW.y + (domW.y - domE.y) * 0.8;
-              drawArrow('racket', domW.x, domW.y, tipX, tipY, '#FF2D55');
+              drawArrow('racket', domW.x, domW.y, tipX, tipY);
             }
           }
 
@@ -4479,10 +4598,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           else ctx.rect(mcX, mcY, mcW, mcH);
           ctx.fill();
 
-          // Header
+          // Header — reflects the locked owner (phase / frame / live).
           ctx.font = 'bold 10px -apple-system, sans-serif';
           ctx.fillStyle = 'rgba(255,255,255,0.4)';
-          ctx.fillText('DATA COLUMN', mcX + 8, mcY + 14);
+          const mcTitle = (mcTitleRef.current || 'DATA COLUMN').toUpperCase();
+          ctx.fillText(mcTitle.length > 22 ? mcTitle.slice(0, 21) + '…' : mcTitle, mcX + 8, mcY + 14);
 
           // Drag handle dots
           ctx.fillStyle = 'rgba(255,255,255,0.25)';
@@ -5497,6 +5617,45 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         closeContextualStyle();
       }
 
+      // Sets the skeleton focus from the current pointer position. Returns false
+      // if the click was outside the rendered video frame. Pure focus plumbing —
+      // no session/lifecycle state is touched here.
+      const trySetSkeletonFocus = (): boolean => {
+        const video = videoRef.current;
+        const bounds = videoBoundsRef.current;
+        if (!video || video.videoWidth === 0 || !bounds || bounds.dw <= 0 || bounds.dh <= 0) return false;
+        const normX = (pos.x - bounds.dx) / bounds.dw;
+        const normY = (pos.y - bounds.dy) / bounds.dh;
+        if (normX < 0 || normX > 1 || normY < 0 || normY > 1) return false;
+        pendingFocusRef.current = { x: normX, y: normY };
+        poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
+        poseBridgeRef.current?.resetSmoothing();
+        // Paused: re-run detection on this frame so the pose snaps immediately
+        // (the play-loop is idle while paused, so the new focus would otherwise
+        // not reach the worker until the next play/seek).
+        const fv = videoRef.current;
+        if (fv?.paused) poseBridgeRef.current?.sendFrame(fv);
+        skeletonSuppressedRef.current = false;
+        renderDirtyRef.current = true;
+        return true;
+      };
+
+      // ── Active "click-to-focus" SESSION (entered via "NO — click player") ──
+      // Highest-priority pointer consumer while open: every click re-aims the
+      // skeleton focus and the session STAYS OPEN until the user explicitly
+      // confirms (Lock). Runs before pan / overlay / column so none of them can
+      // steal the click. Two-finger pinch-zoom is handled earlier, so the coach
+      // can still zoom in to aim precisely.
+      if (skeletonEnabledRef.current && skeletonWaitingForClickRef.current && !skeletonLockedRef.current) {
+        if (trySetSkeletonFocus()) {
+          onProcessingStatus?.('Skeleton focused — click again to adjust, or press Lock');
+        }
+        // Swallow the click either way so pan/zoom/overlay/draw can't hijack it
+        // while the session is open. Exited only by the explicit Lock action.
+        e.preventDefault();
+        return;
+      }
+
       // ── StroMotion rubber-band region selection ──────────────────────────
       if (isSelectingStroRegionRef.current) {
         stroRegionStartRef.current = pos;
@@ -5630,35 +5789,41 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             e.preventDefault();
             return;
           }
+          // Click on a column row → edit value
+          if (mcItemsNow.length > 0 && onMeasurementItemEdit) {
+            const rowH = 22;
+            const rowsTop = mY + 28;
+            const rowY = pos.y - rowsTop;
+            const rowIdx = Math.floor(rowY / rowH);
+            if (pos.x >= mX && pos.x <= mX + mW && rowIdx >= 0 && rowIdx < mcItemsNow.length) {
+              const item = mcItemsNow[rowIdx];
+              if (item.unit || item.value !== 0) {
+                const newVal = prompt(`Edit ${item.label}:`, String(item.value));
+                if (newVal !== null && newVal.trim() !== '') {
+                  const parsed = parseFloat(newVal);
+                  if (!isNaN(parsed)) {
+                    onMeasurementItemEdit(item.id, parsed);
+                    e.preventDefault();
+                    return;
+                  }
+                }
+              }
+            }
+          }
         }
       }
 
-      // ── Skeleton: click to set focus on the player ─────────────────────
-      // Intercepts when: skeleton is the active tool, explicitly waiting
-      // for a click, or skeleton is enabled and the user is on Select tool
-      // (not drawing). Drawing tools take priority over skeleton focus.
-      const skeletonCanFocus = !skeletonLockedRef.current && (tool === 'skeleton' || skeletonWaitingForClickRef.current);
-      if (skeletonCanFocus) {
-        const video = videoRef.current;
-        if (video && video.videoWidth > 0) {
-          const bounds = videoBoundsRef.current;
-          if (bounds && bounds.dw > 0 && bounds.dh > 0) {
-            const normX = (pos.x - bounds.dx) / bounds.dw;
-            const normY = (pos.y - bounds.dy) / bounds.dh;
-            if (normX >= 0 && normX <= 1 && normY >= 0 && normY <= 1) {
-              console.log('[Skeleton focus SET]', { normX, normY, hasBridge: !!poseBridgeRef.current });
-              pendingFocusRef.current = { x: normX, y: normY };
-              poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
-              poseBridgeRef.current?.resetSmoothing();
-              onProcessingStatus?.('Skeleton focused on player');
-              skeletonSuppressedRef.current = false;
-              skeletonWaitingForClickRef.current = false;
-              renderDirtyRef.current = true;
-              onSkeletonFocusSet?.();
-              e.preventDefault();
-              return;
-            }
-          }
+      // ── Skeleton TOOL: one-shot click to set + lock focus ──────────────
+      // Active-session clicks (the "NO — click player" flow) are consumed
+      // earlier and stay open; this remaining path is the Skeleton tool's
+      // single click-to-lock. Drawing tools / pan take priority over it.
+      if (!skeletonLockedRef.current && tool === 'skeleton') {
+        if (trySetSkeletonFocus()) {
+          onProcessingStatus?.('Skeleton focused on player');
+          skeletonWaitingForClickRef.current = false;
+          onSkeletonFocusSet?.();
+          e.preventDefault();
+          return;
         }
       }
 

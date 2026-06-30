@@ -203,6 +203,17 @@ function ReelsDesktopShell({
   );
 }
 
+/**
+ * Step 1 — Mode Guard.
+ * Single source of truth for which analysis domain currently owns the canvas +
+ * data column. Derived from the legacy ids (compat) but treated as authoritative:
+ * exactly one domain may persist at a time.
+ */
+type AnalysisMode =
+  | { kind: 'live' }
+  | { kind: 'snapshot'; snapshotId: string }
+  | { kind: 'frame'; frameIndex: number };
+
 function Home() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -580,6 +591,8 @@ function Home() {
   // ── Snapshot model: single source of truth for Metrics analysis ──────────
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number; unit: string; type: string }>>([]);
+  const measurementColumnRef = useRef(measurementColumn);
+  measurementColumnRef.current = measurementColumn;
   const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
   // Derived phase markers (green balls) consumed by PreciseTimeline.
   const biomechPhaseMarkers = useMemo(
@@ -642,12 +655,39 @@ function Home() {
     enabledModules: biomechEnabledModules,
   } = useAIMetrics(videoRef);
 
-  // Auto-save measurement column to current frame whenever it changes
+  // ── Step 1: Mode Guard — single authoritative domain ─────────────────────
+  // Frame mode supersedes snapshot mode so the two persist paths can never run
+  // together. Snapshot-entry points clear the frame index, so normal snapshot
+  // flow resolves to 'snapshot'; touching a frame resolves to 'frame'.
+  const analysisMode = useMemo<AnalysisMode>(() => {
+    if (biomechActiveFrameIndex !== null) return { kind: 'frame', frameIndex: biomechActiveFrameIndex };
+    if (biomechSelectedPhaseId) return { kind: 'snapshot', snapshotId: biomechSelectedPhaseId };
+    return { kind: 'live' };
+  }, [biomechActiveFrameIndex, biomechSelectedPhaseId]);
+  // Ref mirror so stable callbacks (e.g. the live-angle flush) can read the
+  // current mode without being recreated.
+  const analysisModeRef = useRef(analysisMode);
+  analysisModeRef.current = analysisMode;
+
+  // FRAME mode: restore the stored frame pose as a read-only ('frame') skeleton
+  // overlay. Step 2 made the live cache live-only, so frame poses (which the
+  // contract treats as stored + immutable) must be restored explicitly.
   useEffect(() => {
-    if (biomechActiveFrameIndex !== null) {
-      biomechFrameMeasurementsRef.current[biomechActiveFrameIndex] = [...measurementColumn];
-    }
-  }, [measurementColumn, biomechActiveFrameIndex]);
+    if (analysisMode.kind !== 'frame') return;
+    const frame = aiMetricsDraft?.frames[analysisMode.frameIndex];
+    const kps = (frame?.poseSample ?? frame?.skeletonStamp)?.keypoints;
+    canvasRef.current?.setSkeletonKeypoints?.(
+      kps?.length ? kps.map(k => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' })) : null,
+      'frame',
+    );
+  }, [analysisMode, aiMetricsDraft]);
+
+  // Auto-save measurement column to current frame whenever it changes.
+  // Gated: only the frame domain may write the frame store.
+  useEffect(() => {
+    if (analysisMode.kind !== 'frame') return;
+    biomechFrameMeasurementsRef.current[analysisMode.frameIndex] = [...measurementColumn];
+  }, [measurementColumn, analysisMode]);
 
   const biomechDefaultSampleTimes = useMemo(
     () => computeGhostSampleTimes(biomechTrimStart, biomechTrimEnd, biomechFrameCount),
@@ -713,10 +753,21 @@ function Home() {
   const [phasesPickerOpen, setPhasesPickerOpen] = useState(false);
   const [showMeasurementOverlays, setShowMeasurementOverlays] = useState(false);
 
-  // Track current video time via rAF poll (fires even while paused, unlike 'timeupdate').
-  // Throttled to ~10 Hz and only commits on a meaningful delta to avoid 60 fps
-  // re-renders of the whole analysis tree during playback.
-  const [currentVideoTime, setCurrentVideoTime] = useState(0);
+  // Active snapshot (the phase whose data column is shown).
+  const activeSnapshot = useMemo(
+    () => snapshots.find(s => s.id === biomechSelectedPhaseId) ?? null,
+    [snapshots, biomechSelectedPhaseId],
+  );
+  const activeSnapshotRef = useRef(activeSnapshot);
+  activeSnapshotRef.current = activeSnapshot;
+
+  // Whether the playhead is within 0.3s of the active snapshot. Polled via rAF
+  // (fires even while paused). Stored as a BOOLEAN that only updates when it
+  // FLIPS — so the moving playhead no longer re-renders the whole analysis tree
+  // (toolbar/timeline/panels) ~10×/sec. Previously this was a 10 Hz numeric
+  // `currentVideoTime` state whose only consumer was this boolean; that churn
+  // was the root cause of the lower-left toolbar glitch.
+  const [isNearActivePhase, setIsNearActivePhase] = useState(true);
   useEffect(() => {
     let raf = 0;
     let lastTick = 0;
@@ -724,7 +775,11 @@ function Home() {
       if (now - lastTick >= 100) {
         lastTick = now;
         const v = videoRef.current;
-        if (v) setCurrentVideoTime(prev => (Math.abs(prev - v.currentTime) > 0.05 ? v.currentTime : prev));
+        if (v) {
+          const snap = activeSnapshotRef.current;
+          const near = snap ? Math.abs(v.currentTime - snap.timeSec) < 0.3 : true;
+          setIsNearActivePhase(prev => (prev === near ? prev : near));
+        }
       }
       raf = requestAnimationFrame(poll);
     };
@@ -732,17 +787,19 @@ function Home() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // Data column visible only when the playhead is on the active snapshot (within 0.3s)
-  const activeSnapshot = useMemo(
-    () => snapshots.find(s => s.id === biomechSelectedPhaseId) ?? null,
-    [snapshots, biomechSelectedPhaseId],
-  );
-  const isNearActivePhase = (() => {
-    if (!activeSnapshot) return true;
-    return Math.abs(currentVideoTime - activeSnapshot.timeSec) < 0.3;
-  })();
   const dataColumnVisible = (dataColumnActive && isNearActivePhase) || (biomechActive && biomechActiveFrameIndex !== null);
   const ballTrailEnabled = activeTool === 'ballShadow';
+
+  // Data column header reflects the locked owner (visual feedback only).
+  const measurementColumnTitle = useMemo(() => {
+    if (analysisMode.kind === 'snapshot') return activeSnapshot?.label ?? 'Phase';
+    if (analysisMode.kind === 'frame') {
+      const f = aiMetricsDraft?.frames[analysisMode.frameIndex];
+      const n = analysisMode.frameIndex + 1;
+      return f?.label ? `Frame ${n} · ${f.label}` : `Frame ${n}`;
+    }
+    return 'Data Column';
+  }, [analysisMode, activeSnapshot, aiMetricsDraft]);
 
   // ── Snapshot helpers ─────────────────────────────────────────────────────
   /** Persist the live canvas/column state into the currently-active snapshot. */
@@ -752,15 +809,16 @@ function Home() {
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
     const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
+    const col = measurementColumnRef.current;
     setSnapshots(prev => prev.map(s => s.id === id ? {
       ...s,
-      column: measurementColumn.filter(m => m.type !== 'skeleton-angle'),
+      column: col.filter(m => m.type !== 'skeleton-angle'),
       overlaysOn: showMeasurementOverlays,
       overlayAdjustments,
       drawingsJson,
       ...(skeleton ? { skeleton } : {}),
     } : s));
-  }, [biomechSelectedPhaseId, measurementColumn, showMeasurementOverlays]);
+  }, [biomechSelectedPhaseId, showMeasurementOverlays]);
 
   /** Create a new snapshot at a time, make it active. Returns the new id. */
   const createSnapshot = useCallback((timeSec: number, label: string, short: string): string => {
@@ -768,27 +826,48 @@ function Home() {
     if (currentMediaIdRef.current) snap.mediaId = currentMediaIdRef.current;
     saveActiveSnapshot();
     setSnapshots(prev => [...prev, snap]);
+    // Mode Guard: entering snapshot domain releases the frame domain.
+    setBiomechActiveFrameIndex(null);
     setBiomechSelectedPhaseId(snap.id);
-    // New snapshot starts empty — keep only live skeleton angles in the column.
-    setMeasurementColumn(prev => prev.filter(m => m.type === 'skeleton-angle'));
+    // New snapshot starts empty — clear canvas drawings and overlays.
+    // Mode isolation: a new snapshot starts with an empty column (no LIVE
+    // skeleton-angle carryover).
+    setMeasurementColumn([]);
     canvasRef.current?.setOverlayAdjustments?.({});
+    canvasRef.current?.importStrokes?.('[]');
     return snap.id;
-  }, [saveActiveSnapshot]);
+  }, [saveActiveSnapshot, setBiomechActiveFrameIndex]);
 
   /** Switch to an existing snapshot: save current, restore target, seek video. */
   const selectSnapshot = useCallback((id: string) => {
     saveActiveSnapshot();
     const target = snapshots.find(s => s.id === id);
+    // Mode Guard: entering snapshot domain releases the frame domain.
+    setBiomechActiveFrameIndex(null);
     setBiomechSelectedPhaseId(id);
     if (!target) return;
-    const liveAngles = measurementColumn.filter(m => m.type === 'skeleton-angle');
-    setMeasurementColumn([...liveAngles, ...target.column]);
+    // Mode isolation: SNAPSHOT column = snapshot measurements only. No merge of
+    // LIVE skeleton-angle rows (those belong to LIVE mode).
+    setMeasurementColumn(target.column);
     setShowMeasurementOverlays(target.overlaysOn);
+    // Restore drawings first (importStrokes replaces all strokes atomically).
+    canvasRef.current?.importStrokes?.(target.drawingsJson || '[]');
+    // Restore overlay adjustments after drawings are in place.
     canvasRef.current?.setOverlayAdjustments?.(target.overlayAdjustments ?? {});
-    if (target.drawingsJson) canvasRef.current?.importStrokes?.(target.drawingsJson);
-    else canvasRef.current?.clearAll?.();
+    // Restore skeleton keypoints so overlays render from stored pose.
+    canvasRef.current?.setSkeletonKeypoints?.(target.skeleton ?? null, 'snapshot');
     if (videoRef.current) { videoRef.current.currentTime = target.timeSec; videoRef.current.pause(); }
-  }, [saveActiveSnapshot, snapshots, measurementColumn]);
+  }, [saveActiveSnapshot, snapshots, setBiomechActiveFrameIndex]);
+
+  /**
+   * Mode Guard: release SNAPSHOT ownership when entering FRAME mode so the two
+   * domains are mutually exclusive (no lingering snapshot id while in a frame).
+   * Persists any in-progress snapshot edits first (no-op if not in snapshot mode).
+   */
+  const releaseSnapshotOwnership = useCallback(() => {
+    saveActiveSnapshot();
+    setBiomechSelectedPhaseId(null);
+  }, [saveActiveSnapshot]);
 
   // ── Generate: capture phase screenshots + slow-mo replay ─────────────────
   const [snapshotPanelOpen, setSnapshotPanelOpen] = useState(false);
@@ -817,9 +896,9 @@ function Home() {
     const updated: Snapshot[] = [];
     for (const snap of ordered) {
       await seekVideoTo(snap.timeSec);
+      canvasRef.current?.importStrokes?.(snap.drawingsJson || '[]');
       canvasRef.current?.setOverlayAdjustments?.(snap.overlayAdjustments ?? {});
-      if (snap.drawingsJson) canvasRef.current?.importStrokes?.(snap.drawingsJson);
-      else canvasRef.current?.clearAll?.();
+      canvasRef.current?.setSkeletonKeypoints?.(snap.skeleton ?? null, 'snapshot');
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       let shot: string | undefined;
       if (video && overlay) {
@@ -834,6 +913,10 @@ function Home() {
 
   const [generateVideoUrl, setGenerateVideoUrl] = useState<string | null>(null);
   const [generateRecording, setGenerateRecording] = useState(false);
+  // While true, the visible analysis canvas paints the video itself (instead of
+  // the native <video> underlay) so the on-screen canvas stream carries video +
+  // overlay. Single rendering path for Generate export; restored after recording.
+  const [exportForceVideoPaint, setExportForceVideoPaint] = useState(false);
 
   /** Slow-mo replay: Freeze 3s → slow-play → snap to next → Freeze. Optionally records to a Blob. */
   const handleReplaySnapshots = useCallback(async (recorder?: MediaRecorder | null) => {
@@ -841,6 +924,10 @@ function Home() {
     if (ordered.length === 0) return;
     const v = videoRef.current;
     if (!v) return;
+    // Use the user's current playback speed; if none selected (normal 1×),
+    // default to 0.25× slow motion. Restore the original rate when done.
+    const originalRate = v.playbackRate || 1;
+    const replayRate = originalRate > 0 && originalRate !== 1 ? originalRate : 0.25;
     replayAbortRef.current = false;
     setReplayActive(true);
     const HOLD_MS = 3000;
@@ -858,7 +945,7 @@ function Home() {
       // Slow-play to the next phase
       const next = ordered[i + 1];
       if (next) {
-        v.playbackRate = 0.25;
+        v.playbackRate = replayRate;
         try { await v.play(); } catch { /* ignore */ }
         await new Promise<void>((resolve) => {
           const check = () => {
@@ -869,10 +956,10 @@ function Home() {
           requestAnimationFrame(check);
         });
         v.pause();
-        v.playbackRate = 1;
+        v.playbackRate = replayRate;
       }
     }
-    if (videoRef.current) { videoRef.current.pause(); videoRef.current.playbackRate = 1; }
+    if (videoRef.current) { videoRef.current.pause(); videoRef.current.playbackRate = originalRate; }
     if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* noop */ } }
     setReplayActive(false);
     setReplayIndex(null);
@@ -881,34 +968,49 @@ function Home() {
   /** Record the slow-mo replay to an MP4 file via canvas captureStream + ffmpeg. */
   const recordReplayToMp4 = useCallback(async () => {
     if (!snapshots.length || generateRecording) return;
-    const stream = canvasRef.current?.captureStream?.(30);
-    if (!stream) { setProcessingStatus('Recording not supported on this device'); return; }
-    const mimeCandidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
-    const mime = mimeCandidates.find(m => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) ?? '';
-    let recorder: MediaRecorder;
-    try { recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined); }
-    catch { setProcessingStatus('Recording failed to start'); return; }
-    const chunks: BlobPart[] = [];
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-    const done = new Promise<Blob>((resolve) => {
-      recorder.onstop = () => resolve(new Blob(chunks, { type: mime.includes('mp4') ? 'video/mp4' : 'video/webm' }));
-    });
+    if (!canvasRef.current?.getCanvas?.()) { setProcessingStatus('Recording not supported on this device'); return; }
+
     setGenerateRecording(true);
-    setProcessingStatus('Recording slow-mo replay…');
-    recorder.start();
-    await handleReplaySnapshots(recorder);
-    const webmBlob = await done;
-    setProcessingStatus('Converting to MP4…');
-    let finalBlob = webmBlob;
-    if (!webmBlob.type.includes('mp4')) {
-      const conv = await convertWebmBlobToMp4(webmBlob);
-      if (conv.ok) finalBlob = conv.blob;
+    // Single export rendering path: force the visible, in-DOM analysis canvas to
+    // paint the video itself, then capture that canvas (video + overlay). The
+    // canvas stays attached to the DOM, which Safari captures far more reliably
+    // than a detached offscreen canvas. Rendering mode is restored in `finally`.
+    setExportForceVideoPaint(true);
+    try {
+      // Let the mode flip commit and the canvas paint a video frame first.
+      await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      await canvasRef.current?.waitForRender?.();
+
+      const stream = canvasRef.current?.captureStream?.(30);
+      if (!stream) { setProcessingStatus('Recording not supported on this device'); return; }
+      const mimeCandidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+      const mime = mimeCandidates.find(m => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) ?? '';
+      let recorder: MediaRecorder;
+      try { recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined); }
+      catch { setProcessingStatus('Recording failed to start'); return; }
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      const done = new Promise<Blob>((resolve) => {
+        recorder.onstop = () => resolve(new Blob(chunks, { type: mime.includes('mp4') ? 'video/mp4' : 'video/webm' }));
+      });
+      setProcessingStatus('Recording slow-mo replay…');
+      recorder.start();
+      await handleReplaySnapshots(recorder);
+      const webmBlob = await done;
+      setProcessingStatus('Converting to MP4…');
+      let finalBlob = webmBlob;
+      if (!webmBlob.type.includes('mp4')) {
+        const conv = await convertWebmBlobToMp4(webmBlob);
+        if (conv.ok) finalBlob = conv.blob;
+      }
+      if (generateVideoUrl) URL.revokeObjectURL(generateVideoUrl);
+      const url = URL.createObjectURL(finalBlob);
+      setGenerateVideoUrl(url);
+      setProcessingStatus('Replay video ready — download below');
+    } finally {
+      setExportForceVideoPaint(false);
+      setGenerateRecording(false);
     }
-    if (generateVideoUrl) URL.revokeObjectURL(generateVideoUrl);
-    const url = URL.createObjectURL(finalBlob);
-    setGenerateVideoUrl(url);
-    setGenerateRecording(false);
-    setProcessingStatus('Replay video ready — download below');
   }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots]);
 
   const orderedSnapshots = useMemo(() => [...snapshots].sort((a, b) => a.timeSec - b.timeSec), [snapshots]);
@@ -1607,6 +1709,7 @@ function Home() {
       biomechFrameMeasurementsRef.current[biomechActiveFrameIndex] = [...measurementColumn];
     }
 
+    releaseSnapshotOwnership();
     setBiomechActiveFrameIndex(index);
     setMeasurementColumn(biomechFrameMeasurementsRef.current[index] ?? []);
 
@@ -1628,17 +1731,18 @@ function Home() {
         }
       }
     });
-  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex, setBiomechFrameDrawingJson, biomechActiveFrameIndex, videoRef, canvasRef]);
+  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex, setBiomechFrameDrawingJson, biomechActiveFrameIndex, videoRef, canvasRef, releaseSnapshotOwnership]);
 
   const handleBiomechProposeFrame = useCallback((index: number) => {
     const frame = aiMetricsDraft?.frames[index];
     const timeSec = frame?.timeSec ?? biomechEffectiveSampleTimes[index];
     if (timeSec === undefined) return;
+    releaseSnapshotOwnership();
     setBiomechActiveFrameIndex(index);
     void seekBiomechVideo(timeSec).then(() => {
       void proposeBiomechFrameMeasurements(index);
     });
-  }, [aiMetricsDraft, biomechEffectiveSampleTimes, proposeBiomechFrameMeasurements, seekBiomechVideo, setBiomechActiveFrameIndex]);
+  }, [aiMetricsDraft, biomechEffectiveSampleTimes, proposeBiomechFrameMeasurements, seekBiomechVideo, setBiomechActiveFrameIndex, releaseSnapshotOwnership]);
 
   const handleBiomechMarkReady = useCallback((index: number) => {
     markBiomechFrameReady(index);
@@ -2028,6 +2132,7 @@ function Home() {
       onSelectFrame={handleBiomechSelectFrame}
       onProposeFrame={handleBiomechProposeFrame}
       onEditFrame={(index) => {
+        releaseSnapshotOwnership();
         setBiomechEditingFrameIndex(index);
         setBiomechActiveFrameIndex(index);
       }}
@@ -2154,17 +2259,27 @@ function Home() {
   // Skips when the non-angle column is structurally unchanged so the live
   // skeleton-angle flushes (every 500ms) don't churn the snapshots array.
   useEffect(() => {
-    if (!biomechSelectedPhaseId) return;
+    // Gated: only the snapshot domain may write the snapshot store.
+    if (analysisMode.kind !== 'snapshot') return;
+    const ownerId = analysisMode.snapshotId;
     const nonAngle = measurementColumn.filter(m => m.type !== 'skeleton-angle');
     setSnapshots(prev => {
-      const cur = prev.find(s => s.id === biomechSelectedPhaseId);
+      const cur = prev.find(s => s.id === ownerId);
       if (!cur) return prev;
       const same = cur.column.length === nonAngle.length
         && cur.column.every((c, i) => c.id === nonAngle[i].id && c.value === nonAngle[i].value);
       if (same) return prev;
-      return prev.map(s => s.id === biomechSelectedPhaseId ? { ...s, column: nonAngle } : s);
+      // Re-derive aiDetection/jointAngles from the column so edits stay in sync.
+      const aiDetection: Record<string, number> = {};
+      const jointAngles: Record<string, number> = {};
+      for (const it of nonAngle) {
+        if (it.type === 'angle') jointAngles[it.label] = it.value;
+        aiDetection[it.label] = it.value;
+      }
+      return prev.map(s => s.id === ownerId
+        ? { ...s, column: nonAngle, aiDetection, jointAngles } : s);
     });
-  }, [measurementColumn, biomechSelectedPhaseId]);
+  }, [measurementColumn, analysisMode]);
 
   // Live skeleton angle updates → data column (throttled to avoid render storms)
   const liveAnglesRef = useRef<Array<{ label: string; deg: number }>>([]);
@@ -2172,6 +2287,9 @@ function Home() {
   const ALL_ANGLE_LABELS = ['L Elbow', 'R Elbow', 'L Knee', 'R Knee'];
 
   const flushAnglesToColumn = useCallback(() => {
+    // Mode isolation: live skeleton-angle rows belong to LIVE mode only. In
+    // snapshot/frame mode the column is owned by that mode — do not inject.
+    if (analysisModeRef.current.kind !== 'live') return;
     const current = liveAnglesRef.current;
     const angleMap = new Map(current.map(a => [a.label, a.deg]));
     const angleItems = ALL_ANGLE_LABELS.map(label => ({
@@ -4480,7 +4598,7 @@ function Home() {
         onSampleMarkerSelect: (_id: string, time: number) => {
           const idx = Number(_id.replace('biomech-frame-', ''));
           setBiomechVideoTime(time);
-          if (Number.isFinite(idx)) setBiomechActiveFrameIndex(idx);
+          if (Number.isFinite(idx)) { releaseSnapshotOwnership(); setBiomechActiveFrameIndex(idx); }
           void seekBiomechVideo(time);
         },
         onSampleMarkerChange: (id: string, time: number) => {
@@ -4493,6 +4611,7 @@ function Home() {
             return enforceMonotonicSampleTimes(next, biomechTrimStart, biomechTrimEnd);
           });
           updateBiomechFrameTime(idx, time);
+          releaseSnapshotOwnership();
           setBiomechActiveFrameIndex(idx);
           setBiomechVideoTime(time);
           void seekBiomechVideo(time);
@@ -4570,6 +4689,7 @@ function Home() {
     seekStroVideo,
     updateStroFrameTime,
     setStroActiveFrameIndex,
+    releaseSnapshotOwnership,
   ]);
 
   const renderTimelineDock = () => (
@@ -4995,9 +5115,15 @@ function Home() {
     stroEditingFrameIndex === null,
   );
   const stroCompositeActive = stroDraftPreviewActive;
-  const useNativeHtml5Video = html5FileUpload && !stroCompositeActive;
+  // During StroMotion "Select Area" the rubber-band box is drawn on the overlay
+  // canvas; if the native <video> underlay stays on top (zIndex 1) the box is
+  // hidden behind it. Paint the video onto the canvas instead so the selection
+  // is visible and the click/drag lands on the canvas.
+  const useNativeHtml5Video = html5FileUpload && !stroCompositeActive && !stroSelectingObject && !exportForceVideoPaint;
   const paintVideoOnCanvasA = Boolean(
     (html5FileUpload && stroCompositeActive) ||
+    (html5FileUpload && stroSelectingObject) ||
+    (html5FileUpload && exportForceVideoPaint) ||
     (embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)),
   );
   const html5VideoStyle: React.CSSProperties = {
@@ -5374,12 +5500,20 @@ function Home() {
                   onProcessingStatus={setProcessingStatus}
                   skeletonKeepAlive={skeletonKeepAlive}
                   skeletonLocked={skeletonLocked}
+                  skeletonWaitingForClick={skeletonWaitingForClick}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); setSkeletonLocked(true); }}
                   onSkeletonAnglesUpdate={handleSkeletonAnglesUpdate}
+                  poseMode={analysisMode.kind}
                   showMeasurementOverlays={showMeasurementOverlays && isNearActivePhase}
                   measurementColumnItems={dataColumnVisible ? measurementColumn : null}
+                  measurementColumnTitle={measurementColumnTitle}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
+                  onMeasurementItemEdit={(id, newValue) => {
+                    setMeasurementColumn(prev => prev.map(m =>
+                      m.id === id ? { ...m, value: newValue } : m
+                    ));
+                  }}
                   onMeasurementAdd={() => {
                     const label = prompt('Label:');
                     if (!label?.trim()) return;
@@ -6124,6 +6258,7 @@ function Home() {
                       skeletonDrawEnabled={skeletonEnabled && markupTarget === 'B' && !skeletonOverlayPaused}
                       ballTrailEnabled={ballTrailEnabled}
                       onProcessingStatus={setProcessingStatus}
+                      poseMode={analysisMode.kind}
                       isRecording={isRecording}
                       circleSpinning={circleSpinning}
                       outlineEraserSize={outlineEraserSize}
@@ -6945,12 +7080,29 @@ function Home() {
           style={{
             position: 'fixed', bottom: 140, left: '50%', transform: 'translateX(-50%)',
             zIndex: 9500, background: '#007AFF', borderRadius: 12,
-            padding: '12px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+            padding: '10px 12px 10px 18px', boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+            display: 'flex', alignItems: 'center', gap: 14,
           }}
         >
           <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>
-            👆 Click on the player to lock skeleton
+            👆 Click the player to aim — adjust as often as you like
           </span>
+          <button
+            type="button"
+            onClick={() => {
+              // Explicit confirm: the ONLY way to exit the click-to-focus session.
+              setSkeletonWaitingForClick(false);
+              setSkeletonLocked(true);
+              canvasRef.current?.setSkeletonWaitingForClick(false);
+              setProcessingStatus('Skeleton locked on player');
+            }}
+            style={{
+              padding: '6px 14px', borderRadius: 8, border: 'none', background: '#fff',
+              color: '#007AFF', fontSize: 13, fontWeight: 700, cursor: 'pointer', flexShrink: 0,
+            }}
+          >
+            Lock ✓
+          </button>
         </div>,
         document.body,
       )}

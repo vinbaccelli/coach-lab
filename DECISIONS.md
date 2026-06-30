@@ -255,7 +255,8 @@ single-analysis-model invariant and keeps each concern where it belongs.
 ## ADR-011 — Media playback identity is a separate MediaAsset, not part of Snapshot
 
 - **Date / commit:** P0-2 Media Layer
-- **Status:** Accepted
+- **Status:** Accepted (structure) — **remote-upload behavior superseded for V1
+  by ADR-012**
 
 **Context.** Uploaded videos used ephemeral `blob:` URLs (`createObjectURL`) that
 die on reload, and the video source was entangled with analysis state. We needed
@@ -281,6 +282,60 @@ only — rejected: that is the bug (dies on reload).
 **Why preferred.** A dedicated media identity with a resolver gives instant UX,
 durable storage, and a single decoupled seam that P0-1 can build on — while
 keeping Snapshot the sole analysis model.
+
+> **V1 amendment (ADR-012):** the dual-source *structure* and `getVideoSource`
+> resolver are kept, but the Supabase **remote-upload** behavior is **dormant in
+> V1** — `remoteUrl` stays `null` and playback runs on `localUrl` only. The
+> upload path remains as the post-V1 seam.
+
+---
+
+## ADR-012 — V1 prioritizes a local editing session + Drive/YouTube export over cloud persistence
+
+- **Date / commit:** V1 priority change
+- **Status:** Accepted (supersedes the V1 applicability of ADR-011's remote
+  upload; defers the persistence work behind ADR-001/006)
+
+**Context.** ADRs 001–011 built toward a model whose natural endpoint is cloud
+persistence (serialize snapshots, store videos on Supabase, restore on reload).
+Reviewing cost and product focus, V1 should be an **analysis application first**:
+a stable coaching workflow matters more than cloud round-tripping, and infra cost
+must stay near zero. Storing every coach's videos and analysis on our Supabase is
+both a cost and a reliability surface we don't want to own in V1.
+
+**Decision.** For V1:
+1. The editing session is **local and ephemeral** — Recording/Upload → Metrics →
+   Snapshots → Generate → final export.
+2. **No cloud Snapshot persistence** (no serialize/restore to a DB).
+3. **No video storage on Supabase** — the MediaAsset remote-upload path is
+   dormant; playback uses the local blob only.
+4. **Export = the user's own Google accounts.** The final video either downloads
+   as MP4 or uploads directly to the user's **YouTube**. The user may then attach
+   the lesson to *No Player* or an *Existing Player*, which auto-updates that
+   player's **Timeline Google Doc** (timestamp, YouTube link, snapshot
+   screenshots, notes, measurements, AI Detect values). **Google Drive is the
+   archive of record.**
+
+Snapshots remain the working model **during editing only**.
+
+**Consequences.** Infra cost stays ~0 (we store nothing durable; the user's
+Drive/YouTube quota carries the archive). Durability is real but lives in the
+user's account, not ours. Reload/navigation discards the in-memory session by
+design — coaches export before leaving. The persistence architecture (ARCHITECTURE
+§10) and §14.1 are explicitly **deferred, not cancelled**; ADR-001/006 (Snapshot
+as the single model) are unaffected — only their cloud-persistence endpoint is
+postponed.
+
+**Alternatives considered.** (a) Ship cloud persistence + Supabase video storage
+in V1 (ADR-011 endpoint) — rejected: ongoing storage cost, upload reliability
+burden, and slower path to a stable coaching workflow. (b) Local-only with no
+archive — rejected: coaches need a durable record per player. (c) Build our own
+media CDN/archive — rejected: maximal cost, exactly what we're avoiding.
+
+**Why preferred.** Leaning on the user's own YouTube + Drive delivers a durable,
+shareable lesson archive at near-zero infra cost while letting V1 focus on the
+analysis workflow. It defers — without discarding — the cloud-persistence design
+for when the priority changes.
 
 ---
 
