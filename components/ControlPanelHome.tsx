@@ -9,6 +9,7 @@ import {
   Globe,
   CreditCard,
   GraduationCap,
+  Settings,
 } from 'lucide-react';
 
 const shell: CSSProperties = {
@@ -197,6 +198,16 @@ export default function ControlPanelHome() {
           </div>
           <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
             $20/month or $200/year — see what&apos;s included and subscribe via Stripe.
+          </p>
+        </Link>
+
+        <Link href="/billing" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Settings size={20} strokeWidth={2.25} />
+            <span style={{ fontSize: 15, fontWeight: 800 }}>Account &amp; Billing</span>
+          </div>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
+            Subscription status, invoices, payment method, cancel or change plan — Stripe customer portal.
           </p>
         </Link>
       </div>

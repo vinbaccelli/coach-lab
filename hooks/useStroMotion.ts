@@ -273,12 +273,25 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   }, [invalidatePreview]);
 
   const generatePreview = useCallback(async (
-    options?: { background?: StroMotionBackground; videoOrder?: StroMotionVideoOrder; endTimeSec?: number; draftOverride?: StroMotionDraft },
+    options?: {
+      background?: StroMotionBackground;
+      videoOrder?: StroMotionVideoOrder;
+      endTimeSec?: number;
+      draftOverride?: StroMotionDraft;
+      /** Uniform ghost transparency (0–1); undefined keeps temporal fade. */
+      opacity?: number;
+      /** Restrict the render to these frame indices (Generate "included renders"). */
+      includedIndices?: number[];
+    },
   ): Promise<string | null> => {
     const video = videoRef.current;
     const current = options?.draftOverride ?? draftRef.current;
     if (!video || !current || current.frames.length === 0) return null;
-    if (countExportReadyFrames(current.frames) !== current.frames.length) return null;
+    const consideredFrames = options?.includedIndices
+      ? current.frames.filter((f) => options.includedIndices!.includes(f.index))
+      : current.frames;
+    if (consideredFrames.length === 0) return null;
+    if (countExportReadyFrames(consideredFrames) !== consideredFrames.length) return null;
 
     setStatus('generating');
     setProgress({ current: 0, total: 1 });
@@ -287,6 +300,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         background: options?.background,
         videoOrder: options?.videoOrder,
         endTimeSec: options?.endTimeSec,
+        opacity: options?.opacity,
+        includedIndices: options?.includedIndices,
       });
       setStatus('ready');
       return pngUrl;

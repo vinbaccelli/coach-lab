@@ -29,7 +29,9 @@
 - **Dependencies:** YouTube Data API scope at sign-in; existing Generate/MP4 path.
 - **Maps to:** ARCHITECTURE §1.1, §6, §8.1; DECISIONS ADR-012.
 - **Complexity:** L
-- **Status:** Planned
+- **Status:** Complete (2026-07-02) — `lib/export/exportService.ts` + Generate workspaces
+  (`components/metrics/GenerateWorkspace.tsx`, StroMotion Generate modal) drive
+  Download MP4 + YouTube (Unlisted) via `/api/youtube/upload`.
 
 ### P0-B · "Attach lesson to player?" prompt (No Player | Existing Player)
 - **Description:** After export, prompt to attach the lesson to **No Player**
@@ -39,7 +41,8 @@
 - **Dependencies:** P0-A; Player Database (§8).
 - **Maps to:** ARCHITECTURE §8.1.
 - **Complexity:** S
-- **Status:** Planned
+- **Status:** Complete (2026-07-02) — "No player | Attach to <player>" selector in both
+  Generate export panels.
 
 ### P0-C · Auto-update player's Timeline Google Doc on export
 - **Description:** When a player is chosen, append a dated lesson entry to that
@@ -52,7 +55,10 @@
   in memory.
 - **Maps to:** ARCHITECTURE §8.1; DECISIONS ADR-012, ADR-010.
 - **Complexity:** M
-- **Status:** Planned
+- **Status:** Complete (2026-07-02) — `/api/google/report` creates the formatted
+  report Doc (screenshots, measurements, notes, YouTube link), files it under
+  AngleMotion/Players/<Name>, and prepends a dated link entry to the player's
+  Timeline Doc.
 
 ---
 

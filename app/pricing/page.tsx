@@ -1,27 +1,34 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Check } from 'lucide-react';
 
 const features = [
   'Video Analysis with all drawing tools',
   'Skeleton AI pose detection',
-  'StroMotion composites',
-  'AI Detect Angles (13+ measurements)',
-  'Data Column with per-frame persistence',
-  'Screenshot save to player docs',
+  'AI Detect Angles (13+ measurements) — always coach-editable',
+  'Snapshot phases + slow-motion replay videos',
+  'Metrics Generate: professional Google Docs reports',
+  'StroMotion composites (image + video)',
+  'One-click YouTube upload (Unlisted) with auto-linked reports',
+  'Player database — every lesson archived in Google Drive',
+  'Recording Hub (screen + webcam + mic + voice-over)',
   'Manual Match Report → Google Docs',
   'AI Match Decoder (SwingVision)',
   'AngleMotion Academy (PDFs + guides)',
   'Coach public profile page',
-  'Player database with folders',
-  'Recording Hub (screen + webcam + mic)',
-  'Unlimited video uploads',
+  'Unlimited video uploads — your videos stay on your devices',
 ];
 
 export default function PricingPage() {
   const [loading, setLoading] = useState<'monthly' | 'yearly' | null>(null);
+  // Set when the middleware subscription gate redirected here from /analysis.
+  const [subscriptionRequired, setSubscriptionRequired] = useState(false);
+
+  useEffect(() => {
+    setSubscriptionRequired(new URLSearchParams(window.location.search).get('required') === '1');
+  }, []);
 
   const handleCheckout = async (plan: 'monthly' | 'yearly') => {
     setLoading(plan);
@@ -61,7 +68,7 @@ export default function PricingPage() {
         <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
           <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
           <span style={{ fontSize: 14, fontWeight: 800, color: '#fff' }}>
-            Coach<span style={{ color: '#FF3B30' }}>Lab</span>.ai
+            Angle<span style={{ color: '#FF3B30' }}>Motion</span>
           </span>
         </Link>
         <Link href="/login" style={{
@@ -73,6 +80,16 @@ export default function PricingPage() {
       </div>
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '60px 20px 80px', textAlign: 'center' }}>
+        {subscriptionRequired && (
+          <div style={{
+            margin: '0 auto 28px', maxWidth: 560, padding: '12px 18px',
+            borderRadius: 12, background: 'rgba(255,159,10,0.12)',
+            border: '1px solid rgba(255,159,10,0.45)',
+            fontSize: 13, fontWeight: 600, color: '#FFB340',
+          }}>
+            Video Analysis requires an active subscription — pick a plan below to unlock it.
+          </div>
+        )}
         <h1 style={{ margin: '0 0 8px', fontSize: 36, fontWeight: 900, letterSpacing: -0.5 }}>
           AngleMotion Pro
         </h1>

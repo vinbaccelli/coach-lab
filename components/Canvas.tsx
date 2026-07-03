@@ -183,7 +183,7 @@ export interface CanvasHandle {
   /** Import strokes from a previously exported JSON string, replacing current strokes */
   importStrokes: (json: string) => void;
   /** Record animated Stromotion build-up to a downloadable video (Chrome/desktop) */
-  exportStroMotionVideo: () => Promise<{ ok: boolean; reason?: string; blob?: Blob; url?: string }>;
+  exportStroMotionVideo: (options?: { speed?: number; finalHoldMs?: number }) => Promise<{ ok: boolean; reason?: string; blob?: Blob; url?: string }>;
   canvasSupportsStroMotionVideoExport: () => boolean;
   /** Set visible ghost count immediately (bypasses React prop lag for export) */
   setStroMotionVisibleCount: (count: number | undefined) => void;
@@ -241,6 +241,9 @@ export interface CanvasProps {
   measurementColumnPos?: { x: number; y: number };
   onMeasurementColumnDrag?: (pos: { x: number; y: number }) => void;
   onMeasurementItemEdit?: (id: string, newValue: number) => void;
+  /** Dragging an AI measurement overlay line recomputes its angle; the dependent
+   *  column value updates automatically (BUG 1). */
+  onOverlayAngleEdit?: (overlayId: string, deg: number) => void;
   onMeasurementAdd?: () => void;
   onMeasurementRemoveLast?: () => void;
   /** When true, skeleton click-to-focus works even when skeleton isn't the active tool */
@@ -267,6 +270,8 @@ export interface CanvasProps {
   stroMotionBackground?: 'start' | 'end';
   /** Animation order for composite frames. */
   stroMotionVideoOrder?: 'forward' | 'reverse';
+  /** Uniform ghost transparency (0–1). Undefined keeps the default temporal fade. */
+  stroMotionGhostOpacity?: number;
   /** End-frame bitmap — required when stroMotionBackground === 'end'. */
   stroMotionEndPlate?: ImageBitmap | null;
   /** Subject box preview before generate (video-normalized 0..1) */
@@ -1637,6 +1642,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       measurementColumnPos,
       onMeasurementColumnDrag,
       onMeasurementItemEdit,
+      onOverlayAngleEdit,
       onMeasurementAdd,
       onMeasurementRemoveLast,
       skeletonKeepAlive = false,
@@ -1654,6 +1660,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionUseExportMasks = false,
       stroMotionBackground = 'start',
       stroMotionVideoOrder = 'forward',
+      stroMotionGhostOpacity,
       stroMotionEndPlate,
       stroMotionSubjectBox,
       stroMotionFrameStops,
@@ -1704,6 +1711,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonWaitingForClickRef.current = skeletonWaitingForClick; }, [skeletonWaitingForClick]);
     const onMeasurementCommitRef = useRef(onMeasurementCommit);
     useEffect(() => { onMeasurementCommitRef.current = onMeasurementCommit; }, [onMeasurementCommit]);
+    const onOverlayAngleEditRef = useRef(onOverlayAngleEdit);
+    useEffect(() => { onOverlayAngleEditRef.current = onOverlayAngleEdit; }, [onOverlayAngleEdit]);
     const onSkeletonAnglesUpdateRef = useRef(onSkeletonAnglesUpdate);
     useEffect(() => { onSkeletonAnglesUpdateRef.current = onSkeletonAnglesUpdate; }, [onSkeletonAnglesUpdate]);
     // Perf: the angle math + emit only need to run when the keypoints array
@@ -1864,6 +1873,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const stroMotionUseExportMasksRef = useRef(stroMotionUseExportMasks);
     const stroMotionBackgroundRef = useRef(stroMotionBackground);
     const stroMotionVideoOrderRef = useRef(stroMotionVideoOrder);
+    const stroMotionGhostOpacityRef = useRef<number | undefined>(stroMotionGhostOpacity);
     const stroMotionEndPlateRef = useRef<ImageBitmap | null>(stroMotionEndPlate ?? null);
     // Overlay mode: ghost frames drawn over live video (no background plate). Used during video export.
     const stroMotionOverlayModeRef = useRef(false);
@@ -2050,6 +2060,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { stroMotionUseExportMasksRef.current = stroMotionUseExportMasks; renderDirtyRef.current = true; }, [stroMotionUseExportMasks]);
     useEffect(() => { stroMotionBackgroundRef.current = stroMotionBackground; renderDirtyRef.current = true; }, [stroMotionBackground]);
     useEffect(() => { stroMotionVideoOrderRef.current = stroMotionVideoOrder; renderDirtyRef.current = true; }, [stroMotionVideoOrder]);
+    useEffect(() => { stroMotionGhostOpacityRef.current = stroMotionGhostOpacity; renderDirtyRef.current = true; }, [stroMotionGhostOpacity]);
     useEffect(() => { stroMotionEndPlateRef.current = stroMotionEndPlate ?? null; renderDirtyRef.current = true; }, [stroMotionEndPlate]);
     useEffect(() => { stroMotionSubjectBoxRef.current = stroMotionSubjectBox ?? null; renderDirtyRef.current = true; }, [stroMotionSubjectBox]);
     useEffect(() => { stroMotionFrameStopsRef.current = stroMotionFrameStops ?? null; renderDirtyRef.current = true; }, [stroMotionFrameStops]);
@@ -2612,7 +2623,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         stroMotionCanvasPreviewRef.current = on;
         renderDirtyRef.current = true;
       },
-      exportStroMotionVideo: async () => {
+      exportStroMotionVideo: async (options?: { speed?: number; finalHoldMs?: number }) => {
         const canvas = canvasRef.current;
         if (!canvas) return { ok: false, reason: 'no-canvas' };
         if (!canvasSupportsVideoExport(canvas)) return { ok: false, reason: 'unsupported' };
@@ -2625,8 +2636,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const startTime = Math.min(...sampleTimes);
         const endTime = Math.max(...sampleTimes);
         const fps = 24;
-        const totalSteps = Math.max(1, Math.ceil((endTime - startTime) * fps));
-        const finalHoldMs = 2000;
+        // speed < 1 slows the traversal (more steps for the same time span).
+        const speed = options?.speed && options.speed > 0 ? options.speed : 1;
+        const totalSteps = Math.max(1, Math.ceil(((endTime - startTime) * fps) / speed));
+        const finalHoldMs = options?.finalHoldMs ?? 2000;
         const intervalMs = Math.round(1000 / fps);
 
         const vw = draft.videoWidth || video.videoWidth;
@@ -2869,7 +2882,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // page.tsx; this only governs the rendered skeleton overlay.
     const liveSkeletonActive = () => {
       const v = videoRef.current;
-      return poseLoopActiveRef.current        // skeleton enabled & loop running (false when locked off)
+      return poseModeRef.current === 'live'   // LIVE mode only — SNAPSHOT shows its frozen pose (spec §1)
+        && poseLoopActiveRef.current          // skeleton enabled & loop running (false when locked off)
         && !!poseBridgeRef.current            // worker/bridge present
         && !!v && v.videoWidth > 0;           // video loaded
     };
@@ -3699,6 +3713,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               videoOrder: stroMotionVideoOrderRef.current,
               endPlate: stroMotionEndPlateRef.current,
               overlayMode: stroMotionOverlayModeRef.current,
+              ...(stroMotionGhostOpacityRef.current !== undefined
+                ? { fadeMode: 'uniform' as const, opacity: stroMotionGhostOpacityRef.current }
+                : {}),
             });
 
             if (stroMotionShowSkeletonRef.current && stroComposite?.ghostPoses?.length) {
@@ -3832,6 +3849,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             videoOrder: stroMotionVideoOrderRef.current,
             endPlate: stroMotionEndPlateRef.current,
             overlayMode: stroMotionOverlayModeRef.current,
+            ...(stroMotionGhostOpacityRef.current !== undefined
+              ? { fadeMode: 'uniform' as const, opacity: stroMotionGhostOpacityRef.current }
+              : {}),
           });
         } else if (yt && ytDim.w > 0 && ytDim.h > 0) {
           vW = ytDim.w;
@@ -4050,17 +4070,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.lineTo(bx, by);
             ctx.stroke();
             ctx.setLineDash([]);
-            // Draggable endpoint handles — small + subtle so they read as the
-            // arrow's endpoints, consistent with the Angle Arrow styling (the
-            // line, not the dots, carries the measurement).
-            for (const [px, py] of [[ax, ay], [bx, by]] as [number, number][]) {
-              ctx.fillStyle = OVERLAY_COLOR;
-              ctx.globalAlpha = 0.5;
-              ctx.beginPath();
-              ctx.arc(px, py, 2.5, 0, Math.PI * 2);
-              ctx.fill();
-              ctx.globalAlpha = 1;
-            }
+            // No endpoint dots — render as a plain line, matching the Draw-tool
+            // angle style (the endpoints stay drag-editable via the hit-test in
+            // onPointerDown; the handles don't need to be drawn). (BUG 2 fix)
           };
 
           // Shoulder line (L→R)
@@ -5762,6 +5774,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const onUp = () => {
               isDraggingRef.current = false;
               draggingOverlayRef.current = null;
+              // BUG 1: recompute the angle from the dragged line so the dependent
+              // column value follows what the coach drew (video-pixel coords).
+              const a = overlayAdjustmentsRef.current[eid] ?? { dx1: 0, dy1: 0, dx2: 0, dy2: 0 };
+              const sX = ep.x1 + a.dx1, sY = ep.y1 + a.dy1;
+              const eX = ep.x2 + a.dx2, eY = ep.y2 + a.dy2;
+              let deg = Math.atan2(eY - sY, eX - sX) * 180 / Math.PI;
+              // Shoulder/hip report signed L→R tilt; the rest use a 0–360 heading.
+              if (eid !== 'shoulder' && eid !== 'hip') deg = (deg + 360) % 360;
+              onOverlayAngleEditRef.current?.(eid, Math.round(deg));
               window.removeEventListener('pointermove', onMove);
               window.removeEventListener('pointerup', onUp);
             };

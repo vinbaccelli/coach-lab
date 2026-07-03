@@ -42,6 +42,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!session.googleAccessToken) {
+    console.error('[google-doc] No Google access token in session — user must sign out/in to grant scopes.');
     return NextResponse.json(
       { error: 'Google access not granted — sign out and sign in again to enable Docs export.' },
       { status: 403 },
@@ -119,6 +120,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ documentId: docId, url: `https://docs.google.com/document/d/${docId}/edit` });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Google Docs export failed';
+    console.error('[google-doc] Docs export failed:', msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

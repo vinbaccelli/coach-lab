@@ -48,13 +48,25 @@ export async function hydrateDraftBitmapsForExport(
 export async function exportStroMotionDraftPng(
   video: HTMLVideoElement,
   draft: StroMotionDraft,
-  options?: { background?: StroMotionBackground; videoOrder?: StroMotionVideoOrder; endTimeSec?: number },
+  options?: {
+    background?: StroMotionBackground;
+    videoOrder?: StroMotionVideoOrder;
+    endTimeSec?: number;
+    /** Uniform ghost transparency (0–1). Undefined keeps the default temporal fade. */
+    opacity?: number;
+    /** Restrict the render to these frame indices (Generate "included renders"). */
+    includedIndices?: number[];
+  },
 ): Promise<string> {
-  if (countExportReadyFrames(draft.frames) !== draft.frames.length) {
+  const source = options?.includedIndices
+    ? { ...draft, frames: draft.frames.filter((f) => options.includedIndices!.includes(f.index)) }
+    : draft;
+  if (source.frames.length === 0) throw new Error('Include at least one frame.');
+  if (countExportReadyFrames(source.frames) !== source.frames.length) {
     throw new Error('All frames must be marked Ready before export.');
   }
 
-  const hydrated = await hydrateDraftBitmapsForExport(video, draft);
+  const hydrated = await hydrateDraftBitmapsForExport(video, source);
   const w = hydrated.videoWidth;
   const h = hydrated.videoHeight;
   const canvas = document.createElement('canvas');
@@ -75,6 +87,7 @@ export async function exportStroMotionDraftPng(
     background: options?.background ?? 'start',
     videoOrder: options?.videoOrder ?? 'forward',
     endPlate,
+    ...(options?.opacity !== undefined ? { fadeMode: 'uniform' as const, opacity: options.opacity } : {}),
   });
 
   return canvas.toDataURL('image/png');

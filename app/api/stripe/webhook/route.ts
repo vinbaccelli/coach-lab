@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { stripe } from '@/lib/stripe';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createSupabaseServiceClient } from '@/lib/supabase/service';
 
 export async function POST(req: Request) {
   const body = await req.text();
@@ -26,7 +26,10 @@ export async function POST(req: Request) {
 
     if (userId) {
       try {
-        const supabase = await createSupabaseServerClient();
+        // Webhooks carry no user session — writes need the service-role client
+        // (the anon/session client is blocked by RLS here).
+        const supabase = createSupabaseServiceClient();
+        if (!supabase) throw new Error('SUPABASE_SERVICE_ROLE_KEY not configured');
         await supabase.from('subscriptions').upsert({
           user_id: userId,
           stripe_customer_id: customerId,
@@ -34,7 +37,7 @@ export async function POST(req: Request) {
           status: 'active',
           updated_at: new Date().toISOString(),
         }, { onConflict: 'user_id' });
-      } catch { /* DB not configured yet — silently continue */ }
+      } catch (e) { console.error('[stripe/webhook] subscription upsert failed:', e); }
     }
   }
 
@@ -42,11 +45,12 @@ export async function POST(req: Request) {
     const sub = event.data.object as any;
     const status = sub.status;
     try {
-      const supabase = await createSupabaseServerClient();
+      const supabase = createSupabaseServiceClient();
+      if (!supabase) throw new Error('SUPABASE_SERVICE_ROLE_KEY not configured');
       await supabase.from('subscriptions')
         .update({ status, updated_at: new Date().toISOString() })
         .eq('stripe_subscription_id', sub.id);
-    } catch { /* silently continue */ }
+    } catch (e) { console.error('[stripe/webhook] subscription update failed:', e); }
   }
 
   return NextResponse.json({ received: true });

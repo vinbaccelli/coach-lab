@@ -129,10 +129,8 @@ interface ToolPaletteProps {
   onToggleToolbarLabels?: () => void;
   /** Stromotion panel content (full workflow UI). */
   stroMotionPanel?: React.ReactNode;
-  /** Biomechanics analysis panel (V1 primary workflow). */
-  biomechanicsPanel?: React.ReactNode;
   /** Called when the user navigates to a toolbar screen. */
-  onNavigate?: (screen: 'home' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'framecapture' | 'webcam') => void;
+  onNavigate?: (screen: 'home' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
   /** @deprecated Use stroMotionPanel — legacy toggle only */
   stroMotionEnabled?: boolean;
   onStroMotionToggle?: () => void;
@@ -189,7 +187,6 @@ type NavScreen =
   | 'tools'
   | 'stromotion'
   | 'aimetrics'
-  | 'framecapture'
   | 'webcam';
 
 const TOOLBAR_ICON_PROPS = {
@@ -460,16 +457,18 @@ function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolea
   const compact = io || dense;
   let background = '#FFFFFF';
   let color = '#1D1D1F';
-  let border = '1px solid #D1D1D6';
+  // Longhand border properties: callers override borderColor, and mixing that
+  // with a `border` shorthand triggers React rerender style warnings.
+  let borderColor = '#D1D1D6';
 
   if (active) {
     background = '#007AFF';
     color = '#FFFFFF';
-    border = '1px solid #007AFF';
+    borderColor = '#007AFF';
   } else if (pressed) {
     background = '#DCEBFF';
     color = '#007AFF';
-    border = '1px solid #D1D1D6';
+    borderColor = '#D1D1D6';
   }
 
   const base: React.CSSProperties = {
@@ -480,7 +479,9 @@ function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolea
     minHeight: 44,
     padding: compact ? (io ? '8px 10px' : '8px 12px') : '10px 12px',
     borderRadius: 10,
-    border,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor,
     background,
     color,
     cursor: 'pointer',
@@ -584,7 +585,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
     toolbarLabelsExpanded = false,
     onToggleToolbarLabels,
     stroMotionPanel,
-    biomechanicsPanel,
     onNavigate,
     stroMotionEnabled = false,
     onStroMotionToggle,
@@ -1204,6 +1204,16 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
           <Row k="ruler" active={activeTool === 'ruler'} icon={<Ruler size={18} />} tooltip="Measure real-world distances (calibrate first)" label="Ruler" onPress={() => setTool('ruler')} />
           <Row k="anglediff" icon={<Activity size={18} />} tooltip="Draw two angle arrows (e.g. hips then shoulders) — the angle difference is auto-calculated" label="Angle differential" onPress={() => setTool('arrowAngle')} />
+          {onPrecisionDrawToggle && (
+            <Row
+              k="precision"
+              active={precisionDrawEnabled}
+              icon={<Crosshair size={18} />}
+              tooltip="Precision draw: magnified cursor offset above your finger for exact placement"
+              label="Precision"
+              onPress={() => { onPrecisionDrawToggle(); if (!precisionDrawEnabled) onShowPrecisionInstructions?.(); }}
+            />
+          )}
           <Row
             k="st-d"
             icon={<Palette size={18} />}
@@ -1300,7 +1310,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <BackHeader title="Tools" icon={<LayoutGrid size={18} />} />
-          <Row k="met-t" icon={<BarChart3 size={18} />} tooltip="Skeleton, drawing tools, measurements, and frame capture" label="Metrics" onPress={() => push('aimetrics')} />
+          <Row k="met-t" icon={<BarChart3 size={18} />} tooltip="Skeleton, drawing tools, and measurements" label="Metrics" onPress={() => push('aimetrics')} />
           <Row k="sm-t" icon={<Layers size={18} />} tooltip="Create multi-frame ghost overlay composites" label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
@@ -1397,46 +1407,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <Row k="m-aidetect" icon={<Sparkles size={metricIcon} />} tooltip="Auto-detect joint angles, hip-shoulder differential, and foot direction from skeleton" label="AI Detect Angles" onPress={onAutoDetectMeasurements} />
           )}
 
-          {/* Phases — timeline divisions */}
+          {/* Create Snapshot — freeze the current frame into a snapshot */}
           {onOpenPhases && (
-            <Row k="m-phases" icon={<Target size={metricIcon} />} tooltip="Add phase divisions on the timeline (stroke steps from eBook)" label="Phases" onPress={onOpenPhases} />
+            <Row k="m-snapshot" icon={<Target size={metricIcon} />} tooltip="Create a snapshot — freeze the current frame (skeleton + drawings + data column)" label="Snapshot" onPress={onOpenPhases} />
           )}
 
           {/* Generate — capture phase screenshots + slow-mo replay */}
           {onMetricsGenerate && (
             <Row k="m-generate" icon={<Layers size={metricIcon} />} tooltip="Capture every phase and replay the stroke in slow motion" label="Generate" onPress={onMetricsGenerate} />
-          )}
-
-          {!io && (
-            <div style={{ height: 1, background: '#D1D1D6', margin: '8px 0' }} />
-          )}
-
-          {/* Frame Capture */}
-          <Row
-            k="m-capture"
-            icon={<Camera size={metricIcon} />}
-            label="Frame Capture"
-            tooltip="Save the current frame as a screenshot to a player's timeline"
-            onPress={() => { push('framecapture'); }}
-          />
-        </ToolbarScrollArea>
-        <GlobalActionsFooter />
-      </div>
-    );
-  }
-
-  if (top === ('framecapture')) {
-    return (
-      <div style={shellStyle}>
-        <CollapseControl />
-        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <BackHeader title="Frame Capture" icon={<Camera size={18} />} />
-          {biomechanicsPanel ?? (
-            !io ? (
-              <p style={{ margin: '0 4px 8px', fontSize: 12, lineHeight: 1.45, color: textMuted }}>
-                Add green balls on the timeline to capture frozen frames with measurements.
-              </p>
-            ) : null
           )}
         </ToolbarScrollArea>
         <GlobalActionsFooter />

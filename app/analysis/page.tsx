@@ -31,21 +31,11 @@ import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
 import { useStroMotion } from '@/hooks/useStroMotion';
-import { useAIMetrics } from '@/hooks/useAIMetrics';
 const StroMotionPanel = React.lazy(() => import('@/components/StroMotionPanel'));
-const BiomechanicsPanel = React.lazy(() => import('@/components/BiomechanicsPanel'));
-const PhasesPicker = React.lazy(() => import('@/components/PhasesPicker'));
 const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/SnapshotScrollPanel'));
-const FrameMeasurementEditor = React.lazy(() => import('@/components/aiMetrics/FrameMeasurementEditor'));
+const GenerateWorkspace = React.lazy(() => import('@/components/metrics/GenerateWorkspace'));
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
-import { renderMeasurementCard } from '@/lib/biomechanics';
-import {
-  AIMETRICS_DEFAULT_FRAME_COUNT,
-  frameHasMeasurements,
-  getWorkingMeasurements,
-  type AIMetricsFrameCount,
-} from '@/lib/aiMetricsDraft';
 import {
   computeGhostSampleTimes,
   enforceMonotonicSampleTimes,
@@ -55,7 +45,7 @@ import {
   subjectBoxFromRegion,
 } from '@/lib/stroMotion';
 import { makeSnapshot, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
-import { makeMediaAsset, uploadMediaAsset, getVideoSource, type MediaAsset } from '@/lib/media/mediaAsset';
+import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
   captureVideoFrameAtTime,
@@ -93,8 +83,6 @@ const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportM
 import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import RulerOverlay from '@/components/ruler/RulerOverlay';
-import type { FrameMetricsReportFrame } from '@/components/frameMetrics/FrameMetricsReportModal';
-const FrameMetricsReportModal = React.lazy(() => import('@/components/frameMetrics/FrameMetricsReportModal'));
 import { uploadDataUrl } from '@/lib/supabase/storage';
 import { proposePhaseMarkers } from '@/lib/biomechanics/phaseDetection';
 import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
@@ -211,8 +199,7 @@ function ReelsDesktopShell({
  */
 type AnalysisMode =
   | { kind: 'live' }
-  | { kind: 'snapshot'; snapshotId: string }
-  | { kind: 'frame'; frameIndex: number };
+  | { kind: 'snapshot'; snapshotId: string };
 
 function Home() {
   const router = useRouter();
@@ -552,7 +539,6 @@ function Home() {
     draft: sessionDraft,
     hasContent: sessionDraftHasContent,
     applyStroMotion: applyStroMotionToDraft,
-    applyAIMetrics: applyAIMetricsToDraft,
     setTitle: setSessionDraftTitle,
     resetDraft: resetSessionDraft,
   } = useSessionDraft();
@@ -578,16 +564,6 @@ function Home() {
     !genericEmbedSrcA &&
     !genericEmbedSrcB;
 
-  // AI Metrics (coach override — frame time + optional labels)
-  const biomechClearingRef = useRef(false);
-  const [biomechActive, setBiomechActive] = useState(false);
-  const [biomechVideoTime, setBiomechVideoTime] = useState(0);
-  const [biomechVideoDuration, setBiomechVideoDuration] = useState(0);
-  const [biomechFrameCount, setBiomechFrameCount] = useState<AIMetricsFrameCount>(AIMETRICS_DEFAULT_FRAME_COUNT);
-  const [biomechSampleTimesOverride, setBiomechSampleTimesOverride] = useState<number[] | null>(null);
-  const [biomechFrameCards, setBiomechFrameCards] = useState<Array<{ id: string; label: string; timeSec: number; imageUrl: string }>>([]);
-  const [biomechReportAnalysis, setBiomechReportAnalysis] = useState<import('@/lib/biomechanics/types').BiomechanicsAnalysis | null>(null);
-  const [biomechEditingFrameIndex, setBiomechEditingFrameIndex] = useState<number | null>(null);
   // ── Snapshot model: single source of truth for Metrics analysis ──────────
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number; unit: string; type: string }>>([]);
@@ -599,109 +575,20 @@ function Home() {
     () => (snapshots.length ? toPhaseMarkers(snapshots) : null),
     [snapshots],
   );
-  const biomechFrameDrawingsRef = useRef<Record<number, string>>({});
-  const biomechFrameMeasurementsRef = useRef<Record<number, typeof measurementColumn>>({});
   const [measurementColumnPos, setMeasurementColumnPos] = useState<{ x: number; y: number }>({ x: 0.68, y: 0.02 });
-  const biomechHtml5Only = stroMotionHtml5Only;
-  /** Per-frame captured screenshots: frameIndex → data URL */
-  const [biomechCapturedImages, setBiomechCapturedImages] = useState<Record<number, string>>({});
-  /** Per-frame user notes: frameIndex → string */
-  const [biomechFrameNotes, setBiomechFrameNotes] = useState<Record<number, string>>({});
-  const [biomechMeasurements, setBiomechMeasurements] = useState<Record<number, Record<string, boolean>>>({});
-  /** Whether the Frame Metrics report modal is open */
-  const [biomechReportModalOpen, setBiomechReportModalOpen] = useState(false);
-
-  const {
-    draft: aiMetricsDraft,
-    status: aiMetricsStatus,
-    strokeType: biomechStrokeType,
-    setStrokeType: setBiomechStrokeType,
-    customSteps: biomechCustomSteps,
-    addCustomStep: addBiomechCustomStep,
-    renameCustomStep: renameBiomechCustomStep,
-    deleteCustomStep: deleteBiomechCustomStep,
-    reorderCustomStep: reorderBiomechCustomStep,
-    trimStartSec: biomechTrimStart,
-    setTrimStartSec: setBiomechTrimStart,
-    trimEndSec: biomechTrimEnd,
-    setTrimEndSec: setBiomechTrimEnd,
-    activeFrameIndex: biomechActiveFrameIndex,
-    setActiveFrameIndex: setBiomechActiveFrameIndex,
-    proposingFrameIndex: biomechProposingFrameIndex,
-    isProposingFrame: biomechProposingFrame,
-    isGenerating: biomechGenerating,
-    isProcessing: biomechProcessing,
-    progress: biomechProgress,
-    showSkeleton: biomechShowSkeleton,
-    setShowSkeleton: setBiomechShowSkeleton,
-    syncDraft: syncAIMetricsDraft,
-    addFrame: addBiomechFrame,
-    removeFrame: removeBiomechFrame,
-    updateFrameTime: updateBiomechFrameTime,
-    updateEnabledModule: updateBiomechEnabledModule,
-    updateFrameEnabledModule: updateBiomechFrameEnabledModule,
-    setFrameSkeletonStamp: setBiomechFrameSkeletonStamp,
-    proposeMeasurementsForFrame: proposeBiomechFrameMeasurements,
-    updateFrameMeasurements: updateBiomechFrameMeasurements,
-    resetFrameMeasurements: resetBiomechFrameMeasurements,
-    reproposeFrameMeasurements: reproposeBiomechFrameMeasurements,
-    markFrameReady: markBiomechFrameReady,
-    generateReport: generateBiomechReport,
-    invalidateReport: invalidateBiomechReport,
-    clearAll: clearBiomechAll,
-    setFrameDrawingJson: setBiomechFrameDrawingJson,
-    autoProposeAllFrames: autoProposeAllBiomechFrames,
-    readyCount: biomechReadyCount,
-    enabledModules: biomechEnabledModules,
-  } = useAIMetrics(videoRef);
 
   // ── Step 1: Mode Guard — single authoritative domain ─────────────────────
   // Frame mode supersedes snapshot mode so the two persist paths can never run
   // together. Snapshot-entry points clear the frame index, so normal snapshot
   // flow resolves to 'snapshot'; touching a frame resolves to 'frame'.
   const analysisMode = useMemo<AnalysisMode>(() => {
-    if (biomechActiveFrameIndex !== null) return { kind: 'frame', frameIndex: biomechActiveFrameIndex };
     if (biomechSelectedPhaseId) return { kind: 'snapshot', snapshotId: biomechSelectedPhaseId };
     return { kind: 'live' };
-  }, [biomechActiveFrameIndex, biomechSelectedPhaseId]);
+  }, [biomechSelectedPhaseId]);
   // Ref mirror so stable callbacks (e.g. the live-angle flush) can read the
   // current mode without being recreated.
   const analysisModeRef = useRef(analysisMode);
   analysisModeRef.current = analysisMode;
-
-  // FRAME mode: restore the stored frame pose as a read-only ('frame') skeleton
-  // overlay. Step 2 made the live cache live-only, so frame poses (which the
-  // contract treats as stored + immutable) must be restored explicitly.
-  useEffect(() => {
-    if (analysisMode.kind !== 'frame') return;
-    const frame = aiMetricsDraft?.frames[analysisMode.frameIndex];
-    const kps = (frame?.poseSample ?? frame?.skeletonStamp)?.keypoints;
-    canvasRef.current?.setSkeletonKeypoints?.(
-      kps?.length ? kps.map(k => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' })) : null,
-      'frame',
-    );
-  }, [analysisMode, aiMetricsDraft]);
-
-  // Auto-save measurement column to current frame whenever it changes.
-  // Gated: only the frame domain may write the frame store.
-  useEffect(() => {
-    if (analysisMode.kind !== 'frame') return;
-    biomechFrameMeasurementsRef.current[analysisMode.frameIndex] = [...measurementColumn];
-  }, [measurementColumn, analysisMode]);
-
-  const biomechDefaultSampleTimes = useMemo(
-    () => computeGhostSampleTimes(biomechTrimStart, biomechTrimEnd, biomechFrameCount),
-    [biomechTrimStart, biomechTrimEnd, biomechFrameCount],
-  );
-
-  const biomechEffectiveSampleTimes = useMemo(() => {
-    if (biomechSampleTimesOverride?.length === biomechFrameCount) return biomechSampleTimesOverride;
-    return biomechDefaultSampleTimes;
-  }, [biomechSampleTimesOverride, biomechDefaultSampleTimes, biomechFrameCount]);
-
-  useEffect(() => {
-    setBiomechSampleTimesOverride(null);
-  }, [biomechTrimStart, biomechTrimEnd, biomechFrameCount]);
 
   const {
     draft: stroMotionDraft,
@@ -741,7 +628,7 @@ function Home() {
 
   // Skeleton persists across tool changes once enabled from Metrics
   const [skeletonKeepAlive, setSkeletonKeepAlive] = useState(false);
-  const skeletonEnabled  = activeTool === 'skeleton' || skeletonKeepAlive || (biomechActive && biomechHtml5Only && biomechShowSkeleton) || (stroMotionActive && stroShowSkeleton);
+  const skeletonEnabled  = activeTool === 'skeleton' || skeletonKeepAlive || (stroMotionActive && stroShowSkeleton);
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const [skeletonConfirmOpen, setSkeletonConfirmOpen] = useState(false);
   const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
@@ -750,7 +637,6 @@ function Home() {
   const [pendingMeasurementName, setPendingMeasurementName] = useState('');
   const [dataColumnActive, setDataColumnActive] = useState(false);
   const [columnDeleteMode, setColumnDeleteMode] = useState(false);
-  const [phasesPickerOpen, setPhasesPickerOpen] = useState(false);
   const [showMeasurementOverlays, setShowMeasurementOverlays] = useState(false);
 
   // Active snapshot (the phase whose data column is shown).
@@ -787,19 +673,14 @@ function Home() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const dataColumnVisible = (dataColumnActive && isNearActivePhase) || (biomechActive && biomechActiveFrameIndex !== null);
+  const dataColumnVisible = (dataColumnActive && isNearActivePhase);
   const ballTrailEnabled = activeTool === 'ballShadow';
 
   // Data column header reflects the locked owner (visual feedback only).
   const measurementColumnTitle = useMemo(() => {
-    if (analysisMode.kind === 'snapshot') return activeSnapshot?.label ?? 'Phase';
-    if (analysisMode.kind === 'frame') {
-      const f = aiMetricsDraft?.frames[analysisMode.frameIndex];
-      const n = analysisMode.frameIndex + 1;
-      return f?.label ? `Frame ${n} · ${f.label}` : `Frame ${n}`;
-    }
+    if (analysisMode.kind === 'snapshot') return activeSnapshot?.label ?? 'Snapshot';
     return 'Data Column';
-  }, [analysisMode, activeSnapshot, aiMetricsDraft]);
+  }, [analysisMode, activeSnapshot]);
 
   // ── Snapshot helpers ─────────────────────────────────────────────────────
   /** Persist the live canvas/column state into the currently-active snapshot. */
@@ -820,30 +701,10 @@ function Home() {
     } : s));
   }, [biomechSelectedPhaseId, showMeasurementOverlays]);
 
-  /** Create a new snapshot at a time, make it active. Returns the new id. */
-  const createSnapshot = useCallback((timeSec: number, label: string, short: string): string => {
-    const snap = makeSnapshot(timeSec, label, short);
-    if (currentMediaIdRef.current) snap.mediaId = currentMediaIdRef.current;
-    saveActiveSnapshot();
-    setSnapshots(prev => [...prev, snap]);
-    // Mode Guard: entering snapshot domain releases the frame domain.
-    setBiomechActiveFrameIndex(null);
-    setBiomechSelectedPhaseId(snap.id);
-    // New snapshot starts empty — clear canvas drawings and overlays.
-    // Mode isolation: a new snapshot starts with an empty column (no LIVE
-    // skeleton-angle carryover).
-    setMeasurementColumn([]);
-    canvasRef.current?.setOverlayAdjustments?.({});
-    canvasRef.current?.importStrokes?.('[]');
-    return snap.id;
-  }, [saveActiveSnapshot, setBiomechActiveFrameIndex]);
-
   /** Switch to an existing snapshot: save current, restore target, seek video. */
   const selectSnapshot = useCallback((id: string) => {
     saveActiveSnapshot();
     const target = snapshots.find(s => s.id === id);
-    // Mode Guard: entering snapshot domain releases the frame domain.
-    setBiomechActiveFrameIndex(null);
     setBiomechSelectedPhaseId(id);
     if (!target) return;
     // Mode isolation: SNAPSHOT column = snapshot measurements only. No merge of
@@ -857,7 +718,7 @@ function Home() {
     // Restore skeleton keypoints so overlays render from stored pose.
     canvasRef.current?.setSkeletonKeypoints?.(target.skeleton ?? null, 'snapshot');
     if (videoRef.current) { videoRef.current.currentTime = target.timeSec; videoRef.current.pause(); }
-  }, [saveActiveSnapshot, snapshots, setBiomechActiveFrameIndex]);
+  }, [saveActiveSnapshot, snapshots]);
 
   /**
    * Mode Guard: release SNAPSHOT ownership when entering FRAME mode so the two
@@ -869,8 +730,67 @@ function Home() {
     setBiomechSelectedPhaseId(null);
   }, [saveActiveSnapshot]);
 
+  /**
+   * Manual "Create Snapshot" (spec §2/§8): freeze the current LIVE frame.
+   * Copies the live drawings, data column, and skeleton into a new snapshot,
+   * captures a screenshot, and enters SNAPSHOT mode on it. This is the single
+   * snapshot-creation primitive (used by both Create Snapshot and AI Detect).
+   */
+  const createSnapshotFromLive = useCallback((): string | null => {
+    const v = videoRef.current;
+    if (!v) return null;
+    v.pause();
+    const t = v.currentTime;
+    saveActiveSnapshot(); // persist any in-progress edits to the previous active snapshot
+    const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
+    const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
+    const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
+    const liveColumn = measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle');
+    const overlay = canvasRef.current?.getCanvas?.();
+    let screenshot: string | undefined;
+    if (overlay) { try { screenshot = captureFrame(v, overlay); } catch { screenshot = undefined; } }
+    const num = snapshots.length + 1;
+    const snap = makeSnapshot(t, `Snapshot ${num}`, String(num));
+    if (currentMediaIdRef.current) snap.mediaId = currentMediaIdRef.current;
+    snap.drawingsJson = drawingsJson;
+    snap.overlayAdjustments = overlayAdjustments;
+    if (skeleton) snap.skeleton = skeleton;
+    snap.column = liveColumn;
+    snap.overlaysOn = showMeasurementOverlays;
+    if (screenshot) snap.screenshot = screenshot;
+    setSnapshots(prev => [...prev, snap]);
+    // Enter SNAPSHOT mode.
+    setBiomechSelectedPhaseId(snap.id);
+    setMeasurementColumn(liveColumn);
+    // Drawings are already on the canvas (copied from live); freeze the captured
+    // pose with snapshot provenance so the live worker no longer owns the display.
+    canvasRef.current?.setSkeletonKeypoints?.(skeleton ?? null, 'snapshot');
+    setProcessingStatus(`Snapshot ${num} created`);
+    return snap.id;
+  }, [saveActiveSnapshot, snapshots.length, showMeasurementOverlays]);
+
+  /** Delete a snapshot. If it was the active one, return cleanly to LIVE mode. */
+  const deleteSnapshot = useCallback((id: string) => {
+    setSnapshots(prev => prev.filter(s => s.id !== id));
+    if (biomechSelectedPhaseId === id) {
+      setBiomechSelectedPhaseId(null);
+      setMeasurementColumn([]);
+      setShowMeasurementOverlays(false);
+      canvasRef.current?.importStrokes?.('[]');
+      canvasRef.current?.setOverlayAdjustments?.({});
+      canvasRef.current?.setSkeletonKeypoints?.(null, 'snapshot');
+    }
+  }, [biomechSelectedPhaseId]);
+
   // ── Generate: capture phase screenshots + slow-mo replay ─────────────────
   const [snapshotPanelOpen, setSnapshotPanelOpen] = useState(false);
+  const [generateWorkspaceOpen, setGenerateWorkspaceOpen] = useState(false);
+  // Stays true after the first Generate so the workspace keeps its local state
+  // (order, selection, title, notes) across close/reopen within the session.
+  const [generateWorkspaceMounted, setGenerateWorkspaceMounted] = useState(false);
+  const [generateReplayRate, setGenerateReplayRate] = useState(0.25);
+  /** Seconds each snapshot stays frozen during the replay/recorded video. */
+  const [generateHoldSec, setGenerateHoldSec] = useState(3);
   const [replayActive, setReplayActive] = useState(false);
   const [replayIndex, setReplayIndex] = useState<number | null>(null);
   const replayAbortRef = useRef(false);
@@ -889,8 +809,8 @@ function Home() {
   const handleGenerateSnapshots = useCallback(async () => {
     saveActiveSnapshot();
     const ordered = [...snapshots].sort((a, b) => a.timeSec - b.timeSec);
-    if (ordered.length === 0) { setProcessingStatus('Add phases first (AI Detect or Phases)'); return; }
-    setProcessingStatus('Capturing phase screenshots…');
+    if (ordered.length === 0) { setProcessingStatus('Create a snapshot first (Create Snapshot or AI Detect)'); return; }
+    setProcessingStatus('Capturing snapshot screenshots…');
     const video = videoRef.current;
     const overlay = canvasRef.current?.getCanvas?.();
     const updated: Snapshot[] = [];
@@ -907,11 +827,13 @@ function Home() {
       updated.push({ ...snap, screenshot: shot });
     }
     setSnapshots(prev => prev.map(s => updated.find(u => u.id === s.id) ?? s));
-    setSnapshotPanelOpen(true);
-    setProcessingStatus(`Generated ${ordered.length} phase screenshots`);
+    setGenerateWorkspaceMounted(true);
+    setGenerateWorkspaceOpen(true);
+    setProcessingStatus(`Generated ${ordered.length} snapshot screenshots`);
   }, [snapshots, saveActiveSnapshot, seekVideoTo]);
 
   const [generateVideoUrl, setGenerateVideoUrl] = useState<string | null>(null);
+  const [generateVideoBlob, setGenerateVideoBlob] = useState<Blob | null>(null);
   const [generateRecording, setGenerateRecording] = useState(false);
   // While true, the visible analysis canvas paints the video itself (instead of
   // the native <video> underlay) so the on-screen canvas stream carries video +
@@ -924,13 +846,13 @@ function Home() {
     if (ordered.length === 0) return;
     const v = videoRef.current;
     if (!v) return;
-    // Use the user's current playback speed; if none selected (normal 1×),
-    // default to 0.25× slow motion. Restore the original rate when done.
+    // Replay at the speed chosen in the Generate workspace (default 0.25×
+    // slow motion). Restore the original rate when done.
     const originalRate = v.playbackRate || 1;
-    const replayRate = originalRate > 0 && originalRate !== 1 ? originalRate : 0.25;
+    const replayRate = generateReplayRate > 0 ? generateReplayRate : 0.25;
     replayAbortRef.current = false;
     setReplayActive(true);
-    const HOLD_MS = 3000;
+    const HOLD_MS = Math.max(0.5, generateHoldSec) * 1000;
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
     for (let i = 0; i < ordered.length; i++) {
       if (replayAbortRef.current) break;
@@ -963,7 +885,7 @@ function Home() {
     if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* noop */ } }
     setReplayActive(false);
     setReplayIndex(null);
-  }, [snapshots, seekVideoTo, selectSnapshot]);
+  }, [snapshots, seekVideoTo, selectSnapshot, generateReplayRate, generateHoldSec]);
 
   /** Record the slow-mo replay to an MP4 file via canvas captureStream + ffmpeg. */
   const recordReplayToMp4 = useCallback(async () => {
@@ -1006,12 +928,20 @@ function Home() {
       if (generateVideoUrl) URL.revokeObjectURL(generateVideoUrl);
       const url = URL.createObjectURL(finalBlob);
       setGenerateVideoUrl(url);
+      setGenerateVideoBlob(finalBlob);
       setProcessingStatus('Replay video ready — download below');
     } finally {
       setExportForceVideoPaint(false);
       setGenerateRecording(false);
     }
   }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots]);
+
+  /** Replay from the Generate workspace: workspace hides itself; show the strip HUD meanwhile. */
+  const handleWorkspaceReplay = useCallback(async () => {
+    setSnapshotPanelOpen(true);
+    await handleReplaySnapshots();
+    setSnapshotPanelOpen(false);
+  }, [handleReplaySnapshots]);
 
   const orderedSnapshots = useMemo(() => [...snapshots].sort((a, b) => a.timeSec - b.timeSec), [snapshots]);
 
@@ -1334,6 +1264,48 @@ function Home() {
     return true;
   }, [invalidateStroPreview, markStroFrameReady]);
 
+  // ── StroMotion Generate render settings (drive preview rebuilds) ─────────
+  const [stroGhostOpacity, setStroGhostOpacity] = useState<number | undefined>(undefined);
+  const [stroVideoSpeed, setStroVideoSpeed] = useState(1);
+  const [stroExcludedFrames, setStroExcludedFrames] = useState<Set<number>>(new Set());
+
+  const clearStroVideoPreview = useCallback(() => {
+    setStroPreviewVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    stroPreviewVideoBlobRef.current = null;
+  }, []);
+
+  // Drop excluded-frame indices that no longer exist in the current draft.
+  useEffect(() => {
+    setStroExcludedFrames((prev) => {
+      if (prev.size === 0) return prev;
+      if (!stroMotionDraft) return new Set();
+      const valid = new Set([...prev].filter((i) => stroMotionDraft.frames.some((f) => f.index === i)));
+      return valid.size === prev.size ? prev : valid;
+    });
+  }, [stroMotionDraft]);
+
+  /** Rebuild the StroMotion still-image preview with the current (or overridden) render settings. */
+  const rebuildStroPreview = useCallback(async (opts?: {
+    videoOrder?: 'forward' | 'reverse';
+    opacity?: { value: number | undefined };
+    excluded?: Set<number>;
+  }) => {
+    if (!stroMotionDraft) return;
+    const excluded = opts?.excluded ?? stroExcludedFrames;
+    const includedIndices = excluded.size > 0
+      ? stroMotionDraft.frames.map((f) => f.index).filter((i) => !excluded.has(i))
+      : undefined;
+    const opacity = opts?.opacity ? opts.opacity.value : stroGhostOpacity;
+    const pngUrl = await generateStroPreview({
+      background: stroBackground,
+      videoOrder: opts?.videoOrder ?? stroVideoOrder,
+      endTimeSec: stroEndFrame,
+      opacity,
+      includedIndices,
+    });
+    if (pngUrl) setStroPreviewPngUrl(pngUrl);
+  }, [stroMotionDraft, stroExcludedFrames, stroGhostOpacity, generateStroPreview, stroBackground, stroVideoOrder, stroEndFrame]);
+
   const buildStroVideoPreview = useCallback(async () => {
     if (!stroVideoExportSupported) return false;
     setStroIsBuildingVideoPreview(true);
@@ -1345,7 +1317,7 @@ function Home() {
           requestAnimationFrame(() => resolve());
         });
       });
-      const exportResult = await canvasRef.current?.exportStroMotionVideo?.();
+      const exportResult = await canvasRef.current?.exportStroMotionVideo?.({ speed: stroVideoSpeed });
       if (!exportResult?.ok || !exportResult.url) return false;
       setStroPreviewVideoUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev);
@@ -1361,7 +1333,7 @@ function Home() {
       canvasRef.current?.setStroMotionVisibleCount?.(undefined);
       setStroVisibleCount(undefined);
     }
-  }, [hydrateStroDraftForExport, stroVideoExportSupported]);
+  }, [hydrateStroDraftForExport, stroVideoExportSupported, stroVideoSpeed]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -1371,15 +1343,8 @@ function Home() {
       if (Number.isFinite(dur) && dur > 0) {
         setStroVideoDuration(dur);
         setStroEndFrame((prev) => (prev <= stroStartFrame || prev > dur ? Math.min(Math.max(stroStartFrame + 1, 3), dur) : prev));
-        setBiomechVideoDuration(dur);
-        setBiomechTrimEnd((prev) =>
-          prev <= biomechTrimStart || prev > dur
-            ? Math.min(Math.max(biomechTrimStart + 1, 3), dur)
-            : prev,
-        );
       }
       setStroVideoTime(v.currentTime || 0);
-      setBiomechVideoTime(v.currentTime || 0);
     };
     v.addEventListener('loadedmetadata', syncMeta);
     v.addEventListener('timeupdate', syncMeta);
@@ -1388,70 +1353,7 @@ function Home() {
       v.removeEventListener('loadedmetadata', syncMeta);
       v.removeEventListener('timeupdate', syncMeta);
     };
-  }, [videoSrc, stroStartFrame, biomechTrimStart]);
-
-  const biomechFrameRows = useMemo(
-    () => (aiMetricsDraft?.frames ?? []).map((f) => ({
-      index: f.index,
-      timeSec: f.timeSec,
-      label: f.label,
-      status: f.status,
-      hasMeasurements: frameHasMeasurements(f),
-      hasSkeletonStamp: !!f.skeletonStamp,
-      enabledModules: f.enabledModules,
-      capturedImageUrl: biomechCapturedImages[f.index],
-      notes: biomechFrameNotes[f.index],
-      skeletonStampDone: biomechMeasurements[f.index]?.skeletonStamp,
-      jointAnglesDone: biomechMeasurements[f.index]?.jointAngles,
-      racketVectorDone: biomechMeasurements[f.index]?.racketVector,
-      stringbedDirectionDone: biomechMeasurements[f.index]?.stringbedDirection,
-      measurementsDone: biomechMeasurements[f.index]?.measurements,
-      hipShoulderDiffDone: biomechMeasurements[f.index]?.hipShoulderDiff,
-      footDirectionDone: biomechMeasurements[f.index]?.footDirection,
-      racketDirectionDone: biomechMeasurements[f.index]?.racketDirection,
-      footDistanceDone: biomechMeasurements[f.index]?.footDistance,
-    })),
-    [aiMetricsDraft, biomechCapturedImages, biomechFrameNotes, biomechMeasurements],
-  );
-
-  useEffect(() => {
-    // Skip one cycle right after Clear so the draft stays null instead of
-    // being immediately re-populated by the sample-times reset.
-    if (biomechClearingRef.current) {
-      biomechClearingRef.current = false;
-      return;
-    }
-    if (!biomechActive || !biomechHtml5Only) return;
-    if (biomechTrimEnd <= biomechTrimStart) return;
-    syncAIMetricsDraft({
-      strokeType: biomechStrokeType,
-      trimStartSec: biomechTrimStart,
-      trimEndSec: biomechTrimEnd,
-      sampleTimes: biomechEffectiveSampleTimes,
-      customSteps: biomechStrokeType === 'custom' ? biomechCustomSteps : undefined,
-    });
-  }, [
-    biomechActive,
-    biomechHtml5Only,
-    biomechStrokeType,
-    biomechTrimStart,
-    biomechTrimEnd,
-    biomechEffectiveSampleTimes,
-    biomechCustomSteps,
-    syncAIMetricsDraft,
-  ]);
-
-  // Auto-propose measurements for all pending frames when draft has frames without pose data
-  const biomechAutoProposedRef = useRef(false);
-  useEffect(() => {
-    if (!biomechActive || !biomechHtml5Only || !aiMetricsDraft) return;
-    const hasPending = aiMetricsDraft.frames.some(f => !f.poseSample);
-    if (!hasPending || biomechAutoProposedRef.current) return;
-    biomechAutoProposedRef.current = true;
-    void autoProposeAllBiomechFrames().then(() => {
-      biomechAutoProposedRef.current = false;
-    });
-  }, [biomechActive, biomechHtml5Only, aiMetricsDraft, autoProposeAllBiomechFrames]);
+  }, [videoSrc, stroStartFrame]);
 
   // Phase markers are created explicitly via the Phases button handler.
   // No auto-proposal — phases only appear when the user chooses them.
@@ -1484,7 +1386,15 @@ function Home() {
     setStroPreviewModalOpen(true);
 
     await hydrateStroDraftForExport();
-    const pngUrl = await generateStroPreview({ background: stroBackground, videoOrder: stroVideoOrder, endTimeSec: stroEndFrame });
+    const pngUrl = await generateStroPreview({
+      background: stroBackground,
+      videoOrder: stroVideoOrder,
+      endTimeSec: stroEndFrame,
+      opacity: stroGhostOpacity,
+      includedIndices: stroExcludedFrames.size > 0 && stroMotionDraft
+        ? stroMotionDraft.frames.map((f) => f.index).filter((i) => !stroExcludedFrames.has(i))
+        : undefined,
+    });
     if (!pngUrl) {
       setStroPreviewError('Could not build the StroMotion image. Close and try Generate again.');
       return;
@@ -1508,6 +1418,8 @@ function Home() {
     stroStartFrame,
     stroVideoExportSupported,
     stroVideoOrder,
+    stroGhostOpacity,
+    stroExcludedFrames,
   ]);
 
   useEffect(() => {
@@ -1675,286 +1587,16 @@ function Home() {
     }
   }, [stroMotionActive, stroMotionHtml5Only]);
 
-  const seekBiomechVideo = useCallback(async (timeSec: number) => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.pause();
-    const dur = Number.isFinite(v.duration) ? v.duration : timeSec;
-    const next = Math.max(0, Math.min(timeSec, dur));
-    if (Math.abs(v.currentTime - next) > 0.00001 || v.seeking) {
-      v.currentTime = next;
-      await new Promise<void>((resolve) => {
-        const onSeeked = () => {
-          v.removeEventListener('seeked', onSeeked);
-          resolve();
-        };
-        v.addEventListener('seeked', onSeeked, { once: true });
-        window.setTimeout(resolve, 120);
-      });
-    }
-    setBiomechVideoTime(next);
-    await canvasRef.current?.waitForRender?.();
-  }, []);
-
-  const handleBiomechSelectFrame = useCallback((index: number) => {
-    const frame = aiMetricsDraft?.frames[index];
-    const timeSec = frame?.timeSec ?? biomechEffectiveSampleTimes[index];
-    if (timeSec === undefined) return;
-
-    // Save current frame's drawings and measurements before switching
-    if (biomechActiveFrameIndex !== null && canvasRef.current) {
-      const json = canvasRef.current.exportStrokes();
-      biomechFrameDrawingsRef.current[biomechActiveFrameIndex] = json;
-      setBiomechFrameDrawingJson(biomechActiveFrameIndex, json);
-      biomechFrameMeasurementsRef.current[biomechActiveFrameIndex] = [...measurementColumn];
-    }
-
-    releaseSnapshotOwnership();
-    setBiomechActiveFrameIndex(index);
-    setMeasurementColumn(biomechFrameMeasurementsRef.current[index] ?? []);
-
-    void seekBiomechVideo(timeSec).then(() => {
-      // Restore target frame's drawings (or clear if none saved)
-      const saved = biomechFrameDrawingsRef.current[index] ?? frame?.coachDrawingJson;
-      if (saved) {
-        canvasRef.current?.importStrokes(saved);
-      } else {
-        // No saved drawings — stamp skeleton measurements if pose data available
-        canvasRef.current?.clearAll();
-        const poseSample = frame?.poseSample ?? frame?.skeletonStamp ?? null;
-        const kps = poseSample?.keypoints;
-        if (kps?.length) {
-          const video = videoRef.current;
-          const nativeW = video?.videoWidth ?? 1280;
-          const nativeH = video?.videoHeight ?? 720;
-          canvasRef.current?.stampAutoMeasurements(kps, nativeW, nativeH);
-        }
-      }
-    });
-  }, [aiMetricsDraft, biomechEffectiveSampleTimes, seekBiomechVideo, setBiomechActiveFrameIndex, setBiomechFrameDrawingJson, biomechActiveFrameIndex, videoRef, canvasRef, releaseSnapshotOwnership]);
-
-  const handleBiomechProposeFrame = useCallback((index: number) => {
-    const frame = aiMetricsDraft?.frames[index];
-    const timeSec = frame?.timeSec ?? biomechEffectiveSampleTimes[index];
-    if (timeSec === undefined) return;
-    releaseSnapshotOwnership();
-    setBiomechActiveFrameIndex(index);
-    void seekBiomechVideo(timeSec).then(() => {
-      void proposeBiomechFrameMeasurements(index);
-    });
-  }, [aiMetricsDraft, biomechEffectiveSampleTimes, proposeBiomechFrameMeasurements, seekBiomechVideo, setBiomechActiveFrameIndex, releaseSnapshotOwnership]);
-
-  const handleBiomechMarkReady = useCallback((index: number) => {
-    markBiomechFrameReady(index);
-    invalidateBiomechReport();
-    setBiomechFrameCards([]);
-    setBiomechReportAnalysis(null);
-  }, [invalidateBiomechReport, markBiomechFrameReady]);
-
-  const handleBiomechGenerateReport = useCallback(async () => {
-    const video = videoRef.current;
-    if (!video || !aiMetricsDraft) return;
-    const analysis = generateBiomechReport();
-    if (!analysis) return;
-
-    setBiomechFrameCards([]);
-    const cards: Array<{ id: string; label: string; timeSec: number; imageUrl: string }> = [];
-    const snap = document.createElement('canvas');
-    snap.width = video.videoWidth;
-    snap.height = video.videoHeight;
-    const sctx = snap.getContext('2d');
-
-    for (const m of analysis.measurements) {
-      await seekBiomechVideo(m.timeSec);
-      if (sctx && video.videoWidth > 0) {
-        try {
-          sctx.drawImage(video, 0, 0, snap.width, snap.height);
-          const imageUrl = renderMeasurementCard(snap, snap.width, snap.height, m);
-          cards.push({ id: m.phaseId, label: m.phaseLabel, timeSec: m.timeSec, imageUrl });
-        } catch { /* skip */ }
-      }
-    }
-
-    setBiomechFrameCards(cards);
-    setBiomechReportAnalysis(analysis);
-    applyAIMetricsToDraft({
-      strokeType: biomechStrokeType,
-      trimStartSec: biomechTrimStart,
-      trimEndSec: biomechTrimEnd,
-      frameCards: cards,
-      sampleTimes: biomechEffectiveSampleTimes,
-      measurements: analysis,
-    });
-    setSessionDraftTitle(`${localDateTimeForFolder()} — AI Metrics`);
-  }, [
-    aiMetricsDraft,
-    applyAIMetricsToDraft,
-    biomechEffectiveSampleTimes,
-    biomechStrokeType,
-    biomechTrimEnd,
-    biomechTrimStart,
-    generateBiomechReport,
-    seekBiomechVideo,
-    setSessionDraftTitle,
-  ]);
-
-  const handleBiomechExportJson = useCallback(() => {
-    if (!biomechReportAnalysis) return;
-    const blob = new Blob([JSON.stringify(biomechReportAnalysis, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ai-metrics-${biomechStrokeType}-${Date.now()}.json`;
-    a.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  }, [biomechReportAnalysis, biomechStrokeType]);
-
-  const [biomechSavingReport, setBiomechSavingReport] = useState(false);
-  const [biomechReportPlayerPickerOpen, setBiomechReportPlayerPickerOpen] = useState(false);
-  const [biomechReportPlayerList, setBiomechReportPlayerList] = useState<Array<{ id: string; display_name: string }>>([]);
-
-  /** Opens the player picker; actual save happens in handleBiomechSaveReportToPlayer */
-  const handleBiomechSaveReport = useCallback(async () => {
-    if (!aiMetricsDraft || biomechSavingReport) return;
-    try {
-      const res = await fetch('/api/players');
-      if (res.ok) {
-        const body = await res.json() as { players?: Array<{ id: string; display_name: string }> };
-        setBiomechReportPlayerList(body.players ?? []);
-      }
-    } catch { /* offline */ }
-    setBiomechReportPlayerPickerOpen(true);
-  }, [aiMetricsDraft, biomechSavingReport]);
-
-  const handleBiomechSaveReportToPlayer = useCallback(async (playerId: string | null) => {
-    if (!aiMetricsDraft) return;
-    setBiomechReportPlayerPickerOpen(false);
-    setBiomechSavingReport(true);
-    try {
-      const supabase = createSupabaseBrowserClient();
-      const userRes = await supabase?.auth.getUser();
-      const userId = userRes?.data?.user?.id;
-
-      // Upload captured frame images to Supabase Storage
-      const screenshotUrls: string[] = [];
-      if (supabase && userId) {
-        for (const [idx, dataUrl] of Object.entries(biomechCapturedImages)) {
-          const filename = `${userId}/reports/${Date.now()}-frame${idx}.png`;
-          const path = await uploadDataUrl('analysis-screenshots', filename, dataUrl);
-          if (path) {
-            const { data: signed } = await supabase.storage.from('analysis-screenshots').createSignedUrl(path, 60 * 60 * 24 * 365);
-            if (signed?.signedUrl) screenshotUrls.push(signed.signedUrl);
-          }
-        }
-      }
-
-      // Build report body text
-      const bodyLines: string[] = [
-        `**Stroke type:** ${biomechStrokeType}`,
-        `**Frames analysed:** ${aiMetricsDraft.frames.length}`,
-        '',
-        ...aiMetricsDraft.frames.map((f) => {
-          const notes = biomechFrameNotes[f.index] ?? '';
-          const meas = biomechMeasurements[f.index];
-          const checks = [
-            meas?.skeletonStamp ? '✓ Skeleton' : null,
-            meas?.jointAngles ? '✓ Joint angles' : null,
-            meas?.racketVector ? '✓ Racket vector' : null,
-            meas?.stringbedDirection ? '✓ Stringbed' : null,
-            meas?.hipShoulderDiff ? '✓ Hip/shoulder' : null,
-            meas?.footDirection ? '✓ Foot direction' : null,
-            meas?.footDistance ? '✓ Foot distance' : null,
-          ].filter(Boolean).join('  ');
-          return `**${f.label}** @ ${f.timeSec.toFixed(2)}s${checks ? `  ${checks}` : ''}${notes ? `\n${notes}` : ''}`;
-        }),
-      ];
-
-      const targetPlayerId = playerId ?? biomechReportPlayerList[0]?.id ?? null;
-      if (targetPlayerId) {
-        const res = await fetch(`/api/players/${targetPlayerId}/entries`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            category: 'technique',
-            folder_label: `AI Metrics — ${localDateTimeForFolder()}`,
-            body_text: bodyLines.join('\n'),
-            screenshots: screenshotUrls,
-            source: 'ai-metrics',
-            metadata: { strokeType: biomechStrokeType, frameCount: aiMetricsDraft.frames.length },
-          }),
-        });
-        if (!res.ok) {
-          console.error('Failed to save report:', await res.text());
-        }
-      } else {
-        // No player selected — download report as text file
-        const blob = new Blob([bodyLines.join('\n')], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        downloadDataURL(url, `ai-metrics-report-${Date.now()}.txt`);
-        URL.revokeObjectURL(url);
-      }
-    } finally {
-      setBiomechSavingReport(false);
-    }
-  }, [aiMetricsDraft, biomechCapturedImages, biomechFrameNotes, biomechMeasurements, biomechStrokeType, biomechReportPlayerList]);
-
-  const resetBiomech = useCallback(() => {
-    biomechClearingRef.current = true;
-    clearBiomechAll();
-    // Keep biomechActive=true so the draft re-initialises on next render and
-    // "Add frame" works immediately after Clear without re-navigating.
-    setBiomechFrameCards([]);
-    setBiomechReportAnalysis(null);
-    setBiomechSampleTimesOverride(null);
-    setBiomechEditingFrameIndex(null);
-    setBiomechCapturedImages({});
-    setBiomechFrameNotes({});
-    setBiomechMeasurements({});
+  /** Clear the Metrics/Snapshot analysis state (snapshots, data column, skeleton). */
+  const resetMetrics = useCallback(() => {
     setSnapshots([]);
     setBiomechSelectedPhaseId(null);
-    biomechFrameDrawingsRef.current = {};
-    biomechFrameMeasurementsRef.current = {};
     setMeasurementColumn([]);
     setDataColumnActive(false);
     setShowMeasurementOverlays(false);
     setSkeletonKeepAlive(false);
     setSkeletonLocked(false);
     skeletonFirstDetectedRef.current = false;
-    setBiomechReportModalOpen(false);
-  }, [clearBiomechAll]);
-
-  /** Take a screenshot of the current video + canvas for a specific frame */
-  const handleBiomechCaptureFrame = useCallback(async (frameIndex: number) => {
-    const video = videoRef.current;
-    const overlayCanvas = canvasRef.current?.getCanvas();
-    if (!video) return;
-
-    // Seek to this frame's time first
-    const frame = aiMetricsDraft?.frames[frameIndex];
-    if (frame) {
-      await seekBiomechVideo(frame.timeSec);
-      // Brief wait for frame to render
-      await new Promise(r => setTimeout(r, 200));
-    }
-
-    try {
-      let dataUrl: string;
-      if (overlayCanvas) {
-        dataUrl = captureFrame(video, overlayCanvas);
-      } else {
-        // Fallback: capture just the video frame
-        const tmp = document.createElement('canvas');
-        tmp.width = video.videoWidth || 640;
-        tmp.height = video.videoHeight || 360;
-        tmp.getContext('2d')?.drawImage(video, 0, 0);
-        dataUrl = tmp.toDataURL('image/png');
-      }
-      setBiomechCapturedImages(prev => ({ ...prev, [frameIndex]: dataUrl }));
-    } catch { /* ignore */ }
-  }, [videoRef, canvasRef, aiMetricsDraft, seekBiomechVideo]);
-
-  const handleBiomechUpdateFrameNotes = useCallback((frameIndex: number, notes: string) => {
-    setBiomechFrameNotes(prev => ({ ...prev, [frameIndex]: notes }));
   }, []);
 
   const [screenshotSaving, setScreenshotSaving] = useState(false);
@@ -2047,8 +1689,12 @@ function Home() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ imageUrl: signed.signedUrl, timestampLabel: localDateTimeForFolder() }),
           });
-          if (docRes.ok) setProcessingStatus(`Saved to ${playerName} + Google Doc`);
-          else setProcessingStatus(`Saved to ${playerName} (Google Doc skipped)`);
+          if (docRes.ok) {
+            setProcessingStatus(`Saved to ${playerName} + Google Doc`);
+          } else {
+            const docErr = (await docRes.json().catch(() => ({}))) as { error?: string };
+            setProcessingStatus(`Saved to ${playerName} — Google Doc failed: ${docErr.error ?? `HTTP ${docRes.status}`}`);
+          }
         } catch {
           setProcessingStatus(`Saved to ${playerName} (Google Doc skipped)`);
         }
@@ -2082,124 +1728,6 @@ function Home() {
   }, [screenshotNewPlayerName, screenshotDataUrl, handleScreenshotSaveToPlayer]);
 
   /** Open report modal: requires at least one captured frame */
-  const handleBiomechOpenReport = useCallback(() => {
-    setBiomechReportModalOpen(true);
-  }, []);
-
-  /** Assemble the report frames for the modal */
-  const biomechReportFrames = useMemo((): FrameMetricsReportFrame[] => {
-    if (!aiMetricsDraft) return [];
-    return aiMetricsDraft.frames
-      .filter(f => !!biomechCapturedImages[f.index])
-      .map(f => ({
-        index: f.index,
-        timeSec: f.timeSec,
-        label: f.label,
-        imageUrl: biomechCapturedImages[f.index]!,
-        notes: biomechFrameNotes[f.index] ?? '',
-      }));
-  }, [aiMetricsDraft, biomechCapturedImages, biomechFrameNotes]);
-
-  const biomechanicsPanelEl = (
-    <BiomechanicsPanel
-      compact
-      showLabels={panelShowLabels}
-      currentTime={biomechVideoTime}
-      duration={biomechVideoDuration}
-      strokeType={biomechStrokeType}
-      onStrokeTypeChange={setBiomechStrokeType}
-      customSteps={biomechCustomSteps}
-      onAddCustomStep={addBiomechCustomStep}
-      onRenameCustomStep={renameBiomechCustomStep}
-      onDeleteCustomStep={deleteBiomechCustomStep}
-      onReorderCustomStep={reorderBiomechCustomStep}
-      trimStartSec={biomechTrimStart}
-      trimEndSec={biomechTrimEnd}
-      onSetTrimStart={() => setBiomechTrimStart(Math.max(0, biomechVideoTime))}
-      onSetTrimEnd={() =>
-        setBiomechTrimEnd(
-          Math.min(
-            biomechVideoDuration || biomechVideoTime,
-            Math.max(biomechVideoTime, biomechTrimStart + 0.04),
-          ),
-        )
-      }
-      frameCount={biomechFrameCount}
-      onFrameCountChange={setBiomechFrameCount}
-      sampleTimes={biomechEffectiveSampleTimes}
-      frames={biomechFrameRows}
-      activeFrameIndex={biomechActiveFrameIndex}
-      onSelectFrame={handleBiomechSelectFrame}
-      onProposeFrame={handleBiomechProposeFrame}
-      onEditFrame={(index) => {
-        releaseSnapshotOwnership();
-        setBiomechEditingFrameIndex(index);
-        setBiomechActiveFrameIndex(index);
-      }}
-      onMarkReady={handleBiomechMarkReady}
-      onRemoveFrame={removeBiomechFrame}
-      onAddFrameAtCurrentTime={() => addBiomechFrame(biomechVideoTime)}
-      onToggleFrameModule={updateBiomechFrameEnabledModule}
-      onStampSkeleton={(frameIndex) => {
-        const frame = aiMetricsDraft?.frames[frameIndex];
-        const poseSample = frame?.poseSample;
-        if (!poseSample?.keypoints?.length) {
-          setProcessingStatus('No skeleton data for this frame — play the video with Skeleton enabled first.');
-          return;
-        }
-        setBiomechFrameSkeletonStamp(frameIndex, poseSample);
-        const video = videoRef.current;
-        const nativeW = video?.videoWidth ?? 1280;
-        const nativeH = video?.videoHeight ?? 720;
-        canvasRef.current?.stampAutoMeasurements(poseSample.keypoints, nativeW, nativeH);
-      }}
-      onActivateTool={handleToolChange}
-      onCaptureFrame={(frameIndex) => { void handleBiomechCaptureFrame(frameIndex); }}
-      onUpdateFrameNotes={handleBiomechUpdateFrameNotes}
-      onToggleMeasurement={(frameIndex, key, done) => {
-        setBiomechMeasurements(prev => ({
-          ...prev,
-          [frameIndex]: { ...prev[frameIndex], [key]: done },
-        }));
-        // Auto-draw the measurement using skeleton keypoints when checking
-        if (done) {
-          const frame = aiMetricsDraft?.frames[frameIndex];
-          const kps = frame?.poseSample?.keypoints;
-          if (kps?.length) {
-            const video = videoRef.current;
-            const nativeW = video?.videoWidth ?? 1280;
-            const nativeH = video?.videoHeight ?? 720;
-            canvasRef.current?.stampAutoMeasurements(kps, nativeW, nativeH);
-          }
-        }
-      }}
-      isProposingFrame={biomechProposingFrame}
-      proposingFrameIndex={biomechProposingFrameIndex}
-      isGenerating={biomechGenerating}
-      readyCount={biomechReadyCount}
-      isReportReady={biomechReportFrames.length > 0}
-      showSkeleton={biomechShowSkeleton}
-      onShowSkeletonChange={setBiomechShowSkeleton}
-      onGenerate={handleBiomechOpenReport}
-      onSaveReport={() => { void handleBiomechSaveReport(); }}
-      isSavingReport={biomechSavingReport}
-      onClear={resetBiomech}
-      frameCards={biomechFrameCards}
-      onDownloadFrameCard={(url, label) => {
-        downloadDataURL(url, `ai-metrics-${label.replace(/[^\w]+/g, '')}-${Date.now()}.png`);
-      }}
-      onExportMeasurements={handleBiomechExportJson}
-      isProcessing={biomechProcessing}
-      progress={biomechProgress}
-      disabled={!biomechHtml5Only}
-      disabledReason={
-        !biomechHtml5Only
-          ? 'AI Metrics requires an uploaded video file (not YouTube or embed links).'
-          : undefined
-      }
-    />
-  );
-
   // ── Container size measurement ────────────────────────────────────────────
   const updateSize = useCallback(() => {
     const el = containerRef.current;
@@ -2501,6 +2029,26 @@ function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoRef]);
 
+  // BUG 5: returning to playback exits SNAPSHOT mode → LIVE so the live skeleton
+  // loop resumes (spec §9). Guarded so the slow-mo replay — which plays the video
+  // while cycling snapshots — is not interrupted. LIVE starts with a clean overlay
+  // (snapshot drawings/column belong to the snapshot, saved by release).
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onPlayReturnLive = () => {
+      if (biomechSelectedPhaseId && !replayActive && !generateRecording) {
+        releaseSnapshotOwnership();
+        setMeasurementColumn([]);
+        setShowMeasurementOverlays(false);
+        canvasRef.current?.importStrokes?.('[]');
+        canvasRef.current?.setOverlayAdjustments?.({});
+      }
+    };
+    video.addEventListener('play', onPlayReturnLive);
+    return () => video.removeEventListener('play', onPlayReturnLive);
+  }, [biomechSelectedPhaseId, replayActive, generateRecording, releaseSnapshotOwnership]);
+
   useEffect(() => {
     if (!youtubeVideoIdA && !youtubeVideoIdB) return;
     const t = window.setInterval(() => {
@@ -2748,44 +2296,13 @@ function Home() {
       resetStroMotion();
       canvasRef.current?.clearAll();
       resetToolAfterVideoLoad();
-      // ── Media Layer: instant local playback + background persistent upload ──
-      const asset = makeMediaAsset(url, file.size);
+      // ── Media Layer: local-only in V1 (ADR-012) ──────────────────────────
+      // The remote Supabase-upload path is DORMANT: playback runs on the local
+      // blob, `remoteUrl` stays null, and durability comes from the Drive/
+      // YouTube export. Do not re-enable without revisiting ADR-012.
+      const asset: MediaAsset = { ...makeMediaAsset(url, file.size), status: 'ready' };
       currentMediaIdRef.current = asset.id;
       setMediaAssetA(asset);
-      void (async () => {
-        const userRes = await createSupabaseBrowserClient()?.auth.getUser();
-        const userId = userRes?.data?.user?.id;
-        if (!userId) { setMediaAssetA(a => a && a.id === asset.id ? { ...a, status: 'failed' } : a); return; }
-        const result = await uploadMediaAsset(file, userId);
-        // Ignore if a different video has since been loaded.
-        if (currentMediaIdRef.current !== asset.id) return;
-        if (result.ok) {
-          const updated: MediaAsset = { ...asset, remoteUrl: result.remoteUrl, status: 'ready' };
-          setMediaAssetA(a => a && a.id === asset.id ? updated : a);
-          // Seamless swap via the resolver (remoteUrl preferred), preserving
-          // playhead + play state. Timeline/snapshots are time-based, unaffected.
-          const resolved = getVideoSource(updated);
-          const v = videoRef.current;
-          if (v && resolved && lastBlobUrlARef.current === url) {
-            const t = v.currentTime;
-            const wasPlaying = !v.paused;
-            lastBlobUrlARef.current = resolved;
-            setVideoSrc(resolved);
-            const restore = () => {
-              v.currentTime = t;
-              if (wasPlaying) v.play().catch(() => {});
-              v.removeEventListener('loadeddata', restore);
-            };
-            v.addEventListener('loadeddata', restore);
-            // Revoke the now-unused blob after the swap settles.
-            setTimeout(() => { try { URL.revokeObjectURL(url); } catch { /* noop */ } }, 1000);
-          }
-          setProcessingStatus('Video saved to cloud');
-        } else {
-          setMediaAssetA(a => a && a.id === asset.id ? { ...a, status: 'failed' } : a);
-          setProcessingStatus('Cloud upload failed — using local video');
-        }
-      })();
     } else {
       lastBlobUrlBRef.current = url;
       setVideoSrcB(url);
@@ -4522,8 +4039,8 @@ function Home() {
     });
     setSkeletonOverlayPaused(true);
     softClearStroMotion();
-    resetBiomech();
-  }, [applyMarkupToTargets, softClearStroMotion, resetBiomech]);
+    resetMetrics();
+  }, [applyMarkupToTargets, softClearStroMotion, resetMetrics]);
 
   useEffect(() => {
     if (!hasVideoBContent) {
@@ -4566,14 +4083,6 @@ function Home() {
   }, [playBothEnabled, videoBLoaded, videoBDuration]);
 
   const analysisTimelineExtras = useMemo(() => {
-    const biomechSampleMarkers = biomechActive && biomechHtml5Only && aiMetricsDraft?.frames.length
-      ? aiMetricsDraft.frames.map((f) => ({
-            id: `biomech-frame-${f.index}`,
-            time: f.timeSec,
-            label: String(f.index + 1),
-          }))
-      : null;
-
     const stroFrameStopMarkers = stroMotionActive && stroMotionHtml5Only && stroMotionDraft?.frames.length
       ? stroMotionDraft.frames.map((f) => ({
             id: `stro-stop-${f.index}`,
@@ -4582,42 +4091,26 @@ function Home() {
           }))
       : null;
 
-    if (biomechActive && biomechHtml5Only) {
+    // Snapshot phase markers (green balls) — shown whenever snapshots exist and
+    // we are not in StroMotion mode. Migrated off the removed frame workflow so
+    // the Snapshot architecture owns the timeline markers directly.
+    if (!stroMotionActive && stroMotionHtml5Only && biomechPhaseMarkers) {
       return {
-        trimRange: aiMetricsDraft?.frames.length ? { start: biomechTrimStart, end: biomechTrimEnd } as { start: number; end: number } : null,
+        trimRange: null as null,
         trimAccent: '#34C759',
-        onCurrentTime: setBiomechVideoTime,
+        onCurrentTime: undefined as undefined,
         phaseMarkers: biomechPhaseMarkers,
         selectedPhaseMarkerId: biomechSelectedPhaseId,
         onPhaseMarkerSelect: (id: string) => selectSnapshot(id),
         onPhaseMarkerChange: (id: string, time: number) => {
           setSnapshots(prev => prev.map(s => s.id === id ? { ...s, timeSec: time } : s));
         },
-        phaseMarkerBounds: { start: biomechTrimStart, end: biomechTrimEnd },
-        sampleMarkers: biomechSampleMarkers,
-        onSampleMarkerSelect: (_id: string, time: number) => {
-          const idx = Number(_id.replace('biomech-frame-', ''));
-          setBiomechVideoTime(time);
-          if (Number.isFinite(idx)) { releaseSnapshotOwnership(); setBiomechActiveFrameIndex(idx); }
-          void seekBiomechVideo(time);
-        },
-        onSampleMarkerChange: (id: string, time: number) => {
-          const idx = Number(id.replace('biomech-frame-', ''));
-          if (!Number.isFinite(idx)) return;
-          setBiomechSampleTimesOverride((prev) => {
-            const base = prev ?? [...biomechEffectiveSampleTimes];
-            const next = [...base];
-            if (idx >= 0 && idx < next.length) next[idx] = time;
-            return enforceMonotonicSampleTimes(next, biomechTrimStart, biomechTrimEnd);
-          });
-          updateBiomechFrameTime(idx, time);
-          releaseSnapshotOwnership();
-          setBiomechActiveFrameIndex(idx);
-          setBiomechVideoTime(time);
-          void seekBiomechVideo(time);
-        },
-        sampleMarkerBounds: { start: biomechTrimStart, end: biomechTrimEnd },
-        defaultZoomToTrim: true,
+        phaseMarkerBounds: null as null,
+        sampleMarkers: null as null,
+        onSampleMarkerSelect: undefined,
+        onSampleMarkerChange: undefined,
+        sampleMarkerBounds: null as null,
+        defaultZoomToTrim: false,
       };
     }
     if (stroMotionActive && stroMotionHtml5Only) {
@@ -4671,15 +4164,9 @@ function Home() {
       defaultZoomToTrim: false,
     };
   }, [
-    biomechActive,
-    biomechHtml5Only,
-    biomechTrimStart,
-    biomechTrimEnd,
-    aiMetricsDraft,
-    biomechEffectiveSampleTimes,
-    seekBiomechVideo,
-    updateBiomechFrameTime,
-    setBiomechActiveFrameIndex,
+    biomechPhaseMarkers,
+    biomechSelectedPhaseId,
+    selectSnapshot,
     stroMotionActive,
     stroMotionHtml5Only,
     stroMotionDraft,
@@ -4689,7 +4176,6 @@ function Home() {
     seekStroVideo,
     updateStroFrameTime,
     setStroActiveFrameIndex,
-    releaseSnapshotOwnership,
   ]);
 
   const renderTimelineDock = () => (
@@ -4832,12 +4318,10 @@ function Home() {
     skeletonShowLeftLeg,
     onSkeletonShowLeftLegChange:     setSkeletonShowLeftLeg,
     stroMotionPanel: stroMotionPanelEl,
-    biomechanicsPanel: biomechanicsPanelEl,
     authContent: <AuthButton iconOnly={compactToolbarRail} />,
     onNavigate: (screen) => {
       if (screen === 'stromotion') {
         setStroMotionActive(true);
-        setBiomechActive(false);
         // Import phase markers as StroMotion frame times ONLY if phases exist
         // Do NOT create default frames — user must explicitly add phases first
         if (biomechPhaseMarkers && biomechPhaseMarkers.length > 0) {
@@ -4872,8 +4356,6 @@ function Home() {
         }, 500);
       } else if (screen === 'aimetrics') {
         setStroMotionActive(false);
-      } else if (screen === 'framecapture') {
-        setBiomechActive(true);
       } else if (screen === 'skeleton') {
         handleToolChange('skeleton');
         setSkeletonOverlayPaused(false);
@@ -4906,16 +4388,9 @@ function Home() {
     dataColumnActive,
     skeletonLocked,
     onSkeletonLockToggle:            () => { setSkeletonLocked(false); setSkeletonWaitingForClick(true); canvasRef.current?.setSkeletonWaitingForClick(true); setProcessingStatus('Click on the player to refocus skeleton'); },
-    onDataColumnToggle:              () => {
-      setDataColumnActive(v => {
-        const next = !v;
-        if (next && !snapshots.length) {
-          const t = videoRef.current?.currentTime ?? 0;
-          createSnapshot(t, 'Column', 'C');
-        }
-        return next;
-      });
-    },
+    // Data Column is a LIVE display toggle only. It never creates a snapshot —
+    // snapshots come only from Create Snapshot / AI Detect (spec §4).
+    onDataColumnToggle:              () => { setDataColumnActive(v => !v); },
     onUndoMeasurement:               () => {
       setMeasurementColumn(prev => {
         const last = prev[prev.length - 1];
@@ -4945,18 +4420,17 @@ function Home() {
     },
     measurementColumnItems:          measurementColumn,
     onDeleteMeasurement:             (id: string) => setMeasurementColumn(prev => prev.filter(m => m.id !== id)),
-    onOpenPhases:                    () => setPhasesPickerOpen(true),
+    onOpenPhases:                    () => { createSnapshotFromLive(); },
     onMetricsGenerate:               () => { void handleGenerateSnapshots(); },
     onAutoDetectMeasurements:        () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
-      // AI Detect always creates a fresh snapshot at the current time
-      const currentTime = videoRef.current?.currentTime ?? 0;
-      const phaseNum = (snapshots.length + 1);
-      const newSnapId = createSnapshot(currentTime, `Phase ${phaseNum}`, String(phaseNum));
       const latest = skFrames[skFrames.length - 1];
       const kps = latest?.keypoints;
-      if (!kps?.length) return;
+      if (!kps?.length) { setProcessingStatus('No skeleton detected — ensure tracking the player'); return; }
+      // Capture the LIVE column before snapshot creation (spec §6 step 1).
+      const liveCol = measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle');
+      // Step 2: compute AI measurements on the frozen pose.
       const { computePhaseMeasurements } = require('@/lib/biomechanics/measurements');
       const meas = computePhaseMeasurements('auto', 'AI Detect', 0, kps);
       const items: typeof measurementColumn = [];
@@ -5002,31 +4476,41 @@ function Home() {
         const racketAngle = Math.round(((Math.atan2(domW.y - domE.y, domW.x - domE.x) * 180 / Math.PI) + 360) % 360);
         items.push({ id: `ai-ra-${Date.now()}`, label: 'Racket Angle (est.)', value: racketAngle, unit: '°', type: 'arrowAngle' });
       }
-      // Enable live measurement overlays on canvas
-      setShowMeasurementOverlays(true);
-
-      if (items.length > 0) {
-        setDataColumnActive(true);
-        setMeasurementColumn(prev => [...prev, ...items]);
-        // Persist AI results + skeleton + derived angles into the active snapshot
-        const aiDetection: Record<string, number> = {};
-        const jointAngles: Record<string, number> = {};
-        for (const it of items) {
-          if (it.type === 'angle') jointAngles[it.label] = it.value;
-          aiDetection[it.label] = it.value;
-        }
-        setSnapshots(prev => prev.map(s => s.id === newSnapId ? {
-          ...s,
-          column: items,
-          aiDetection,
-          jointAngles,
-          skeleton: kps.map(k => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' })),
-          overlaysOn: true,
-        } : s));
-        setProcessingStatus(`AI detected ${items.length} measurements`);
-      } else {
+      if (items.length === 0) {
         setProcessingStatus('No measurements detected — ensure skeleton is tracking the player');
+        return;
       }
+
+      // Step 1: create the snapshot from LIVE — captures the frame screenshot,
+      // drawings, and skeleton, and enters SNAPSHOT mode. (AI Detect captures at
+      // creation so Generate stays read-only.)
+      const newSnapId = createSnapshotFromLive();
+      if (!newSnapId) return;
+
+      // Step 3: inject AI results — captured live column + AI measurements.
+      const fullCol = [...liveCol, ...items];
+      const skSnapshot = kps.map(k => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' }));
+      const aiDetection: Record<string, number> = {};
+      const jointAngles: Record<string, number> = {};
+      for (const it of items) {
+        if (it.type === 'angle') jointAngles[it.label] = it.value;
+        aiDetection[it.label] = it.value;
+      }
+      setDataColumnActive(true);
+      // Step 4: editable traced lines — angle arrows on skeleton joints.
+      setShowMeasurementOverlays(true);
+      setMeasurementColumn(fullCol);
+      // Freeze the exact pose the angles were computed from so overlays align.
+      canvasRef.current?.setSkeletonKeypoints?.(skSnapshot, 'snapshot');
+      setSnapshots(prev => prev.map(s => s.id === newSnapId ? {
+        ...s,
+        column: fullCol,
+        aiDetection,
+        jointAngles,
+        skeleton: skSnapshot,
+        overlaysOn: true,
+      } : s));
+      setProcessingStatus(`AI detected ${items.length} measurements`);
     },
     onScreenshotSave:                () => { void handleScreenshotSave(); },
     screenshotSaving,
@@ -5413,9 +4897,9 @@ function Home() {
               // In desktop reels A/B compare the playback dock (absolute, bottom:0
               // of this container) would otherwise overlay the lower panel. Reserve
               // its measured height so both stacked panels stay clear of the dock.
-              ...(reelsDesktop && hasVideoBContent
-                ? { paddingBottom: toolbarBottomReservePx }
-                : null),
+              // Always present (0 when unused) — removing the property mid-rerender
+              // alongside the `padding` shorthand triggers React style warnings.
+              paddingBottom: reelsDesktop && hasVideoBContent ? toolbarBottomReservePx : 0,
             }}
           >
             <div
@@ -5514,6 +4998,26 @@ function Home() {
                       m.id === id ? { ...m, value: newValue } : m
                     ));
                   }}
+                  onOverlayAngleEdit={(overlayId, deg) => {
+                    // BUG 1: dragging an AI overlay line updates its column value
+                    // (+ the derived Shoulder-Hip Diff). The column→snapshot
+                    // auto-save persists it to the active snapshot only.
+                    const labelMap: Record<string, string> = {
+                      shoulder: 'Shoulder (L→R)', hip: 'Hip (L→R)', head: 'Head Direction',
+                      lfoot: 'L Foot Dir', rfoot: 'R Foot Dir', racket: 'Racket Angle (est.)',
+                    };
+                    const label = labelMap[overlayId];
+                    if (!label) return;
+                    setMeasurementColumn(prev => {
+                      let next = prev.map(m => m.label === label ? { ...m, value: deg } : m);
+                      const sh = next.find(m => m.label === 'Shoulder (L→R)')?.value;
+                      const hp = next.find(m => m.label === 'Hip (L→R)')?.value;
+                      if (sh != null && hp != null) {
+                        next = next.map(m => m.label === 'Shoulder-Hip Diff' ? { ...m, value: Math.abs(sh - hp) } : m);
+                      }
+                      return next;
+                    });
+                  }}
                   onMeasurementAdd={() => {
                     const label = prompt('Label:');
                     if (!label?.trim()) return;
@@ -5542,6 +5046,7 @@ function Home() {
                   stroMotionUseExportMasks={stroAllFramesExportReady || stroMotionStatus === 'ready'}
                   stroMotionBackground={stroBackground}
                   stroMotionVideoOrder={stroVideoOrder}
+                  stroMotionGhostOpacity={stroGhostOpacity}
                   stroMotionEndPlate={stroEndPlate}
                   stroMotionSubjectBox={null}
                   stroMotionFrameStops={stroMotionFrameStopsForCanvas}
@@ -6825,6 +6330,45 @@ function Home() {
         onBuildVideo={() => { void handleStroBuildVideoPreview(); }}
         onDownloadPng={handleStroDownloadPng}
         onDownloadVideo={handleStroDownloadVideo}
+        frames={stroMotionDraft?.frames.map((f) => ({
+          index: f.index,
+          label: `F${f.index + 1}`,
+          included: !stroExcludedFrames.has(f.index),
+        }))}
+        onToggleFrame={(i) => {
+          const next = new Set(stroExcludedFrames);
+          if (next.has(i)) next.delete(i); else next.add(i);
+          // Never exclude every frame — the composite needs at least one.
+          if (stroMotionDraft && next.size >= stroMotionDraft.frames.length) return;
+          setStroExcludedFrames(next);
+          void rebuildStroPreview({ excluded: next });
+        }}
+        videoOrder={stroVideoOrder}
+        onVideoOrderChange={(o) => {
+          setStroVideoOrder(o);
+          clearStroVideoPreview();
+          void rebuildStroPreview({ videoOrder: o });
+        }}
+        ghostOpacity={stroGhostOpacity}
+        onGhostOpacityChange={(v) => {
+          setStroGhostOpacity(v);
+          clearStroVideoPreview();
+          void rebuildStroPreview({ opacity: { value: v } });
+        }}
+        videoSpeed={stroVideoSpeed}
+        onVideoSpeedChange={(s) => {
+          setStroVideoSpeed(s);
+          clearStroVideoPreview();
+        }}
+        videoBlob={stroPreviewVideoBlobRef.current}
+        settingsLines={[
+          `Frames: ${stroMotionDraft?.frames.length ?? 0}${stroExcludedFrames.size > 0 ? ` (${(stroMotionDraft?.frames.length ?? 0) - stroExcludedFrames.size} included in still image)` : ''}`,
+          `Direction: ${stroVideoOrder}`,
+          `Ghost transparency: ${stroGhostOpacity !== undefined ? `${Math.round(stroGhostOpacity * 100)}%` : 'Auto'}`,
+          `Video speed: ${stroVideoSpeed}×`,
+          `Background: ${stroBackground} frame`,
+          `Clip: ${stroStartFrame.toFixed(2)}s – ${stroEndFrame.toFixed(2)}s`,
+        ]}
       />
 
       {/* ── Screenshot player picker ─────────────────────────────────── */}
@@ -6855,9 +6399,24 @@ function Home() {
               >×</button>
             </div>
             <img src={screenshotDataUrl} alt="Screenshot preview" style={{ width: '100%', borderRadius: 10, objectFit: 'cover', maxHeight: 180 }} />
-            <p style={{ margin: 0, fontSize: 13, color: '#6E6E73' }}>
-              Save to a player's docs, create a new player, or download directly.
-            </p>
+            {screenshotSaving ? (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px',
+                borderRadius: 10, background: 'rgba(0,122,255,0.08)', border: '1px solid rgba(0,122,255,0.3)',
+              }}>
+                <span className="animate-spin" style={{
+                  width: 14, height: 14, borderRadius: '50%', flexShrink: 0,
+                  border: '2px solid rgba(0,122,255,0.3)', borderTopColor: '#007AFF',
+                }} />
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#007AFF' }}>
+                  Saving… this takes a few seconds (upload + player record + Google Doc).
+                </span>
+              </div>
+            ) : (
+              <p style={{ margin: 0, fontSize: 13, color: '#6E6E73' }}>
+                Save to a player's docs, create a new player, or download directly.
+              </p>
+            )}
             {/* Create new player inline */}
             {!screenshotNewPlayerName && (
               <button type="button" onClick={() => setScreenshotNewPlayerName(' ')} style={{
@@ -6924,19 +6483,6 @@ function Home() {
         </div>,
         document.body,
       )}
-
-      <FrameMetricsReportModal
-        open={biomechReportModalOpen}
-        onClose={() => setBiomechReportModalOpen(false)}
-        frames={biomechReportFrames}
-        onSaveToDoc={async (framesWithNotes) => {
-          framesWithNotes.forEach(f => {
-            setBiomechFrameNotes(prev => ({ ...prev, [f.index]: f.notes }));
-          });
-          await handleBiomechSaveReport();
-        }}
-        isSaving={biomechSavingReport}
-      />
 
       {/* Measurement naming prompt */}
       {pendingMeasurement && createPortal(
@@ -7107,81 +6653,6 @@ function Home() {
         document.body,
       )}
 
-      {/* Report player picker modal */}
-      {biomechReportPlayerPickerOpen && createPortal(
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
-          onClick={() => setBiomechReportPlayerPickerOpen(false)}
-        >
-          <div
-            style={{ background: '#fff', borderRadius: 18, padding: 24, width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', gap: 14 }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 16, fontWeight: 700, color: '#1D1D1F' }}>Save Report to Player</span>
-              <button type="button" onClick={() => setBiomechReportPlayerPickerOpen(false)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6E6E73' }}>×</button>
-            </div>
-            <p style={{ margin: 0, fontSize: 13, color: '#6E6E73' }}>
-              {biomechReportPlayerList.length > 0 ? 'Choose which player\'s docs to save this AI Metrics report into.' : 'No players found — create one first in the Players section.'}
-            </p>
-            {biomechReportPlayerList.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }}>
-                {biomechReportPlayerList.map(p => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => { void handleBiomechSaveReportToPlayer(p.id); }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10, border: '1px solid #E5E5EA', background: '#F9F9F9', color: '#1D1D1F', fontSize: 13, fontWeight: 500, cursor: 'pointer', textAlign: 'left' }}
-                  >
-                    <span style={{ width: 30, height: 30, borderRadius: '50%', background: '#5856D6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
-                      {p.display_name.charAt(0).toUpperCase()}
-                    </span>
-                    <span style={{ flex: 1 }}>{p.display_name}</span>
-                    <span style={{ fontSize: 11, color: '#6E6E73' }}>→ docs</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={() => { void handleBiomechSaveReportToPlayer(null); }}
-              style={{ padding: '10px 0', borderRadius: 10, border: '1px solid #D1D1D6', background: '#F2F2F7', color: '#1D1D1F', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
-            >
-              Save without player
-            </button>
-          </div>
-        </div>,
-        document.body,
-      )}
-
-      {biomechEditingFrameIndex !== null && aiMetricsDraft ? (() => {
-        const frame = aiMetricsDraft.frames[biomechEditingFrameIndex];
-        const working = frame ? getWorkingMeasurements(frame) : null;
-        if (!frame || !working) return null;
-        return (
-          <FrameMeasurementEditor
-            key={frame.index}
-            frameLabel={frame.label}
-            timeSec={frame.timeSec}
-            frameStatus={frame.status}
-            measurements={working}
-            enabledModules={biomechEnabledModules}
-            onMeasurementsChange={(m) => updateBiomechFrameMeasurements(frame.index, m)}
-            onReset={() => resetBiomechFrameMeasurements(frame.index)}
-            onRepropose={() => {
-              void reproposeBiomechFrameMeasurements(frame.index);
-            }}
-            onMarkReady={() => {
-              markBiomechFrameReady(frame.index);
-              invalidateBiomechReport();
-              setBiomechFrameCards([]);
-              setBiomechReportAnalysis(null);
-            }}
-            onClose={() => setBiomechEditingFrameIndex(null)}
-            isReproposing={biomechProposingFrame && biomechProposingFrameIndex === frame.index}
-          />
-        );
-      })() : null}
 
       <SaveReportModal
         open={captureSaveModalOpen}
@@ -7355,6 +6826,7 @@ function Home() {
             replaying={replayActive || generateRecording}
             videoUrl={generateVideoUrl}
             onSelectIndex={(i) => { const s = orderedSnapshots[i]; if (s) selectSnapshot(s.id); }}
+            onDeleteIndex={(i) => { const s = orderedSnapshots[i]; if (s) deleteSnapshot(s.id); }}
             onReplay={() => { void recordReplayToMp4(); }}
             onDownloadVideo={() => {
               if (!generateVideoUrl) return;
@@ -7368,45 +6840,27 @@ function Home() {
         </React.Suspense>
       )}
 
-      {phasesPickerOpen && (
+      {generateWorkspaceMounted && (
         <React.Suspense fallback={null}>
-          <PhasesPicker
-            open={phasesPickerOpen}
-            onClose={() => setPhasesPickerOpen(false)}
-            onSelect={(preset) => {
-              const videoTime = videoRef.current?.currentTime ?? 0;
-              const videoDur = videoRef.current?.duration ?? 10;
-              const trimStart = biomechTrimStart > 0 ? biomechTrimStart : Math.max(0, videoTime - 2);
-              const trimEnd = biomechTrimEnd > trimStart ? biomechTrimEnd : Math.min(videoDur, videoTime + 3);
-
-              let newSnaps: Snapshot[];
-              if (preset.type === 'preset') {
-                setBiomechStrokeType(preset.strokeType);
-                const { getPhaseDefinitions } = require('@/lib/biomechanics/strokePhases');
-                const defs = getPhaseDefinitions(preset.strokeType);
-                newSnaps = defs.map((d: any, i: number) => {
-                  const s = makeSnapshot(trimStart + ((i + 0.5) / defs.length) * (trimEnd - trimStart), d.label, d.short);
-                  if (currentMediaIdRef.current) s.mediaId = currentMediaIdRef.current;
-                  return s;
-                });
-                setBiomechFrameCount(Math.min(defs.length, 15) as any);
-              } else {
-                setBiomechStrokeType('custom');
-                const count = preset.count;
-                newSnaps = Array.from({ length: count }, (_, i) => {
-                  const s = makeSnapshot(trimStart + ((i + 0.5) / count) * (trimEnd - trimStart), `Phase ${i + 1}`, String(i + 1));
-                  if (currentMediaIdRef.current) s.mediaId = currentMediaIdRef.current;
-                  return s;
-                });
-                setBiomechFrameCount(Math.min(count, 15) as any);
-              }
-              setSnapshots(newSnaps);
-              setBiomechSelectedPhaseId(newSnaps[0]?.id ?? null);
-              setBiomechActive(true);
-            }}
+          <GenerateWorkspace
+            open={generateWorkspaceOpen}
+            hidden={replayActive || generateRecording}
+            onClose={() => setGenerateWorkspaceOpen(false)}
+            snapshots={orderedSnapshots}
+            videoUrl={generateVideoUrl}
+            videoBlob={generateVideoBlob}
+            recording={generateRecording}
+            replaying={replayActive}
+            playbackRate={generateReplayRate}
+            onPlaybackRateChange={setGenerateReplayRate}
+            holdSeconds={generateHoldSec}
+            onHoldSecondsChange={setGenerateHoldSec}
+            onReplay={() => { void handleWorkspaceReplay(); }}
+            onRecordVideo={() => { void recordReplayToMp4(); }}
           />
         </React.Suspense>
       )}
+
     </div>
   );
 }

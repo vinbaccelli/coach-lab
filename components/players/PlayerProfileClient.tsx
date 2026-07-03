@@ -16,6 +16,10 @@ type Player = {
   nationality?: string | null;
   playing_hand?: string | null;
   notes?: string | null;
+  /** Google Doc that collects this player's screenshots/reports (null until first export). */
+  google_doc_id?: string | null;
+  /** Drive folder (AngleMotion/Players/<Name>) holding every export for this player. */
+  google_folder_id?: string | null;
 };
 
 type Entry = {
@@ -26,6 +30,8 @@ type Entry = {
   youtube_url?: string | null;
   created_at: string;
   screenshots?: unknown;
+  /** doc_url points at the specific report Doc created for this entry. */
+  metadata?: { doc_url?: string } | null;
 };
 
 export default function PlayerProfileClient({ playerId }: { playerId: string }) {
@@ -260,9 +266,43 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           color: '#1A1A1A',
         }}
       >
-        <h2 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Reports</h2>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <h2 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Reports</h2>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {player.google_doc_id ? (
+              <a
+                href={`https://docs.google.com/document/d/${player.google_doc_id}/edit`}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '8px 14px', borderRadius: 10, background: '#007AFF',
+                  color: '#fff', fontSize: 12, fontWeight: 700, textDecoration: 'none',
+                }}
+              >
+                Open Google Doc ↗
+              </a>
+            ) : null}
+            {player.google_folder_id ? (
+              <a
+                href={`https://drive.google.com/drive/folders/${player.google_folder_id}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '8px 14px', borderRadius: 10, background: '#fff',
+                  border: '1px solid #007AFF', color: '#007AFF',
+                  fontSize: 12, fontWeight: 700, textDecoration: 'none',
+                }}
+              >
+                Open Drive folder ↗
+              </a>
+            ) : null}
+          </div>
+        </div>
         <p style={{ margin: '0 0 16px', fontSize: 12, color: '#78716c' }}>
           Match and technique reports — newest first.
+          {player.google_doc_id ? ' Click an entry to open it in the player’s Google Doc.' : ''}
         </p>
         {timelineEntries.length === 0 ? (
           <p style={{ margin: 0, fontSize: 13, color: '#78716c' }}>No entries yet.</p>
@@ -271,11 +311,18 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             {timelineEntries.map((e) => (
               <article
                 key={e.id}
+                onClick={() => {
+                  // Prefer the entry's own report Doc; fall back to the player's main Doc.
+                  const url = e.metadata?.doc_url
+                    ?? (player.google_doc_id ? `https://docs.google.com/document/d/${player.google_doc_id}/edit` : null);
+                  if (url) window.open(url, '_blank', 'noopener');
+                }}
                 style={{
                   padding: 14,
                   borderRadius: 12,
                   background: '#fff',
                   border: '1px solid #E7E5E4',
+                  cursor: (e.metadata?.doc_url || player.google_doc_id) ? 'pointer' : 'default',
                 }}
               >
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
@@ -301,6 +348,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                     href={e.youtube_url}
                     target="_blank"
                     rel="noreferrer"
+                    onClick={(ev) => ev.stopPropagation()}
                     style={{ fontSize: 13, color: '#2563eb', marginTop: 8, display: 'inline-block' }}
                   >
                     YouTube link

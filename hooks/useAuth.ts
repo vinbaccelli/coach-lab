@@ -34,7 +34,10 @@ export function useAuth(): AuthState {
       provider: 'google',
       options: {
         redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(window.location.pathname)}`,
-        scopes: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
+        // Keep in sync with app/login/LoginClient.tsx — BOTH sign-in paths must
+        // request identical scopes or exports break depending on which button
+        // the coach used ("Insufficient Permission").
+        scopes: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
         queryParams: { access_type: 'offline', prompt: 'consent' },
       },
     });

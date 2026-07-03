@@ -157,7 +157,7 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
         position: 'sticky', top: 0, zIndex: 20,
       }}>
         <Link href="/" style={{ fontSize: 14, fontWeight: 800, color: '#fff', textDecoration: 'none', letterSpacing: -0.3 }}>
-          Coach<span style={{ color: accentColor }}>Lab</span>
+          Angle<span style={{ color: accentColor }}>Motion</span>
         </Link>
         <Link href="/analysis" style={{
           fontSize: 12, fontWeight: 600, color: '#fff', textDecoration: 'none',

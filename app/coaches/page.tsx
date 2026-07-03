@@ -38,7 +38,7 @@ export default async function CoachesPage() {
         <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
           <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
           <span style={{ fontSize: 14, fontWeight: 800, color: '#fff', letterSpacing: -0.3 }}>
-            Coach<span style={{ color: '#FF3B30' }}>Lab</span>
+            Angle<span style={{ color: '#FF3B30' }}>Motion</span>
           </span>
         </Link>
         <div style={{ display: 'flex', gap: 10 }}>

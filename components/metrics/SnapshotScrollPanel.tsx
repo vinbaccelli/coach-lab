@@ -8,6 +8,7 @@ interface SnapshotScrollPanelProps {
   snapshots: Snapshot[];
   activeIndex: number | null;
   onSelectIndex: (index: number) => void;
+  onDeleteIndex?: (index: number) => void;
   onClose: () => void;
   onReplay?: () => void;
   onDownloadVideo?: () => void;
@@ -16,13 +17,14 @@ interface SnapshotScrollPanelProps {
 }
 
 /**
- * Horizontal strip of phase screenshots shown after Generate.
+ * Horizontal strip of snapshot screenshots shown after Generate.
  * Highlights the active snapshot during replay; click a card to jump to it.
  */
 export default function SnapshotScrollPanel({
   snapshots,
   activeIndex,
   onSelectIndex,
+  onDeleteIndex,
   onClose,
   onReplay,
   onDownloadVideo,
@@ -50,7 +52,7 @@ export default function SnapshotScrollPanel({
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>
-          Phase Sequence · {snapshots.length} {snapshots.length === 1 ? 'phase' : 'phases'}
+          Snapshot Sequence · {snapshots.length} {snapshots.length === 1 ? 'snapshot' : 'snapshots'}
         </span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {onReplay && (
@@ -83,7 +85,7 @@ export default function SnapshotScrollPanel({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close phase sequence"
+            aria-label="Close snapshot sequence"
             style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', padding: 4 }}
           >
             <X size={18} />
@@ -93,12 +95,26 @@ export default function SnapshotScrollPanel({
 
       <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4, WebkitOverflowScrolling: 'touch' }}>
         {snapshots.map((s, i) => (
+          <div key={s.id} style={{ position: 'relative', flexShrink: 0 }}>
+          {onDeleteIndex && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDeleteIndex(i); }}
+              aria-label={`Delete ${s.label}`}
+              style={{
+                position: 'absolute', top: 4, right: 4, zIndex: 1,
+                width: 22, height: 22, borderRadius: '50%', border: 'none',
+                background: 'rgba(0,0,0,0.6)', color: '#fff', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+              }}
+            >
+              <X size={13} />
+            </button>
+          )}
           <button
-            key={s.id}
             type="button"
             onClick={() => onSelectIndex(i)}
             style={{
-              flexShrink: 0,
               width: 140,
               borderRadius: 10,
               overflow: 'hidden',
@@ -123,6 +139,7 @@ export default function SnapshotScrollPanel({
               </div>
             </div>
           </button>
+          </div>
         ))}
       </div>
     </div>
