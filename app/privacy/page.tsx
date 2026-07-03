@@ -14,7 +14,10 @@ export const metadata = {
 export default function PrivacyPage() {
   return (
     <div style={{
-      minHeight: '100dvh',
+      // The app shell sets body{overflow:hidden}; this page must scroll itself.
+      height: '100dvh',
+      overflowY: 'auto',
+      WebkitOverflowScrolling: 'touch',
       background: 'linear-gradient(160deg, #0a0a10 0%, #0f1420 100%)',
       color: '#fff',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
