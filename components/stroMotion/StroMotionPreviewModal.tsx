@@ -13,7 +13,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Download, X, FileText, Youtube, Loader2, ExternalLink } from 'lucide-react';
 import { runExportPipeline } from '@/lib/export/exportService';
-import { ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
+import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
 
 export interface StroMotionFrameToggle {
   index: number;
@@ -376,7 +376,8 @@ export default function StroMotionPreviewModal({
           </div>
         )}
 
-        {/* Export panel */}
+        {/* Export panel — hidden until Google verification approves the export scopes */}
+        {ENABLE_GOOGLE_EXPORTS ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.7)' }}>Export report</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -464,6 +465,7 @@ export default function StroMotionPreviewModal({
             </div>
           )}
         </div>
+        ) : null}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" onClick={onClose} style={secondaryBtn}>

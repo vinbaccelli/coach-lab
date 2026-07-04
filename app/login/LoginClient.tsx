@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import { ENABLE_GOOGLE_EXPORTS, GOOGLE_EXPORT_SCOPES } from '@/lib/featureFlags';
 
 export default function LoginClient({ redirect }: { redirect: string }) {
   const [loading, setLoading] = useState(false);
@@ -18,13 +19,16 @@ export default function LoginClient({ redirect }: { redirect: string }) {
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(redirect)}`,
-          scopes:
-            'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
-          // We want refresh tokens so YouTube upload can work long-term.
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          },
+          // Sensitive scopes only when Google exports are enabled (post
+          // verification) — an unverified app requesting them shows every user
+          // a warning screen. Keep in sync with hooks/useAuth.ts.
+          ...(ENABLE_GOOGLE_EXPORTS
+            ? {
+                scopes: GOOGLE_EXPORT_SCOPES,
+                // Refresh tokens so exports keep working past the 1h expiry.
+                queryParams: { access_type: 'offline', prompt: 'consent' },
+              }
+            : {}),
         },
       });
       if (error) throw error;

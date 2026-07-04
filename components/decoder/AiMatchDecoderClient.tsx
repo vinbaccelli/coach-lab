@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import SaveReportModal from '@/components/shared/SaveReportModal';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
+import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
 
 const MAX_IMAGES = 16;
 
@@ -177,6 +178,7 @@ export default function AiMatchDecoderClient() {
             >
               Save to player folder
             </button>
+            {ENABLE_GOOGLE_EXPORTS && (
             <button
               type="button"
               disabled={exportBusy}
@@ -212,6 +214,7 @@ export default function AiMatchDecoderClient() {
             >
               {exportBusy ? 'Creating…' : 'Export to Google Doc'}
             </button>
+            )}
           </div>
 
           <SaveReportModal

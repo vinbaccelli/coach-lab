@@ -7,6 +7,7 @@ import type { ManualOutcome } from '@/lib/tennis/compileManualReport';
 import { compileManualReport } from '@/lib/tennis/compileManualReport';
 import SaveReportModal from '@/components/shared/SaveReportModal';
 import { formatMatchFolderLabel, localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
+import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
 import {
   applyFormattedPoint,
   defaultMatchFormat,
@@ -272,6 +273,7 @@ export default function ManualMatchRecorder() {
           >
             Save to player folder
           </button>
+          {ENABLE_GOOGLE_EXPORTS && (
           <button
             type="button"
             disabled={exportBusy}
@@ -301,6 +303,7 @@ export default function ManualMatchRecorder() {
           >
             {exportBusy ? 'Creating…' : 'Export to Google Doc'}
           </button>
+          )}
           <button type="button" onClick={() => setPhase('setup')} style={{ ...btnLight, background: '#fff' }}>
             New match
           </button>

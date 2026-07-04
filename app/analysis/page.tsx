@@ -30,6 +30,7 @@ import YouTubeEmbed from '@/components/YouTubeEmbed';
 import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
+import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
 import { useStroMotion } from '@/hooks/useStroMotion';
 const StroMotionPanel = React.lazy(() => import('@/components/StroMotionPanel'));
 const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/SnapshotScrollPanel'));
@@ -1659,19 +1660,22 @@ function Home() {
     setScreenshotSaving(true);
     try {
       // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive.
-      // Supabase storage is only the fallback when Drive is unavailable.
+      // Supabase storage is the fallback (and the only path while the Google
+      // export scopes are disabled pending verification).
       let imageUrl: string | null = null;
-      try {
-        const driveRes = await fetch('/api/google/upload-image', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dataUrl: screenshotDataUrl, name: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png` }),
-        });
-        if (driveRes.ok) {
-          const body = await driveRes.json() as { url?: string };
-          imageUrl = body.url ?? null;
-        }
-      } catch { /* fall back to Supabase */ }
+      if (ENABLE_GOOGLE_EXPORTS) {
+        try {
+          const driveRes = await fetch('/api/google/upload-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataUrl: screenshotDataUrl, name: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png` }),
+          });
+          if (driveRes.ok) {
+            const body = await driveRes.json() as { url?: string };
+            imageUrl = body.url ?? null;
+          }
+        } catch { /* fall back to Supabase */ }
+      }
 
       if (!imageUrl) {
         const filename = `${userId}/${Date.now()}.png`;
@@ -1700,21 +1704,26 @@ function Home() {
           return;
         }
         // Best-effort: append to the player's Google Doc (AngleMotion/Players/<Name>).
-        // A Docs failure must not fail the screenshot save.
-        try {
-          const docRes = await fetch(`/api/players/${playerId}/google-doc`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ imageUrl: signed.signedUrl, timestampLabel: localDateTimeForFolder() }),
-          });
-          if (docRes.ok) {
-            setProcessingStatus(`Saved to ${playerName} + Google Doc`);
-          } else {
-            const docErr = (await docRes.json().catch(() => ({}))) as { error?: string };
-            setProcessingStatus(`Saved to ${playerName} — Google Doc failed: ${docErr.error ?? `HTTP ${docRes.status}`}`);
+        // A Docs failure must not fail the screenshot save. Skipped entirely
+        // while the Google export scopes are disabled pending verification.
+        if (ENABLE_GOOGLE_EXPORTS) {
+          try {
+            const docRes = await fetch(`/api/players/${playerId}/google-doc`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ imageUrl: signed.signedUrl, timestampLabel: localDateTimeForFolder() }),
+            });
+            if (docRes.ok) {
+              setProcessingStatus(`Saved to ${playerName} + Google Doc`);
+            } else {
+              const docErr = (await docRes.json().catch(() => ({}))) as { error?: string };
+              setProcessingStatus(`Saved to ${playerName} — Google Doc failed: ${docErr.error ?? `HTTP ${docRes.status}`}`);
+            }
+          } catch {
+            setProcessingStatus(`Saved to ${playerName} (Google Doc skipped)`);
           }
-        } catch {
-          setProcessingStatus(`Saved to ${playerName} (Google Doc skipped)`);
+        } else {
+          setProcessingStatus(`Saved to ${playerName}`);
         }
       } else {
         setProcessingStatus('Upload failed — try again');

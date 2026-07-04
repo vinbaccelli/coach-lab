@@ -11,6 +11,7 @@
  */
 import { uploadDataUrl } from '@/lib/supabase/storage';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
 
 export interface ReportSectionInput {
   heading: string;
@@ -80,18 +81,20 @@ export async function uploadVideoToYouTube(
 export async function dataUrlToSignedUrl(dataUrl: string): Promise<string | null> {
   if (!dataUrl.startsWith('data:')) return dataUrl; // already a URL
 
-  // 1. Coach's Drive.
-  try {
-    const res = await fetch('/api/google/upload-image', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dataUrl }),
-    });
-    if (res.ok) {
-      const body = (await res.json()) as { url?: string };
-      if (body.url) return body.url;
-    }
-  } catch { /* fall through to Supabase */ }
+  // 1. Coach's Drive (only when the export scopes are enabled).
+  if (ENABLE_GOOGLE_EXPORTS) {
+    try {
+      const res = await fetch('/api/google/upload-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl }),
+      });
+      if (res.ok) {
+        const body = (await res.json()) as { url?: string };
+        if (body.url) return body.url;
+      }
+    } catch { /* fall through to Supabase */ }
+  }
 
   // 2. Supabase fallback.
   const supabase = createSupabaseBrowserClient();

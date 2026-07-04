@@ -14,7 +14,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Download, Play, Video, FileText, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Youtube, Loader2, ExternalLink } from 'lucide-react';
 import type { Snapshot } from '@/lib/snapshots';
 import { runExportPipeline } from '@/lib/export/exportService';
-import { ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
+import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
 
 const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1] as const;
 
@@ -413,7 +413,8 @@ export default function GenerateWorkspace({
               )}
             </div>
 
-            {/* Export panel */}
+            {/* Export panel — hidden until Google verification approves the export scopes */}
+            {ENABLE_GOOGLE_EXPORTS ? (
             <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <input
                 value={reportTitle}
@@ -490,6 +491,7 @@ export default function GenerateWorkspace({
                 </div>
               )}
             </div>
+            ) : null}
           </div>
         </div>
       </div>
