@@ -1658,14 +1658,32 @@ function Home() {
     }
     setScreenshotSaving(true);
     try {
-      const filename = `${userId}/${Date.now()}.png`;
-      const path = await uploadDataUrl('analysis-screenshots', filename, screenshotDataUrl);
-      if (path) {
-        const { data: signed, error: signErr } = await supabase.storage.from('analysis-screenshots').createSignedUrl(path, 60 * 60 * 24 * 365);
-        if (signErr || !signed?.signedUrl) {
-          setProcessingStatus('Failed to create image URL — try again');
-          return;
+      // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive.
+      // Supabase storage is only the fallback when Drive is unavailable.
+      let imageUrl: string | null = null;
+      try {
+        const driveRes = await fetch('/api/google/upload-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataUrl: screenshotDataUrl, name: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png` }),
+        });
+        if (driveRes.ok) {
+          const body = await driveRes.json() as { url?: string };
+          imageUrl = body.url ?? null;
         }
+      } catch { /* fall back to Supabase */ }
+
+      if (!imageUrl) {
+        const filename = `${userId}/${Date.now()}.png`;
+        const path = await uploadDataUrl('analysis-screenshots', filename, screenshotDataUrl);
+        if (path) {
+          const { data: signed } = await supabase.storage.from('analysis-screenshots').createSignedUrl(path, 60 * 60 * 24 * 365);
+          imageUrl = signed?.signedUrl ?? null;
+        }
+      }
+
+      if (imageUrl) {
+        const signed = { signedUrl: imageUrl };
         const res = await fetch(`/api/players/${playerId}/entries`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

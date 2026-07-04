@@ -20,6 +20,15 @@ export interface ReportSectionInput {
   notes?: string;
 }
 
+/** Structured measurement stored with the player entry (drives Statistics). */
+export interface ReportMeasurement {
+  snapshot: string;
+  label: string;
+  value: number;
+  unit: string;
+  timeSec: number;
+}
+
 export interface ExportPipelineInput {
   title: string;
   /** Final rendered video. When present it is uploaded to YouTube (Unlisted). */
@@ -30,6 +39,8 @@ export interface ExportPipelineInput {
   settingsLines?: string[];
   /** Attach the report to a player (files the Doc + updates the Timeline Doc). */
   playerId?: string | null;
+  /** Structured measurements saved on the player entry for Statistics. */
+  measurements?: ReportMeasurement[];
   /** Skip the Docs step (video-only export). */
   skipDoc?: boolean;
   onProgress?: (step: string) => void;
@@ -59,9 +70,30 @@ export async function uploadVideoToYouTube(
   return { ok: true, url: body.url };
 }
 
-/** Upload a PNG data URL to storage and return a long-lived signed URL Docs can fetch. */
+/**
+ * Store a report image and return a URL Docs can embed.
+ *
+ * Primary: the COACH'S OWN Google Drive (bring-your-own-cloud — zero storage
+ * cost on our side). Fallback: Supabase storage signed URL, so exports still
+ * work if Drive is temporarily unavailable.
+ */
 export async function dataUrlToSignedUrl(dataUrl: string): Promise<string | null> {
   if (!dataUrl.startsWith('data:')) return dataUrl; // already a URL
+
+  // 1. Coach's Drive.
+  try {
+    const res = await fetch('/api/google/upload-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataUrl }),
+    });
+    if (res.ok) {
+      const body = (await res.json()) as { url?: string };
+      if (body.url) return body.url;
+    }
+  } catch { /* fall through to Supabase */ }
+
+  // 2. Supabase fallback.
   const supabase = createSupabaseBrowserClient();
   const userRes = await supabase?.auth.getUser();
   const userId = userRes?.data?.user?.id;
@@ -86,6 +118,7 @@ export async function createDocsReport(payload: {
   intro?: string;
   settingsLines?: string[];
   sections: Array<{ heading: string; imageUrl?: string; lines?: string[]; notes?: string }>;
+  measurements?: ReportMeasurement[];
 }): Promise<{ ok: boolean; url?: string; error?: string }> {
   const res = await fetch('/api/google/report', {
     method: 'POST',
@@ -130,6 +163,7 @@ export async function runExportPipeline(input: ExportPipelineInput): Promise<Exp
     intro: input.intro,
     settingsLines: input.settingsLines,
     sections,
+    measurements: input.measurements,
   });
   if (!doc.ok) return { ok: false, youtubeUrl, error: doc.error };
 

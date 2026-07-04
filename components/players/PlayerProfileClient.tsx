@@ -35,8 +35,11 @@ type Entry = {
   youtube_url?: string | null;
   created_at: string;
   screenshots?: unknown;
-  /** doc_url points at the specific report Doc created for this entry. */
-  metadata?: { doc_url?: string } | null;
+  /** doc_url → the entry's Doc; measurements → structured values for Statistics. */
+  metadata?: {
+    doc_url?: string;
+    measurements?: Array<{ snapshot: string; label: string; value: number; unit: string; timeSec: number }>;
+  } | null;
 };
 
 export default function PlayerProfileClient({ playerId }: { playerId: string }) {
@@ -105,10 +108,37 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
     load();
   }, [load]);
 
-  const timelineEntries = useMemo(
-    () => [...entries].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
-    [entries],
-  );
+  // ── Player database: Technical / Match tabs + text search ────────────────
+  const [dbTab, setDbTab] = useState<'all' | 'technique' | 'match'>('all');
+  const [dbSearch, setDbSearch] = useState('');
+
+  const timelineEntries = useMemo(() => {
+    const q = dbSearch.trim().toLowerCase();
+    return [...entries]
+      .filter((e) => (dbTab === 'all' ? true : e.category === dbTab))
+      .filter((e) => !q || e.folder_label.toLowerCase().includes(q) || (e.body_text ?? '').toLowerCase().includes(q))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }, [entries, dbTab, dbSearch]);
+
+  // ── Statistics: measurements across all report entries, grouped by metric ─
+  const statSeries = useMemo(() => {
+    const byLabel = new Map<string, Array<{ date: string; value: number; unit: string; snapshot: string }>>();
+    for (const e of entries) {
+      for (const m of e.metadata?.measurements ?? []) {
+        if (typeof m?.value !== 'number' || !m.label) continue;
+        const list = byLabel.get(m.label) ?? [];
+        list.push({ date: e.created_at, value: m.value, unit: m.unit ?? '', snapshot: m.snapshot ?? '' });
+        byLabel.set(m.label, list);
+      }
+    }
+    for (const list of byLabel.values()) {
+      list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    }
+    return byLabel;
+  }, [entries]);
+  const [statMetric, setStatMetric] = useState('');
+  const statLabels = useMemo(() => [...statSeries.keys()].sort(), [statSeries]);
+  const activeStat = statSeries.get(statMetric || statLabels[0] || '') ?? [];
 
   const panel = {
     background: 'rgba(250, 249, 247, 0.96)',
@@ -454,10 +484,35 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             ) : null}
           </div>
         </div>
-        <p style={{ margin: '0 0 16px', fontSize: 12, color: '#78716c' }}>
+        <p style={{ margin: '0 0 10px', fontSize: 12, color: '#78716c' }}>
           Match and technique reports — newest first.
           {player.google_doc_id ? ' Click an entry to open it in the player’s Google Doc.' : ''}
         </p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
+          {([['all', 'All'], ['technique', 'Technical Analysis'], ['match', 'Match Analysis']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setDbTab(key)}
+              style={{
+                padding: '7px 14px', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                borderWidth: 1, borderStyle: 'solid',
+                borderColor: dbTab === key ? '#007AFF' : '#D1D1D6',
+                background: dbTab === key ? '#007AFF' : '#fff',
+                color: dbTab === key ? '#fff' : '#1A1A1A',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          <input
+            value={dbSearch}
+            onChange={(e) => setDbSearch(e.target.value)}
+            placeholder="Search reports…"
+            aria-label="Search reports"
+            style={{ flex: '1 1 180px', minWidth: 160, padding: '8px 12px', borderRadius: 10, border: '1px solid #D1D1D6', fontSize: 12 }}
+          />
+        </div>
         {timelineEntries.length === 0 ? (
           <p style={{ margin: 0, fontSize: 13, color: '#78716c' }}>No entries yet.</p>
         ) : (
@@ -530,6 +585,66 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           </div>
         )}
       </section>
+
+      {/* ── Statistics: measurement progression across report exports ────── */}
+      {statLabels.length > 0 && (
+        <section style={{ ...panel, marginTop: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0, fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Statistics</h2>
+            <select
+              value={statMetric || statLabels[0]}
+              onChange={(e) => setStatMetric(e.target.value)}
+              aria-label="Metric"
+              style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #D1D1D6', fontSize: 12, background: '#fff' }}
+            >
+              {statLabels.map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </div>
+          <p style={{ margin: '4px 0 14px', fontSize: 12, color: '#78716c' }}>
+            Values from every exported report, oldest to newest — watch the progression.
+          </p>
+          {activeStat.length === 0 ? (
+            <p style={{ margin: 0, fontSize: 13, color: '#78716c' }}>No values yet for this metric.</p>
+          ) : (() => {
+            const values = activeStat.map((d) => d.value);
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            const avg = values.reduce((s, v) => s + v, 0) / values.length;
+            const span = Math.max(1e-6, Math.abs(max) > Math.abs(min) ? Math.abs(max) : Math.abs(min));
+            const unit = activeStat[0]?.unit ?? '';
+            return (
+              <>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12, fontSize: 12, color: '#44403c' }}>
+                  <span><strong>Min</strong> {Math.round(min * 10) / 10}{unit}</span>
+                  <span><strong>Avg</strong> {Math.round(avg * 10) / 10}{unit}</span>
+                  <span><strong>Max</strong> {Math.round(max * 10) / 10}{unit}</span>
+                  <span><strong>Samples</strong> {values.length}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {activeStat.slice(-30).map((d, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ width: 130, fontSize: 11, color: '#78716c', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                        {new Date(d.date).toLocaleDateString()}{d.snapshot ? ` · ${d.snapshot}` : ''}
+                      </span>
+                      <div style={{ flex: 1, height: 16, background: '#F2F2F7', borderRadius: 8, overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${Math.max(2, Math.min(100, (Math.abs(d.value) / span) * 100))}%`,
+                          height: '100%',
+                          background: '#007AFF',
+                          borderRadius: 8,
+                        }} />
+                      </div>
+                      <span style={{ width: 70, fontSize: 12, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                        {Math.round(d.value * 10) / 10}{d.unit}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
+        </section>
+      )}
     </div>
   );
 }

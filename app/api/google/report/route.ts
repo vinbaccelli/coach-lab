@@ -32,6 +32,8 @@ interface ReportPayload {
   intro?: string;
   settingsLines?: string[];
   sections?: ReportSection[];
+  /** Structured measurements stored on the player entry (drives Statistics). */
+  measurements?: Array<{ snapshot: string; label: string; value: number; unit: string; timeSec: number }>;
 }
 
 const IMG_PLACEHOLDER = '￼';
@@ -85,7 +87,11 @@ export async function POST(req: Request) {
         youtube_url: payload.youtubeUrl ?? null,
         screenshots: [],
         source: 'report-export',
-        metadata: { doc_url: docUrl, doc_id: docId },
+        metadata: {
+          doc_url: docUrl,
+          doc_id: docId,
+          ...(payload.measurements?.length ? { measurements: payload.measurements } : {}),
+        },
       }).then(({ error }) => { if (error) console.error('[google/report] entry insert failed:', error.message); });
 
       return NextResponse.json({ documentId: docId, url: docUrl });

@@ -212,6 +212,14 @@ export default function GenerateWorkspace({
         videoBlob: ENABLE_YOUTUBE_UPLOAD && includeVideoUpload && videoBlob ? videoBlob : null,
         sections: sectionsForReport(),
         playerId: attachPlayerId || null,
+        // Structured values feed the player's Statistics (progress over time).
+        measurements: includedSnaps.flatMap((s) => s.column.map((m) => ({
+          snapshot: s.label,
+          label: m.label,
+          value: m.value,
+          unit: m.unit,
+          timeSec: s.timeSec,
+        }))),
         onProgress: setExportStatus,
       });
       if (!result.ok) {
