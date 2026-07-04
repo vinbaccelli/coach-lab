@@ -5,11 +5,9 @@ export const metadata = {
   description: 'Terms of service for the AngleMotion coaching platform.',
 };
 
-/** Public terms of service — linked from the Google OAuth consent screen. */
 export default function TermsPage() {
   return (
     <div style={{
-      // The app shell sets body{overflow:hidden}; this page must scroll itself.
       height: '100dvh',
       overflowY: 'auto',
       WebkitOverflowScrolling: 'touch',
@@ -38,58 +36,140 @@ export default function TermsPage() {
       </div>
 
       <main style={{ maxWidth: 760, margin: '0 auto', padding: '48px 20px 80px', lineHeight: 1.65 }}>
-        <h1 style={{ fontSize: 32, fontWeight: 900, letterSpacing: -0.5, margin: '0 0 6px' }}>Terms of Service</h1>
-        <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13, margin: '0 0 36px' }}>Last updated: July 3, 2026</p>
+        <h1 style={{ fontSize: 32, fontWeight: 900, letterSpacing: -0.5, margin: '0 0 6px' }}>Terms of Service – AngleMotion</h1>
+        <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13, margin: '0 0 36px' }}>Effective Date: July 3, 2026</p>
 
-        <Section title="1. The service">
-          AngleMotion (&ldquo;the Service&rdquo;), available at{' '}
-          <a href="https://www.anglemotion.com" style={a}>www.anglemotion.com</a>, is a video-analysis platform for
-          tennis coaches: pose analysis, drawing tools, StroMotion composites, and report exports to your own Google
-          Drive and YouTube. By creating an account or using the Service you agree to these terms.
+        <Section title="Company: AngleMotion">
+          AngleMotion ("we", "us", "our")
         </Section>
 
-        <Section title="2. Your account">
-          You sign in with your Google account and are responsible for activity under it. You must be at least 18 years
-          old to hold an account. You may stop using the Service and request deletion of your data at any time
-          (see the <Link href="/privacy" style={a}>Privacy Policy</Link>).
+        <Section title="1. Introduction">
+          These Terms of Service govern access to and use of the AngleMotion web and mobile application and related services ("Service"). By using the Service, you agree to these Terms.
         </Section>
 
-        <Section title="3. Subscriptions and billing">
-          Paid plans are billed through Stripe on a monthly or yearly basis and renew automatically until cancelled.
-          You can cancel anytime from the billing page — access continues until the end of the paid period. Prices may
-          change with notice; changes apply from the next billing cycle.
+        <Section title="2. Acceptance of Terms">
+          By creating an account or using the Service, you confirm that you have read, understood, and agree to be bound by these Terms. If you do not agree, you must not use the Service.
         </Section>
 
-        <Section title="4. Your content">
-          You keep full ownership of your videos, analyses, reports, and player data. Videos are processed locally in
-          your browser and are not stored on our servers. Content you export to Google Drive or YouTube lives in your
-          own accounts under Google&rsquo;s terms. You are responsible for having the right to analyze the footage you
-          use, including consent from the people in it.
+        <Section title="3. Description of the Service">
+          AngleMotion provides video analysis tools designed for sports performance improvement, primarily tennis. Users can upload or connect video content to receive biomechanical and technical analysis.
+          <br /><br />
+          The Service may allow users to:
+          <ul style={{ marginTop: 12, marginBottom: 0 }}>
+            <li>Upload video files directly</li>
+            <li>Connect external accounts (such as Google services)</li>
+            <li>Store and process training-related media</li>
+            <li>Export analysis reports</li>
+          </ul>
         </Section>
 
-        <Section title="5. Acceptable use">
-          Do not misuse the Service: no unlawful content, no attempts to break, overload, or reverse-engineer the
-          platform, no reselling of the Service, and no uploading of content that infringes the rights of others.
+        <Section title="4. Google API Services Usage Disclosure">
+          AngleMotion uses Google API Services only when explicitly authorized by the user.
+          <br /><br />
+          We request access to the following Google scopes solely to provide core functionality:
         </Section>
 
-        <Section title="6. AI features">
-          Pose detection and AI measurements are estimates provided as a starting point for coaching analysis. They can
-          be inaccurate and are always editable by the coach. They are not medical, physiotherapeutic, or safety
-          advice.
+        <Section title="4.1 YouTube Data API">
+          Used only to:
+          <ul style={{ marginTop: 12, marginBottom: 12 }}>
+            <li>Allow users to upload videos to their own YouTube account from within AngleMotion</li>
+            <li>Retrieve basic video metadata required for upload confirmation</li>
+          </ul>
+          We do not:
+          <ul style={{ marginTop: 12, marginBottom: 0 }}>
+            <li>Access private YouTube data unrelated to user-selected uploads</li>
+            <li>Use YouTube data for advertising or profiling</li>
+          </ul>
         </Section>
 
-        <Section title="7. Availability and changes">
-          We work to keep the Service available and improving, but it is provided &ldquo;as is&rdquo; without
-          warranties. Features may change. We may suspend accounts that violate these terms.
+        <Section title="4.2 Google Drive API">
+          Used only to:
+          <ul style={{ marginTop: 12, marginBottom: 12 }}>
+            <li>Access files selected by the user for video analysis</li>
+            <li>Store analysis outputs if the user chooses Google Drive as storage destination</li>
+          </ul>
+          We do not:
+          <ul style={{ marginTop: 12, marginBottom: 0 }}>
+            <li>Access all files in a user's Drive</li>
+            <li>Read or modify files without explicit user selection</li>
+          </ul>
         </Section>
 
-        <Section title="8. Liability">
-          To the maximum extent permitted by law, our liability is limited to the amount you paid for the Service in
-          the 12 months before the claim.
+        <Section title="4.3 Google Docs API">
+          Used only to:
+          <ul style={{ marginTop: 12, marginBottom: 12 }}>
+            <li>Create or export analysis reports generated by the user's video sessions</li>
+            <li>Save documents to locations explicitly selected by the user</li>
+          </ul>
+          We do not:
+          <ul style={{ marginTop: 12, marginBottom: 0 }}>
+            <li>Read existing Google Docs content unless explicitly selected by the user</li>
+            <li>Share documents with third parties</li>
+          </ul>
         </Section>
 
-        <Section title="9. Contact">
-          Questions about these terms: <a href="mailto:vinbaccelli@gmail.com" style={a}>vinbaccelli@gmail.com</a>.
+        <Section title="4.4 Data Handling Principles (Google Data)">
+          We strictly comply with Google API Services User Data Policy, including:
+          <ul style={{ marginTop: 12, marginBottom: 0 }}>
+            <li>Access only the minimum data required for the feature requested</li>
+            <li>No transfer, sale, or monetization of Google user data</li>
+            <li>No use of Google user data for advertising, profiling, or analytics outside service functionality</li>
+            <li>No sharing of Google user data with unauthorized third parties</li>
+          </ul>
+        </Section>
+
+        <Section title="5. User Data and Privacy">
+          We collect and process only data necessary to operate the Service, including:
+          <ul style={{ marginTop: 12, marginBottom: 12 }}>
+            <li>Account information (email, authentication identifiers)</li>
+            <li>Uploaded or connected training videos</li>
+            <li>User-generated analysis data</li>
+          </ul>
+          We do not sell personal data. All processing is done solely to provide core functionality of the application.
+        </Section>
+
+        <Section title="6. Data Retention and Deletion">
+          Users retain full control over their data.
+          <ul style={{ marginTop: 12, marginBottom: 12 }}>
+            <li>Users may delete uploaded content at any time</li>
+            <li>Users may disconnect Google accounts at any time</li>
+            <li>Upon deletion request, associated data is permanently removed within a reasonable timeframe</li>
+            <li>Google-derived data is deleted when the user revokes access</li>
+          </ul>
+        </Section>
+
+        <Section title="7. User Rights and Account Termination">
+          Users may:
+          <ul style={{ marginTop: 12, marginBottom: 12 }}>
+            <li>Access their data</li>
+            <li>Modify or delete their content</li>
+            <li>Revoke third-party integrations</li>
+          </ul>
+          We may suspend accounts in case of misuse or violation of these Terms.
+        </Section>
+
+        <Section title="8. Security Measures">
+          We implement reasonable technical and organizational measures to protect user data, including encryption in transit and access controls. However, no system is fully secure, and we cannot guarantee absolute security.
+        </Section>
+
+        <Section title="9. Third-Party Services">
+          The Service integrates with:
+          <ul style={{ marginTop: 12, marginBottom: 12 }}>
+            <li>Google API Services (YouTube, Drive, Docs)</li>
+          </ul>
+          Use of these services is subject to their respective terms and privacy policies.
+        </Section>
+
+        <Section title="10. Limitation of Liability">
+          To the maximum extent permitted by law, AngleMotion is not liable for indirect damages, loss of data, or service interruptions.
+        </Section>
+
+        <Section title="11. Changes to Terms">
+          We may update these Terms periodically. Continued use of the Service constitutes acceptance of the updated Terms.
+        </Section>
+
+        <Section title="12. Contact Information">
+          For questions regarding these Terms, contact: <a href="mailto:vinbaccelli@gmail.com" style={a}>vinbaccelli@gmail.com</a>
         </Section>
       </main>
     </div>
