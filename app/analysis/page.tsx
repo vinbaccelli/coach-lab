@@ -655,6 +655,13 @@ function Home() {
   // `currentVideoTime` state whose only consumer was this boolean; that churn
   // was the root cause of the lower-left toolbar glitch.
   const [isNearActivePhase, setIsNearActivePhase] = useState(true);
+  // Auto-return to LIVE when the playhead leaves the selected snapshot (play,
+  // frame-step, or scrub). Without this the mode stayed 'snapshot' forever and
+  // the live skeleton never resumed following the player. Orchestrated flows
+  // (Generate capture, slow-mo replay) manage selection themselves and suppress
+  // the autopilot while they drive the playhead.
+  const exitSnapshotToLiveRef = useRef<() => void>(() => {});
+  const modeAutopilotSuppressedRef = useRef(false);
   useEffect(() => {
     let raf = 0;
     let lastTick = 0;
@@ -666,6 +673,9 @@ function Home() {
           const snap = activeSnapshotRef.current;
           const near = snap ? Math.abs(v.currentTime - snap.timeSec) < 0.3 : true;
           setIsNearActivePhase(prev => (prev === near ? prev : near));
+          if (!near && snap && !modeAutopilotSuppressedRef.current) {
+            exitSnapshotToLiveRef.current();
+          }
         }
       }
       raf = requestAnimationFrame(poll);
@@ -720,6 +730,22 @@ function Home() {
     canvasRef.current?.setSkeletonKeypoints?.(target.skeleton ?? null, 'snapshot');
     if (videoRef.current) { videoRef.current.currentTime = target.timeSec; videoRef.current.pause(); }
   }, [saveActiveSnapshot, snapshots]);
+
+  /**
+   * Leave SNAPSHOT mode and return to LIVE: persist the departing snapshot,
+   * release its canvas state (mode isolation — snapshot drawings/overlays must
+   * not bleed into LIVE), and let the live skeleton resume following the player.
+   */
+  const exitSnapshotToLive = useCallback(() => {
+    if (analysisModeRef.current.kind !== 'snapshot') return;
+    saveActiveSnapshot();
+    setBiomechSelectedPhaseId(null);
+    setMeasurementColumn([]);
+    setShowMeasurementOverlays(false);
+    canvasRef.current?.importStrokes?.('[]');
+    canvasRef.current?.setOverlayAdjustments?.({});
+  }, [saveActiveSnapshot]);
+  useEffect(() => { exitSnapshotToLiveRef.current = exitSnapshotToLive; }, [exitSnapshotToLive]);
 
   /**
    * Mode Guard: release SNAPSHOT ownership when entering FRAME mode so the two
@@ -811,6 +837,9 @@ function Home() {
     saveActiveSnapshot();
     const ordered = [...snapshots].sort((a, b) => a.timeSec - b.timeSec);
     if (ordered.length === 0) { setProcessingStatus('Create a snapshot first (Create Snapshot or AI Detect)'); return; }
+    // Capture drives the playhead across snapshots — keep the mode autopilot
+    // from clearing restored strokes between restore and capture.
+    modeAutopilotSuppressedRef.current = true;
     setProcessingStatus('Capturing snapshot screenshots…');
     const video = videoRef.current;
     const overlay = canvasRef.current?.getCanvas?.();
@@ -828,6 +857,7 @@ function Home() {
       updated.push({ ...snap, screenshot: shot });
     }
     setSnapshots(prev => prev.map(s => updated.find(u => u.id === s.id) ?? s));
+    modeAutopilotSuppressedRef.current = false;
     setGenerateWorkspaceMounted(true);
     setGenerateWorkspaceOpen(true);
     setProcessingStatus(`Generated ${ordered.length} snapshot screenshots`);
@@ -853,6 +883,8 @@ function Home() {
     const replayRate = generateReplayRate > 0 ? generateReplayRate : 0.25;
     replayAbortRef.current = false;
     setReplayActive(true);
+    // Replay orchestrates snapshot selection itself while the playhead travels.
+    modeAutopilotSuppressedRef.current = true;
     const HOLD_MS = Math.max(0.5, generateHoldSec) * 1000;
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
     for (let i = 0; i < ordered.length; i++) {
@@ -884,6 +916,7 @@ function Home() {
     }
     if (videoRef.current) { videoRef.current.pause(); videoRef.current.playbackRate = originalRate; }
     if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* noop */ } }
+    modeAutopilotSuppressedRef.current = false;
     setReplayActive(false);
     setReplayIndex(null);
   }, [snapshots, seekVideoTo, selectSnapshot, generateReplayRate, generateHoldSec]);

@@ -4,14 +4,10 @@
  * Falls back to main-thread WebGL only if the worker cannot start.
  */
 
-import type { SmoothPoint } from '@/lib/keypointSmooth';
-import { smoothKeypointsEma } from '@/lib/keypointSmooth';
+import { OneEuroKeypointSmoother } from '@/lib/keypointSmooth';
 
 export type PoseKeypoint = { x: number; y: number; score: number; name: string };
 type ResultCb = (keypoints: PoseKeypoint[] | null) => void;
-
-/** EMA: 30% new sample, 70% previous — smooth tracking. */
-const SKELETON_EMA_ALPHA = 0.3;
 
 let globalWorker: Worker | null = null;
 let globalWorkerReady = false;
@@ -58,7 +54,8 @@ export class PoseWorkerBridge {
   private resultCb: ResultCb | null = null;
   private readyCb: (() => void) | null = null;
   private statusCb: ((msg: string) => void) | null = null;
-  private smoothPrev: SmoothPoint[] | null = null;
+  // Speed-adaptive smoothing: steady at rest, near-zero lag on fast swings.
+  private smoother = new OneEuroKeypointSmoother();
 
   private fallbackDetector: any = null;
   private idleId: number | null = null;
@@ -119,7 +116,7 @@ export class PoseWorkerBridge {
   }
 
   resetSmoothing() {
-    this.smoothPrev = null;
+    this.smoother.reset();
   }
 
   /**
@@ -350,8 +347,7 @@ export class PoseWorkerBridge {
       return;
     }
 
-    const smoothed = smoothKeypointsEma(this.smoothPrev, raw, SKELETON_EMA_ALPHA);
-    this.smoothPrev = smoothed as SmoothPoint[];
+    const smoothed = this.smoother.apply(raw, performance.now());
     this.resultCb?.(smoothed as PoseKeypoint[]);
   }
 }

@@ -3049,10 +3049,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const onPause = () => detectStaticFrame();
       const onSeeked = () => { if (videoRef.current?.paused) detectStaticFrame(); };
       const onPlay = () => { cancelScheduled(); scheduleNext(); };
+      // Returning from another app/tab: rVFC/rAF were throttled or dropped
+      // while hidden — restart the loop (playing) or re-snap the static frame
+      // (paused) so the skeleton never "disappears" after switching apps.
+      const onVisibility = () => {
+        if (document.visibilityState !== 'visible') return;
+        const v = videoRef.current;
+        if (!v) return;
+        if (v.paused) detectStaticFrame();
+        else { cancelScheduled(); scheduleNext(); }
+      };
 
       video.addEventListener('pause', onPause);
       video.addEventListener('seeked', onSeeked);
       video.addEventListener('play', onPlay);
+      document.addEventListener('visibilitychange', onVisibility);
 
       // Bootstrap: start the play loop if playing, else snap once if paused.
       if (video.paused) detectStaticFrame(); else scheduleNext();
@@ -3063,6 +3074,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         video.removeEventListener('pause', onPause);
         video.removeEventListener('seeked', onSeeked);
         video.removeEventListener('play', onPlay);
+        document.removeEventListener('visibilitychange', onVisibility);
       };
     }, [skeletonEnabled, videoRef]);
 

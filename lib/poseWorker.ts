@@ -1,6 +1,11 @@
 /**
  * Web Worker for off-main-thread MoveNet pose detection.
- * Uses TF.js WASM backend (WebGL is unavailable inside workers).
+ *
+ * Backend chain: WebGPU → WebGL (OffscreenCanvas) → WASM. GPU backends run
+ * inference 3–10× faster than WASM, which lets us load the higher-precision
+ * MoveNet THUNDER model on GPU while keeping LIGHTNING as the WASM fallback.
+ * (The old "WebGL is unavailable inside workers" assumption is obsolete —
+ * OffscreenCanvas WebGL works in workers in all current browsers.)
  *
  * Protocol:
  *   Main → Worker:  { type: 'init' }
@@ -16,32 +21,60 @@ let detector: any = null;
 let ready = false;
 let prevCentroid: { x: number; y: number } | null = null;
 
+async function pickBackend(tf: any): Promise<string> {
+  // 1. WebGPU — fastest path (Chromium).
+  try {
+    if ((self.navigator as unknown as { gpu?: unknown })?.gpu) {
+      await import('@tensorflow/tfjs-backend-webgpu');
+      if (await tf.setBackend('webgpu')) {
+        await tf.ready();
+        return 'webgpu';
+      }
+    }
+  } catch { /* fall through */ }
+
+  // 2. WebGL via OffscreenCanvas — broadly supported in workers.
+  try {
+    if (typeof OffscreenCanvas !== 'undefined') {
+      await import('@tensorflow/tfjs-backend-webgl');
+      if (await tf.setBackend('webgl')) {
+        await tf.ready();
+        return 'webgl';
+      }
+    }
+  } catch { /* fall through */ }
+
+  // 3. WASM — universal fallback.
+  const wasmBackend = await import('@tensorflow/tfjs-backend-wasm');
+  wasmBackend.setWasmPaths(
+    'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/',
+  );
+  await tf.setBackend('wasm');
+  await tf.ready();
+  return 'wasm';
+}
+
 async function init() {
   try {
-    if (process.env.NODE_ENV !== 'production') {
-    }
-
-    self.postMessage({ type: 'status', message: 'Loading TensorFlow WASM…' });
+    self.postMessage({ type: 'status', message: 'Loading AI engine…' });
     const tf = await import('@tensorflow/tfjs-core');
-    const wasmBackend = await import('@tensorflow/tfjs-backend-wasm');
-
-    wasmBackend.setWasmPaths(
-      'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/',
-    );
-
-    await tf.setBackend('wasm');
-    await tf.ready();
+    const backend = await pickBackend(tf);
 
     self.postMessage({ type: 'status', message: 'Loading pose detection model…' });
     const pd = await import('@tensorflow-models/pose-detection');
+    const gpu = backend === 'webgpu' || backend === 'webgl';
     detector = await pd.createDetector(pd.SupportedModels.MoveNet, {
-      modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
+      // GPU: THUNDER (markedly more precise joints) still runs realtime.
+      // WASM: LIGHTNING keeps the fallback fast enough to follow play.
+      modelType: gpu
+        ? pd.movenet.modelType.SINGLEPOSE_THUNDER
+        : pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
       enableSmoothing: false,
     });
 
     ready = true;
     self.postMessage({ type: 'ready' });
-    console.log('[PoseWorker] Model loaded and ready');
+    console.log(`[PoseWorker] Ready — backend: ${backend}, model: ${gpu ? 'thunder' : 'lightning'}`);
   } catch (err: any) {
     console.error('[PoseWorker] Init failed:', err);
     self.postMessage({ type: 'error', message: err?.message || 'Worker init failed' });
