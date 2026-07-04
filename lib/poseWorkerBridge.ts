@@ -60,6 +60,8 @@ export class PoseWorkerBridge {
   private fallbackDetector: any = null;
   private idleId: number | null = null;
   private _focusPoint: { x: number; y: number } | null = null;
+  /** Video-px per bitmap-px of the frame currently in flight (downscaled send). */
+  private lastSentScale = 1;
 
   constructor(opts?: { frameSkip?: number; onStatus?: (msg: string) => void }) {
     this._frameSkip = opts?.frameSkip ?? 0;
@@ -175,7 +177,14 @@ export class PoseWorkerBridge {
     const { data } = e;
     if (data.type === 'result') {
       this.inFlight = false;
-      this.deliverKeypoints(data.keypoints);
+      // Worker coords are in (possibly downscaled) bitmap space — map back to
+      // video-native pixels before smoothing/consumption.
+      let kps: PoseKeypoint[] | null = data.keypoints ?? null;
+      if (kps && this.lastSentScale !== 1) {
+        const f = this.lastSentScale;
+        kps = kps.map((k) => ({ ...k, x: k.x * f, y: k.y * f }));
+      }
+      this.deliverKeypoints(kps);
       const v = this.pendingResendVideo;
       this.pendingResendVideo = null;
       if (v && !this.disposed) {
@@ -265,13 +274,29 @@ export class PoseWorkerBridge {
     if (!this.worker || !globalWorkerReady) return;
     this.inFlight = true;
     try {
-      createImageBitmap(video)
+      // The model's input is only 192–256px — shipping full-res frames wastes
+      // capture, transfer, and tensor-conversion time (the dominant cost on
+      // the WASM path). 512px keeps ample margin for the 0.6 focus crop.
+      const vw = video.videoWidth || 0;
+      const vh = video.videoHeight || 0;
+      const TARGET = 512;
+      const scale = vw > 0 ? Math.min(1, TARGET / Math.max(vw, vh)) : 1;
+      const make: Promise<ImageBitmap> = scale < 1
+        ? createImageBitmap(video, {
+            resizeWidth: Math.max(1, Math.round(vw * scale)),
+            resizeHeight: Math.max(1, Math.round(vh * scale)),
+            resizeQuality: 'low',
+          }).catch(() => createImageBitmap(video)) // older engines: no resize options
+        : createImageBitmap(video);
+
+      make
         .then((bmp) => {
           if (this.disposed || !this.worker) {
             bmp.close();
             this.inFlight = false;
             return;
           }
+          this.lastSentScale = bmp.width > 0 && vw > 0 ? vw / bmp.width : 1;
           this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId: this.frameCount, focusPoint: this._focusPoint }, [bmp]);
         })
         .catch(() => {

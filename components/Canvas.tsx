@@ -539,31 +539,47 @@ function drawSkeletonOverlay(
     }
   }
 
-  // Foot direction lines (ankle → toe tip)
+  // Foot direction lines (ankle → toe tip).
+  // MoveNet has no toe keypoints, so the direction is estimated: primarily
+  // from the body-center → ankle horizontal offset; when the foot is under
+  // the body (lunge/split-step) fall back to the facing direction (nose vs
+  // body center) so the line never flips backwards mid-stroke.
   if (showFootLine) {
-    for (const [kneeIdx, ankleIdx, hipIdx] of [[13, 15, 11], [14, 16, 12]] as [number, number, number][]) {
+    const lHip = keypoints[11];
+    const rHip = keypoints[12];
+    const nose = keypoints[0];
+    const hipXs = [lHip, rHip].filter((h) => h && h.score >= scoreThreshold).map((h) => h.x * sx);
+    const bodyCenterX = hipXs.length ? hipXs.reduce((a, b) => a + b, 0) / hipXs.length : null;
+    const facing = bodyCenterX != null && nose && nose.score >= scoreThreshold
+      ? (nose.x * sx >= bodyCenterX ? 1 : -1)
+      : 1;
+
+    for (const [kneeIdx, ankleIdx] of [[13, 15], [14, 16]] as [number, number][]) {
       if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
       const knee  = keypoints[kneeIdx];
       const ankle = keypoints[ankleIdx];
-      const hip   = keypoints[hipIdx];
       if (!knee || !ankle || knee.score < scoreThreshold || ankle.score < scoreThreshold) continue;
       const ax = ankle.x * sx, ay = ankle.y * sy;
       const kx = knee.x * sx, ky = knee.y * sy;
       const shinLen = Math.hypot(ax - kx, ay - ky);
       if (shinLen < 1) continue;
-      const toeLen = shinLen * 0.35;
-      // Determine forward direction: use hip→ankle horizontal direction
-      const hipX = (hip && hip.score >= scoreThreshold) ? hip.x * sx : kx;
-      const fwd = ax >= hipX ? 1 : -1;
+      const toeLen = shinLen * 0.45;
+      // Ankle clearly ahead/behind the body → that side is forward; otherwise
+      // use the facing direction so feet under the body still point correctly.
+      let fwd: number;
+      if (bodyCenterX != null && Math.abs(ax - bodyCenterX) > shinLen * 0.15) {
+        fwd = ax >= bodyCenterX ? 1 : -1;
+      } else {
+        fwd = facing;
+      }
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      ctx.lineTo(ax + fwd * toeLen, ay + toeLen * 0.15);
+      ctx.lineTo(ax + fwd * toeLen, ay + toeLen * 0.12);
       ctx.stroke();
-      ctx.setLineDash([]);
       ctx.restore();
     }
   }
