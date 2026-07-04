@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Download, Play, Video, FileText, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Youtube, Loader2, ExternalLink } from 'lucide-react';
 import type { Snapshot } from '@/lib/snapshots';
 import { runExportPipeline } from '@/lib/export/exportService';
+import { ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
 
 const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1] as const;
 
@@ -76,7 +77,9 @@ export default function GenerateWorkspace({
   const [noteOverrides, setNoteOverrides] = useState<Record<string, string>>({});
   const [players, setPlayers] = useState<PlayerOption[]>([]);
   const [attachPlayerId, setAttachPlayerId] = useState<string>('');
-  const [includeVideoUpload, setIncludeVideoUpload] = useState(true);
+  const [includeVideoUpload, setIncludeVideoUpload] = useState(ENABLE_YOUTUBE_UPLOAD);
+  const [newPlayerName, setNewPlayerName] = useState<string | null>(null);
+  const [creatingPlayer, setCreatingPlayer] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -172,6 +175,31 @@ export default function GenerateWorkspace({
     notes: (noteOverrides[s.id] ?? s.notes ?? '').trim() || undefined,
   })), [includedSnaps, noteOverrides]);
 
+  /** Create a player inline and select it — report generation stays continuous. */
+  const handleCreatePlayer = useCallback(async () => {
+    const name = newPlayerName?.trim();
+    if (!name || creatingPlayer) return;
+    setCreatingPlayer(true);
+    setExportError(null);
+    try {
+      const res = await fetch('/api/players', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ display_name: name }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { player?: PlayerOption; error?: string };
+      if (!res.ok || !body.player) {
+        setExportError(body.error ?? 'Could not create the player — try again.');
+        return;
+      }
+      setPlayers((prev) => [...prev, body.player!].sort((a, b) => a.display_name.localeCompare(b.display_name)));
+      setAttachPlayerId(body.player.id);
+      setNewPlayerName(null);
+    } finally {
+      setCreatingPlayer(false);
+    }
+  }, [newPlayerName, creatingPlayer]);
+
   const handleExportReport = useCallback(async () => {
     if (exporting || includedSnaps.length === 0) return;
     setExporting(true);
@@ -181,7 +209,7 @@ export default function GenerateWorkspace({
     try {
       const result = await runExportPipeline({
         title: reportTitle.trim() || 'AngleMotion — Stroke analysis',
-        videoBlob: includeVideoUpload && videoBlob ? videoBlob : null,
+        videoBlob: ENABLE_YOUTUBE_UPLOAD && includeVideoUpload && videoBlob ? videoBlob : null,
         sections: sectionsForReport(),
         playerId: attachPlayerId || null,
         onProgress: setExportStatus,
@@ -396,16 +424,46 @@ export default function GenerateWorkspace({
                   <option value="">No player — just create the report</option>
                   {players.map((p) => <option key={p.id} value={p.id}>Attach to {p.display_name}</option>)}
                 </select>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'rgba(255,255,255,0.7)', whiteSpace: 'nowrap' }}>
-                  <input type="checkbox" checked={includeVideoUpload} onChange={(e) => setIncludeVideoUpload(e.target.checked)} disabled={!videoBlob} />
-                  <Youtube size={13} /> Upload video
-                </label>
+                <button
+                  type="button"
+                  onClick={() => setNewPlayerName((v) => (v === null ? '' : null))}
+                  style={{ ...secondaryBtn, padding: '8px 10px', whiteSpace: 'nowrap' }}
+                >
+                  + New player
+                </button>
+                {ENABLE_YOUTUBE_UPLOAD && (
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'rgba(255,255,255,0.7)', whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={includeVideoUpload} onChange={(e) => setIncludeVideoUpload(e.target.checked)} disabled={!videoBlob} />
+                    <Youtube size={13} /> Upload video
+                  </label>
+                )}
               </div>
+              {newPlayerName !== null && (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    value={newPlayerName}
+                    onChange={(e) => setNewPlayerName(e.target.value)}
+                    placeholder="New player name…"
+                    autoFocus
+                    aria-label="New player name"
+                    onKeyDown={(e) => { if (e.key === 'Enter' && newPlayerName.trim()) void handleCreatePlayer(); }}
+                    style={{ flex: 1, fontSize: 12, background: 'rgba(0,0,0,0.35)', color: '#fff', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
+                  />
+                  <button
+                    type="button"
+                    disabled={!newPlayerName.trim() || creatingPlayer}
+                    onClick={() => void handleCreatePlayer()}
+                    style={{ ...primaryBtn, padding: '8px 14px', fontSize: 12 }}
+                  >
+                    {creatingPlayer ? <Loader2 size={13} className="animate-spin" /> : 'Create'}
+                  </button>
+                </div>
+              )}
               <button type="button" onClick={() => void handleExportReport()} disabled={exporting || includedSnaps.length === 0} style={{ ...primaryBtn, width: '100%', justifyContent: 'center' }}>
                 {exporting ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
                 {exporting ? (exportStatus ?? 'Exporting…') : 'Export Google Docs report'}
               </button>
-              {includeVideoUpload && !videoBlob && (
+              {ENABLE_YOUTUBE_UPLOAD && includeVideoUpload && !videoBlob && (
                 <p style={{ margin: 0, fontSize: 10, color: 'rgba(255,255,255,0.45)' }}>Record the replay video first to include it (uploaded Unlisted to your YouTube).</p>
               )}
               {exportError && <p style={{ margin: 0, fontSize: 11, color: '#FF453A', fontWeight: 600 }}>{exportError}</p>}

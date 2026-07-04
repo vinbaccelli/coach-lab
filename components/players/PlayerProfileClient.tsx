@@ -3,10 +3,11 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft, Plus, X } from 'lucide-react';
 import PlayerSessionTimeline from '@/components/players/PlayerSessionTimeline';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
+import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 
 type Player = {
   id: string;
@@ -16,10 +17,14 @@ type Player = {
   nationality?: string | null;
   playing_hand?: string | null;
   notes?: string | null;
-  /** Google Doc that collects this player's screenshots/reports (null until first export). */
+  /** Technical Analysis Google Doc (null until first export). */
   google_doc_id?: string | null;
+  /** Match Analysis Google Doc (null until first match report). */
+  google_match_doc_id?: string | null;
   /** Drive folder (AngleMotion/Players/<Name>) holding every export for this player. */
   google_folder_id?: string | null;
+  /** Editable Technical Sheet rows (jsonb). */
+  technical_sheet?: unknown;
 };
 
 type Entry = {
@@ -43,6 +48,38 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [sheet, setSheet] = useState<TechnicalSheetRow[] | null>(null);
+  const [sheetSaving, setSheetSaving] = useState(false);
+  const [newRowLabel, setNewRowLabel] = useState<string | null>(null);
+
+  // Initialize the sheet once from the loaded player (don't clobber edits on reloads).
+  useEffect(() => {
+    if (player && sheet === null) {
+      setSheet(parseTechnicalSheet(player.technical_sheet) ?? defaultTechnicalSheet());
+    }
+  }, [player, sheet]);
+
+  /** Structural row changes update the coach's default template for NEW players. */
+  const syncTemplate = useCallback((rows: TechnicalSheetRow[]) => {
+    void fetch('/api/coach-settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ technicalSheetTemplate: rows.map((r) => r.label) }),
+    }).catch(() => {});
+  }, []);
+
+  const saveSheet = useCallback(async (rows: TechnicalSheetRow[]) => {
+    setSheetSaving(true);
+    try {
+      await fetch(`/api/players/${playerId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ technical_sheet: rows }),
+      });
+    } finally {
+      setSheetSaving(false);
+    }
+  }, [playerId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -216,6 +253,109 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </button>
       </div>
 
+      {/* ── Technical Sheet ─────────────────────────────────────────────── */}
+      <div style={{ ...panel, marginBottom: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Technical Sheet</h2>
+          <button
+            type="button"
+            onClick={() => { if (sheet) void saveSheet(sheet); }}
+            disabled={sheetSaving || !sheet}
+            style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#1A1A1A', color: '#fff', fontWeight: 700, fontSize: 12, cursor: sheetSaving ? 'wait' : 'pointer' }}
+          >
+            {sheetSaving ? 'Saving…' : 'Save sheet'}
+          </button>
+        </div>
+        <p style={{ margin: '4px 0 14px', fontSize: 12, color: '#78716c' }}>
+          Adding or deleting rows also updates your default sheet for new players — existing players keep their rows.
+        </p>
+        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
+          {(sheet ?? []).map((row, i) => (
+            <div key={`${row.label}-${i}`} style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+              <label style={{ ...lb, flex: 1 }}>
+                {row.label}
+                <input
+                  value={row.value}
+                  onChange={(e) => setSheet((prev) => prev ? prev.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)) : prev)}
+                  style={inp}
+                />
+              </label>
+              <button
+                type="button"
+                aria-label={`Delete ${row.label} row`}
+                onClick={() => {
+                  setSheet((prev) => {
+                    if (!prev) return prev;
+                    const next = prev.filter((_, j) => j !== i);
+                    syncTemplate(next);
+                    void saveSheet(next);
+                    return next;
+                  });
+                }}
+                style={{ width: 30, height: 34, borderRadius: 8, border: '1px solid #E5E5EA', background: '#fff', color: '#8E8E93', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {newRowLabel === null ? (
+            <button
+              type="button"
+              onClick={() => setNewRowLabel('')}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed #007AFF', background: 'rgba(0,122,255,0.04)', color: '#007AFF', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+            >
+              <Plus size={14} /> Add row
+            </button>
+          ) : (
+            <>
+              <input
+                value={newRowLabel}
+                onChange={(e) => setNewRowLabel(e.target.value)}
+                placeholder="Row name (e.g. Serve speed)"
+                autoFocus
+                style={{ ...inp, maxWidth: 260 }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newRowLabel.trim()) {
+                    setSheet((prev) => {
+                      const next = [...(prev ?? []), { label: newRowLabel.trim(), value: '' }];
+                      syncTemplate(next);
+                      void saveSheet(next);
+                      return next;
+                    });
+                    setNewRowLabel(null);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                disabled={!newRowLabel.trim()}
+                onClick={() => {
+                  setSheet((prev) => {
+                    const next = [...(prev ?? []), { label: newRowLabel.trim(), value: '' }];
+                    syncTemplate(next);
+                    void saveSheet(next);
+                    return next;
+                  });
+                  setNewRowLabel(null);
+                }}
+                style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#007AFF', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewRowLabel(null)}
+                style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #D1D1D6', background: '#fff', color: '#1A1A1A', fontSize: 12, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
       <section
         style={{
           background: 'rgba(250, 249, 247, 0.96)',
@@ -280,7 +420,21 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                   color: '#fff', fontSize: 12, fontWeight: 700, textDecoration: 'none',
                 }}
               >
-                Open Google Doc ↗
+                Technical Analysis Doc ↗
+              </a>
+            ) : null}
+            {player.google_match_doc_id ? (
+              <a
+                href={`https://docs.google.com/document/d/${player.google_match_doc_id}/edit`}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '8px 14px', borderRadius: 10, background: '#34C759',
+                  color: '#fff', fontSize: 12, fontWeight: 700, textDecoration: 'none',
+                }}
+              >
+                Match Analysis Doc ↗
               </a>
             ) : null}
             {player.google_folder_id ? (
@@ -312,9 +466,12 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
               <article
                 key={e.id}
                 onClick={() => {
-                  // Prefer the entry's own report Doc; fall back to the player's main Doc.
+                  // Prefer the entry's own doc link; fall back to the doc for its category.
+                  const fallbackId = e.category === 'match'
+                    ? player.google_match_doc_id ?? player.google_doc_id
+                    : player.google_doc_id;
                   const url = e.metadata?.doc_url
-                    ?? (player.google_doc_id ? `https://docs.google.com/document/d/${player.google_doc_id}/edit` : null);
+                    ?? (fallbackId ? `https://docs.google.com/document/d/${fallbackId}/edit` : null);
                   if (url) window.open(url, '_blank', 'noopener');
                 }}
                 style={{

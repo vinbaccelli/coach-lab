@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { defaultTechnicalSheet } from '@/lib/players/technicalSheet';
 
 export async function GET() {
   const session = await getRouteSession();
@@ -31,6 +32,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'display_name is required' }, { status: 400 });
   }
 
+  // New players start with the coach's Technical Sheet template (or the
+  // built-in defaults). Existing players are never touched by template changes.
+  const { data: settings } = await session.supabase
+    .from('coach_settings')
+    .select('technical_sheet_template')
+    .eq('coach_id', session.userId)
+    .maybeSingle<{ technical_sheet_template: string[] | null }>();
+
   const { data, error } = await session.supabase
     .from('players')
     .insert({
@@ -41,6 +50,7 @@ export async function POST(req: Request) {
       nationality: body.nationality ?? null,
       playing_hand: body.playing_hand ?? 'unknown',
       notes: body.notes ?? null,
+      technical_sheet: defaultTechnicalSheet(settings?.technical_sheet_template ?? undefined),
     })
     .select('*')
     .single();
