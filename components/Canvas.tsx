@@ -572,13 +572,24 @@ function drawSkeletonOverlay(
       } else {
         fwd = facing;
       }
+      // Anatomical constraint: the foot is ~perpendicular to the shin (slight
+      // plantar droop) — derive the toe direction by ROTATING the knee→ankle
+      // axis ±(90°−15°), then clamp its deviation from horizontal-forward to
+      // ±34° (feet stay near ground-flat even when the shin inclines). The
+      // line physically cannot point back up the leg.
+      const shinAng = Math.atan2(ay - ky, ax - kx);
+      const perpAng = shinAng - fwd * (Math.PI / 2 - 0.26);
+      const horizForward = fwd === 1 ? 0 : Math.PI;
+      const norm = (a: number) => ((a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      const dev = Math.max(-0.6, Math.min(0.6, norm(perpAng - horizForward)));
+      const footAng = horizForward + dev;
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
       ctx.lineWidth = 2;
       ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      ctx.lineTo(ax + fwd * toeLen, ay + toeLen * 0.12);
+      ctx.lineTo(ax + Math.cos(footAng) * toeLen, ay + Math.sin(footAng) * toeLen);
       ctx.stroke();
       ctx.restore();
     }

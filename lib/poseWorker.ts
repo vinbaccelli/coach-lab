@@ -21,44 +21,64 @@ let detector: any = null;
 let ready = false;
 let prevCentroid: { x: number; y: number } | null = null;
 
-async function pickBackend(tf: any): Promise<string> {
-  // 1. WebGPU — fastest path (Chromium).
-  try {
-    if ((self.navigator as unknown as { gpu?: unknown })?.gpu) {
-      await import('@tensorflow/tfjs-backend-webgpu');
-      if (await tf.setBackend('webgpu')) {
-        await tf.ready();
-        return 'webgpu';
-      }
-    }
-  } catch { /* fall through */ }
+/** Race a backend init against a hard timeout so a hung GPU probe can never stall the chain. */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} init timed out`)), ms)),
+  ]);
+}
 
-  // 2. WebGL via OffscreenCanvas — broadly supported in workers.
-  try {
-    if (typeof OffscreenCanvas !== 'undefined') {
-      await import('@tensorflow/tfjs-backend-webgl');
-      if (await tf.setBackend('webgl')) {
-        await tf.ready();
-        return 'webgl';
-      }
-    }
-  } catch { /* fall through */ }
-
-  // 3. WASM — universal fallback.
+async function initWasm(tf: any): Promise<void> {
   const wasmBackend = await import('@tensorflow/tfjs-backend-wasm');
   wasmBackend.setWasmPaths(
     'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/',
   );
   await tf.setBackend('wasm');
   await tf.ready();
+}
+
+async function pickBackend(tf: any, wasmOnly: boolean): Promise<string> {
+  if (!wasmOnly) {
+    // 1. WebGL via OffscreenCanvas — the most stable GPU path in workers.
+    try {
+      if (typeof OffscreenCanvas !== 'undefined') {
+        await import('@tensorflow/tfjs-backend-webgl');
+        const ok = await withTimeout(Promise.resolve(tf.setBackend('webgl')), 6000, 'webgl');
+        if (ok) {
+          await tf.ready();
+          return 'webgl';
+        }
+      }
+    } catch (e) {
+      console.warn('[PoseWorker] webgl backend unavailable:', (e as Error)?.message);
+    }
+
+    // 2. WebGPU — fastest when it works (Chromium), but probes can hang.
+    try {
+      if ((self.navigator as unknown as { gpu?: unknown })?.gpu) {
+        await import('@tensorflow/tfjs-backend-webgpu');
+        const ok = await withTimeout(Promise.resolve(tf.setBackend('webgpu')), 6000, 'webgpu');
+        if (ok) {
+          await tf.ready();
+          return 'webgpu';
+        }
+      }
+    } catch (e) {
+      console.warn('[PoseWorker] webgpu backend unavailable:', (e as Error)?.message);
+    }
+  }
+
+  // 3. WASM — universal fallback, the configuration that works everywhere.
+  await initWasm(tf);
   return 'wasm';
 }
 
-async function init() {
+async function init(wasmOnly = false) {
   try {
     self.postMessage({ type: 'status', message: 'Loading AI engine…' });
     const tf = await import('@tensorflow/tfjs-core');
-    const backend = await pickBackend(tf);
+    const backend = await pickBackend(tf, wasmOnly);
 
     self.postMessage({ type: 'status', message: 'Loading pose detection model…' });
     const pd = await import('@tensorflow-models/pose-detection');
@@ -73,7 +93,7 @@ async function init() {
     });
 
     ready = true;
-    self.postMessage({ type: 'ready' });
+    self.postMessage({ type: 'ready', backend });
     console.log(`[PoseWorker] Ready — backend: ${backend}, model: ${gpu ? 'thunder' : 'lightning'}`);
   } catch (err: any) {
     console.error('[PoseWorker] Init failed:', err);
@@ -85,7 +105,7 @@ self.onmessage = async (e: MessageEvent) => {
   const { data } = e;
 
   if (data.type === 'init') {
-    await init();
+    await init(!!data.wasmOnly);
     return;
   }
 

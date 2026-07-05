@@ -62,6 +62,8 @@ export class PoseWorkerBridge {
   private _focusPoint: { x: number; y: number } | null = null;
   /** Video-px per bitmap-px of the frame currently in flight (downscaled send). */
   private lastSentScale = 1;
+  /** One retry with a fresh wasm-only worker before the main-thread fallback. */
+  private triedWasmOnly = false;
 
   constructor(opts?: { frameSkip?: number; onStatus?: (msg: string) => void }) {
     this._frameSkip = opts?.frameSkip ?? 0;
@@ -195,7 +197,24 @@ export class PoseWorkerBridge {
     }
   }
 
-  private tryWorker() {
+  /**
+   * Failure ladder: a broken/hung GPU worker retries ONCE as a fresh wasm-only
+   * worker (the configuration that works in every browser) before falling back
+   * to main-thread WebGL.
+   */
+  private failOver() {
+    if (this.disposed) return;
+    terminateGlobalPoseWorker();
+    if (!this.triedWasmOnly) {
+      this.triedWasmOnly = true;
+      this.statusCb?.('Retrying skeleton engine…');
+      this.tryWorker(true);
+    } else {
+      this.initMainThread();
+    }
+  }
+
+  private tryWorker(wasmOnly = false) {
     try {
       // Fast path: worker already loaded from a previous session
       if (globalWorker && globalWorkerReady) {
@@ -221,10 +240,9 @@ export class PoseWorkerBridge {
 
       // 30s timeout — model download can be slow on first load
       globalInitTimeout = setTimeout(() => {
-        console.warn('[PoseWorkerBridge] Worker timed out after 30s — falling back to main thread');
+        console.warn('[PoseWorkerBridge] Worker timed out after 30s — failing over');
         this.statusCb?.('Worker timed out — using fallback…');
-        terminateGlobalPoseWorker();
-        if (!this.disposed) this.initMainThread();
+        this.failOver();
       }, 30_000);
 
       w.onmessage = (e: MessageEvent) => {
@@ -249,21 +267,19 @@ export class PoseWorkerBridge {
         } else if (data.type === 'error') {
           if (globalInitTimeout) { clearTimeout(globalInitTimeout); globalInitTimeout = null; }
           console.error('[PoseWorkerBridge] Worker error:', data.message);
-          this.statusCb?.('Skeleton failed — using fallback…');
-          terminateGlobalPoseWorker();
-          if (!this.disposed) this.initMainThread();
+          this.statusCb?.('Skeleton engine hiccup — retrying…');
+          this.failOver();
         }
       };
 
       w.onerror = () => {
         if (globalInitTimeout) { clearTimeout(globalInitTimeout); globalInitTimeout = null; }
-        console.warn('[PoseWorkerBridge] Worker onerror — falling back');
-        this.statusCb?.('Skeleton failed — using fallback…');
-        terminateGlobalPoseWorker();
-        if (!this.disposed) this.initMainThread();
+        console.warn('[PoseWorkerBridge] Worker onerror — failing over');
+        this.statusCb?.('Skeleton engine hiccup — retrying…');
+        this.failOver();
       };
 
-      w.postMessage({ type: 'init' });
+      w.postMessage({ type: 'init', wasmOnly });
     } catch {
       console.warn('[PoseWorkerBridge] Worker creation failed — falling back');
       this.initMainThread();
