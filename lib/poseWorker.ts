@@ -31,9 +31,9 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 
 async function initWasm(tf: any): Promise<void> {
   const wasmBackend = await import('@tensorflow/tfjs-backend-wasm');
-  wasmBackend.setWasmPaths(
-    'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/',
-  );
+  // Self-hosted binaries (public/tfjs-wasm/) — a third-party CDN here meant
+  // ad-blockers/network policies could silently kill the whole skeleton.
+  wasmBackend.setWasmPaths(`${self.location.origin}/tfjs-wasm/`);
   await tf.setBackend('wasm');
   await tf.ready();
 }
@@ -89,6 +89,9 @@ async function init(wasmOnly = false) {
       modelType: gpu
         ? pd.movenet.modelType.SINGLEPOSE_THUNDER
         : pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
+      // Self-hosted weights (public/models/) — no third-party CDN a blocker
+      // or network policy could kill.
+      modelUrl: `${self.location.origin}/models/movenet-${gpu ? 'thunder' : 'lightning'}/model.json`,
       enableSmoothing: false,
     });
 

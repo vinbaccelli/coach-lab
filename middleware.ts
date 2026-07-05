@@ -5,9 +5,14 @@ import { isAdmin } from '@/lib/admin';
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
 
-  // Skip static/assets and auth endpoints
+  // Skip static/assets and auth endpoints. Any path with a file extension is
+  // a public asset (images, wasm, models, manifest…) — auth-gating those
+  // redirects them to /login and silently breaks workers and logged-out pages.
   const { pathname } = req.nextUrl;
   if (
+    /\.[a-zA-Z0-9]+$/.test(pathname) ||
+    pathname.startsWith('/tfjs-wasm') ||
+    pathname.startsWith('/models') ||
     pathname.startsWith('/_next') ||
     pathname.startsWith('/api') ||
     pathname.startsWith('/login') ||

@@ -46,7 +46,11 @@ export async function getPoseDetector(): Promise<PoseDetector | null> {
       const pd = await import('@tensorflow-models/pose-detection');
       detector = await pd.createDetector(
         pd.SupportedModels.MoveNet,
-        { modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING },
+        {
+          modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
+          // Self-hosted weights — no third-party CDN a blocker could kill.
+          modelUrl: `${window.location.origin}/models/movenet-lightning/model.json`,
+        },
       );
       if (process.env.NODE_ENV !== 'production') {
       }
