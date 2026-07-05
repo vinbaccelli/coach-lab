@@ -17,6 +17,15 @@
 
 /* eslint-disable no-restricted-globals */
 
+// STATIC imports for the core path (tf-core, wasm backend, pose-detection):
+// dynamic import() inside a worker relies on webpack's runtime chunk loading,
+// which broke in the production build ("ReferenceError: a is not defined" →
+// worker died before any backend could init). Statically bundled code cannot
+// fail to load. The optional GPU backends stay dynamic + guarded below.
+import * as tf from '@tensorflow/tfjs-core';
+import * as wasmBackend from '@tensorflow/tfjs-backend-wasm';
+import * as pd from '@tensorflow-models/pose-detection';
+
 let detector: any = null;
 let ready = false;
 let prevCentroid: { x: number; y: number } | null = null;
@@ -29,8 +38,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 
-async function initWasm(tf: any): Promise<void> {
-  const wasmBackend = await import('@tensorflow/tfjs-backend-wasm');
+async function initWasm(): Promise<void> {
   // Self-hosted binaries (public/tfjs-wasm/) — a third-party CDN here meant
   // ad-blockers/network policies could silently kill the whole skeleton.
   wasmBackend.setWasmPaths(`${self.location.origin}/tfjs-wasm/`);
@@ -38,7 +46,7 @@ async function initWasm(tf: any): Promise<void> {
   await tf.ready();
 }
 
-async function pickBackend(tf: any, wasmOnly: boolean): Promise<string> {
+async function pickBackend(wasmOnly: boolean): Promise<string> {
   if (!wasmOnly) {
     // 1. WebGL via OffscreenCanvas — the most stable GPU path in workers.
     try {
@@ -70,18 +78,16 @@ async function pickBackend(tf: any, wasmOnly: boolean): Promise<string> {
   }
 
   // 3. WASM — universal fallback, the configuration that works everywhere.
-  await initWasm(tf);
+  await initWasm();
   return 'wasm';
 }
 
 async function init(wasmOnly = false) {
   try {
     self.postMessage({ type: 'status', message: 'Loading AI engine…' });
-    const tf = await import('@tensorflow/tfjs-core');
-    const backend = await pickBackend(tf, wasmOnly);
+    const backend = await pickBackend(wasmOnly);
 
     self.postMessage({ type: 'status', message: 'Loading pose detection model…' });
-    const pd = await import('@tensorflow-models/pose-detection');
     const gpu = backend === 'webgpu' || backend === 'webgl';
     detector = await pd.createDetector(pd.SupportedModels.MoveNet, {
       // GPU: THUNDER (markedly more precise joints) still runs realtime.

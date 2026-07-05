@@ -6,6 +6,9 @@ const withBundleAnalyzer = require('@next/bundle-analyzer')({
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Verification builds set NEXT_DIST_DIR so they never clobber the dev
+  // server's .next (which caused recurring "Internal Server Error" locally).
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // Keep jsdom (and its dependents) OUT of the server bundle. When webpack
   // inlines jsdom, its xhr-sync-worker script self-executes with a
   // process.stdin listener — on serverless (Vercel) stdin is empty/closed,
