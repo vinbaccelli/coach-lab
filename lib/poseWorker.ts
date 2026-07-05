@@ -30,6 +30,46 @@ let detector: any = null;
 let ready = false;
 let prevCentroid: { x: number; y: number } | null = null;
 
+// Adaptive precision: start with THUNDER on GPU, but if measured inference is
+// too slow for realtime on this machine (older iGPUs), swap to LIGHTNING.
+let currentModel: 'thunder' | 'lightning' = 'lightning';
+let inferSamples: number[] = [];
+let modelSwapInFlight = false;
+const SWAP_AFTER_SAMPLES = 12;
+const SWAP_THRESHOLD_MS = 45;
+
+function makeDetector(model: 'thunder' | 'lightning') {
+  return pd.createDetector(pd.SupportedModels.MoveNet, {
+    modelType: model === 'thunder'
+      ? pd.movenet.modelType.SINGLEPOSE_THUNDER
+      : pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
+    // Self-hosted weights (public/models/) — no third-party CDN a blocker
+    // or network policy could kill.
+    modelUrl: `${self.location.origin}/models/movenet-${model}/model.json`,
+    enableSmoothing: false,
+  });
+}
+
+/** Swap THUNDER → LIGHTNING when this machine can't run it at realtime. */
+async function maybeDowngradeModel(lastMs: number) {
+  if (currentModel !== 'thunder' || modelSwapInFlight) return;
+  inferSamples.push(lastMs);
+  if (inferSamples.length < SWAP_AFTER_SAMPLES) return;
+  const avg = inferSamples.reduce((s, v) => s + v, 0) / inferSamples.length;
+  inferSamples = [];
+  if (avg <= SWAP_THRESHOLD_MS) return;
+  modelSwapInFlight = true;
+  try {
+    const next = await makeDetector('lightning');
+    try { detector?.dispose?.(); } catch { /* noop */ }
+    detector = next;
+    currentModel = 'lightning';
+    console.log(`[PoseWorker] Thunder too slow here (avg ${Math.round(avg)}ms) — switched to Lightning for realtime tracking`);
+  } catch { /* keep thunder */ } finally {
+    modelSwapInFlight = false;
+  }
+}
+
 /** Race a backend init against a hard timeout so a hung GPU probe can never stall the chain. */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -89,21 +129,15 @@ async function init(wasmOnly = false) {
 
     self.postMessage({ type: 'status', message: 'Loading pose detection model…' });
     const gpu = backend === 'webgpu' || backend === 'webgl';
-    detector = await pd.createDetector(pd.SupportedModels.MoveNet, {
-      // GPU: THUNDER (markedly more precise joints) still runs realtime.
-      // WASM: LIGHTNING keeps the fallback fast enough to follow play.
-      modelType: gpu
-        ? pd.movenet.modelType.SINGLEPOSE_THUNDER
-        : pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
-      // Self-hosted weights (public/models/) — no third-party CDN a blocker
-      // or network policy could kill.
-      modelUrl: `${self.location.origin}/models/movenet-${gpu ? 'thunder' : 'lightning'}/model.json`,
-      enableSmoothing: false,
-    });
+    // GPU: start with THUNDER (markedly more precise); measured inference
+    // later downgrades to LIGHTNING if this machine can't run it realtime.
+    // WASM: LIGHTNING from the start.
+    currentModel = gpu ? 'thunder' : 'lightning';
+    detector = await makeDetector(currentModel);
 
     ready = true;
     self.postMessage({ type: 'ready', backend });
-    console.log(`[PoseWorker] Ready — backend: ${backend}, model: ${gpu ? 'thunder' : 'lightning'}`);
+    console.log(`[PoseWorker] Ready — backend: ${backend}, model: ${currentModel}`);
   } catch (err: any) {
     console.error('[PoseWorker] Init failed:', err);
     self.postMessage({ type: 'error', message: err?.message || 'Worker init failed' });
@@ -150,7 +184,9 @@ self.onmessage = async (e: MessageEvent) => {
         source = bitmap;
       }
 
+      const t0 = performance.now();
       const poses = await detector.estimatePoses(source, { flipHorizontal: false });
+      void maybeDowngradeModel(performance.now() - t0);
       if (!poses || poses.length === 0) console.warn('[PoseWorker] No poses detected in frame', data.frameId);
 
       const bestPose = selectBestPose(poses, prevCentroid);

@@ -1852,6 +1852,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // Real-time skeleton detection (HTML5 bridge path)
     const youtubePoseDetectorRef = useRef<Awaited<ReturnType<typeof getPoseDetector>> | null>(null);
     const latestKeypointsRef  = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
+    // Last two live detections + arrival times — the render loop extrapolates
+    // each joint along its velocity between detections, so the skeleton moves
+    // at display framerate even when inference runs at ~10 Hz on weak GPUs.
+    const posePrevSampleRef = useRef<{ kps: Array<{ x: number; y: number; score: number; name: string }>; ts: number } | null>(null);
+    const poseLatestSampleRef = useRef<{ kps: Array<{ x: number; y: number; score: number; name: string }>; ts: number } | null>(null);
     const poseLoopActiveRef   = useRef(false);
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
     // When true, skeleton overlay + detection is temporarily suppressed (e.g. after Clear All / Undo).
@@ -2972,6 +2977,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // Capability gate: the live worker owns the displayed pose whenever
           // it can render — in every analysis mode, not just live.
           if (liveSkeletonActive()) {
+            posePrevSampleRef.current = poseLatestSampleRef.current;
+            poseLatestSampleRef.current = { kps: keypoints, ts: performance.now() };
             latestKeypointsRef.current = keypoints;
             renderDirtyRef.current = true;
           }
@@ -4037,9 +4044,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           skeletonDimsOk
         ) {
           if (latestKeypointsRef.current && latestKeypointsRef.current.length > 0 && vW > 0 && vH > 0) {
+            // Motion prediction: while PLAYING, extrapolate joints along their
+            // velocity so the drawn skeleton follows the player at display
+            // framerate even when detections arrive at ~10 Hz (weak GPUs).
+            // Paused/snapshot poses draw exactly as detected/restored.
+            let displayKps = latestKeypointsRef.current;
+            const latestS = poseLatestSampleRef.current;
+            const prevS = posePrevSampleRef.current;
+            if (
+              video && !video.paused && latestS && prevS &&
+              latestS.kps === latestKeypointsRef.current &&
+              latestS.kps.length === prevS.kps.length
+            ) {
+              const interval = Math.min(200, Math.max(20, latestS.ts - prevS.ts));
+              const a = Math.min(1.2, (performance.now() - latestS.ts) / interval);
+              if (a > 0.02) {
+                displayKps = latestS.kps.map((k, i) => {
+                  const p = prevS.kps[i];
+                  if (!p || k.score < 0.15 || p.score < 0.15) return k;
+                  return { ...k, x: k.x + (k.x - p.x) * a, y: k.y + (k.y - p.y) * a };
+                });
+              }
+            }
             ctx.save();
             ctx.translate(dx, dy);
-            drawSkeletonOverlay(ctx, latestKeypointsRef.current, vW, vH, dw, dh, {
+            drawSkeletonOverlay(ctx, displayKps, vW, vH, dw, dh, {
               showAngles: false,
               showHeadLine: skeletonShowHeadLineRef.current,
               showHeadDirection: skeletonShowHeadDirectionRef.current,
