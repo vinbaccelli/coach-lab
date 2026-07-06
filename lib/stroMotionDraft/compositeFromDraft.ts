@@ -81,6 +81,8 @@ export interface StroMotionDraftCompositeOptions {
   opacity?: number;
   fadeMode?: StroMotionOpacityMode;
   visibleCount?: number;
+  /** First visible frame index (for 'vanish' layer mode — hides passed ghosts). */
+  visibleStart?: number;
   /** When true, include edited / AI-proposed masks before Mark Ready. */
   previewMode?: boolean;
   dest: { x: number; y: number; w: number; h: number };
@@ -108,6 +110,7 @@ export function renderStroMotionDraftComposite(
     opacity = STRO_MOTION_DEFAULT_OPACITY,
     fadeMode = 'temporal',
     visibleCount = draft.frames.length,
+    visibleStart = 0,
     previewMode = false,
     dest,
     resolveMask,
@@ -138,7 +141,8 @@ export function renderStroMotionDraftComposite(
   }
 
   const scratch = document.createElement('canvas');
-  for (let i = 0; i < count; i++) {
+  const startIdx = Math.max(0, Math.min(visibleStart, count));
+  for (let i = startIdx; i < count; i++) {
     const frame = orderedFrames[i];
     const mask = pickMask(frame);
     if (!frame.sourceFrame || !mask) continue;

@@ -1301,6 +1301,8 @@ function Home() {
   // ── StroMotion Generate render settings (drive preview rebuilds) ─────────
   const [stroGhostOpacity, setStroGhostOpacity] = useState<number | undefined>(undefined);
   const [stroVideoSpeed, setStroVideoSpeed] = useState(1);
+  // Exported-video ghost timing: build-up (appear) / fade-behind (vanish) / all-on.
+  const [stroLayerMode, setStroLayerMode] = useState<'appear' | 'vanish' | 'all'>('appear');
   const [stroExcludedFrames, setStroExcludedFrames] = useState<Set<number>>(new Set());
 
   const clearStroVideoPreview = useCallback(() => {
@@ -5107,6 +5109,7 @@ function Home() {
                   stroMotionBackground={stroBackground}
                   stroMotionVideoOrder={stroVideoOrder}
                   stroMotionGhostOpacity={stroGhostOpacity}
+                  stroMotionLayerMode={stroLayerMode}
                   stroMotionEndPlate={stroEndPlate}
                   stroMotionSubjectBox={null}
                   stroMotionFrameStops={stroMotionFrameStopsForCanvas}
@@ -6433,10 +6436,16 @@ function Home() {
           setStroVideoSpeed(s);
           clearStroVideoPreview();
         }}
+        layerMode={stroLayerMode}
+        onLayerModeChange={(m) => {
+          setStroLayerMode(m);
+          clearStroVideoPreview();
+        }}
         videoBlob={stroPreviewVideoBlobRef.current}
         settingsLines={[
           `Frames: ${stroMotionDraft?.frames.length ?? 0}${stroExcludedFrames.size > 0 ? ` (${(stroMotionDraft?.frames.length ?? 0) - stroExcludedFrames.size} included in still image)` : ''}`,
           `Direction: ${stroVideoOrder}`,
+          `Ghost layers: ${stroLayerMode === 'appear' ? 'Build up' : stroLayerMode === 'vanish' ? 'Fade behind' : 'All on'}`,
           `Ghost transparency: ${stroGhostOpacity !== undefined ? `${Math.round(stroGhostOpacity * 100)}%` : 'Auto'}`,
           `Video speed: ${stroVideoSpeed}×`,
           `Background: ${stroBackground} frame`,

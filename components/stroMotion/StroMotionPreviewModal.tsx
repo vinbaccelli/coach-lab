@@ -43,6 +43,9 @@ export interface StroMotionPreviewModalProps {
   onGhostOpacityChange?: (opacity: number | undefined) => void;
   videoSpeed?: number;
   onVideoSpeedChange?: (speed: number) => void;
+  /** Ghost-layer timing for the exported video. */
+  layerMode?: 'appear' | 'vanish' | 'all';
+  onLayerModeChange?: (mode: 'appear' | 'vanish' | 'all') => void;
   /** Final rendered video blob (for the YouTube upload step). */
   videoBlob?: Blob | null;
   /** Settings summary lines included in the Docs report. */
@@ -80,6 +83,8 @@ export default function StroMotionPreviewModal({
   onGhostOpacityChange,
   videoSpeed,
   onVideoSpeedChange,
+  layerMode,
+  onLayerModeChange,
   videoBlob,
   settingsLines,
 }: StroMotionPreviewModalProps) {
@@ -165,7 +170,7 @@ export default function StroMotionPreviewModal({
   if (!open) return null;
 
   const showLoading = !pngUrl;
-  const hasSettings = !!(onVideoOrderChange || onGhostOpacityChange || onVideoSpeedChange || (frames && onToggleFrame));
+  const hasSettings = !!(onVideoOrderChange || onGhostOpacityChange || onVideoSpeedChange || onLayerModeChange || (frames && onToggleFrame));
 
   return (
     <div
@@ -355,6 +360,18 @@ export default function StroMotionPreviewModal({
                     <button key={s} type="button" onClick={() => onVideoSpeedChange(s)}
                       style={{ ...chipBtn, ...(videoSpeed === s ? chipActive : {}) }}>
                       {s}×
+                    </button>
+                  ))}
+                </div>
+              )}
+              {onLayerModeChange && (
+                <div style={settingGroup}>
+                  <span style={settingLabel}>Ghost layers (video)</span>
+                  {([['appear', 'Build up'], ['vanish', 'Fade behind'], ['all', 'All on']] as const).map(([m, label]) => (
+                    <button key={m} type="button" onClick={() => onLayerModeChange(m)}
+                      title={m === 'appear' ? 'Ghosts turn on as the player passes each position' : m === 'vanish' ? 'All ghosts shown, each turns off once passed' : 'Every ghost visible the whole clip'}
+                      style={{ ...chipBtn, ...(layerMode === m ? chipActive : {}) }}>
+                      {label}
                     </button>
                   ))}
                 </div>

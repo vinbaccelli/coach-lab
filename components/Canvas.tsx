@@ -272,6 +272,8 @@ export interface CanvasProps {
   stroMotionVideoOrder?: 'forward' | 'reverse';
   /** Uniform ghost transparency (0–1). Undefined keeps the default temporal fade. */
   stroMotionGhostOpacity?: number;
+  /** Exported-video ghost timing: build-up / fade-behind / all-on. */
+  stroMotionLayerMode?: 'appear' | 'vanish' | 'all';
   /** End-frame bitmap — required when stroMotionBackground === 'end'. */
   stroMotionEndPlate?: ImageBitmap | null;
   /** Subject box preview before generate (video-normalized 0..1) */
@@ -1688,6 +1690,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionBackground = 'start',
       stroMotionVideoOrder = 'forward',
       stroMotionGhostOpacity,
+      stroMotionLayerMode,
       stroMotionEndPlate,
       stroMotionSubjectBox,
       stroMotionFrameStops,
@@ -1911,6 +1914,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const stroMotionBackgroundRef = useRef(stroMotionBackground);
     const stroMotionVideoOrderRef = useRef(stroMotionVideoOrder);
     const stroMotionGhostOpacityRef = useRef<number | undefined>(stroMotionGhostOpacity);
+    // Coach-facing ghost-layer timing mode for the exported video (see the
+    // export loop). undefined → derive from videoOrder for back-compat.
+    const stroMotionLayerModeRef = useRef<'appear' | 'vanish' | 'all' | undefined>(stroMotionLayerMode);
+    const stroMotionVisibleStartRef = useRef(0);
     const stroMotionEndPlateRef = useRef<ImageBitmap | null>(stroMotionEndPlate ?? null);
     // Overlay mode: ghost frames drawn over live video (no background plate). Used during video export.
     const stroMotionOverlayModeRef = useRef(false);
@@ -2098,6 +2105,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { stroMotionBackgroundRef.current = stroMotionBackground; renderDirtyRef.current = true; }, [stroMotionBackground]);
     useEffect(() => { stroMotionVideoOrderRef.current = stroMotionVideoOrder; renderDirtyRef.current = true; }, [stroMotionVideoOrder]);
     useEffect(() => { stroMotionGhostOpacityRef.current = stroMotionGhostOpacity; renderDirtyRef.current = true; }, [stroMotionGhostOpacity]);
+    useEffect(() => { stroMotionLayerModeRef.current = stroMotionLayerMode; renderDirtyRef.current = true; }, [stroMotionLayerMode]);
     useEffect(() => { stroMotionEndPlateRef.current = stroMotionEndPlate ?? null; renderDirtyRef.current = true; }, [stroMotionEndPlate]);
     useEffect(() => { stroMotionSubjectBoxRef.current = stroMotionSubjectBox ?? null; renderDirtyRef.current = true; }, [stroMotionSubjectBox]);
     useEffect(() => { stroMotionFrameStopsRef.current = stroMotionFrameStops ?? null; renderDirtyRef.current = true; }, [stroMotionFrameStops]);
@@ -2740,14 +2748,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               stroMotionBackgroundRef.current = 'start';
             }
 
-            // Compute visible ghost count
+            // Ghost visibility over time. layerMode (coach-facing):
+            //   'appear'  build-up — ghosts turn ON as the playhead passes each
+            //   'vanish'  fade-behind — all ghosts ON, turn OFF once passed
+            //   'all'     every ghost visible the whole video
+            // Falls back to videoOrder for backwards-compatible behavior.
+            const layerMode = stroMotionLayerModeRef.current
+              ?? (videoOrder === 'reverse' ? 'vanish' : 'appear');
+            let visibleStart = 0;
             let visibleCount: number;
-            if (videoOrder === 'reverse') {
-              visibleCount = sampleTimes.filter((st) => st > clampedT - 0.001).length;
+            if (layerMode === 'all') {
+              visibleCount = sampleTimes.length;
+            } else if (layerMode === 'vanish') {
+              // Show frames at/after the playhead (ghosts ahead), hide passed ones.
+              visibleStart = sampleTimes.filter((st) => st <= clampedT - 0.001).length;
+              visibleCount = sampleTimes.length;
             } else {
+              // appear: show frames up to the playhead.
               visibleCount = sampleTimes.filter((st) => st <= clampedT + 0.001).length;
             }
             stroMotionVisibleCountRef.current = visibleCount;
+            stroMotionVisibleStartRef.current = visibleStart;
 
             await waitRender();
             await waitRender();
@@ -2772,6 +2793,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           return { ok: false, reason: 'record-failed' };
         } finally {
           stroMotionVisibleCountRef.current = savedVisible;
+          stroMotionVisibleStartRef.current = 0;
           stroMotionCanvasPreviewRef.current = savedPreview;
           stroMotionOverlayModeRef.current = savedOverlay;
           stroMotionEndPlateRef.current = savedEndPlate;
@@ -3758,6 +3780,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const visibleCount = stroMotionVisibleCountRef.current ?? stroDraft.frames.length;
             renderStroMotionDraftComposite(ctx, stroDraft, {
               visibleCount,
+              visibleStart: stroMotionVisibleStartRef.current,
               previewMode: !stroMotionUseExportMasksRef.current,
               dest: { x: dx, y: dy, w: dw, h: dh },
               background: stroMotionBackgroundRef.current,
