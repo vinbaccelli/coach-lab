@@ -4138,9 +4138,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.lineTo(bx, by);
             ctx.stroke();
             ctx.setLineDash([]);
-            // No endpoint dots — render as a plain line, matching the Draw-tool
-            // angle style (the endpoints stay drag-editable via the hit-test in
-            // onPointerDown; the handles don't need to be drawn). (BUG 2 fix)
+            // Endpoint grab handles — small but visible so coaches can SEE the
+            // lines are editable (product rule: AI output is always adjustable).
+            for (const [hx, hy] of [[ax, ay], [bx, by]] as const) {
+              ctx.beginPath();
+              ctx.arc(hx, hy, 5, 0, Math.PI * 2);
+              ctx.fillStyle = OVERLAY_COLOR;
+              ctx.fill();
+              ctx.lineWidth = 1.5;
+              ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+              ctx.stroke();
+            }
           };
 
           // Shoulder line (L→R)
@@ -5757,39 +5765,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         tool === 'angle' || tool === 'text' || tool === 'erase' || tool === 'ballShadow' ||
         tool === 'swingPath' || tool === 'manualSwing' || tool === 'jointChain';
 
-      // If the pointer lands on the webcam PiP, preserve PiP drag/resize even
-      // when pan mode is active.  We pre-check here so the PiP hit can veto
-      // the pan-mode condition inside shouldPan.
-      const pipVeto =
-        webcamActiveRef.current &&
-        tool === 'select' &&
-        webcamPipHitTest(getPosFromPointerEvent(e)) !== 'miss';
-
-      const shouldPan =
-        !pipVeto && (
-          e.button === 1 ||
-          spaceHeldRef.current ||
-          (tool === 'zoom' && e.button === 0 && zoomed) ||
-          // Pan mode works at ANY zoom level — no prior zoom-in required.
-          panModeEnabledRef.current ||
-          (zoomed && !isDrawingTool) ||
-          // Touch one-finger drag while zoomed always pans (no activation needed).
-          (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current)
-        );
-      if (shouldPan) {
-        isPanningRef.current = true;
-        panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
-        e.preventDefault();
-        return;
-      }
-
-      // ── Measurement overlay endpoint drag (BEFORE column drag) ────────
+      // ── Measurement overlay endpoint drag (BEFORE pan/zoom/column) ──────
+      // Must run before shouldPan: coaches zoom in precisely when they want to
+      // adjust the AI lines, and the pan branch used to swallow the pointer —
+      // making the overlays feel un-editable (product rule: AI is always
+      // coach-adjustable).
       if (showMeasurementOverlaysRef.current && latestKeypointsRef.current?.length && videoBoundsRef.current) {
         const kps = latestKeypointsRef.current;
         const vb = videoBoundsRef.current;
         const osx = vb.dw / (videoRef.current?.videoWidth || 1);
         const osy = vb.dh / (videoRef.current?.videoHeight || 1);
-        const hitR = 18;
+        const hitR = 26;
         const overlayEndpoints: Array<{ id: string; x1: number; y1: number; x2: number; y2: number }> = [];
         const sm = 0.2;
         const lS = kps[5], rS = kps[6], lH = kps[11], rH = kps[12];
@@ -5842,7 +5828,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const onUp = () => {
               isDraggingRef.current = false;
               draggingOverlayRef.current = null;
-              // BUG 1: recompute the angle from the dragged line so the dependent
+              // Recompute the angle from the dragged line so the dependent
               // column value follows what the coach drew (video-pixel coords).
               const a = overlayAdjustmentsRef.current[eid] ?? { dx1: 0, dy1: 0, dx2: 0, dy2: 0 };
               const sX = ep.x1 + a.dx1, sY = ep.y1 + a.dy1;
@@ -5860,6 +5846,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             return;
           }
         }
+      }
+
+      // If the pointer lands on the webcam PiP, preserve PiP drag/resize even
+      // when pan mode is active.  We pre-check here so the PiP hit can veto
+      // the pan-mode condition inside shouldPan.
+      const pipVeto =
+        webcamActiveRef.current &&
+        tool === 'select' &&
+        webcamPipHitTest(getPosFromPointerEvent(e)) !== 'miss';
+
+      const shouldPan =
+        !pipVeto && (
+          e.button === 1 ||
+          spaceHeldRef.current ||
+          (tool === 'zoom' && e.button === 0 && zoomed) ||
+          // Pan mode works at ANY zoom level — no prior zoom-in required.
+          panModeEnabledRef.current ||
+          (zoomed && !isDrawingTool) ||
+          // Touch one-finger drag while zoomed always pans (no activation needed).
+          (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current)
+        );
+      if (shouldPan) {
+        isPanningRef.current = true;
+        panStartRef.current = { x: e.clientX, y: e.clientY, px: panXRef.current, py: panYRef.current };
+        e.preventDefault();
+        return;
       }
 
       // ── Measurement column drag (header only — top 24px) ─────────────

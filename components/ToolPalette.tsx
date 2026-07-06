@@ -1232,6 +1232,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
+          <ToolbarLead />
           <BackHeader title="Angle" icon={<AngleToolIcon size={18} />} />
           <Row k="angle" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} tooltip="Measure angle between three points" label="Angle" onPress={() => setTool('angle')} />
           <Row k="aa" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} tooltip="Draw an arrow that measures direction angle" label="Angle arrow" onPress={() => setTool('arrowAngle')} />
@@ -1246,6 +1247,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
+          <ToolbarLead />
           <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
           {/* On/Off toggle */}
           {onSkeletonOverlayPausedChange !== undefined && (
@@ -1309,6 +1311,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
+          <ToolbarLead />
           <BackHeader title="Tools" icon={<LayoutGrid size={18} />} />
           <Row k="met-t" icon={<BarChart3 size={18} />} tooltip="Skeleton, drawing tools, and measurements" label="Metrics" onPress={() => push('aimetrics')} />
           <Row k="sm-t" icon={<Layers size={18} />} tooltip="Create multi-frame ghost overlay composites" label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
@@ -1323,6 +1326,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <div style={shellStyle}>
         <CollapseControl />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
+          <ToolbarLead />
           <BackHeader title="Stromotion" icon={<Layers size={18} />} />
           {stroMotionPanel ?? (
             <>

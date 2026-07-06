@@ -14,7 +14,9 @@ export default function PersistentWebcamOverlay() {
   const { webcamStream, recState, registerWebcamVideo } = useRecording();
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [pos, setPos] = useState({ x: 16, y: 16 });
+  // Default lower-left: clears the top control row (help/zoom cluster) so the
+  // PiP never lands on top of the zoom buttons. Coach can drag it anywhere.
+  const [pos, setPos] = useState({ x: 12, y: 96 });
   const [size, setSize] = useState({ w: 240, h: 135 });
 
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);

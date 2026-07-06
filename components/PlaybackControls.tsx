@@ -46,6 +46,37 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
 
   const isSynced = !!videoRefB;
 
+  // Keep the play/pause button icons truthful: play/pause can come from the
+  // space key, replay flows, or sync code — local click-state alone desyncs,
+  // and a lying icon makes "press pause" play instead.
+  useEffect(() => {
+    const vA = videoRef.current;
+    const vB = videoRefB?.current;
+    const bindings: Array<[HTMLVideoElement, () => void, () => void]> = [];
+    if (vA) {
+      const onPlay = () => setIsPlayingA(true);
+      const onPause = () => setIsPlayingA(false);
+      vA.addEventListener('play', onPlay);
+      vA.addEventListener('pause', onPause);
+      setIsPlayingA(!vA.paused);
+      bindings.push([vA, onPlay, onPause]);
+    }
+    if (vB) {
+      const onPlay = () => setIsPlayingB(true);
+      const onPause = () => setIsPlayingB(false);
+      vB.addEventListener('play', onPlay);
+      vB.addEventListener('pause', onPause);
+      setIsPlayingB(!vB.paused);
+      bindings.push([vB, onPlay, onPause]);
+    }
+    return () => {
+      for (const [v, onPlay, onPause] of bindings) {
+        v.removeEventListener('play', onPlay);
+        v.removeEventListener('pause', onPause);
+      }
+    };
+  }, [videoRef, videoRefB, isSynced]);
+
   // ── Frame stepping helper ────────────────────────────────────────────────
   const stepVideo = useCallback((video: HTMLVideoElement, dir: 1 | -1, setTime: (t: number) => void) => {
     video.pause();

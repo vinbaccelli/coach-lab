@@ -444,13 +444,30 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
       paintOnce();
       rafPaintRef.current = requestAnimationFrame(paintLoop);
     };
-    paintOnce();
+    // Paint several frames BEFORE capture so the stream starts with real
+    // content (a canvas captured while still blank can yield a 0-byte file).
+    paintOnce(); paintOnce();
     rafPaintRef.current = requestAnimationFrame(paintLoop);
+    // Backup painter: requestAnimationFrame is throttled to ~0 fps when the tab
+    // loses focus (e.g. the native save dialog, or the coach switching apps),
+    // which starves the capture stream and produced empty recordings. A timer
+    // keeps painting so the stream always has frames.
+    if (paintTimerRef.current) { clearInterval(paintTimerRef.current); }
+    paintTimerRef.current = setInterval(paintOnce, 66);
 
     // Capture a fresh stream per recording (important for memory cleanup and layout changes).
     streamRef.current = (recCanvas as unknown as { captureStream(fps: number): MediaStream }).captureStream(30);
 
     const tracks: MediaStreamTrack[] = [...streamRef.current.getTracks()];
+    if (tracks.length === 0 || !tracks.some((t) => t.kind === 'video' && t.readyState === 'live')) {
+      if (rafPaintRef.current) { cancelAnimationFrame(rafPaintRef.current); rafPaintRef.current = null; }
+      if (paintTimerRef.current) { clearInterval(paintTimerRef.current); paintTimerRef.current = null; }
+      try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
+      streamRef.current = null;
+      recCanvasRef.current = null;
+      setError('Could not start capture — reload the page and try again.');
+      return;
+    }
 
     // Add mic audio if available; otherwise fall back to webcam audio.
     const micStream = getMicStream?.();
