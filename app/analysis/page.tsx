@@ -577,6 +577,10 @@ function Home() {
     [snapshots],
   );
   const [measurementColumnPos, setMeasurementColumnPos] = useState<{ x: number; y: number }>({ x: 0.68, y: 0.02 });
+  // Live column rect (CSS px, relative to the canvas container) reported by
+  // Canvas each frame so the +/- overlay buttons anchor to the exact drawn
+  // column — tracking drag AND resize with no lag/misalignment.
+  const [measurementColumnRect, setMeasurementColumnRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
   // ── Step 1: Mode Guard — single authoritative domain ─────────────────────
   // Frame mode supersedes snapshot mode so the two persist paths can never run
@@ -671,7 +675,10 @@ function Home() {
         const v = videoRef.current;
         if (v) {
           const snap = activeSnapshotRef.current;
-          const near = snap ? Math.abs(v.currentTime - snap.timeSec) < 0.3 : true;
+          // Tight tolerance (~a few frames): a snapshot seek lands exactly on
+          // timeSec, so stepping even slightly forward should drop the snapshot
+          // column/overlays and return to live — never linger past the phase.
+          const near = snap ? Math.abs(v.currentTime - snap.timeSec) < 0.12 : true;
           setIsNearActivePhase(prev => (prev === near ? prev : near));
           if (!near && snap && !modeAutopilotSuppressedRef.current) {
             exitSnapshotToLiveRef.current();
@@ -5064,6 +5071,15 @@ function Home() {
                   measurementColumnTitle={measurementColumnTitle}
                   measurementColumnPos={measurementColumnPos}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
+                  onMeasurementColumnRect={setMeasurementColumnRect}
+                  columnDeleteMode={columnDeleteMode}
+                  onMeasurementItemDelete={(id) => {
+                    setMeasurementColumn(prev => {
+                      const next = prev.filter(m => m.id !== id);
+                      if (next.length === 0) setColumnDeleteMode(false);
+                      return next;
+                    });
+                  }}
                   onMeasurementItemEdit={(id, newValue) => {
                     setMeasurementColumn(prev => prev.map(m =>
                       m.id === id ? { ...m, value: newValue } : m
@@ -5158,39 +5174,18 @@ function Home() {
                     }}
                   />
                 )}
-                {/* Data column HTML overlay buttons */}
-                {dataColumnVisible && (
+                {/* Data column HTML overlay buttons — anchored to the live
+                    canvas-drawn column rect so they track drag + resize exactly. */}
+                {dataColumnVisible && measurementColumnRect && (
                   <div style={{
                     position: 'absolute',
-                    right: Math.round((1 - measurementColumnPos.x) * 100) + '%',
-                    top: Math.round(measurementColumnPos.y * 100) + '%',
-                    marginRight: -146,
+                    left: measurementColumnRect.x,
+                    top: measurementColumnRect.y + measurementColumnRect.h + 4,
                     zIndex: 15,
                     pointerEvents: 'none',
                   }}>
-                    {/* Delete mode: show − next to each row */}
-                    {columnDeleteMode && measurementColumn.length > 0 && (
-                      <div style={{
-                        marginTop: 20,
-                        marginLeft: -18,
-                        display: 'flex', flexDirection: 'column', gap: 0,
-                        pointerEvents: 'auto',
-                      }}>
-                        {measurementColumn.map((item, i) => (
-                          <button key={item.id} type="button" onClick={() => {
-                            setMeasurementColumn(prev => prev.filter(m => m.id !== item.id));
-                            if (measurementColumn.length <= 1) setColumnDeleteMode(false);
-                          }} style={{
-                            width: 16, height: 22, border: 'none', background: 'transparent',
-                            color: '#FF3B30', fontSize: 14, fontWeight: 700, cursor: 'pointer',
-                            lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center',
-                          }}>−</button>
-                        ))}
-                      </div>
-                    )}
-                    {/* + and − toggle buttons */}
+                    {/* + and − toggle buttons — sit just under the column */}
                     <div style={{
-                      marginTop: columnDeleteMode ? 4 : (measurementColumn.length > 0 ? measurementColumn.length * 22 + 28 : 48) + 2,
                       display: 'flex', gap: 4, pointerEvents: 'auto',
                     }}>
                       <button type="button" onClick={() => {
@@ -5213,6 +5208,11 @@ function Home() {
                         fontSize: 16, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
                       }}>−</button>
                     </div>
+                    {columnDeleteMode && (
+                      <div style={{ marginTop: 4, fontSize: 10, color: '#FF9F9F', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+                        Tap a row to delete
+                      </div>
+                    )}
                   </div>
                 )}
                 {!(videoSrc || youtubeVideoIdA || genericEmbedSrcA) ? (

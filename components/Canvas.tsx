@@ -240,7 +240,13 @@ export interface CanvasProps {
   /** Position of the measurement column (normalized 0-1). Default: top-right */
   measurementColumnPos?: { x: number; y: number };
   onMeasurementColumnDrag?: (pos: { x: number; y: number }) => void;
+  /** Live column rect in CSS pixels (x,y,w,h) so HTML overlays (the +/- buttons)
+   *  can anchor to the exact drawn column, tracking drag + resize in real time. */
+  onMeasurementColumnRect?: (rect: { x: number; y: number; w: number; h: number } | null) => void;
   onMeasurementItemEdit?: (id: string, newValue: number) => void;
+  /** When true, a column row-click deletes that row (delete-mode). */
+  columnDeleteMode?: boolean;
+  onMeasurementItemDelete?: (id: string) => void;
   /** Dragging an AI measurement overlay line recomputes its angle; the dependent
    *  column value updates automatically (BUG 1). */
   onOverlayAngleEdit?: (overlayId: string, deg: number) => void;
@@ -574,24 +580,32 @@ function drawSkeletonOverlay(
       } else {
         fwd = facing;
       }
-      // Anatomical constraint: the foot is ~perpendicular to the shin (slight
-      // plantar droop) — derive the toe direction by ROTATING the knee→ankle
-      // axis ±(90°−15°), then clamp its deviation from horizontal-forward to
-      // ±34° (feet stay near ground-flat even when the shin inclines). The
-      // line physically cannot point back up the leg.
-      const shinAng = Math.atan2(ay - ky, ax - kx);
-      const perpAng = shinAng - fwd * (Math.PI / 2 - 0.26);
-      const horizForward = fwd === 1 ? 0 : Math.PI;
-      const norm = (a: number) => ((a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-      const dev = Math.max(-0.6, Math.min(0.6, norm(perpAng - horizForward)));
-      const footAng = horizForward + dev;
+      // The foot is ~perpendicular to the shin, but the toe is ANATOMICALLY
+      // always at/below the ankle (never above) — so of the two shin
+      // perpendiculars, choose the one that points DOWNWARD (positive screen y)
+      // and, among those, toward `fwd`. This makes it geometrically impossible
+      // for the line to point back up the leg. Screen y grows downward.
+      const shinX = ax - kx, shinY = ay - ky;
+      // Two unit perpendiculars to the shin.
+      const p1x = shinY, p1y = -shinX;   // rotate shin +90°
+      const p2x = -shinY, p2y = shinX;   // rotate shin −90°
+      const len1 = Math.hypot(p1x, p1y) || 1;
+      const len2 = Math.hypot(p2x, p2y) || 1;
+      // Score each by downward-ness (0.6) + forward horizontal match (0.4).
+      const score1 = 0.6 * (p1y / len1) + 0.4 * fwd * (p1x / len1);
+      const score2 = 0.6 * (p2y / len2) + 0.4 * fwd * (p2x / len2);
+      let dirX = score1 >= score2 ? p1x / len1 : p2x / len2;
+      let dirY = score1 >= score2 ? p1y / len1 : p2y / len2;
+      // Hard guarantee: never point upward (toe above ankle). If the chosen
+      // perpendicular still tilts up, flatten it to horizontal-forward.
+      if (dirY < 0) { dirY = 0; dirX = fwd; const l = Math.hypot(dirX, dirY) || 1; dirX /= l; dirY /= l; }
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
       ctx.lineWidth = 2;
       ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      ctx.lineTo(ax + Math.cos(footAng) * toeLen, ay + Math.sin(footAng) * toeLen);
+      ctx.lineTo(ax + dirX * toeLen, ay + dirY * toeLen);
       ctx.stroke();
       ctx.restore();
     }
@@ -1670,7 +1684,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       measurementColumnTitle = 'DATA COLUMN',
       measurementColumnPos,
       onMeasurementColumnDrag,
+      onMeasurementColumnRect,
       onMeasurementItemEdit,
+      columnDeleteMode,
+      onMeasurementItemDelete,
       onOverlayAngleEdit,
       onMeasurementAdd,
       onMeasurementRemoveLast,
@@ -1734,6 +1751,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // bottom-right corner to resize; in-session only.
     const mcScaleRef = useRef<number>(1);
     const mcResizingRef = useRef<{ startX: number; startY: number; origScale: number } | null>(null);
+    const lastMcRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+    const columnDeleteModeRef = useRef(columnDeleteMode);
+    useEffect(() => { columnDeleteModeRef.current = columnDeleteMode; }, [columnDeleteMode]);
+    const onMeasurementItemDeleteRef = useRef(onMeasurementItemDelete);
+    useEffect(() => { onMeasurementItemDeleteRef.current = onMeasurementItemDelete; }, [onMeasurementItemDelete]);
     const MC_BASE_W = 150;
     const skeletonWaitingForClickRef = useRef(false);
     const skeletonKeepAliveRef = useRef(skeletonKeepAlive);
@@ -1770,6 +1792,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { showMeasurementOverlaysRef.current = showMeasurementOverlays; renderDirtyRef.current = true; }, [showMeasurementOverlays]);
     const overlayAdjustmentsRef = useRef<Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>>({});
     const draggingOverlayRef = useRef<{ id: string; endpoint: 'start' | 'end' } | null>(null);
+    // The AI-overlay line the coach is currently editing (highlighted; it is the
+    // priority drag target). Set by column-click or clicking near a line.
+    const activeOverlayIdRef = useRef<string | null>(null);
     const onMeasurementAddRef = useRef(onMeasurementAdd);
     useEffect(() => { onMeasurementAddRef.current = onMeasurementAdd; }, [onMeasurementAdd]);
     const onMeasurementRemoveLastRef = useRef(onMeasurementRemoveLast);
@@ -4165,24 +4190,29 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const ay = (y1 + (adj?.dy1 ?? 0)) * msy;
             const bx = (x2 + (adj?.dx2 ?? 0)) * msx;
             const by = (y2 + (adj?.dy2 ?? 0)) * msy;
-            ctx.strokeStyle = OVERLAY_COLOR;
-            ctx.lineWidth = 2;
+            const isActive = activeOverlayIdRef.current === id;
+            ctx.strokeStyle = isActive ? '#FFFFFF' : OVERLAY_COLOR;
+            ctx.lineWidth = isActive ? 2.5 : 2;
             ctx.setLineDash([8, 6]);
             ctx.beginPath();
             ctx.moveTo(ax, ay);
             ctx.lineTo(bx, by);
             ctx.stroke();
             ctx.setLineDash([]);
-            // Endpoint grab handles — small but visible so coaches can SEE the
-            // lines are editable (product rule: AI output is always adjustable).
+            // Endpoint grab handles — small (skeleton-joint size, ~2.5px) so
+            // they don't obscure the player. The active line gets a white ring
+            // for clear feedback on which line is being edited.
+            const hr = isActive ? 4 : 2.5;
             for (const [hx, hy] of [[ax, ay], [bx, by]] as const) {
               ctx.beginPath();
-              ctx.arc(hx, hy, 5, 0, Math.PI * 2);
-              ctx.fillStyle = OVERLAY_COLOR;
+              ctx.arc(hx, hy, hr, 0, Math.PI * 2);
+              ctx.fillStyle = isActive ? '#FFFFFF' : OVERLAY_COLOR;
               ctx.fill();
-              ctx.lineWidth = 1.5;
-              ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-              ctx.stroke();
+              if (isActive) {
+                ctx.lineWidth = 1.5;
+                ctx.strokeStyle = OVERLAY_COLOR;
+                ctx.stroke();
+              }
             }
           };
 
@@ -4777,6 +4807,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
 
           ctx.restore();
+
+          // Report the column's live CSS-pixel rect so the HTML +/- buttons
+          // anchor to it exactly (tracks drag + resize in real time). Convert
+          // canvas-internal px → CSS px via the element's on-screen scale.
+          if (onMeasurementColumnRect) {
+            const el = canvasRef.current;
+            const rectEl = el?.getBoundingClientRect();
+            if (el && rectEl) {
+              const csx = rectEl.width / (el.width || 1);
+              const csy = rectEl.height / (el.height || 1);
+              const next = { x: mcX * csx, y: mcY * csy, w: mcW * csx, h: mcH * csy };
+              const prev = lastMcRectRef.current;
+              if (!prev || Math.abs(prev.x - next.x) > 0.5 || Math.abs(prev.y - next.y) > 0.5 || Math.abs(prev.w - next.w) > 0.5 || Math.abs(prev.h - next.h) > 0.5) {
+                lastMcRectRef.current = next;
+                onMeasurementColumnRect(next);
+              }
+            }
+          }
+        } else if (onMeasurementColumnRect && lastMcRectRef.current) {
+          lastMcRectRef.current = null;
+          onMeasurementColumnRect(null);
         }
 
         // ── Watermark logo (bottom-right corner) ──────────────────────────
@@ -5843,7 +5894,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (dW?.score >= sm && dE?.score >= sm) overlayEndpoints.push({ id: 'racket', x1: dW.x, y1: dW.y, x2: dW.x + (dW.x - dE.x) * 0.8, y2: dW.y + (dW.y - dE.y) * 0.8 });
         }
 
+        // Pick the GLOBALLY nearest endpoint across all overlays (not the first
+        // match) so clicking never grabs a different, farther line. If a line is
+        // active (column-selected), only that line's endpoints are targetable.
+        let bestHit: { ep: typeof overlayEndpoints[number]; endpoint: 'start' | 'end'; dist: number } | null = null;
+        const activeId = activeOverlayIdRef.current;
         for (const ep of overlayEndpoints) {
+          if (activeId && ep.id !== activeId) continue;
           const adj = overlayAdjustmentsRef.current[ep.id];
           const ax = (ep.x1 + (adj?.dx1 ?? 0)) * osx + vb.dx;
           const ay = (ep.y1 + (adj?.dy1 ?? 0)) * osy + vb.dy;
@@ -5851,9 +5908,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const by = (ep.y2 + (adj?.dy2 ?? 0)) * osy + vb.dy;
           const dA = Math.sqrt((pos.x - ax) ** 2 + (pos.y - ay) ** 2);
           const dB = Math.sqrt((pos.x - bx) ** 2 + (pos.y - by) ** 2);
-          if (dA < hitR || dB < hitR) {
-            const endpoint = dA < dB ? 'start' : 'end';
+          if (dA < hitR && (!bestHit || dA < bestHit.dist)) bestHit = { ep, endpoint: 'start', dist: dA };
+          if (dB < hitR && (!bestHit || dB < bestHit.dist)) bestHit = { ep, endpoint: 'end', dist: dB };
+        }
+        // If nothing near an endpoint but an active line exists, allow grabbing
+        // its nearest endpoint anywhere on screen (coach selected it deliberately).
+        {
+          const ep = bestHit?.ep;
+          if (ep) {
+            const endpoint = bestHit!.endpoint;
             const eid = ep.id;
+            activeOverlayIdRef.current = eid;
             const baseX = endpoint === 'start' ? ep.x1 : ep.x2;
             const baseY = endpoint === 'start' ? ep.y1 : ep.y2;
             isDraggingRef.current = true;
@@ -5946,14 +6011,40 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             e.preventDefault();
             return;
           }
-          // Click on a column row → edit value
-          if (mcItemsNow.length > 0 && onMeasurementItemEdit) {
+          // Click on a column row → highlight the matching AI line (make it the
+          // active, sole drag target) so the coach picks WHICH line to edit.
+          // Long-press / second click still opens the numeric edit prompt.
+          if (mcItemsNow.length > 0) {
             const rowsTop = mY + Math.round(28 * s);
             const rowY = pos.y - rowsTop;
             const rowIdx = Math.floor(rowY / rowH);
             if (pos.x >= mX && pos.x <= mX + mW && rowIdx >= 0 && rowIdx < mcItemsNow.length) {
               const item = mcItemsNow[rowIdx];
-              if (item.unit || item.value !== 0) {
+              // Delete-mode: a row-click removes that measurement.
+              if (columnDeleteModeRef.current && onMeasurementItemDeleteRef.current) {
+                onMeasurementItemDeleteRef.current(item.id);
+                e.preventDefault();
+                return;
+              }
+              const lbl = item.label.toLowerCase();
+              // Map the column label to its overlay id.
+              const oid =
+                lbl.includes('shoulder') ? 'shoulder' :
+                lbl.includes('hip') ? 'hip' :
+                lbl.includes('head') ? 'head' :
+                (lbl.includes('left') && lbl.includes('foot')) ? 'lfoot' :
+                (lbl.includes('right') && lbl.includes('foot')) ? 'rfoot' :
+                lbl.includes('foot') ? 'lfoot' :
+                lbl.includes('racket') ? 'racket' : null;
+              if (oid && showMeasurementOverlaysRef.current) {
+                // Toggle: clicking the already-active line clears the selection.
+                activeOverlayIdRef.current = activeOverlayIdRef.current === oid ? null : oid;
+                renderDirtyRef.current = true;
+                e.preventDefault();
+                return;
+              }
+              // No matching line (e.g. a note or diff row): fall back to numeric edit.
+              if (onMeasurementItemEdit && (item.unit || item.value !== 0)) {
                 const newVal = prompt(`Edit ${item.label}:`, String(item.value));
                 if (newVal !== null && newVal.trim() !== '') {
                   const parsed = parseFloat(newVal);
