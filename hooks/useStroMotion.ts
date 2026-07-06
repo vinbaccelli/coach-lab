@@ -80,15 +80,32 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       if (Math.abs(current.backgroundTimeSec - next.backgroundTimeSec) > 0.001) return next;
       if (current.objectType !== next.objectType) return next;
 
-      const mergedFrames = next.frames.map((f, i) => {
-        const cur = current.frames[i];
+      // Preserve completed work when the frame COUNT changes (re-spacing the
+      // sample times): match each new frame to the NEAREST old frame by time,
+      // not by index. Index-only matching discarded every mask on a count
+      // change because the times no longer lined up. Each old frame is reused
+      // at most once (claimed set).
+      const claimed = new Set<number>();
+      const findNearest = (t: number): number => {
+        let best = -1;
+        let bestDist = 0.15; // within 150ms counts as "the same" frame
+        current.frames.forEach((cf, idx) => {
+          if (claimed.has(idx)) return;
+          const d = Math.abs(cf.timeSec - t);
+          if (d < bestDist) { bestDist = d; best = idx; }
+        });
+        return best;
+      };
+      const mergedFrames = next.frames.map((f) => {
+        const idx = findNearest(f.timeSec);
+        const cur = idx >= 0 ? current.frames[idx] : undefined;
         if (
           cur &&
           cur.sourceFrame &&
           (maskHasContent(cur.working) || maskHasContent(cur.readyMask) || maskHasContent(cur.aiSnapshot)) &&
-          Math.abs(cur.timeSec - f.timeSec) < 0.05 &&
           cur.selectionBox
         ) {
+          claimed.add(idx);
           return {
             ...f,
             selectionBox: cur.selectionBox,

@@ -1727,6 +1727,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const mcPosRef = useRef<{ x: number; y: number }>({ x: 0.85, y: 0.02 });
     const mcTitleRef = useRef<string>(measurementColumnTitle);
     const mcDraggingRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+    // Column size multiplier (width + fonts scale together). Coach drags the
+    // bottom-right corner to resize; in-session only.
+    const mcScaleRef = useRef<number>(1);
+    const mcResizingRef = useRef<{ startX: number; startY: number; origScale: number } | null>(null);
+    const MC_BASE_W = 150;
     const skeletonWaitingForClickRef = useRef(false);
     const skeletonKeepAliveRef = useRef(skeletonKeepAlive);
     useEffect(() => { skeletonKeepAliveRef.current = skeletonKeepAlive; }, [skeletonKeepAlive]);
@@ -4669,15 +4674,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // ── Data column (draggable, persistent when active) ─────────────
+        // ── Data column (draggable + resizable, persistent when active) ──
         const mcItems = measurementColumnRef.current;
         if (mcItems !== null) {
-          const mcW = 150;
-          const mcLineH = 22;
+          const s = mcScaleRef.current;
+          const mcW = Math.round(MC_BASE_W * s);
+          const mcLineH = Math.round(22 * s);
+          const pad = Math.round(8 * s);
           const hasItems = mcItems.length > 0;
-          const mcH = hasItems ? mcItems.length * mcLineH + 28 : 48;
+          const mcH = hasItems ? mcItems.length * mcLineH + Math.round(28 * s) : Math.round(48 * s);
           const mcX = Math.round(Math.min(mcPosRef.current.x * W, W - mcW - 4));
           const mcY = Math.round(Math.min(mcPosRef.current.y * H, H - mcH - 4));
+          const f = (px: number) => `${Math.round(px * s)}px`;
 
           ctx.save();
           ctx.fillStyle = 'rgba(0,0,0,0.75)';
@@ -4687,48 +4695,55 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.fill();
 
           // Header — reflects the locked owner (phase / frame / live).
-          ctx.font = 'bold 10px -apple-system, sans-serif';
+          ctx.font = `bold ${f(10)} -apple-system, sans-serif`;
           ctx.fillStyle = 'rgba(255,255,255,0.4)';
           const mcTitle = (mcTitleRef.current || 'DATA COLUMN').toUpperCase();
-          ctx.fillText(mcTitle.length > 22 ? mcTitle.slice(0, 21) + '…' : mcTitle, mcX + 8, mcY + 14);
+          ctx.fillText(mcTitle.length > 22 ? mcTitle.slice(0, 21) + '…' : mcTitle, mcX + pad, mcY + Math.round(14 * s));
 
           // Drag handle dots
           ctx.fillStyle = 'rgba(255,255,255,0.25)';
-          for (let d = 0; d < 3; d++) ctx.fillRect(mcX + mcW - 18 + d * 5, mcY + 10, 2, 2);
+          for (let d = 0; d < 3; d++) ctx.fillRect(mcX + mcW - Math.round(18 * s) + d * Math.round(5 * s), mcY + Math.round(10 * s), 2, 2);
 
           if (hasItems) {
-            ctx.font = '11px -apple-system, sans-serif';
             for (let i = 0; i < mcItems.length; i++) {
               const item = mcItems[i];
-              const y = mcY + 28 + i * mcLineH;
+              const y = mcY + Math.round(28 * s) + i * mcLineH;
               if (item.value === 0 && !item.unit) {
-                // Text-only note
                 ctx.fillStyle = 'rgba(255,255,255,0.8)';
-                ctx.font = 'italic 11px -apple-system, sans-serif';
-                ctx.fillText(item.label, mcX + 8, y);
-                ctx.font = '11px -apple-system, sans-serif';
+                ctx.font = `italic ${f(11)} -apple-system, sans-serif`;
+                ctx.fillText(item.label, mcX + pad, y);
               } else if (item.unit === '' && item.value !== 0) {
-                // Note with label:number (no unit)
                 ctx.fillStyle = 'rgba(255,255,255,0.6)';
-                ctx.fillText(item.label, mcX + 8, y);
+                ctx.font = `${f(11)} -apple-system, sans-serif`;
+                ctx.fillText(item.label, mcX + pad, y);
                 ctx.fillStyle = '#93C5FD';
-                ctx.font = 'bold 12px -apple-system, sans-serif';
-                ctx.fillText(`${item.value}`, mcX + mcW - 8 - ctx.measureText(`${item.value}`).width, y);
-                ctx.font = '11px -apple-system, sans-serif';
+                ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
+                ctx.fillText(`${item.value}`, mcX + mcW - pad - ctx.measureText(`${item.value}`).width, y);
               } else {
                 ctx.fillStyle = 'rgba(255,255,255,0.6)';
-                ctx.fillText(item.label, mcX + 8, y);
+                ctx.font = `${f(11)} -apple-system, sans-serif`;
+                ctx.fillText(item.label, mcX + pad, y);
                 ctx.fillStyle = '#93C5FD';
-                ctx.font = 'bold 12px -apple-system, sans-serif';
+                ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
                 const valText = `${item.value}${item.unit}`;
-                ctx.fillText(valText, mcX + mcW - 8 - ctx.measureText(valText).width, y);
-                ctx.font = '11px -apple-system, sans-serif';
+                ctx.fillText(valText, mcX + mcW - pad - ctx.measureText(valText).width, y);
               }
             }
           } else {
-            ctx.font = '11px -apple-system, sans-serif';
+            ctx.font = `${f(11)} -apple-system, sans-serif`;
             ctx.fillStyle = 'rgba(255,255,255,0.3)';
-            ctx.fillText('Draw to add measurements', mcX + 8, mcY + 34);
+            ctx.fillText('Draw to add measurements', mcX + pad, mcY + Math.round(34 * s));
+          }
+
+          // Resize handle — bottom-right corner (diagonal grip lines).
+          ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+          ctx.lineWidth = 1.5;
+          for (let g = 0; g < 3; g++) {
+            const off = 4 + g * 4;
+            ctx.beginPath();
+            ctx.moveTo(mcX + mcW - off, mcY + mcH - 4);
+            ctx.lineTo(mcX + mcW - 4, mcY + mcH - off);
+            ctx.stroke();
           }
 
           ctx.restore();
@@ -5874,16 +5889,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // ── Measurement column drag (header only — top 24px) ─────────────
+      // ── Measurement column drag (header) + resize (corner) ───────────
       const mcItemsNow = measurementColumnRef.current;
       if (mcItemsNow !== null) {
         const canvas = canvasRef.current;
         if (canvas) {
           const cW = canvas.width, cH = canvas.height;
-          const mW = 150;
+          const s = mcScaleRef.current;
+          const mW = Math.round(MC_BASE_W * s);
+          const rowH = Math.round(22 * s);
+          const mH = mcItemsNow.length > 0 ? mcItemsNow.length * rowH + Math.round(28 * s) : Math.round(48 * s);
           const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
-          const mY = Math.min(mcPosRef.current.y * cH, cH - 48 - 4);
-          const headerH = 24;
+          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
+          // Resize corner (bottom-right ~22px box) — checked first.
+          const rc = 22;
+          if (pos.x >= mX + mW - rc && pos.x <= mX + mW + 6 && pos.y >= mY + mH - rc && pos.y <= mY + mH + 6) {
+            mcResizingRef.current = { startX: pos.x, startY: pos.y, origScale: s };
+            isDraggingRef.current = true;
+            e.preventDefault();
+            return;
+          }
+          const headerH = Math.round(26 * s);
           if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + headerH) {
             mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
             isDraggingRef.current = true;
@@ -5892,8 +5918,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
           // Click on a column row → edit value
           if (mcItemsNow.length > 0 && onMeasurementItemEdit) {
-            const rowH = 22;
-            const rowsTop = mY + 28;
+            const rowsTop = mY + Math.round(28 * s);
             const rowY = pos.y - rowsTop;
             const rowIdx = Math.floor(rowY / rowH);
             if (pos.x >= mX && pos.x <= mX + mW && rowIdx >= 0 && rowIdx < mcItemsNow.length) {
@@ -6160,6 +6185,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         });
       }
 
+      // ── Measurement column resize (corner drag) ──────────────────────
+      if (mcResizingRef.current && isDraggingRef.current) {
+        const r = mcResizingRef.current;
+        // Diagonal drag: right/down enlarges. Scale range 0.6×–2.5×.
+        const delta = ((pos.x - r.startX) + (pos.y - r.startY)) / 2;
+        mcScaleRef.current = Math.max(0.6, Math.min(2.5, r.origScale + delta / MC_BASE_W));
+        renderDirtyRef.current = true;
+        return;
+      }
+
       // ── Measurement column drag ──────────────────────────────────────
       if (mcDraggingRef.current && isDraggingRef.current) {
         const canvas = canvasRef.current;
@@ -6411,6 +6446,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const remainingTouch = [...activePointersRef.current.values()].filter(
         (p) => p.pointerType === 'touch',
       ).length;
+
+      // ── End measurement column resize ──────────────────────────────────
+      if (mcResizingRef.current) {
+        mcResizingRef.current = null;
+        isDraggingRef.current = false;
+        try { (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+        return;
+      }
 
       // ── End measurement column drag ────────────────────────────────────
       if (mcDraggingRef.current) {

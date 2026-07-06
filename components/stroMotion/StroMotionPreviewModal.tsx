@@ -221,7 +221,7 @@ export default function StroMotionPreviewModal({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(440px, 1fr))',
             gap: 16,
             alignItems: 'start',
           }}

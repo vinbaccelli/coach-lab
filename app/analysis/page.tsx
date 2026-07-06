@@ -6315,28 +6315,41 @@ function Home() {
                 }}
               >
                 <strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
-                  {isProposingThisFrame ? 'Removing background…' : 'Preparing frame…'}
+                  {isProposingThisFrame ? 'Removing background…' : 'This frame has no selection yet'}
                 </strong>
                 <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.65)' }}>
                   {isProposingThisFrame
                     ? 'Auto background removal runs on the selected area. The editor opens when ready.'
-                    : 'If this takes more than a few seconds, close and try Select Area again.'}
+                    : 'Draw a box around the player with Select Area to isolate them, then the mask editor opens.'}
                 </p>
-                <button
-                  type="button"
-                  onClick={handleStroCloseFrameEditor}
-                  style={{
-                    marginTop: 16,
-                    padding: '8px 14px',
-                    borderRadius: 8,
-                    border: '1px solid rgba(255,255,255,0.18)',
-                    background: 'rgba(255,255,255,0.06)',
-                    color: '#fff',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 16 }}>
+                  {!isProposingThisFrame && (
+                    <button
+                      type="button"
+                      onClick={() => { setStroEditingFrameIndex(null); handleStroSelectArea(stroEditingFrameIndex); }}
+                      style={{
+                        padding: '8px 16px', borderRadius: 8, border: 'none',
+                        background: '#007AFF', color: '#fff', fontWeight: 700, cursor: 'pointer',
+                      }}
+                    >
+                      Select Area
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleStroCloseFrameEditor}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 8,
+                      border: '1px solid rgba(255,255,255,0.18)',
+                      background: 'rgba(255,255,255,0.06)',
+                      color: '#fff',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
           );
