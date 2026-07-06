@@ -16,6 +16,7 @@ import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
+import ScreenRecorder, { type ScreenRecorderHandle } from '@/components/ScreenRecorder';
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
 import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModal';
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
@@ -315,6 +316,9 @@ function Home() {
     cropRegion: null | { x: number; y: number; width: number; height: number; aspectRatio?: CropAspect };
   } | null>(null);
   const [isRecording, setIsRecording]     = useState(false);
+  // Page-owned recorder (always mounted) so recording survives toolbar/screen
+  // changes; the floating Stop button and the Recording Hub both drive it.
+  const pageRecorderRef = useRef<ScreenRecorderHandle | null>(null);
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
@@ -4628,6 +4632,7 @@ function Home() {
       <RecordingHubContent
         isRecording={isRecording}
         onRecordingChange={handleRecordingChange}
+        externalRecorderRef={pageRecorderRef}
         getCanvas={getCanvas}
         getWebcamStream={getWebcamStream}
         getMicStream={getMicStream}
@@ -6793,42 +6798,62 @@ function Home() {
       />
 
       {/* Guided tour: floating "?" + spotlight overlay (portaled to body). */}
+      {/* Page-owned recorder — always mounted so recording survives navigating
+          between toolbars/screens; hub + floating button drive this one. */}
+      <ScreenRecorder
+        ref={pageRecorderRef}
+        headless
+        mode="display"
+        getCanvas={getCanvas}
+        getWebcamStream={getWebcamStream}
+        getMicStream={getMicStream}
+        layoutMode={layoutMode as 'youtube' | 'reels'}
+        onRecordingChange={handleRecordingChange}
+        onRecordingError={(msg) => setProcessingStatus(msg)}
+        promptDownload
+        onRecordingComplete={handleScreenRecordComplete}
+      />
+
       {isRecording &&
         typeof document !== 'undefined' &&
         createPortal(
-          <div
-            role="status"
-            aria-live="polite"
+          <button
+            type="button"
+            aria-label="Stop recording"
+            title="Stop recording"
+            onClick={() => { pageRecorderRef.current?.stop(); }}
             style={{
               position: 'fixed',
               top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
               left: '50%',
               transform: 'translateX(-50%)',
-              zIndex: 250,
+              zIndex: 100000,
               display: 'flex',
               alignItems: 'center',
               gap: 8,
-              padding: '8px 14px',
+              padding: '8px 16px 8px 14px',
               borderRadius: 999,
-              background: 'rgba(255, 59, 48, 0.95)',
+              border: 'none',
+              background: 'rgba(255, 59, 48, 0.97)',
               color: '#FFFFFF',
               fontSize: 13,
               fontWeight: 700,
-              boxShadow: '0 8px 28px rgba(255,59,48,0.35)',
-              pointerEvents: 'none',
+              boxShadow: '0 8px 28px rgba(255,59,48,0.45)',
+              cursor: 'pointer',
+              pointerEvents: 'auto',
             }}
           >
             <span
               style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
+                width: 12,
+                height: 12,
+                borderRadius: 3,
                 background: '#FFFFFF',
-                animation: 'hubRecPulse 1.2s ease-in-out infinite',
+                flexShrink: 0,
               }}
             />
-            Recording
-          </div>,
+            Stop recording
+          </button>,
           document.body,
         )}
 

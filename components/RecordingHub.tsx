@@ -42,6 +42,13 @@ import type { WebcamPipMode } from '@/components/ToolPalette';
 export interface RecordingHubContentProps {
   isRecording: boolean;
   onRecordingChange: (v: boolean) => void;
+  /** Register the recorder's stop() so a page-level floating button can stop it
+   *  from any toolbar/screen (null when not recording). */
+  onRegisterStop?: (stop: (() => void) | null) => void;
+  /** Page-owned recorder (always-mounted) so recording survives toolbar/screen
+   *  changes. When provided, the hub drives THIS recorder and renders no internal
+   *  one; `isRecording` reflects its state. */
+  externalRecorderRef?: React.RefObject<ScreenRecorderHandle | null>;
   getCanvas: () => HTMLCanvasElement | null;
   getWebcamStream: () => MediaStream | null;
   getMicStream: () => MediaStream | null;
@@ -288,11 +295,17 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     hubLabelsExpanded = false,
     onToggleHubLabels,
     onRecordingError,
+    onRegisterStop,
+    externalRecorderRef,
   } = props;
 
   const io = hubIconOnly;
-  const recorderRef = useRef<ScreenRecorderHandle | null>(null);
-  const [screenRecording, setScreenRecording] = useState(false);
+  const internalRecorderRef = useRef<ScreenRecorderHandle | null>(null);
+  const recorderRef = externalRecorderRef ?? internalRecorderRef;
+  const [internalScreenRecording, setInternalScreenRecording] = useState(false);
+  // When the page owns the recorder, `isRecording` (prop) is the truth.
+  const screenRecording = externalRecorderRef ? props.isRecording : internalScreenRecording;
+  const setScreenRecording = setInternalScreenRecording;
   const [recorderError, setRecorderError] = useState<string | null>(null);
   const [screenshotModalOpen, setScreenshotModalOpen] = useState(false);
   const [screenshotAreaOpen, setScreenshotAreaOpen] = useState(false);
@@ -557,28 +570,33 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           <HubRow iconOnly={io} danger icon={<RefreshCw size={16} />} label="Reset recording" title="Reset recording settings" onClick={onResetRecordingSettings} />
         ) : null}
 
-        {/* Single persistent full-screen recorder, driven by the Start/Stop toggle.
-            Always records the full getDisplayMedia stream — no crop params. */}
-        <ScreenRecorder
-          ref={recorderRef}
-          headless
-          mode="display"
-          disabled={captureBusy}
-          onRecordingError={(msg) => {
-            setRecorderError(msg);
-            onRecordingError?.(msg);
-          }}
-          getCanvas={getCanvas}
-          getWebcamStream={getWebcamStream}
-          getMicStream={getMicStream}
-          layoutMode={layoutMode}
-          onRecordingChange={(v) => {
-            setScreenRecording(v);
-            onRecordingChange(v);
-          }}
-          promptDownload
-          onRecordingComplete={onScreenRecordComplete}
-        />
+        {/* Single persistent full-screen recorder, driven by the Start/Stop
+            toggle. When the page owns the recorder (externalRecorderRef), it is
+            mounted at page level (survives toolbar/screen changes) so we render
+            no internal one here. */}
+        {!externalRecorderRef && (
+          <ScreenRecorder
+            ref={internalRecorderRef}
+            headless
+            mode="display"
+            disabled={captureBusy}
+            onRecordingError={(msg) => {
+              setRecorderError(msg);
+              onRecordingError?.(msg);
+            }}
+            getCanvas={getCanvas}
+            getWebcamStream={getWebcamStream}
+            getMicStream={getMicStream}
+            layoutMode={layoutMode}
+            onRecordingChange={(v) => {
+              setScreenRecording(v);
+              onRecordingChange(v);
+              onRegisterStop?.(v ? () => recorderRef.current?.stop() : null);
+            }}
+            promptDownload
+            onRecordingComplete={onScreenRecordComplete}
+          />
+        )}
 
         {/* Embed / tab-capture feedback (separate feature). */}
         {io ? (
