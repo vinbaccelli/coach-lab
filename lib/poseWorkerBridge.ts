@@ -295,7 +295,10 @@ export class PoseWorkerBridge {
       // the WASM path). 512px keeps ample margin for the 0.6 focus crop.
       const vw = video.videoWidth || 0;
       const vh = video.videoHeight || 0;
-      const TARGET = 512;
+      // MoveNet resizes internally to 192 (Lightning) / 256 (Thunder), so 384px
+      // is ample and cuts capture+transfer+tensor cost vs full-res (the dominant
+      // WASM-path expense). The internal 0.6 focus crop still has margin.
+      const TARGET = 384;
       const scale = vw > 0 ? Math.min(1, TARGET / Math.max(vw, vh)) : 1;
       const make: Promise<ImageBitmap> = scale < 1
         ? createImageBitmap(video, {
