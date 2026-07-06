@@ -144,6 +144,9 @@ export interface CanvasHandle {
   drawSwingFromSegment: (segment: SwingSegment, color: string) => void;
   setRacketTrail: (trail: RacketTrail | null) => void;
   getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
+  /** Run pose detection ON DEMAND at a specific video time (for StroMotion
+   *  auto-detect when the coach hasn't played through with the skeleton on). */
+  detectPoseAtTime: (timeSec: number) => Promise<Array<{ x: number; y: number; score: number; name: string }> | null>;
   /** Current frame's pose keypoints (for snapshot capture). */
   getSkeletonKeypoints: () => Array<{ x: number; y: number; score: number; name: string }> | null;
   /** Restore skeleton keypoints from a snapshot (for phase switching). */
@@ -2553,6 +2556,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         racketTrailRef.current = trail;
       },
       getSkeletonFrames: () => skeletonFramesRef.current,
+      detectPoseAtTime: async (timeSec: number) => {
+        const video = videoRef.current;
+        if (!video || video.videoWidth === 0) return null;
+        try {
+          const { acquirePoseDetector } = await import('@/lib/sharedPoseDetector');
+          const det = await acquirePoseDetector();
+          const bmp = await captureVideoFrameAtTime(video, timeSec);
+          const poses = await det.estimatePoses(bmp as unknown as HTMLCanvasElement, { flipHorizontal: false });
+          try { (bmp as ImageBitmap).close?.(); } catch { /* ok */ }
+          const raw = poses?.[0]?.keypoints as Array<{ x: number; y: number; score?: number; name?: string }> | undefined;
+          if (!raw?.length) return null;
+          return raw.map((k) => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' }));
+        } catch {
+          return null;
+        }
+      },
       getSkeletonKeypoints: () => latestKeypointsRef.current ? [...latestKeypointsRef.current] : null,
       setSkeletonKeypoints: (kps, provenance) => {
         latestKeypointsRef.current = kps ? [...kps] : null;

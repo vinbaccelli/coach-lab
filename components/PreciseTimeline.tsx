@@ -141,6 +141,7 @@ export default function PreciseTimeline({
   /** Called when HTML5 video.play() is rejected (Safari autoplay policy). */
   onPlayBlocked,
   trimRange = null,
+  onTrimChange,
   trimAccent = '#FF9500',
   onCurrentTime,
   phaseMarkers = null,
@@ -169,6 +170,8 @@ export default function PreciseTimeline({
   beforePause?: () => void;
   onPlayBlocked?: () => void;
   trimRange?: { start: number; end: number } | null;
+  /** When provided, the trim start/end lines become draggable handles. */
+  onTrimChange?: (start: number, end: number) => void;
   trimAccent?: string;
   onCurrentTime?: (t: number) => void;
   phaseMarkers?: Array<{ id: string; label: string; short?: string; time: number }> | null;
@@ -321,6 +324,7 @@ export default function PreciseTimeline({
   const scrubTrackRef = useRef<HTMLDivElement | null>(null);
   const scrubbingRef = useRef(false);
   const phaseDragIdRef = useRef<string | null>(null);
+  const trimDragRef = useRef<'start' | 'end' | null>(null);
   const sampleDragIdRef = useRef<string | null>(null);
   const [viewWindow, setViewWindow] = useState<{ start: number; end: number } | null>(null);
   /** Live scrub thumb position while dragging (before frame-ready commit). */
@@ -852,26 +856,70 @@ export default function PreciseTimeline({
                 boxSizing: 'border-box',
               }}
             />
+            {/* Start handle — draggable when onTrimChange is provided. */}
             <div
+              onPointerDown={onTrimChange ? (e) => {
+                e.stopPropagation();
+                trimDragRef.current = 'start';
+                (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+              } : undefined}
+              onPointerMove={onTrimChange ? (e) => {
+                if (trimDragRef.current !== 'start') return;
+                if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+                e.stopPropagation();
+                const next = timeFromClientX(e.clientX);
+                if (next === null || !trimRange) return;
+                onTrimChange(clamp(next, 0, trimRange.end - 0.04), trimRange.end);
+              } : undefined}
+              onPointerUp={onTrimChange ? (e) => {
+                trimDragRef.current = null;
+                try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+              } : undefined}
               style={{
                 position: 'absolute',
-                left: `calc(10px + (100% - 20px) * ${trimStartPct / 100} - 1px)`,
-                top: 4,
-                bottom: 4,
-                width: 2,
-                background: trimAccent,
-                pointerEvents: 'none',
+                left: `calc(10px + (100% - 20px) * ${trimStartPct / 100} - ${onTrimChange ? 6 : 1}px)`,
+                top: 2,
+                bottom: 2,
+                width: onTrimChange ? 12 : 2,
+                background: onTrimChange ? 'transparent' : trimAccent,
+                borderLeft: onTrimChange ? `3px solid ${trimAccent}` : undefined,
+                cursor: onTrimChange ? 'ew-resize' : 'default',
+                pointerEvents: onTrimChange ? 'auto' : 'none',
+                zIndex: 4,
+                touchAction: 'none',
               }}
             />
+            {/* End handle */}
             <div
+              onPointerDown={onTrimChange ? (e) => {
+                e.stopPropagation();
+                trimDragRef.current = 'end';
+                (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+              } : undefined}
+              onPointerMove={onTrimChange ? (e) => {
+                if (trimDragRef.current !== 'end') return;
+                if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+                e.stopPropagation();
+                const next = timeFromClientX(e.clientX);
+                if (next === null || !trimRange) return;
+                onTrimChange(trimRange.start, clamp(next, trimRange.start + 0.04, d));
+              } : undefined}
+              onPointerUp={onTrimChange ? (e) => {
+                trimDragRef.current = null;
+                try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+              } : undefined}
               style={{
                 position: 'absolute',
-                left: `calc(10px + (100% - 20px) * ${trimEndPct / 100} - 1px)`,
-                top: 4,
-                bottom: 4,
-                width: 2,
-                background: trimAccent,
-                pointerEvents: 'none',
+                left: `calc(10px + (100% - 20px) * ${trimEndPct / 100} - ${onTrimChange ? 6 : 1}px)`,
+                top: 2,
+                bottom: 2,
+                width: onTrimChange ? 12 : 2,
+                background: onTrimChange ? 'transparent' : trimAccent,
+                borderRight: onTrimChange ? `3px solid ${trimAccent}` : undefined,
+                cursor: onTrimChange ? 'ew-resize' : 'default',
+                pointerEvents: onTrimChange ? 'auto' : 'none',
+                zIndex: 4,
+                touchAction: 'none',
               }}
             />
           </>

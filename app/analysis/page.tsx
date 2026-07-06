@@ -1210,20 +1210,26 @@ function Home() {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return false;
 
-    // Get skeleton keypoints near this frame time
+    // Get skeleton keypoints near this frame time from the playback cache…
     const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
-    const nearest = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>((best, f) => {
+    const cached = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>((best, f) => {
       if (!best || Math.abs(f.timeSeconds - timeSec) < Math.abs(best.timeSeconds - timeSec)) return f;
       return best;
     }, null);
+    // …but if the coach never played through with the skeleton on, run pose
+    // detection ON DEMAND at this frame's time (this is what made auto-detect
+    // "do nothing" before — no cached skeleton existed).
+    let keypointsForFrame = cached && Math.abs(cached.timeSeconds - timeSec) < 0.2 ? cached.keypoints : null;
+    if (!keypointsForFrame) {
+      keypointsForFrame = await canvasRef.current?.detectPoseAtTime?.(timeSec) ?? null;
+    }
+    if (!keypointsForFrame?.length) return false;
 
-    if (!nearest?.keypoints?.length) return false;
-
-    const validKps = nearest.keypoints.filter(kp => kp.score >= 0.2);
+    const validKps = keypointsForFrame.filter(kp => kp.score >= 0.2);
     if (validKps.length < 4) return false;
 
     // Extend bounding box along dominant arm to include racket
-    const kps = nearest.keypoints;
+    const kps = keypointsForFrame;
     const rWrist = kps[10]; // right wrist
     const lWrist = kps[9];  // left wrist
     const rElbow = kps[8];
@@ -1594,11 +1600,21 @@ function Home() {
       onAutoSelectAll={async () => {
         const draft = stroMotionDraft;
         if (!draft) return;
-        for (const frame of draft.frames) {
-          if (!frame.selectionBox) {
-            await autoSelectStroFrameFromSkeleton(frame.index);
-          }
+        const pending = draft.frames.filter((f) => !f.selectionBox);
+        if (pending.length === 0) { setProcessingStatus('All frames already have a selection.'); return; }
+        setProcessingStatus(`AI detecting the player + racket in ${pending.length} frames…`);
+        let ok = 0;
+        for (let i = 0; i < pending.length; i++) {
+          setProcessingStatus(`AI auto-detect: frame ${i + 1}/${pending.length}…`);
+          const success = await autoSelectStroFrameFromSkeleton(pending[i].index);
+          if (success) ok++;
         }
+        void refreshStroPreviewFromDraft();
+        setProcessingStatus(
+          ok === 0
+            ? 'Auto-detect could not find the player — make sure the player is visible, or use Select Area manually.'
+            : `AI auto-selected ${ok}/${pending.length} frames. Review each, fix with Add brush if needed, then Generate.`,
+        );
       }}
       previewPngUrl={stroPreviewPngUrl}
       previewVideoUrl={stroPreviewVideoUrl}
@@ -4179,6 +4195,7 @@ function Home() {
     if (!stroMotionActive && stroMotionHtml5Only && biomechPhaseMarkers) {
       return {
         trimRange: null as null,
+        onTrimChange: undefined as undefined,
         trimAccent: '#34C759',
         onCurrentTime: undefined as undefined,
         phaseMarkers: biomechPhaseMarkers,
@@ -4198,6 +4215,8 @@ function Home() {
     if (stroMotionActive && stroMotionHtml5Only) {
       return {
         trimRange: stroMotionDraft?.frames.length ? { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number } : null,
+        // Coach can drag the section start/end handles on the timeline.
+        onTrimChange: (start: number, end: number) => { setStroStartFrame(start); setStroEndFrame(end); },
         trimAccent: '#FF9500',
         onCurrentTime: setStroVideoTime,
         phaseMarkers: null as null,
@@ -4232,6 +4251,7 @@ function Home() {
     }
     return {
       trimRange: null as null,
+      onTrimChange: undefined as undefined,
       trimAccent: '#FF9500',
       onCurrentTime: undefined as undefined,
       phaseMarkers: null as null,
@@ -4303,6 +4323,7 @@ function Home() {
                 beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
                 onPlayBlocked={handlePlayBlocked}
                 trimRange={analysisTimelineExtras.trimRange}
+onTrimChange={analysisTimelineExtras.onTrimChange}
                 trimAccent={analysisTimelineExtras.trimAccent}
                 onCurrentTime={analysisTimelineExtras.onCurrentTime}
                 phaseMarkers={analysisTimelineExtras.phaseMarkers}
@@ -4338,6 +4359,7 @@ function Home() {
             beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
             onPlayBlocked={handlePlayBlocked}
             trimRange={analysisTimelineExtras.trimRange}
+onTrimChange={analysisTimelineExtras.onTrimChange}
             trimAccent={analysisTimelineExtras.trimAccent}
             onCurrentTime={analysisTimelineExtras.onCurrentTime}
             phaseMarkers={analysisTimelineExtras.phaseMarkers}
