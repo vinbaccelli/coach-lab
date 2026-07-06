@@ -4096,14 +4096,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }
             ctx.save();
             ctx.translate(dx, dy);
-            drawSkeletonOverlay(ctx, displayKps, vW, vH, dw, dh, {
-              showAngles: false,
-              showHeadLine: skeletonShowHeadLineRef.current,
-              showHeadDirection: skeletonShowHeadDirectionRef.current,
-              showFootLine: skeletonShowFootLineRef.current,
-              classicColors: skeletonClassicColorsRef.current,
-              parts: skeletonPartsRef.current,
-            });
+            // Never let an overlay-draw exception (bad keypoint, NaN geometry)
+            // abort the frame — the video is already painted underneath, so a
+            // throw here previously left a half-rendered/black canvas.
+            try {
+              drawSkeletonOverlay(ctx, displayKps, vW, vH, dw, dh, {
+                showAngles: false,
+                showHeadLine: skeletonShowHeadLineRef.current,
+                showHeadDirection: skeletonShowHeadDirectionRef.current,
+                showFootLine: skeletonShowFootLineRef.current,
+                classicColors: skeletonClassicColorsRef.current,
+                parts: skeletonPartsRef.current,
+              });
+            } catch (skErr) {
+              if (process.env.NODE_ENV !== 'production') console.warn('[Canvas] skeleton overlay draw skipped:', skErr);
+            }
             if (onSkeletonAnglesUpdateRef.current && latestKeypointsRef.current !== lastEmittedKpsRef.current) {
               lastEmittedKpsRef.current = latestKeypointsRef.current;
               const kps = latestKeypointsRef.current;

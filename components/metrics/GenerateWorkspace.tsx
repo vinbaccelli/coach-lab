@@ -36,9 +36,9 @@ export interface GenerateWorkspaceProps {
   holdSeconds: number;
   onHoldSecondsChange: (sec: number) => void;
   /** Replay the sequence on the analysis canvas (workspace hides meanwhile). */
-  onReplay: () => void;
+  onReplay: (includedIds: string[]) => void;
   /** Record the replay to MP4 (workspace hides meanwhile). */
-  onRecordVideo: () => void;
+  onRecordVideo: (includedIds: string[]) => void;
 }
 
 interface PlayerOption { id: string; display_name: string }
@@ -327,7 +327,7 @@ export default function GenerateWorkspace({
                   <p style={{ margin: '0 0 12px', fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>
                     No replay video yet. Record the slow-motion replay to preview and export it.
                   </p>
-                  <button type="button" onClick={onRecordVideo} disabled={recording || replaying} style={primaryBtn}>
+                  <button type="button" onClick={() => onRecordVideo(includedSnaps.map((s) => s.id))} disabled={recording || replaying} style={primaryBtn}>
                     {recording ? <Loader2 size={15} className="animate-spin" /> : <Video size={15} />} {recording ? 'Recording…' : 'Record replay video'}
                   </button>
                 </div>
@@ -336,10 +336,10 @@ export default function GenerateWorkspace({
 
             {/* Preview actions */}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button type="button" onClick={onReplay} disabled={replaying || recording} style={secondaryBtn}>
+              <button type="button" onClick={() => onReplay(includedSnaps.map((s) => s.id))} disabled={replaying || recording} style={secondaryBtn}>
                 <Play size={14} /> {replaying ? 'Replaying…' : 'Replay on canvas'}
               </button>
-              <button type="button" onClick={onRecordVideo} disabled={recording || replaying} style={secondaryBtn}>
+              <button type="button" onClick={() => onRecordVideo(includedSnaps.map((s) => s.id))} disabled={recording || replaying} style={secondaryBtn}>
                 <Video size={14} /> {recording ? 'Recording…' : videoUrl ? 'Re-record video' : 'Record video'}
               </button>
               <div style={{ flex: 1 }} />

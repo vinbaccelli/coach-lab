@@ -871,9 +871,15 @@ function Home() {
   // overlay. Single rendering path for Generate export; restored after recording.
   const [exportForceVideoPaint, setExportForceVideoPaint] = useState(false);
 
+  // Snapshot IDs the Generate workspace selected for the video (empty = all).
+  const generateIncludedIdsRef = useRef<string[] | null>(null);
+
   /** Slow-mo replay: Freeze 3s → slow-play → snap to next → Freeze. Optionally records to a Blob. */
   const handleReplaySnapshots = useCallback(async (recorder?: MediaRecorder | null) => {
-    const ordered = [...snapshots].sort((a, b) => a.timeSec - b.timeSec);
+    const inc = generateIncludedIdsRef.current;
+    const ordered = [...snapshots]
+      .filter((s) => !inc || inc.includes(s.id))
+      .sort((a, b) => a.timeSec - b.timeSec);
     if (ordered.length === 0) return;
     const v = videoRef.current;
     if (!v) return;
@@ -922,9 +928,11 @@ function Home() {
   }, [snapshots, seekVideoTo, selectSnapshot, generateReplayRate, generateHoldSec]);
 
   /** Record the slow-mo replay to an MP4 file via canvas captureStream + ffmpeg. */
-  const recordReplayToMp4 = useCallback(async () => {
+  const recordReplayToMp4 = useCallback(async (includedIds?: string[]) => {
     if (!snapshots.length || generateRecording) return;
     if (!canvasRef.current?.getCanvas?.()) { setProcessingStatus('Recording not supported on this device'); return; }
+    // Honor the workspace's snapshot selection for the recorded video.
+    generateIncludedIdsRef.current = includedIds && includedIds.length ? includedIds : null;
 
     setGenerateRecording(true);
     // Single export rendering path: force the visible, in-DOM analysis canvas to
@@ -971,7 +979,8 @@ function Home() {
   }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots]);
 
   /** Replay from the Generate workspace: workspace hides itself; show the strip HUD meanwhile. */
-  const handleWorkspaceReplay = useCallback(async () => {
+  const handleWorkspaceReplay = useCallback(async (includedIds: string[]) => {
+    generateIncludedIdsRef.current = includedIds.length ? includedIds : null;
     setSnapshotPanelOpen(true);
     await handleReplaySnapshots();
     setSnapshotPanelOpen(false);
@@ -6937,8 +6946,8 @@ function Home() {
             onPlaybackRateChange={setGenerateReplayRate}
             holdSeconds={generateHoldSec}
             onHoldSecondsChange={setGenerateHoldSec}
-            onReplay={() => { void handleWorkspaceReplay(); }}
-            onRecordVideo={() => { void recordReplayToMp4(); }}
+            onReplay={(ids) => { void handleWorkspaceReplay(ids); }}
+            onRecordVideo={(ids) => { void recordReplayToMp4(ids); }}
           />
         </React.Suspense>
       )}
