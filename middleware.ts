@@ -10,6 +10,7 @@ export async function middleware(req: NextRequest) {
   // redirects them to /login and silently breaks workers and logged-out pages.
   const { pathname } = req.nextUrl;
   if (
+    pathname === '/' ||           // public marketing landing (auth-checked in the page)
     /\.[a-zA-Z0-9]+$/.test(pathname) ||
     pathname.startsWith('/tfjs-wasm') ||
     pathname.startsWith('/models') ||
