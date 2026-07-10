@@ -35,7 +35,10 @@ let prevCentroid: { x: number; y: number } | null = null;
 let currentModel: 'thunder' | 'lightning' = 'lightning';
 let inferSamples: number[] = [];
 let modelSwapInFlight = false;
-const SWAP_AFTER_SAMPLES = 12;
+// Downgrade fast: on a weak (mobile) GPU the first Thunder frames are slow and
+// jittery. 6 samples cuts that jitter window in half vs 12 while still averaging
+// out one-off slow frames on capable desktops (which stay on Thunder).
+const SWAP_AFTER_SAMPLES = 6;
 const SWAP_THRESHOLD_MS = 45;
 
 function makeDetector(model: 'thunder' | 'lightning') {

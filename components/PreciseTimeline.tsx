@@ -527,11 +527,19 @@ export default function PreciseTimeline({
     return clamp(vStart + raw * span, 0, dur);
   }, [viewWindow]);
 
+  // Zoom to the trim range ONCE on entry — NOT on every trimRange change.
+  // Re-zooming on each change rescaled the whole timeline while a handle was
+  // being dragged, so the opposite handle and the sample balls appeared to jump
+  // ("move one side, the other moves too"). The user wants stable, precise
+  // handles; they can re-fit manually via zoomToTrim.
+  const didZoomToTrimRef = useRef(false);
   useEffect(() => {
     if (!defaultZoomToTrim || !trimRange || d <= 0) {
-      if (!defaultZoomToTrim) setViewWindow(null);
+      if (!defaultZoomToTrim) { setViewWindow(null); didZoomToTrimRef.current = false; }
       return;
     }
+    if (didZoomToTrimRef.current) return;
+    didZoomToTrimRef.current = true;
     const span = trimRange.end - trimRange.start;
     const pad = Math.max(0.08, span * 0.12);
     setViewWindow({

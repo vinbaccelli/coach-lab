@@ -24,6 +24,7 @@ import {
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { getPoseDetector } from '@/lib/poseDetection';
+import { estimateFootVector } from '@/lib/biomechanics/measurements';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
@@ -1821,6 +1822,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const animTickRef     = useRef<number>(0);
     const longPressRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // ── HiDPI (devicePixelRatio) support ───────────────────────────────────
+    // The backing store is sized to CSS-px × dpr so the skeleton/overlay render
+    // crisp on Retina/mobile (was drawn at CSS res then upscaled → soft). All
+    // drawing stays in LOGICAL (CSS) units via a ctx.scale(dpr) base transform,
+    // so coordinate reads must convert canvas.width (physical) → logical with
+    // cssW()/cssH(). At dpr=1 these are exact no-ops (standard displays unchanged).
+    const dprRef = useRef(1);
+    const cssW = (c: HTMLCanvasElement) => c.width / (dprRef.current || 1);
+    const cssH = (c: HTMLCanvasElement) => c.height / (dprRef.current || 1);
+
     // Precision touch drawing (mobile): anchor finger moves crosshair; second finger injects events at crosshair
     const precisionTouchDrawRef = useRef(false);
     useEffect(() => {
@@ -2018,8 +2029,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         panXRef,
         panYRef,
         videoBoundsRef.current,
-        canvas.width,
-        canvas.height,
+        cssW(canvas),
+        cssH(canvas),
         nextZoom,
         focalX,
         focalY,
@@ -2383,8 +2394,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const ny = pinch.cy - nh / 2;
       webcamPipRectRef.current = clampWebcamPip(
         { x: nx, y: ny, w: nw, h: nh },
-        canvas.width,
-        canvas.height,
+        cssW(canvas),
+        cssH(canvas),
         webcamPipBottomInsetRef.current,
       );
       renderDirtyRef.current = true;
@@ -2394,11 +2405,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const tryStartWebcamPinch = useCallback((t1: Touch, t2: Touch, canvas: HTMLCanvasElement) => {
       if (!webcamActiveRef.current) return false;
       const rect = canvas.getBoundingClientRect();
-      const mx = ((t1.clientX + t2.clientX) / 2 - rect.left) * (canvas.width / rect.width);
-      const my = ((t1.clientY + t2.clientY) / 2 - rect.top) * (canvas.height / rect.height);
+      const mx = ((t1.clientX + t2.clientX) / 2 - rect.left) * (cssW(canvas) / rect.width);
+      const my = ((t1.clientY + t2.clientY) / 2 - rect.top) * (cssH(canvas) / rect.height);
       let pip = webcamPipRectRef.current;
-      if (!pip.w || !pip.h) pip = defaultWebcamPipRect(canvas.width, canvas.height, webcamPipBottomInsetRef.current);
-      pip = clampWebcamPip(pip, canvas.width, canvas.height, webcamPipBottomInsetRef.current);
+      if (!pip.w || !pip.h) pip = defaultWebcamPipRect(cssW(canvas), cssH(canvas), webcamPipBottomInsetRef.current);
+      pip = clampWebcamPip(pip, cssW(canvas), cssH(canvas), webcamPipBottomInsetRef.current);
       webcamPipRectRef.current = pip;
       const inside = mx >= pip.x && mx <= pip.x + pip.w && my >= pip.y && my <= pip.y + pip.h;
       if (!inside) return false;
@@ -2528,13 +2539,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const vW2 = (video && video.videoWidth > 0 ? video.videoWidth : youtubePoseDimsRef.current.w) || canvas.width;
-        const vH2 = (video && video.videoHeight > 0 ? video.videoHeight : youtubePoseDimsRef.current.h) || canvas.height;
-        const sc = Math.min(canvas.width / vW2, canvas.height / vH2);
+        const vW2 = (video && video.videoWidth > 0 ? video.videoWidth : youtubePoseDimsRef.current.w) || cssW(canvas);
+        const vH2 = (video && video.videoHeight > 0 ? video.videoHeight : youtubePoseDimsRef.current.h) || cssH(canvas);
+        const sc = Math.min(cssW(canvas) / vW2, cssH(canvas) / vH2);
         const dw2 = vW2 * sc;
         const dh2 = vH2 * sc;
-        const dx2 = (canvas.width - dw2) / 2;
-        const dy2 = (canvas.height - dh2) / 2;
+        const dx2 = (cssW(canvas) - dw2) / 2;
+        const dy2 = (cssH(canvas) - dh2) / 2;
 
         const points = segment.wristPositions.map((p) => ({
           x: dx2 + p.x * (dw2 / vW2),
@@ -2620,11 +2631,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           panXRef,
           panYRef,
           videoBoundsRef.current,
-          canvas.width,
-          canvas.height,
+          cssW(canvas),
+          cssH(canvas),
           next,
-          canvas.width / 2,
-          canvas.height / 2,
+          cssW(canvas) / 2,
+          cssH(canvas) / 2,
         );
         renderDirtyRef.current = true;
       },
@@ -2641,11 +2652,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           panXRef,
           panYRef,
           videoBoundsRef.current,
-          canvas.width,
-          canvas.height,
+          cssW(canvas),
+          cssH(canvas),
           next,
-          canvas.width / 2,
-          canvas.height / 2,
+          cssW(canvas) / 2,
+          cssH(canvas) / 2,
         );
         renderDirtyRef.current = true;
       },
@@ -2762,7 +2773,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           renderDirtyRef.current = true;
         });
 
-        const stream = (canvas as unknown as { captureStream(f: number): MediaStream }).captureStream(fps);
+        // Frame-STEPPED capture: captureStream(0) never auto-samples — we emit
+        // exactly one encoded frame per fully-composited step via requestFrame().
+        // captureStream(fps) previously auto-sampled on wall-clock while each
+        // step could stall on a slow video seek, so the recorder captured the
+        // SAME frame repeatedly → "records just the picture / jumps".
+        const stream = (canvas as unknown as { captureStream(f: number): MediaStream }).captureStream(0);
+        const frameTrack = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
+        const emitFrame = () => { try { frameTrack.requestFrame?.(); } catch { /* noop */ } };
         const recorder = new MediaRecorder(stream, { mimeType });
         const chunks: Blob[] = [];
         recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
@@ -2816,6 +2834,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
             await waitRender();
             await waitRender();
+            // Composite for this step is on the canvas — capture exactly one frame.
+            emitFrame();
 
             if (liveBitmap) {
               try { liveBitmap.close(); } catch { /* ok */ }
@@ -2824,8 +2844,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             await new Promise((resolve) => setTimeout(resolve, intervalMs));
           }
 
-          // Hold final frame
-          await new Promise((resolve) => setTimeout(resolve, finalHoldMs));
+          // Hold final frame: emit frames for the hold duration so the freeze
+          // has real length (with captureStream(0) nothing is captured unless we
+          // request it).
+          const holdFrames = Math.max(1, Math.round((finalHoldMs / 1000) * fps));
+          for (let i = 0; i < holdFrames; i++) {
+            emitFrame();
+            await new Promise((resolve) => setTimeout(resolve, intervalMs));
+          }
 
           recorder.stop();
           await new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
@@ -2867,8 +2893,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (!canvas || !keypoints.length) return;
 
-        const W = canvas.width;
-        const H = canvas.height;
+        const W = cssW(canvas);
+        const H = cssH(canvas);
         // Scale keypoints (video pixels) → canvas pixels via letterbox transform
         const sc = Math.min(W / videoNativeW, H / videoNativeH);
         const dw = videoNativeW * sc;
@@ -3153,7 +3179,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       const onPause = () => detectStaticFrame();
       const onSeeked = () => { if (videoRef.current?.paused) detectStaticFrame(); };
-      const onPlay = () => { cancelScheduled(); scheduleNext(); };
+      // Resume-from-pause: snap the filter to the live frame instead of letting
+      // a stale velocity estimate produce a jitter/lag burst on the first frames.
+      const onPlay = () => { poseBridgeRef.current?.resetSmoothing(); cancelScheduled(); scheduleNext(); };
       // Returning from another app/tab: rVFC/rAF were throttled or dropped
       // while hidden — restart the loop (playing) or re-snap the static frame
       // (paused) so the skeleton never "disappears" after switching apps.
@@ -3601,8 +3629,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas || !containerWidth || !containerHeight) return;
-      canvas.width = containerWidth;
-      canvas.height = containerHeight;
+      // Cap dpr at 2: enough to look crisp on Retina/mobile without tripling the
+      // per-frame fill cost on 3× phones. CSS display size stays 100% (set in
+      // JSX style), so the element footprint is unchanged — only sharper.
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      dprRef.current = dpr;
+      canvas.width = Math.round(containerWidth * dpr);
+      canvas.height = Math.round(containerHeight * dpr);
       renderDirtyRef.current = true;
     }, [containerWidth, containerHeight]);
 
@@ -3639,8 +3672,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
-        const fx = (e.clientX - rect.left) * (canvas.width / rect.width);
-        const fy = (e.clientY - rect.top) * (canvas.height / rect.height);
+        const fx = (e.clientX - rect.left) * (cssW(canvas) / rect.width);
+        const fy = (e.clientY - rect.top) * (cssH(canvas) / rect.height);
         const factor = Math.exp(-e.deltaY * ZOOM_WHEEL_GAIN);
         applyZoomAtRef.current(zoomRef.current * factor, fx, fy);
       };
@@ -3703,8 +3736,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const ctx = ctxRef.current;
         if (!ctx) return;
 
-        const W = canvas.width;
-        const H = canvas.height;
+        // Logical (CSS) dimensions — backing store is W×dpr, H×dpr.
+        const dpr = dprRef.current || 1;
+        const W = canvas.width / dpr;
+        const H = canvas.height / dpr;
 
         const video = videoRef.current;
         const curVideoTime = video?.currentTime ?? -1;
@@ -3775,6 +3810,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           renderDirtyRef.current = true;
         }
 
+        // Base transform: 1 unit = 1 CSS px (scales the whole logical drawing up
+        // to the physical backing store). Everything below draws in CSS units.
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, W, H);
 
         // ── Apply zoom/pan transform ──────────────────────────────────────
@@ -4129,12 +4167,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               latestS.kps.length === prevS.kps.length
             ) {
               const interval = Math.min(200, Math.max(20, latestS.ts - prevS.ts));
-              const a = Math.min(1.2, (performance.now() - latestS.ts) / interval);
+              const age = performance.now() - latestS.ts;
+              // Only extrapolate while the last detection is FRESH. On slow
+              // phones detections arrive late/bursty; a large `age` × a big
+              // between-detection displacement is exactly what flung the
+              // skeleton across the frame ("goes crazy after play"). Cap the
+              // blend low, and stop entirely once the sample is clearly stale.
+              const a = age > interval * 1.5 ? 0 : Math.min(0.5, age / interval);
               if (a > 0.02) {
+                // Cap how far any single joint may be extrapolated so one bad
+                // (fast/misdetected) frame can't throw a limb across the frame.
+                const maxStep = 0.06 * Math.max(vW, vH);
                 displayKps = latestS.kps.map((k, i) => {
                   const p = prevS.kps[i];
-                  if (!p || k.score < 0.15 || p.score < 0.15) return k;
-                  return { ...k, x: k.x + (k.x - p.x) * a, y: k.y + (k.y - p.y) * a };
+                  if (!p || k.score < 0.2 || p.score < 0.2) return k;
+                  let ex = (k.x - p.x) * a;
+                  let ey = (k.y - p.y) * a;
+                  const m = Math.hypot(ex, ey);
+                  if (m > maxStep) { const s = maxStep / m; ex *= s; ey *= s; }
+                  return { ...k, x: k.x + ex, y: k.y + ey };
                 });
               }
             }
@@ -4255,20 +4306,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             drawArrow('head', earX, earY, nose.x, nose.y);
           }
 
-          // Left foot direction (knee→ankle extended)
+          // Foot direction — anatomical (shin-perpendicular, forced down+forward),
+          // shared with lib/biomechanics so the arrow matches the AI-Detect number.
+          const footBodyCenterX = (lH?.score >= scoreMin && rH?.score >= scoreMin) ? (lH.x + rH.x) / 2 : null;
+          const footFacing: 1 | -1 = footBodyCenterX != null && nose?.score >= scoreMin ? (nose.x >= footBodyCenterX ? 1 : -1) : 1;
+
+          // Left foot direction
           const lK = kps[13], lA = kps[15];
           if (lK?.score >= scoreMin && lA?.score >= scoreMin) {
-            const dx2 = lA.x + (lA.x - lK.x) * 0.4;
-            const dy2 = lA.y + (lA.y - lK.y) * 0.4;
-            drawArrow('lfoot', lA.x, lA.y, dx2, dy2);
+            const v = estimateFootVector(lK, lA, footBodyCenterX, footFacing);
+            const len = Math.hypot(lA.x - lK.x, lA.y - lK.y) * 0.55;
+            drawArrow('lfoot', lA.x, lA.y, lA.x + v.x * len, lA.y + v.y * len);
           }
 
-          // Right foot direction (knee→ankle extended)
+          // Right foot direction
           const rK = kps[14], rA = kps[16];
           if (rK?.score >= scoreMin && rA?.score >= scoreMin) {
-            const dx2 = rA.x + (rA.x - rK.x) * 0.4;
-            const dy2 = rA.y + (rA.y - rK.y) * 0.4;
-            drawArrow('rfoot', rA.x, rA.y, dx2, dy2);
+            const v = estimateFootVector(rK, rA, footBodyCenterX, footFacing);
+            const len = Math.hypot(rA.x - rK.x, rA.y - rK.y) * 0.55;
+            drawArrow('rfoot', rA.x, rA.y, rA.x + v.x * len, rA.y + v.y * len);
           }
 
           // Racket angle (dominant wrist → extended past wrist)
@@ -4886,16 +4942,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!canvas) return { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
       return {
-        x: (clientX - rect.left) * (canvas.width / rect.width),
-        y: (clientY - rect.top) * (canvas.height / rect.height),
+        x: (clientX - rect.left) * (cssW(canvas) / rect.width),
+        y: (clientY - rect.top) * (cssH(canvas) / rect.height),
       };
     };
 
     const clientToLogical = (clientX: number, clientY: number): Pt => {
       const canvas = canvasRef.current;
       if (!canvas) return { x: 0, y: 0 };
-      const W = canvas.width;
-      const H = canvas.height;
+      const W = cssW(canvas);
+      const H = cssH(canvas);
       const s = clientToCanvasPx(clientX, clientY);
       return {
         x: (s.x - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
@@ -4946,8 +5002,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const logicalPtToClient = (pt: Pt): { clientX: number; clientY: number } => {
       const canvas = canvasRef.current!;
       const rect = canvas.getBoundingClientRect();
-      const W = canvas.width;
-      const H = canvas.height;
+      const W = cssW(canvas);
+      const H = cssH(canvas);
       const sx = (pt.x - W / 2) * zoomRef.current + W / 2 + panXRef.current;
       const sy = (pt.y - H / 2) * zoomRef.current + H / 2 + panYRef.current;
       return {
@@ -5317,8 +5373,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       const canvas = canvasRef.current;
       if (!canvas) return 'miss';
-      const cw = canvas.width;
-      const ch = canvas.height;
+      const cw = cssW(canvas);
+      const ch = cssH(canvas);
       let pip = webcamPipRectRef.current;
       if (!pip.w || !pip.h) pip = defaultWebcamPipRect(cw, ch, webcamPipBottomInsetRef.current);
       pip = clampWebcamPip(pip, cw, ch, webcamPipBottomInsetRef.current);
@@ -5536,7 +5592,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (!canvas) break;
           const { clientX, clientY } = logicalPtToClient(pos);
           const rect = canvas.getBoundingClientRect();
-          const scaledFontSize = opts.fontSize * zoomRef.current * (rect.height / canvas.height);
+          const scaledFontSize = opts.fontSize * zoomRef.current * (rect.height / cssH(canvas));
           setNewTextDraft({
             pos,
             left: clientX - rect.left,
@@ -5556,12 +5612,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const video  = videoRef.current;
           const canvas = canvasRef.current;
           if (video && canvas) {
-            const vW2 = video.videoWidth  || canvas.width;
-            const vH2 = video.videoHeight || canvas.height;
-            const sc  = Math.min(canvas.width / vW2, canvas.height / vH2);
+            const vW2 = video.videoWidth  || cssW(canvas);
+            const vH2 = video.videoHeight || cssH(canvas);
+            const sc  = Math.min(cssW(canvas) / vW2, cssH(canvas) / vH2);
             const dw2 = vW2 * sc, dh2 = vH2 * sc;
-            const dx2 = (canvas.width  - dw2) / 2;
-            const dy2 = (canvas.height - dh2) / 2;
+            const dx2 = (cssW(canvas)  - dw2) / 2;
+            const dy2 = (cssH(canvas) - dh2) / 2;
             const nx  = (pos.x - dx2) / dw2;
             const ny  = (pos.y - dy2) / dh2;
 
@@ -5695,8 +5751,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!canvas) return { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
       return {
-        x: (e.clientX - rect.left) * (canvas.width / rect.width),
-        y: (e.clientY - rect.top) * (canvas.height / rect.height),
+        x: (e.clientX - rect.left) * (cssW(canvas) / rect.width),
+        y: (e.clientY - rect.top) * (cssH(canvas) / rect.height),
       };
     }, []);
 
@@ -5780,8 +5836,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         } else if (canvas) {
           webcamPinchRef.current = null;
           const rect = canvas.getBoundingClientRect();
-          const focalX = (cClient.clientX - rect.left) * (canvas.width / rect.width);
-          const focalY = (cClient.clientY - rect.top) * (canvas.height / rect.height);
+          const focalX = (cClient.clientX - rect.left) * (cssW(canvas) / rect.width);
+          const focalY = (cClient.clientY - rect.top) * (cssH(canvas) / rect.height);
           canvasPinchRef.current = {
             lastDist: Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY),
             focalX,
@@ -6008,7 +6064,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (mcItemsNow !== null) {
         const canvas = canvasRef.current;
         if (canvas) {
-          const cW = canvas.width, cH = canvas.height;
+          const cW = cssW(canvas), cH = cssH(canvas);
           const s = mcScaleRef.current;
           const mW = Math.round(MC_BASE_W * s);
           const rowH = Math.round(22 * s);
@@ -6163,14 +6219,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const bb = getTextBBox(tx);
               const canvas = canvasRef.current!;
               const rect = canvas.getBoundingClientRect();
-              const W = canvas.width;
-              const H = canvas.height;
+              const W = cssW(canvas);
+              const H = cssH(canvas);
               const logX = bb.x0;
               const logY = bb.y0;
-              const screenX = ((logX - W / 2) * zoomRef.current + W / 2 + panXRef.current) * (rect.width / canvas.width);
-              const screenY = ((logY - H / 2) * zoomRef.current + H / 2 + panYRef.current) * (rect.height / canvas.height);
-              const scaledFontSize = tx.fontSize * zoomRef.current * (rect.height / canvas.height);
-              const bbW = (bb.x1 - bb.x0) * zoomRef.current * (rect.width / canvas.width);
+              const screenX = ((logX - W / 2) * zoomRef.current + W / 2 + panXRef.current) * (rect.width / cssW(canvas));
+              const screenY = ((logY - H / 2) * zoomRef.current + H / 2 + panYRef.current) * (rect.height / cssH(canvas));
+              const scaledFontSize = tx.fontSize * zoomRef.current * (rect.height / cssH(canvas));
+              const bbW = (bb.x1 - bb.x0) * zoomRef.current * (rect.width / cssW(canvas));
               textEditingIdxRef.current = best.idx;
               setTextEditing({
                 idx: best.idx,
@@ -6342,8 +6398,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const dx = pos.x - mcDraggingRef.current.startX;
           const dy = pos.y - mcDraggingRef.current.startY;
           mcPosRef.current = {
-            x: Math.max(0, Math.min(0.9, mcDraggingRef.current.origX + dx / canvas.width)),
-            y: Math.max(0, Math.min(0.9, mcDraggingRef.current.origY + dy / canvas.height)),
+            x: Math.max(0, Math.min(0.9, mcDraggingRef.current.origX + dx / cssW(canvas))),
+            y: Math.max(0, Math.min(0.9, mcDraggingRef.current.origY + dy / cssH(canvas))),
           };
           renderDirtyRef.current = true;
         }
@@ -6369,8 +6425,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const midClientX = (t1.clientX + t2.clientX) / 2;
           const midClientY = (t1.clientY + t2.clientY) / 2;
           const rect = canvas.getBoundingClientRect();
-          const focalX = (midClientX - rect.left) * (canvas.width / rect.width);
-          const focalY = (midClientY - rect.top) * (canvas.height / rect.height);
+          const focalX = (midClientX - rect.left) * (cssW(canvas) / rect.width);
+          const focalY = (midClientY - rect.top) * (cssH(canvas) / rect.height);
           if (last > 0) {
             applyZoomAtRef.current(zoomRef.current * (dist / last), focalX, focalY);
           }
@@ -6414,8 +6470,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (canvas) {
           const rect = canvas.getBoundingClientRect();
-          const scaleX = canvas.width  / rect.width;
-          const scaleY = canvas.height / rect.height;
+          const scaleX = cssW(canvas)  / rect.width;
+          const scaleY = cssH(canvas) / rect.height;
           panXRef.current = panStartRef.current.px + (e.clientX - panStartRef.current.x) * scaleX;
           panYRef.current = panStartRef.current.py + (e.clientY - panStartRef.current.y) * scaleY;
           const { dx, dy, dw, dh } = videoBoundsRef.current;
@@ -6423,8 +6479,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             panXRef.current,
             panYRef.current,
             zoomRef.current,
-            canvas.width,
-            canvas.height,
+            cssW(canvas),
+            cssH(canvas),
             dx,
             dy,
             dw,
@@ -6893,10 +6949,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
-        const sx = (e.clientX - rect.left) * (canvas.width / rect.width);
-        const sy = (e.clientY - rect.top) * (canvas.height / rect.height);
-        const W = canvas.width;
-        const H = canvas.height;
+        const sx = (e.clientX - rect.left) * (cssW(canvas) / rect.width);
+        const sy = (e.clientY - rect.top) * (cssH(canvas) / rect.height);
+        const W = cssW(canvas);
+        const H = cssH(canvas);
         const pos: Pt = {
           x: (sx - (W / 2 + panXRef.current)) / zoomRef.current + W / 2,
           y: (sy - (H / 2 + panYRef.current)) / zoomRef.current + H / 2,
@@ -6910,10 +6966,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               // Convert canvas coords back to screen coords for overlay positioning
               const logX = bb.x0;
               const logY = bb.y0;
-              const screenX = ((logX - W / 2) * zoomRef.current + W / 2 + panXRef.current) * (rect.width / canvas.width);
-              const screenY = ((logY - H / 2) * zoomRef.current + H / 2 + panYRef.current) * (rect.height / canvas.height);
-              const scaledFontSize = tx.fontSize * zoomRef.current * (rect.height / canvas.height);
-              const bbW = (bb.x1 - bb.x0) * zoomRef.current * (rect.width / canvas.width);
+              const screenX = ((logX - W / 2) * zoomRef.current + W / 2 + panXRef.current) * (rect.width / cssW(canvas));
+              const screenY = ((logY - H / 2) * zoomRef.current + H / 2 + panYRef.current) * (rect.height / cssH(canvas));
+              const scaledFontSize = tx.fontSize * zoomRef.current * (rect.height / cssH(canvas));
+              const bbW = (bb.x1 - bb.x0) * zoomRef.current * (rect.width / cssW(canvas));
               textEditingIdxRef.current = i;
               setTextEditing({
                 idx: i,
@@ -6967,10 +7023,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+      const x = (e.clientX - rect.left) * (cssW(canvas) / rect.width);
+      const y = (e.clientY - rect.top) * (cssH(canvas) / rect.height);
       let pip = webcamPipRectRef.current;
-      if (!pip.w || !pip.h) pip = defaultWebcamPipRect(canvas.width, canvas.height, webcamPipBottomInsetRef.current);
+      if (!pip.w || !pip.h) pip = defaultWebcamPipRect(cssW(canvas), cssH(canvas), webcamPipBottomInsetRef.current);
       if (x < pip.x || x > pip.x + pip.w || y < pip.y || y > pip.y + pip.h) return;
       const cx = pip.x + pip.w / 2;
       const cy = pip.y + pip.h / 2;
@@ -6981,8 +7037,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const ny = cy - nh / 2;
       webcamPipRectRef.current = clampWebcamPip(
         { x: nx, y: ny, w: nw, h: nh },
-        canvas.width,
-        canvas.height,
+        cssW(canvas),
+        cssH(canvas),
         webcamPipBottomInsetRef.current,
       );
       renderDirtyRef.current = true;
@@ -7062,8 +7118,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const nh = Math.round(nw / WEBCAM_PIP_ASPECT);
         webcamPipRectRef.current = clampWebcamPip(
           { x: cx0 - nw / 2, y: cy0 - nh / 2, w: nw, h: nh },
-          canvas.width,
-          canvas.height,
+          cssW(canvas),
+          cssH(canvas),
           webcamPipBottomInsetRef.current,
         );
         renderDirtyRef.current = true;
@@ -7446,7 +7502,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             onClick={() => {
               const canvas = canvasRef.current;
               if (!canvas) return;
-              applyZoomAtRef.current(zoomRef.current + ZOOM_BUTTON_STEP, canvas.width / 2, canvas.height / 2);
+              applyZoomAtRef.current(zoomRef.current + ZOOM_BUTTON_STEP, cssW(canvas) / 2, cssH(canvas) / 2);
             }}
             style={zoomControlBtnStyle}
             title="Zoom in"
@@ -7459,7 +7515,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             onClick={() => {
               const canvas = canvasRef.current;
               if (!canvas) return;
-              applyZoomAtRef.current(zoomRef.current - ZOOM_BUTTON_STEP, canvas.width / 2, canvas.height / 2);
+              applyZoomAtRef.current(zoomRef.current - ZOOM_BUTTON_STEP, cssW(canvas) / 2, cssH(canvas) / 2);
             }}
             style={zoomControlBtnStyle}
             title="Zoom out"

@@ -44,6 +44,10 @@ function renderMaskedFrame(
       maskImageData.data[i * 4 + 3] = 255;
     }
     mctx.putImageData(maskImageData, 0, 0);
+    // Nearest-neighbour rescale: bilinear smoothing feathered the mask edge,
+    // which shifted the racket cut-out boundary off the actual racket ("frame
+    // layer position not precise"). Keep the alpha edge crisp and aligned.
+    rctx.imageSmoothingEnabled = false;
     rctx.drawImage(maskCanvas, 0, 0, sw, sh);
     const rescaled = rctx.getImageData(0, 0, sw, sh);
     const data = new Uint8ClampedArray(sw * sh);

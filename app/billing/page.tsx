@@ -12,7 +12,9 @@ import { CreditCard, LogOut, Loader2, ExternalLink } from 'lucide-react';
 import WorkspaceChrome from '@/components/WorkspaceChrome';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
-type SubStatus = { status: string; email: string | null; updatedAt?: string | null };
+type SubStatus = { status: string; email: string | null; updatedAt?: string | null; tier?: string | null; seats?: number | null };
+
+const TIER_LABEL: Record<string, string> = { light: 'Light', pro: 'Pro', academy: 'Academy' };
 
 const ACTIVE_STATUSES = new Set(['active', 'trialing']);
 
@@ -78,13 +80,15 @@ export default function BillingPage() {
             <p style={muted}>Checking subscription…</p>
           ) : isActive ? (
             <p style={muted}>
-              Status: <strong style={{ color: '#30D158' }}>{sub!.status}</strong>
+              Plan: <strong>{sub?.tier ? TIER_LABEL[sub.tier] ?? sub.tier : 'Pro'}</strong>
+              {sub?.seats && sub.seats > 1 ? ` · ${sub.seats} seats` : ''}
+              {' · '}Status: <strong style={{ color: '#30D158' }}>{sub!.status}</strong>
               {sub?.updatedAt ? ` · updated ${new Date(sub.updatedAt).toLocaleDateString()}` : ''}
             </p>
           ) : (
             <p style={muted}>
               Status: <strong>{sub?.status && sub.status !== 'none' ? sub.status : 'no active subscription'}</strong>
-              {' — '}$20/month or $200/year via Stripe.
+              {' — '}plans from $5/mo (Light) to $40/mo (Academy) via Stripe.
             </p>
           )}
           <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>

@@ -107,18 +107,63 @@ export function computeFootSpacing(keypoints: PoseKeypoint[] | null): FootSpacin
   return { absolutePx, normalizedToShoulderWidth };
 }
 
-/** Foot direction from knee → ankle (toe points along shin extension). */
+/**
+ * Foot direction as a screen-space unit vector (y grows downward).
+ *
+ * MoveNet exposes no toe/heel keypoint, so the foot cannot be read directly.
+ * We model it anatomically: the foot is ~perpendicular to the shin, the toe is
+ * always at/below the ankle (never above), and it points FORWARD toward the
+ * player's stance/facing direction. This mirrors the on-canvas foot line
+ * (Canvas.drawSkeletonOverlay) exactly so the AI-Detect number and the drawn
+ * line always agree. `bodyCenterX` is the hip midpoint; `facing` is +1 when the
+ * player faces screen-right, -1 when facing screen-left.
+ */
+export function estimateFootVector(
+  knee: { x: number; y: number },
+  ankle: { x: number; y: number },
+  bodyCenterX: number | null,
+  facing: 1 | -1,
+): { x: number; y: number } {
+  const shinX = ankle.x - knee.x;
+  const shinY = ankle.y - knee.y;
+  const shinLen = Math.hypot(shinX, shinY) || 1;
+  // Ankle clearly ahead/behind the body → that side is forward; else use facing.
+  let fwd: number = facing;
+  if (bodyCenterX != null && Math.abs(ankle.x - bodyCenterX) > shinLen * 0.15) {
+    fwd = ankle.x >= bodyCenterX ? 1 : -1;
+  }
+  // Two unit perpendiculars to the shin; pick the one that points down + forward.
+  const p1x = shinY, p1y = -shinX;
+  const p2x = -shinY, p2y = shinX;
+  const l1 = Math.hypot(p1x, p1y) || 1;
+  const l2 = Math.hypot(p2x, p2y) || 1;
+  const s1 = 0.6 * (p1y / l1) + 0.4 * fwd * (p1x / l1);
+  const s2 = 0.6 * (p2y / l2) + 0.4 * fwd * (p2x / l2);
+  let dirX = s1 >= s2 ? p1x / l1 : p2x / l2;
+  let dirY = s1 >= s2 ? p1y / l1 : p2y / l2;
+  // Hard guarantee: never point the toe above the ankle.
+  if (dirY < 0) { dirY = 0; dirX = fwd; const l = Math.hypot(dirX, dirY) || 1; dirX /= l; dirY /= l; }
+  return { x: dirX, y: dirY };
+}
+
+/** Foot direction (degrees), estimated anatomically — see estimateFootVector. */
 export function computeFootDirection(keypoints: PoseKeypoint[] | null): FootDirection {
   const lk = kp(keypoints, POSE.L_KNEE);
   const rk = kp(keypoints, POSE.R_KNEE);
   const la = kp(keypoints, POSE.L_ANKLE);
   const ra = kp(keypoints, POSE.R_ANKLE);
+  const lh = kp(keypoints, POSE.L_HIP);
+  const rh = kp(keypoints, POSE.R_HIP);
+  const nose = kp(keypoints, 0);
+
+  const hipXs = [lh, rh].filter((h): h is PoseKeypoint => !!h).map((h) => h.x);
+  const bodyCenterX = hipXs.length ? hipXs.reduce((a, b) => a + b, 0) / hipXs.length : null;
+  const facing: 1 | -1 = bodyCenterX != null && nose ? (nose.x >= bodyCenterX ? 1 : -1) : 1;
 
   let leftFootDeg: number | null = null;
   let rightFootDeg: number | null = null;
-
-  if (lk && la) leftFootDeg = vectorAngleDeg(la.x - lk.x, la.y - lk.y);
-  if (rk && ra) rightFootDeg = vectorAngleDeg(ra.x - rk.x, ra.y - rk.y);
+  if (lk && la) { const v = estimateFootVector(lk, la, bodyCenterX, facing); leftFootDeg = vectorAngleDeg(v.x, v.y); }
+  if (rk && ra) { const v = estimateFootVector(rk, ra, bodyCenterX, facing); rightFootDeg = vectorAngleDeg(v.x, v.y); }
 
   return { leftFootDeg, rightFootDeg };
 }

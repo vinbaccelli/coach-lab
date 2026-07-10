@@ -8,9 +8,12 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Check, X, Minus, ChevronDown } from 'lucide-react';
+import { Check, X, Minus, ChevronDown, Sparkles, Ruler, Film, Layers, Users, Share2 } from 'lucide-react';
+import { PLANS, DEMO, planPrice, yearlyPerMonth } from '@/lib/plans';
 
-const ACCENT = '#FF3B30';
+// Accent matches the app's design system (styles/tokens.css --cl-accent) for a
+// consistent white/Apple look — no more off-brand red.
+const ACCENT = '#007AFF';
 const INK = '#1D1D1F';
 const MUTED = '#6E6E73';
 
@@ -44,22 +47,35 @@ const features = [
   },
 ];
 
-// Verified comparison (research-checked). y=yes, n=no, q='?'.
-const COMPARE_COLS = ['AngleMotion', 'Dartfish', 'CoachNow', 'OnForm', 'Kinovea', 'SwingVision'];
+// Representative concept visuals for each feature row (NOT app screenshots).
+// Swap in real photos by dropping /public/marketing/feature-{0..5}.jpg — the
+// tile falls back to this branded icon+caption when a photo is absent.
+const FEATURE_VISUALS: Array<{ Icon: React.ElementType; caption: string; tint: string }> = [
+  { Icon: Sparkles, caption: 'AI reads every joint — you keep the pen', tint: '#EAF3FF' },
+  { Icon: Ruler, caption: '13+ live angles, right on the frame', tint: '#EAF7EE' },
+  { Icon: Film, caption: 'The whole stroke, frozen across space', tint: '#F0EEFF' },
+  { Icon: Layers, caption: 'Phase-by-phase, in slow motion', tint: '#FFF3E8' },
+  { Icon: Users, caption: "Every player's story in one file", tint: '#EAF3FF' },
+  { Icon: Share2, caption: 'Record → report → publish', tint: '#EAF7EE' },
+];
+
+// Comparison vs the two platforms in our niche only (CoachNow, Dartfish).
+// y=yes, n=no, q='?'.
+const COMPARE_COLS = ['AngleMotion', 'CoachNow', 'Dartfish'];
 const COMPARE_ROWS: Array<{ label: string; cells: Array<'y' | 'n' | 'q' | string> }> = [
-  { label: 'Price (annual)', cells: ['$200/yr', '€7–180/mo', '$59–899/yr', '~$20–60/mo', 'Free', '$179.99/yr'] },
-  { label: 'AI pose / skeleton overlay', cells: ['y', 'y', 'y', 'q', 'n', 'n'] },
-  { label: 'Angle measurement (auto)', cells: ['y', 'y', 'y', 'y', 'y', 'n'] },
-  { label: 'Editable AI skeleton (override by hand)', cells: ['y', 'n', 'q', 'q', 'n', 'n'] },
-  { label: 'Slow-mo / frame-by-frame', cells: ['y', 'y', 'y', 'y', 'y', 'y'] },
-  { label: 'Drawing / telestration', cells: ['y', 'y', 'y', 'y', 'y', 'q'] },
-  { label: 'Side-by-side compare', cells: ['y', 'y', 'y', 'y', 'y', 'n'] },
-  { label: 'StroMotion / motion-trail composite', cells: ['y', 'y', 'n', 'q', 'q', 'n'] },
-  { label: 'Coaching report (Google Docs)', cells: ['y', 'q', 'q', 'q', 'n', 'y'] },
-  { label: 'Player database / client file', cells: ['y', 'q', 'y', 'y', 'n', 'n'] },
-  { label: 'Videos stay local (no cloud lock-in)', cells: ['y', 'n', 'n', 'n', 'y', 'n'] },
-  { label: 'One-click YouTube publish', cells: ['y', 'q', 'q', 'q', 'n', 'q'] },
-  { label: 'SwingVision stat import (Match Decoder)', cells: ['y', 'n', 'n', 'n', 'n', 'q'] },
+  { label: 'Price (annual)', cells: ['from $50/yr', '$59–899/yr', '€7–180/mo'] },
+  { label: 'AI pose / skeleton overlay', cells: ['y', 'y', 'y'] },
+  { label: 'Angle measurement (auto)', cells: ['y', 'y', 'y'] },
+  { label: 'Editable AI skeleton (override by hand)', cells: ['y', 'q', 'n'] },
+  { label: 'Slow-mo / frame-by-frame', cells: ['y', 'y', 'y'] },
+  { label: 'Drawing / telestration', cells: ['y', 'y', 'y'] },
+  { label: 'Side-by-side compare', cells: ['y', 'y', 'y'] },
+  { label: 'StroMotion / motion-trail composite', cells: ['y', 'n', 'y'] },
+  { label: 'Coaching report (Google Docs)', cells: ['y', 'q', 'q'] },
+  { label: 'Player database / client file', cells: ['y', 'y', 'q'] },
+  { label: 'Videos stay local (no cloud lock-in)', cells: ['y', 'n', 'n'] },
+  { label: 'One-click YouTube publish', cells: ['y', 'q', 'q'] },
+  { label: 'SwingVision stat import (Match Decoder)', cells: ['y', 'n', 'n'] },
 ];
 
 const faqs = [
@@ -136,9 +152,18 @@ export default function LandingPage() {
               <p style={{ fontSize: 15.5, color: MUTED, lineHeight: 1.6, margin: 0 }}>{f.b}</p>
               {f.micro && <p style={{ fontSize: 14, fontWeight: 700, color: ACCENT, margin: '10px 0 0' }}>{f.micro}</p>}
             </div>
-            <div style={{ flex: '1 1 280px', minWidth: 240, height: 200, borderRadius: 16, background: 'linear-gradient(135deg, #0a0a10, #1a2740)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.35)', fontSize: 13, fontWeight: 600 }}>
-              Product screenshot
-            </div>
+            {(() => {
+              const v = FEATURE_VISUALS[i % FEATURE_VISUALS.length];
+              const Icon = v.Icon;
+              return (
+                <div style={{ flex: '1 1 280px', minWidth: 240, height: 200, borderRadius: 16, background: `linear-gradient(135deg, ${v.tint}, #FFFFFF)`, border: '1px solid #E9E9EE', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 20, textAlign: 'center' }}>
+                  <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#fff', boxShadow: '0 4px 16px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Icon size={26} color={ACCENT} />
+                  </div>
+                  <span style={{ fontSize: 13.5, fontWeight: 700, color: INK, maxWidth: 240 }}>{v.caption}</span>
+                </div>
+              );
+            })()}
           </div>
         ))}
       </section>
@@ -175,7 +200,7 @@ export default function LandingPage() {
               <tr style={{ borderBottom: '2px solid #E5E5EA' }}>
                 <th style={{ padding: '12px 14px', textAlign: 'left', fontSize: 11, color: MUTED, fontWeight: 600 }}>Feature</th>
                 {COMPARE_COLS.map((c, i) => (
-                  <th key={c} style={{ padding: '12px 8px', textAlign: 'center', fontSize: 12, fontWeight: 800, color: i === 0 ? ACCENT : INK, background: i === 0 ? 'rgba(255,59,48,0.06)' : undefined }}>{c}</th>
+                  <th key={c} style={{ padding: '12px 8px', textAlign: 'center', fontSize: 12, fontWeight: 800, color: i === 0 ? ACCENT : INK, background: i === 0 ? 'rgba(0,122,255,0.06)' : undefined }}>{c}</th>
                 ))}
               </tr>
             </thead>
@@ -184,7 +209,7 @@ export default function LandingPage() {
                 <tr key={r.label} style={{ borderBottom: '1px solid #F0F0F0' }}>
                   <td style={{ padding: '10px 14px', color: INK, fontWeight: 500 }}>{r.label}</td>
                   {r.cells.map((v, ci) => (
-                    <td key={ci} style={{ padding: '10px 8px', textAlign: 'center', background: ci === 0 ? 'rgba(255,59,48,0.04)' : undefined }}>
+                    <td key={ci} style={{ padding: '10px 8px', textAlign: 'center', background: ci === 0 ? 'rgba(0,122,255,0.04)' : undefined }}>
                       <Cell v={v} />
                     </td>
                   ))}
@@ -196,38 +221,51 @@ export default function LandingPage() {
         <p style={{ fontSize: 11, color: MUTED, marginTop: 10 }}>Verified data; “–” means uncertain/undocumented, not a claim of absence. Prices approximate; check each vendor for current pricing.</p>
       </section>
 
-      {/* PRICING */}
+      {/* PRICING — three tiers + demo */}
       <section id="pricing" style={{ background: '#FAFAFA', borderTop: '1px solid #EEE', padding: '64px 20px' }}>
-        <div style={{ maxWidth: 820, margin: '0 auto', textAlign: 'center' }}>
-          <h2 style={{ fontSize: 'clamp(24px, 4vw, 34px)', fontWeight: 900, letterSpacing: -0.5, margin: '0 0 8px' }}>Less than one lesson a month.</h2>
-          <p style={{ fontSize: 15, color: MUTED, margin: '0 0 24px' }}>A full coaching platform for barely more than a player-only stats app. Try it free, then keep the tools that grow your business all season.</p>
-          <div style={{ display: 'inline-flex', background: '#EDEDED', borderRadius: 999, padding: 4, marginBottom: 28 }}>
+        <div style={{ maxWidth: 1080, margin: '0 auto', textAlign: 'center' }}>
+          <h2 style={{ fontSize: 'clamp(24px, 4vw, 34px)', fontWeight: 900, letterSpacing: -0.5, margin: '0 0 8px' }}>Pricing that fits how you coach.</h2>
+          <p style={{ fontSize: 15, color: MUTED, margin: '0 0 24px' }}>Start light, go Pro for the full platform + Academy, or run your whole team on one plan.</p>
+          <div style={{ display: 'inline-flex', background: '#EDEDED', borderRadius: 999, padding: 4, marginBottom: 32 }}>
             <button type="button" onClick={() => setAnnual(true)} style={toggleBtn(annual)}>Annual <span style={{ fontSize: 10, fontWeight: 800, color: annual ? '#fff' : ACCENT }}>· 2 mo free</span></button>
             <button type="button" onClick={() => setAnnual(false)} style={toggleBtn(!annual)}>Monthly</button>
           </div>
-          <div style={{ display: 'flex', gap: 18, justifyContent: 'center', flexWrap: 'wrap' }}>
-            {/* Featured plan */}
-            <div style={{ flex: '1 1 320px', maxWidth: 380, background: '#fff', border: `2px solid ${ACCENT}`, borderRadius: 18, padding: 26, textAlign: 'left', boxShadow: '0 12px 40px rgba(255,59,48,0.12)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 800, color: ACCENT }}>{annual ? 'ANNUAL' : 'MONTHLY'}</span>
-                {annual && <span style={{ fontSize: 10, fontWeight: 800, background: ACCENT, color: '#fff', padding: '2px 8px', borderRadius: 999 }}>MOST POPULAR</span>}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                <span style={{ fontSize: 40, fontWeight: 900, letterSpacing: -1 }}>{annual ? '$200' : '$20'}</span>
-                <span style={{ fontSize: 15, color: MUTED }}>{annual ? '/yr' : '/mo'}</span>
-                {annual && <span style={{ fontSize: 15, color: '#B0B0B5', textDecoration: 'line-through' }}>$240</span>}
-              </div>
-              <p style={{ fontSize: 13, color: MUTED, margin: '4px 0 14px' }}>{annual ? '$16.67/mo · 2 months free' : 'Switch to yearly anytime for 2 months free + the eBook.'}</p>
-              {annual && <div style={{ fontSize: 12, fontWeight: 700, color: ACCENT, background: 'rgba(255,59,48,0.08)', padding: '6px 10px', borderRadius: 8, marginBottom: 14 }}>Includes the free tennis biomechanics eBook</div>}
-              <Link href="/pricing" style={{ ...ctaBtn, display: 'block', textAlign: 'center', padding: '12px', fontSize: 15 }}>Start Free</Link>
-              <ul style={{ listStyle: 'none', padding: 0, margin: '18px 0 0', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {['Editable AI skeleton + 13+ angle detection', 'StroMotion composites (image + video)', 'Slow-mo phase replays + side-by-side', 'Player database + 2 Google Docs per player', 'Technical sheet + progress tracking', 'Recording hub (screen / webcam / mic)', 'One-click YouTube publish', 'SwingVision Match Decoder', 'Your videos stay local'].map((li) => (
-                  <li key={li} style={{ display: 'flex', gap: 8, fontSize: 13.5, color: INK }}><Check size={16} style={{ color: '#30A46C', flexShrink: 0, marginTop: 1 }} /> {li}</li>
-                ))}
-              </ul>
-            </div>
+          <div style={{ display: 'flex', gap: 18, justifyContent: 'center', flexWrap: 'wrap', alignItems: 'stretch' }}>
+            {PLANS.map((plan) => {
+              const price = annual ? plan.priceYearly : plan.priceMonthly;
+              return (
+                <div key={plan.id} style={{
+                  flex: '1 1 300px', maxWidth: 350, background: '#fff', textAlign: 'left',
+                  border: plan.featured ? `2px solid ${ACCENT}` : '1px solid #E5E5EA',
+                  borderRadius: 18, padding: 26,
+                  boxShadow: plan.featured ? '0 12px 40px rgba(0,122,255,0.12)' : '0 1px 3px rgba(0,0,0,0.04)',
+                  display: 'flex', flexDirection: 'column',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontSize: 17, fontWeight: 800 }}>{plan.name}</span>
+                    {plan.featured && <span style={{ fontSize: 10, fontWeight: 800, background: ACCENT, color: '#fff', padding: '2px 8px', borderRadius: 999 }}>MOST POPULAR</span>}
+                    {plan.seats > 1 && <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>up to {plan.seats} coaches</span>}
+                  </div>
+                  <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px' }}>{plan.tagline}</p>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontSize: 38, fontWeight: 900, letterSpacing: -1 }}>${price}</span>
+                    <span style={{ fontSize: 15, color: MUTED }}>{annual ? '/yr' : '/mo'}</span>
+                  </div>
+                  <p style={{ fontSize: 12, color: MUTED, margin: '4px 0 14px', minHeight: 16 }}>{annual ? `$${yearlyPerMonth(plan)}/mo · 2 months free` : 'Billed monthly · cancel anytime'}</p>
+                  <Link href="/pricing" style={{ ...ctaBtn, display: 'block', textAlign: 'center', padding: '11px', fontSize: 15, background: plan.featured ? ACCENT : INK }}>Choose {plan.name}</Link>
+                  <ul style={{ listStyle: 'none', padding: 0, margin: '16px 0 0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {plan.features.map((li) => (
+                      <li key={li} style={{ display: 'flex', gap: 8, fontSize: 13, color: INK }}><Check size={15} style={{ color: '#30A46C', flexShrink: 0, marginTop: 1 }} /> {li}</li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
           </div>
-          <p style={{ fontSize: 13, color: MUTED, marginTop: 18 }}>Start with a free trial — no commitment. One retained student pays for the whole year.</p>
+          <div style={{ marginTop: 22, display: 'inline-flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', justifyContent: 'center', fontSize: 14, color: MUTED }}>
+            <span>{DEMO.note}</span>
+            <a href={DEMO.url} target={DEMO.url.startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ ...ctaBtn, background: 'transparent', color: ACCENT, border: `1.5px solid ${ACCENT}` }}>{DEMO.label}</a>
+          </div>
         </div>
       </section>
 
@@ -245,21 +283,21 @@ export default function LandingPage() {
         ))}
       </section>
 
-      {/* FINAL CTA */}
-      <section style={{ background: 'linear-gradient(160deg, #0a0a10 0%, #14203a 100%)', color: '#fff', padding: '64px 20px', textAlign: 'center' }}>
+      {/* FINAL CTA — light, Apple-toned */}
+      <section style={{ background: 'linear-gradient(160deg, #EAF3FF 0%, #FFFFFF 100%)', color: INK, padding: '64px 20px', textAlign: 'center', borderTop: '1px solid #EEE' }}>
         <h2 style={{ fontSize: 'clamp(26px, 4.4vw, 40px)', fontWeight: 900, letterSpacing: -1, margin: '0 0 12px' }}>Ready to raise your game?</h2>
-        <p style={{ fontSize: 16, color: 'rgba(255,255,255,0.7)', maxWidth: 560, margin: '0 auto 26px', lineHeight: 1.55 }}>
+        <p style={{ fontSize: 16, color: MUTED, maxWidth: 560, margin: '0 auto 26px', lineHeight: 1.55 }}>
           Analyze faster, teach clearer, and grow your coaching business — for less than one lesson a month. Go yearly and get the free tennis biomechanics eBook.
         </p>
         <Link href="/login" style={{ ...ctaBtn, fontSize: 16, padding: '14px 32px' }}>Start Free</Link>
-        <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', marginTop: 16 }}>Annual is 2 months free — and the eBook’s on us.</p>
+        <p style={{ fontSize: 13, color: MUTED, marginTop: 16 }}>Annual is 2 months free — and the eBook’s on us.</p>
       </section>
 
-      {/* FOOTER */}
-      <footer style={{ background: '#0a0a10', color: 'rgba(255,255,255,0.6)', padding: '32px 20px', textAlign: 'center' }}>
+      {/* FOOTER — light */}
+      <footer style={{ background: '#FFFFFF', color: MUTED, padding: '32px 20px', textAlign: 'center', borderTop: '1px solid #EEE' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', marginBottom: 14 }}>
           <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 24, height: 24, borderRadius: 5 }} />
-          <span style={{ fontSize: 15, fontWeight: 800, color: '#fff' }}>Angle<span style={{ color: ACCENT }}>Motion</span></span>
+          <span style={{ fontSize: 15, fontWeight: 800, color: INK }}>AngleMotion</span>
         </div>
         <div style={{ display: 'flex', gap: 18, justifyContent: 'center', flexWrap: 'wrap', fontSize: 13, marginBottom: 12 }}>
           <a href="#features" style={footLink}>Features</a>
@@ -268,14 +306,14 @@ export default function LandingPage() {
           <Link href="/terms" style={footLink}>Terms</Link>
           <Link href="/login" style={footLink}>Sign In</Link>
         </div>
-        <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.35)', margin: 0 }}>{'©'} 2026 AngleMotion. Built by tennis coaches.</p>
+        <p style={{ fontSize: 12, color: '#B0B0B5', margin: 0 }}>{'©'} 2026 AngleMotion. Built by tennis coaches.</p>
       </footer>
     </div>
   );
 }
 
 const navLink: React.CSSProperties = { fontSize: 14, color: INK, textDecoration: 'none', fontWeight: 500 };
-const footLink: React.CSSProperties = { color: 'rgba(255,255,255,0.6)', textDecoration: 'none' };
+const footLink: React.CSSProperties = { color: MUTED, textDecoration: 'none' };
 const ctaBtn: React.CSSProperties = { display: 'inline-block', background: ACCENT, color: '#fff', fontWeight: 700, fontSize: 14, padding: '9px 20px', borderRadius: 999, textDecoration: 'none', border: 'none', cursor: 'pointer' };
 function toggleBtn(active: boolean): React.CSSProperties {
   return { padding: '8px 18px', borderRadius: 999, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700, background: active ? ACCENT : 'transparent', color: active ? '#fff' : INK };

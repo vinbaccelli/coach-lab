@@ -8,9 +8,9 @@ export async function GET() {
 
   const { data, error } = await session.supabase
     .from('subscriptions')
-    .select('status, stripe_subscription_id, updated_at')
+    .select('status, tier, seats, stripe_subscription_id, updated_at')
     .eq('user_id', session.userId)
-    .maybeSingle<{ status: string; stripe_subscription_id: string | null; updated_at: string }>();
+    .maybeSingle<{ status: string; tier: string | null; seats: number | null; stripe_subscription_id: string | null; updated_at: string }>();
 
   if (error) {
     // Table may not be migrated yet — treat as "no subscription" instead of failing the page.
@@ -19,6 +19,8 @@ export async function GET() {
 
   return NextResponse.json({
     status: data?.status ?? 'none',
+    tier: data?.tier ?? null,
+    seats: data?.seats ?? null,
     updatedAt: data?.updated_at ?? null,
     email: session.email ?? null,
   });

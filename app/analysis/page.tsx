@@ -559,7 +559,15 @@ function Home() {
   }, [stroSampleTimesOverride, stroSampleTimes, stroFrameCount]);
 
   useEffect(() => {
-    setStroSampleTimesOverride(null);
+    setStroSampleTimesOverride((prev) => {
+      // Frame COUNT changed → reseed evenly (null lets the memo recompute).
+      if (!prev || prev.length !== stroFrameCount) return null;
+      // Only the trim range moved (handle drag) → KEEP the coach's manually
+      // placed sample balls, just clamp any that fell outside the new
+      // [start,end] instead of wiping every position (the "snapshots move from
+      // their position" bug).
+      return enforceMonotonicSampleTimes(prev, stroStartFrame, stroEndFrame);
+    });
   }, [stroStartFrame, stroEndFrame, stroFrameCount]);
 
   const stroMotionHtml5Only =
@@ -832,6 +840,11 @@ function Home() {
   const [replayActive, setReplayActive] = useState(false);
   const [replayIndex, setReplayIndex] = useState<number | null>(null);
   const replayAbortRef = useRef(false);
+  // Metrics "section" the replay/recording travels over. Shown as draggable
+  // start/end handles on the timeline once a snapshot exists; defaults to the
+  // span of all snapshots so the whole stroke is covered.
+  const [metricsSectionStart, setMetricsSectionStart] = useState<number | null>(null);
+  const [metricsSectionEnd, setMetricsSectionEnd] = useState<number | null>(null);
 
   /** Seek the video to a time and resolve once the frame is ready. */
   const seekVideoTo = useCallback((t: number): Promise<void> => new Promise((resolve) => {
@@ -885,7 +898,14 @@ function Home() {
   // Snapshot IDs the Generate workspace selected for the video (empty = all).
   const generateIncludedIdsRef = useRef<string[] | null>(null);
 
-  /** Slow-mo replay: Freeze 3s → slow-play → snap to next → Freeze. Optionally records to a Blob. */
+  /**
+   * Section-driven slow-mo replay: travel the SELECTED timeline section, slow-
+   * playing the real video the whole way and freezing on each snapshot as the
+   * playhead passes it. Previously it jumped snapshot→snapshot and only ever
+   * called play() when a *next* snapshot existed — so a single snapshot (or a
+   * mostly-held sequence) recorded a frozen frame ("outputs the picture only").
+   * Now the stroke actually plays. Optionally stops a passed-in recorder at end.
+   */
   const handleReplaySnapshots = useCallback(async (recorder?: MediaRecorder | null) => {
     const inc = generateIncludedIdsRef.current;
     const ordered = [...snapshots]
@@ -894,49 +914,70 @@ function Home() {
     if (ordered.length === 0) return;
     const v = videoRef.current;
     if (!v) return;
-    // Replay at the speed chosen in the Generate workspace (default 0.25×
-    // slow motion). Restore the original rate when done.
+
+    // Section to travel: the coach's timeline selection, else the snapshot span
+    // (padded) so there is real motion before the first and after the last phase.
+    const secStart = metricsSectionStart ?? Math.max(0, ordered[0].timeSec - 0.3);
+    const secEnd = Math.max(secStart + 0.1, metricsSectionEnd ?? (ordered[ordered.length - 1].timeSec + 0.3));
+    const stops = ordered.filter((s) => s.timeSec >= secStart - 0.05 && s.timeSec <= secEnd + 0.05);
+
     const originalRate = v.playbackRate || 1;
     const replayRate = generateReplayRate > 0 ? generateReplayRate : 0.25;
     replayAbortRef.current = false;
     setReplayActive(true);
-    // Replay orchestrates snapshot selection itself while the playhead travels.
     modeAutopilotSuppressedRef.current = true;
     const HOLD_MS = Math.max(0.5, generateHoldSec) * 1000;
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-    for (let i = 0; i < ordered.length; i++) {
-      if (replayAbortRef.current) break;
-      const snap = ordered[i];
-      // Snap to this phase, restore its state, freeze 3s
-      await seekVideoTo(snap.timeSec);
+
+    // Slow-play from the current position up to `target`, then pause.
+    const playTo = async (target: number) => {
+      if (!videoRef.current || target <= videoRef.current.currentTime + 0.02) return;
+      v.playbackRate = replayRate;
+      try { await v.play(); } catch { /* ignore */ }
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (replayAbortRef.current || !videoRef.current) { resolve(); return; }
+          if (videoRef.current.currentTime >= target - 0.02) { resolve(); return; }
+          requestAnimationFrame(check);
+        };
+        requestAnimationFrame(check);
+      });
       v.pause();
+    };
+
+    // Begin at the section start.
+    await seekVideoTo(secStart);
+    v.pause();
+
+    for (let i = 0; i < stops.length; i++) {
+      if (replayAbortRef.current) break;
+      const snap = stops[i];
+      // Play the real video up to this phase — this is the stroke motion.
+      await playTo(snap.timeSec);
+      if (replayAbortRef.current) break;
+      // Freeze on the phase with its drawings + skeleton restored.
       setReplayIndex(i);
       selectSnapshot(snap.id);
       await sleep(HOLD_MS);
-      if (replayAbortRef.current) break;
-      // Slow-play to the next phase
-      const next = ordered[i + 1];
-      if (next) {
-        v.playbackRate = replayRate;
-        try { await v.play(); } catch { /* ignore */ }
-        await new Promise<void>((resolve) => {
-          const check = () => {
-            if (replayAbortRef.current || !videoRef.current) { resolve(); return; }
-            if (videoRef.current.currentTime >= next.timeSec - 0.02) { resolve(); return; }
-            requestAnimationFrame(check);
-          };
-          requestAnimationFrame(check);
-        });
-        v.pause();
-        v.playbackRate = replayRate;
-      }
     }
+    // Follow-through: play out to the section end.
+    if (!replayAbortRef.current) await playTo(secEnd);
+
     if (videoRef.current) { videoRef.current.pause(); videoRef.current.playbackRate = originalRate; }
     if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* noop */ } }
     modeAutopilotSuppressedRef.current = false;
     setReplayActive(false);
     setReplayIndex(null);
-  }, [snapshots, seekVideoTo, selectSnapshot, generateReplayRate, generateHoldSec]);
+  }, [snapshots, seekVideoTo, selectSnapshot, generateReplayRate, generateHoldSec, metricsSectionStart, metricsSectionEnd]);
+
+  // Default the metrics section to the snapshot span; preserve manual drags.
+  useEffect(() => {
+    if (snapshots.length === 0) { setMetricsSectionStart(null); setMetricsSectionEnd(null); return; }
+    const times = snapshots.map(s => s.timeSec).sort((a, b) => a - b);
+    const lo = times[0], hi = times[times.length - 1];
+    setMetricsSectionStart(prev => prev == null ? Math.max(0, lo - 0.3) : prev);
+    setMetricsSectionEnd(prev => prev == null ? hi + 0.3 : prev);
+  }, [snapshots]);
 
   /** Record the slow-mo replay to an MP4 file via canvas captureStream + ffmpeg. */
   const recordReplayToMp4 = useCallback(async (includedIds?: string[]) => {
@@ -4194,8 +4235,13 @@ function Home() {
     // the Snapshot architecture owns the timeline markers directly.
     if (!stroMotionActive && stroMotionHtml5Only && biomechPhaseMarkers) {
       return {
-        trimRange: null as null,
-        onTrimChange: undefined as undefined,
+        // Draggable start/end handles delimiting the section the Metrics replay/
+        // recording travels over. Each handle moves independently (PreciseTimeline
+        // passes the unchanged value through) and the timeline does not re-zoom.
+        trimRange: (metricsSectionStart != null && metricsSectionEnd != null)
+          ? { start: metricsSectionStart, end: metricsSectionEnd } as { start: number; end: number }
+          : null,
+        onTrimChange: (start: number, end: number) => { setMetricsSectionStart(start); setMetricsSectionEnd(end); },
         trimAccent: '#34C759',
         onCurrentTime: undefined as undefined,
         phaseMarkers: biomechPhaseMarkers,
@@ -4278,6 +4324,8 @@ function Home() {
     seekStroVideo,
     updateStroFrameTime,
     setStroActiveFrameIndex,
+    metricsSectionStart,
+    metricsSectionEnd,
   ]);
 
   const renderTimelineDock = () => (
@@ -4542,8 +4590,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       if (meas.jointAngles.rightElbowDeg != null) items.push({ id: `ai-re-${Date.now()}`, label: 'R Elbow', value: Math.round(meas.jointAngles.rightElbowDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.leftKneeDeg != null) items.push({ id: `ai-lk-${Date.now()}`, label: 'L Knee', value: Math.round(meas.jointAngles.leftKneeDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.rightKneeDeg != null) items.push({ id: `ai-rk-${Date.now()}`, label: 'R Knee', value: Math.round(meas.jointAngles.rightKneeDeg), unit: '°', type: 'angle' });
-      if (meas.jointAngles.leftShoulderDeg != null) items.push({ id: `ai-ls-${Date.now()}`, label: 'L Shoulder', value: Math.round(meas.jointAngles.leftShoulderDeg), unit: '°', type: 'angle' });
-      if (meas.jointAngles.rightShoulderDeg != null) items.push({ id: `ai-rs-${Date.now()}`, label: 'R Shoulder', value: Math.round(meas.jointAngles.rightShoulderDeg), unit: '°', type: 'angle' });
+      // NOTE: L/R Shoulder joint-angle items intentionally removed — not useful for
+      // coaching. Shoulder LINE orientation (L→R) is kept below as 'Shoulder (L→R)'.
       // Shoulder and hip line angles (L→R direction) + differential
       const lShoulder = kps[5], rShoulder = kps[6], lHip = kps[11], rHip = kps[12];
       let shoulderDeg: number | null = null;
@@ -4568,8 +4616,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         const headAngle = Math.round(((Math.atan2(nose.y - earMidY, nose.x - earMidX) * 180 / Math.PI) + 360) % 360);
         items.push({ id: `ai-hd-${Date.now()}`, label: 'Head Direction', value: headAngle, unit: '°', type: 'arrowAngle' });
       }
-      if (meas.footDirection.leftAnkleDeg != null) items.push({ id: `ai-lf-${Date.now()}`, label: 'L Foot Dir', value: Math.round(meas.footDirection.leftAnkleDeg), unit: '°', type: 'angle' });
-      if (meas.footDirection.rightAnkleDeg != null) items.push({ id: `ai-rf-${Date.now()}`, label: 'R Foot Dir', value: Math.round(meas.footDirection.rightAnkleDeg), unit: '°', type: 'angle' });
+      if (meas.footDirection.leftFootDeg != null) items.push({ id: `ai-lf-${Date.now()}`, label: 'L Foot Dir', value: Math.round(meas.footDirection.leftFootDeg), unit: '°', type: 'arrowAngle' });
+      if (meas.footDirection.rightFootDeg != null) items.push({ id: `ai-rf-${Date.now()}`, label: 'R Foot Dir', value: Math.round(meas.footDirection.rightFootDeg), unit: '°', type: 'arrowAngle' });
       if (meas.footSpacing?.distancePx != null) items.push({ id: `ai-fd-${Date.now()}`, label: 'Foot Distance', value: Math.round(meas.footSpacing.distancePx), unit: 'px', type: 'ruler' });
       // Racket angle (estimated from dominant wrist extension)
       const rW = kps[10], lW = kps[9], rE = kps[8], lE = kps[7];

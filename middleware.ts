@@ -60,18 +60,25 @@ export async function middleware(req: NextRequest) {
       return NextResponse.redirect(url);
     }
 
-    // ── Subscription gate: /analysis requires an active subscription ────────
-    // Admins bypass. Fails OPEN on query errors so an infra hiccup never
-    // locks paying coaches out of the core tool.
-    if (pathname.startsWith('/analysis') && !isAdmin(user.email)) {
+    // ── Subscription gate ───────────────────────────────────────────────────
+    // /analysis  → any active tier (Light / Pro / Academy).
+    // /academy   → Pro or Academy only (Light is analysis-with-metrics).
+    // Admins bypass. Fails OPEN on query errors so an infra hiccup never locks
+    // paying coaches out. `tier` defaults to 'pro' for pre-tier rows.
+    const gated = pathname.startsWith('/analysis') || pathname.startsWith('/academy');
+    if (gated && !isAdmin(user.email)) {
       try {
         const { data: sub } = await supabase
           .from('subscriptions')
-          .select('status')
+          .select('status, tier')
           .eq('user_id', user.id)
-          .maybeSingle<{ status: string }>();
+          .maybeSingle<{ status: string; tier: string | null }>();
         const active = sub?.status === 'active' || sub?.status === 'trialing';
-        if (!active) {
+        // Only 'light' is blocked from the academy; unknown/missing tier is
+        // treated as allowed (fail open) so a missing column never locks anyone out.
+        const academyOk = sub?.tier !== 'light';
+        const allowed = active && (!pathname.startsWith('/academy') || academyOk);
+        if (!allowed) {
           const url = req.nextUrl.clone();
           url.pathname = '/pricing';
           url.searchParams.set('required', '1');
