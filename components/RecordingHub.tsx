@@ -17,7 +17,7 @@
  * (see PostRecordingCropModal).
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Mic,
@@ -35,26 +35,16 @@ import {
   Download,
   AlertCircle,
 } from 'lucide-react';
-import ScreenRecorder, { type ScreenRecorderHandle } from '@/components/ScreenRecorder';
+import { useRecording } from '@/contexts/RecordingContext';
 import { RegionRecordOverlay, type ViewportRegion } from '@/components/RegionRecordOverlay';
 import type { WebcamPipMode } from '@/components/ToolPalette';
 
 export interface RecordingHubContentProps {
-  isRecording: boolean;
-  onRecordingChange: (v: boolean) => void;
-  /** Register the recorder's stop() so a page-level floating button can stop it
-   *  from any toolbar/screen (null when not recording). */
-  onRegisterStop?: (stop: (() => void) | null) => void;
-  /** Page-owned recorder (always-mounted) so recording survives toolbar/screen
-   *  changes. When provided, the hub drives THIS recorder and renders no internal
-   *  one; `isRecording` reflects its state. */
-  externalRecorderRef?: React.RefObject<ScreenRecorderHandle | null>;
+  // Recording itself is owned by the GLOBAL RecordingProvider (app/layout.tsx)
+  // so it survives route navigation; the hub is just its control surface.
   getCanvas: () => HTMLCanvasElement | null;
-  getWebcamStream: () => MediaStream | null;
-  getMicStream: () => MediaStream | null;
   layoutMode: 'youtube' | 'reels';
   onLayoutChange: (mode: 'youtube' | 'reels') => void;
-  onScreenRecordComplete?: (blob: Blob, ext: string) => void;
 
   onScreenshotEntireArea: () => void;
   onScreenshotSelectArea: (region: ViewportRegion) => void;
@@ -264,13 +254,9 @@ function HubRow({
 
 export function RecordingHubContent(props: RecordingHubContentProps) {
   const {
-    onRecordingChange,
     getCanvas,
-    getWebcamStream,
-    getMicStream,
     layoutMode,
     onLayoutChange,
-    onScreenRecordComplete,
     onScreenshotEntireArea,
     onScreenshotSelectArea,
     webcamActive,
@@ -295,27 +281,31 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
     hubLabelsExpanded = false,
     onToggleHubLabels,
     onRecordingError,
-    onRegisterStop,
-    externalRecorderRef,
   } = props;
 
   const io = hubIconOnly;
-  const internalRecorderRef = useRef<ScreenRecorderHandle | null>(null);
-  const recorderRef = externalRecorderRef ?? internalRecorderRef;
-  const [internalScreenRecording, setInternalScreenRecording] = useState(false);
-  // When the page owns the recorder, `isRecording` (prop) is the truth.
-  const screenRecording = externalRecorderRef ? props.isRecording : internalScreenRecording;
-  const setScreenRecording = setInternalScreenRecording;
+  // Global recorder — lives in RecordingProvider (app/layout.tsx), so the
+  // recording keeps running and the floating widget follows across every route.
+  const { recState, startRecording, stopRecording, error: globalRecError } = useRecording();
+  const screenRecording = recState === 'recording' || recState === 'paused' || recState === 'stopped';
   const [recorderError, setRecorderError] = useState<string | null>(null);
   const [screenshotModalOpen, setScreenshotModalOpen] = useState(false);
   const [screenshotAreaOpen, setScreenshotAreaOpen] = useState(false);
 
+  // Surface provider errors in the hub UI (and to the page toast, if wired).
+  React.useEffect(() => {
+    if (globalRecError) {
+      setRecorderError(globalRecError);
+      onRecordingError?.(globalRecError);
+    }
+  }, [globalRecError, onRecordingError]);
+
   const startBlocked = captureBusy && !screenRecording;
   const handleStartStop = () => {
-    if (screenRecording) recorderRef.current?.stop();
+    if (screenRecording) void stopRecording();
     else if (!startBlocked) {
       setRecorderError(null);
-      void recorderRef.current?.start();
+      void startRecording();
     }
   };
 
@@ -451,38 +441,9 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           document.body,
         )}
 
-      {/* Sticky floating Stop — always reachable while recording, never inside scroll. */}
-      {screenRecording &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <button
-            type="button"
-            onClick={() => recorderRef.current?.stop()}
-            title="Stop recording and save"
-            style={{
-              position: 'fixed',
-              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              zIndex: 200002,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '12px 20px',
-              borderRadius: 999,
-              border: 'none',
-              background: '#FF3B30',
-              color: '#fff',
-              fontSize: 15,
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 10px 30px rgba(255,59,48,0.4)',
-            }}
-          >
-            <Square size={16} fill="currentColor" /> Stop recording
-          </button>,
-          document.body,
-        )}
+      {/* No sticky Stop portal here anymore — the GLOBAL floating Play/Pause/
+          Stop + timer widget (FloatingRecordingIndicator, app/layout.tsx)
+          follows the coach across every page while recording. */}
 
       <div data-tour-id="recording-hub" className={io ? 'anglemotion-recording-hub--icon-only' : undefined} style={gridStyle}>
         {recorderError ? (
@@ -570,33 +531,8 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
           <HubRow iconOnly={io} danger icon={<RefreshCw size={16} />} label="Reset recording" title="Reset recording settings" onClick={onResetRecordingSettings} />
         ) : null}
 
-        {/* Single persistent full-screen recorder, driven by the Start/Stop
-            toggle. When the page owns the recorder (externalRecorderRef), it is
-            mounted at page level (survives toolbar/screen changes) so we render
-            no internal one here. */}
-        {!externalRecorderRef && (
-          <ScreenRecorder
-            ref={internalRecorderRef}
-            headless
-            mode="display"
-            disabled={captureBusy}
-            onRecordingError={(msg) => {
-              setRecorderError(msg);
-              onRecordingError?.(msg);
-            }}
-            getCanvas={getCanvas}
-            getWebcamStream={getWebcamStream}
-            getMicStream={getMicStream}
-            layoutMode={layoutMode}
-            onRecordingChange={(v) => {
-              setScreenRecording(v);
-              onRecordingChange(v);
-              onRegisterStop?.(v ? () => recorderRef.current?.stop() : null);
-            }}
-            promptDownload
-            onRecordingComplete={onScreenRecordComplete}
-          />
-        )}
+        {/* The recorder engine itself lives in RecordingProvider (app/layout.tsx)
+            — nothing to mount here; handleStartStop drives it via context. */}
 
         {/* Embed / tab-capture feedback (separate feature). */}
         {io ? (

@@ -39,7 +39,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
   }, [redirect, supabase]);
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: '#0b0b0c' }}>
+    <div style={{ height: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: '#0b0b0c' }}>
       <div style={{
         width: 'min(520px, 100%)',
         padding: 20,

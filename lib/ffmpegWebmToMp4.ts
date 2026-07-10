@@ -49,6 +49,14 @@ async function getFFmpeg(): Promise<FFmpeg> {
 
 export async function convertWebmBlobToMp4(
   webmBlob: Blob,
+  opts?: {
+    /**
+     * Multiply every presentation timestamp by this factor (setpts). < 1 speeds
+     * the video up — e.g. a stroke recorded at 0.25× playback with retimeFactor
+     * 0.25 plays back at true 1× in the output. Output resampled to 30 fps.
+     */
+    retimeFactor?: number;
+  },
 ): Promise<{ ok: true; blob: Blob } | { ok: false; error: string }> {
   const inputName = 'in.webm';
   const outputName = 'out.mp4';
@@ -61,12 +69,18 @@ export async function convertWebmBlobToMp4(
     return { ok: false, error };
   }
 
+  const f = opts?.retimeFactor;
+  const retimeArgs = f && f > 0 && Math.abs(f - 1) > 0.001
+    ? ['-vf', `setpts=${f.toFixed(4)}*PTS`, '-r', '30']
+    : [];
+
   try {
     await ffmpeg.writeFile(inputName, new Uint8Array(await webmBlob.arrayBuffer()));
 
     const primary = [
       '-i',
       inputName,
+      ...retimeArgs,
       '-c:v',
       'libx264',
       '-preset',
@@ -84,7 +98,7 @@ export async function convertWebmBlobToMp4(
 
     if (code !== 0) {
       await ffmpeg.deleteFile(outputName).catch(() => {});
-      const fallback = ['-i', inputName, '-c:v', 'mpeg4', '-q:v', '8', '-an', outputName];
+      const fallback = ['-i', inputName, ...retimeArgs, '-c:v', 'mpeg4', '-q:v', '8', '-an', outputName];
       code = await ffmpeg.exec(fallback);
     }
 

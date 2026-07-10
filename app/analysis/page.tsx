@@ -16,7 +16,7 @@ import type { CanvasHandle } from '@/components/Canvas';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
-import ScreenRecorder, { type ScreenRecorderHandle } from '@/components/ScreenRecorder';
+import { useRecording } from '@/contexts/RecordingContext';
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
 import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModal';
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
@@ -64,6 +64,13 @@ import {
 } from '@/lib/stroMotionDraft';
 const FrameMaskEditor = React.lazy(() => import('@/components/stroMotion/FrameMaskEditor'));
 const StroMotionPreviewModal = React.lazy(() => import('@/components/stroMotion/StroMotionPreviewModal'));
+
+// Retired AI-Detect items (not useful for coaching) — scrubbed from every column
+// carry-forward path so state captured before their removal self-heals.
+const RETIRED_COLUMN_LABELS = new Set(['L Shoulder', 'R Shoulder']);
+function scrubRetiredLabels<T extends { label: string }>(items: T[]): T[] {
+  return items.filter((m) => !RETIRED_COLUMN_LABELS.has(m.label));
+}
 import { normalizeWebUrlInput, resolveEmbedTarget } from '@/lib/embedUrl';
 import {
   createHtml5VideoController,
@@ -315,10 +322,16 @@ function Home() {
     ext: string;
     cropRegion: null | { x: number; y: number; width: number; height: number; aspectRatio?: CropAspect };
   } | null>(null);
-  const [isRecording, setIsRecording]     = useState(false);
-  // Page-owned recorder (always mounted) so recording survives toolbar/screen
-  // changes; the floating Stop button and the Recording Hub both drive it.
-  const pageRecorderRef = useRef<ScreenRecorderHandle | null>(null);
+  // Recording is owned by the GLOBAL RecordingProvider (app/layout.tsx) so it
+  // survives route navigation; this page registers its webcam/mic sources and
+  // consumes finished recordings (crop/save modal).
+  const {
+    recState: globalRecState,
+    registerRecordingSources,
+    completedRecording,
+    clearCompletedRecording,
+  } = useRecording();
+  const isRecording = globalRecState === 'recording' || globalRecState === 'paused' || globalRecState === 'stopped';
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
@@ -739,7 +752,9 @@ function Home() {
     if (!target) return;
     // Mode isolation: SNAPSHOT column = snapshot measurements only. No merge of
     // LIVE skeleton-angle rows (those belong to LIVE mode).
-    setMeasurementColumn(target.column);
+    // scrubRetiredLabels: retired AI items (L/R Shoulder) may live on in columns
+    // captured before their removal — snapshots self-heal on restore.
+    setMeasurementColumn(scrubRetiredLabels(target.column));
     setShowMeasurementOverlays(target.overlaysOn);
     // Restore drawings first (importStrokes replaces all strokes atomically).
     canvasRef.current?.importStrokes?.(target.drawingsJson || '[]');
@@ -791,7 +806,7 @@ function Home() {
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
     const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
-    const liveColumn = measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle');
+    const liveColumn = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
     const overlay = canvasRef.current?.getCanvas?.();
     let screenshot: string | undefined;
     if (overlay) { try { screenshot = captureFrame(v, overlay); } catch { screenshot = undefined; } }
@@ -906,7 +921,15 @@ function Home() {
    * mostly-held sequence) recorded a frozen frame ("outputs the picture only").
    * Now the stroke actually plays. Optionally stops a passed-in recorder at end.
    */
-  const handleReplaySnapshots = useCallback(async (recorder?: MediaRecorder | null) => {
+  const handleReplaySnapshots = useCallback(async (
+    recorder?: MediaRecorder | null,
+    opts?: {
+      /** Playback rate to traverse the section at (recording overrides this to a slow "master" rate). */
+      playRate?: number;
+      /** Scale factor for snapshot freeze durations (recording holds longer so retimed holds stay correct). */
+      holdScale?: number;
+    },
+  ) => {
     const inc = generateIncludedIdsRef.current;
     const ordered = [...snapshots]
       .filter((s) => !inc || inc.includes(s.id))
@@ -922,11 +945,11 @@ function Home() {
     const stops = ordered.filter((s) => s.timeSec >= secStart - 0.05 && s.timeSec <= secEnd + 0.05);
 
     const originalRate = v.playbackRate || 1;
-    const replayRate = generateReplayRate > 0 ? generateReplayRate : 0.25;
+    const replayRate = opts?.playRate ?? (generateReplayRate > 0 ? generateReplayRate : 0.25);
     replayAbortRef.current = false;
     setReplayActive(true);
     modeAutopilotSuppressedRef.current = true;
-    const HOLD_MS = Math.max(0.5, generateHoldSec) * 1000;
+    const HOLD_MS = Math.max(0.5, generateHoldSec) * 1000 * (opts?.holdScale ?? 1);
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
     // Slow-play from the current position up to `target`, then pause.
@@ -979,7 +1002,14 @@ function Home() {
     setMetricsSectionEnd(prev => prev == null ? hi + 0.3 : prev);
   }, [snapshots]);
 
-  /** Record the slow-mo replay to an MP4 file via canvas captureStream + ffmpeg. */
+  /**
+   * Record the replay to MP4 — SLOW-MASTER strategy: the section is always
+   * recorded with the video playing at ≤0.25× (the regime where pose detection
+   * has time to converge → maximum-quality skeleton on every frame), then the
+   * ffmpeg conversion retimes the master to the coach's chosen speed. Choosing
+   * 1× still gets the 0.25×-quality skeleton. Holds are recorded proportionally
+   * longer so they come out exactly `holdSec` after retiming.
+   */
   const recordReplayToMp4 = useCallback(async (includedIds?: string[]) => {
     if (!snapshots.length || generateRecording) return;
     if (!canvasRef.current?.getCanvas?.()) { setProcessingStatus('Recording not supported on this device'); return; }
@@ -992,12 +1022,17 @@ function Home() {
     // canvas stays attached to the DOM, which Safari captures far more reliably
     // than a detached offscreen canvas. Rendering mode is restored in `finally`.
     setExportForceVideoPaint(true);
+    let stream: MediaStream | null = null;
     try {
-      // Let the mode flip commit and the canvas paint a video frame first.
+      // Let the mode flip commit, then wait for a REAL video frame on the canvas
+      // — capturing earlier encoded blank/overlay-only frames.
       await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
-      await canvasRef.current?.waitForRender?.();
+      const painted = await canvasRef.current?.waitForVideoPaint?.(60);
+      if (!painted) { setProcessingStatus('Could not start video capture — try again'); return; }
 
-      const stream = canvasRef.current?.captureStream?.(30);
+      // Always a FRESH stream (a cached one goes stale after canvas resizes and
+      // silently records a single frozen frame).
+      stream = canvasRef.current?.captureStream?.(30) ?? null;
       if (!stream) { setProcessingStatus('Recording not supported on this device'); return; }
       const mimeCandidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
       const mime = mimeCandidates.find(m => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) ?? '';
@@ -1009,26 +1044,39 @@ function Home() {
       const done = new Promise<Blob>((resolve) => {
         recorder.onstop = () => resolve(new Blob(chunks, { type: mime.includes('mp4') ? 'video/mp4' : 'video/webm' }));
       });
-      setProcessingStatus('Recording slow-mo replay…');
+
+      // Slow master: traverse at ≤0.25× regardless of the chosen speed; retime after.
+      const targetRate = generateReplayRate > 0 ? generateReplayRate : 0.25;
+      const masterRate = Math.min(0.25, targetRate);
+      const holdScale = targetRate / masterRate;        // hold longer → correct after retime
+      const retimeFactor = masterRate / targetRate;     // <1 speeds the master up
+
+      setProcessingStatus(`Recording master at ${masterRate}× for best skeleton…`);
       recorder.start();
-      await handleReplaySnapshots(recorder);
+      await handleReplaySnapshots(recorder, { playRate: masterRate, holdScale });
       const webmBlob = await done;
-      setProcessingStatus('Converting to MP4…');
+      setProcessingStatus(retimeFactor < 1 ? `Rendering at ${targetRate}× speed…` : 'Converting to MP4…');
       let finalBlob = webmBlob;
-      if (!webmBlob.type.includes('mp4')) {
-        const conv = await convertWebmBlobToMp4(webmBlob);
-        if (conv.ok) finalBlob = conv.blob;
+      const conv = await convertWebmBlobToMp4(webmBlob, { retimeFactor });
+      if (conv.ok) {
+        finalBlob = conv.blob;
+      } else if (retimeFactor < 1) {
+        // Conversion failed and the master is slow — deliver it honestly.
+        setProcessingStatus('MP4 conversion failed — video saved at recording speed');
       }
       if (generateVideoUrl) URL.revokeObjectURL(generateVideoUrl);
       const url = URL.createObjectURL(finalBlob);
       setGenerateVideoUrl(url);
       setGenerateVideoBlob(finalBlob);
-      setProcessingStatus('Replay video ready — download below');
+      if (conv.ok) setProcessingStatus('Replay video ready — download below');
     } finally {
+      // Freeing the capture track matters: a live track keeps compositing costs
+      // on every canvas paint.
+      try { stream?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
       setExportForceVideoPaint(false);
       setGenerateRecording(false);
     }
-  }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots]);
+  }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots, generateReplayRate]);
 
   /** Replay from the Generate workspace: workspace hides itself; show the strip HUD meanwhile. */
   const handleWorkspaceReplay = useCallback(async (includedIds: string[]) => {
@@ -2348,9 +2396,9 @@ function Home() {
     setCaptureSaveModalOpen(false);
     urlLoadAbortRef.current?.abort();
     urlLoadAbortRef.current = null;
-    // Clear any lingering recording UI so a "clean session" never leaves the
-    // top Recording pill, countdown, step status, or download prompt behind.
-    setIsRecording(false);
+    // Clear any lingering capture UI so a "clean session" never leaves the
+    // countdown, step status, or download prompt behind. (Screen recording is
+    // global now — if one is running, the floating widget keeps showing it.)
     setCaptureCountdown(null);
     setCaptureStepStatus(null);
     setScreenRecordDownloadPending(false);
@@ -2981,13 +3029,8 @@ function Home() {
     downloadDataURL(crop.toDataURL('image/png'), `angle-motion-screenshot-${Date.now()}.png`);
   }, []);
 
-  const handleScreenRecordComplete = useCallback((blob: Blob, ext: string) => {
-    setRecordingSession({
-      videoBlob: blob,
-      ext,
-      cropRegion: null,
-    });
-  }, []);
+  // (Recording completion now flows through the global RecordingProvider →
+  // the completedRecording consumption effect above.)
 
   const handleResetRecordingSettings = useCallback(() => {
     setLayoutMode('youtube');
@@ -3075,12 +3118,22 @@ function Home() {
   const getCanvas        = useCallback(() => canvasRef.current?.getCanvas() ?? null, []);
   const getWebcamStream  = useCallback(() => webcamStreamRef.current, []);
   const getMicStream     = useCallback(() => micStreamRef.current, []);
-  const getCropRegion    = useCallback(() => canvasRef.current?.getCropRegion() ?? null, []);
 
-  // Keep ScreenRecorder informed when recording state changes so Canvas draws PiP
-  const handleRecordingChange = useCallback((recording: boolean) => {
-    setIsRecording(recording);
-  }, []);
+  // Register this page's webcam/mic sources with the global recorder. The
+  // engine snapshots the actual tracks at start() time, so these getters going
+  // stale after navigation is harmless.
+  useEffect(() => {
+    registerRecordingSources({ getWebcamStream, getMicStream });
+    return () => registerRecordingSources(null);
+  }, [registerRecordingSources, getWebcamStream, getMicStream]);
+
+  // Consume finished recordings (also covers "stopped while on another page" —
+  // the blob waits in the provider until this page mounts again).
+  useEffect(() => {
+    if (!completedRecording) return;
+    setRecordingSession({ videoBlob: completedRecording.blob, ext: completedRecording.ext, cropRegion: null });
+    clearCompletedRecording();
+  }, [completedRecording, clearCompletedRecording]);
 
   const removeVideoA = useCallback(() => {
     revokeBlobUrl(lastBlobUrlARef.current);
@@ -4574,14 +4627,14 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onDeleteMeasurement:             (id: string) => setMeasurementColumn(prev => prev.filter(m => m.id !== id)),
     onOpenPhases:                    () => { createSnapshotFromLive(); },
     onMetricsGenerate:               () => { void handleGenerateSnapshots(); },
-    onAutoDetectMeasurements:        () => {
+    onAutoDetectMeasurements:        async () => {
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
       if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
       const latest = skFrames[skFrames.length - 1];
       const kps = latest?.keypoints;
       if (!kps?.length) { setProcessingStatus('No skeleton detected — ensure tracking the player'); return; }
       // Capture the LIVE column before snapshot creation (spec §6 step 1).
-      const liveCol = measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle');
+      const liveCol = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
       // Step 2: compute AI measurements on the frozen pose.
       const { computePhaseMeasurements } = require('@/lib/biomechanics/measurements');
       const meas = computePhaseMeasurements('auto', 'AI Detect', 0, kps);
@@ -4590,8 +4643,10 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       if (meas.jointAngles.rightElbowDeg != null) items.push({ id: `ai-re-${Date.now()}`, label: 'R Elbow', value: Math.round(meas.jointAngles.rightElbowDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.leftKneeDeg != null) items.push({ id: `ai-lk-${Date.now()}`, label: 'L Knee', value: Math.round(meas.jointAngles.leftKneeDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.rightKneeDeg != null) items.push({ id: `ai-rk-${Date.now()}`, label: 'R Knee', value: Math.round(meas.jointAngles.rightKneeDeg), unit: '°', type: 'angle' });
-      // NOTE: L/R Shoulder joint-angle items intentionally removed — not useful for
-      // coaching. Shoulder LINE orientation (L→R) is kept below as 'Shoulder (L→R)'.
+      // L/R Foot direction takes the slot the (retired, not-useful) L/R Shoulder
+      // joint angles used to occupy. Shoulder LINE stays below as 'Shoulder (L→R)'.
+      if (meas.footDirection.leftFootDeg != null) items.push({ id: `ai-lf-${Date.now()}`, label: 'L Foot', value: Math.round(meas.footDirection.leftFootDeg), unit: '°', type: 'arrowAngle' });
+      if (meas.footDirection.rightFootDeg != null) items.push({ id: `ai-rf-${Date.now()}`, label: 'R Foot', value: Math.round(meas.footDirection.rightFootDeg), unit: '°', type: 'arrowAngle' });
       // Shoulder and hip line angles (L→R direction) + differential
       const lShoulder = kps[5], rShoulder = kps[6], lHip = kps[11], rHip = kps[12];
       let shoulderDeg: number | null = null;
@@ -4616,17 +4671,51 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         const headAngle = Math.round(((Math.atan2(nose.y - earMidY, nose.x - earMidX) * 180 / Math.PI) + 360) % 360);
         items.push({ id: `ai-hd-${Date.now()}`, label: 'Head Direction', value: headAngle, unit: '°', type: 'arrowAngle' });
       }
-      if (meas.footDirection.leftFootDeg != null) items.push({ id: `ai-lf-${Date.now()}`, label: 'L Foot Dir', value: Math.round(meas.footDirection.leftFootDeg), unit: '°', type: 'arrowAngle' });
-      if (meas.footDirection.rightFootDeg != null) items.push({ id: `ai-rf-${Date.now()}`, label: 'R Foot Dir', value: Math.round(meas.footDirection.rightFootDeg), unit: '°', type: 'arrowAngle' });
       if (meas.footSpacing?.distancePx != null) items.push({ id: `ai-fd-${Date.now()}`, label: 'Foot Distance', value: Math.round(meas.footSpacing.distancePx), unit: 'px', type: 'ruler' });
-      // Racket angle (estimated from dominant wrist extension)
+      // Racket angle — REAL detection first (COCO-SSD racket/bat near the dominant
+      // wrist → wrist-to-implement-tip line), wrist-extension estimate as fallback.
       const rW = kps[10], lW = kps[9], rE = kps[8], lE = kps[7];
       const bodyCenter = (lShoulder?.score >= 0.2 && rShoulder?.score >= 0.2) ? (lShoulder.x + rShoulder.x) / 2 : 0;
       const domW = (rW?.score >= 0.2 && lW?.score >= 0.2) ? (Math.abs(rW.x - bodyCenter) > Math.abs(lW.x - bodyCenter) ? rW : lW) : (rW?.score >= 0.2 ? rW : lW);
       const domE = (rW?.score >= 0.2 && lW?.score >= 0.2) ? (Math.abs(rW.x - bodyCenter) > Math.abs(lW.x - bodyCenter) ? rE : lE) : (rW?.score >= 0.2 ? rE : lE);
-      if (domW?.score >= 0.2 && domE?.score >= 0.2) {
-        const racketAngle = Math.round(((Math.atan2(domW.y - domE.y, domW.x - domE.x) * 180 / Math.PI) + 360) % 360);
-        items.push({ id: `ai-ra-${Date.now()}`, label: 'Racket Angle (est.)', value: racketAngle, unit: '°', type: 'arrowAngle' });
+      if (domW?.score >= 0.2) {
+        let racketAngle: number | null = null;
+        const v = videoRef.current;
+        if (v && v.videoWidth > 0) {
+          try {
+            setProcessingStatus('Detecting racket…');
+            const { detectTennisRacketNearHint } = await import('@/lib/racketCocoDetect');
+            const vw = v.videoWidth, vh = v.videoHeight;
+            const r = 0.14; // search square around the wrist (normalized)
+            const hint = {
+              x: Math.max(0, domW.x / vw - r), y: Math.max(0, domW.y / vh - r),
+              w: Math.min(1, 2 * r), h: Math.min(1, 2 * r),
+            };
+            // Time-boxed: a cold model download must not hang AI Detect.
+            const det = await Promise.race([
+              detectTennisRacketNearHint(v, hint),
+              new Promise<null>((res) => setTimeout(() => res(null), 2500)),
+            ]);
+            if (det && det.score >= 0.25) {
+              // Implement tip = box point farthest from the wrist (corners + edge midpoints).
+              const bx = det.box.x * vw, by = det.box.y * vh, bw = det.box.w * vw, bh = det.box.h * vh;
+              const cand = [
+                { x: bx, y: by }, { x: bx + bw, y: by }, { x: bx, y: by + bh }, { x: bx + bw, y: by + bh },
+                { x: bx + bw / 2, y: by }, { x: bx + bw / 2, y: by + bh }, { x: bx, y: by + bh / 2 }, { x: bx + bw, y: by + bh / 2 },
+              ];
+              let tip = cand[0], dMax = -1;
+              for (const c of cand) { const d = Math.hypot(c.x - domW.x, c.y - domW.y); if (d > dMax) { dMax = d; tip = c; } }
+              racketAngle = Math.round(((Math.atan2(tip.y - domW.y, tip.x - domW.x) * 180 / Math.PI) + 360) % 360);
+            }
+          } catch { /* detection unavailable — fall back below */ }
+        }
+        // Fallback: dominant elbow→wrist extension.
+        if (racketAngle == null && domE?.score >= 0.2) {
+          racketAngle = Math.round(((Math.atan2(domW.y - domE.y, domW.x - domE.x) * 180 / Math.PI) + 360) % 360);
+        }
+        if (racketAngle != null) {
+          items.push({ id: `ai-ra-${Date.now()}`, label: 'Racket Angle (est.)', value: racketAngle, unit: '°', type: 'arrowAngle' });
+        }
       }
       if (items.length === 0) {
         setProcessingStatus('No measurements detected — ensure skeleton is tracking the player');
@@ -4700,15 +4789,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       : {}),
     recordingHubContent: (
       <RecordingHubContent
-        isRecording={isRecording}
-        onRecordingChange={handleRecordingChange}
-        externalRecorderRef={pageRecorderRef}
         getCanvas={getCanvas}
-        getWebcamStream={getWebcamStream}
-        getMicStream={getMicStream}
         layoutMode={layoutMode as 'youtube' | 'reels'}
         onLayoutChange={setLayoutMode}
-        onScreenRecordComplete={handleScreenRecordComplete}
         onScreenshotEntireArea={handleScreenshotEntireArea}
         onScreenshotSelectArea={handleScreenshotSelectArea}
         webcamActive={webcamActive}
@@ -5166,7 +5249,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     // auto-save persists it to the active snapshot only.
                     const labelMap: Record<string, string> = {
                       shoulder: 'Shoulder (L→R)', hip: 'Hip (L→R)', head: 'Head Direction',
-                      lfoot: 'L Foot Dir', rfoot: 'R Foot Dir', racket: 'Racket Angle (est.)',
+                      lfoot: 'L Foot', rfoot: 'R Foot', racket: 'Racket Angle (est.)',
                     };
                     const label = labelMap[overlayId];
                     if (!label) return;
@@ -6868,64 +6951,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       />
 
       {/* Guided tour: floating "?" + spotlight overlay (portaled to body). */}
-      {/* Page-owned recorder — always mounted so recording survives navigating
-          between toolbars/screens; hub + floating button drive this one. */}
-      <ScreenRecorder
-        ref={pageRecorderRef}
-        headless
-        mode="display"
-        getCanvas={getCanvas}
-        getWebcamStream={getWebcamStream}
-        getMicStream={getMicStream}
-        layoutMode={layoutMode as 'youtube' | 'reels'}
-        onRecordingChange={handleRecordingChange}
-        onRecordingError={(msg) => setProcessingStatus(msg)}
-        promptDownload
-        onRecordingComplete={handleScreenRecordComplete}
-      />
-
-      {isRecording &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <button
-            type="button"
-            aria-label="Stop recording"
-            title="Stop recording"
-            onClick={() => { pageRecorderRef.current?.stop(); }}
-            style={{
-              position: 'fixed',
-              top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              zIndex: 100000,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '8px 16px 8px 14px',
-              borderRadius: 999,
-              border: 'none',
-              background: 'rgba(255, 59, 48, 0.97)',
-              color: '#FFFFFF',
-              fontSize: 13,
-              fontWeight: 700,
-              boxShadow: '0 8px 28px rgba(255,59,48,0.45)',
-              cursor: 'pointer',
-              pointerEvents: 'auto',
-            }}
-          >
-            <span
-              style={{
-                width: 12,
-                height: 12,
-                borderRadius: 3,
-                background: '#FFFFFF',
-                flexShrink: 0,
-              }}
-            />
-            Stop recording
-          </button>,
-          document.body,
-        )}
+      {/* Recording engine + floating Play/Pause/Stop widget are GLOBAL now
+          (RecordingProvider + FloatingRecordingIndicator in app/layout.tsx) —
+          they survive navigation to any page, so nothing to mount here. */}
 
       {(processingStatus || stroMotionProcessing) && (
         <div

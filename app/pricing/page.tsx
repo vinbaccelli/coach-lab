@@ -41,7 +41,8 @@ export default function PricingPage() {
   };
 
   return (
-    <div style={{ minHeight: '100dvh', background: '#F5F5F7', color: INK, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
+    // Own scroll container — globals.css locks body overflow for the canvas app.
+    <div style={{ height: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch', background: '#F5F5F7', color: INK, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
       {/* Nav */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -50,7 +51,7 @@ export default function PricingPage() {
         position: 'sticky', top: 0, zIndex: 20,
       }}>
         <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
-          <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
+          <img src="/logo-mark.svg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
           <span style={{ fontSize: 14, fontWeight: 800, color: INK }}>AngleMotion</span>
         </Link>
         <Link href="/login" style={{

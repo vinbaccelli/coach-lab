@@ -172,6 +172,7 @@ export interface CanvasHandle {
   getObjMultiplierFrameCount: () => number;
   /** Wait until the next canvas paint completes */
   waitForRender: () => Promise<void>;
+  waitForVideoPaint: (maxTries?: number) => Promise<boolean>;
   /**
    * Stamp auto-generated angle/line measurements from skeleton keypoints onto
    * the drawing canvas. Each line/angle is a regular editable stroke/angle-meas.
@@ -1745,6 +1746,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
+    // Increments whenever the render loop paints an actual video frame onto the
+    // canvas — recording waits on this so it never captures a pre-video frame.
+    const videoPaintTickRef = useRef(0);
     const watermarkRef = useRef<HTMLImageElement | null>(null);
     const watermarkLoadedRef = useRef(false);
     const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
@@ -2495,12 +2499,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       getCanvas: () => canvasRef.current,
       getCompositeCanvas: () => canvasRef.current,
       captureStream: (fps = 30) => {
-        if (!streamRef.current) {
-          const canvas = canvasRef.current;
-          if (!canvas) return null;
-          streamRef.current = (canvas as unknown as { captureStream(f: number): MediaStream }).captureStream(fps);
-        }
-        return streamRef.current;
+        // ALWAYS a fresh stream. The old cached streamRef was created once and
+        // never invalidated — after any canvas.width reallocation (resize, DPR
+        // change, workspace open) the stale CanvasCaptureMediaStreamTrack stops
+        // delivering frames, so MediaRecorder encoded a single frozen frame
+        // ("outputs the picture only"). Callers stop the tracks when done.
+        const canvas = canvasRef.current;
+        if (!canvas) return null;
+        return (canvas as unknown as { captureStream(f: number): MediaStream }).captureStream(fps);
       },
       undo: () => {
         skeletonSuppressedRef.current = true;
@@ -2711,6 +2717,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderWaitersRef.current.push(resolve);
         renderDirtyRef.current = true;
       }),
+      // Resolve true once the canvas has painted a REAL video frame (see
+      // videoPaintTickRef). Recording must not start before this — capturing a
+      // pre-video render encoded overlay-only/blank frames.
+      waitForVideoPaint: async (maxTries = 45) => {
+        const start = videoPaintTickRef.current;
+        for (let i = 0; i < maxTries; i++) {
+          if (videoPaintTickRef.current > start) return true;
+          await new Promise<void>((resolve) => {
+            renderWaitersRef.current.push(resolve);
+            renderDirtyRef.current = true;
+          });
+        }
+        return videoPaintTickRef.current > start;
+      },
       canvasSupportsStroMotionVideoExport: () => {
         const canvas = canvasRef.current;
         return !!canvas && canvasSupportsVideoExport(canvas);
@@ -3718,7 +3738,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Watermark logo ───────────────────────────────────────────────────
     useEffect(() => {
       const img = new Image();
-      img.src = '/logo-square-new.jpg';
+      img.src = '/logo-mark.svg';
       img.onload = () => { watermarkRef.current = img; watermarkLoadedRef.current = true; };
       img.onerror = () => { watermarkLoadedRef.current = false; };
     }, []);
@@ -3923,6 +3943,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }
           } else if (!hideStreamMirror) {
             ctx.drawImage(video, dx, dy, dw, dh);
+            // Recording readiness signal: a real video frame reached the canvas.
+            videoPaintTickRef.current++;
           }
 
           // ── Real-time ball detection (only when video frame changed) ────────
@@ -4154,9 +4176,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           skeletonDimsOk
         ) {
           if (latestKeypointsRef.current && latestKeypointsRef.current.length > 0 && vW > 0 && vH > 0) {
-            // Motion prediction: while PLAYING, extrapolate joints along their
-            // velocity so the drawn skeleton follows the player at display
-            // framerate even when detections arrive at ~10 Hz (weak GPUs).
+            // Motion smoothing: while PLAYING, INTERPOLATE the displayed pose
+            // between the last two detections (prev → latest, blended by sample
+            // age). Interpolation is strictly bounded — the drawn joint can never
+            // leave the segment between two real detections — so it is smooth at
+            // EVERY playback speed: no overshoot ("goes crazy"), no freeze
+            // between detections (the old extrapolation stopped when samples
+            // went stale, which visibly stuttered at 1× where inference lags the
+            // frame rate). Cost: the skeleton trails reality by one detection
+            // interval (~30-80 ms) — imperceptible against the video.
             // Paused/snapshot poses draw exactly as detected/restored.
             let displayKps = latestKeypointsRef.current;
             const latestS = poseLatestSampleRef.current;
@@ -4166,26 +4194,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               latestS.kps === latestKeypointsRef.current &&
               latestS.kps.length === prevS.kps.length
             ) {
-              const interval = Math.min(200, Math.max(20, latestS.ts - prevS.ts));
+              const interval = Math.min(300, Math.max(20, latestS.ts - prevS.ts));
               const age = performance.now() - latestS.ts;
-              // Only extrapolate while the last detection is FRESH. On slow
-              // phones detections arrive late/bursty; a large `age` × a big
-              // between-detection displacement is exactly what flung the
-              // skeleton across the frame ("goes crazy after play"). Cap the
-              // blend low, and stop entirely once the sample is clearly stale.
-              const a = age > interval * 1.5 ? 0 : Math.min(0.5, age / interval);
-              if (a > 0.02) {
-                // Cap how far any single joint may be extrapolated so one bad
-                // (fast/misdetected) frame can't throw a limb across the frame.
-                const maxStep = 0.06 * Math.max(vW, vH);
+              // a: 0 → show prev pose, 1 → show latest pose. Clamped, no overshoot.
+              const a = Math.min(1, Math.max(0, age / interval));
+              if (a < 0.98) {
                 displayKps = latestS.kps.map((k, i) => {
                   const p = prevS.kps[i];
                   if (!p || k.score < 0.2 || p.score < 0.2) return k;
-                  let ex = (k.x - p.x) * a;
-                  let ey = (k.y - p.y) * a;
-                  const m = Math.hypot(ex, ey);
-                  if (m > maxStep) { const s = maxStep / m; ex *= s; ey *= s; }
-                  return { ...k, x: k.x + ex, y: k.y + ey };
+                  return { ...k, x: p.x + (k.x - p.x) * a, y: p.y + (k.y - p.y) * a };
                 });
               }
             }

@@ -63,7 +63,10 @@ const FEATURE_VISUALS: Array<{ Icon: React.ElementType; caption: string; tint: s
 // y=yes, n=no, q='?'.
 const COMPARE_COLS = ['AngleMotion', 'CoachNow', 'Dartfish'];
 const COMPARE_ROWS: Array<{ label: string; cells: Array<'y' | 'n' | 'q' | string> }> = [
-  { label: 'Price (annual)', cells: ['from $50/yr', '$59–899/yr', '€7–180/mo'] },
+  // Pro-tier vs Pro-tier comparison (CoachNow PRO $499.99/yr per coachnow.com/pricing;
+  // Dartfish 360 S ≈ €40/mo per dartfish.com/plans — their cheap ~$5/mo Express tier
+  // is mobile-only and not comparable).
+  { label: 'Price (Pro tier, annual)', cells: ['$200/yr', '$499/yr', '~€480/yr'] },
   { label: 'AI pose / skeleton overlay', cells: ['y', 'y', 'y'] },
   { label: 'Angle measurement (auto)', cells: ['y', 'y', 'y'] },
   { label: 'Editable AI skeleton (override by hand)', cells: ['y', 'q', 'n'] },
@@ -103,7 +106,7 @@ export default function LandingPage() {
       {/* NAV */}
       <nav style={{ position: 'sticky', top: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(12px)', borderBottom: '1px solid #EEE' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
+          <img src="/logo-mark.svg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
           <span style={{ fontSize: 16, fontWeight: 900, letterSpacing: -0.3 }}>Angle<span style={{ color: ACCENT }}>Motion</span></span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -296,7 +299,7 @@ export default function LandingPage() {
       {/* FOOTER — light */}
       <footer style={{ background: '#FFFFFF', color: MUTED, padding: '32px 20px', textAlign: 'center', borderTop: '1px solid #EEE' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', marginBottom: 14 }}>
-          <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 24, height: 24, borderRadius: 5 }} />
+          <img src="/logo-mark.svg" alt="AngleMotion" style={{ width: 24, height: 24, borderRadius: 5 }} />
           <span style={{ fontSize: 15, fontWeight: 800, color: INK }}>AngleMotion</span>
         </div>
         <div style={{ display: 'flex', gap: 18, justifyContent: 'center', flexWrap: 'wrap', fontSize: 13, marginBottom: 12 }}>

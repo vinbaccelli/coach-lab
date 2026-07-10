@@ -40,7 +40,7 @@ export default function ControlPanelHome() {
   return (
     <div style={shell}>
       <div style={{ marginBottom: 22 }}>
-        <img src="/logo-rect-new.jpg" alt="Anglemotion" style={{ height: 44, width: 'auto', marginBottom: 8, borderRadius: 8 }} />
+        <img src="/logo-wordmark.svg" alt="Anglemotion" style={{ height: 44, width: 'auto', marginBottom: 8, borderRadius: 8 }} />
         <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 600, letterSpacing: '-0.03em', color: '#1D1D1F' }}>
           Control Panel
         </h1>

@@ -7,7 +7,9 @@
 
 export type NormRect = { x: number; y: number; w: number; h: number };
 
-const RACKET_CLASS = 'tennis racket';
+// Elongated sports implements COCO-SSD can localize. (COCO has no golf-club
+// class — golf swings fall back to the wrist-extension estimate.)
+const IMPLEMENT_CLASSES = new Set(['tennis racket', 'baseball bat']);
 
 let modelPromise: Promise<import('@tensorflow-models/coco-ssd').ObjectDetection> | null = null;
 
@@ -50,7 +52,7 @@ export async function detectTennisRacketNorm(
 
   const model = await getRacketDetectorModel();
   const preds = await model.detect(video, maxDetections, minScore);
-  const racket = preds.find((p) => p.class === RACKET_CLASS);
+  const racket = preds.find((p) => IMPLEMENT_CLASSES.has(p.class));
   if (!racket) return null;
 
   let [bx, by, bw, bh] = racket.bbox;
@@ -110,7 +112,7 @@ export async function detectTennisRacketNearHint(
 
   const model = await getRacketDetectorModel();
   const preds = await model.detect(video, maxDetections, minScore);
-  const rackets = preds.filter((p) => p.class === RACKET_CLASS);
+  const rackets = preds.filter((p) => IMPLEMENT_CLASSES.has(p.class));
 
   let best: { box: NormRect; score: number; dist: number } | null = null;
 
