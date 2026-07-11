@@ -1789,19 +1789,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // video.currentTime — perfectly aligned at ANY playback speed, because the
     // lookup is keyed to media time, not to live inference wall-clock.
     type BakedSample = { t: number; kps: Array<{ x: number; y: number; score: number; name: string }> };
+    type BakedTrack = { samples: BakedSample[]; start: number; end: number };
     const bakingRef = useRef(false);
     const bakeSamplesRef = useRef<BakedSample[]>([]);
-    const bakedTrackRef = useRef<{ samples: BakedSample[]; start: number; end: number } | null>(null);
+    // MULTIPLE tracked sections: the coach can AI-Track one section, then
+    // another — each pass adds a track (replacing any overlapping one). While
+    // any track exists, the skeleton shows ONLY inside tracked sections.
+    const bakedTracksRef = useRef<BakedTrack[]>([]);
 
-    const bakedCovers = (t: number): boolean => {
-      const b = bakedTrackRef.current;
-      return !!b && t >= b.start - 0.1 && t <= b.end + 0.1;
+    const findBakedTrack = (t: number): BakedTrack | null => {
+      for (const b of bakedTracksRef.current) {
+        if (t >= b.start - 0.1 && t <= b.end + 0.1) return b;
+      }
+      return null;
     };
+    const bakedCovers = (t: number): boolean => findBakedTrack(t) !== null;
 
-    /** Time-interpolated pose from the baked track (null when uncovered). */
+    /** Time-interpolated pose from the covering baked track (null when uncovered). */
     const lookupBakedPose = (t: number): BakedSample['kps'] | null => {
-      const b = bakedTrackRef.current;
-      if (!b || !bakedCovers(t)) return null;
+      const b = findBakedTrack(t);
+      if (!b) return null;
       const s = b.samples;
       if (s.length === 0) return null;
       if (t <= s[0].t) return s[0].kps;
@@ -2706,19 +2713,28 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }
           }
         }
-        bakedTrackRef.current = { samples: kept, start: range.start, end: range.end };
+        // Add as a new tracked section, replacing any overlapping older track.
+        bakedTracksRef.current = [
+          ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
+          { samples: kept, start: range.start, end: range.end },
+        ].sort((a, b) => a.start - b.start);
         renderDirtyRef.current = true;
         return kept.length;
       },
       clearBakedTrack: () => {
-        bakedTrackRef.current = null;
+        bakedTracksRef.current = [];
         bakingRef.current = false;
         bakeSamplesRef.current = [];
         renderDirtyRef.current = true;
       },
       getBakedTrackInfo: () => {
-        const b = bakedTrackRef.current;
-        return b ? { samples: b.samples.length, start: b.start, end: b.end } : null;
+        const tracks = bakedTracksRef.current;
+        if (!tracks.length) return null;
+        return {
+          samples: tracks.reduce((s, b) => s + b.samples.length, 0),
+          start: Math.min(...tracks.map((b) => b.start)),
+          end: Math.max(...tracks.map((b) => b.end)),
+        };
       },
       getBakedPoseAt: (t: number) => lookupBakedPose(t),
       startStroMotionRegionSelect: (cb) => {
@@ -3309,10 +3325,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const bridge = poseBridgeRef.current;
         const v = videoRef.current;
         if (bridge && v) {
-          // Baked track owns this stretch of the video — skip live inference
-          // (the render loop draws from the track). The bake pass itself
-          // (bakingRef) always sends, so re-tracking overwrites cleanly.
-          if (bakingRef.current || !bakedCovers(v.currentTime)) {
+          // Once any AI Track exists, the tracks own the skeleton display
+          // entirely (it hides outside tracked sections) — live inference is
+          // pointless then. The bake pass itself (bakingRef) always sends.
+          if (bakingRef.current || bakedTracksRef.current.length === 0) {
             bridge.frameSkip = poseFrameSkipRef.current;
             bridge.sendFrame(v);
           }
@@ -3799,8 +3815,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const v = videoRef.current;
       if (!v) return;
 
-      // A baked pose track belongs to ONE video — clear it when the source changes.
-      bakedTrackRef.current = null;
+      // Baked pose tracks belong to ONE video — clear them when the source changes.
+      bakedTracksRef.current = [];
       bakingRef.current = false;
       bakeSamplesRef.current = [];
 
@@ -3948,7 +3964,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // video plays inside a baked range (with the native <video> underlay
         // nothing else marks the canvas dirty per frame).
         const bakedPlaybackActive =
-          !!bakedTrackRef.current &&
+          bakedTracksRef.current.length > 0 &&
           !!video && !video.paused &&
           skeletonEnabledRef.current &&
           poseModeRef.current === 'live' &&
@@ -4335,7 +4351,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const bakedPose = poseModeRef.current === 'live' && video && !bakingRef.current
             ? lookupBakedPose(video.currentTime)
             : null;
-          if ((bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
+          // Once ANY section is tracked, the skeleton shows ONLY inside tracked
+          // sections (per coach request) — outside them it hides instead of
+          // falling back to live jitter. Track another section to extend.
+          const hiddenByTrackScope =
+            bakedTracksRef.current.length > 0 &&
+            !bakedPose &&
+            !bakingRef.current &&
+            poseModeRef.current === 'live';
+          if (!hiddenByTrackScope && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
             // Motion smoothing (live path): while PLAYING, INTERPOLATE the
             // displayed pose between the last two detections (prev → latest,
             // blended by sample age). Bounded — no overshoot, no stale-freeze
@@ -5085,8 +5109,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const el = canvasRef.current;
             const rectEl = el?.getBoundingClientRect();
             if (el && rectEl) {
-              const csx = rectEl.width / (el.width || 1);
-              const csy = rectEl.height / (el.height || 1);
+              // mcX/mcY/mcW/mcH are LOGICAL (CSS-unit) coords — divide by the
+              // logical size, not el.width (physical, ×dpr since the HiDPI
+              // change; using it shifted the +/- buttons far off-position).
+              const csx = rectEl.width / (cssW(el) || 1);
+              const csy = rectEl.height / (cssH(el) || 1);
               const next = { x: mcX * csx, y: mcY * csy, w: mcW * csx, h: mcH * csy };
               const prev = lastMcRectRef.current;
               if (!prev || Math.abs(prev.x - next.x) > 0.5 || Math.abs(prev.y - next.y) > 0.5 || Math.abs(prev.w - next.w) > 0.5 || Math.abs(prev.h - next.h) > 0.5) {
@@ -6155,8 +6182,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const earY = lEar?.score >= sm && rEar?.score >= sm ? (lEar.y + rEar.y) / 2 : (lEar?.score >= sm ? lEar.y : rEar!.y);
           overlayEndpoints.push({ id: 'head', x1: earX, y1: earY, x2: nose.x, y2: nose.y });
         }
-        if (lK2?.score >= sm && lA2?.score >= sm) overlayEndpoints.push({ id: 'lfoot', x1: lA2.x, y1: lA2.y, x2: lA2.x + (lA2.x - lK2.x) * 0.4, y2: lA2.y + (lA2.y - lK2.y) * 0.4 });
-        if (rK2?.score >= sm && rA2?.score >= sm) overlayEndpoints.push({ id: 'rfoot', x1: rA2.x, y1: rA2.y, x2: rA2.x + (rA2.x - rK2.x) * 0.4, y2: rA2.y + (rA2.y - rK2.y) * 0.4 });
+        // Foot endpoints must mirror the DRAWN geometry exactly (real toe
+        // keypoint when present, else the anatomical estimate) — the old shin-
+        // extension math put the grab point away from the visible tip, which
+        // made the toe end feel un-draggable.
+        {
+          const hitBodyCenterX = (lH?.score >= sm && rH?.score >= sm) ? (lH.x + rH.x) / 2 : null;
+          const hitFacing: 1 | -1 = hitBodyCenterX != null && nose?.score >= sm ? (nose.x >= hitBodyCenterX ? 1 : -1) : 1;
+          const hitToe = (nm: string) => {
+            for (let fi = 17; fi < kps.length; fi++) {
+              const c = kps[fi];
+              if (c?.name === nm && c.score >= 0.3) return c;
+            }
+            return null;
+          };
+          const lToeH = hitToe('left_foot_index');
+          if (lA2?.score >= sm && lToeH) {
+            overlayEndpoints.push({ id: 'lfoot', x1: lA2.x, y1: lA2.y, x2: lToeH.x + (lToeH.x - lA2.x) * 0.15, y2: lToeH.y + (lToeH.y - lA2.y) * 0.15 });
+          } else if (lK2?.score >= sm && lA2?.score >= sm) {
+            const v = estimateFootVector(lK2, lA2, hitBodyCenterX, hitFacing);
+            const len = Math.hypot(lA2.x - lK2.x, lA2.y - lK2.y) * 0.55;
+            overlayEndpoints.push({ id: 'lfoot', x1: lA2.x, y1: lA2.y, x2: lA2.x + v.x * len, y2: lA2.y + v.y * len });
+          }
+          const rToeH = hitToe('right_foot_index');
+          if (rA2?.score >= sm && rToeH) {
+            overlayEndpoints.push({ id: 'rfoot', x1: rA2.x, y1: rA2.y, x2: rToeH.x + (rToeH.x - rA2.x) * 0.15, y2: rToeH.y + (rToeH.y - rA2.y) * 0.15 });
+          } else if (rK2?.score >= sm && rA2?.score >= sm) {
+            const v = estimateFootVector(rK2, rA2, hitBodyCenterX, hitFacing);
+            const len = Math.hypot(rA2.x - rK2.x, rA2.y - rK2.y) * 0.55;
+            overlayEndpoints.push({ id: 'rfoot', x1: rA2.x, y1: rA2.y, x2: rA2.x + v.x * len, y2: rA2.y + v.y * len });
+          }
+        }
         if (lS?.score >= sm && rS?.score >= sm) {
           const bc = (lS.x + rS.x) / 2;
           const dW = (rW2?.score >= sm && lW2?.score >= sm) ? (Math.abs(rW2.x - bc) > Math.abs(lW2.x - bc) ? rW2 : lW2) : (rW2?.score >= sm ? rW2 : lW2);

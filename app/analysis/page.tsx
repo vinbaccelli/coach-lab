@@ -969,7 +969,15 @@ function Home() {
       v.pause();
     };
 
-    // Begin at the section start.
+    // Begin at the section start — in LIVE mode. Entering from the Generate
+    // workspace usually leaves a snapshot selected, whose frozen pose otherwise
+    // owns the display until the first hold ("skeleton froze up to the first
+    // snapshot").
+    releaseSnapshotOwnership();
+    setMeasurementColumn([]);
+    setShowMeasurementOverlays(false);
+    canvasRef.current?.importStrokes?.('[]');
+    canvasRef.current?.setOverlayAdjustments?.({});
     await seekVideoTo(secStart);
     v.pause();
 
@@ -1409,16 +1417,19 @@ function Home() {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return false;
 
+    // Seek FIRST — both the pose fallback and the object detector read the
+    // video's current frame.
+    await seekStroVideo(timeSec);
+
     // Get skeleton keypoints near this frame time from the playback cache…
     const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
     const cached = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>((best, f) => {
       if (!best || Math.abs(f.timeSeconds - timeSec) < Math.abs(best.timeSeconds - timeSec)) return f;
       return best;
     }, null);
-    // …but if the coach never played through with the skeleton on, run pose
-    // detection ON DEMAND at this frame's time (this is what made auto-detect
-    // "do nothing" before — no cached skeleton existed).
-    let keypointsForFrame = cached && Math.abs(cached.timeSeconds - timeSec) < 0.2 ? cached.keypoints : null;
+    // …preferring the Precision AI Track pose, then cache, then on-demand.
+    let keypointsForFrame = canvasRef.current?.getBakedPoseAt?.(timeSec)
+      ?? (cached && Math.abs(cached.timeSeconds - timeSec) < 0.2 ? cached.keypoints : null);
     if (!keypointsForFrame) {
       keypointsForFrame = await canvasRef.current?.detectPoseAtTime?.(timeSec) ?? null;
     }
@@ -1427,28 +1438,70 @@ function Home() {
     const validKps = keypointsForFrame.filter(kp => kp.score >= 0.2);
     if (validKps.length < 4) return false;
 
-    // Extend bounding box along dominant arm to include racket
     const kps = keypointsForFrame;
-    const rWrist = kps[10]; // right wrist
-    const lWrist = kps[9];  // left wrist
-    const rElbow = kps[8];
-    const lElbow = kps[7];
-
-    // Pick dominant arm (the one further from body center = likely holding racket)
+    const rWrist = kps[10], lWrist = kps[9], rElbow = kps[8], lElbow = kps[7];
     const bodyX = validKps.reduce((s, k) => s + k.x, 0) / validKps.length;
     const rDist = rWrist?.score >= 0.2 ? Math.abs(rWrist.x - bodyX) : 0;
     const lDist = lWrist?.score >= 0.2 ? Math.abs(lWrist.x - bodyX) : 0;
     const domWrist = rDist > lDist ? rWrist : lWrist;
     const domElbow = rDist > lDist ? rElbow : lElbow;
 
-    // Extend racket tip: project 2.5x from elbow through wrist
+    const vw = video.videoWidth, vh = video.videoHeight;
+
+    // ── OBJECT mode: find the IMPLEMENT box, not the player box ────────────
+    if (stroObjectType !== 'player') {
+      // 1. Real detection (COCO-SSD racket/bat) near the dominant wrist.
+      if (domWrist?.score >= 0.2) {
+        try {
+          const { detectTennisRacketNearHint } = await import('@/lib/racketCocoDetect');
+          const r = 0.16;
+          const hint = {
+            x: Math.max(0, domWrist.x / vw - r), y: Math.max(0, domWrist.y / vh - r),
+            w: Math.min(1, 2 * r), h: Math.min(1, 2 * r),
+          };
+          const det = await Promise.race([
+            detectTennisRacketNearHint(video, hint, { minScore: 0.18, searchExpand: 1.0 }),
+            new Promise<null>((res) => setTimeout(() => res(null), 3000)),
+          ]);
+          if (det && det.score >= 0.18) {
+            finishStroRegionSelect(index, {
+              x: det.box.x * vw, y: det.box.y * vh, w: det.box.w * vw, h: det.box.h * vh,
+            });
+            return true;
+          }
+        } catch { /* detector unavailable — geometric fallback below */ }
+      }
+      // 2. Geometric fallback: a racket-sized box centered on the wrist→tip
+      //    extension (NOT the whole player — a tight box keeps the motion-diff
+      //    mask clean).
+      if (domWrist?.score >= 0.2 && domElbow?.score >= 0.2) {
+        const dx = domWrist.x - domElbow.x;
+        const dy = domWrist.y - domElbow.y;
+        const forearm = Math.hypot(dx, dy);
+        if (forearm > 4) {
+          const tipX = domWrist.x + dx * 1.4;
+          const tipY = domWrist.y + dy * 1.4;
+          const cx = (domWrist.x + tipX) / 2;
+          const cy = (domWrist.y + tipY) / 2;
+          const half = Math.max(forearm * 1.2, 40);
+          finishStroRegionSelect(index, {
+            x: Math.max(0, cx - half), y: Math.max(0, cy - half),
+            w: Math.min(vw, cx + half) - Math.max(0, cx - half),
+            h: Math.min(vh, cy + half) - Math.max(0, cy - half),
+          });
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // ── PLAYER mode: whole-body box extended along the dominant arm ────────
     const racketPoints: Array<{ x: number; y: number }> = [];
     if (domWrist?.score >= 0.2 && domElbow?.score >= 0.2) {
       const dx = domWrist.x - domElbow.x;
       const dy = domWrist.y - domElbow.y;
       racketPoints.push({ x: domWrist.x + dx * 1.5, y: domWrist.y + dy * 1.5 });
     }
-
     const allPoints = [...validKps, ...racketPoints];
     const xs = allPoints.map(kp => kp.x);
     const ys = allPoints.map(kp => kp.y);
@@ -1458,17 +1511,14 @@ function Home() {
     const maxY = Math.max(...ys);
     const padX = (maxX - minX) * 0.2;
     const padY = (maxY - minY) * 0.2;
-    const region = {
+    finishStroRegionSelect(index, {
       x: Math.max(0, minX - padX),
       y: Math.max(0, minY - padY),
-      w: Math.min(video.videoWidth, maxX + padX) - Math.max(0, minX - padX),
-      h: Math.min(video.videoHeight, maxY + padY) - Math.max(0, minY - padY),
-    };
-
-    await seekStroVideo(timeSec);
-    finishStroRegionSelect(index, region);
+      w: Math.min(vw, maxX + padX) - Math.max(0, minX - padX),
+      h: Math.min(vh, maxY + padY) - Math.max(0, minY - padY),
+    });
     return true;
-  }, [stroMotionDraft, videoRef, canvasRef, seekStroVideo, finishStroRegionSelect]);
+  }, [stroMotionDraft, videoRef, canvasRef, seekStroVideo, finishStroRegionSelect, stroObjectType]);
 
   const handleStroSelectArea = useCallback((index: number) => {
     const frame = stroMotionDraft?.frames[index];
@@ -2911,7 +2961,11 @@ function Home() {
     };
 
     const onPauseA = () => {
-      if (!vB.paused) vB.pause();
+      // UNCONDITIONAL pause: while B's play() promise is pending, vB.paused is
+      // still true — the old `if (!vB.paused)` guard skipped the pause, the
+      // promise then resolved, and B played on alone ("stop doesn't stop").
+      // pause() during a pending play() simply rejects it (caught below).
+      vB.pause();
       playPendingB = false;
       const t = bTarget();
       if (bInRange(t)) {
@@ -2946,6 +3000,10 @@ function Home() {
 
     const correctDrift = () => {
       if (vA.paused || !playBothEnabled) {
+        // A stopped — make CERTAIN B stops too before the loop exits (a pending
+        // B play() promise can otherwise land after this and play on alone).
+        vB.pause();
+        playPendingB = false;
         rafId = 0;
         return;
       }
@@ -4363,9 +4421,22 @@ function Home() {
       vB.playbackRate = vA.playbackRate;
       vB.currentTime = t;
       if (vB.paused) void vB.play().catch(() => {});
+      // Self-heal "B plays but A never starts": whatever blocked A's own play,
+      // retry it once; if it still refuses, stop B too — the pair either plays
+      // together or not at all (never one-sided).
+      window.setTimeout(() => {
+        const a = videoRef.current, b = videoRefB.current;
+        if (!a || !b) return;
+        if (a.paused && !b.paused) {
+          a.play().catch(() => {
+            b.pause();
+            setProcessingStatus('Could not start synced playback — press play again');
+          });
+        }
+      }, 250);
     } else if (t < 0) {
       vB.currentTime = 0;
-      if (!vB.paused) vB.pause();
+      vB.pause();
     }
   }, [playBothEnabled, videoBLoaded, videoBDuration]);
 
@@ -4381,7 +4452,9 @@ function Home() {
     } else if (t < 0) {
       vB.currentTime = 0;
     }
-    if (!vB.paused) vB.pause();
+    // Unconditional — see onPauseA: the paused-guard skipped the pause while a
+    // play() promise was pending, leaving B running after Stop.
+    vB.pause();
   }, [playBothEnabled, videoBLoaded, videoBDuration]);
 
   const analysisTimelineExtras = useMemo(() => {

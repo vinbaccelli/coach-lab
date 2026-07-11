@@ -1304,15 +1304,28 @@ export default function ToolPalette(props: ToolPaletteProps) {
               onPress={() => onPrecisionTrack('all')}
             />
           )}
-          {onPrecisionTrackClear !== undefined && precisionTrackState === 'ready' && (
-            <Row
-              k="ptrack-clear"
-              active
-              icon={<Sparkles size={18} strokeWidth={2} />}
-              label="AI Track ON — tap to clear"
-              tooltip="Skeleton is locked to the video (any speed). Tap to go back to live tracking."
-              onPress={onPrecisionTrackClear}
-            />
+          {precisionTrackState === 'ready' && (
+            <>
+              {onPrecisionTrack !== undefined && (
+                <Row
+                  k="ptrack-more"
+                  icon={<Sparkles size={18} strokeWidth={2} />}
+                  label="AI Track — another section"
+                  tooltip="Move the green timeline handles to a new section and track it too — the skeleton shows only inside tracked sections"
+                  onPress={() => onPrecisionTrack('section')}
+                />
+              )}
+              {onPrecisionTrackClear !== undefined && (
+                <Row
+                  k="ptrack-clear"
+                  active
+                  icon={<Sparkles size={18} strokeWidth={2} />}
+                  label="AI Track ON — tap to clear"
+                  tooltip="Skeleton is locked to the tracked sections (any speed). Tap to go back to live tracking."
+                  onPress={onPrecisionTrackClear}
+                />
+              )}
+            </>
           )}
           {/* Style options */}
           {onSkeletonShowAnglesChange !== undefined &&
