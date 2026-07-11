@@ -76,6 +76,10 @@ interface ToolPaletteProps {
   onSkeletonShowHeadDirectionChange?: (v: boolean) => void;
   skeletonShowFootLine?: boolean;
   onSkeletonShowFootLineChange?: (v: boolean) => void;
+  /** Precision AI Track — slow 0.25× pass that locks the pose to video time. */
+  precisionTrackState?: 'idle' | 'running' | 'ready';
+  onPrecisionTrack?: (scope: 'all' | 'section') => void;
+  onPrecisionTrackClear?: () => void;
   skeletonClassicColors?: boolean;
   onSkeletonClassicColorsChange?: (v: boolean) => void;
   skeletonShowRightArm?: boolean;
@@ -547,6 +551,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onSkeletonShowHeadDirectionChange,
     skeletonShowFootLine,
     onSkeletonShowFootLineChange,
+    precisionTrackState = 'idle',
+    onPrecisionTrack,
+    onPrecisionTrackClear,
     skeletonClassicColors,
     onSkeletonClassicColorsChange,
     skeletonShowRightArm,
@@ -749,8 +756,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
       {/* Logo */}
       <div style={{ display: 'flex', justifyContent: io ? 'center' : 'center', padding: io ? '2px 0' : '6px 8px 10px' }}>
         {io
-          ? <img src="/logo-mark.svg" alt="AngleMotion" style={{ width: 36, height: 36, borderRadius: 7 }} />
-          : <img src="/logo-wordmark.svg" alt="Anglemotion" style={{ width: '100%', maxWidth: 180, height: 'auto', borderRadius: 6 }} />
+          ? <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 36, height: 36, borderRadius: 7 }} />
+          : <img src="/logo-rect-new.jpg" alt="Anglemotion" style={{ width: '100%', maxWidth: 180, height: 'auto', borderRadius: 6 }} />
         }
       </div>
       {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
@@ -1269,6 +1276,44 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => onResetSkeleton()}
             destructive
           />
+          {/* Precision AI Track — slow pass now, perfect skeleton at any speed */}
+          {onPrecisionTrack !== undefined && precisionTrackState === 'idle' && (
+            <>
+              <Row
+                k="ptrack-all"
+                icon={<Sparkles size={18} strokeWidth={2} />}
+                label="AI Track — whole video"
+                tooltip="Plays the video once at 0.25× to record a perfect skeleton track, then plays aligned at ANY speed"
+                onPress={() => onPrecisionTrack('all')}
+              />
+              <Row
+                k="ptrack-sec"
+                icon={<Sparkles size={18} strokeWidth={2} />}
+                label="AI Track — selected section"
+                tooltip="Tracks only the timeline section between the green handles"
+                onPress={() => onPrecisionTrack('section')}
+              />
+            </>
+          )}
+          {onPrecisionTrack !== undefined && precisionTrackState === 'running' && (
+            <Row
+              k="ptrack-run"
+              active
+              icon={<Sparkles size={18} strokeWidth={2} />}
+              label="AI-tracking… tap to cancel"
+              onPress={() => onPrecisionTrack('all')}
+            />
+          )}
+          {onPrecisionTrackClear !== undefined && precisionTrackState === 'ready' && (
+            <Row
+              k="ptrack-clear"
+              active
+              icon={<Sparkles size={18} strokeWidth={2} />}
+              label="AI Track ON — tap to clear"
+              tooltip="Skeleton is locked to the video (any speed). Tap to go back to live tracking."
+              onPress={onPrecisionTrackClear}
+            />
+          )}
           {/* Style options */}
           {onSkeletonShowAnglesChange !== undefined &&
             chk('sa', 'Show angle labels', skeletonShowAngles ?? true, onSkeletonShowAnglesChange, <Activity size={18} strokeWidth={2} />)}

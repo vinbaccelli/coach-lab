@@ -152,6 +152,18 @@ export interface CanvasHandle {
   getSkeletonKeypoints: () => Array<{ x: number; y: number; score: number; name: string }> | null;
   /** Restore skeleton keypoints from a snapshot (for phase switching). */
   setSkeletonKeypoints: (kps: Array<{ x: number; y: number; score: number; name: string }> | null, provenance?: 'snapshot' | 'frame') => void;
+  /** Precision AI Track: begin collecting a dense video-time pose track. */
+  startBakeCapture: () => void;
+  /** Finish the tracking pass; returns the number of samples kept (0 = failed).
+   *  feetSamples (optional): MediaPipe foot keypoints sampled in parallel —
+   *  merged into the nearest pose sample so the baked track carries real toes. */
+  finishBakeCapture: (
+    range: { start: number; end: number },
+    feetSamples?: Array<{ t: number; kps: Array<{ x: number; y: number; score: number; name: string }> }>,
+  ) => number;
+  clearBakedTrack: () => void;
+  getBakedTrackInfo: () => { samples: number; start: number; end: number } | null;
+  getBakedPoseAt: (t: number) => Array<{ x: number; y: number; score: number; name: string }> | null;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
   /** Cancel an in-progress StroMotion region selection; fires the pending callback with null */
@@ -567,13 +579,34 @@ function drawSkeletonOverlay(
       ? (nose.x * sx >= bodyCenterX ? 1 : -1)
       : 1;
 
-    for (const [kneeIdx, ankleIdx] of [[13, 15], [14, 16]] as [number, number][]) {
+    for (const [kneeIdx, ankleIdx, toeName] of [[13, 15, 'left_foot_index'], [14, 16, 'right_foot_index']] as Array<[number, number, string]>) {
       if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
       const knee  = keypoints[kneeIdx];
       const ankle = keypoints[ankleIdx];
       if (!knee || !ankle || knee.score < scoreThreshold || ankle.score < scoreThreshold) continue;
       const ax = ankle.x * sx, ay = ankle.y * sy;
       const kx = knee.x * sx, ky = knee.y * sy;
+      // REAL foot line: when the pose carries MediaPipe foot keypoints (appended
+      // at index 17+, from AI Track / AI Detect), draw ankle → toe tip directly.
+      let toe: { x: number; y: number; score: number; name?: string } | null = null;
+      for (let fi = 17; fi < keypoints.length; fi++) {
+        const cand = keypoints[fi];
+        if (cand?.name === toeName && cand.score >= 0.3) { toe = cand; break; }
+      }
+      if (toe) {
+        const tx2 = toe.x * sx, ty2 = toe.y * sy;
+        ctx.save();
+        ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        // Extend slightly past the toe so the line reaches the shoe tip.
+        ctx.lineTo(tx2 + (tx2 - ax) * 0.15, ty2 + (ty2 - ay) * 0.15);
+        ctx.stroke();
+        ctx.restore();
+        continue;
+      }
       const shinLen = Math.hypot(ax - kx, ay - ky);
       if (shinLen < 1) continue;
       const toeLen = shinLen * 0.45;
@@ -1749,6 +1782,54 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // Increments whenever the render loop paints an actual video frame onto the
     // canvas — recording waits on this so it never captures a pre-video frame.
     const videoPaintTickRef = useRef(0);
+
+    // ── Precision AI Track ("bake") ─────────────────────────────────────────
+    // A slow tracking pass records a dense, VIDEO-TIME-indexed pose track; the
+    // render loop then draws the skeleton by interpolating that track at
+    // video.currentTime — perfectly aligned at ANY playback speed, because the
+    // lookup is keyed to media time, not to live inference wall-clock.
+    type BakedSample = { t: number; kps: Array<{ x: number; y: number; score: number; name: string }> };
+    const bakingRef = useRef(false);
+    const bakeSamplesRef = useRef<BakedSample[]>([]);
+    const bakedTrackRef = useRef<{ samples: BakedSample[]; start: number; end: number } | null>(null);
+
+    const bakedCovers = (t: number): boolean => {
+      const b = bakedTrackRef.current;
+      return !!b && t >= b.start - 0.1 && t <= b.end + 0.1;
+    };
+
+    /** Time-interpolated pose from the baked track (null when uncovered). */
+    const lookupBakedPose = (t: number): BakedSample['kps'] | null => {
+      const b = bakedTrackRef.current;
+      if (!b || !bakedCovers(t)) return null;
+      const s = b.samples;
+      if (s.length === 0) return null;
+      if (t <= s[0].t) return s[0].kps;
+      if (t >= s[s.length - 1].t) return s[s.length - 1].kps;
+      let lo = 0, hi = s.length - 1;
+      while (lo + 1 < hi) {
+        const mid = (lo + hi) >> 1;
+        if (s[mid].t <= t) lo = mid; else hi = mid;
+      }
+      const a = s[lo], c = s[hi];
+      const span = c.t - a.t;
+      // A gap means detection dropped there — snap to the nearest sample
+      // rather than interpolating across a hole.
+      if (span <= 0 || span > 0.5) return t - a.t < c.t - t ? a.kps : c.kps;
+      const f = (t - a.t) / span;
+      const n = Math.min(a.kps.length, c.kps.length);
+      const out: BakedSample['kps'] = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const p = a.kps[i], q = c.kps[i];
+        out[i] = {
+          x: p.x + (q.x - p.x) * f,
+          y: p.y + (q.y - p.y) * f,
+          score: Math.min(p.score, q.score),
+          name: p.name,
+        };
+      }
+      return out;
+    };
     const watermarkRef = useRef<HTMLImageElement | null>(null);
     const watermarkLoadedRef = useRef(false);
     const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
@@ -2155,11 +2236,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { stroMotionVisibleCountRef.current = stroMotionVisibleCount; renderDirtyRef.current = true; }, [stroMotionVisibleCount]);
     useEffect(() => { stroMotionShowSkeletonRef.current = stroMotionShowSkeleton; renderDirtyRef.current = true; }, [stroMotionShowSkeleton]);
     useEffect(() => { skeletonShowAnglesRef.current   = skeletonShowAngles; },   [skeletonShowAngles]);
-    useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; },  [skeletonShowHeadLine]);
-    useEffect(() => { skeletonShowHeadDirectionRef.current = skeletonShowHeadDirection; }, [skeletonShowHeadDirection]);
-    useEffect(() => { skeletonShowFootLineRef.current  = skeletonShowFootLine; },  [skeletonShowFootLine]);
-    useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; }, [skeletonClassicColors]);
-    useEffect(() => { skeletonPartsRef.current = skeletonParts; }, [skeletonParts]);
+    // Mark the canvas dirty on every skeleton display toggle — without it the
+    // change only became visible on the NEXT video frame (i.e. after pressing
+    // play); a paused video never repainted.
+    useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; renderDirtyRef.current = true; },  [skeletonShowHeadLine]);
+    useEffect(() => { skeletonShowHeadDirectionRef.current = skeletonShowHeadDirection; renderDirtyRef.current = true; }, [skeletonShowHeadDirection]);
+    useEffect(() => { skeletonShowFootLineRef.current  = skeletonShowFootLine; renderDirtyRef.current = true; },  [skeletonShowFootLine]);
+    useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; renderDirtyRef.current = true; }, [skeletonClassicColors]);
+    useEffect(() => { skeletonPartsRef.current = skeletonParts; renderDirtyRef.current = true; }, [skeletonParts]);
     useEffect(() => { ballSampleModeRef.current = ballSampleMode; }, [ballSampleMode]);
     useEffect(() => { transparentWhenNoVideoRef.current = transparentWhenNoVideo; }, [transparentWhenNoVideo]);
     useEffect(() => { renderVideoRef.current = renderVideo; if (renderVideo) renderDirtyRef.current = true; }, [renderVideo]);
@@ -2598,6 +2682,45 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         skeletonSuppressedRef.current = !kps;
         renderDirtyRef.current = true;
       },
+      startBakeCapture: () => {
+        bakingRef.current = true;
+        bakeSamplesRef.current = [];
+      },
+      finishBakeCapture: (range, feetSamples) => {
+        bakingRef.current = false;
+        const kept = bakeSamplesRef.current
+          .filter((x) => x.t >= range.start - 0.2 && x.t <= range.end + 0.2)
+          .sort((a, b) => a.t - b.t);
+        bakeSamplesRef.current = [];
+        if (kept.length < 2) return 0;
+        // Merge real MediaPipe foot keypoints (sampled in parallel at a lower
+        // rate) into the nearest pose sample — appended as named entries 17+.
+        if (feetSamples?.length) {
+          const feet = [...feetSamples].sort((a, b) => a.t - b.t);
+          let fi = 0;
+          for (const s of kept) {
+            while (fi + 1 < feet.length && Math.abs(feet[fi + 1].t - s.t) <= Math.abs(feet[fi].t - s.t)) fi++;
+            const f = feet[fi];
+            if (f && Math.abs(f.t - s.t) <= 0.15 && f.kps.length) {
+              s.kps = [...s.kps.slice(0, 17), ...f.kps];
+            }
+          }
+        }
+        bakedTrackRef.current = { samples: kept, start: range.start, end: range.end };
+        renderDirtyRef.current = true;
+        return kept.length;
+      },
+      clearBakedTrack: () => {
+        bakedTrackRef.current = null;
+        bakingRef.current = false;
+        bakeSamplesRef.current = [];
+        renderDirtyRef.current = true;
+      },
+      getBakedTrackInfo: () => {
+        const b = bakedTrackRef.current;
+        return b ? { samples: b.samples.length, start: b.start, end: b.end } : null;
+      },
+      getBakedPoseAt: (t: number) => lookupBakedPose(t),
       startStroMotionRegionSelect: (cb) => {
         isSelectingStroRegionRef.current = true;
         stroRegionCallbackRef.current = cb;
@@ -3073,6 +3196,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       poseLoopActiveRef.current = true;
 
       bridge.onResult((keypoints) => {
+        // Precision AI Track capture — record every detection with its video
+        // time, ahead of any display gating (the bake pass must never lose
+        // samples to overlay suppression).
+        if (bakingRef.current && keypoints) {
+          const bv = videoRef.current;
+          if (bv) bakeSamplesRef.current.push({ t: bv.currentTime, kps: keypoints });
+        }
         if (skeletonSuppressedRef.current || !skeletonDrawEnabledRef.current) {
           // Capability gate: clear the live pose when the live skeleton is active.
           if (liveSkeletonActive()) latestKeypointsRef.current = null;
@@ -3179,8 +3309,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const bridge = poseBridgeRef.current;
         const v = videoRef.current;
         if (bridge && v) {
-          bridge.frameSkip = poseFrameSkipRef.current;
-          bridge.sendFrame(v);
+          // Baked track owns this stretch of the video — skip live inference
+          // (the render loop draws from the track). The bake pass itself
+          // (bakingRef) always sends, so re-tracking overwrites cleanly.
+          if (bakingRef.current || !bakedCovers(v.currentTime)) {
+            bridge.frameSkip = poseFrameSkipRef.current;
+            bridge.sendFrame(v);
+          }
         }
         scheduleNext();
       };
@@ -3664,6 +3799,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const v = videoRef.current;
       if (!v) return;
 
+      // A baked pose track belongs to ONE video — clear it when the source changes.
+      bakedTrackRef.current = null;
+      bakingRef.current = false;
+      bakeSamplesRef.current = [];
+
       const markDirty = () => {
         renderDirtyRef.current = true;
       };
@@ -3738,7 +3878,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Watermark logo ───────────────────────────────────────────────────
     useEffect(() => {
       const img = new Image();
-      img.src = '/logo-mark.svg';
+      img.src = '/logo-square-new.jpg';
       img.onload = () => { watermarkRef.current = img; watermarkLoadedRef.current = true; };
       img.onerror = () => { watermarkLoadedRef.current = false; };
     }, []);
@@ -3803,12 +3943,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               ? videoFrameDirtyRef.current
               : videoTimeChanged;
 
+        // Baked-track playback: the pose is looked up per display frame from
+        // video.currentTime, so the overlay must repaint every rAF while the
+        // video plays inside a baked range (with the native <video> underlay
+        // nothing else marks the canvas dirty per frame).
+        const bakedPlaybackActive =
+          !!bakedTrackRef.current &&
+          !!video && !video.paused &&
+          skeletonEnabledRef.current &&
+          poseModeRef.current === 'live' &&
+          bakedCovers(video.currentTime);
+
         const needsRender =
           videoFrameChanged ||
           zoomChanged ||
           renderDirtyRef.current ||
           renderWaitersRef.current.length > 0 ||
           hasActiveInteraction ||
+          bakedPlaybackActive ||
           webcamFrameDirtyRef.current ||
           (webcamActiveRef.current && webcamPipModeRef.current !== 'hidden');
 
@@ -4175,21 +4327,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           !skeletonSuppressedRef.current &&
           skeletonDimsOk
         ) {
-          if (latestKeypointsRef.current && latestKeypointsRef.current.length > 0 && vW > 0 && vH > 0) {
-            // Motion smoothing: while PLAYING, INTERPOLATE the displayed pose
-            // between the last two detections (prev → latest, blended by sample
-            // age). Interpolation is strictly bounded — the drawn joint can never
-            // leave the segment between two real detections — so it is smooth at
-            // EVERY playback speed: no overshoot ("goes crazy"), no freeze
-            // between detections (the old extrapolation stopped when samples
-            // went stale, which visibly stuttered at 1× where inference lags the
-            // frame rate). Cost: the skeleton trails reality by one detection
-            // interval (~30-80 ms) — imperceptible against the video.
+          // Precision AI Track: when a baked track covers the current video
+          // time (and the pose isn't a frozen snapshot restore), it takes
+          // precedence over live inference — the pose is looked up by MEDIA
+          // time, so it stays perfectly glued to the player at 1×, 2×, any
+          // speed, playing or paused.
+          const bakedPose = poseModeRef.current === 'live' && video && !bakingRef.current
+            ? lookupBakedPose(video.currentTime)
+            : null;
+          if ((bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
+            // Motion smoothing (live path): while PLAYING, INTERPOLATE the
+            // displayed pose between the last two detections (prev → latest,
+            // blended by sample age). Bounded — no overshoot, no stale-freeze
+            // stutter at 1×. Cost: one detection interval of trailing
+            // (~30-80 ms) — imperceptible against the video.
             // Paused/snapshot poses draw exactly as detected/restored.
-            let displayKps = latestKeypointsRef.current;
+            let displayKps = bakedPose ?? latestKeypointsRef.current!;
             const latestS = poseLatestSampleRef.current;
             const prevS = posePrevSampleRef.current;
             if (
+              !bakedPose &&
               video && !video.paused && latestS && prevS &&
               latestS.kps === latestKeypointsRef.current &&
               latestS.kps.length === prevS.kps.length
@@ -4223,9 +4380,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             } catch (skErr) {
               if (process.env.NODE_ENV !== 'production') console.warn('[Canvas] skeleton overlay draw skipped:', skErr);
             }
-            if (onSkeletonAnglesUpdateRef.current && latestKeypointsRef.current !== lastEmittedKpsRef.current) {
+            // Angle emission follows the DISPLAYED pose (baked or live). Baked
+            // playback emits on a ~10 Hz tick (page-side flush throttles further).
+            const emitBaked = !!bakedPose && animTickRef.current % 6 === 0;
+            if (onSkeletonAnglesUpdateRef.current && (emitBaked || (!bakedPose && latestKeypointsRef.current !== lastEmittedKpsRef.current))) {
               lastEmittedKpsRef.current = latestKeypointsRef.current;
-              const kps = latestKeypointsRef.current;
+              const kps = displayKps;
               const scoreMin = 0.2;
               const angleDefs = [
                 { indices: [7, 5, 9], label: 'L Elbow' },
@@ -4315,9 +4475,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             drawArrow('hip', lH.x, lH.y, rH.x, rH.y);
           }
 
-          // Head direction (ear midpoint → nose)
+          // Head direction (ear midpoint → nose) — drawn only when its skeleton
+          // toggle is ON, matching the AI-Detect column gating.
           const nose = kps[0], lEar = kps[3], rEar = kps[4];
-          if (nose?.score >= scoreMin && ((lEar?.score >= scoreMin) || (rEar?.score >= scoreMin))) {
+          if (skeletonShowHeadDirectionRef.current && nose?.score >= scoreMin && ((lEar?.score >= scoreMin) || (rEar?.score >= scoreMin))) {
             const earX = lEar?.score >= scoreMin && rEar?.score >= scoreMin ? (lEar.x + rEar.x) / 2 : (lEar?.score >= scoreMin ? lEar.x : rEar!.x);
             const earY = lEar?.score >= scoreMin && rEar?.score >= scoreMin ? (lEar.y + rEar.y) / 2 : (lEar?.score >= scoreMin ? lEar.y : rEar!.y);
             drawArrow('head', earX, earY, nose.x, nose.y);
@@ -4325,23 +4486,40 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
           // Foot direction — anatomical (shin-perpendicular, forced down+forward),
           // shared with lib/biomechanics so the arrow matches the AI-Detect number.
-          const footBodyCenterX = (lH?.score >= scoreMin && rH?.score >= scoreMin) ? (lH.x + rH.x) / 2 : null;
-          const footFacing: 1 | -1 = footBodyCenterX != null && nose?.score >= scoreMin ? (nose.x >= footBodyCenterX ? 1 : -1) : 1;
+          // Drawn only when the Foot line skeleton toggle is ON.
+          if (skeletonShowFootLineRef.current) {
+            const footBodyCenterX = (lH?.score >= scoreMin && rH?.score >= scoreMin) ? (lH.x + rH.x) / 2 : null;
+            const footFacing: 1 | -1 = footBodyCenterX != null && nose?.score >= scoreMin ? (nose.x >= footBodyCenterX ? 1 : -1) : 1;
+            // Real MediaPipe toe keypoints (appended at index 17+) beat the estimate.
+            const namedToe = (nm: string) => {
+              for (let fi = 17; fi < kps.length; fi++) {
+                const c = kps[fi];
+                if (c?.name === nm && c.score >= 0.3) return c;
+              }
+              return null;
+            };
 
-          // Left foot direction
-          const lK = kps[13], lA = kps[15];
-          if (lK?.score >= scoreMin && lA?.score >= scoreMin) {
-            const v = estimateFootVector(lK, lA, footBodyCenterX, footFacing);
-            const len = Math.hypot(lA.x - lK.x, lA.y - lK.y) * 0.55;
-            drawArrow('lfoot', lA.x, lA.y, lA.x + v.x * len, lA.y + v.y * len);
-          }
+            // Left foot direction
+            const lK = kps[13], lA = kps[15];
+            const lToe = namedToe('left_foot_index');
+            if (lA?.score >= scoreMin && lToe) {
+              drawArrow('lfoot', lA.x, lA.y, lToe.x + (lToe.x - lA.x) * 0.15, lToe.y + (lToe.y - lA.y) * 0.15);
+            } else if (lK?.score >= scoreMin && lA?.score >= scoreMin) {
+              const v = estimateFootVector(lK, lA, footBodyCenterX, footFacing);
+              const len = Math.hypot(lA.x - lK.x, lA.y - lK.y) * 0.55;
+              drawArrow('lfoot', lA.x, lA.y, lA.x + v.x * len, lA.y + v.y * len);
+            }
 
-          // Right foot direction
-          const rK = kps[14], rA = kps[16];
-          if (rK?.score >= scoreMin && rA?.score >= scoreMin) {
-            const v = estimateFootVector(rK, rA, footBodyCenterX, footFacing);
-            const len = Math.hypot(rA.x - rK.x, rA.y - rK.y) * 0.55;
-            drawArrow('rfoot', rA.x, rA.y, rA.x + v.x * len, rA.y + v.y * len);
+            // Right foot direction
+            const rK = kps[14], rA = kps[16];
+            const rToe = namedToe('right_foot_index');
+            if (rA?.score >= scoreMin && rToe) {
+              drawArrow('rfoot', rA.x, rA.y, rToe.x + (rToe.x - rA.x) * 0.15, rToe.y + (rToe.y - rA.y) * 0.15);
+            } else if (rK?.score >= scoreMin && rA?.score >= scoreMin) {
+              const v = estimateFootVector(rK, rA, footBodyCenterX, footFacing);
+              const len = Math.hypot(rA.x - rK.x, rA.y - rK.y) * 0.55;
+              drawArrow('rfoot', rA.x, rA.y, rA.x + v.x * len, rA.y + v.y * len);
+            }
           }
 
           // Racket angle (dominant wrist → extended past wrist)

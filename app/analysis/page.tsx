@@ -340,7 +340,8 @@ function Home() {
   const [skeletonShowAngles, setSkeletonShowAngles] = useState(true);
   const [skeletonShowHeadLine, setSkeletonShowHeadLine] = useState(false);
   const [skeletonShowHeadDirection, setSkeletonShowHeadDirection] = useState(false);
-  const [skeletonShowFootLine, setSkeletonShowFootLine] = useState(true);
+  // Foot line is opt-in like the head lines — click it in Skeleton tools to show.
+  const [skeletonShowFootLine, setSkeletonShowFootLine] = useState(false);
   const [skeletonClassicColors, setSkeletonClassicColors] = useState(true);
   const [skeletonShowRightArm, setSkeletonShowRightArm] = useState(true);
   const [skeletonShowLeftArm, setSkeletonShowLeftArm] = useState(true);
@@ -982,6 +983,16 @@ function Home() {
       setReplayIndex(i);
       selectSnapshot(snap.id);
       await sleep(HOLD_MS);
+      if (replayAbortRef.current) break;
+      // Hand the display back to LIVE before the next motion segment — staying
+      // in snapshot mode froze the skeleton for the rest of the recording (the
+      // play→live effect is suppressed during replay). Snapshot drawings/column
+      // belong to the hold; the motion plays clean with live tracking.
+      releaseSnapshotOwnership();
+      setMeasurementColumn([]);
+      setShowMeasurementOverlays(false);
+      canvasRef.current?.importStrokes?.('[]');
+      canvasRef.current?.setOverlayAdjustments?.({});
     }
     // Follow-through: play out to the section end.
     if (!replayAbortRef.current) await playTo(secEnd);
@@ -991,16 +1002,115 @@ function Home() {
     modeAutopilotSuppressedRef.current = false;
     setReplayActive(false);
     setReplayIndex(null);
-  }, [snapshots, seekVideoTo, selectSnapshot, generateReplayRate, generateHoldSec, metricsSectionStart, metricsSectionEnd]);
+  }, [snapshots, seekVideoTo, selectSnapshot, releaseSnapshotOwnership, generateReplayRate, generateHoldSec, metricsSectionStart, metricsSectionEnd]);
 
   // Default the metrics section to the snapshot span; preserve manual drags.
+  // (The same section doubles as the Precision-AI-Track range when skeleton is
+  // on, so it is only cleared when neither consumer needs it.)
   useEffect(() => {
-    if (snapshots.length === 0) { setMetricsSectionStart(null); setMetricsSectionEnd(null); return; }
+    if (snapshots.length === 0) {
+      if (!skeletonEnabled) { setMetricsSectionStart(null); setMetricsSectionEnd(null); }
+      return;
+    }
     const times = snapshots.map(s => s.timeSec).sort((a, b) => a - b);
     const lo = times[0], hi = times[times.length - 1];
     setMetricsSectionStart(prev => prev == null ? Math.max(0, lo - 0.3) : prev);
     setMetricsSectionEnd(prev => prev == null ? hi + 0.3 : prev);
-  }, [snapshots]);
+  }, [snapshots, skeletonEnabled]);
+
+  // Skeleton on → make the section handles available (default: full video) so
+  // the coach can scope the Precision AI Track like in Metrics/StroMotion.
+  useEffect(() => {
+    if (!skeletonEnabled || !videoSrc) return;
+    const v = videoRef.current;
+    const dur = v && isFinite(v.duration) ? v.duration : 0;
+    if (dur <= 0) return;
+    setMetricsSectionStart(prev => prev == null ? 0 : prev);
+    setMetricsSectionEnd(prev => prev == null ? dur : prev);
+  }, [skeletonEnabled, videoSrc]);
+
+  // ── Precision AI Track (skeleton "bake") ─────────────────────────────────
+  // Records the pose track during a slow 0.25× pass (where detection is at its
+  // best), then playback at ANY speed draws the skeleton by video-time lookup.
+  const [precisionTrackState, setPrecisionTrackState] = useState<'idle' | 'running' | 'ready'>('idle');
+  const precisionAbortRef = useRef(false);
+
+  const handlePrecisionTrack = useCallback(async (scope: 'all' | 'section') => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) { setProcessingStatus('Load a video first'); return; }
+    if (!skeletonEnabled) { setProcessingStatus('Enable Skeleton first, then run AI Track'); return; }
+    if (precisionTrackState === 'running') { precisionAbortRef.current = true; return; } // second tap cancels
+    const dur = isFinite(v.duration) ? v.duration : 0;
+    if (dur <= 0) { setProcessingStatus('Video not ready yet — try again'); return; }
+    const start = scope === 'section' && metricsSectionStart != null ? Math.max(0, metricsSectionStart) : 0;
+    const end = scope === 'section' && metricsSectionEnd != null ? Math.min(dur, metricsSectionEnd) : dur;
+    if (end - start < 0.2) { setProcessingStatus('Selected section is too short to track'); return; }
+
+    precisionAbortRef.current = false;
+    setPrecisionTrackState('running');
+    const originalRate = v.playbackRate || 1;
+    try {
+      await seekVideoTo(start);
+      canvasRef.current?.startBakeCapture?.();
+      // Real foot keypoints (MediaPipe, heel + toe) sampled in parallel during
+      // the slow pass — merged into the baked track at the end so the foot line
+      // follows the actual shoe, not an estimate.
+      const feetSamples: Array<{ t: number; kps: Array<{ x: number; y: number; score: number; name: string }> }> = [];
+      let feetBusy = false;
+      const feetTimer = setInterval(() => {
+        const vv = videoRef.current;
+        if (!vv || feetBusy || precisionAbortRef.current) return;
+        feetBusy = true;
+        const t = vv.currentTime;
+        void import('@/lib/mediapipeFeet')
+          .then(async (m) => {
+            const fp = await m.detectFeetOnFrame(vv);
+            if (fp) {
+              const kps = m.footPointsToKeypoints(fp);
+              if (kps.length) feetSamples.push({ t, kps });
+            }
+          })
+          .catch(() => {})
+          .finally(() => { feetBusy = false; });
+      }, 120);
+      v.playbackRate = 0.25;
+      try { await v.play(); } catch { /* autoplay block — user gesture already happened */ }
+      await new Promise<void>((resolve) => {
+        const tick = () => {
+          const vv = videoRef.current;
+          if (precisionAbortRef.current || !vv) { resolve(); return; }
+          const pct = Math.min(100, Math.round(((vv.currentTime - start) / (end - start)) * 100));
+          setProcessingStatus(`AI-tracking skeleton… ${pct}% (slow pass = perfect track)`);
+          if (vv.currentTime >= end - 0.03 || vv.ended) { resolve(); return; }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      clearInterval(feetTimer);
+      v.pause();
+      const kept = canvasRef.current?.finishBakeCapture?.({ start, end }, feetSamples) ?? 0;
+      if (precisionAbortRef.current || kept < 2) {
+        canvasRef.current?.clearBakedTrack?.();
+        setPrecisionTrackState('idle');
+        setProcessingStatus(precisionAbortRef.current ? 'AI Track cancelled' : 'AI Track found no skeleton in that range');
+      } else {
+        setPrecisionTrackState('ready');
+        setProcessingStatus(`AI Track ready — ${kept} poses locked to the video. Play at any speed.`);
+      }
+    } finally {
+      v.playbackRate = originalRate;
+      void seekVideoTo(start);
+    }
+  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsSectionStart, metricsSectionEnd, seekVideoTo]);
+
+  const handlePrecisionTrackClear = useCallback(() => {
+    canvasRef.current?.clearBakedTrack?.();
+    setPrecisionTrackState('idle');
+    setProcessingStatus('AI Track cleared — live tracking resumed');
+  }, []);
+
+  // The baked track dies with its video (Canvas clears it too) — reset the UI.
+  useEffect(() => { setPrecisionTrackState('idle'); }, [videoSrc]);
 
   /**
    * Record the replay to MP4 — SLOW-MASTER strategy: the section is always
@@ -4286,11 +4396,12 @@ function Home() {
     // Snapshot phase markers (green balls) — shown whenever snapshots exist and
     // we are not in StroMotion mode. Migrated off the removed frame workflow so
     // the Snapshot architecture owns the timeline markers directly.
-    if (!stroMotionActive && stroMotionHtml5Only && biomechPhaseMarkers) {
+    if (!stroMotionActive && stroMotionHtml5Only && (biomechPhaseMarkers || skeletonEnabled)) {
       return {
         // Draggable start/end handles delimiting the section the Metrics replay/
-        // recording travels over. Each handle moves independently (PreciseTimeline
-        // passes the unchanged value through) and the timeline does not re-zoom.
+        // recording travels over — and, when the skeleton is on, the range the
+        // Precision AI Track pass covers. Each handle moves independently and
+        // the timeline does not re-zoom.
         trimRange: (metricsSectionStart != null && metricsSectionEnd != null)
           ? { start: metricsSectionStart, end: metricsSectionEnd } as { start: number; end: number }
           : null,
@@ -4379,6 +4490,7 @@ function Home() {
     setStroActiveFrameIndex,
     metricsSectionStart,
     metricsSectionEnd,
+    skeletonEnabled,
   ]);
 
   const renderTimelineDock = () => (
@@ -4512,6 +4624,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onSkeletonShowHeadDirectionChange: setSkeletonShowHeadDirection,
     skeletonShowFootLine,
     onSkeletonShowFootLineChange:    setSkeletonShowFootLine,
+    precisionTrackState,
+    onPrecisionTrack:                (scope: 'all' | 'section') => { void handlePrecisionTrack(scope); },
+    onPrecisionTrackClear:           handlePrecisionTrackClear,
     skeletonClassicColors,
     onSkeletonClassicColorsChange:   setSkeletonClassicColors,
     skeletonShowRightArm,
@@ -4628,11 +4743,30 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onOpenPhases:                    () => { createSnapshotFromLive(); },
     onMetricsGenerate:               () => { void handleGenerateSnapshots(); },
     onAutoDetectMeasurements:        async () => {
+      // Prefer the Precision-AI-Track pose at the CURRENT frame (video-time
+      // exact); fall back to the latest live detection.
+      const bakedKps = videoRef.current ? canvasRef.current?.getBakedPoseAt?.(videoRef.current.currentTime) ?? null : null;
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
-      if (skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
+      if (!bakedKps && skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
       const latest = skFrames[skFrames.length - 1];
-      const kps = latest?.keypoints;
+      let kps = bakedKps ?? latest?.keypoints;
       if (!kps?.length) { setProcessingStatus('No skeleton detected — ensure tracking the player'); return; }
+      // Enrich with REAL foot keypoints (MediaPipe heel + toe) when the pose has
+      // none — one-shot on the current frame, time-boxed so AI Detect never hangs.
+      if (skeletonShowFootLine && videoRef.current && !kps.some((k) => k?.name === 'left_foot_index' || k?.name === 'right_foot_index')) {
+        try {
+          setProcessingStatus('Detecting feet…');
+          const feet = await Promise.race([
+            import('@/lib/mediapipeFeet').then((m) => m.detectFeetOnFrame(videoRef.current!)),
+            new Promise<null>((res) => setTimeout(() => res(null), 2000)),
+          ]);
+          if (feet) {
+            const { footPointsToKeypoints } = await import('@/lib/mediapipeFeet');
+            const extra = footPointsToKeypoints(feet);
+            if (extra.length) kps = [...kps, ...extra];
+          }
+        } catch { /* feet unavailable — the anatomical estimate still applies */ }
+      }
       // Capture the LIVE column before snapshot creation (spec §6 step 1).
       const liveCol = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
       // Step 2: compute AI measurements on the frozen pose.
@@ -4644,9 +4778,12 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       if (meas.jointAngles.leftKneeDeg != null) items.push({ id: `ai-lk-${Date.now()}`, label: 'L Knee', value: Math.round(meas.jointAngles.leftKneeDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.rightKneeDeg != null) items.push({ id: `ai-rk-${Date.now()}`, label: 'R Knee', value: Math.round(meas.jointAngles.rightKneeDeg), unit: '°', type: 'angle' });
       // L/R Foot direction takes the slot the (retired, not-useful) L/R Shoulder
-      // joint angles used to occupy. Shoulder LINE stays below as 'Shoulder (L→R)'.
-      if (meas.footDirection.leftFootDeg != null) items.push({ id: `ai-lf-${Date.now()}`, label: 'L Foot', value: Math.round(meas.footDirection.leftFootDeg), unit: '°', type: 'arrowAngle' });
-      if (meas.footDirection.rightFootDeg != null) items.push({ id: `ai-rf-${Date.now()}`, label: 'R Foot', value: Math.round(meas.footDirection.rightFootDeg), unit: '°', type: 'arrowAngle' });
+      // joint angles used to occupy. Included only when the Foot line skeleton
+      // toggle is ON — AI Detect mirrors what the coach chose to display.
+      if (skeletonShowFootLine) {
+        if (meas.footDirection.leftFootDeg != null) items.push({ id: `ai-lf-${Date.now()}`, label: 'L Foot', value: Math.round(meas.footDirection.leftFootDeg), unit: '°', type: 'arrowAngle' });
+        if (meas.footDirection.rightFootDeg != null) items.push({ id: `ai-rf-${Date.now()}`, label: 'R Foot', value: Math.round(meas.footDirection.rightFootDeg), unit: '°', type: 'arrowAngle' });
+      }
       // Shoulder and hip line angles (L→R direction) + differential
       const lShoulder = kps[5], rShoulder = kps[6], lHip = kps[11], rHip = kps[12];
       let shoulderDeg: number | null = null;
@@ -4663,9 +4800,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         const diff = Math.abs(shoulderDeg - hipDeg);
         items.push({ id: `ai-shd-${Date.now()}`, label: 'Shoulder-Hip Diff', value: Math.round(diff), unit: '°', type: 'differential' });
       }
-      // Head direction
+      // Head direction — only when its skeleton toggle is ON (mirrors display).
       const nose = kps[0], lEar = kps[3], rEar = kps[4];
-      if (nose?.score >= 0.2 && ((lEar?.score >= 0.2) || (rEar?.score >= 0.2))) {
+      if (skeletonShowHeadDirection && nose?.score >= 0.2 && ((lEar?.score >= 0.2) || (rEar?.score >= 0.2))) {
         const earMidX = lEar?.score >= 0.2 && rEar?.score >= 0.2 ? (lEar.x + rEar.x) / 2 : (lEar?.score >= 0.2 ? lEar.x : rEar!.x);
         const earMidY = lEar?.score >= 0.2 && rEar?.score >= 0.2 ? (lEar.y + rEar.y) / 2 : (lEar?.score >= 0.2 ? lEar.y : rEar!.y);
         const headAngle = Math.round(((Math.atan2(nose.y - earMidY, nose.x - earMidX) * 180 / Math.PI) + 360) % 360);

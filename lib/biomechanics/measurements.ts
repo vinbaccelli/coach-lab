@@ -146,7 +146,21 @@ export function estimateFootVector(
   return { x: dirX, y: dirY };
 }
 
-/** Foot direction (degrees), estimated anatomically — see estimateFootVector. */
+/** Named (appended, index ≥17) keypoint lookup — real MediaPipe foot points. */
+function namedKp(keypoints: PoseKeypoint[] | null, name: string): PoseKeypoint | null {
+  if (!keypoints) return null;
+  for (let i = 17; i < keypoints.length; i++) {
+    const p = keypoints[i] as PoseKeypoint & { name?: string };
+    if (p?.name === name && p.score >= 0.3) return p;
+  }
+  return null;
+}
+
+/**
+ * Foot direction (degrees). Uses REAL ankle→toe (foot_index) when MediaPipe
+ * foot keypoints are present (AI Track / AI Detect enrich the pose with them);
+ * falls back to the anatomical shin-perpendicular estimate otherwise.
+ */
 export function computeFootDirection(keypoints: PoseKeypoint[] | null): FootDirection {
   const lk = kp(keypoints, POSE.L_KNEE);
   const rk = kp(keypoints, POSE.R_KNEE);
@@ -155,6 +169,8 @@ export function computeFootDirection(keypoints: PoseKeypoint[] | null): FootDire
   const lh = kp(keypoints, POSE.L_HIP);
   const rh = kp(keypoints, POSE.R_HIP);
   const nose = kp(keypoints, 0);
+  const lToe = namedKp(keypoints, 'left_foot_index');
+  const rToe = namedKp(keypoints, 'right_foot_index');
 
   const hipXs = [lh, rh].filter((h): h is PoseKeypoint => !!h).map((h) => h.x);
   const bodyCenterX = hipXs.length ? hipXs.reduce((a, b) => a + b, 0) / hipXs.length : null;
@@ -162,8 +178,10 @@ export function computeFootDirection(keypoints: PoseKeypoint[] | null): FootDire
 
   let leftFootDeg: number | null = null;
   let rightFootDeg: number | null = null;
-  if (lk && la) { const v = estimateFootVector(lk, la, bodyCenterX, facing); leftFootDeg = vectorAngleDeg(v.x, v.y); }
-  if (rk && ra) { const v = estimateFootVector(rk, ra, bodyCenterX, facing); rightFootDeg = vectorAngleDeg(v.x, v.y); }
+  if (la && lToe) leftFootDeg = vectorAngleDeg(lToe.x - la.x, lToe.y - la.y);
+  else if (lk && la) { const v = estimateFootVector(lk, la, bodyCenterX, facing); leftFootDeg = vectorAngleDeg(v.x, v.y); }
+  if (ra && rToe) rightFootDeg = vectorAngleDeg(rToe.x - ra.x, rToe.y - ra.y);
+  else if (rk && ra) { const v = estimateFootVector(rk, ra, bodyCenterX, facing); rightFootDeg = vectorAngleDeg(v.x, v.y); }
 
   return { leftFootDeg, rightFootDeg };
 }

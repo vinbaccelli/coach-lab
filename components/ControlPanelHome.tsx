@@ -40,7 +40,7 @@ export default function ControlPanelHome() {
   return (
     <div style={shell}>
       <div style={{ marginBottom: 22 }}>
-        <img src="/logo-wordmark.svg" alt="Anglemotion" style={{ height: 44, width: 'auto', marginBottom: 8, borderRadius: 8 }} />
+        <img src="/logo-rect-new.jpg" alt="Anglemotion" style={{ height: 44, width: 'auto', marginBottom: 8, borderRadius: 8 }} />
         <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 600, letterSpacing: '-0.03em', color: '#1D1D1F' }}>
           Control Panel
         </h1>
@@ -197,7 +197,7 @@ export default function ControlPanelHome() {
             <span style={{ fontSize: 15, fontWeight: 800 }}>Pricing &amp; Subscribe</span>
           </div>
           <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
-            $20/month or $200/year — see what&apos;s included and subscribe via Stripe.
+            Light $5/mo · Pro $20/mo · Academy $40/mo (or 2 months free yearly) — subscribe via Stripe.
           </p>
         </Link>
 
@@ -222,14 +222,14 @@ export default function ControlPanelHome() {
           How AngleMotion compares
         </h2>
         <p style={{ margin: '0 0 16px', fontSize: 13, color: '#6E6E73' }}>
-          All-in-one coaching platform vs. single-purpose tools.
+          Head-to-head with the two platforms in our niche — the full coaching workflow, at a fraction of the price.
         </p>
         <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', borderRadius: 14, border: '1px solid #E5E5EA' }}>
-          <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse', fontSize: 12, background: '#FFF' }}>
+          <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: 12, background: '#FFF' }}>
             <thead>
               <tr style={{ borderBottom: '2px solid #E5E5EA' }}>
                 <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#6E6E73', fontSize: 11 }}>Feature</th>
-                {['AngleMotion', 'Dartfish', 'CoachNow', 'OnForm', 'VisualEyes', 'Yogger', 'SwingCoach'].map((name, i) => (
+                {['AngleMotion', 'CoachNow', 'Dartfish'].map((name, i) => (
                   <th key={name} style={{
                     padding: '12px 10px', textAlign: 'center', fontWeight: 700, fontSize: 11,
                     color: i === 0 ? '#007AFF' : '#1D1D1F',
@@ -240,15 +240,16 @@ export default function ControlPanelHome() {
             </thead>
             <tbody>
               {([
-                ['Video analysis + drawing', true, true, true, true, true, false, true],
-                ['AI skeleton detection', true, false, false, true, false, false, false],
-                ['StroMotion composites', true, true, false, false, false, false, false],
-                ['AI match decoding', true, false, false, false, false, true, false],
-                ['Player database', true, false, true, false, false, false, false],
-                ['Screenshot export', true, true, true, true, true, false, true],
-                ['Coach public profile', true, false, true, false, false, false, false],
-                ['Free tier', true, false, true, true, false, true, true],
-                ['Price', '$20/mo', '$30+/mo', '$30/mo', '$15/mo', '$20/mo', 'Free', '$5/mo'],
+                ['AI skeleton + 13+ auto angles', true, true, true],
+                ['Editable AI skeleton (drag any joint)', true, false, false],
+                ['StroMotion / motion-trail composites', true, false, true],
+                ['Slow-mo phase replay videos', true, true, true],
+                ['Google Docs coaching reports', true, false, false],
+                ['One-click YouTube publish', true, false, false],
+                ['Player database + progress tracking', true, true, false],
+                ['AI match decoding (SwingVision)', true, false, false],
+                ['Videos stay on YOUR device', true, false, false],
+                ['Price (Pro tier, annual)', '$200/yr', '$499/yr', '~€480/yr'],
               ] as Array<[string, ...Array<boolean | string>]>).map((row, ri) => (
                 <tr key={ri} style={{ borderBottom: '1px solid #F2F2F7' }}>
                   <td style={{ padding: '10px 14px', fontWeight: 600, color: '#1D1D1F', whiteSpace: 'nowrap' }}>{row[0]}</td>
