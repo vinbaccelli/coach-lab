@@ -76,6 +76,10 @@ identical to pre-change.
 ## Prerequisites before recording
 
 1. Use the verification URL: **https://anglemotionverification.vercel.app**
+   — type it directly. (Vercel dashboard "Visit" buttons open per-deployment
+   alias URLs; those are also allow-listed now, but the clean domain is what
+   the demo video should show. If sign-in ever bounces to anglemotion.com, you
+   were on an origin missing from the Supabase redirect allowlist.)
 2. Sign in with a Google account that is a **test user** on the OAuth consent
    screen (while the app is unverified, only test users can grant the sensitive
    scopes). Expect the "Google hasn't verified this app" interstitial —
