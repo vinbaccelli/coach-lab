@@ -11,8 +11,18 @@
  * ENABLE_YOUTUBE_UPLOAD — YouTube upload UI (unverified projects get uploads
  * locked private by YouTube). Requires ENABLE_GOOGLE_EXPORTS.
  */
-export const ENABLE_GOOGLE_EXPORTS = false;
-export const ENABLE_YOUTUBE_UPLOAD = false;
+// TEMPORARY FOR GOOGLE OAUTH VERIFICATION
+// Env override so the SEPARATE verification deployment
+// (anglemotionverification.vercel.app, env NEXT_PUBLIC_GOOGLE_VERIFICATION_DEMO=1)
+// can show the full Google Docs/Drive/YouTube surface for Google's demo video.
+// anglemotion.com production does NOT set this env var, so both flags compile
+// to `false` there — behavior is byte-identical to the previous hardcoded values.
+// Revert: restore the two exports to `= false;` and delete this block + the
+// env var (full instructions in GOOGLE_VERIFICATION_DEMO.md).
+const GOOGLE_VERIFICATION_DEMO = process.env.NEXT_PUBLIC_GOOGLE_VERIFICATION_DEMO === '1';
+
+export const ENABLE_GOOGLE_EXPORTS = GOOGLE_VERIFICATION_DEMO;
+export const ENABLE_YOUTUBE_UPLOAD = GOOGLE_VERIFICATION_DEMO;
 
 /** Sensitive scopes requested at sign-in when exports are enabled. */
 export const GOOGLE_EXPORT_SCOPES =
