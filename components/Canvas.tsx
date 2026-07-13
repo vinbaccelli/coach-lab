@@ -1955,6 +1955,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonSuppressedRef = useRef(false);
     const poseBridgeRef = useRef<PoseWorkerBridge | null>(null);
     const pendingFocusRef = useRef<{ x: number; y: number } | null>(null);
+    // Continuous auto-focus crop target (torso centroid, normalized). Distinct
+    // from pendingFocusRef, which is the coach's explicit skeleton-lock click.
+    const autoFocusRef = useRef<{ x: number; y: number } | null>(null);
     const renderDirtyRef = useRef(true);
     const renderWaitersRef = useRef<Array<() => void>>([]);
     const lastRenderVideoTimeRef = useRef(-1);
@@ -3201,6 +3204,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             poseLatestSampleRef.current = { kps: keypoints, ts: performance.now() };
             latestKeypointsRef.current = keypoints;
             renderDirtyRef.current = true;
+          }
+
+          // ── Auto-focus crop ────────────────────────────────────────────
+          // Keep the worker's 0.6 focus crop centered on the athlete
+          // continuously (it previously only activated on a skeleton-lock
+          // click). A tighter crop = more model pixels on the player = better
+          // limb fidelity and lower latency. Hysteresis: recentre only when
+          // the torso centroid drifts > 5% of the frame; drop the crop when
+          // confidence collapses so re-acquisition scans the full frame.
+          if (v && v.videoWidth > 0 && !bakingRef.current) {
+            const core = [5, 6, 11, 12]
+              .map((i) => keypoints[i])
+              .filter((k) => k && k.score >= 0.3);
+            if (core.length >= 3) {
+              const cx = core.reduce((s, k) => s + k.x, 0) / core.length / v.videoWidth;
+              const cy = core.reduce((s, k) => s + k.y, 0) / core.length / v.videoHeight;
+              const prev = autoFocusRef.current;
+              if (!prev || Math.hypot(cx - prev.x, cy - prev.y) > 0.05) {
+                autoFocusRef.current = { x: cx, y: cy };
+                poseBridgeRef.current?.setFocusPoint(autoFocusRef.current);
+              }
+            } else if (autoFocusRef.current) {
+              autoFocusRef.current = null;
+              poseBridgeRef.current?.setFocusPoint(pendingFocusRef.current ?? null);
+            }
           }
         }
       });

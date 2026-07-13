@@ -39,7 +39,10 @@ let modelSwapInFlight = false;
 // jittery. 6 samples cuts that jitter window in half vs 12 while still averaging
 // out one-off slow frames on capable desktops (which stay on Thunder).
 const SWAP_AFTER_SAMPLES = 6;
-const SWAP_THRESHOLD_MS = 45;
+// 55 ms keeps THUNDER (markedly more precise) on borderline GPUs that hover in
+// the 45-55 ms band — with display interpolation, ~18 Hz detection is smooth,
+// so precision is worth more than the extra frames Lightning would give.
+const SWAP_THRESHOLD_MS = 55;
 
 function makeDetector(model: 'thunder' | 'lightning') {
   return pd.createDetector(pd.SupportedModels.MoveNet, {
