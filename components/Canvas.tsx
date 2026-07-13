@@ -24,7 +24,6 @@ import {
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { getPoseDetector } from '@/lib/poseDetection';
-import { estimateFootVector } from '@/lib/biomechanics/measurements';
 import { smoothBakedTrack } from '@/lib/trackSmoothing';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
@@ -566,86 +565,32 @@ function drawSkeletonOverlay(
     }
   }
 
-  // Foot direction lines (ankle → toe tip).
-  // MoveNet has no toe keypoints, so the direction is estimated: primarily
-  // from the body-center → ankle horizontal offset; when the foot is under
-  // the body (lunge/split-step) fall back to the facing direction (nose vs
-  // body center) so the line never flips backwards mid-stroke.
+  // Foot direction lines — REAL ankle → toe-tip only. The line renders solely
+  // when the pose carries MediaPipe foot keypoints (appended at index 17+ by
+  // the Precision AI Track pass or AI Detect). No estimate is ever drawn:
+  // outside tracked data the foot line is simply absent (user decision — a
+  // wrong guess is worse than no line).
   if (showFootLine) {
-    const lHip = keypoints[11];
-    const rHip = keypoints[12];
-    const nose = keypoints[0];
-    const hipXs = [lHip, rHip].filter((h) => h && h.score >= scoreThreshold).map((h) => h.x * sx);
-    const bodyCenterX = hipXs.length ? hipXs.reduce((a, b) => a + b, 0) / hipXs.length : null;
-    const facing = bodyCenterX != null && nose && nose.score >= scoreThreshold
-      ? (nose.x * sx >= bodyCenterX ? 1 : -1)
-      : 1;
-
     for (const [kneeIdx, ankleIdx, toeName] of [[13, 15, 'left_foot_index'], [14, 16, 'right_foot_index']] as Array<[number, number, string]>) {
       if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
-      const knee  = keypoints[kneeIdx];
       const ankle = keypoints[ankleIdx];
-      if (!knee || !ankle || knee.score < scoreThreshold || ankle.score < scoreThreshold) continue;
-      const ax = ankle.x * sx, ay = ankle.y * sy;
-      const kx = knee.x * sx, ky = knee.y * sy;
-      // REAL foot line: when the pose carries MediaPipe foot keypoints (appended
-      // at index 17+, from AI Track / AI Detect), draw ankle → toe tip directly.
+      if (!ankle || ankle.score < scoreThreshold) continue;
       let toe: { x: number; y: number; score: number; name?: string } | null = null;
       for (let fi = 17; fi < keypoints.length; fi++) {
         const cand = keypoints[fi];
         if (cand?.name === toeName && cand.score >= 0.3) { toe = cand; break; }
       }
-      if (toe) {
-        const tx2 = toe.x * sx, ty2 = toe.y * sy;
-        ctx.save();
-        ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        // Extend slightly past the toe so the line reaches the shoe tip.
-        ctx.lineTo(tx2 + (tx2 - ax) * 0.15, ty2 + (ty2 - ay) * 0.15);
-        ctx.stroke();
-        ctx.restore();
-        continue;
-      }
-      const shinLen = Math.hypot(ax - kx, ay - ky);
-      if (shinLen < 1) continue;
-      const toeLen = shinLen * 0.45;
-      // Ankle clearly ahead/behind the body → that side is forward; otherwise
-      // use the facing direction so feet under the body still point correctly.
-      let fwd: number;
-      if (bodyCenterX != null && Math.abs(ax - bodyCenterX) > shinLen * 0.15) {
-        fwd = ax >= bodyCenterX ? 1 : -1;
-      } else {
-        fwd = facing;
-      }
-      // The foot is ~perpendicular to the shin, but the toe is ANATOMICALLY
-      // always at/below the ankle (never above) — so of the two shin
-      // perpendiculars, choose the one that points DOWNWARD (positive screen y)
-      // and, among those, toward `fwd`. This makes it geometrically impossible
-      // for the line to point back up the leg. Screen y grows downward.
-      const shinX = ax - kx, shinY = ay - ky;
-      // Two unit perpendiculars to the shin.
-      const p1x = shinY, p1y = -shinX;   // rotate shin +90°
-      const p2x = -shinY, p2y = shinX;   // rotate shin −90°
-      const len1 = Math.hypot(p1x, p1y) || 1;
-      const len2 = Math.hypot(p2x, p2y) || 1;
-      // Score each by downward-ness (0.6) + forward horizontal match (0.4).
-      const score1 = 0.6 * (p1y / len1) + 0.4 * fwd * (p1x / len1);
-      const score2 = 0.6 * (p2y / len2) + 0.4 * fwd * (p2x / len2);
-      let dirX = score1 >= score2 ? p1x / len1 : p2x / len2;
-      let dirY = score1 >= score2 ? p1y / len1 : p2y / len2;
-      // Hard guarantee: never point upward (toe above ankle). If the chosen
-      // perpendicular still tilts up, flatten it to horizontal-forward.
-      if (dirY < 0) { dirY = 0; dirX = fwd; const l = Math.hypot(dirX, dirY) || 1; dirX /= l; dirY /= l; }
+      if (!toe) continue;
+      const ax = ankle.x * sx, ay = ankle.y * sy;
+      const tx2 = toe.x * sx, ty2 = toe.y * sy;
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
       ctx.lineWidth = 2;
       ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      ctx.lineTo(ax + dirX * toeLen, ay + dirY * toeLen);
+      // Extend slightly past the toe so the line reaches the shoe tip.
+      ctx.lineTo(tx2 + (tx2 - ax) * 0.15, ty2 + (ty2 - ay) * 0.15);
       ctx.stroke();
       ctx.restore();
     }
@@ -4509,13 +4454,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             drawArrow('head', earX, earY, nose.x, nose.y);
           }
 
-          // Foot direction — anatomical (shin-perpendicular, forced down+forward),
-          // shared with lib/biomechanics so the arrow matches the AI-Detect number.
-          // Drawn only when the Foot line skeleton toggle is ON.
+          // Foot direction arrows — REAL toe keypoints only (appended at index
+          // 17+ by AI Track / AI Detect). No estimate arrows: absent data means
+          // absent arrow. Drawn only when the Foot line skeleton toggle is ON.
           if (skeletonShowFootLineRef.current) {
-            const footBodyCenterX = (lH?.score >= scoreMin && rH?.score >= scoreMin) ? (lH.x + rH.x) / 2 : null;
-            const footFacing: 1 | -1 = footBodyCenterX != null && nose?.score >= scoreMin ? (nose.x >= footBodyCenterX ? 1 : -1) : 1;
-            // Real MediaPipe toe keypoints (appended at index 17+) beat the estimate.
             const namedToe = (nm: string) => {
               for (let fi = 17; fi < kps.length; fi++) {
                 const c = kps[fi];
@@ -4524,26 +4466,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               return null;
             };
 
-            // Left foot direction
-            const lK = kps[13], lA = kps[15];
+            const lA = kps[15];
             const lToe = namedToe('left_foot_index');
             if (lA?.score >= scoreMin && lToe) {
               drawArrow('lfoot', lA.x, lA.y, lToe.x + (lToe.x - lA.x) * 0.15, lToe.y + (lToe.y - lA.y) * 0.15);
-            } else if (lK?.score >= scoreMin && lA?.score >= scoreMin) {
-              const v = estimateFootVector(lK, lA, footBodyCenterX, footFacing);
-              const len = Math.hypot(lA.x - lK.x, lA.y - lK.y) * 0.55;
-              drawArrow('lfoot', lA.x, lA.y, lA.x + v.x * len, lA.y + v.y * len);
             }
 
-            // Right foot direction
-            const rK = kps[14], rA = kps[16];
+            const rA = kps[16];
             const rToe = namedToe('right_foot_index');
             if (rA?.score >= scoreMin && rToe) {
               drawArrow('rfoot', rA.x, rA.y, rToe.x + (rToe.x - rA.x) * 0.15, rToe.y + (rToe.y - rA.y) * 0.15);
-            } else if (rK?.score >= scoreMin && rA?.score >= scoreMin) {
-              const v = estimateFootVector(rK, rA, footBodyCenterX, footFacing);
-              const len = Math.hypot(rA.x - rK.x, rA.y - rK.y) * 0.55;
-              drawArrow('rfoot', rA.x, rA.y, rA.x + v.x * len, rA.y + v.y * len);
             }
           }
 
@@ -6183,13 +6115,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const earY = lEar?.score >= sm && rEar?.score >= sm ? (lEar.y + rEar.y) / 2 : (lEar?.score >= sm ? lEar.y : rEar!.y);
           overlayEndpoints.push({ id: 'head', x1: earX, y1: earY, x2: nose.x, y2: nose.y });
         }
-        // Foot endpoints must mirror the DRAWN geometry exactly (real toe
-        // keypoint when present, else the anatomical estimate) — the old shin-
-        // extension math put the grab point away from the visible tip, which
-        // made the toe end feel un-draggable.
+        // Foot endpoints mirror the DRAWN geometry exactly: real toe keypoints
+        // only (no estimate arrows exist anymore, so no estimate hit targets).
         {
-          const hitBodyCenterX = (lH?.score >= sm && rH?.score >= sm) ? (lH.x + rH.x) / 2 : null;
-          const hitFacing: 1 | -1 = hitBodyCenterX != null && nose?.score >= sm ? (nose.x >= hitBodyCenterX ? 1 : -1) : 1;
           const hitToe = (nm: string) => {
             for (let fi = 17; fi < kps.length; fi++) {
               const c = kps[fi];
@@ -6200,18 +6128,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const lToeH = hitToe('left_foot_index');
           if (lA2?.score >= sm && lToeH) {
             overlayEndpoints.push({ id: 'lfoot', x1: lA2.x, y1: lA2.y, x2: lToeH.x + (lToeH.x - lA2.x) * 0.15, y2: lToeH.y + (lToeH.y - lA2.y) * 0.15 });
-          } else if (lK2?.score >= sm && lA2?.score >= sm) {
-            const v = estimateFootVector(lK2, lA2, hitBodyCenterX, hitFacing);
-            const len = Math.hypot(lA2.x - lK2.x, lA2.y - lK2.y) * 0.55;
-            overlayEndpoints.push({ id: 'lfoot', x1: lA2.x, y1: lA2.y, x2: lA2.x + v.x * len, y2: lA2.y + v.y * len });
           }
           const rToeH = hitToe('right_foot_index');
           if (rA2?.score >= sm && rToeH) {
             overlayEndpoints.push({ id: 'rfoot', x1: rA2.x, y1: rA2.y, x2: rToeH.x + (rToeH.x - rA2.x) * 0.15, y2: rToeH.y + (rToeH.y - rA2.y) * 0.15 });
-          } else if (rK2?.score >= sm && rA2?.score >= sm) {
-            const v = estimateFootVector(rK2, rA2, hitBodyCenterX, hitFacing);
-            const len = Math.hypot(rA2.x - rK2.x, rA2.y - rK2.y) * 0.55;
-            overlayEndpoints.push({ id: 'rfoot', x1: rA2.x, y1: rA2.y, x2: rA2.x + v.x * len, y2: rA2.y + v.y * len });
           }
         }
         if (lS?.score >= sm && rS?.score >= sm) {
