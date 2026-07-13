@@ -1046,19 +1046,14 @@ function Home() {
   const [precisionTrackState, setPrecisionTrackState] = useState<'idle' | 'running' | 'ready'>('idle');
   const precisionAbortRef = useRef(false);
 
-  const handlePrecisionTrack = useCallback(async (scope: 'all' | 'section') => {
+  /**
+   * The frame-stepped tracking pass over [start, end]. Returns the number of
+   * samples baked (0 = failed or cancelled — already-baked sections are left
+   * untouched either way). Caller owns the precisionTrackState UI.
+   */
+  const runPrecisionPass = useCallback(async (start: number, end: number): Promise<number> => {
     const v = videoRef.current;
-    if (!v || !videoSrc) { setProcessingStatus('Load a video first'); return; }
-    if (!skeletonEnabled) { setProcessingStatus('Enable Skeleton first, then run AI Track'); return; }
-    if (precisionTrackState === 'running') { precisionAbortRef.current = true; return; } // second tap cancels
-    const dur = isFinite(v.duration) ? v.duration : 0;
-    if (dur <= 0) { setProcessingStatus('Video not ready yet — try again'); return; }
-    const start = scope === 'section' && metricsSectionStart != null ? Math.max(0, metricsSectionStart) : 0;
-    const end = scope === 'section' && metricsSectionEnd != null ? Math.min(dur, metricsSectionEnd) : dur;
-    if (end - start < 0.2) { setProcessingStatus('Selected section is too short to track'); return; }
-
-    precisionAbortRef.current = false;
-    setPrecisionTrackState('running');
+    if (!v) return 0;
     const originalRate = v.playbackRate || 1;
     try {
       v.pause();
@@ -1104,25 +1099,48 @@ function Home() {
           setProcessingStatus(`AI-tracking… ${Math.round((k / total) * 100)}% (frame-exact${useMediaPipe ? ' + real feet' : ''})`);
         }
       }
-      const passMs = performance.now() - passT0;
 
+      if (precisionAbortRef.current) {
+        canvasRef.current?.discardBakeCapture?.();
+        return 0;
+      }
       const kept = canvasRef.current?.finishBakeCapture?.({ start, end }) ?? 0;
-      if (precisionAbortRef.current || kept < 2) {
-        canvasRef.current?.clearBakedTrack?.();
-        setPrecisionTrackState('idle');
+      if (kept >= 2 && process.env.NODE_ENV !== 'production') {
+        const passMs = performance.now() - passT0;
+        console.log(`[PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);
+      }
+      return kept;
+    } finally {
+      v.playbackRate = originalRate;
+    }
+  }, [seekVideoTo]);
+
+  const handlePrecisionTrack = useCallback(async (scope: 'all' | 'section') => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) { setProcessingStatus('Load a video first'); return; }
+    if (!skeletonEnabled) { setProcessingStatus('Enable Skeleton first, then run AI Track'); return; }
+    if (precisionTrackState === 'running') { precisionAbortRef.current = true; return; } // second tap cancels
+    const dur = isFinite(v.duration) ? v.duration : 0;
+    if (dur <= 0) { setProcessingStatus('Video not ready yet — try again'); return; }
+    const start = scope === 'section' && metricsSectionStart != null ? Math.max(0, metricsSectionStart) : 0;
+    const end = scope === 'section' && metricsSectionEnd != null ? Math.min(dur, metricsSectionEnd) : dur;
+    if (end - start < 0.2) { setProcessingStatus('Selected section is too short to track'); return; }
+
+    precisionAbortRef.current = false;
+    setPrecisionTrackState('running');
+    try {
+      const kept = await runPrecisionPass(start, end);
+      if (kept < 2) {
         setProcessingStatus(precisionAbortRef.current ? 'AI Track cancelled' : 'AI Track found no skeleton in that range');
       } else {
-        setPrecisionTrackState('ready');
-        if (process.env.NODE_ENV !== 'production') {
-          console.log(`[PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);
-        }
         setProcessingStatus(`AI Track ready — ${kept} frame-exact poses locked. Play at any speed.`);
       }
     } finally {
-      v.playbackRate = originalRate;
+      // Earlier sections survive a failed/cancelled pass — reflect reality.
+      setPrecisionTrackState(canvasRef.current?.getBakedTrackInfo?.() ? 'ready' : 'idle');
       void seekVideoTo(start);
     }
-  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsSectionStart, metricsSectionEnd, seekVideoTo]);
+  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsSectionStart, metricsSectionEnd, seekVideoTo, runPrecisionPass]);
 
   const handlePrecisionTrackClear = useCallback(() => {
     canvasRef.current?.clearBakedTrack?.();
@@ -1140,6 +1158,10 @@ function Home() {
    * ffmpeg conversion retimes the master to the coach's chosen speed. Choosing
    * 1× still gets the 0.25×-quality skeleton. Holds are recorded proportionally
    * longer so they come out exactly `holdSec` after retiming.
+   *
+   * TRACK-BACKED UPGRADE: when a Precision AI Track covers the section (auto-run
+   * if missing), the skeleton is frame-exact at any speed, so the recording runs
+   * directly at the coach's chosen rate — the slow-master is fallback only.
    */
   const recordReplayToMp4 = useCallback(async (includedIds?: string[]) => {
     if (!snapshots.length || generateRecording) return;
@@ -1148,6 +1170,25 @@ function Home() {
     generateIncludedIdsRef.current = includedIds && includedIds.length ? includedIds : null;
 
     setGenerateRecording(true);
+
+    // ── Track-backed recording ───────────────────────────────────────────
+    // Resolve the section (must mirror handleReplaySnapshots) and make sure a
+    // baked track covers it BEFORE capture starts: the skeleton then draws
+    // frame-exact from the track at ANY speed, so the recording can run at the
+    // coach's target rate directly — no slow-master wait, no retime.
+    const incNow = generateIncludedIdsRef.current;
+    const orderedNow = [...snapshots].filter((s) => !incNow || incNow.includes(s.id)).sort((a, b) => a.timeSec - b.timeSec);
+    const secStart = metricsSectionStart ?? Math.max(0, (orderedNow[0]?.timeSec ?? 0) - 0.3);
+    const secEnd = Math.max(secStart + 0.1, metricsSectionEnd ?? ((orderedNow[orderedNow.length - 1]?.timeSec ?? secStart) + 0.3));
+    let trackBacked = !skeletonEnabled || (canvasRef.current?.isRangeBaked?.(secStart, secEnd) ?? false);
+    if (!trackBacked && skeletonEnabled) {
+      setProcessingStatus('Preparing perfect skeleton for the recording…');
+      precisionAbortRef.current = false;
+      setPrecisionTrackState('running');
+      const kept = await runPrecisionPass(secStart, secEnd);
+      trackBacked = kept >= 2;
+      setPrecisionTrackState(canvasRef.current?.getBakedTrackInfo?.() ? 'ready' : 'idle');
+    }
     // Single export rendering path: force the visible, in-DOM analysis canvas to
     // paint the video itself, then capture that canvas (video + overlay). The
     // canvas stays attached to the DOM, which Safari captures far more reliably
@@ -1176,13 +1217,17 @@ function Home() {
         recorder.onstop = () => resolve(new Blob(chunks, { type: mime.includes('mp4') ? 'video/mp4' : 'video/webm' }));
       });
 
-      // Slow master: traverse at ≤0.25× regardless of the chosen speed; retime after.
+      // Track-backed: record at the coach's speed directly (skeleton comes from
+      // the baked track — frame-exact at any rate). The ≤0.25× slow-master +
+      // retime survives only as the fallback when no track could be produced.
       const targetRate = generateReplayRate > 0 ? generateReplayRate : 0.25;
-      const masterRate = Math.min(0.25, targetRate);
+      const masterRate = trackBacked ? targetRate : Math.min(0.25, targetRate);
       const holdScale = targetRate / masterRate;        // hold longer → correct after retime
       const retimeFactor = masterRate / targetRate;     // <1 speeds the master up
 
-      setProcessingStatus(`Recording master at ${masterRate}× for best skeleton…`);
+      setProcessingStatus(trackBacked
+        ? `Recording at ${targetRate}× with frame-exact skeleton…`
+        : `Recording master at ${masterRate}× for best skeleton…`);
       recorder.start();
       await handleReplaySnapshots(recorder, { playRate: masterRate, holdScale });
       const webmBlob = await done;
@@ -1207,7 +1252,7 @@ function Home() {
       setExportForceVideoPaint(false);
       setGenerateRecording(false);
     }
-  }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots, generateReplayRate]);
+  }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots, generateReplayRate, skeletonEnabled, metricsSectionStart, metricsSectionEnd, runPrecisionPass]);
 
   /** Replay from the Generate workspace: workspace hides itself; show the strip HUD meanwhile. */
   const handleWorkspaceReplay = useCallback(async (includedIds: string[]) => {

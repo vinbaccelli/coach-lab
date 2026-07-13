@@ -159,12 +159,15 @@ export interface CanvasHandle {
   startBakeCapture: (collectFromBridge?: boolean) => void;
   /** Push one frame-exact sample (frame-stepped pass; MediaPipe 17+feet pose). */
   addBakeSample: (t: number, kps: Array<{ x: number; y: number; score: number; name: string }>) => void;
+  /** Abort the in-flight pass without touching already-baked sections. */
+  discardBakeCapture: () => void;
   /** Finish the tracking pass (applies offline outlier repair + zero-lag
    *  smoothing); returns the number of samples kept (0 = failed). */
   finishBakeCapture: (range: { start: number; end: number }) => number;
   clearBakedTrack: () => void;
   getBakedTrackInfo: () => { samples: number; start: number; end: number } | null;
   getBakedPoseAt: (t: number) => Array<{ x: number; y: number; score: number; name: string }> | null;
+  isRangeBaked: (start: number, end: number) => boolean;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
   /** Cancel an in-progress StroMotion region selection; fires the pending callback with null */
@@ -2648,6 +2651,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (!bakingRef.current || !kps.length) return;
         bakeSamplesRef.current.push({ t, kps });
       },
+      discardBakeCapture: () => {
+        // Abort the in-flight pass WITHOUT touching already-baked sections.
+        bakingRef.current = false;
+        bakeSamplesRef.current = [];
+      },
       finishBakeCapture: (range) => {
         bakingRef.current = false;
         const kept = bakeSamplesRef.current
@@ -2682,6 +2690,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         };
       },
       getBakedPoseAt: (t: number) => lookupBakedPose(t),
+      /** True when one baked track fully covers [start, end] (small tolerance). */
+      isRangeBaked: (start: number, end: number) =>
+        bakedTracksRef.current.some((b) => b.start <= start + 0.05 && b.end >= end - 0.05),
       startStroMotionRegionSelect: (cb) => {
         isSelectingStroRegionRef.current = true;
         stroRegionCallbackRef.current = cb;
