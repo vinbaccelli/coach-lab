@@ -25,6 +25,7 @@ import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { estimateFootVector } from '@/lib/biomechanics/measurements';
+import { smoothBakedTrack } from '@/lib/trackSmoothing';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
@@ -152,15 +153,16 @@ export interface CanvasHandle {
   getSkeletonKeypoints: () => Array<{ x: number; y: number; score: number; name: string }> | null;
   /** Restore skeleton keypoints from a snapshot (for phase switching). */
   setSkeletonKeypoints: (kps: Array<{ x: number; y: number; score: number; name: string }> | null, provenance?: 'snapshot' | 'frame') => void;
-  /** Precision AI Track: begin collecting a dense video-time pose track. */
-  startBakeCapture: () => void;
-  /** Finish the tracking pass; returns the number of samples kept (0 = failed).
-   *  feetSamples (optional): MediaPipe foot keypoints sampled in parallel —
-   *  merged into the nearest pose sample so the baked track carries real toes. */
-  finishBakeCapture: (
-    range: { start: number; end: number },
-    feetSamples?: Array<{ t: number; kps: Array<{ x: number; y: number; score: number; name: string }> }>,
-  ) => number;
+  /** Precision AI Track: begin collecting a dense video-time pose track.
+   *  collectFromBridge=false → samples come ONLY via addBakeSample (the
+   *  frame-stepped MediaPipe pass); live MoveNet results are ignored so the
+   *  two models' coordinates never mix in one track. */
+  startBakeCapture: (collectFromBridge?: boolean) => void;
+  /** Push one frame-exact sample (frame-stepped pass; MediaPipe 17+feet pose). */
+  addBakeSample: (t: number, kps: Array<{ x: number; y: number; score: number; name: string }>) => void;
+  /** Finish the tracking pass (applies offline outlier repair + zero-lag
+   *  smoothing); returns the number of samples kept (0 = failed). */
+  finishBakeCapture: (range: { start: number; end: number }) => number;
   clearBakedTrack: () => void;
   getBakedTrackInfo: () => { samples: number; start: number; end: number } | null;
   getBakedPoseAt: (t: number) => Array<{ x: number; y: number; score: number; name: string }> | null;
@@ -1791,6 +1793,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     type BakedSample = { t: number; kps: Array<{ x: number; y: number; score: number; name: string }> };
     type BakedTrack = { samples: BakedSample[]; start: number; end: number };
     const bakingRef = useRef(false);
+    // When false, the frame-stepped MediaPipe pass owns sample collection and
+    // MoveNet bridge results must NOT be mixed into the same track.
+    const bakeBridgeCollectRef = useRef(true);
     const bakeSamplesRef = useRef<BakedSample[]>([]);
     // MULTIPLE tracked sections: the coach can AI-Track one section, then
     // another — each pass adds a track (replacing any overlapping one). While
@@ -2689,37 +2694,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         skeletonSuppressedRef.current = !kps;
         renderDirtyRef.current = true;
       },
-      startBakeCapture: () => {
+      startBakeCapture: (collectFromBridge = true) => {
         bakingRef.current = true;
+        bakeBridgeCollectRef.current = collectFromBridge;
         bakeSamplesRef.current = [];
       },
-      finishBakeCapture: (range, feetSamples) => {
+      addBakeSample: (t, kps) => {
+        if (!bakingRef.current || !kps.length) return;
+        bakeSamplesRef.current.push({ t, kps });
+      },
+      finishBakeCapture: (range) => {
         bakingRef.current = false;
         const kept = bakeSamplesRef.current
           .filter((x) => x.t >= range.start - 0.2 && x.t <= range.end + 0.2)
           .sort((a, b) => a.t - b.t);
         bakeSamplesRef.current = [];
         if (kept.length < 2) return 0;
-        // Merge real MediaPipe foot keypoints (sampled in parallel at a lower
-        // rate) into the nearest pose sample — appended as named entries 17+.
-        if (feetSamples?.length) {
-          const feet = [...feetSamples].sort((a, b) => a.t - b.t);
-          let fi = 0;
-          for (const s of kept) {
-            while (fi + 1 < feet.length && Math.abs(feet[fi + 1].t - s.t) <= Math.abs(feet[fi].t - s.t)) fi++;
-            const f = feet[fi];
-            if (f && Math.abs(f.t - s.t) <= 0.15 && f.kps.length) {
-              s.kps = [...s.kps.slice(0, 17), ...f.kps];
-            }
-          }
-        }
+        // Offline post-pass: outlier repair + centered (zero-lag) smoothing —
+        // the precision live tracking can mathematically never reach.
+        const smoothed = smoothBakedTrack(kept);
         // Add as a new tracked section, replacing any overlapping older track.
         bakedTracksRef.current = [
           ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
-          { samples: kept, start: range.start, end: range.end },
+          { samples: smoothed, start: range.start, end: range.end },
         ].sort((a, b) => a.start - b.start);
         renderDirtyRef.current = true;
-        return kept.length;
+        return smoothed.length;
       },
       clearBakedTrack: () => {
         bakedTracksRef.current = [];
@@ -3212,10 +3212,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       poseLoopActiveRef.current = true;
 
       bridge.onResult((keypoints) => {
-        // Precision AI Track capture — record every detection with its video
-        // time, ahead of any display gating (the bake pass must never lose
-        // samples to overlay suppression).
-        if (bakingRef.current && keypoints) {
+        // Precision AI Track capture (MoveNet-fallback path only) — record every
+        // detection with its video time, ahead of any display gating. When the
+        // frame-stepped MediaPipe pass is collecting (bakeBridgeCollectRef
+        // false), bridge results are excluded so model coordinates never mix.
+        if (bakingRef.current && bakeBridgeCollectRef.current && keypoints) {
           const bv = videoRef.current;
           if (bv) bakeSamplesRef.current.push({ t: bv.currentTime, kps: keypoints });
         }

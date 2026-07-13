@@ -1038,8 +1038,11 @@ function Home() {
   }, [skeletonEnabled, videoSrc]);
 
   // ── Precision AI Track (skeleton "bake") ─────────────────────────────────
-  // Records the pose track during a slow 0.25× pass (where detection is at its
-  // best), then playback at ANY speed draws the skeleton by video-time lookup.
+  // FRAME-STEPPED pass: seek every frame time, detect on the PAUSED frame with
+  // MediaPipe Pose Landmarker FULL (33 landmarks — real heel+toe on every
+  // frame), then apply offline zero-lag smoothing. Deterministic and
+  // frame-exact — strictly more precise than any slow-playback pass, because
+  // samples land ON frames instead of at arbitrary wall-clock times.
   const [precisionTrackState, setPrecisionTrackState] = useState<'idle' | 'running' | 'ready'>('idle');
   const precisionAbortRef = useRef(false);
 
@@ -1058,52 +1061,62 @@ function Home() {
     setPrecisionTrackState('running');
     const originalRate = v.playbackRate || 1;
     try {
-      await seekVideoTo(start);
-      canvasRef.current?.startBakeCapture?.();
-      // Real foot keypoints (MediaPipe, heel + toe) sampled in parallel during
-      // the slow pass — merged into the baked track at the end so the foot line
-      // follows the actual shoe, not an estimate.
-      const feetSamples: Array<{ t: number; kps: Array<{ x: number; y: number; score: number; name: string }> }> = [];
-      let feetBusy = false;
-      const feetTimer = setInterval(() => {
-        const vv = videoRef.current;
-        if (!vv || feetBusy || precisionAbortRef.current) return;
-        feetBusy = true;
-        const t = vv.currentTime;
-        void import('@/lib/mediapipeFeet')
-          .then(async (m) => {
-            const fp = await m.detectFeetOnFrame(vv);
-            if (fp) {
-              const kps = m.footPointsToKeypoints(fp);
-              if (kps.length) feetSamples.push({ t, kps });
-            }
-          })
-          .catch(() => {})
-          .finally(() => { feetBusy = false; });
-      }, 120);
-      v.playbackRate = 0.25;
-      try { await v.play(); } catch { /* autoplay block — user gesture already happened */ }
-      await new Promise<void>((resolve) => {
-        const tick = () => {
-          const vv = videoRef.current;
-          if (precisionAbortRef.current || !vv) { resolve(); return; }
-          const pct = Math.min(100, Math.round(((vv.currentTime - start) / (end - start)) * 100));
-          setProcessingStatus(`AI-tracking skeleton… ${pct}% (slow pass = perfect track)`);
-          if (vv.currentTime >= end - 0.03 || vv.ended) { resolve(); return; }
-          requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-      });
-      clearInterval(feetTimer);
       v.pause();
-      const kept = canvasRef.current?.finishBakeCapture?.({ start, end }, feetSamples) ?? 0;
+      setProcessingStatus('Loading precision tracking model…');
+      const mp = await import('@/lib/mediapipePose');
+      await seekVideoTo(start);
+      // Probe once: cold model init + first inference. Decides the engine for
+      // the whole pass so MoveNet and MediaPipe coords never mix in one track.
+      const probe = await mp.detectFullPoseOnFrame(v).catch(() => null);
+      const useMediaPipe = !!probe;
+      canvasRef.current?.startBakeCapture?.(!useMediaPipe);
+      if (probe) canvasRef.current?.addBakeSample?.(v.currentTime, probe);
+
+      // Epsilon-guarded frame seek (seekStroVideo pattern) — 'seeked' or 200 ms.
+      const seekTo = (t: number) => new Promise<void>((resolve) => {
+        const vv = videoRef.current;
+        if (!vv) { resolve(); return; }
+        if (Math.abs(vv.currentTime - t) < 0.0005 && !vv.seeking) { resolve(); return; }
+        let done = false;
+        const fin = () => { if (!done) { done = true; vv.removeEventListener('seeked', fin); resolve(); } };
+        vv.addEventListener('seeked', fin, { once: true });
+        vv.currentTime = t;
+        window.setTimeout(fin, 200);
+      });
+
+      const FPS = 30;
+      const step = 1 / FPS;
+      const total = Math.max(1, Math.ceil((end - start) / step));
+      const passT0 = performance.now();
+      for (let k = 1; k <= total; k++) {
+        if (precisionAbortRef.current) break;
+        const t = Math.min(end, start + k * step);
+        await seekTo(t);
+        if (useMediaPipe) {
+          const kps = await mp.detectFullPoseOnFrame(v).catch(() => null);
+          if (kps) canvasRef.current?.addBakeSample?.(v.currentTime, kps);
+        } else {
+          // MoveNet fallback: the paused-frame 'seeked' detection (Canvas pose
+          // scheduler) feeds the bake via the bridge hook — give it one beat.
+          await new Promise((r) => setTimeout(r, 90));
+        }
+        if (k % 3 === 0 || k === total) {
+          setProcessingStatus(`AI-tracking… ${Math.round((k / total) * 100)}% (frame-exact${useMediaPipe ? ' + real feet' : ''})`);
+        }
+      }
+      const passMs = performance.now() - passT0;
+
+      const kept = canvasRef.current?.finishBakeCapture?.({ start, end }) ?? 0;
       if (precisionAbortRef.current || kept < 2) {
         canvasRef.current?.clearBakedTrack?.();
         setPrecisionTrackState('idle');
         setProcessingStatus(precisionAbortRef.current ? 'AI Track cancelled' : 'AI Track found no skeleton in that range');
       } else {
         setPrecisionTrackState('ready');
-        setProcessingStatus(`AI Track ready — ${kept} poses locked to the video. Play at any speed.`);
+        if (process.env.NODE_ENV !== 'production') {
+          console.log(`[PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);
+        }
+        setProcessingStatus(`AI Track ready — ${kept} frame-exact poses locked. Play at any speed.`);
       }
     } finally {
       v.playbackRate = originalRate;
@@ -4830,11 +4843,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         try {
           setProcessingStatus('Detecting feet…');
           const feet = await Promise.race([
-            import('@/lib/mediapipeFeet').then((m) => m.detectFeetOnFrame(videoRef.current!)),
+            import('@/lib/mediapipePose').then((m) => m.detectFeetOnFrame(videoRef.current!)),
             new Promise<null>((res) => setTimeout(() => res(null), 2000)),
           ]);
           if (feet) {
-            const { footPointsToKeypoints } = await import('@/lib/mediapipeFeet');
+            const { footPointsToKeypoints } = await import('@/lib/mediapipePose');
             const extra = footPointsToKeypoints(feet);
             if (extra.length) kps = [...kps, ...extra];
           }
