@@ -41,16 +41,19 @@ function boxToPixels(
  * Motion-difference matte — the classic Dartfish StroMotion technique.
  *
  * The moving object (racket/bat/club/limb) is exactly what CHANGED between this
- * frame and a background reference frame (a moment when the object is not in
- * the box). |frame − background| inside the selection, cleaned with a
- * morphological open and feathered, isolates the object regardless of its
- * colors — far more reliable than color flood-fill on real footage. Requires a
- * reasonably static camera (tripod/phone-mount), our V1 capture case.
- * Returns null when the diff is unreliable (empty or blown-out box).
+ * frame and the BACKGROUND (ideally a temporal-median plate; single reference
+ * frame as fallback). Pipeline inside the selection box:
+ *   diff → SOFT alpha (smoothstep 30..70 of channel-diff — preserves the
+ *   semi-transparency of motion-blurred implements) → strong-core binarize +
+ *   morphological open → CONNECTED COMPONENTS keep only blobs near the box
+ *   centre (kills background speckle) → alpha gated by the kept support →
+ *   3×3 box-blur feather.
+ * Requires a reasonably static camera (tripod/phone-mount), our V1 capture
+ * case. Returns null when the diff is unreliable (empty or blown-out box).
  */
 async function motionDiffMaskInSelection(
   sourceFrame: ImageBitmap,
-  backgroundFrame: ImageBitmap,
+  background: { bitmap: ImageBitmap; scale: number },
   box: StroMotionSubjectBox,
   vw: number,
   vh: number,
@@ -70,19 +73,28 @@ async function motionDiffMaskInSelection(
   ctx.drawImage(sourceFrame, px, py, pw, ph, 0, 0, w, h);
   const cur = ctx.getImageData(0, 0, w, h);
   ctx.clearRect(0, 0, w, h);
-  ctx.drawImage(backgroundFrame, px, py, pw, ph, 0, 0, w, h);
+  // The background may live at a reduced resolution (median plate) — its
+  // source rect is the same box scaled into plate space.
+  const bs = background.scale;
+  ctx.drawImage(background.bitmap, px * bs, py * bs, pw * bs, ph * bs, 0, 0, w, h);
   const bg = ctx.getImageData(0, 0, w, h);
 
   const n = w * h;
-  const bin = new Uint8Array(n);
-  const T = 48; // sum-of-channel-abs-diff threshold
+  const T_LOW = 30;   // below: definitely background
+  const T_HIGH = 70;  // above: definitely moving object
+  const alphaRaw = new Uint8ClampedArray(n);
+  const core = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
     const o = i * 4;
     const d =
       Math.abs(cur.data[o] - bg.data[o]) +
       Math.abs(cur.data[o + 1] - bg.data[o + 1]) +
       Math.abs(cur.data[o + 2] - bg.data[o + 2]);
-    bin[i] = d > T ? 1 : 0;
+    // smoothstep(T_LOW, T_HIGH, d) → soft alpha keeps motion-blur transparency.
+    const tRaw = (d - T_LOW) / (T_HIGH - T_LOW);
+    const t = tRaw <= 0 ? 0 : tRaw >= 1 ? 1 : tRaw * tRaw * (3 - 2 * tRaw);
+    alphaRaw[i] = Math.round(t * 255);
+    core[i] = d > T_HIGH ? 1 : 0;
   }
 
   const morph = (src: Uint8Array, op: 'erode' | 'dilate'): Uint8Array => {
@@ -103,24 +115,71 @@ async function motionDiffMaskInSelection(
     return out;
   };
 
-  // Open (erode→dilate) kills pixel speckle; the extra dilate reconnects thin
-  // fast-moving parts (racket shaft) the open pass may have nicked.
-  let m = morph(bin, 'erode');
-  m = morph(m, 'dilate');
+  // Open (erode→dilate) kills pixel speckle in the strong core.
+  let m = morph(core, 'erode');
   m = morph(m, 'dilate');
 
+  // Connected components on the cleaned core: keep only blobs whose bounding
+  // box touches the inner 60% of the selection — the object the coach framed —
+  // and drop peripheral movers (shadows, other players, wind-blown net).
+  const labels = new Int32Array(n).fill(-1);
+  const innerX0 = w * 0.2, innerX1 = w * 0.8, innerY0 = h * 0.2, innerY1 = h * 0.8;
+  const stack: number[] = [];
+  let nextLabel = 0;
+  const keepLabel: boolean[] = [];
+  for (let i = 0; i < n; i++) {
+    if (!m[i] || labels[i] !== -1) continue;
+    const label = nextLabel++;
+    let minX = w, maxX = 0, minY = h, maxY = 0;
+    stack.push(i);
+    labels[i] = label;
+    while (stack.length) {
+      const p = stack.pop() as number;
+      const pxl = p % w, pyl = (p / w) | 0;
+      if (pxl < minX) minX = pxl;
+      if (pxl > maxX) maxX = pxl;
+      if (pyl < minY) minY = pyl;
+      if (pyl > maxY) maxY = pyl;
+      // 4-connectivity
+      if (pxl > 0 && m[p - 1] && labels[p - 1] === -1) { labels[p - 1] = label; stack.push(p - 1); }
+      if (pxl < w - 1 && m[p + 1] && labels[p + 1] === -1) { labels[p + 1] = label; stack.push(p + 1); }
+      if (pyl > 0 && m[p - w] && labels[p - w] === -1) { labels[p - w] = label; stack.push(p - w); }
+      if (pyl < h - 1 && m[p + w] && labels[p + w] === -1) { labels[p + w] = label; stack.push(p + w); }
+    }
+    keepLabel[label] = maxX >= innerX0 && minX <= innerX1 && maxY >= innerY0 && minY <= innerY1;
+  }
+  const kept = new Uint8Array(n);
+  for (let i = 0; i < n; i++) if (labels[i] >= 0 && keepLabel[labels[i]]) kept[i] = 1;
+
+  // Support = kept core grown twice, so the soft alpha skirt survives around it.
+  let support = morph(kept, 'dilate');
+  support = morph(support, 'dilate');
+
   let on = 0;
-  for (let i = 0; i < n; i++) on += m[i];
+  for (let i = 0; i < n; i++) on += kept[i];
   const frac = on / n;
   // Nearly-empty diff = object didn't move / wrong reference; nearly-full =
   // camera moved or exposure shifted. Both mean "don't trust this".
-  if (frac < 0.005 || frac > 0.9) return null;
+  if (frac < 0.004 || frac > 0.9) return null;
 
-  // Feather: solid core at 255, one dilate ring at soft alpha (motion blur
-  // makes fast implements semi-transparent — a hard cut looks wrong).
-  const ring = morph(m, 'dilate');
+  // Gate the soft alpha by the support, then feather with a 3×3 box blur.
+  const gated = new Uint8ClampedArray(n);
+  for (let i = 0; i < n; i++) gated[i] = support[i] ? alphaRaw[i] : 0;
   const soft = new Uint8ClampedArray(n);
-  for (let i = 0; i < n; i++) soft[i] = m[i] ? 255 : ring[i] ? 120 : 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let acc = 0, cnt = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dxx = -1; dxx <= 1; dxx++) {
+          const yy = y + dy, xx = x + dxx;
+          if (yy < 0 || xx < 0 || yy >= h || xx >= w) continue;
+          acc += gated[yy * w + xx];
+          cnt++;
+        }
+      }
+      soft[y * w + x] = Math.round(acc / cnt);
+    }
+  }
 
   // Upscale (nearest) back to the crop's native resolution for embedding.
   const up = new Uint8ClampedArray(pw * ph);
@@ -166,6 +225,8 @@ export async function proposeFrameMask(
   selectionBox: StroMotionSubjectBox,
   backgroundTimeSec: number,
   objectType: StroMotionObjectType = 'racket',
+  /** Temporal-median plate (preferred diff reference — see backgroundPlate.ts). */
+  backgroundPlate?: { bitmap: ImageBitmap; scale: number } | null,
 ): Promise<ProposeFrameMaskResult | null> {
   if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
@@ -176,13 +237,23 @@ export async function proposeFrameMask(
 
   let aiSnapshot: AlphaMask | null = null;
 
-  // 1. Motion diff against the background plate time (skip when the reference
-  //    is effectively the same frame — nothing to diff).
-  if (Math.abs(backgroundTimeSec - timeSec) > 0.05) {
+  // 1a. Motion diff against the temporal-MEDIAN plate — robust even when the
+  //     object overlaps its own position in any single reference frame.
+  if (backgroundPlate) {
+    try {
+      aiSnapshot = await motionDiffMaskInSelection(sourceFrame, backgroundPlate, box, vw, vh);
+    } catch {
+      aiSnapshot = null;
+    }
+  }
+
+  // 1b. Single-reference-frame diff fallback (skip when the reference is
+  //     effectively the same frame — nothing to diff).
+  if ((!aiSnapshot || !maskHasContent(aiSnapshot)) && Math.abs(backgroundTimeSec - timeSec) > 0.05) {
     try {
       const backgroundFrame = await captureVideoFrameAtTime(video, backgroundTimeSec);
       try {
-        aiSnapshot = await motionDiffMaskInSelection(sourceFrame, backgroundFrame, box, vw, vh);
+        aiSnapshot = await motionDiffMaskInSelection(sourceFrame, { bitmap: backgroundFrame, scale: 1 }, box, vw, vh);
       } finally {
         backgroundFrame.close();
       }

@@ -1468,6 +1468,85 @@ function Home() {
       });
   }, [selectStroAreaForFrame, stroObjectType]);
 
+  /**
+   * Detect the sports implement at one frame time. Returns video-pixel boxes:
+   * `det` from COCO-SSD (racket/bat near the dominant wrist) and `fallback`
+   * (a racket-sized box along the wrist→tip extension). No state committed —
+   * callers decide (single-frame commit, or batch with gap interpolation).
+   */
+  const detectObjectBoxAtFrame = useCallback(async (
+    timeSec: number,
+  ): Promise<{ det: { x: number; y: number; w: number; h: number } | null; fallback: { x: number; y: number; w: number; h: number } | null }> => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0) return { det: null, fallback: null };
+
+    // Seek FIRST — both the pose fallback and the object detector read the
+    // video's current frame.
+    await seekStroVideo(timeSec);
+
+    // Pose for the wrist hint: Precision AI Track pose, then cache, then on-demand.
+    const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
+    const cached = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>((best, f) => {
+      if (!best || Math.abs(f.timeSeconds - timeSec) < Math.abs(best.timeSeconds - timeSec)) return f;
+      return best;
+    }, null);
+    let kps = canvasRef.current?.getBakedPoseAt?.(timeSec)
+      ?? (cached && Math.abs(cached.timeSeconds - timeSec) < 0.2 ? cached.keypoints : null);
+    if (!kps) {
+      kps = await canvasRef.current?.detectPoseAtTime?.(timeSec) ?? null;
+    }
+    if (!kps?.length) return { det: null, fallback: null };
+    const validKps = kps.filter((kp) => kp.score >= 0.2);
+    if (validKps.length < 4) return { det: null, fallback: null };
+
+    const rWrist = kps[10], lWrist = kps[9], rElbow = kps[8], lElbow = kps[7];
+    const bodyX = validKps.reduce((s, k) => s + k.x, 0) / validKps.length;
+    const rDist = rWrist?.score >= 0.2 ? Math.abs(rWrist.x - bodyX) : 0;
+    const lDist = lWrist?.score >= 0.2 ? Math.abs(lWrist.x - bodyX) : 0;
+    const domWrist = rDist > lDist ? rWrist : lWrist;
+    const domElbow = rDist > lDist ? rElbow : lElbow;
+    const vw = video.videoWidth, vh = video.videoHeight;
+
+    let det: { x: number; y: number; w: number; h: number } | null = null;
+    if (domWrist?.score >= 0.2) {
+      try {
+        const { detectTennisRacketNearHint } = await import('@/lib/racketCocoDetect');
+        const r = 0.16;
+        const hint = {
+          x: Math.max(0, domWrist.x / vw - r), y: Math.max(0, domWrist.y / vh - r),
+          w: Math.min(1, 2 * r), h: Math.min(1, 2 * r),
+        };
+        const found = await Promise.race([
+          detectTennisRacketNearHint(video, hint, { minScore: 0.18, searchExpand: 1.0 }),
+          new Promise<null>((res) => setTimeout(() => res(null), 3000)),
+        ]);
+        if (found && found.score >= 0.18) {
+          det = { x: found.box.x * vw, y: found.box.y * vh, w: found.box.w * vw, h: found.box.h * vh };
+        }
+      } catch { /* detector unavailable — fallback below */ }
+    }
+
+    let fallback: { x: number; y: number; w: number; h: number } | null = null;
+    if (domWrist?.score >= 0.2 && domElbow?.score >= 0.2) {
+      const dx = domWrist.x - domElbow.x;
+      const dy = domWrist.y - domElbow.y;
+      const forearm = Math.hypot(dx, dy);
+      if (forearm > 4) {
+        const tipX = domWrist.x + dx * 1.4;
+        const tipY = domWrist.y + dy * 1.4;
+        const cx = (domWrist.x + tipX) / 2;
+        const cy = (domWrist.y + tipY) / 2;
+        const half = Math.max(forearm * 1.2, 40);
+        fallback = {
+          x: Math.max(0, cx - half), y: Math.max(0, cy - half),
+          w: Math.min(vw, cx + half) - Math.max(0, cx - half),
+          h: Math.min(vh, cy + half) - Math.max(0, cy - half),
+        };
+      }
+    }
+    return { det, fallback };
+  }, [videoRef, canvasRef, seekStroVideo]);
+
   const autoSelectStroFrameFromSkeleton = useCallback(async (index: number): Promise<boolean> => {
     const frame = stroMotionDraft?.frames[index];
     if (!frame || frame.selectionBox) return false;
@@ -1475,8 +1554,16 @@ function Home() {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return false;
 
-    // Seek FIRST — both the pose fallback and the object detector read the
-    // video's current frame.
+    // ── OBJECT mode: find the IMPLEMENT box, not the player box ────────────
+    if (stroObjectType !== 'player') {
+      const { det, fallback } = await detectObjectBoxAtFrame(timeSec);
+      const box = det ?? fallback;
+      if (!box) return false;
+      finishStroRegionSelect(index, box);
+      return true;
+    }
+
+    // Seek FIRST — the pose fallback reads the video's current frame.
     await seekStroVideo(timeSec);
 
     // Get skeleton keypoints near this frame time from the playback cache…
@@ -1506,53 +1593,6 @@ function Home() {
 
     const vw = video.videoWidth, vh = video.videoHeight;
 
-    // ── OBJECT mode: find the IMPLEMENT box, not the player box ────────────
-    if (stroObjectType !== 'player') {
-      // 1. Real detection (COCO-SSD racket/bat) near the dominant wrist.
-      if (domWrist?.score >= 0.2) {
-        try {
-          const { detectTennisRacketNearHint } = await import('@/lib/racketCocoDetect');
-          const r = 0.16;
-          const hint = {
-            x: Math.max(0, domWrist.x / vw - r), y: Math.max(0, domWrist.y / vh - r),
-            w: Math.min(1, 2 * r), h: Math.min(1, 2 * r),
-          };
-          const det = await Promise.race([
-            detectTennisRacketNearHint(video, hint, { minScore: 0.18, searchExpand: 1.0 }),
-            new Promise<null>((res) => setTimeout(() => res(null), 3000)),
-          ]);
-          if (det && det.score >= 0.18) {
-            finishStroRegionSelect(index, {
-              x: det.box.x * vw, y: det.box.y * vh, w: det.box.w * vw, h: det.box.h * vh,
-            });
-            return true;
-          }
-        } catch { /* detector unavailable — geometric fallback below */ }
-      }
-      // 2. Geometric fallback: a racket-sized box centered on the wrist→tip
-      //    extension (NOT the whole player — a tight box keeps the motion-diff
-      //    mask clean).
-      if (domWrist?.score >= 0.2 && domElbow?.score >= 0.2) {
-        const dx = domWrist.x - domElbow.x;
-        const dy = domWrist.y - domElbow.y;
-        const forearm = Math.hypot(dx, dy);
-        if (forearm > 4) {
-          const tipX = domWrist.x + dx * 1.4;
-          const tipY = domWrist.y + dy * 1.4;
-          const cx = (domWrist.x + tipX) / 2;
-          const cy = (domWrist.y + tipY) / 2;
-          const half = Math.max(forearm * 1.2, 40);
-          finishStroRegionSelect(index, {
-            x: Math.max(0, cx - half), y: Math.max(0, cy - half),
-            w: Math.min(vw, cx + half) - Math.max(0, cx - half),
-            h: Math.min(vh, cy + half) - Math.max(0, cy - half),
-          });
-          return true;
-        }
-      }
-      return false;
-    }
-
     // ── PLAYER mode: whole-body box extended along the dominant arm ────────
     const racketPoints: Array<{ x: number; y: number }> = [];
     if (domWrist?.score >= 0.2 && domElbow?.score >= 0.2) {
@@ -1576,7 +1616,106 @@ function Home() {
       h: Math.min(vh, maxY + padY) - Math.max(0, minY - padY),
     });
     return true;
-  }, [stroMotionDraft, videoRef, canvasRef, seekStroVideo, finishStroRegionSelect, stroObjectType]);
+  }, [stroMotionDraft, videoRef, canvasRef, seekStroVideo, finishStroRegionSelect, stroObjectType, detectObjectBoxAtFrame]);
+
+  /**
+   * OBJECT-mode batch auto-select: detect the implement on every pending frame
+   * first, FILL detection gaps by interpolating neighbor boxes over time
+   * (an implement that was found at t1 and t3 is between them at t2 — a miss
+   * on one frame no longer breaks the sequence), then commit + propose masks
+   * SEQUENTIALLY (awaited — concurrent proposals interleave video seeks).
+   * Returns the number of frames that got a box.
+   */
+  const autoSelectAllObjectFrames = useCallback(async (
+    pending: Array<{ index: number; timeSec: number }>,
+  ): Promise<number> => {
+    type Box = { x: number; y: number; w: number; h: number };
+    const results: Array<{ index: number; timeSec: number; det: Box | null; fallback: Box | null }> = [];
+    for (let i = 0; i < pending.length; i++) {
+      setProcessingStatus(`AI detecting the object: frame ${i + 1}/${pending.length}…`);
+      const r = await detectObjectBoxAtFrame(pending[i].timeSec);
+      results.push({ ...pending[i], ...r });
+    }
+
+    // Interpolate missing detections from the nearest detected neighbors.
+    const boxes: Array<Box | null> = results.map((r) => r.det);
+    for (let i = 0; i < results.length; i++) {
+      if (boxes[i]) continue;
+      let lo = i - 1; while (lo >= 0 && !results[lo].det) lo--;
+      let hi = i + 1; while (hi < results.length && !results[hi].det) hi++;
+      const L = lo >= 0 ? results[lo].det : null;
+      const H = hi < results.length ? results[hi].det : null;
+      if (L && H) {
+        const f = (results[i].timeSec - results[lo].timeSec) / Math.max(1e-3, results[hi].timeSec - results[lo].timeSec);
+        boxes[i] = {
+          x: L.x + (H.x - L.x) * f,
+          y: L.y + (H.y - L.y) * f,
+          w: L.w + (H.w - L.w) * f,
+          h: L.h + (H.h - L.h) * f,
+        };
+      } else {
+        boxes[i] = L ?? H ?? results[i].fallback;
+      }
+    }
+
+    let ok = 0;
+    for (let i = 0; i < results.length; i++) {
+      const b = boxes[i];
+      if (!b) continue;
+      setProcessingStatus(`Removing background: frame ${i + 1}/${results.length}…`);
+      await seekStroVideo(results[i].timeSec);
+      const normalized = normalizeObjectBox(subjectBoxFromRegion(b));
+      const okOne = await selectStroAreaForFrame(results[i].index, normalized).catch(() => false);
+      if (okOne) ok++;
+    }
+    return ok;
+  }, [detectObjectBoxAtFrame, seekStroVideo, selectStroAreaForFrame]);
+
+  /** One click (or auto-trigger): boxes + masks for every pending frame. */
+  const stroAutoSelectBusyRef = useRef(false);
+  const handleStroAutoSelectAll = useCallback(async () => {
+    const draft = stroMotionDraft;
+    if (!draft || stroAutoSelectBusyRef.current) return;
+    const pending = draft.frames.filter((f) => !f.selectionBox).map((f) => ({ index: f.index, timeSec: f.timeSec }));
+    if (pending.length === 0) { setProcessingStatus('All frames already have a selection.'); return; }
+    stroAutoSelectBusyRef.current = true;
+    try {
+      let ok = 0;
+      if (stroObjectType !== 'player') {
+        // Object mode: detect-all → interpolate gaps → sequential mask proposal.
+        ok = await autoSelectAllObjectFrames(pending);
+      } else {
+        for (let i = 0; i < pending.length; i++) {
+          setProcessingStatus(`AI auto-detect: frame ${i + 1}/${pending.length}…`);
+          const success = await autoSelectStroFrameFromSkeleton(pending[i].index);
+          if (success) ok++;
+        }
+      }
+      void refreshStroPreviewFromDraft();
+      setProcessingStatus(
+        ok === 0
+          ? 'Auto-detect found nothing — make sure the subject is visible, or use Select Area manually.'
+          : `AI auto-selected ${ok}/${pending.length} frames. Review each, fix with Add brush if needed, then Generate.`,
+      );
+    } finally {
+      stroAutoSelectBusyRef.current = false;
+    }
+  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, autoSelectStroFrameFromSkeleton, refreshStroPreviewFromDraft]);
+
+  // Auto-trigger: entering OBJECT-mode StroMotion with a fresh draft (no frame
+  // selected yet) starts the AI pass by itself — the coach reviews and edits
+  // afterwards ("AI does the job, coach has the final say").
+  const stroAutoRanForRef = useRef<unknown>(null);
+  useEffect(() => {
+    if (!stroMotionActive || !stroMotionHtml5Only) return;
+    if (stroObjectType === 'player') return;
+    const draft = stroMotionDraft;
+    if (!draft || !draft.frames.length) return;
+    if (draft.frames.some((f) => f.selectionBox)) return;   // coach already started
+    if (stroAutoRanForRef.current === draft) return;         // once per draft
+    stroAutoRanForRef.current = draft;
+    void handleStroAutoSelectAll();
+  }, [stroMotionActive, stroMotionHtml5Only, stroObjectType, stroMotionDraft, handleStroAutoSelectAll]);
 
   const handleStroSelectArea = useCallback((index: number) => {
     const frame = stroMotionDraft?.frames[index];
@@ -1904,25 +2043,7 @@ function Home() {
       isExportingVideo={stroIsExportingVideo}
       onGenerate={() => void handleStroGenerate()}
       onClear={softClearStroMotion}
-      onAutoSelectAll={async () => {
-        const draft = stroMotionDraft;
-        if (!draft) return;
-        const pending = draft.frames.filter((f) => !f.selectionBox);
-        if (pending.length === 0) { setProcessingStatus('All frames already have a selection.'); return; }
-        setProcessingStatus(`AI detecting the player + racket in ${pending.length} frames…`);
-        let ok = 0;
-        for (let i = 0; i < pending.length; i++) {
-          setProcessingStatus(`AI auto-detect: frame ${i + 1}/${pending.length}…`);
-          const success = await autoSelectStroFrameFromSkeleton(pending[i].index);
-          if (success) ok++;
-        }
-        void refreshStroPreviewFromDraft();
-        setProcessingStatus(
-          ok === 0
-            ? 'Auto-detect could not find the player — make sure the player is visible, or use Select Area manually.'
-            : `AI auto-selected ${ok}/${pending.length} frames. Review each, fix with Add brush if needed, then Generate.`,
-        );
-      }}
+      onAutoSelectAll={() => { void handleStroAutoSelectAll(); }}
       previewPngUrl={stroPreviewPngUrl}
       previewVideoUrl={stroPreviewVideoUrl}
       isBuildingVideoPreview={stroIsBuildingVideoPreview}

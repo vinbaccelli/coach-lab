@@ -8,6 +8,7 @@ import { countExportReadyFrames, maskHasContent, statusAfterMaskEdit } from '@/l
 import { hydrateDraftBitmapsForExport } from '@/lib/stroMotionDraft/exportDraft';
 import { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
 import { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
+import { buildMedianBackgroundPlate, type BackgroundPlate } from '@/lib/stroMotionDraft/backgroundPlate';
 import type {
   AlphaMask,
   StroMotionBackground,
@@ -42,7 +43,32 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   const draftRef = useRef<StroMotionDraft | null>(null);
   draftRef.current = draft;
 
+  // Temporal-median background plate, cached per section (keyed by the sample
+  // span). The plate makes the motion-diff matte robust even where the object
+  // overlaps its position in any single reference frame.
+  const plateRef = useRef<{ key: string; promise: Promise<BackgroundPlate | null> } | null>(null);
+
+  const disposePlate = useCallback(() => {
+    const held = plateRef.current;
+    plateRef.current = null;
+    if (held) void held.promise.then((p) => { try { p?.bitmap.close(); } catch { /* closed */ } });
+  }, []);
+
+  const getBackgroundPlate = useCallback((video: HTMLVideoElement, current: StroMotionDraft): Promise<BackgroundPlate | null> => {
+    const times = current.frames.map((f) => f.timeSec);
+    if (!times.length) return Promise.resolve(null);
+    const start = Math.max(0, Math.min(...times) - 0.2);
+    const end = Math.max(...times) + 0.2;
+    const key = `${start.toFixed(2)}|${end.toFixed(2)}|${video.videoWidth}x${video.videoHeight}`;
+    if (plateRef.current?.key !== key) {
+      disposePlate();
+      plateRef.current = { key, promise: buildMedianBackgroundPlate(video, start, end).catch(() => null) };
+    }
+    return plateRef.current.promise;
+  }, [disposePlate]);
+
   const clearDraftState = useCallback(() => {
+    disposePlate();
     setDraft((prev) => {
       if (prev) clearStroMotionDraft(prev);
       return null;
@@ -50,7 +76,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     setActiveFrameIndex(null);
     setProposingFrameIndex(null);
     setProgress({ current: 0, total: 0 });
-  }, []);
+  }, [disposePlate]);
 
   const clearAll = useCallback(() => {
     clearDraftState();
@@ -183,12 +209,15 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     setStatus('proposing');
 
     try {
+      // Median plate is built once per section and shared by every frame.
+      const plate = await getBackgroundPlate(video, current).catch(() => null);
       const proposal = await proposeFrameMask(
         video,
         frame.timeSec,
         selectionBox,
         current.backgroundTimeSec,
         current.objectType,
+        plate,
       );
 
       if (!proposal) return false;
@@ -227,7 +256,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       setProgress({ current: 0, total: 0 });
       setStatus('configuring');
     }
-  }, [invalidatePreview, videoRef]);
+  }, [invalidatePreview, videoRef, getBackgroundPlate]);
 
   const updateFrameMask = useCallback((frameIndex: number, mask: AlphaMask) => {
     setDraft((prev) => {
