@@ -339,6 +339,52 @@ for when the priority changes.
 
 ---
 
+## ADR-013 — Toolbar layout defaults, skeleton activation, and the StroMotion flow (V1 freeze)
+
+- **Date / commit:** 2026-07-14
+- **Status:** Accepted
+
+**Context.** QA showed three interaction traps: a narrow desktop window
+auto-flipped the app to 9:16; the 9:16 layout had no toolbar expand arrow; and
+pressing the "Skeleton" toolbar button re-ran side effects (tool toggle +
+skeleton reset), so re-opening the panel made a running skeleton disappear.
+StroMotion also auto-ran AI detection the moment the panel opened, before the
+coach had chosen frame count or section.
+
+**Decision.**
+1. **Toolbar defaults:** desktop (16:9) starts with the EXTENDED toolbar and
+   can be collapsed with the collapse arrow. 9:16 (real phone/tablet — and
+   desktop-reels if the coach selects it) starts COLLAPSED and can be extended
+   with the same arrow. Every layout always has the arrow.
+2. **Layout auto-switching** follows device orientation ONLY on true touch
+   hardware (`hover: none and pointer: coarse`). A narrow desktop window never
+   changes the layout; desktop always starts 16:9.
+3. **Skeleton activation is an explicit switch.** Pressing the Skeleton
+   toolbar button only OPENS the panel (first press also activates —
+   idempotent). It never resets, relocks, or hides a running skeleton.
+   Deactivation happens only via the "Skeleton on / off" row inside the panel;
+   refresh/lock are likewise explicit in-panel actions.
+4. **StroMotion flow:** opening StroMotion only opens its toolbar. The coach
+   picks the frame count and the timeline section, then presses "AI
+   auto-detect" (object box + background removal per frame, automatic). Every
+   AI-proposed frame is export-READY immediately; the coach may open any frame
+   to edit its mask or reselect the area (closing the editor keeps it ready),
+   then Generate. Nothing runs unrequested.
+
+**Consequences.** Panel navigation is now side-effect-free (open ≠ toggle),
+which is a general V1 UI rule going forward. Two legacy behaviors were removed:
+the on-open StroMotion auto-detect and the on-open skeleton reset.
+
+**Alternatives considered.** Keeping activation coupled to tool selection —
+rejected: re-selecting an active tool toggles it off, which reads as data loss.
+Auto-running StroMotion detection on open — rejected: it races the coach's
+configuration (frame count/section) and blocks the UI uninvited.
+
+**Why preferred.** "Opening a panel only opens the panel" is predictable; every
+state change traces to an explicit user action on a control inside it.
+
+---
+
 # Future Decisions
 
 Copy this template for every significant decision. Keep records append-only;

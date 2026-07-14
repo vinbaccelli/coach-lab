@@ -16,9 +16,11 @@ export const metadata: Metadata = {
     statusBarStyle: 'black-translucent',
     title: 'AngleMotion',
   },
+  // Official brand logo everywhere — tab icon included (PNGs generated from
+  // /logo-square-new.jpg; the old stick-figure SVGs are retired).
   icons: {
-    icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],
-    apple: [{ url: '/icons/apple-touch-icon.svg' }],
+    icon: [{ url: '/favicon.png', type: 'image/png' }],
+    apple: [{ url: '/icons/apple-touch-icon.png' }],
   },
 };
 

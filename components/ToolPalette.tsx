@@ -76,7 +76,11 @@ interface ToolPaletteProps {
   onSkeletonShowHeadDirectionChange?: (v: boolean) => void;
   skeletonShowFootLine?: boolean;
   onSkeletonShowFootLineChange?: (v: boolean) => void;
-  /** Precision AI Track — slow 0.25× pass that locks the pose to video time. */
+  /** REAL skeleton switch (spec: the only way to deactivate — opening the
+   *  toolbar never toggles it). */
+  skeletonActive?: boolean;
+  onSkeletonActiveChange?: () => void;
+  /** Precision AI Track — frame-stepped pass that locks the pose to video time. */
   precisionTrackState?: 'idle' | 'running' | 'ready';
   onPrecisionTrack?: (scope: 'all' | 'section') => void;
   onPrecisionTrackClear?: () => void;
@@ -551,6 +555,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onSkeletonShowHeadDirectionChange,
     skeletonShowFootLine,
     onSkeletonShowFootLineChange,
+    skeletonActive,
+    onSkeletonActiveChange,
     precisionTrackState = 'idle',
     onPrecisionTrack,
     onPrecisionTrackClear,
@@ -1256,15 +1262,16 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead />
           <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
-          {/* On/Off toggle */}
-          {onSkeletonOverlayPausedChange !== undefined && (
+          {/* THE skeleton switch (spec): activate/deactivate lives HERE only —
+              opening this toolbar never toggles the skeleton. */}
+          {onSkeletonActiveChange !== undefined && (
             <Row
               k="sov"
-              active={!skeletonOverlayPaused}
+              active={skeletonActive ?? false}
               icon={<PersonStanding size={io ? 18 : 20} />}
               label="Skeleton on / off"
-              tooltip="Toggle the AI skeleton overlay on or off while keeping detection running"
-              onPress={() => onSkeletonOverlayPausedChange()}
+              tooltip="Activate or deactivate the AI skeleton — the only switch that turns it off"
+              onPress={() => onSkeletonActiveChange()}
             />
           )}
           {/* Refresh */}

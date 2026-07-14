@@ -658,8 +658,12 @@ function Home() {
   const [objMultiplierProgress, setObjMultiplierProgress] = useState<string | null>(null);
 
   // Skeleton persists across tool changes once enabled from Metrics
-  const [skeletonKeepAlive, setSkeletonKeepAlive] = useState(false);
-  const skeletonEnabled  = activeTool === 'skeleton' || skeletonKeepAlive || (stroMotionActive && stroShowSkeleton);
+  // SPEC: skeleton activation is an EXPLICIT switch — first press of the
+  // Skeleton toolbar button turns it on; only the in-panel on/off row turns it
+  // off. It is deliberately NOT derived from activeTool: re-clicking the
+  // toolbar button (or tool changes) must never make the skeleton disappear.
+  const [skeletonOn, setSkeletonOn] = useState(false);
+  const skeletonEnabled  = skeletonOn || (stroMotionActive && stroShowSkeleton);
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const [skeletonConfirmOpen, setSkeletonConfirmOpen] = useState(false);
   const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
@@ -1665,7 +1669,9 @@ function Home() {
       setProcessingStatus(`Removing background: frame ${i + 1}/${results.length}…`);
       await seekStroVideo(results[i].timeSec);
       const normalized = normalizeObjectBox(subjectBoxFromRegion(b));
-      const okOne = await selectStroAreaForFrame(results[i].index, normalized).catch(() => false);
+      // markReady: AI-proposed masks count as READY so Generate works
+      // immediately — the coach can still open any frame to edit.
+      const okOne = await selectStroAreaForFrame(results[i].index, normalized, { markReady: true }).catch(() => false);
       if (okOne) ok++;
     }
     return ok;
@@ -1702,20 +1708,9 @@ function Home() {
     }
   }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, autoSelectStroFrameFromSkeleton, refreshStroPreviewFromDraft]);
 
-  // Auto-trigger: entering OBJECT-mode StroMotion with a fresh draft (no frame
-  // selected yet) starts the AI pass by itself — the coach reviews and edits
-  // afterwards ("AI does the job, coach has the final say").
-  const stroAutoRanForRef = useRef<unknown>(null);
-  useEffect(() => {
-    if (!stroMotionActive || !stroMotionHtml5Only) return;
-    if (stroObjectType === 'player') return;
-    const draft = stroMotionDraft;
-    if (!draft || !draft.frames.length) return;
-    if (draft.frames.some((f) => f.selectionBox)) return;   // coach already started
-    if (stroAutoRanForRef.current === draft) return;         // once per draft
-    stroAutoRanForRef.current = draft;
-    void handleStroAutoSelectAll();
-  }, [stroMotionActive, stroMotionHtml5Only, stroObjectType, stroMotionDraft, handleStroAutoSelectAll]);
+  // SPEC: no auto-trigger. Opening StroMotion only opens the toolbar; the AI
+  // pass starts when the coach presses "AI auto-detect" after choosing the
+  // frame count and section.
 
   const handleStroSelectArea = useCallback((index: number) => {
     const frame = stroMotionDraft?.frames[index];
@@ -1977,9 +1972,13 @@ function Home() {
   }, [seekStroVideo, setStroActiveFrameIndex, stroEffectiveSampleTimes, stroMotionDraft]);
 
   const handleStroCloseFrameEditor = useCallback(() => {
+    // Closing the editor keeps the frame export-ready (if its mask has
+    // content) — the coach's flow is "AI detect → fix what's off → Generate",
+    // without a separate Mark-Ready step per frame.
+    if (stroEditingFrameIndex !== null) markStroFrameReady(stroEditingFrameIndex);
     setStroEditingFrameIndex(null);
     void refreshStroPreviewFromDraft();
-  }, [refreshStroPreviewFromDraft]);
+  }, [refreshStroPreviewFromDraft, stroEditingFrameIndex, markStroFrameReady]);
 
   const handleStroBuildVideoPreview = useCallback(async () => {
     if (!stroMotionDraft) {
@@ -2094,7 +2093,7 @@ function Home() {
     setMeasurementColumn([]);
     setDataColumnActive(false);
     setShowMeasurementOverlays(false);
-    setSkeletonKeepAlive(false);
+    setSkeletonOn(false);
     setSkeletonLocked(false);
     skeletonFirstDetectedRef.current = false;
   }, []);
@@ -2492,9 +2491,15 @@ function Home() {
     setPrecisionInstructionsOpen(true);
   }, []);
 
-  // Mobile: auto-switch layout based on device orientation (portrait=reels, landscape=youtube)
+  // TOUCH devices only: auto-switch layout with device orientation
+  // (portrait = reels, landscape = youtube). Guarded on real touch hardware —
+  // isMobile alone also matches a NARROW DESKTOP WINDOW (≤768px), which made a
+  // half-snapped laptop window open in 9:16. Desktop always starts 16:9 (spec).
   useEffect(() => {
     if (!isMobile) return;
+    if (typeof window === 'undefined') return;
+    const isTouchDevice = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    if (!isTouchDevice) return;
     const mq = window.matchMedia('(orientation: portrait)');
     const apply = () => setLayoutMode(mq.matches ? 'reels' : 'youtube');
     apply();
@@ -4876,6 +4881,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onSkeletonShowHeadDirectionChange: setSkeletonShowHeadDirection,
     skeletonShowFootLine,
     onSkeletonShowFootLineChange:    setSkeletonShowFootLine,
+    skeletonActive:                  skeletonOn,
+    onSkeletonActiveChange:          () => setSkeletonOn((v) => !v),
     precisionTrackState,
     onPrecisionTrack:                (scope: 'all' | 'section') => { void handlePrecisionTrack(scope); },
     onPrecisionTrackClear:           handlePrecisionTrackClear,
@@ -4909,34 +4916,18 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             setProcessingStatus(`Imported ${count} phase markers as StroMotion frames`);
           }
         }
-        // Auto-detect: if skeleton data exists, try auto-selecting areas for all frames
-        setTimeout(() => {
-          const draft = stroMotionDraft;
-          if (!draft?.frames.length) return;
-          const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
-          if (skFrames.length < 3) return;
-          const unselected = draft.frames.filter(f => !f.selectionBox);
-          if (unselected.length > 0) {
-            setProcessingStatus(`AI auto-detecting player in ${unselected.length} frames...`);
-            (async () => {
-              for (const frame of unselected) {
-                await autoSelectStroFrameFromSkeleton(frame.index);
-              }
-              setProcessingStatus('AI detection complete — verify and adjust each frame');
-            })();
-          }
-        }, 500);
+        // SPEC: opening StroMotion only opens the toolbar. The coach configures
+        // frame count + section first, then presses "AI auto-detect" — nothing
+        // runs by itself.
       } else if (screen === 'aimetrics') {
         setStroMotionActive(false);
       } else if (screen === 'skeleton') {
+        // SPEC: pressing "Skeleton" only OPENS this toolbar (plus first-time
+        // activation). It must never reset, relock, or hide a running
+        // skeleton — deactivation and refresh are explicit rows inside.
         handleToolChange('skeleton');
         setSkeletonOverlayPaused(false);
-        setSkeletonKeepAlive(true);
-        canvasRef.current?.resetSkeleton();
-        setSkeletonWaitingForClick(false);
-        setSkeletonLocked(false);
-        skeletonFirstDetectedRef.current = false;
-        // Skeleton does NOT create a snapshot — it modifies the active one.
+        setSkeletonOn(true); // idempotent — first open activates, re-open is a no-op
       } else if (screen === 'home') {
         setStroMotionActive(false);
       }
@@ -5163,8 +5154,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       : {}),
     phoneLayout:                     reelsDesktopEarly,
     compactToolbarChrome:            compactToolbarRail,
-    toolbarLabelsExpanded:             isMobile ? false : toolbarLabelsExpanded,
-    onToggleToolbarLabels:             isMobile ? undefined : () => setToolbarLabelsExpanded((v) => !v),
+    // Spec: EVERY layout has the expand/collapse arrow. 9:16 (phone/tablet or
+    // desktop-reels) starts collapsed and expands labels via this toggle —
+    // previously mobile got no toggle at all.
+    toolbarLabelsExpanded,
+    onToggleToolbarLabels:             () => setToolbarLabelsExpanded((v) => !v),
     ...(compactToolbarRail
       ? {
           iconOnlyLayout: true,
@@ -5607,7 +5601,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
-                  skeletonKeepAlive={skeletonKeepAlive}
+                  skeletonKeepAlive={skeletonOn}
                   skeletonLocked={skeletonLocked}
                   skeletonWaitingForClick={skeletonWaitingForClick}
                   onSkeletonFocusSet={() => { setSkeletonWaitingForClick(false); setSkeletonConfirmOpen(false); setSkeletonLocked(true); }}

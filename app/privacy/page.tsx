@@ -29,7 +29,7 @@ export default function PrivacyPage() {
         position: 'sticky', top: 0, zIndex: 20,
       }}>
         <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
-          <img src="/logo-mark.svg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
+          <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
           <span style={{ fontSize: 14, fontWeight: 800, color: '#fff' }}>
             Angle<span style={{ color: '#007AFF' }}>Motion</span>
           </span>
