@@ -106,44 +106,50 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       if (Math.abs(current.backgroundTimeSec - next.backgroundTimeSec) > 0.001) return next;
       if (current.objectType !== next.objectType) return next;
 
-      // Preserve completed work when the frame COUNT changes (re-spacing the
-      // sample times): match each new frame to the NEAREST old frame by time,
-      // not by index. Index-only matching discarded every mask on a count
-      // change because the times no longer lined up. Each old frame is reused
-      // at most once (claimed set).
-      const claimed = new Set<number>();
-      const findNearest = (t: number): number => {
-        let best = -1;
-        let bestDist = 0.15; // within 150ms counts as "the same" frame
-        current.frames.forEach((cf, idx) => {
-          if (claimed.has(idx)) return;
-          const d = Math.abs(cf.timeSec - t);
-          if (d < bestDist) { bestDist = d; best = idx; }
+      // Preserve completed work when the frame set changes (adding/removing a
+      // frame, or re-spacing): match each NEW frame to the nearest OLD frame by
+      // time — but use GLOBAL nearest-first assignment so an exact time match
+      // (an untouched frame) always wins over a merely-close one. In-order
+      // matching let a newly-inserted midpoint sitting within 150ms of an
+      // existing frame steal that frame's mask, leaving the real frame empty.
+      // Each old frame is reused at most once.
+      const THRESHOLD = 0.15; // within 150ms counts as "the same" frame
+      const pairs: Array<{ ni: number; oi: number; d: number }> = [];
+      next.frames.forEach((f, ni) => {
+        current.frames.forEach((cf, oi) => {
+          if (
+            !cf.sourceFrame ||
+            !cf.selectionBox ||
+            !(maskHasContent(cf.working) || maskHasContent(cf.readyMask) || maskHasContent(cf.aiSnapshot))
+          ) return;
+          const d = Math.abs(cf.timeSec - f.timeSec);
+          if (d < THRESHOLD) pairs.push({ ni, oi, d });
         });
-        return best;
-      };
-      const mergedFrames = next.frames.map((f) => {
-        const idx = findNearest(f.timeSec);
-        const cur = idx >= 0 ? current.frames[idx] : undefined;
-        if (
-          cur &&
-          cur.sourceFrame &&
-          (maskHasContent(cur.working) || maskHasContent(cur.readyMask) || maskHasContent(cur.aiSnapshot)) &&
-          cur.selectionBox
-        ) {
-          claimed.add(idx);
-          return {
-            ...f,
-            selectionBox: cur.selectionBox,
-            sourceFrame: cur.sourceFrame,
-            aiSnapshot: cur.aiSnapshot,
-            working: cur.working,
-            readyMask: cur.readyMask,
-            status: cur.status,
-            label: cur.label || f.label,
-          };
-        }
-        return f;
+      });
+      pairs.sort((a, b) => a.d - b.d);
+      const newClaimed = new Set<number>();
+      const oldClaimed = new Set<number>();
+      const matchOf = new Map<number, number>(); // new index → old index
+      for (const p of pairs) {
+        if (newClaimed.has(p.ni) || oldClaimed.has(p.oi)) continue;
+        newClaimed.add(p.ni);
+        oldClaimed.add(p.oi);
+        matchOf.set(p.ni, p.oi);
+      }
+      const mergedFrames = next.frames.map((f, ni) => {
+        const oi = matchOf.get(ni);
+        if (oi === undefined) return f;
+        const cur = current.frames[oi];
+        return {
+          ...f,
+          selectionBox: cur.selectionBox,
+          sourceFrame: cur.sourceFrame,
+          aiSnapshot: cur.aiSnapshot,
+          working: cur.working,
+          readyMask: cur.readyMask,
+          status: cur.status,
+          label: cur.label || f.label,
+        };
       });
       return { ...next, frames: mergedFrames };
     });

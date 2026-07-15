@@ -82,7 +82,9 @@ interface ToolPaletteProps {
   onSkeletonActiveChange?: () => void;
   /** Precision AI Track — frame-stepped pass that locks the pose to video time. */
   precisionTrackState?: 'idle' | 'running' | 'ready';
-  onPrecisionTrack?: (scope: 'all' | 'section') => void;
+  /** Open the AI Track popup (explains + asks tracking speed; scope auto-detected). */
+  onOpenPrecisionTrack?: () => void;
+  onPrecisionTrackCancel?: () => void;
   onPrecisionTrackClear?: () => void;
   skeletonClassicColors?: boolean;
   onSkeletonClassicColorsChange?: (v: boolean) => void;
@@ -558,7 +560,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     skeletonActive,
     onSkeletonActiveChange,
     precisionTrackState = 'idle',
-    onPrecisionTrack,
+    onOpenPrecisionTrack,
+    onPrecisionTrackCancel,
     onPrecisionTrackClear,
     skeletonClassicColors,
     onSkeletonClassicColorsChange,
@@ -1283,43 +1286,36 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => onResetSkeleton()}
             destructive
           />
-          {/* Precision AI Track — slow pass now, perfect skeleton at any speed */}
-          {onPrecisionTrack !== undefined && precisionTrackState === 'idle' && (
-            <>
-              <Row
-                k="ptrack-all"
-                icon={<Sparkles size={18} strokeWidth={2} />}
-                label="AI Track — whole video"
-                tooltip="Plays the video once at 0.25× to record a perfect skeleton track, then plays aligned at ANY speed"
-                onPress={() => onPrecisionTrack('all')}
-              />
-              <Row
-                k="ptrack-sec"
-                icon={<Sparkles size={18} strokeWidth={2} />}
-                label="AI Track — selected section"
-                tooltip="Tracks only the timeline section between the green handles"
-                onPress={() => onPrecisionTrack('section')}
-              />
-            </>
+          {/* Precision AI Track — one button opens a popup (scope auto-detected:
+              whole video, or the green timeline section if the coach dragged it;
+              popup asks the tracking speed). */}
+          {onOpenPrecisionTrack !== undefined && precisionTrackState === 'idle' && (
+            <Row
+              k="ptrack"
+              icon={<Sparkles size={18} strokeWidth={2} />}
+              label="AI Track"
+              tooltip="Records one perfect skeleton track, then plays aligned at ANY speed. Select a timeline section first to track just that part."
+              onPress={onOpenPrecisionTrack}
+            />
           )}
-          {onPrecisionTrack !== undefined && precisionTrackState === 'running' && (
+          {precisionTrackState === 'running' && onPrecisionTrackCancel !== undefined && (
             <Row
               k="ptrack-run"
               active
               icon={<Sparkles size={18} strokeWidth={2} />}
               label="AI-tracking… tap to cancel"
-              onPress={() => onPrecisionTrack('all')}
+              onPress={onPrecisionTrackCancel}
             />
           )}
           {precisionTrackState === 'ready' && (
             <>
-              {onPrecisionTrack !== undefined && (
+              {onOpenPrecisionTrack !== undefined && (
                 <Row
                   k="ptrack-more"
                   icon={<Sparkles size={18} strokeWidth={2} />}
                   label="AI Track — another section"
                   tooltip="Move the green timeline handles to a new section and track it too — the skeleton shows only inside tracked sections"
-                  onPress={() => onPrecisionTrack('section')}
+                  onPress={onOpenPrecisionTrack}
                 />
               )}
               {onPrecisionTrackClear !== undefined && (

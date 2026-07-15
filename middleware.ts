@@ -2,6 +2,9 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { isAdmin } from '@/lib/admin';
 
+/** Free self-serve trial length: one hour per account (see start_trial() SQL). */
+const TRIAL_MS = 60 * 60 * 1000;
+
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
 
@@ -77,7 +80,19 @@ export async function middleware(req: NextRequest) {
         // Only 'light' is blocked from the academy; unknown/missing tier is
         // treated as allowed (fail open) so a missing column never locks anyone out.
         const academyOk = sub?.tier !== 'light';
-        const allowed = active && (!pathname.startsWith('/academy') || academyOk);
+        let allowed = active && (!pathname.startsWith('/academy') || academyOk);
+
+        // No active subscription → fall back to the free 1-hour trial (one per
+        // account, full access to every tool). start_trial() stamps
+        // started_at=now() on the first call and is idempotent after, so this
+        // one round-trip both starts and reads the trial clock.
+        if (!allowed) {
+          const { data: startedAt } = await supabase.rpc('start_trial');
+          if (startedAt && Date.now() - new Date(startedAt as string).getTime() < TRIAL_MS) {
+            allowed = true;
+          }
+        }
+
         if (!allowed) {
           const url = req.nextUrl.clone();
           url.pathname = '/pricing';

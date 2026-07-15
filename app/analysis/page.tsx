@@ -38,8 +38,11 @@ const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/Snapsh
 const GenerateWorkspace = React.lazy(() => import('@/components/metrics/GenerateWorkspace'));
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
+import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
+import type { TrackQuality } from '@/lib/mediapipePose';
 import {
   computeGhostSampleTimes,
+  resizeSampleTimes,
   enforceMonotonicSampleTimes,
   setStroMotionPreviewHash,
   normalizeObjectBox,
@@ -584,6 +587,19 @@ function Home() {
     });
   }, [stroStartFrame, stroEndFrame, stroFrameCount]);
 
+  // Adding/removing a StroMotion frame must NOT reposition the frames the coach
+  // already configured. Insert/remove sample times around the existing ones and
+  // seed the override with the result (same length as the new count) so the
+  // count-change effect above keeps it instead of reseeding evenly — and so the
+  // draft-sync merge preserves every existing frame's mask (identical times →
+  // exact matches). See resizeSampleTimes + the greedy merge in useStroMotion.
+  const handleStroFrameCountChange = useCallback((n: StroMotionFrameCount) => {
+    setStroSampleTimesOverride(() =>
+      resizeSampleTimes(stroEffectiveSampleTimes, n, stroStartFrame, stroEndFrame),
+    );
+    setStroFrameCount(n);
+  }, [stroEffectiveSampleTimes, stroStartFrame, stroEndFrame]);
+
   const stroMotionHtml5Only =
     !!videoSrc &&
     !youtubeVideoIdA &&
@@ -865,6 +881,10 @@ function Home() {
   // span of all snapshots so the whole stroke is covered.
   const [metricsSectionStart, setMetricsSectionStart] = useState<number | null>(null);
   const [metricsSectionEnd, setMetricsSectionEnd] = useState<number | null>(null);
+  // True once the coach DRAGS the timeline handles — distinguishes a deliberate
+  // section from the auto-defaults (snapshot span / full video). AI Track uses
+  // it to decide "whole video" vs "selected section" for the single button.
+  const [metricsTrimUserAdjusted, setMetricsTrimUserAdjusted] = useState(false);
 
   /** Seek the video to a time and resolve once the frame is ready. */
   const seekVideoTo = useCallback((t: number): Promise<void> => new Promise((resolve) => {
@@ -1055,7 +1075,7 @@ function Home() {
    * samples baked (0 = failed or cancelled — already-baked sections are left
    * untouched either way). Caller owns the precisionTrackState UI.
    */
-  const runPrecisionPass = useCallback(async (start: number, end: number): Promise<number> => {
+  const runPrecisionPass = useCallback(async (start: number, end: number, quality: TrackQuality = 'balanced'): Promise<number> => {
     const v = videoRef.current;
     if (!v) return 0;
     const originalRate = v.playbackRate || 1;
@@ -1063,28 +1083,33 @@ function Home() {
       v.pause();
       setProcessingStatus('Loading precision tracking model…');
       const mp = await import('@/lib/mediapipePose');
+      const params = mp.TRACK_QUALITY[quality];
       await seekVideoTo(start);
       // Probe once: cold model init + first inference. Decides the engine for
       // the whole pass so MoveNet and MediaPipe coords never mix in one track.
-      const probe = await mp.detectFullPoseOnFrame(v).catch(() => null);
+      const probe = await mp.detectPosePrecise(v, params).catch(() => null);
       const useMediaPipe = !!probe;
       canvasRef.current?.startBakeCapture?.(!useMediaPipe);
       if (probe) canvasRef.current?.addBakeSample?.(v.currentTime, probe);
 
-      // Epsilon-guarded frame seek (seekStroVideo pattern) — 'seeked' or 200 ms.
+      // Exact-frame seek: set time → await 'seeked' → await one
+      // requestVideoFrameCallback so the seeked frame is actually PAINTED before
+      // we detect (kills stale-frame sampling on the fast-motion frames that
+      // matter most). 300 ms safety net + rVFC fallback for older browsers.
       const seekTo = (t: number) => new Promise<void>((resolve) => {
         const vv = videoRef.current;
         if (!vv) { resolve(); return; }
         if (Math.abs(vv.currentTime - t) < 0.0005 && !vv.seeking) { resolve(); return; }
         let done = false;
-        const fin = () => { if (!done) { done = true; vv.removeEventListener('seeked', fin); resolve(); } };
-        vv.addEventListener('seeked', fin, { once: true });
+        const fin = () => { if (!done) { done = true; vv.removeEventListener('seeked', onSeeked); resolve(); } };
+        const rvfc = (vv as unknown as { requestVideoFrameCallback?: (cb: () => void) => number }).requestVideoFrameCallback;
+        const onSeeked = () => { if (rvfc) rvfc.call(vv, () => fin()); else fin(); };
+        vv.addEventListener('seeked', onSeeked, { once: true });
         vv.currentTime = t;
-        window.setTimeout(fin, 200);
+        window.setTimeout(fin, 300);
       });
 
-      const FPS = 30;
-      const step = 1 / FPS;
+      const step = 1 / params.fps;
       const total = Math.max(1, Math.ceil((end - start) / step));
       const passT0 = performance.now();
       for (let k = 1; k <= total; k++) {
@@ -1092,7 +1117,7 @@ function Home() {
         const t = Math.min(end, start + k * step);
         await seekTo(t);
         if (useMediaPipe) {
-          const kps = await mp.detectFullPoseOnFrame(v).catch(() => null);
+          const kps = await mp.detectPosePrecise(v, params).catch(() => null);
           if (kps) canvasRef.current?.addBakeSample?.(v.currentTime, kps);
         } else {
           // MoveNet fallback: the paused-frame 'seeked' detection (Canvas pose
@@ -1100,7 +1125,7 @@ function Home() {
           await new Promise((r) => setTimeout(r, 90));
         }
         if (k % 3 === 0 || k === total) {
-          setProcessingStatus(`AI-tracking… ${Math.round((k / total) * 100)}% (frame-exact${useMediaPipe ? ' + real feet' : ''})`);
+          setProcessingStatus(`AI-tracking… ${Math.round((k / total) * 100)}% (${params.speedLabel}${useMediaPipe ? ' · real feet' : ''})`);
         }
       }
 
@@ -1119,7 +1144,7 @@ function Home() {
     }
   }, [seekVideoTo]);
 
-  const handlePrecisionTrack = useCallback(async (scope: 'all' | 'section') => {
+  const handlePrecisionTrack = useCallback(async (scope: 'all' | 'section', quality: TrackQuality = 'balanced') => {
     const v = videoRef.current;
     if (!v || !videoSrc) { setProcessingStatus('Load a video first'); return; }
     if (!skeletonEnabled) { setProcessingStatus('Enable Skeleton first, then run AI Track'); return; }
@@ -1133,7 +1158,7 @@ function Home() {
     precisionAbortRef.current = false;
     setPrecisionTrackState('running');
     try {
-      const kept = await runPrecisionPass(start, end);
+      const kept = await runPrecisionPass(start, end, quality);
       if (kept < 2) {
         setProcessingStatus(precisionAbortRef.current ? 'AI Track cancelled' : 'AI Track found no skeleton in that range');
       } else {
@@ -1152,8 +1177,40 @@ function Home() {
     setProcessingStatus('AI Track cleared — live tracking resumed');
   }, []);
 
-  // The baked track dies with its video (Canvas clears it too) — reset the UI.
-  useEffect(() => { setPrecisionTrackState('idle'); }, [videoSrc]);
+  const handlePrecisionTrackCancel = useCallback(() => {
+    if (precisionTrackState === 'running') precisionAbortRef.current = true;
+  }, [precisionTrackState]);
+
+  // AI Track popup: opening computes the scope (a coach-dragged timeline section,
+  // else the whole video) so the dialog can show it and ask for a tracking speed.
+  const [precisionDialog, setPrecisionDialog] = useState<{ scope: 'all' | 'section'; lengthSec: number } | null>(null);
+
+  const handleOpenPrecisionTrack = useCallback(() => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) { setProcessingStatus('Load a video first'); return; }
+    if (!skeletonEnabled) { setProcessingStatus('Enable Skeleton first, then run AI Track'); return; }
+    if (precisionTrackState === 'running') return;
+    const dur = isFinite(v.duration) ? v.duration : 0;
+    if (dur <= 0) { setProcessingStatus('Video not ready yet — try again'); return; }
+    const hasSection =
+      metricsTrimUserAdjusted &&
+      metricsSectionStart != null && metricsSectionEnd != null &&
+      (metricsSectionStart > 0.05 || metricsSectionEnd < dur - 0.05);
+    const scope: 'all' | 'section' = hasSection ? 'section' : 'all';
+    const start = scope === 'section' ? Math.max(0, metricsSectionStart!) : 0;
+    const end = scope === 'section' ? Math.min(dur, metricsSectionEnd!) : dur;
+    setPrecisionDialog({ scope, lengthSec: Math.max(0, end - start) });
+  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsTrimUserAdjusted, metricsSectionStart, metricsSectionEnd]);
+
+  const handleConfirmPrecisionTrack = useCallback((quality: TrackQuality) => {
+    const scope = precisionDialog?.scope ?? 'all';
+    setPrecisionDialog(null);
+    void handlePrecisionTrack(scope, quality);
+  }, [precisionDialog, handlePrecisionTrack]);
+
+  // The baked track dies with its video (Canvas clears it too) — reset the UI,
+  // and forget any manual section selection so the next video starts as "whole".
+  useEffect(() => { setPrecisionTrackState('idle'); setMetricsTrimUserAdjusted(false); }, [videoSrc]);
 
   /**
    * Record the replay to MP4 — SLOW-MASTER strategy: the section is always
@@ -1189,7 +1246,9 @@ function Home() {
       setProcessingStatus('Preparing perfect skeleton for the recording…');
       precisionAbortRef.current = false;
       setPrecisionTrackState('running');
-      const kept = await runPrecisionPass(secStart, secEnd);
+      // 'fast' (FULL model, 30fps) preserves the prior recording behaviour — no
+      // surprise 30MB HEAVY download just to record a metrics clip.
+      const kept = await runPrecisionPass(secStart, secEnd, 'fast');
       trackBacked = kept >= 2;
       setPrecisionTrackState(canvasRef.current?.getBakedTrackInfo?.() ? 'ready' : 'idle');
     }
@@ -2022,7 +2081,7 @@ function Home() {
       onSetStartFrame={() => setStroStartFrame(Math.max(0, stroVideoTime))}
       onSetEndFrame={() => setStroEndFrame(Math.min(stroVideoDuration || stroVideoTime, Math.max(stroVideoTime, stroStartFrame + 0.04)))}
       frameCount={stroFrameCount}
-      onFrameCountChange={setStroFrameCount}
+      onFrameCountChange={handleStroFrameCountChange}
       frames={stroFrameRows}
       activeFrameIndex={stroActiveFrameIndex}
       onSelectFrame={handleStroSelectFrame}
@@ -4662,7 +4721,7 @@ function Home() {
         trimRange: (metricsSectionStart != null && metricsSectionEnd != null)
           ? { start: metricsSectionStart, end: metricsSectionEnd } as { start: number; end: number }
           : null,
-        onTrimChange: (start: number, end: number) => { setMetricsSectionStart(start); setMetricsSectionEnd(end); },
+        onTrimChange: (start: number, end: number) => { setMetricsSectionStart(start); setMetricsSectionEnd(end); setMetricsTrimUserAdjusted(true); },
         trimAccent: '#34C759',
         onCurrentTime: undefined as undefined,
         phaseMarkers: biomechPhaseMarkers,
@@ -4884,7 +4943,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     skeletonActive:                  skeletonOn,
     onSkeletonActiveChange:          () => setSkeletonOn((v) => !v),
     precisionTrackState,
-    onPrecisionTrack:                (scope: 'all' | 'section') => { void handlePrecisionTrack(scope); },
+    onOpenPrecisionTrack:            handleOpenPrecisionTrack,
+    onPrecisionTrackCancel:          handlePrecisionTrackCancel,
     onPrecisionTrackClear:           handlePrecisionTrackClear,
     skeletonClassicColors,
     onSkeletonClassicColorsChange:   setSkeletonClassicColors,
@@ -5376,6 +5436,14 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         WebkitTouchCallout: 'none',
       }}
     >
+      {precisionDialog && (
+        <PrecisionTrackDialog
+          scope={precisionDialog.scope}
+          lengthSec={precisionDialog.lengthSec}
+          onConfirm={handleConfirmPrecisionTrack}
+          onCancel={() => setPrecisionDialog(null)}
+        />
+      )}
 
       {/* ── Hidden decoders — slot B + webcam; slot A video lives in the panel ── */}
       <video

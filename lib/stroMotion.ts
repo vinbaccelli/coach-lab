@@ -299,6 +299,57 @@ export function computeGhostSampleTimes(
   return times;
 }
 
+/**
+ * Change the NUMBER of sample times without moving the ones that already exist.
+ * Adding frames inserts new times at the midpoint of the widest gap (so every
+ * existing snapshot — and its mask — keeps its exact position); removing frames
+ * drops the most redundant interior time (closest to a neighbour) while keeping
+ * the endpoints. Falls back to even spacing only when there's nothing to keep.
+ *
+ * This replaces the old "re-space everything evenly on any count change", which
+ * moved every frame and made the draft-sync merge drop the coach's masks.
+ */
+export function resizeSampleTimes(
+  times: number[],
+  targetCount: number,
+  startSec: number,
+  endSec: number,
+): number[] {
+  if (targetCount < 1 || endSec < startSec) return [];
+  const result = times.filter((t) => Number.isFinite(t)).slice().sort((a, b) => a - b);
+  if (result.length === 0) return computeGhostSampleTimes(startSec, endSec, targetCount);
+
+  // Grow: insert at the midpoint of the widest gap, one at a time.
+  while (result.length < targetCount) {
+    if (result.length === 1) {
+      result.push(result[0] < (startSec + endSec) / 2 ? endSec : startSec);
+      result.sort((a, b) => a - b);
+      continue;
+    }
+    let gi = 0;
+    let widest = -1;
+    for (let i = 0; i < result.length - 1; i++) {
+      const gap = result[i + 1] - result[i];
+      if (gap > widest) { widest = gap; gi = i; }
+    }
+    result.splice(gi + 1, 0, (result[gi] + result[gi + 1]) / 2);
+  }
+
+  // Shrink: drop the interior time whose neighbours are closest; keep endpoints.
+  while (result.length > targetCount && result.length > 2) {
+    let ri = 1;
+    let tightest = Infinity;
+    for (let i = 1; i < result.length - 1; i++) {
+      const gap = Math.min(result[i] - result[i - 1], result[i + 1] - result[i]);
+      if (gap < tightest) { tightest = gap; ri = i; }
+    }
+    result.splice(ri, 1);
+  }
+  if (result.length > targetCount) result.length = targetCount; // count 1/2 edge
+
+  return result;
+}
+
 /** Keep sample times inside trim and minimally spaced when dragging markers. */
 export function enforceMonotonicSampleTimes(
   times: number[],

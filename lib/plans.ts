@@ -77,12 +77,16 @@ export const PLANS: Plan[] = [
   },
 ];
 
-/** 1-hour guided demo — a booking link, not a Stripe product. */
+/**
+ * Free 1-hour self-serve trial — NOT a booking link. Signing in with Google
+ * grants one hour of full access to every tool (gated in middleware.ts, one hour
+ * per account), then prompts to subscribe.
+ */
 export const DEMO = {
-  label: 'Book a 1-hour demo',
-  note: 'A free, guided walkthrough of AngleMotion with a coach.',
-  /** Set NEXT_PUBLIC_DEMO_URL to your Calendly/booking link; falls back to email. */
-  url: process.env.NEXT_PUBLIC_DEMO_URL || 'mailto:vinbaccelli@gmail.com?subject=AngleMotion%20demo',
+  label: 'Test it free for an hour',
+  note: 'Sign in with Google and use every tool free for one hour — no card, no booking.',
+  /** Routes to Google sign-in, then straight into the app for the trial hour. */
+  url: '/login?redirect=/analysis',
 };
 
 export function getPlan(id: PlanId): Plan | undefined {
