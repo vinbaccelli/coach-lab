@@ -206,6 +206,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       /** Mark the frame export-READY in the same state update (AI batch flow) —
        *  avoids the stale-draftRef race of a separate markFrameReady call. */
       markReady?: boolean;
+      /** Pose-derived scribble (normalized) → pose-anchored segmentation. */
+      scribble?: Array<{ x: number; y: number }> | null;
     },
   ): Promise<boolean> => {
     const video = videoRef.current;
@@ -229,6 +231,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         current.backgroundTimeSec,
         current.objectType,
         plate,
+        opts?.scribble ?? null,
       );
 
       if (!proposal) return false;

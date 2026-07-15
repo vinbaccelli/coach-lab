@@ -1392,7 +1392,13 @@ function Home() {
 
   const refreshStroPreviewFromDraft = useCallback(async () => {
     const video = videoRef.current;
-    if (!video || !stroMotionDraft || stroMotionStatus !== 'ready') return;
+    if (!video || !stroMotionDraft) return;
+    // Build the preview when the hook is 'ready' OR every frame is export-ready
+    // (the auto batch leaves status at 'configuring' but all frames marked ready).
+    const allReady =
+      stroMotionDraft.frames.length > 0 &&
+      countExportReadyFrames(stroMotionDraft.frames) === stroMotionDraft.frames.length;
+    if (stroMotionStatus !== 'ready' && !allReady) return;
     try {
       const pngUrl = await exportStroMotionDraftPng(video, stroMotionDraft);
       setStroPreviewPngUrl(pngUrl);
@@ -1539,9 +1545,9 @@ function Home() {
    */
   const detectObjectBoxAtFrame = useCallback(async (
     timeSec: number,
-  ): Promise<{ det: { x: number; y: number; w: number; h: number } | null; fallback: { x: number; y: number; w: number; h: number } | null }> => {
+  ): Promise<{ det: { x: number; y: number; w: number; h: number } | null; fallback: { x: number; y: number; w: number; h: number } | null; kps: Array<{ x: number; y: number; score: number }> | null }> => {
     const video = videoRef.current;
-    if (!video || video.videoWidth === 0) return { det: null, fallback: null };
+    if (!video || video.videoWidth === 0) return { det: null, fallback: null, kps: null };
 
     // Seek FIRST — both the pose fallback and the object detector read the
     // video's current frame.
@@ -1558,9 +1564,9 @@ function Home() {
     if (!kps) {
       kps = await canvasRef.current?.detectPoseAtTime?.(timeSec) ?? null;
     }
-    if (!kps?.length) return { det: null, fallback: null };
+    if (!kps?.length) return { det: null, fallback: null, kps: null };
     const validKps = kps.filter((kp) => kp.score >= 0.2);
-    if (validKps.length < 4) return { det: null, fallback: null };
+    if (validKps.length < 4) return { det: null, fallback: null, kps: null };
 
     const rWrist = kps[10], lWrist = kps[9], rElbow = kps[8], lElbow = kps[7];
     const bodyX = validKps.reduce((s, k) => s + k.x, 0) / validKps.length;
@@ -1607,7 +1613,7 @@ function Home() {
         };
       }
     }
-    return { det, fallback };
+    return { det, fallback, kps };
   }, [videoRef, canvasRef, seekStroVideo]);
 
   const autoSelectStroFrameFromSkeleton = useCallback(async (index: number): Promise<boolean> => {
@@ -1693,11 +1699,16 @@ function Home() {
     pending: Array<{ index: number; timeSec: number }>,
   ): Promise<number> => {
     type Box = { x: number; y: number; w: number; h: number };
-    const results: Array<{ index: number; timeSec: number; det: Box | null; fallback: Box | null }> = [];
+    type Kps = Array<{ x: number; y: number; score: number }> | null;
+    const results: Array<{ index: number; timeSec: number; det: Box | null; fallback: Box | null; kps: Kps }> = [];
+    // Yield to the browser between frames so the paint loop keeps running and the
+    // live skeleton doesn't appear frozen during the (main-thread) detection pass.
+    const yieldFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     for (let i = 0; i < pending.length; i++) {
-      setProcessingStatus(`AI detecting the object: frame ${i + 1}/${pending.length}…`);
+      setProcessingStatus(`AI detecting the athlete: frame ${i + 1}/${pending.length}…`);
       const r = await detectObjectBoxAtFrame(pending[i].timeSec);
       results.push({ ...pending[i], ...r });
+      await yieldFrame();
     }
 
     // Interpolate missing detections from the nearest detected neighbors.
@@ -1721,20 +1732,40 @@ function Home() {
       }
     }
 
+    // Bounding box of the athlete (+ implement tip) from a pose — used both as a
+    // fallback selection box and to keep the mask coherent with the subject.
+    const vw = videoRef.current?.videoWidth ?? 0;
+    const vh = videoRef.current?.videoHeight ?? 0;
+    const athleteBox = (kps: NonNullable<Kps>): Box | null => {
+      const valid = kps.filter((k) => k.score >= 0.2);
+      if (valid.length < 4 || !vw || !vh) return null;
+      const xs = valid.map((k) => k.x), ys = valid.map((k) => k.y);
+      const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+      const padX = (maxX - minX) * 0.2, padY = (maxY - minY) * 0.2;
+      const x = Math.max(0, minX - padX), y = Math.max(0, minY - padY);
+      return { x, y, w: Math.min(vw, maxX + padX) - x, h: Math.min(vh, maxY + padY) - y };
+    };
+
+    const { poseScribble } = await import('@/lib/mediapipeSegmenter');
     let ok = 0;
     for (let i = 0; i < results.length; i++) {
-      const b = boxes[i];
+      const kps = results[i].kps;
+      // Prefer the implement box; else the athlete bbox from pose so a frame with
+      // a skeleton is never left empty (the "reopen shows no selection" bug).
+      const b = boxes[i] ?? (kps ? athleteBox(kps) : null);
       if (!b) continue;
       setProcessingStatus(`Removing background: frame ${i + 1}/${results.length}…`);
       await seekStroVideo(results[i].timeSec);
+      await yieldFrame();
       const normalized = normalizeObjectBox(subjectBoxFromRegion(b));
+      const scribble = kps && vw && vh ? poseScribble(kps, vw, vh) : null;
       // markReady: AI-proposed masks count as READY so Generate works
       // immediately — the coach can still open any frame to edit.
-      const okOne = await selectStroAreaForFrame(results[i].index, normalized, { markReady: true }).catch(() => false);
+      const okOne = await selectStroAreaForFrame(results[i].index, normalized, { markReady: true, scribble }).catch(() => false);
       if (okOne) ok++;
     }
     return ok;
-  }, [detectObjectBoxAtFrame, seekStroVideo, selectStroAreaForFrame]);
+  }, [detectObjectBoxAtFrame, seekStroVideo, selectStroAreaForFrame, videoRef]);
 
   /** One click (or auto-trigger): boxes + masks for every pending frame. */
   const stroAutoSelectBusyRef = useRef(false);

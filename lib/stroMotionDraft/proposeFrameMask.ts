@@ -213,8 +213,11 @@ async function matteMaskInSelection(
  * Background-removal proposal after coach Select Area.
  *
  * Proposal ladder (best → safest):
- *   1. MOTION DIFF vs the background reference frame — the Dartfish technique;
- *      isolates whatever MOVED inside the box (any sport implement, any color).
+ *   0. POSE-ANCHORED SEGMENTATION (MediaPipe MagicTouch) — when a scribble over
+ *      the athlete + implement is supplied (auto path), cut that subject out
+ *      directly. This is the Dartfish-grade path.
+ *   1. MOTION DIFF vs the background reference frame — isolates whatever MOVED
+ *      inside the box (any sport implement, any color).
  *   2. Border flood-fill matte (color-based) when the diff is unreliable.
  *   3. Solid selection-box fill so the manual editor always opens with something.
  * The coach's manual mask editor remains the final say on every frame.
@@ -227,6 +230,8 @@ export async function proposeFrameMask(
   objectType: StroMotionObjectType = 'racket',
   /** Temporal-median plate (preferred diff reference — see backgroundPlate.ts). */
   backgroundPlate?: { bitmap: ImageBitmap; scale: number } | null,
+  /** Pose-derived scribble (normalized points over athlete + implement). */
+  scribble?: Array<{ x: number; y: number }> | null,
 ): Promise<ProposeFrameMaskResult | null> {
   if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
@@ -237,9 +242,22 @@ export async function proposeFrameMask(
 
   let aiSnapshot: AlphaMask | null = null;
 
+  // 0. Pose-anchored segmentation — the athlete + implement, cut cleanly. Only
+  //    runs on the auto path (a scribble is present); falls through on failure.
+  if (scribble && scribble.length >= 2) {
+    try {
+      const { segmentSubjectMask } = await import('@/lib/mediapipeSegmenter');
+      const seg = await segmentSubjectMask(sourceFrame, scribble, vw, vh);
+      if (seg && maskHasContent(seg)) aiSnapshot = seg;
+    } catch {
+      aiSnapshot = null;
+    }
+  }
+
   // 1a. Motion diff against the temporal-MEDIAN plate — robust even when the
-  //     object overlaps its own position in any single reference frame.
-  if (backgroundPlate) {
+  //     object overlaps its own position in any single reference frame. Skipped
+  //     when rung 0 (segmentation) already produced a mask.
+  if (!maskHasContent(aiSnapshot) && backgroundPlate) {
     try {
       aiSnapshot = await motionDiffMaskInSelection(sourceFrame, backgroundPlate, box, vw, vh);
     } catch {
