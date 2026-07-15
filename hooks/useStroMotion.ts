@@ -196,6 +196,11 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   const selectAreaForFrame = useCallback(async (
     frameIndex: number,
     selectionBox: StroMotionSubjectBox,
+    opts?: {
+      /** Mark the frame export-READY in the same state update (AI batch flow) —
+       *  avoids the stale-draftRef race of a separate markFrameReady call. */
+      markReady?: boolean;
+    },
   ): Promise<boolean> => {
     const video = videoRef.current;
     const current = draftRef.current;
@@ -229,6 +234,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
           proposal.sourceFrame.close();
           return prev;
         }
+        const markReady = !!opts?.markReady && hasProposal;
         const frames = prev.frames.map((f) => {
           if (f.index !== frameIndex) return f;
           if (f.sourceFrame) {
@@ -240,8 +246,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             sourceFrame: proposal.sourceFrame,
             aiSnapshot: proposal.aiSnapshot,
             working: proposal.working,
-            readyMask: null,
-            status: 'edited' as StroMotionFrameStatus,
+            readyMask: markReady ? cloneAlphaMask(proposal.working) : null,
+            status: (markReady ? 'ready' : 'edited') as StroMotionFrameStatus,
           };
         });
         return { ...prev, frames };
