@@ -604,7 +604,9 @@ function drawSkeletonOverlay(
         const knee = keypoints[kneeIdx];
         if (!knee || knee.score < scoreThreshold) continue;
         const shinLen = Math.hypot(ankle.x - knee.x, ankle.y - knee.y) || 1;
-        const forward = bodyCenterX != null && ankle.x < bodyCenterX ? -1 : 1;
+        // Toe points AWAY from the body's vertical axis (foot in front of the
+        // stance). Sign was inverted before — feet pointed backward.
+        const forward = bodyCenterX != null && ankle.x < bodyCenterX ? 1 : -1;
         const footLen = shinLen * 0.5;
         tipX = ax + forward * footLen * sx;
         tipY = ay + footLen * 0.28 * sy;

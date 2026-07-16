@@ -1708,8 +1708,15 @@ function Home() {
     const yieldFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     for (let i = 0; i < pending.length; i++) {
       setProcessingStatus(`AI detecting the athlete: frame ${i + 1}/${pending.length}…`);
-      const r = await detectObjectBoxAtFrame(pending[i].timeSec);
-      results.push({ ...pending[i], ...r });
+      // A single frame's detection error must NOT abort the whole batch — that
+      // left every later frame empty ("click a frame → draw a box again").
+      try {
+        const r = await detectObjectBoxAtFrame(pending[i].timeSec);
+        results.push({ ...pending[i], ...r });
+      } catch (err) {
+        console.error('[StroMotion] detect failed on frame', i, err);
+        results.push({ ...pending[i], det: null, fallback: null, kps: null });
+      }
       await yieldFrame();
     }
 
@@ -1789,22 +1796,42 @@ function Home() {
         // Object mode: detect-all → interpolate gaps → sequential mask proposal.
         ok = await autoSelectAllObjectFrames(pending);
       } else {
+        // Player mode: pose-boxed selection, with a centered fallback so a frame
+        // is NEVER left empty (weak pose otherwise gave "click a frame → draw a
+        // box again").
+        const v = videoRef.current;
+        const vw = v?.videoWidth ?? 0, vh = v?.videoHeight ?? 0;
         for (let i = 0; i < pending.length; i++) {
           setProcessingStatus(`AI auto-detect: frame ${i + 1}/${pending.length}…`);
-          const success = await autoSelectStroFrameFromSkeleton(pending[i].index);
-          if (success) ok++;
+          let success = false;
+          try {
+            success = await autoSelectStroFrameFromSkeleton(pending[i].index);
+          } catch (err) {
+            console.error('[StroMotion] player auto-select failed', i, err);
+          }
+          if (success) { ok++; continue; }
+          if (vw && vh) {
+            await seekStroVideo(pending[i].timeSec);
+            const box = normalizeSubjectBox(subjectBoxFromRegion({ x: vw * 0.2, y: vh * 0.1, w: vw * 0.6, h: vh * 0.85 }));
+            const okOne = await selectStroAreaForFrame(pending[i].index, box, { markReady: true }).catch(() => false);
+            if (okOne) ok++;
+          }
         }
       }
       void refreshStroPreviewFromDraft();
+      console.log('[StroMotion] auto-detect committed', ok, 'of', pending.length, 'frames');
       setProcessingStatus(
         ok === 0
           ? 'Auto-detect found nothing — make sure the subject is visible, or use Select Area manually.'
           : `AI auto-selected ${ok}/${pending.length} frames. Review each, fix with Add brush if needed, then Generate.`,
       );
+    } catch (err) {
+      console.error('[StroMotion] auto-detect crashed', err);
+      setProcessingStatus('Auto-detect hit an error (see console). Try Select Area on a frame manually.');
     } finally {
       stroAutoSelectBusyRef.current = false;
     }
-  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, autoSelectStroFrameFromSkeleton, refreshStroPreviewFromDraft]);
+  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, autoSelectStroFrameFromSkeleton, refreshStroPreviewFromDraft, seekStroVideo, selectStroAreaForFrame, videoRef]);
 
   // SPEC: no auto-trigger. Opening StroMotion only opens the toolbar; the AI
   // pass starts when the coach presses "AI auto-detect" after choosing the
