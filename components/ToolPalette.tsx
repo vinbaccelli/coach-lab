@@ -1206,6 +1206,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead />
           <BackHeader title="Draw" icon={<Pen size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
+          {/* V1 spec: Style sits at the TOP of the Draw list (set the look first). */}
+          <Row
+            k="st-d"
+            icon={<Palette size={18} />}
+            label="Style"
+            tooltip="Change line color, thickness, and dash style for drawing tools"
+            onPress={() => push('style')}
+          />
           <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} tooltip="Freehand drawing tool" label="Pen" onPress={() => setTool('pen')} />
           <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} tooltip="Draw a straight line" label="Line" onPress={() => setTool('line')} />
           <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} tooltip="Draw an arrow with direction" label="Arrow" onPress={() => setTool('arrow')} />
@@ -1230,13 +1238,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
               onPress={() => { onPrecisionDrawToggle(); if (!precisionDrawEnabled) onShowPrecisionInstructions?.(); }}
             />
           )}
-          <Row
-            k="st-d"
-            icon={<Palette size={18} />}
-            label="Style"
-            tooltip="Change line color, thickness, and dash style for drawing tools"
-            onPress={() => push('style')}
-          />
         </ToolbarScrollArea>
         <GlobalActionsFooter />
       </div>

@@ -893,7 +893,7 @@ export default function PreciseTimeline({
                 borderLeft: onTrimChange ? `3px solid ${trimAccent}` : undefined,
                 cursor: onTrimChange ? 'ew-resize' : 'default',
                 pointerEvents: onTrimChange ? 'auto' : 'none',
-                zIndex: 4,
+                zIndex: 8,
                 touchAction: 'none',
               }}
             />
@@ -926,7 +926,7 @@ export default function PreciseTimeline({
                 borderRight: onTrimChange ? `3px solid ${trimAccent}` : undefined,
                 cursor: onTrimChange ? 'ew-resize' : 'default',
                 pointerEvents: onTrimChange ? 'auto' : 'none',
-                zIndex: 4,
+                zIndex: 8,
                 touchAction: 'none',
               }}
             />

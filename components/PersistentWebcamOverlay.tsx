@@ -84,7 +84,7 @@ export default function PersistentWebcamOverlay() {
   return (
     <div
       className="fixed z-50 rounded-xl overflow-hidden shadow-2xl border-2 border-blue-400 select-none"
-      style={{ left: pos.x, top: pos.y, width: size.w, height: size.h, cursor: 'grab' }}
+      style={{ left: pos.x, top: pos.y, width: size.w, height: size.h, cursor: 'grab', touchAction: 'none' }}
       onPointerDown={onDragStart}
     >
       <video

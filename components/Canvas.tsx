@@ -574,6 +574,11 @@ function drawSkeletonOverlay(
   // outside tracked data the foot line is simply absent (user decision — a
   // wrong guess is worse than no line).
   if (showFootLine) {
+    // Body centre-x (shoulders + hips) disambiguates "forward" for the live
+    // estimate below. Toe points away from the body's vertical axis.
+    const centerPts = [5, 6, 11, 12].map((i) => keypoints[i]).filter((k) => k && k.score >= scoreThreshold);
+    const bodyCenterX = centerPts.length ? centerPts.reduce((s, k) => s + k!.x, 0) / centerPts.length : null;
+
     for (const [kneeIdx, ankleIdx, toeName] of [[13, 15, 'left_foot_index'], [14, 16, 'right_foot_index']] as Array<[number, number, string]>) {
       if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
       const ankle = keypoints[ankleIdx];
@@ -583,17 +588,36 @@ function drawSkeletonOverlay(
         const cand = keypoints[fi];
         if (cand?.name === toeName && cand.score >= 0.3) { toe = cand; break; }
       }
-      if (!toe) continue;
+
       const ax = ankle.x * sx, ay = ankle.y * sy;
-      const tx2 = toe.x * sx, ty2 = toe.y * sy;
+      let tipX: number, tipY: number, estimated = false;
+
+      if (toe) {
+        // PRECISE: real toe from AI Track / AI Detect — extend slightly past it.
+        const tx2 = toe.x * sx, ty2 = toe.y * sy;
+        tipX = tx2 + (tx2 - ax) * 0.15;
+        tipY = ty2 + (ty2 - ay) * 0.15;
+      } else {
+        // LIVE ESTIMATE (dashed): no foot keypoint on the live skeleton. Point the
+        // foot forward (away from the body axis), length ~0.5× the shin. Precise
+        // direction needs AI Track — this is just live feedback.
+        const knee = keypoints[kneeIdx];
+        if (!knee || knee.score < scoreThreshold) continue;
+        const shinLen = Math.hypot(ankle.x - knee.x, ankle.y - knee.y) || 1;
+        const forward = bodyCenterX != null && ankle.x < bodyCenterX ? -1 : 1;
+        const footLen = shinLen * 0.5;
+        tipX = ax + forward * footLen * sx;
+        tipY = ay + footLen * 0.28 * sy;
+        estimated = true;
+      }
+
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
       ctx.lineWidth = 2;
-      ctx.setLineDash([]);
+      ctx.setLineDash(estimated ? [5, 4] : []); // dashed = live estimate
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      // Extend slightly past the toe so the line reaches the shoe tip.
-      ctx.lineTo(tx2 + (tx2 - ax) * 0.15, ty2 + (ty2 - ay) * 0.15);
+      ctx.lineTo(tipX, tipY);
       ctx.stroke();
       ctx.restore();
     }
@@ -2556,16 +2580,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return (canvas as unknown as { captureStream(f: number): MediaStream }).captureStream(fps);
       },
       undo: () => {
-        skeletonSuppressedRef.current = true;
-        skeletonFramesRef.current = [];
-        latestKeypointsRef.current = null;
-        cachedBallRef.current = [];
-        ballProcessingRef.current = false;
+        // Undo affects DRAWINGS only. It must NOT touch the live skeleton — a
+        // previous version suppressed the skeleton and cleared its keypoints
+        // here, so undoing a drawing made the skeleton vanish and it could not
+        // be re-enabled. The skeleton is a live overlay, not an undo step.
         renderDirtyRef.current = true;
-        ballTrackRef.current = [];
-        isBallDetectingRef.current = false;
-        onProcessingStatus?.(null);
-
         if (historyIdxRef.current > 0) {
           historyIdxRef.current--;
           strokesRef.current = [...historyRef.current[historyIdxRef.current]];

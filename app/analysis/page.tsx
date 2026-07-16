@@ -1566,7 +1566,9 @@ function Home() {
     }
     if (!kps?.length) return { det: null, fallback: null, kps: null };
     const validKps = kps.filter((kp) => kp.score >= 0.2);
-    if (validKps.length < 4) return { det: null, fallback: null, kps: null };
+    // Keep going even with sparse pose — the batch commits a fallback box either
+    // way, so a frame is never left empty. Weak pose just means a rougher hint.
+    if (validKps.length < 1) return { det: null, fallback: null, kps };
 
     const rWrist = kps[10], lWrist = kps[9], rElbow = kps[8], lElbow = kps[7];
     const bodyX = validKps.reduce((s, k) => s + k.x, 0) / validKps.length;
@@ -1746,14 +1748,20 @@ function Home() {
       return { x, y, w: Math.min(vw, maxX + padX) - x, h: Math.min(vh, maxY + padY) - y };
     };
 
+    // Centered default when there's no detection AND no usable pose — a rough box
+    // the coach can edit. Guarantees EVERY frame commits a sourceFrame + mask, so
+    // reviewing a frame always shows the AI result and Generate always has layers.
+    const centeredBox = (): Box | null =>
+      (vw && vh) ? { x: vw * 0.2, y: vh * 0.12, w: vw * 0.6, h: vh * 0.82 } : null;
+
     const { poseScribble } = await import('@/lib/mediapipeSegmenter');
     let ok = 0;
     for (let i = 0; i < results.length; i++) {
       const kps = results[i].kps;
-      // Prefer the implement box; else the athlete bbox from pose so a frame with
-      // a skeleton is never left empty (the "reopen shows no selection" bug).
-      const b = boxes[i] ?? (kps ? athleteBox(kps) : null);
-      if (!b) continue;
+      // Prefer the implement box; else the athlete bbox from pose; else a centered
+      // default — so a frame is NEVER left empty ("reopen shows no selection").
+      const b = boxes[i] ?? (kps ? athleteBox(kps) : null) ?? centeredBox();
+      if (!b) continue; // only when the video isn't ready (no dimensions)
       setProcessingStatus(`Removing background: frame ${i + 1}/${results.length}…`);
       await seekStroVideo(results[i].timeSec);
       await yieldFrame();

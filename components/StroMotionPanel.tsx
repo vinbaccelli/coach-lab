@@ -368,7 +368,7 @@ export default function StroMotionPanel({
         </button>
 
         {onBackgroundChange ? (
-          <button type="button" onClick={() => onBackgroundChange(background === 'start' ? 'end' : 'start')} title={`BG: ${background}`} style={ib(background === 'end')}>
+          <button type="button" onClick={() => onBackgroundChange(background === 'start' ? 'end' : 'start')} title={`Clean-background frame: ${background} of section. AI samples the empty background here to erase it — switch to whichever end has no athlete in view.`} style={ib(background === 'end')}>
             <Layers size={14} strokeWidth={2} />
           </button>
         ) : null}
@@ -431,8 +431,8 @@ export default function StroMotionPanel({
           </button>
 
           {onBackgroundChange ? (
-            <button type="button" onClick={() => onBackgroundChange(background === 'start' ? 'end' : 'start')} style={ib(background === 'end')}>
-              <LB icon={<Layers size={18} />} label={`BG: ${background} frame`} />
+            <button type="button" onClick={() => onBackgroundChange(background === 'start' ? 'end' : 'start')} title="The frame the AI reads as the clean, athlete-free background to erase. Set it to whichever end of the section has no athlete in view." style={ib(background === 'end')}>
+              <LB icon={<Layers size={18} />} label={`Clean BG: ${background}`} />
             </button>
           ) : null}
 

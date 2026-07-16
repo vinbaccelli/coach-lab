@@ -383,6 +383,35 @@ configuration (frame count/section) and blocks the UI uninvited.
 **Why preferred.** "Opening a panel only opens the panel" is predictable; every
 state change traces to an explicit user action on a control inside it.
 
+## ADR-014 — Post-launch testing round: frozen UI behaviors
+
+- **Date / commit:** 2026-07-15
+- **Status:** Accepted
+
+**Context.** A founder testing pass produced a batch of UI expectations that
+should be locked for V1 so they don't regress again.
+
+**Decision (V1 freeze).**
+- **Style at the top of the Draw list.** The Draw sub-toolbar shows Style first,
+  before Pen — set the look, then draw.
+- **Metrics AI Track is frozen as-is.** The single scope-smart button + speed
+  popup (0.1×–0.5×, 0.25× default) delivering a frame-exact skeleton track is
+  final for V1; do not restyle or re-flow it.
+- **Toolbar stays extended across sub-toolbars.** Entering a sub-toolbar
+  (Skeleton, Draw…) with the rail expanded and returning must keep it expanded —
+  navigation never collapses the labels.
+- **Webcam overlay is movable + resizable.** The floating webcam PiP must always
+  be draggable and corner-resizable (drag surface uses `touch-action: none`); this
+  is a standing capability, not a mode.
+- **Undo affects drawings only.** Undo/redo must never suppress or clear the live
+  skeleton or its pose data.
+
+**Consequences.** These are re-test checkpoints; a change touching the toolbar,
+Draw list, Recording Hub webcam, or undo must preserve them.
+
+**Why preferred.** They were reported as regressions or clear expectations —
+codifying them prevents the same round-trips.
+
 ---
 
 # Future Decisions
