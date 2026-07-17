@@ -39,6 +39,8 @@ const GenerateWorkspace = React.lazy(() => import('@/components/metrics/Generate
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
+import { poseScribble } from '@/lib/mediapipeSegmenter';
+import type { StroAutoFrameSpec } from '@/hooks/useStroMotion';
 import type { TrackQuality } from '@/lib/mediapipePose';
 import {
   computeGhostSampleTimes,
@@ -652,6 +654,7 @@ function Home() {
     syncDraft: syncStroDraft,
     updateFrameTime: updateStroFrameTime,
     selectAreaForFrame: selectStroAreaForFrame,
+    autoProcessFrames: autoProcessStroFrames,
     updateFrameMask,
     resetFrameMask,
     reproposeFrameMask,
@@ -1618,41 +1621,33 @@ function Home() {
     return { det, fallback, kps };
   }, [videoRef, canvasRef, seekStroVideo]);
 
-  const autoSelectStroFrameFromSkeleton = useCallback(async (index: number): Promise<boolean> => {
+  // PLAYER-mode spec builder: pose → whole-body box + pose scribble. Returns a
+  // spec for the atomic batch (autoProcessStroFrames) — it does NOT commit.
+  const buildPlayerFrameSpec = useCallback(async (index: number): Promise<StroAutoFrameSpec | null> => {
     const frame = stroMotionDraft?.frames[index];
-    if (!frame || frame.selectionBox) return false;
+    if (!frame) return null;
     const timeSec = frame.timeSec;
     const video = videoRef.current;
-    if (!video || video.videoWidth === 0) return false;
+    if (!video || video.videoWidth === 0) return null;
 
-    // ── OBJECT mode: find the IMPLEMENT box, not the player box ────────────
-    if (stroObjectType !== 'player') {
-      const { det, fallback } = await detectObjectBoxAtFrame(timeSec);
-      const box = det ?? fallback;
-      if (!box) return false;
-      finishStroRegionSelect(index, box);
-      return true;
-    }
-
-    // Seek FIRST — the pose fallback reads the video's current frame.
+    // Seek FIRST — the pose read uses the video's current frame.
     await seekStroVideo(timeSec);
 
-    // Get skeleton keypoints near this frame time from the playback cache…
+    // Prefer the Precision AI Track pose, then the playback cache, then on-demand.
     const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
     const cached = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>((best, f) => {
       if (!best || Math.abs(f.timeSeconds - timeSec) < Math.abs(best.timeSeconds - timeSec)) return f;
       return best;
     }, null);
-    // …preferring the Precision AI Track pose, then cache, then on-demand.
     let keypointsForFrame = canvasRef.current?.getBakedPoseAt?.(timeSec)
       ?? (cached && Math.abs(cached.timeSeconds - timeSec) < 0.2 ? cached.keypoints : null);
     if (!keypointsForFrame) {
       keypointsForFrame = await canvasRef.current?.detectPoseAtTime?.(timeSec) ?? null;
     }
-    if (!keypointsForFrame?.length) return false;
+    if (!keypointsForFrame?.length) return null;
 
     const validKps = keypointsForFrame.filter(kp => kp.score >= 0.2);
-    if (validKps.length < 4) return false;
+    if (validKps.length < 4) return null;
 
     const kps = keypointsForFrame;
     const rWrist = kps[10], lWrist = kps[9], rElbow = kps[8], lElbow = kps[7];
@@ -1664,7 +1659,7 @@ function Home() {
 
     const vw = video.videoWidth, vh = video.videoHeight;
 
-    // ── PLAYER mode: whole-body box extended along the dominant arm ────────
+    // Whole-body box extended along the dominant arm (implement reach).
     const racketPoints: Array<{ x: number; y: number }> = [];
     if (domWrist?.score >= 0.2 && domElbow?.score >= 0.2) {
       const dx = domWrist.x - domElbow.x;
@@ -1674,28 +1669,24 @@ function Home() {
     const allPoints = [...validKps, ...racketPoints];
     const xs = allPoints.map(kp => kp.x);
     const ys = allPoints.map(kp => kp.y);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-    const padX = (maxX - minX) * 0.2;
-    const padY = (maxY - minY) * 0.2;
-    finishStroRegionSelect(index, {
-      x: Math.max(0, minX - padX),
-      y: Math.max(0, minY - padY),
-      w: Math.min(vw, maxX + padX) - Math.max(0, minX - padX),
-      h: Math.min(vh, maxY + padY) - Math.max(0, minY - padY),
-    });
-    return true;
-  }, [stroMotionDraft, videoRef, canvasRef, seekStroVideo, finishStroRegionSelect, stroObjectType, detectObjectBoxAtFrame]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const padX = (maxX - minX) * 0.2, padY = (maxY - minY) * 0.2;
+    const x = Math.max(0, minX - padX), y = Math.max(0, minY - padY);
+    return {
+      frameIndex: index,
+      selectionBox: normalizeSubjectBox(subjectBoxFromRegion({
+        x, y, w: Math.min(vw, maxX + padX) - x, h: Math.min(vh, maxY + padY) - y,
+      })),
+      scribble: poseScribble(kps, vw, vh),
+    };
+  }, [stroMotionDraft, videoRef, canvasRef, seekStroVideo]);
 
   /**
    * OBJECT-mode batch auto-select: detect the implement on every pending frame
-   * first, FILL detection gaps by interpolating neighbor boxes over time
-   * (an implement that was found at t1 and t3 is between them at t2 — a miss
-   * on one frame no longer breaks the sequence), then commit + propose masks
-   * SEQUENTIALLY (awaited — concurrent proposals interleave video seeks).
-   * Returns the number of frames that got a box.
+   * first, FILL detection gaps by interpolating neighbor boxes over time (a miss
+   * on one frame no longer breaks the sequence), build a per-frame spec set, then
+   * hand it to autoProcessStroFrames for an ATOMIC single-commit. Returns the
+   * number of frames committed.
    */
   const autoSelectAllObjectFrames = useCallback(async (
     pending: Array<{ index: number; timeSec: number }>,
@@ -1761,26 +1752,25 @@ function Home() {
     const centeredBox = (): Box | null =>
       (vw && vh) ? { x: vw * 0.2, y: vh * 0.12, w: vw * 0.6, h: vh * 0.82 } : null;
 
-    const { poseScribble } = await import('@/lib/mediapipeSegmenter');
-    let ok = 0;
+    // Build the complete spec set (box + pose scribble per frame) — NO draft
+    // writes here. The single atomic commit happens inside autoProcessStroFrames.
+    const specs: StroAutoFrameSpec[] = [];
     for (let i = 0; i < results.length; i++) {
       const kps = results[i].kps;
       // Prefer the implement box; else the athlete bbox from pose; else a centered
       // default — so a frame is NEVER left empty ("reopen shows no selection").
       const b = boxes[i] ?? (kps ? athleteBox(kps) : null) ?? centeredBox();
       if (!b) continue; // only when the video isn't ready (no dimensions)
-      setProcessingStatus(`Removing background: frame ${i + 1}/${results.length}…`);
-      await seekStroVideo(results[i].timeSec);
-      await yieldFrame();
-      const normalized = normalizeObjectBox(subjectBoxFromRegion(b));
-      const scribble = kps && vw && vh ? poseScribble(kps, vw, vh) : null;
-      // markReady: AI-proposed masks count as READY so Generate works
-      // immediately — the coach can still open any frame to edit.
-      const okOne = await selectStroAreaForFrame(results[i].index, normalized, { markReady: true, scribble }).catch(() => false);
-      if (okOne) ok++;
+      specs.push({
+        frameIndex: results[i].index,
+        selectionBox: normalizeObjectBox(subjectBoxFromRegion(b)),
+        scribble: kps && vw && vh ? poseScribble(kps, vw, vh) : null,
+      });
     }
-    return ok;
-  }, [detectObjectBoxAtFrame, seekStroVideo, selectStroAreaForFrame, videoRef]);
+    return autoProcessStroFrames(specs, (done, total) =>
+      setProcessingStatus(`Removing background: frame ${done}/${total}…`),
+    );
+  }, [detectObjectBoxAtFrame, autoProcessStroFrames, videoRef]);
 
   /** One click (or auto-trigger): boxes + masks for every pending frame. */
   const stroAutoSelectBusyRef = useRef(false);
@@ -1793,30 +1783,34 @@ function Home() {
     try {
       let ok = 0;
       if (stroObjectType !== 'player') {
-        // Object mode: detect-all → interpolate gaps → sequential mask proposal.
+        // Object mode: detect-all → interpolate gaps → build specs → atomic commit.
         ok = await autoSelectAllObjectFrames(pending);
       } else {
-        // Player mode: pose-boxed selection, with a centered fallback so a frame
-        // is NEVER left empty (weak pose otherwise gave "click a frame → draw a
-        // box again").
+        // Player mode: build a whole-body spec per frame (centered fallback when
+        // pose is weak so no frame is empty), then ONE atomic commit.
         const v = videoRef.current;
         const vw = v?.videoWidth ?? 0, vh = v?.videoHeight ?? 0;
+        const specs: StroAutoFrameSpec[] = [];
         for (let i = 0; i < pending.length; i++) {
-          setProcessingStatus(`AI auto-detect: frame ${i + 1}/${pending.length}…`);
-          let success = false;
+          setProcessingStatus(`AI detecting the athlete: frame ${i + 1}/${pending.length}…`);
+          let spec: StroAutoFrameSpec | null = null;
           try {
-            success = await autoSelectStroFrameFromSkeleton(pending[i].index);
+            spec = await buildPlayerFrameSpec(pending[i].index);
           } catch (err) {
-            console.error('[StroMotion] player auto-select failed', i, err);
+            console.error('[StroMotion] player spec build failed', i, err);
           }
-          if (success) { ok++; continue; }
-          if (vw && vh) {
-            await seekStroVideo(pending[i].timeSec);
-            const box = normalizeSubjectBox(subjectBoxFromRegion({ x: vw * 0.2, y: vh * 0.1, w: vw * 0.6, h: vh * 0.85 }));
-            const okOne = await selectStroAreaForFrame(pending[i].index, box, { markReady: true }).catch(() => false);
-            if (okOne) ok++;
+          if (!spec && vw && vh) {
+            spec = {
+              frameIndex: pending[i].index,
+              selectionBox: normalizeSubjectBox(subjectBoxFromRegion({ x: vw * 0.2, y: vh * 0.1, w: vw * 0.6, h: vh * 0.85 })),
+              scribble: null,
+            };
           }
+          if (spec) specs.push(spec);
         }
+        ok = await autoProcessStroFrames(specs, (done, total) =>
+          setProcessingStatus(`Removing background: frame ${done}/${total}…`),
+        );
       }
       void refreshStroPreviewFromDraft();
       console.log('[StroMotion] auto-detect committed', ok, 'of', pending.length, 'frames');
@@ -1831,7 +1825,7 @@ function Home() {
     } finally {
       stroAutoSelectBusyRef.current = false;
     }
-  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, autoSelectStroFrameFromSkeleton, refreshStroPreviewFromDraft, seekStroVideo, selectStroAreaForFrame, videoRef]);
+  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, videoRef]);
 
   // SPEC: no auto-trigger. Opening StroMotion only opens the toolbar; the AI
   // pass starts when the coach presses "AI auto-detect" after choosing the

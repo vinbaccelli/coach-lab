@@ -44,16 +44,113 @@ const SWAP_AFTER_SAMPLES = 6;
 // so precision is worth more than the extra frames Lightning would give.
 const SWAP_THRESHOLD_MS = 55;
 
-function makeDetector(model: 'thunder' | 'lightning') {
-  return pd.createDetector(pd.SupportedModels.MoveNet, {
-    modelType: model === 'thunder'
-      ? pd.movenet.modelType.SINGLEPOSE_THUNDER
-      : pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
-    // Self-hosted weights (public/models/) — no third-party CDN a blocker
-    // or network policy could kill.
-    modelUrl: `${self.location.origin}/models/movenet-${model}/model.json`,
-    enableSmoothing: false,
+// ── Backend-loss guard: an inference must never block the bridge forever ──────
+// A WebGL context loss makes estimatePoses' async GPU→CPU readback never settle,
+// which latches the bridge's single-in-flight slot true permanently (a frozen
+// skeleton). The three guards below guarantee every inference resolves: a
+// per-call timeout, proactive context-loss detection + recovery, and a
+// pre-inference context-lost check.
+const ESTIMATE_TIMEOUT_MS = 2000;
+// Recovery state machine: every async recovery step is bounded, so a cycle
+// always terminates (`recovering` can never stay true); failed cycles retry with
+// exponential backoff; after repeated WebGL failures the worker commits to WASM
+// for the session; and `ready` returns to true as soon as any backend inits.
+const MODEL_LOAD_TIMEOUT_MS = 10000;
+const BACKEND_INIT_TIMEOUT_MS = 8000;
+const RECOVERY_BACKOFF_START_MS = 400;
+const RECOVERY_BACKOFF_MAX_MS = 5000;
+const RECOVERY_MAX_WEBGL_FAILS = 2;
+
+let recovering = false;
+let everReady = false;      // the worker has reached a ready backend at least once
+let wasmPermanent = false;  // committed to WASM after repeated WebGL failures
+let recoveryFailures = 0;   // consecutive failed attempts (drives the backoff)
+let lastRecoveryAt = -Infinity;
+let ctxLossCanvas: EventTarget | null = null;
+
+/** The live WebGL context (only for the webgl backend; null for wasm/webgpu). */
+function currentGL(): WebGLRenderingContext | null {
+  try {
+    const b = tf.backend() as unknown as { getGPGPUContext?: () => { gl: WebGLRenderingContext } };
+    return b?.getGPGPUContext?.().gl ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Attach a per-context webglcontextlost handler that kicks off recovery. */
+function attachContextLossHandler() {
+  const canvas = currentGL()?.canvas as unknown as EventTarget | undefined;
+  if (!canvas || canvas === ctxLossCanvas || typeof canvas.addEventListener !== 'function') return;
+  ctxLossCanvas = canvas;
+  canvas.addEventListener('webglcontextlost', (ev) => {
+    ev.preventDefault(); // keep the context restorable
+    recoverBackend('webglcontextlost event');
   });
+}
+
+/**
+ * One bounded recovery attempt. `ready` goes false so detects post a null result
+ * (unblocking the bridge) until a fresh backend is up. Rate-limited by an
+ * exponential backoff that grows with consecutive failures. Each attempt
+ * disposes the dead detector, drops the stale GL backend, and re-runs init() —
+ * whose async steps are all timeout-bounded, so this ALWAYS settles and the
+ * `finally` ALWAYS clears `recovering`. After RECOVERY_MAX_WEBGL_FAILS
+ * consecutive failures it commits to WASM for the session. Re-triggered by the
+ * context-loss event and by incoming frames while not ready, so `ready` returns
+ * to true as soon as any backend initialises.
+ */
+function recoverBackend(reason: string) {
+  if (recovering) return;
+  const now = performance.now();
+  const backoff = Math.min(RECOVERY_BACKOFF_MAX_MS, RECOVERY_BACKOFF_START_MS * 2 ** recoveryFailures);
+  if (now - lastRecoveryAt < backoff) return; // honour exponential backoff between attempts
+  lastRecoveryAt = now;
+  recovering = true;
+  ready = false;
+  console.warn(`[PoseWorker] Backend recovery attempt ${recoveryFailures + 1} (${reason})`);
+  void (async () => {
+    try {
+      try { detector?.dispose?.(); } catch { /* noop */ }
+      detector = null;
+      try { tf.removeBackend('webgl'); } catch { /* noop */ } // drop the dead context
+      const forceWasm = wasmPermanent || recoveryFailures >= RECOVERY_MAX_WEBGL_FAILS;
+      try {
+        await init(forceWasm); // bounded internally; sets ready=true on success
+      } catch { /* init handles its own errors; `ready` reflects the outcome */ }
+
+      if (ready) {
+        recoveryFailures = 0;
+        console.log('[PoseWorker] Backend recovery succeeded');
+        return;
+      }
+      recoveryFailures++;
+      if (!wasmPermanent && recoveryFailures >= RECOVERY_MAX_WEBGL_FAILS) {
+        wasmPermanent = true;
+        console.warn('[PoseWorker] WebGL kept failing — committing to WASM for this session');
+      }
+    } finally {
+      recovering = false; // ALWAYS — recovering can never remain permanently true
+    }
+  })();
+}
+
+function makeDetector(model: 'thunder' | 'lightning') {
+  // Timeout-bounded so a stalled model fetch can never leave init()/recovery
+  // hanging (it rejects → the caller's catch runs).
+  return withTimeout(
+    pd.createDetector(pd.SupportedModels.MoveNet, {
+      modelType: model === 'thunder'
+        ? pd.movenet.modelType.SINGLEPOSE_THUNDER
+        : pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
+      // Self-hosted weights (public/models/) — no third-party CDN a blocker
+      // or network policy could kill.
+      modelUrl: `${self.location.origin}/models/movenet-${model}/model.json`,
+      enableSmoothing: false,
+    }),
+    MODEL_LOAD_TIMEOUT_MS,
+    `${model} model load`,
+  );
 }
 
 /** Swap THUNDER → LIGHTNING when this machine can't run it at realtime. */
@@ -80,7 +177,7 @@ async function maybeDowngradeModel(lastMs: number) {
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} init timed out`)), ms)),
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
   ]);
 }
 
@@ -88,8 +185,9 @@ async function initWasm(): Promise<void> {
   // Self-hosted binaries (public/tfjs-wasm/) — a third-party CDN here meant
   // ad-blockers/network policies could silently kill the whole skeleton.
   wasmBackend.setWasmPaths(`${self.location.origin}/tfjs-wasm/`);
-  await tf.setBackend('wasm');
-  await tf.ready();
+  // Timeout-bounded so a stalled WASM load can never hang init()/recovery.
+  await withTimeout(tf.setBackend('wasm'), BACKEND_INIT_TIMEOUT_MS, 'wasm setBackend');
+  await withTimeout(tf.ready(), BACKEND_INIT_TIMEOUT_MS, 'wasm ready');
 }
 
 async function pickBackend(wasmOnly: boolean): Promise<string> {
@@ -131,7 +229,9 @@ async function pickBackend(wasmOnly: boolean): Promise<string> {
 async function init(wasmOnly = false) {
   try {
     self.postMessage({ type: 'status', message: 'Loading AI engine…' });
-    const backend = await pickBackend(wasmOnly);
+    // Once the session has committed to WASM (repeated WebGL failures), never
+    // probe the GPU backends again.
+    const backend = await pickBackend(wasmOnly || wasmPermanent);
 
     self.postMessage({ type: 'status', message: 'Loading pose detection model…' });
     const gpu = backend === 'webgpu' || backend === 'webgl';
@@ -141,7 +241,12 @@ async function init(wasmOnly = false) {
     currentModel = gpu ? 'thunder' : 'lightning';
     detector = await makeDetector(currentModel);
 
+    // Detect WebGL context loss the instant it happens so we recover instead of
+    // hanging on the next inference's readback.
+    if (backend === 'webgl') attachContextLossHandler();
+
     ready = true;
+    everReady = true;
     self.postMessage({ type: 'ready', backend });
     console.log(`[PoseWorker] Ready — backend: ${backend}, model: ${currentModel}`);
   } catch (err: any) {
@@ -160,6 +265,21 @@ self.onmessage = async (e: MessageEvent) => {
 
   if (data.type === 'detect') {
     if (!ready || !detector) {
+      self.postMessage({ type: 'result', keypoints: null, frameId: data.frameId });
+      if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
+      // If the worker was ready before and isn't now, an incoming frame keeps
+      // re-triggering recovery (backoff-gated) so `ready` returns as soon as any
+      // backend initialises — even if a prior recovery attempt failed.
+      if (everReady && !recovering) recoverBackend('frame while not ready');
+      return;
+    }
+
+    // Never issue an inference into an already-lost WebGL context — its async
+    // readback would never settle and would hang the bridge. Post null (unblock)
+    // and start recovery instead.
+    const glPre = currentGL();
+    if (glPre && glPre.isContextLost()) {
+      recoverBackend('context already lost before inference');
       self.postMessage({ type: 'result', keypoints: null, frameId: data.frameId });
       if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
       return;
@@ -191,7 +311,14 @@ self.onmessage = async (e: MessageEvent) => {
       }
 
       const t0 = performance.now();
-      const poses = await detector.estimatePoses(source, { flipHorizontal: false });
+      // Cap every inference: a hung GPU readback (context loss) must never leave
+      // the bridge permanently blocked. On timeout this rejects → the catch
+      // below posts a null result so the bridge always advances.
+      const poses = await withTimeout(
+        detector.estimatePoses(source, { flipHorizontal: false }) as Promise<any[]>,
+        ESTIMATE_TIMEOUT_MS,
+        'estimatePoses',
+      );
       void maybeDowngradeModel(performance.now() - t0);
       if (!poses || poses.length === 0) console.warn('[PoseWorker] No poses detected in frame', data.frameId);
 
@@ -227,6 +354,10 @@ self.onmessage = async (e: MessageEvent) => {
       source.close();
       self.postMessage({ type: 'result', keypoints, frameId: data.frameId });
     } catch (err) {
+      // A timeout or GPU error here can mean the WebGL context died mid-readback;
+      // recover so subsequent frames don't each wait out the full timeout.
+      const glErr = currentGL();
+      if (glErr && glErr.isContextLost()) recoverBackend('context lost during inference');
       console.error('[PoseWorker] detect error:', err);
       if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
       self.postMessage({ type: 'result', keypoints: null, frameId: data.frameId });

@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg } from '@/lib/drawingTools';
+import { estimateFootVector } from '@/lib/biomechanics/measurements';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
@@ -568,16 +569,21 @@ function drawSkeletonOverlay(
     }
   }
 
-  // Foot direction lines — REAL ankle → toe-tip only. The line renders solely
-  // when the pose carries MediaPipe foot keypoints (appended at index 17+ by
-  // the Precision AI Track pass or AI Detect). No estimate is ever drawn:
-  // outside tracked data the foot line is simply absent (user decision — a
-  // wrong guess is worse than no line).
+  // Foot direction lines — ONE shared algorithm with the AI foot-direction
+  // measurement (lib/biomechanics/measurements.ts computeFootDirection): a real
+  // ankle→toe when the pose carries a MediaPipe foot_index keypoint (AI Track /
+  // AI Detect), otherwise the canonical shin-perpendicular estimateFootVector().
+  // bodyCenterX (hip midpoint) and facing (nose vs hips) are derived exactly as
+  // measurements does, so the drawn line and the AI number always agree.
   if (showFootLine) {
-    // Body centre-x (shoulders + hips) disambiguates "forward" for the live
-    // estimate below. Toe points away from the body's vertical axis.
-    const centerPts = [5, 6, 11, 12].map((i) => keypoints[i]).filter((k) => k && k.score >= scoreThreshold);
-    const bodyCenterX = centerPts.length ? centerPts.reduce((s, k) => s + k!.x, 0) / centerPts.length : null;
+    const FOOT_MIN_SCORE = 0.2; // matches measurements.ts MIN_SCORE
+    const lHip = keypoints[11], rHip = keypoints[12];
+    const hipXs = [lHip, rHip].filter((h) => h && h.score >= FOOT_MIN_SCORE).map((h) => h!.x);
+    const bodyCenterX = hipXs.length ? hipXs.reduce((a, b) => a + b, 0) / hipXs.length : null;
+    const nose = keypoints[0];
+    const facing: 1 | -1 = bodyCenterX != null && nose && nose.score >= FOOT_MIN_SCORE
+      ? (nose.x >= bodyCenterX ? 1 : -1)
+      : 1;
 
     for (const [kneeIdx, ankleIdx, toeName] of [[13, 15, 'left_foot_index'], [14, 16, 'right_foot_index']] as Array<[number, number, string]>) {
       if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
@@ -593,30 +599,27 @@ function drawSkeletonOverlay(
       let tipX: number, tipY: number, estimated = false;
 
       if (toe) {
-        // PRECISE: real toe from AI Track / AI Detect — extend slightly past it.
+        // PRECISE: real ankle→toe (same as measurements' real-toe branch).
         const tx2 = toe.x * sx, ty2 = toe.y * sy;
         tipX = tx2 + (tx2 - ax) * 0.15;
         tipY = ty2 + (ty2 - ay) * 0.15;
       } else {
-        // LIVE ESTIMATE (dashed): no foot keypoint on the live skeleton. Point the
-        // foot forward (away from the body axis), length ~0.5× the shin. Precise
-        // direction needs AI Track — this is just live feedback.
+        // ESTIMATE: the canonical shin-perpendicular direction (identical inputs
+        // to computeFootDirection), drawn ~0.45× the shin from the ankle.
         const knee = keypoints[kneeIdx];
         if (!knee || knee.score < scoreThreshold) continue;
+        const v = estimateFootVector(knee, ankle, bodyCenterX, facing);
         const shinLen = Math.hypot(ankle.x - knee.x, ankle.y - knee.y) || 1;
-        // Toe points AWAY from the body's vertical axis (foot in front of the
-        // stance). Sign was inverted before — feet pointed backward.
-        const forward = bodyCenterX != null && ankle.x < bodyCenterX ? 1 : -1;
-        const footLen = shinLen * 0.5;
-        tipX = ax + forward * footLen * sx;
-        tipY = ay + footLen * 0.28 * sy;
+        const len = shinLen * 0.45;
+        tipX = (ankle.x + v.x * len) * sx;
+        tipY = (ankle.y + v.y * len) * sy;
         estimated = true;
       }
 
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
       ctx.lineWidth = 2;
-      ctx.setLineDash(estimated ? [5, 4] : []); // dashed = live estimate
+      ctx.setLineDash(estimated ? [5, 4] : []); // dashed = estimate (no real toe)
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(tipX, tipY);

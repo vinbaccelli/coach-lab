@@ -27,6 +27,13 @@ export interface StroMotionProgress {
   total: number;
 }
 
+/** One frame's Auto-Detect input (box + optional pose scribble) for the atomic batch. */
+export interface StroAutoFrameSpec {
+  frameIndex: number;
+  selectionBox: StroMotionSubjectBox;
+  scribble?: Array<{ x: number; y: number }> | null;
+}
+
 export interface SyncDraftParams {
   objectType: StroMotionObjectType;
   backgroundTimeSec: number;
@@ -273,6 +280,107 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     }
   }, [invalidatePreview, videoRef, getBackgroundPlate]);
 
+  /**
+   * Auto Detect commit — ATOMIC. Builds every frame's proposal in memory (no
+   * draft writes), then commits the COMPLETE set in a single setDraft. Each
+   * committed frame carries sourceFrame + selectionBox + aiSnapshot + working +
+   * readyMask and status 'ready', so the FrameMaskEditor and Generate read the
+   * exact same committed state. This replaces the old N sequential per-frame
+   * commits, which interleaved with video seeks / re-syncs and could leave
+   * frames half-committed (no sourceFrame, or not export-ready).
+   */
+  const autoProcessFrames = useCallback(async (
+    specs: StroAutoFrameSpec[],
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<number> => {
+    const video = videoRef.current;
+    const current = draftRef.current;
+    if (!video || !current || specs.length === 0) return 0;
+
+    setStatus('proposing');
+    setProgress({ current: 0, total: specs.length });
+    const plate = await getBackgroundPlate(video, current).catch(() => null);
+
+    // Phase 1 — build ALL proposals in memory. No draft writes here, so nothing
+    // can interleave, re-sync, or leave a frame partially committed.
+    const built: Array<{
+      frameIndex: number;
+      selectionBox: StroMotionSubjectBox;
+      sourceFrame: ImageBitmap;
+      aiSnapshot: AlphaMask;
+      working: AlphaMask;
+    }> = [];
+    for (let i = 0; i < specs.length; i++) {
+      const spec = specs[i];
+      const frame = current.frames[spec.frameIndex];
+      if (frame) {
+        try {
+          const proposal = await proposeFrameMask(
+            video,
+            frame.timeSec,
+            spec.selectionBox,
+            current.backgroundTimeSec,
+            current.objectType,
+            plate,
+            spec.scribble ?? null,
+          );
+          if (proposal && maskHasContent(proposal.aiSnapshot)) {
+            built.push({
+              frameIndex: spec.frameIndex,
+              selectionBox: spec.selectionBox,
+              sourceFrame: proposal.sourceFrame,
+              aiSnapshot: proposal.aiSnapshot,
+              working: proposal.working,
+            });
+          } else if (proposal) {
+            try { proposal.sourceFrame.close(); } catch { /* closed */ }
+          }
+        } catch (err) {
+          console.error('[StroMotion] proposal build failed on frame', spec.frameIndex, err);
+        }
+      }
+      setProgress({ current: i + 1, total: specs.length });
+      onProgress?.(i + 1, specs.length);
+      // Yield so the paint loop keeps running (skeleton doesn't freeze mid-pass).
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    }
+
+    if (built.length === 0) {
+      setStatus('configuring');
+      setProgress({ current: 0, total: 0 });
+      return 0;
+    }
+
+    // Phase 2 — commit the COMPLETE set in ONE update. Every built frame becomes
+    // fully editable AND export-ready in the same commit.
+    setDraft((prev) => {
+      if (!prev) {
+        built.forEach((b) => { try { b.sourceFrame.close(); } catch { /* closed */ } });
+        return prev;
+      }
+      const byIndex = new Map(built.map((b) => [b.frameIndex, b]));
+      const frames = prev.frames.map((f) => {
+        const b = byIndex.get(f.index);
+        if (!b) return f;
+        if (f.sourceFrame) { try { f.sourceFrame.close(); } catch { /* closed */ } }
+        return {
+          ...f,
+          selectionBox: b.selectionBox,
+          sourceFrame: b.sourceFrame,
+          aiSnapshot: b.aiSnapshot,
+          working: b.working,
+          readyMask: cloneAlphaMask(b.working),
+          status: 'ready' as StroMotionFrameStatus,
+        };
+      });
+      return { ...prev, frames };
+    });
+    invalidatePreview();
+    setStatus('configuring');
+    setProgress({ current: 0, total: 0 });
+    return built.length;
+  }, [invalidatePreview, videoRef, getBackgroundPlate]);
+
   const updateFrameMask = useCallback((frameIndex: number, mask: AlphaMask) => {
     setDraft((prev) => {
       if (!prev) return prev;
@@ -408,6 +516,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     updateFrameTime,
     updateFrameLabel,
     selectAreaForFrame,
+    autoProcessFrames,
     updateFrameMask,
     resetFrameMask,
     reproposeFrameMask,
