@@ -4606,6 +4606,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const webcam = webcamVideoRef?.current;
         const showWebcamPip =
           webcamActiveRef.current &&
+          !isRecordingRef.current &&
           webcam &&
           webcam.videoWidth > 0 &&
           webcam.readyState >= 1 &&
