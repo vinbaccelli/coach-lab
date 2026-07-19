@@ -335,6 +335,9 @@ function Home() {
     registerRecordingSources,
     completedRecording,
     clearCompletedRecording,
+    updateWebcamStream,
+    isPipOpen,
+    reopenPipWindow,
   } = useRecording();
   const isRecording = globalRecState === 'recording' || globalRecState === 'paused' || globalRecState === 'stopped';
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
@@ -682,7 +685,7 @@ function Home() {
   // off. It is deliberately NOT derived from activeTool: re-clicking the
   // toolbar button (or tool changes) must never make the skeleton disappear.
   const [skeletonOn, setSkeletonOn] = useState(false);
-  const skeletonEnabled  = skeletonOn || (stroMotionActive && stroShowSkeleton);
+  const skeletonEnabled  = skeletonOn;
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const [skeletonConfirmOpen, setSkeletonConfirmOpen] = useState(false);
   const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
@@ -2170,7 +2173,7 @@ function Home() {
       onBuildVideoPreview={() => { void handleStroBuildVideoPreview(); }}
       onOpenPreview={() => setStroPreviewModalOpen(true)}
       showSkeleton={stroShowSkeleton}
-      onShowSkeletonChange={setStroShowSkeleton}
+      onShowSkeletonChange={(v: boolean) => { setStroShowSkeleton(v); setSkeletonOn(v); }}
       precomputedSampleTimes={stroEffectiveSampleTimes}
       background={stroBackground}
       onBackgroundChange={setStroBackground}
@@ -2212,7 +2215,6 @@ function Home() {
     setMeasurementColumn([]);
     setDataColumnActive(false);
     setShowMeasurementOverlays(false);
-    setSkeletonOn(false);
     setSkeletonLocked(false);
     skeletonFirstDetectedRef.current = false;
   }, []);
@@ -3413,7 +3415,10 @@ function Home() {
       setMicActive(false);
       setMicMuted(false);
     }
-  }, []);
+    // Toggling off mid-recording (independent of PiP-close) stops Source B only —
+    // the encode/captureStream pipeline is untouched.
+    if (isRecording) updateWebcamStream(null);
+  }, [isRecording, updateWebcamStream]);
 
   const startWebcam = useCallback(async () => {
     try {
@@ -3429,11 +3434,30 @@ function Home() {
       stream.getAudioTracks().forEach((t) => {
         t.enabled = true;
       });
+      // Re-enabling the camera while a recording is already active (e.g. after
+      // the coach closed the PiP window) resumes Source B from this frame on —
+      // no stop/restart of the ongoing MediaRecorder.
+      if (isRecording) {
+        updateWebcamStream(stream);
+        // The PiP being closed is what turned the camera off, so re-opening it is
+        // what makes the camera visible again. No-op when one is already open.
+        // requestWindow needs transient user activation: this runs after the
+        // getUserMedia await, which still holds activation on the re-enable path
+        // (camera permission is already granted, so it resolves immediately).
+        // If activation is lost anyway, reopenPipWindow resolves false and logs —
+        // Source B still records; only the floating window is missing.
+        if (!isPipOpen()) {
+          const opened = await reopenPipWindow();
+          if (!opened) {
+            console.warn('[page] PiP reopen skipped/failed — recording continues, camera still composited.');
+          }
+        }
+      }
     } catch (err) {
       console.error('[page] Webcam access denied:', err);
       setProcessingStatus('Could not access webcam. Please check browser permissions.');
     }
-  }, []);
+  }, [isRecording, updateWebcamStream, isPipOpen, reopenPipWindow]);
 
   const toggleWebcam = useCallback(async () => {
     if (webcamActive) stopWebcam();
@@ -3594,9 +3618,12 @@ function Home() {
   // engine snapshots the actual tracks at start() time, so these getters going
   // stale after navigation is harmless.
   useEffect(() => {
-    registerRecordingSources({ getWebcamStream, getMicStream });
+    // onWebcamClosedByPip: the coach closed the floating PiP mid-recording, which
+    // turns Source B off inside the engine. Run the SAME teardown the Hub's
+    // toggle-off runs so the button state (and the camera itself) match reality.
+    registerRecordingSources({ getWebcamStream, getMicStream, onWebcamClosedByPip: stopWebcam });
     return () => registerRecordingSources(null);
-  }, [registerRecordingSources, getWebcamStream, getMicStream]);
+  }, [registerRecordingSources, getWebcamStream, getMicStream, stopWebcam]);
 
   // Consume finished recordings (also covers "stopped while on another page" —
   // the blob waits in the provider until this page mounts again).
@@ -4700,7 +4727,6 @@ function Home() {
       c.clearAll();
       c.resetBallTrail();
     });
-    setSkeletonOverlayPaused(true);
     softClearStroMotion();
     resetMetrics();
   }, [applyMarkupToTargets, softClearStroMotion, resetMetrics]);

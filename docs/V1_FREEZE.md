@@ -5,7 +5,7 @@ subsystems that are **frozen** (working, verified, and off-limits to refactor)
 and the work that **remains**. Every subsystem finished during stabilization is
 added here.
 
-Last updated: 2026-07-17
+Last updated: 2026-07-19
 
 ---
 
@@ -39,9 +39,86 @@ The goal is stabilization only, not redesign.
 | ✅ Manual StroMotion workflow | `hooks/useStroMotion.ts` `selectAreaForFrame`, `finishStroRegionSelect` | `9cff403` |
 | ✅ Auto Detect editor workflow | `FrameMaskEditor` gate + committed frame `{sourceFrame, selectionBox, aiSnapshot, working, readyMask, status:'ready'}` | `9cff403` |
 | ✅ Generate pipeline architecture | `lib/stroMotionDraft/exportDraft.ts`, `compositeFromDraft.ts`, `frameMask.ts` (reads the committed draft) | `9cff403` |
+| ✅ Recording PiP subsystem | `contexts/RecordingContext.tsx`, `lib/pipRecorderSurface.ts`, `components/Canvas.tsx` webcam-PiP block (Source A suppression) | `2026-07-19`¹ |
+| ✅ Skeleton persistent on/off gate (Family B) | `app/analysis/page.tsx` (`skeletonEnabled` formula, StroMotion checkbox → `setSkeletonOn` mirror, `resetMetrics()`, `handleMarkupClear()`) | `2026-07-19`² |
 
 **Frozen means:** no refactor, no API change, no "cleanup". Bug fixes touching
 these require explicit approval (Rule 6).
+
+¹ No git repo is present in this working tree (`git rev-parse` fails), so this
+row cites the confirmation date instead of a commit hash, unlike the rows above.
+
+² Cites the confirmation date, not a commit hash — as of writing this fix is
+**uncommitted** in the working tree (verify with `git status` before assuming
+it has landed anywhere beyond the local checkout).
+
+### Recording PiP subsystem — confirmed behavior
+
+Verified end-to-end via live instrumentation + manual test on a real localhost
+session (no stale build, no service-worker contamination):
+
+- Meet-style floating camera + Pause/Resume/Stop + live timer, Document PiP,
+  survives tab/app switching (PiP window's own rAF drives the paint loop, not
+  throttled while the opener tab is hidden).
+- Entire-Screen share mode produces exactly ONE webcam in the output: the
+  on-canvas webcam (Source A) is suppressed while recording, and the composited
+  stamp (Source B) is skipped when `displaySurface === 'monitor'` — the floating
+  PiP window itself is the only camera the screen grab picks up.
+- Camera re-enable after closing the PiP mid-recording: the Recording Hub's
+  webcam toggle button syncs to "off" the moment the PiP closes
+  (`onWebcamClosedByPip`), and toggling it back on both feeds the live stream
+  into the active recording (`updateWebcamStream`) and re-opens a fresh PiP
+  window from that click's gesture (`reopenPipWindow`) — verified through a full
+  close → toggle-on → reopen cycle with no freeze and no recording gap.
+- Recording continuity is sacred throughout all of the above: `captureStream`,
+  `MediaRecorder`, and audio-track assembly are untouched by any of this — PiP
+  open/close/reopen only changes what the Source B region draws from.
+
+### Recording PiP subsystem — NOT yet tested
+
+Do not assume these are covered by the verification above:
+
+- **This-Tab / This-Window share modes** — only Entire-Screen has been verified.
+  The Source A/B suppression logic is `displaySurface`-gated, so behavior in
+  these modes is unconfirmed, not merely unverified-but-assumed-fine.
+- **An isolated 60+ second hidden-tab throttle test with the PiP left closed the
+  whole time** — the accepted-degradation fallback path (opener `setInterval`
+  throttling in a hidden tab) has not been exercised in isolation for a sustained
+  duration.
+- **PiP window drag/resize as a standalone check** — not verified separately
+  from the rest of the recording flow.
+
+### Skeleton persistent on/off gate (Family B) — confirmed behavior
+
+Verified live against running code (not just diff review):
+
+- **B1 (skeleton blanking on StroMotion exit):** turned the skeleton on via the
+  canonical toolbar toggle, entered StroMotion, exited fully back to top level,
+  re-checked state via the button's `data-active` attribute — held `true`
+  throughout. **CONFIRMED FIXED.**
+- **B2 (Clear-All silently disabling the skeleton):** with the skeleton on,
+  pressed Clear All (`handleMarkupClear`) — state held `true` after, no
+  confirmation dialog interfered. **CONFIRMED FIXED.**
+- **Canonical toolbar toggle:** confirmed still functions correctly, unchanged
+  code path, exercised repeatedly during testing.
+
+Scope of the fix (4 hunks, `app/analysis/page.tsx` only):
+- `skeletonEnabled` simplified from `skeletonOn || (stroMotionActive && stroShowSkeleton)`
+  to `skeletonOn` — one persistent flag, no longer collapses when StroMotion exits.
+- StroMotion-internal checkbox's `onShowSkeletonChange` now also calls
+  `setSkeletonOn`, in addition to the existing `setStroShowSkeleton` (which still
+  independently gates the StroMotion ghost-pose composite render in
+  `Canvas.tsx` — untouched, kept as its own concern per explicit decision).
+- `resetMetrics()` no longer calls `setSkeletonOn(false)`.
+- `handleMarkupClear()` (Clear-All) no longer calls `setSkeletonOverlayPaused(true)`.
+
+### Skeleton persistent on/off gate (Family B) — NOT yet tested
+
+- **StroMotion-internal checkbox's symmetric wiring** — the two-line change
+  where checking/unchecking the checkbox inside StroMotion's frame-review step
+  also flips `setSkeletonOn` has not been exercised live. That step is gated
+  behind "Upload video first," and no test video was available this session.
+  Lower risk than B1/B2 (it rides on already-verified gate logic), but unwatched.
 
 ---
 
@@ -49,8 +126,8 @@ these require explicit approval (Rule 6).
 
 | Area | Notes |
 |------|-------|
-| ⬜ Skeleton Stability | Live-path jitter/jump on slow devices (interpolation clamp, backpressure) — distinct from the (frozen) worker-recovery freeze |
-| ⬜ Recording Hub | Movable/resizable webcam overlay; post-record crop/trim; permission-prompt latency |
+| ⬜ Skeleton Stability — Family A | Live-path jitter/jump on slow devices (interpolation clamp, backpressure) — distinct from the (frozen) worker-recovery freeze and now also distinct from the frozen Family B on/off gate above |
+| ⬜ Recording Hub | Post-record crop/trim; permission-prompt latency (movable/resizable webcam overlay is now the frozen Recording PiP subsystem above) |
 | ⬜ Phone UI | Extended toolbar on phone; general mobile layout |
 | ⬜ Timeline Handles | Grab reliability after scrubbing (esp. right handle) |
 | ⬜ Generate Panel | Layout overlap on phone |

@@ -4,7 +4,7 @@
 maintain V1 discipline, write the Claude Code prompts, pick model/effort, and review output.
 **Purpose:** everything needed to make correct decisions and understand 100% of the work done so far.
 **Repo root:** `coach-lab/` (Next.js app). **Prod:** https://anglemotion.com
-**Phase:** V1 **stabilization** (bug fixes only — see §6). Last updated 2026‑07‑17.
+**Phase:** V1 **stabilization** (bug fixes only — see §6). Last updated 2026‑07‑19.
 
 ---
 
@@ -152,7 +152,11 @@ Recording/Playback RCA (both summarized in §7). Research docs for segmentation 
 Full text in **`docs/V1_FREEZE.md`**. Frozen subsystems (no refactor / no API change / no "cleanup" without
 explicit approval): **Worker Recovery, Pose Worker Architecture, Foot Line, shared `estimateFootVector`,
 Skeleton↔AI-measurement consistency, StroMotion Auto-Detect architecture, Atomic Auto-Detect commit, Manual
-StroMotion workflow, Auto-Detect editor workflow, Generate pipeline architecture.**
+StroMotion workflow, Auto-Detect editor workflow, Generate pipeline architecture, Recording PiP subsystem
+(`RecordingContext.tsx`, `lib/pipRecorderSurface.ts`, Canvas.tsx webcam-PiP block — Document PiP camera+controls,
+Source A/B dedup, camera re-enable/reopen mid-recording), Skeleton persistent on/off gate — Family B
+(`app/analysis/page.tsx` — `skeletonEnabled` formula, StroMotion checkbox mirror, `resetMetrics()`,
+`handleMarkupClear()`; see §7b and `docs/V1_FREEZE.md` for the confirmed/not-yet-tested split).**
 
 **Rules (binding):** (1) don't refactor frozen subsystems unless asked; (2) no unrequested quality/architecture
 improvements — fix only the reported bug; (3) preserve every existing API unless absolutely required; (4)
@@ -164,36 +168,61 @@ Also protected (CLAUDE.md §6): the analysis-mode ownership model and pose-prove
 
 ## 7. Open stabilization backlog + the two live RCAs
 
-**Remaining (from `docs/V1_FREEZE.md`):** Skeleton Stability · Recording Hub · Phone UI · Timeline Handles ·
-Generate Panel · Text tool · Final QA.
+**Remaining (from `docs/V1_FREEZE.md`):** Skeleton Stability — Family A (the on/off gate, Family B, is now
+**done**, see §6 and `docs/V1_FREEZE.md`) · Recording Hub (post-record crop/trim,
+permission-prompt latency — the movable/resizable webcam overlay item is now **done**, see the Recording PiP
+subsystem entry in §6 and `docs/V1_FREEZE.md`) · Phone UI · Timeline Handles · Generate Panel · Text tool ·
+Final QA.
 
-### 7a. Recording & Playback RCA (current target — verified)
+### 7a. Recording & Playback RCA (superseded in part — see update below)
 The active recorder is `RecordingContext` (getDisplayMedia); `ScreenRecorder.tsx` is dead code on `/analysis`.
 - **Unresponsive playback:** `RecordingContext.startRecording` runs a **second full-res 2-D compositor on the
   main thread**, driven by **both** a `requestAnimationFrame` loop **and** a `setInterval(paintOnce, 66)` —
   ~75 full-frame `drawImage`/sec for a 30 fps sink (`RecordingContext.tsx:242-276`). The Canvas loop isn't
   de-escalated during recording (`isRecordingRef` is write-only). Transport handlers contend on the main thread.
+  **Still open — unaffected by the PiP work below.**
 - **Secondary:** `WebcamSegmenter` runs MediaPipe selfie segmentation **synchronously on the main thread** +
-  blur double-draw per frame when cutout is on (`webcamSegmentation.ts:92-128`).
-- **Two webcam layers:** the getDisplayMedia capture already contains the on-screen canvas PiP (the *correct*,
-  cutout-aware one, `Canvas.tsx:4629-4642`); `RecordingContext.paintOnce` then **unconditionally stamps a
-  second raw PiP** (`:254-262`). Duplicate is created **at recording-time compositing** (not preview/export).
-- **Smallest fix:** delete the recorder's `recCanvas` compositor and **record the getDisplayMedia video track
-  directly** (+ the already-assembled audio tracks). One change removes both the duplicate PiP **and** the
-  second main-thread paint pipeline. Fallback if a compositor must stay: rAF-only, ≤30 fps, downscale,
+  blur double-draw per frame when cutout is on (`webcamSegmentation.ts:92-128`). **Still open.**
+- ~~**Two webcam layers:** the getDisplayMedia capture already contains the on-screen canvas PiP...;
+  `RecordingContext.paintOnce` then unconditionally stamps a second raw PiP.~~ **RESOLVED, confirmed 2026-07-19**
+  (live instrumentation + manual test): Source A (on-canvas webcam) is now suppressed while recording, and the
+  Source B stamp is skipped when `getVideoTracks()[0].getSettings().displaySurface === 'monitor'` — Entire-Screen
+  recordings contain exactly one webcam (the floating Document PiP window). See the Recording PiP subsystem entry
+  in §6 and the confirmed-behavior list in `docs/V1_FREEZE.md`. This-Tab/This-Window share modes are **not yet
+  verified** for the same dedup — see the NOT-yet-tested list in `docs/V1_FREEZE.md`.
+- **Smallest fix (still applies to the two items above):** delete the recorder's `recCanvas` compositor and
+  **record the getDisplayMedia video track directly** (+ the already-assembled audio tracks) — this would remove
+  both the second main-thread paint pipeline and (as a side effect) the two-webcam-layers duplication that
+  `isMonitor` gating fixes today more narrowly. Fallback if a compositor must stay: rAF-only, ≤30 fps, downscale,
   OffscreenCanvas worker. Second-order (only if cutout still lags): move `WebcamSegmenter` to a Worker.
   **Clear of all frozen subsystems** — do NOT route through `recordReplayToMp4` / `exportStroMotionVideo` (frozen).
+  Note: `RecordingContext.tsx` is now itself a frozen subsystem (§6) — this fix would need explicit approval
+  before touching it.
 
-### 7b. Skeleton subsystem RCA (next architectural target — no single source of truth)
-Visibility is the AND of ~6 flags split across page + Canvas (`skeletonOn`, `stroShowSkeleton`, derived
-`skeletonEnabled`, `skeletonEnabledRef`/`skeletonDrawEnabledRef`, internal `skeletonSuppressedRef`,
-`hiddenByTrackScope`, data-availability). Causes: **disappearance** = internal suppression the toolbar can't see
-(`redo` still sets `skeletonSuppressedRef=true`, `Canvas.tsx:2602` — same class as the fixed undo bug) +
-`hiddenByTrackScope` hiding the live skeleton outside baked ranges. **Freeze/impossible-positions** = the display
-interpolation blends `posePrev→poseLatest` and those samples are never reset on seek → it slides through
-impossible intermediate poses. **Isolated fixes:** remove `redo` suppression; reset interp samples on seek.
-**Architectural fix:** one owned visibility intent; render hides only for (a) intent off, (b) no pose. The
-`hiddenByTrackScope` policy borders AI-Track — get sign-off before changing it.
+### 7b. Skeleton subsystem RCA — split into two independent bug families
+
+The original RCA found visibility gated by the AND of ~6 flags split across page + Canvas (`skeletonOn`,
+`stroShowSkeleton`, derived `skeletonEnabled`, `skeletonEnabledRef`/`skeletonDrawEnabledRef`, internal
+`skeletonSuppressedRef`, `hiddenByTrackScope`, data-availability), producing two distinct failure modes:
+
+- **Family B — disappearance (skeleton ABSENT when it shouldn't be): DONE, frozen (§6).** Root cause:
+  `skeletonEnabled = skeletonOn || (stroMotionActive && stroShowSkeleton)` let StroMotion's own checkbox drive
+  visibility through a shadow flag that collapsed the moment `stroMotionActive` went false on exit (B1), and
+  Clear-All silently flipped the canonical `skeletonOn`/`skeletonOverlayPaused` flags off without the coach
+  pressing the actual toggle (B2). Fixed by collapsing the gate to `skeletonEnabled = skeletonOn` and making
+  every activation path (toolbar toggle + StroMotion checkbox) write through the one persistent flag; Clear-All
+  no longer touches it. B1 and B2 are **confirmed fixed live**; the StroMotion-checkbox wiring itself is
+  implemented but **not yet exercised live** (gated behind "Upload video first," no test video available this
+  session) — see the confirmed/not-yet-tested split in `docs/V1_FREEZE.md`.
+- **Family A — presence-but-wrong (freeze/jump/impossible-positions): NOT started, separate work.** The display
+  interpolation blends `posePrev→poseLatest` and those samples are never reset on seek → it slides through
+  impossible intermediate poses; `redo` still sets `skeletonSuppressedRef=true` (`Canvas.tsx:2602` — same class
+  as the fixed undo bug); `hiddenByTrackScope` hides the live skeleton outside baked ranges. This touches the
+  **Pose Worker / render-loop interpolation path, which is frozen (§6)** — any fix here needs its own
+  stop-and-justify (Rule 6) before writing code, independent of the Family B work above. **Isolated fixes (not
+  yet applied):** remove `redo` suppression; reset interp samples on seek. **Architectural fix (not yet
+  applied):** one owned visibility intent; render hides only for (a) intent off, (b) no pose. The
+  `hiddenByTrackScope` policy borders AI-Track — get sign-off before changing it.
 
 *(Text tool, phone Generate panel, timeline handle grab, phone toolbar expand remain scoped but un-diagnosed.)*
 
