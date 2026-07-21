@@ -45,6 +45,8 @@ export interface FrameMaskEditorProps {
   onMarkReadyAndNext?: () => void;
   onClose: () => void;
   isRegenerating?: boolean;
+  /** Tightens backdrop/panel padding and lets the header's text column shrink at narrow viewports. */
+  isMobile?: boolean;
 }
 
 export default function FrameMaskEditor({
@@ -64,6 +66,7 @@ export default function FrameMaskEditor({
   onMarkReadyAndNext,
   onClose,
   isRegenerating = false,
+  isMobile = false,
 }: FrameMaskEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -311,7 +314,7 @@ export default function FrameMaskEditor({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 16,
+        padding: isMobile ? 8 : 16,
       }}
     >
       <div
@@ -322,13 +325,13 @@ export default function FrameMaskEditor({
           background: '#1c1c1e',
           borderRadius: 14,
           border: '1px solid rgba(255,255,255,0.12)',
-          padding: 16,
+          padding: isMobile ? 12 : 16,
           color: '#fff',
         }}
       >
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, gap: 12 }}>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <strong style={{ fontSize: 16 }}>Refine background removal — {frameLabel}{framePosLabel}</strong>
             {frameStatus === 'ready' ? (
               <span style={{ marginLeft: 8, fontSize: 11, color: '#34C759', fontWeight: 700 }}>Ready</span>
@@ -343,7 +346,7 @@ export default function FrameMaskEditor({
               </p>
             ) : null}
           </div>
-          <button type="button" onClick={onClose} style={toolBtn}>Close</button>
+          <button type="button" onClick={onClose} style={{ ...toolBtn, flexShrink: 0 }}>Close</button>
         </div>
 
         {/* Toolbar — row 1: brush modes + size + undo/redo */}
@@ -504,6 +507,11 @@ export default function FrameMaskEditor({
               borderRadius: 8,
               border: '1px solid rgba(255,255,255,0.15)',
               maxHeight: 'min(72vh, 720px)',
+              // Canvas below is position:absolute (out of flow) so its zoomed +
+              // transformed size can never inflate this box or the panel's
+              // scrollable overflow — aspectRatio gives this container its own
+              // definite height instead of inheriting it from canvas's flow size.
+              aspectRatio: `${sourceFrame.width} / ${sourceFrame.height}`,
               touchAction: 'none',
               cursor: brushMode === 'flood-remove' ? 'cell' : 'none',
               background: '#000',
@@ -545,6 +553,14 @@ export default function FrameMaskEditor({
             <canvas
               ref={canvasRef}
               style={{
+                // Out of flow: at zoom > 1 this renders up to 400% of the
+                // container's width. In-flow + transform is the classic cross-
+                // browser case where overflow:hidden clips paint but not the
+                // scrollable-overflow rect. position:absolute removes it from
+                // flow entirely, so it can never affect any ancestor's box.
+                position: 'absolute',
+                top: 0,
+                left: 0,
                 width: `${zoom * 100}%`,
                 height: 'auto',
                 transform: `translate(${pan.x}px, ${pan.y}px)`,

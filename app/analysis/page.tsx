@@ -507,7 +507,16 @@ function Home() {
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
   const [drawContextActive, setDrawContextActive] = useState(false);
-  const [isMobile, setIsMobile]             = useState(false);
+  const [realIsMobileMQ, setRealIsMobileMQ] = useState(false);
+  // ─── TEMP-DEBUG-FORCEMOBILE — remove after toolbar phone verification ───────
+  // ?forceMobile=1 overrides the REAL media-query isMobile GLOBALLY, so the
+  // ENTIRE phone layout path (rail width, mobileChrome, tool strip, hub, reels
+  // gating) is forced consistently on a desktop viewport — no impossible
+  // compactRail=true / isMobile=false combo. tempForceMobile is populated from
+  // sessionStorage in the sticky effect further below; false until then.
+  const [tempForceMobile, setTempForceMobile] = useState(false);
+  const isMobile = realIsMobileMQ || tempForceMobile;
+  // ─── END TEMP-DEBUG-FORCEMOBILE ─────────────────────────────────────────────
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
   const [showMobileToolStrip, setShowMobileToolStrip] = useState(false);
   const reelsDesktopEarly = !isMobile && layoutMode === 'reels';
@@ -2515,7 +2524,7 @@ function Home() {
     const mq = window.matchMedia(
       '(max-width: 768px), ((hover: none) and (pointer: coarse) and (max-width: 1024px))',
     );
-    const onChange = () => setIsMobile(mq.matches);
+    const onChange = () => setRealIsMobileMQ(mq.matches);
     onChange();
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
@@ -2542,7 +2551,6 @@ function Home() {
   const TOOLBAR_EXPANDED_W = 240;
   const TOOLBAR_COLLAPSED_W = 60;
   const TOOLBAR_MOBILE_W = 60;
-  const TOOLBAR_MOBILE_FIXED_W = 60;
   const TOOLBAR_COMPACT_EXPANDED_W = 196;
   useEffect(() => {
     try {
@@ -2566,14 +2574,94 @@ function Home() {
     });
   }, []);
 
+  // NOTE: ?forceMobile=1 now flows through the GLOBAL isMobile override (declared
+  // with the isMobile state above), so compactToolbarRail is already true when
+  // forced — no separate toolbar-scoped derivation needed here.
+
   const toolbarWidthPx = useMemo(() => {
-    if (isMobile) return TOOLBAR_MOBILE_FIXED_W;
     if (compactToolbarRail) {
       return toolbarLabelsExpanded ? TOOLBAR_COMPACT_EXPANDED_W : TOOLBAR_MOBILE_W;
     }
     if (toolbarCollapsed) return TOOLBAR_COLLAPSED_W;
     return TOOLBAR_EXPANDED_W;
-  }, [isMobile, compactToolbarRail, toolbarCollapsed, toolbarLabelsExpanded]);
+  }, [compactToolbarRail, toolbarCollapsed, toolbarLabelsExpanded]);
+
+  // ─── TEMP-DEBUG (mobile toolbar-expand) — remove after phone verification ───
+  // Phone has no console, so surface live values on-screen (gated by ?debug=1).
+  // The measured width uses a ResizeObserver so it captures the settled value
+  // AFTER the 200ms width transition, not just the commit-time geometry.
+  const [tempDebugOn, setTempDebugOn] = useState(false);
+  const tempDebugAsideElRef = useRef<HTMLElement | null>(null); // attached DIRECTLY via ref= on the <aside>
+  const tempDebugLastLogRef = useRef<string>('');
+  // STICKY flag resolution. The OAuth login round-trip strips the query string:
+  // /analysis?debug=1 → (unauth) /login?debug=1&redirect=%2Fanalysis → callback
+  // redirects to the bare `redirect` value `/analysis` (no debug). So reading
+  // only window.location.search misses the flag after a login. Fix: persist to
+  // sessionStorage the moment ?debug=1 / ?forceMobile=1 is seen on ANY page
+  // (LoginClient does the same, so the flag survives the round-trip), and read
+  // URL-or-stored here. ?debug=0 / ?forceMobile=0 explicitly clears.
+  useEffect(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const resolveFlag = (param: string, ssKey: string): boolean => {
+        const v = sp.get(param);
+        if (v === '1') { window.sessionStorage.setItem(ssKey, '1'); return true; }
+        if (v === '0') { window.sessionStorage.removeItem(ssKey); return false; }
+        return window.sessionStorage.getItem(ssKey) === '1';
+      };
+      const dbg = resolveFlag('debug', 'am-temp-debug');
+      const fm = resolveFlag('forceMobile', 'am-temp-forcemobile');
+      setTempDebugOn(dbg);
+      setTempForceMobile(fm);
+      // Client-side confirmation line (phone/user can read it in their console).
+      // eslint-disable-next-line no-console
+      console.log(`[TEMP-DEBUG-OVERLAY] Home mounted | search='${window.location.search}' | debugOn=${dbg} | forceMobile=${fm}`);
+    } catch { /* noop */ }
+  }, []);
+  // ─── END TEMP-DEBUG ─────────────────────────────────────────────────────────
+
+  // ─── TEMP-DEBUG-GLOBAL — remove after toolbar verification ──────────────────
+  // SYNCHRONOUS render-body assignment (the mechanism that reliably worked
+  // before) — NOT a useEffect, since the effect version silently never ran
+  // (Fast-Refresh hook staleness on this hot file). Reads tempDebugAsideElRef,
+  // which is attached DIRECTLY via ref= on the <aside> (single ref, no callback,
+  // no ResizeObserver). The ref is populated from the PREVIOUS commit, so the
+  // width is at most one render stale — fine for a settled value.
+  //   toolbarWidthPx    — memo output (what we WANT the width to be)
+  //   asideInlineWidth  — what React actually wrote to el.style.width
+  //   asideOffsetWidth  — the element's REAL rendered box width (integer)
+  //   asideRectWidth    — real box width, fractional
+  //   asideTag          — confirms the read node really is the <aside>
+  // Read from any console at any time: window.__TEMP_DEBUG__
+  //   inline=60px  but offset=240  → layout clamp (real bug; likely flex min-width:auto → add minWidth:0)
+  //   inline=240px                 → width binding wrong (not toolbarWidthPx)
+  //   inline=60px & offset=60      → width IS correct; the old 240 reading was a stuck-observer artifact
+  if (typeof window !== 'undefined') {
+    const el = tempDebugAsideElRef.current;
+    const rect = el ? el.getBoundingClientRect() : null;
+    const payload = {
+      isMobile,
+      compactRail: compactToolbarRail,
+      labelsExpanded: toolbarLabelsExpanded,
+      forceMobile: tempForceMobile,
+      toolbarWidthPx,
+      asideInlineWidth: el ? el.style.width : '(no el yet)',
+      asideOffsetWidth: el ? el.offsetWidth : null,
+      asideRectWidth: rect ? Math.round(rect.width * 10) / 10 : null,
+      asideTag: el ? `${el.tagName}.${el.className}` : '(no el yet)',
+      ts: Date.now(),
+    };
+    (window as unknown as { __TEMP_DEBUG__?: unknown }).__TEMP_DEBUG__ = payload;
+    // De-duped console line (only when a meaningful value changes) so it proves
+    // the render-body code runs without flooding the console every render.
+    const sig = `${payload.toolbarWidthPx}|${payload.asideInlineWidth}|${payload.asideOffsetWidth}|${payload.asideTag}`;
+    if (sig !== tempDebugLastLogRef.current) {
+      tempDebugLastLogRef.current = sig;
+      // eslint-disable-next-line no-console
+      console.log('[TEMP-DEBUG-GLOBAL]', sig, JSON.stringify(payload));
+    }
+  }
+  // ─── END TEMP-DEBUG-GLOBAL ────────────────────────────────────────────────────
 
   const showToolbarRail = isMobile ? showMobileToolStrip : true;
 
@@ -5340,9 +5428,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         captureDownloadStatus={captureDownloadStatus}
         onDownloadCapture={handleDownloadCaptureBlob}
         onDismissCaptureDownload={handleDismissCaptureDownload}
-        hubIconOnly={isMobile || (compactToolbarRail && !toolbarLabelsExpanded)}
-        hubLabelsExpanded={isMobile ? false : toolbarLabelsExpanded}
-        onToggleHubLabels={isMobile ? undefined : () => setToolbarLabelsExpanded((v) => !v)}
+        hubIconOnly={compactToolbarRail && !toolbarLabelsExpanded}
+        hubLabelsExpanded={toolbarLabelsExpanded}
+        onToggleHubLabels={() => setToolbarLabelsExpanded((v) => !v)}
         captureBusy={captureBusy || embedCaptureRecording}
       />
     ),
@@ -5474,12 +5562,13 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     };
     return (
       <aside
+        ref={tempDebugAsideElRef} /* TEMP-DEBUG: direct handle to read real rendered rail width — remove later */
         data-tour-id="video-toolbar"
         className="anglemotion-video-toolbar"
         style={{
           flexShrink: 0,
           width: toolbarWidthPx,
-          ...(isMobile ? {} : { transition: 'width 200ms ease' }),
+          transition: 'width 200ms ease',
           display: 'flex',
           flexDirection: 'column',
           minHeight: 0,
@@ -7091,6 +7180,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             }}
             onClose={handleStroCloseFrameEditor}
             isRegenerating={stroProposingFrame && stroProposingFrameIndex === frame.index}
+            isMobile={isMobile}
           />
         );
       })() : null}
@@ -7608,6 +7698,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             onHoldSecondsChange={setGenerateHoldSec}
             onReplay={(ids) => { void handleWorkspaceReplay(ids); }}
             onRecordVideo={(ids) => { void recordReplayToMp4(ids); }}
+            isMobile={isMobile}
           />
         </React.Suspense>
       )}

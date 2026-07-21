@@ -626,7 +626,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     ? !toolbarLabelsExpanded
     : Boolean(iconOnlyLayout || mobileChrome || collapsed || phoneLayout);
   const io = iconOnlyMode;
-  const useVerticalThickness = Boolean((compactToolbarChrome || phoneLayout) && !mobileChrome && !io);
+  const useVerticalThickness = Boolean((compactToolbarChrome || phoneLayout) && !io);
   const rb = (active: boolean, pressed: boolean, iconOnly = io, dense = denseMobile || iconOnly): React.CSSProperties =>
     rowBase(active, pressed, iconOnly, dense);
   const textMuted = '#6E6E73';
