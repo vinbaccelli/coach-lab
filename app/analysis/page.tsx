@@ -7285,12 +7285,16 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   border: '2px solid rgba(0,122,255,0.3)', borderTopColor: '#007AFF',
                 }} />
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#007AFF' }}>
-                  Saving… this takes a few seconds (upload + player record + Google Doc).
+                  {ENABLE_GOOGLE_EXPORTS
+                    ? 'Saving… this takes a few seconds (upload + player record + Google Doc).'
+                    : 'Saving… this takes a few seconds.'}
                 </span>
               </div>
             ) : (
               <p style={{ margin: 0, fontSize: 13, color: '#6E6E73' }}>
-                Save to a player's docs, create a new player, or download directly.
+                {ENABLE_GOOGLE_EXPORTS
+                  ? "Save to a player's docs, create a new player, or download directly."
+                  : "Save to a player, create a new player, or download directly."}
               </p>
             )}
             {/* Create new player inline */}
@@ -7339,7 +7343,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       {p.display_name.charAt(0).toUpperCase()}
                     </span>
                     <span style={{ flex: 1 }}>{p.display_name}</span>
-                    <span style={{ fontSize: 11, color: '#6E6E73' }}>→ save to docs</span>
+                    <span style={{ fontSize: 11, color: '#6E6E73' }}>{ENABLE_GOOGLE_EXPORTS ? '→ save to docs' : '→ save'}</span>
                   </button>
                 ))}
               </div>
