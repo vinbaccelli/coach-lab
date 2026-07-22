@@ -7582,6 +7582,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             onHoldSecondsChange={setGenerateHoldSec}
             onReplay={(ids) => { void handleWorkspaceReplay(ids); }}
             onRecordVideo={(ids) => { void recordReplayToMp4(ids); }}
+            isMobile={isMobile}
           />
         </React.Suspense>
       )}

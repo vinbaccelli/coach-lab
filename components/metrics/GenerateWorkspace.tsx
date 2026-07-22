@@ -39,6 +39,8 @@ export interface GenerateWorkspaceProps {
   onReplay: (includedIds: string[]) => void;
   /** Record the replay to MP4 (workspace hides meanwhile). */
   onRecordVideo: (includedIds: string[]) => void;
+  /** Stack preview/controls vertically and give the panel a single scroll path at narrow viewports. */
+  isMobile?: boolean;
 }
 
 interface PlayerOption { id: string; display_name: string }
@@ -67,6 +69,7 @@ export default function GenerateWorkspace({
   onHoldSecondsChange,
   onReplay,
   onRecordVideo,
+  isMobile = false,
 }: GenerateWorkspaceProps) {
   // ── Local, non-destructive workspace state ────────────────────────────────
   const [order, setOrder] = useState<string[]>([]);
@@ -250,9 +253,12 @@ export default function GenerateWorkspace({
       }}
     >
       <div style={{
-        width: 'min(1280px, 100%)', height: 'min(860px, 96vh)',
+        width: isMobile ? 'min(480px, 100%)' : 'min(1280px, 100%)',
+        height: isMobile ? 'auto' : 'min(860px, 96vh)',
+        maxHeight: isMobile ? '92vh' : undefined,
         background: '#101014', borderRadius: 16, border: '1px solid rgba(255,255,255,0.12)',
-        color: '#fff', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        color: '#fff', display: 'flex', flexDirection: 'column',
+        overflowY: isMobile ? 'auto' : 'hidden', overflowX: 'hidden',
       }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
@@ -266,10 +272,16 @@ export default function GenerateWorkspace({
         </div>
 
         {/* Body */}
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 0 }}>
+        <div style={{
+          flex: isMobile ? undefined : 1, minHeight: isMobile ? undefined : 0,
+          display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 0,
+        }}>
           {/* Preview column */}
-          <div style={{ flex: '1 1 62%', minWidth: 0, display: 'flex', flexDirection: 'column', padding: 16, gap: 10 }}>
-            <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{
+            flex: isMobile ? 'none' : '1 1 62%', width: isMobile ? '100%' : undefined, minWidth: isMobile ? undefined : 0,
+            display: 'flex', flexDirection: 'column', padding: 16, gap: 10,
+          }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
               <button type="button" onClick={() => setPreviewTab('image')} style={previewTab === 'image' ? tabActive : tabIdle}>Image preview</button>
               <button type="button" onClick={() => setPreviewTab('video')} style={previewTab === 'video' ? tabActive : tabIdle}>Video preview</button>
               <div style={{ flex: 1 }} />
@@ -291,7 +303,13 @@ export default function GenerateWorkspace({
               </div>
             </div>
 
-            <div style={{ position: 'relative', flex: 1, minHeight: 0, borderRadius: 12, background: '#000', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+            <div style={{
+              position: 'relative',
+              flex: isMobile ? '0 0 auto' : 1, minHeight: isMobile ? undefined : 0,
+              aspectRatio: isMobile ? '16 / 9' : undefined,
+              borderRadius: 12, background: '#000', border: '1px solid rgba(255,255,255,0.1)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+            }}>
               {previewTab === 'image' && orderedSnaps.length > 1 && (() => {
                 const idx = orderedSnaps.findIndex((s) => s.id === selectedId);
                 const go = (dir: -1 | 1) => {
@@ -356,8 +374,21 @@ export default function GenerateWorkspace({
           </div>
 
           {/* Right column: snapshot list + export */}
-          <div style={{ flex: '1 1 38%', minWidth: 320, maxWidth: 460, borderLeft: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{
+            flex: isMobile ? 'none' : '1 1 38%',
+            width: isMobile ? '100%' : undefined,
+            minWidth: isMobile ? undefined : 320,
+            maxWidth: isMobile ? undefined : 460,
+            borderLeft: isMobile ? 'none' : '1px solid rgba(255,255,255,0.08)',
+            borderTop: isMobile ? '1px solid rgba(255,255,255,0.08)' : undefined,
+            background: '#101014',
+            display: 'flex', flexDirection: 'column', minHeight: isMobile ? undefined : 0,
+          }}>
+            <div style={{
+              flex: isMobile ? 'none' : 1, minHeight: isMobile ? undefined : 0,
+              overflowY: isMobile ? 'visible' : 'auto',
+              padding: 14, display: 'flex', flexDirection: 'column', gap: 8,
+            }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.7)' }}>
                 Snapshot sequence · {includedSnaps.length}/{orderedSnaps.length} included
               </div>
