@@ -29,11 +29,18 @@ pre-existing `GOOGLE_EXPORT_SCOPES` constant (untouched):
 | `lib/featureFlags.ts` | The two flag constants now derive from `NEXT_PUBLIC_GOOGLE_VERIFICATION_DEMO === '1'` instead of hardcoded `false`. Marked with `// TEMPORARY FOR GOOGLE OAUTH VERIFICATION`. |
 | `GOOGLE_VERIFICATION_DEMO.md` | This file. |
 
-That is the complete list. The 9 files that *consume* the flags
-(login/useAuth scope request, analysis page, GenerateWorkspace,
+That is the complete list. The files that *consume* the flags
+(LoginClient.tsx, hooks/useAuth.ts, components/WorkspaceChrome.tsx — all three
+sign-in scope requests — plus the analysis page, GenerateWorkspace,
 StroMotionPreviewModal, ManualMatchRecorder, AiMatchDecoderClient,
 exportService) are **unmodified** — they light up automatically when the flags
 are true, exactly as they were designed to after verification approval.
+
+Note (2026-07-22): `WorkspaceChrome.tsx`'s sign-in was found requesting the
+sensitive `documents`/`drive.file` scopes unconditionally, missing the
+`ENABLE_GOOGLE_EXPORTS` gate the other two sign-in sites have — fixed to match.
+Listed here explicitly so a future edit to any of these three doesn't drift
+out of sync again without being caught.
 
 ## Infrastructure (created for this)
 

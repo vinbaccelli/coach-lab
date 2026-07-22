@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import { ENABLE_GOOGLE_EXPORTS, GOOGLE_EXPORT_SCOPES } from '@/lib/featureFlags';
 import { LayoutGrid, LogIn, LogOut } from 'lucide-react';
 
 type Props = {
@@ -45,8 +46,15 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
       provider: 'google',
       options: {
         redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(window.location.pathname)}`,
-        scopes: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
-        queryParams: { access_type: 'offline', prompt: 'consent' },
+        // Sensitive scopes only when Google exports are enabled (post
+        // verification) — requesting them from an unverified app shows every
+        // user a scary warning screen. Keep in sync with LoginClient.tsx / useAuth.ts.
+        ...(ENABLE_GOOGLE_EXPORTS
+          ? {
+              scopes: GOOGLE_EXPORT_SCOPES,
+              queryParams: { access_type: 'offline', prompt: 'consent' },
+            }
+          : {}),
       },
     });
     if (error) console.error('Sign in error:', error.message);
