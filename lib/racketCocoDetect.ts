@@ -40,7 +40,7 @@ async function getRacketDetectorModel(): Promise<import('@tensorflow-models/coco
  */
 export async function detectTennisRacketNorm(
   video: HTMLVideoElement,
-  options?: { maxDetections?: number; minScore?: number; pad?: number },
+  options?: { maxDetections?: number; minScore?: number; pad?: number; subjectHint?: NormRect | null },
 ): Promise<NormRect | null> {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
@@ -52,8 +52,26 @@ export async function detectTennisRacketNorm(
 
   const model = await getRacketDetectorModel();
   const preds = await model.detect(video, maxDetections, minScore);
-  const racket = preds.find((p) => IMPLEMENT_CLASSES.has(p.class));
-  if (!racket) return null;
+  const rackets = preds.filter((p) => IMPLEMENT_CLASSES.has(p.class));
+  if (rackets.length === 0) return null;
+
+  // Prefer the implement NEAREST the subject (when a hint is supplied) over the
+  // first/highest-scoring one anywhere in frame — so a bystander's or opponent's
+  // racket is not chosen over the tracked subject's. Falls back to the first
+  // detection when no hint is given (prior behavior).
+  let racket = rackets[0];
+  const hint = options?.subjectHint;
+  if (hint) {
+    const hc = rectCenter(hint);
+    let bestDist = Infinity;
+    for (const cand of rackets) {
+      const [cbx, cby, cbw, cbh] = cand.bbox;
+      const cx = (cbx + cbw / 2) / vw;
+      const cy = (cby + cbh / 2) / vh;
+      const dist = Math.hypot(cx - hc.cx, cy - hc.cy);
+      if (dist < bestDist) { bestDist = dist; racket = cand; }
+    }
+  }
 
   let [bx, by, bw, bh] = racket.bbox;
   bw = Math.max(4, bw);

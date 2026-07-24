@@ -34,7 +34,7 @@ export default function PlayerSessionDetailClient({
           alignItems: 'center',
           gap: 6,
           fontSize: 13,
-          color: 'rgba(255,255,255,0.75)',
+          color: '#007AFF',
           textDecoration: 'none',
           marginBottom: 16,
         }}

@@ -73,12 +73,20 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
 
   const saveSheet = useCallback(async (rows: TechnicalSheetRow[]) => {
     setSheetSaving(true);
+    setErr(null);
     try {
-      await fetch(`/api/players/${playerId}`, {
+      const res = await fetch(`/api/players/${playerId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ technical_sheet: rows }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? 'Could not save the technical sheet');
+      }
+    } catch (e: unknown) {
+      // Surface the failure instead of reporting a silent false success.
+      setErr(e instanceof Error ? e.message : 'Could not save the technical sheet');
     } finally {
       setSheetSaving(false);
     }
@@ -151,6 +159,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const saveProfile = async () => {
     if (!player) return;
     setSaving(true);
+    setErr(null);
     try {
       const res = await fetch(`/api/players/${playerId}`, {
         method: 'PATCH',
@@ -190,10 +199,13 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   };
 
   if (loading) {
-    return <p style={{ color: 'rgba(255,255,255,0.65)' }}>Loading profile…</p>;
+    return <p style={{ color: '#57534e' }}>Loading profile…</p>;
   }
-  if (err || !player) {
-    return <p style={{ color: '#fca5a5' }}>{err ?? 'Player not found'}</p>;
+  // Only a genuinely-absent player is fatal (nothing to render). A failed
+  // save / new-session sets `err` while the player is still loaded — that is
+  // shown as a recoverable inline banner below, NOT a full-page unmount.
+  if (!player) {
+    return <p style={{ color: '#b91c1c' }}>{err || 'Player not found'}</p>;
   }
 
   return (
@@ -204,7 +216,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           display: 'inline-flex',
           alignItems: 'center',
           gap: 6,
-          color: 'rgba(255,255,255,0.75)',
+          color: '#007AFF',
           fontSize: 13,
           marginBottom: 16,
           textDecoration: 'none',
@@ -212,6 +224,24 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       >
         <ArrowLeft size={16} /> Players
       </Link>
+
+      {err ? (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 14,
+            padding: '10px 14px',
+            borderRadius: 10,
+            background: 'rgba(220,38,38,0.08)',
+            border: '1px solid rgba(220,38,38,0.25)',
+            color: '#b91c1c',
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          {err}
+        </div>
+      ) : null}
 
       <div style={{ ...panel, marginBottom: 18 }}>
         <h1 style={{ margin: '0 0 14px', fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em' }}>{player.display_name}</h1>
@@ -314,6 +344,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 type="button"
                 aria-label={`Delete ${row.label} row`}
                 onClick={() => {
+                  // Destructive AND global: this also removes the row from the
+                  // coach's default sheet for all future players. Confirm first.
+                  if (!window.confirm(`Delete the "${row.label}" row?\n\nThis also removes it from your default technical sheet for new players (existing players keep their rows).`)) return;
                   setSheet((prev) => {
                     if (!prev) return prev;
                     const next = prev.filter((_, j) => j !== i);

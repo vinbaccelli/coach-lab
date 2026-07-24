@@ -2306,7 +2306,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         onProcessingStatus?.('Scanning for racket…');
         try {
           const { detectTennisRacketNorm } = await import('@/lib/racketCocoDetect');
-          const r = await detectTennisRacketNorm(v);
+          // Anchor the suggestion to the tracked subject's hands (where a racket
+          // is held) so a bystander's/opponent's racket isn't picked over the
+          // subject's. Wrist keypoints are in video-pixel space → normalize to
+          // 0..1. No pose available → no hint → prior first-racket behavior.
+          const poseKps = poseLatestSampleRef.current?.kps;
+          let subjectHint: { x: number; y: number; w: number; h: number } | null = null;
+          if (poseKps && v.videoWidth > 0 && v.videoHeight > 0) {
+            const wrists = poseKps.filter((k) => k && k.score >= 0.2 && /wrist/i.test(k.name));
+            if (wrists.length > 0) {
+              const cx = Math.max(0, Math.min(1, wrists.reduce((s, k) => s + k.x / v.videoWidth, 0) / wrists.length));
+              const cy = Math.max(0, Math.min(1, wrists.reduce((s, k) => s + k.y / v.videoHeight, 0) / wrists.length));
+              // Only the hint's CENTER is used for nearest-racket selection; the
+              // nominal box just carries that centre through the NormRect shape.
+              subjectHint = { x: cx - 0.1, y: cy - 0.1, w: 0.2, h: 0.2 };
+            }
+          }
+          const r = await detectTennisRacketNorm(v, subjectHint ? { subjectHint } : undefined);
           if (cancelled || activeToolRef.current !== 'objectMultiplier' || objMultRegionRef.current) return;
           if (r) {
             racketSuggestNormRef.current = r;
