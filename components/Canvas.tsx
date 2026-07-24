@@ -4542,15 +4542,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }
           }
 
-          // Racket angle (dominant wrist → extended past wrist)
+          // Racket angle (dominant wrist → extended past wrist). Gated on the
+          // wrist alone, matching the AI-Detect column's own gate (page.tsx
+          // ~5295) — NOT the elbow too. The elbow is often low-confidence at
+          // contact (the hitting arm extended/occluded), which used to leave
+          // the column showing a value with no line drawn/draggable for it.
+          // When the elbow IS available it still drives the extension
+          // direction (unchanged); otherwise a default extension is drawn so
+          // there is always something for the coach to drag-correct.
           const lW = kps[9], rW = kps[10], lE = kps[7], rE = kps[8];
-          if (lS?.score >= scoreMin && rS?.score >= scoreMin) {
-            const bodyCenter = (lS.x + rS.x) / 2;
+          {
+            const bodyCenter = (lS?.score >= scoreMin && rS?.score >= scoreMin) ? (lS.x + rS.x) / 2 : 0;
             const domW = (rW?.score >= scoreMin && lW?.score >= scoreMin) ? (Math.abs(rW.x - bodyCenter) > Math.abs(lW.x - bodyCenter) ? rW : lW) : (rW?.score >= scoreMin ? rW : lW);
             const domE = (rW?.score >= scoreMin && lW?.score >= scoreMin) ? (Math.abs(rW.x - bodyCenter) > Math.abs(lW.x - bodyCenter) ? rE : lE) : (rW?.score >= scoreMin ? rE : lE);
-            if (domW?.score >= scoreMin && domE?.score >= scoreMin) {
-              const tipX = domW.x + (domW.x - domE.x) * 0.8;
-              const tipY = domW.y + (domW.y - domE.y) * 0.8;
+            if (domW?.score >= scoreMin) {
+              const tipX = domE?.score >= scoreMin ? domW.x + (domW.x - domE.x) * 0.8 : domW.x;
+              const tipY = domE?.score >= scoreMin ? domW.y + (domW.y - domE.y) * 0.8 : domW.y + vH * 0.08;
               drawArrow('racket', domW.x, domW.y, tipX, tipY);
             }
           }
@@ -6166,6 +6173,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const osx = vb.dw / (videoRef.current?.videoWidth || 1);
         const osy = vb.dh / (videoRef.current?.videoHeight || 1);
         const hitR = 26;
+        // Perpendicular tolerance for clicking an angle's LINE BODY (not just its
+        // endpoint dots). Kept tight so a nearby line can't steal a click; the
+        // nearest line (smallest perpendicular distance) wins.
+        const LINE_HIT_T = 12;
         const overlayEndpoints: Array<{ id: string; x1: number; y1: number; x2: number; y2: number }> = [];
         const sm = 0.2;
         const lS = kps[5], rS = kps[6], lH = kps[11], rH = kps[12];
@@ -6198,11 +6209,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             overlayEndpoints.push({ id: 'rfoot', x1: rA2.x, y1: rA2.y, x2: rToeH.x + (rToeH.x - rA2.x) * 0.15, y2: rToeH.y + (rToeH.y - rA2.y) * 0.15 });
           }
         }
-        if (lS?.score >= sm && rS?.score >= sm) {
-          const bc = (lS.x + rS.x) / 2;
+        {
+          // Mirrors the render block's gate + fallback exactly (wrist-only,
+          // elbow optional) so the hit target always matches the drawn line.
+          const bc = (lS?.score >= sm && rS?.score >= sm) ? (lS.x + rS.x) / 2 : 0;
           const dW = (rW2?.score >= sm && lW2?.score >= sm) ? (Math.abs(rW2.x - bc) > Math.abs(lW2.x - bc) ? rW2 : lW2) : (rW2?.score >= sm ? rW2 : lW2);
           const dE = (rW2?.score >= sm && lW2?.score >= sm) ? (Math.abs(rW2.x - bc) > Math.abs(lW2.x - bc) ? rE2 : lE2) : (rW2?.score >= sm ? rE2 : lE2);
-          if (dW?.score >= sm && dE?.score >= sm) overlayEndpoints.push({ id: 'racket', x1: dW.x, y1: dW.y, x2: dW.x + (dW.x - dE.x) * 0.8, y2: dW.y + (dW.y - dE.y) * 0.8 });
+          if (dW?.score >= sm) {
+            const tipX = dE?.score >= sm ? dW.x + (dW.x - dE.x) * 0.8 : dW.x;
+            const tipY = dE?.score >= sm ? dW.y + (dW.y - dE.y) * 0.8 : dW.y + (videoRef.current?.videoHeight || 0) * 0.08;
+            overlayEndpoints.push({ id: 'racket', x1: dW.x, y1: dW.y, x2: tipX, y2: tipY });
+          }
         }
 
         // Pick the GLOBALLY nearest endpoint across all overlays (not the first
@@ -6235,7 +6252,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             isDraggingRef.current = true;
             draggingOverlayRef.current = { id: eid, endpoint };
             const onMove = (me: PointerEvent) => {
-              const mp = getPosFromPointerEvent(me as any);
+              // Use the SAME zoom/pan-corrected mapper as the grab (getPos ->
+              // clientToLogical). getPosFromPointerEvent is canvas-px WITHOUT the
+              // zoom/pan inverse, so at zoom>1 / pan!=0 the dragged endpoint
+              // teleported by (cursor-W/2)*(zoom-1)+pan on the first move — read
+              // by coaches as "the grab landed far from the click".
+              const mp = getPosFromClientXY(me.clientX, me.clientY);
               const nx = (mp.x - vb.dx) / osx;
               const ny = (mp.y - vb.dy) / osy;
               const prev = overlayAdjustmentsRef.current[eid] ?? { dx1: 0, dy1: 0, dx2: 0, dy2: 0 };
@@ -6249,6 +6271,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const onUp = () => {
               isDraggingRef.current = false;
               draggingOverlayRef.current = null;
+              // Release the exclusive selection latch once the edit completes.
+              // It is set on every grab (above) and by a column-row click, and
+              // gates the hit-test to that one line (if activeId && ep.id!==activeId
+              // continue). Never resetting it meant that after editing any line,
+              // every OTHER line (e.g. hip) was locked out until the coach
+              // re-clicked its column row. Clearing here keeps the deliberate
+              // row-select→edit flow (row sets it, this drag clears it) while
+              // restoring free grabbing afterwards.
+              activeOverlayIdRef.current = null;
               // Recompute the angle from the dragged line so the dependent
               // column value follows what the coach drew (video-pixel coords).
               const a = overlayAdjustmentsRef.current[eid] ?? { dx1: 0, dy1: 0, dx2: 0, dy2: 0 };
@@ -6265,6 +6296,33 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             window.addEventListener('pointerup', onUp);
             e.preventDefault();
             return;
+          }
+          // FIX 2 — no endpoint was grabbed. If the click lands near a line BODY
+          // (within LINE_HIT_T perpendicular px), SELECT that line so lines are
+          // easy to hit, not just the small endpoint dots. NEAREST line wins
+          // (smallest perpendicular distance), so close/overlapping lines resolve
+          // to the intended one and a racket line can't steal a hip/shoulder
+          // click. This SELECTS (like a column-row click) rather than dragging —
+          // so a mid-line click never teleports an endpoint. Endpoint dragging
+          // above is unchanged.
+          if (!bestHit) {
+            let bestLineId: string | null = null;
+            let bestLineDist = LINE_HIT_T;
+            for (const ep of overlayEndpoints) {
+              const adj = overlayAdjustmentsRef.current[ep.id];
+              const ax = (ep.x1 + (adj?.dx1 ?? 0)) * osx + vb.dx;
+              const ay = (ep.y1 + (adj?.dy1 ?? 0)) * osy + vb.dy;
+              const bx = (ep.x2 + (adj?.dx2 ?? 0)) * osx + vb.dx;
+              const by = (ep.y2 + (adj?.dy2 ?? 0)) * osy + vb.dy;
+              const dSeg = distToSegment(pos, { x: ax, y: ay }, { x: bx, y: by });
+              if (dSeg < bestLineDist) { bestLineDist = dSeg; bestLineId = ep.id; }
+            }
+            if (bestLineId) {
+              activeOverlayIdRef.current = bestLineId;
+              renderDirtyRef.current = true;
+              e.preventDefault();
+              return;
+            }
           }
         }
       }
@@ -6326,9 +6384,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // active, sole drag target) so the coach picks WHICH line to edit.
           // Long-press / second click still opens the numeric edit prompt.
           if (mcItemsNow.length > 0) {
-            const rowsTop = mY + Math.round(28 * s);
-            const rowY = pos.y - rowsTop;
-            const rowIdx = Math.floor(rowY / rowH);
+            // Rows render with the text BASELINE at mY + 28*s + i*rowH (fillText
+            // draws UPWARD from the baseline, render at 5088). The old floor-from-
+            // top band was off by one — a click on a row's text resolved to the
+            // row ABOVE it. Round to the nearest rendered baseline so a click
+            // anywhere on row i's text/value selects row i.
+            const rowIdx = Math.round((pos.y - (mY + Math.round(28 * s))) / rowH);
             if (pos.x >= mX && pos.x <= mX + mW && rowIdx >= 0 && rowIdx < mcItemsNow.length) {
               const item = mcItemsNow[rowIdx];
               // Delete-mode: a row-click removes that measurement.
@@ -6337,16 +6398,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 e.preventDefault();
                 return;
               }
-              const lbl = item.label.toLowerCase();
-              // Map the column label to its overlay id.
-              const oid =
-                lbl.includes('shoulder') ? 'shoulder' :
-                lbl.includes('hip') ? 'hip' :
-                lbl.includes('head') ? 'head' :
-                (lbl.includes('left') && lbl.includes('foot')) ? 'lfoot' :
-                (lbl.includes('right') && lbl.includes('foot')) ? 'rfoot' :
-                lbl.includes('foot') ? 'lfoot' :
-                lbl.includes('racket') ? 'racket' : null;
+              // Map the measurement to its overlay line by its STABLE id prefix
+              // (ai-sa/ha/hd/lf/rf/ra), NOT a label substring. Substring matching
+              // mis-routed 'Shoulder-Hip Diff' (contains "shoulder") and
+              // 'Foot Distance' (contains "foot") onto real lines, and rows with no
+              // overlay (elbow/knee interior angles, diff, ruler) matched loosely.
+              // The id prefix is unambiguous and collision-free.
+              const OVERLAY_BY_ID: Record<string, string> = {
+                sa: 'shoulder', ha: 'hip', hd: 'head', lf: 'lfoot', rf: 'rfoot', ra: 'racket',
+              };
+              const oid = item.id.startsWith('ai-')
+                ? (OVERLAY_BY_ID[item.id.split('-')[1]] ?? null)
+                : null;
               if (oid && showMeasurementOverlaysRef.current) {
                 // Toggle: clicking the already-active line clears the selection.
                 activeOverlayIdRef.current = activeOverlayIdRef.current === oid ? null : oid;
