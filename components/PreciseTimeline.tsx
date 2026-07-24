@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nearestYoutubePlaybackRate } from '@/lib/videoController';
+import { tempDebugPointer } from '@/lib/tempDebugPointer'; // TEMP-DEBUG-POINTER — remove after phone touch investigation
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -323,6 +324,8 @@ export default function PreciseTimeline({
 
   const scrubTrackRef = useRef<HTMLDivElement | null>(null);
   const scrubbingRef = useRef(false);
+  /** pointerId that started the active scrub — used by the capture-loss fallback. */
+  const scrubPointerIdRef = useRef<number | null>(null);
   const phaseDragIdRef = useRef<string | null>(null);
   const trimDragRef = useRef<'start' | 'end' | null>(null);
   const sampleDragIdRef = useRef<string | null>(null);
@@ -334,6 +337,8 @@ export default function PreciseTimeline({
   const lastScrubCommitRef = useRef<number | null>(null);
   const lastTimeUiTsRef = useRef(0);
   const stepInFlightRef = useRef(false);
+  /** Net frame delta requested while a step seek is in flight (coalesced, not dropped). */
+  const pendingStepFramesRef = useRef(0);
 
   const applyTimeUi = useCallback((next: number) => {
     tRef.current = next;
@@ -436,6 +441,9 @@ export default function PreciseTimeline({
     scrubRafRef.current = 0;
     const pending = pendingScrubTimeRef.current;
     if (pending === null) return;
+    // Coalesced preview update — the thumb tracks the finger once per rAF, and
+    // still advances even when the seek itself is deduped below.
+    setScrubPreviewT(pending);
     if (source.kind === 'html') {
       const v = source.videoRef.current;
       if (!v) return;
@@ -576,18 +584,34 @@ export default function PreciseTimeline({
     const next = timeFromClientX(clientX);
     if (next === null) return;
     pendingScrubTimeRef.current = next;
-    setScrubPreviewT(next);
+    // Preview thumb is updated inside flushScrubSeek (the rAF-coalesced path),
+    // NOT here — so a fast drag re-renders once per animation frame, not once
+    // per raw pointer event.
     scheduleScrubSeek();
   }, [scheduleScrubSeek, timeFromClientX]);
 
   useEffect(() => {
+    // Pointer MOVE during a scrub is normally handled by the scrub track's own
+    // onPointerMove (pointer-capture-scoped to the dragging pointerId). This
+    // window listener is a FALLBACK that queues the SAME seek only when the
+    // element has LOST pointer capture mid-drag (common under mobile gesture
+    // arbitration). It is guarded by the active pointerId + a hasPointerCapture
+    // check, so it never double-fires while capture holds (that was the churn we
+    // removed) and never responds to a second, multi-touch pointer.
     const onWinMove = (e: PointerEvent) => {
       if (!scrubbingRef.current) return;
+      if (e.pointerId !== scrubPointerIdRef.current) return;
+      const el = scrubTrackRef.current;
+      if (el && el.hasPointerCapture(e.pointerId)) return;
       queueScrubAtClientX(e.clientX);
     };
-    const onWinUp = () => {
+    const onWinUp = (e: PointerEvent) => {
       if (!scrubbingRef.current) return;
+      // Only the active scrub pointer's up/cancel ends the drag (a stray second
+      // finger lifting must not terminate it).
+      if (e.pointerId !== scrubPointerIdRef.current) return;
       scrubbingRef.current = false;
+      scrubPointerIdRef.current = null;
       void finalizeScrub();
     };
     window.addEventListener('pointermove', onWinMove);
@@ -675,27 +699,46 @@ export default function PreciseTimeline({
   }, [beforePause, beforePlay, isPlaying, onPlayBlocked, source]);
 
   const stepFrame = useCallback((dir: 1 | -1, mult = 1) => {
-    if (stepInFlightRef.current) return;
+    const frames = dir * mult;
+    if (stepInFlightRef.current) {
+      // A step arrived while one is still resolving — accumulate the NET frame
+      // delta instead of dropping it, so a rapid burst of presses is honored
+      // (coalesced into the next seek), never silently lost.
+      pendingStepFramesRef.current += frames;
+      return;
+    }
     stepInFlightRef.current = true;
     void (async () => {
       try {
-        const dur = dRef.current;
-        const delta = dir * frameStepRef.current * mult;
-        if (source.kind === 'html') {
-          const v = source.videoRef.current;
-          if (!v) return;
-          const cur = v.currentTime;
-          const next = clamp(cur + delta, 0, dur || Math.max(cur + delta, 0));
-          await commitHtmlStep(next);
-          return;
+        let framesToApply = frames;
+        // Drain accumulated presses: each iteration coalesces ALL pending frames
+        // into a SINGLE seek (current-frame + net delta), so holding the control
+        // advances by the net delta without a runaway one-seek-per-press queue.
+        // A lone tap runs exactly one iteration — as immediate as before.
+        while (framesToApply !== 0) {
+          const step = frameStepRef.current;
+          const dur = dRef.current;
+          const delta = framesToApply * step;
+          if (source.kind === 'html') {
+            const v = source.videoRef.current;
+            if (!v) break;
+            const cur = v.currentTime;
+            const next = clamp(cur + delta, 0, dur || Math.max(cur + delta, 0));
+            await commitHtmlStep(next);
+          } else {
+            try {
+              source.playerRef.current?.pauseVideo?.();
+            } catch {
+              /* ignore */
+            }
+            const next = clamp(tRef.current + delta, 0, dur || tRef.current + delta);
+            await seekTo(next);
+          }
+          // Pick up anything requested during the awaited seek and coalesce it
+          // into the next iteration's single seek.
+          framesToApply = pendingStepFramesRef.current;
+          pendingStepFramesRef.current = 0;
         }
-        try {
-          source.playerRef.current?.pauseVideo?.();
-        } catch {
-          /* ignore */
-        }
-        const next = clamp(tRef.current + delta, 0, dur || tRef.current + delta);
-        await seekTo(next);
       } finally {
         stepInFlightRef.current = false;
       }
@@ -775,6 +818,38 @@ export default function PreciseTimeline({
   const thumbSize = phoneChrome ? 26 : 24;
   const scrubTrackH = phoneChrome ? 56 : 48;
 
+  // Trim-handle grab model: the ONLY draggable surface is an ABOVE-TRACK grab tab
+  // (rendered per handle below). The in-track body is a thin, always-inert stripe
+  // that just marks the exact trim boundary. Because the tabs live above the track
+  // and the playback ball lives on it, their grab-zones sit at different heights
+  // and can NEVER overlap — at any zoom or proximity.
+  const HANDLE_STRIPE_W = 3;                  // visible in-track boundary marker width
+  // Horizontal splay + edge behaviour: the start tab's RIGHT edge normally sits at
+  // the trim-start x and the body extends LEFT; the end tab's LEFT edge sits at the
+  // trim-end x and the body extends RIGHT — so as the two points converge the tabs
+  // splay outward and never stack. When a trim point reaches a track edge (e.g. the
+  // start point at the very BEGINNING) there is no room to extend outward, so the
+  // tab instead pins flush to that edge and extends INWARD at full size, staying
+  // fully on-screen and grabbable. It never overlaps the other tab (the start tab's
+  // right edge is capped at the end x, and vice-versa) and never falls back to an
+  // in-track grab. In the rare case of a tiny trim sliver parked against an edge the
+  // pinned tab simply shrinks to fit — the deliberate Option-B tradeoff.
+  const TRIM_TAB_W = phoneChrome ? 46 : 38;   // nominal tab width
+  const TRIM_TAB_H = phoneChrome ? 34 : 22;   // tab height (taller on touch for a comfortable target)
+  const TRIM_TAB_EDGE = 2;                    // keep the tab body a hair inside the track edge
+  // Prebuilt CSS geometry so the start/end tab styles below stay readable. sX/eX are
+  // the on-track x of each trim boundary; _tabA is the flush-to-edge threshold.
+  const _sX = `(10px + (100% - 20px) * ${trimStartPct / 100})`;
+  const _eX = `(10px + (100% - 20px) * ${trimEndPct / 100})`;
+  const _tabA = TRIM_TAB_EDGE + TRIM_TAB_W;
+  // Start tab right edge R = min(endX, max(startX, _tabA)); body extends left from R.
+  const _startR = `min(${_eX}, max(${_sX}, ${_tabA}px))`;
+  const trimStartTabRight = `calc(100% - ${_startR})`;
+  const trimStartTabWidth = `min(${TRIM_TAB_W}px, calc(${_startR} - ${TRIM_TAB_EDGE}px))`;
+  // End tab left edge L = max(startX, min(endX, 100% - _tabA)); body extends right from L.
+  const trimEndTabLeft = `max(${_sX}, min(${_eX}, calc(100% - ${_tabA}px)))`;
+  const trimEndTabWidth = `min(${TRIM_TAB_W}px, calc(100% - ${TRIM_TAB_EDGE}px - ${trimEndTabLeft}))`;
+
   return (
     <div data-tour-id="tour-timeline" style={shellStyle} aria-label="Timeline">
       {/* Full-width scrub bar — placed first so it stays visible above control chrome */}
@@ -802,7 +877,15 @@ export default function PreciseTimeline({
         }}
         onPointerDown={(e) => {
           if (d <= 0) return;
+          // Ignore a second concurrent press while a scrub is already active —
+          // otherwise a stray second finger captures its own pointer and hijacks
+          // the drag (multi-touch cross-talk).
+          if (scrubbingRef.current) return;
+          // The trim handles are now grabbed exclusively via their ABOVE-TRACK
+          // tabs, so the in-track region carries no handle grab-zone: a press
+          // anywhere on the track scrubs uniformly, with no near-handle dead zone.
           scrubbingRef.current = true;
+          scrubPointerIdRef.current = e.pointerId;
           lastScrubCommitRef.current = null;
           (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
           const v = source.kind === 'html' ? source.videoRef.current : null;
@@ -811,12 +894,17 @@ export default function PreciseTimeline({
         }}
         onPointerMove={(e) => {
           if (!scrubbingRef.current || d <= 0) return;
+          if (e.pointerId !== scrubPointerIdRef.current) return;
           if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
           queueScrubAtClientX(e.clientX);
         }}
         onPointerUp={(e) => {
           if (!scrubbingRef.current) return;
+          // Only the pointer that started the scrub may end it — lifting a stray
+          // second finger must not kill a still-active drag.
+          if (e.pointerId !== scrubPointerIdRef.current) return;
           scrubbingRef.current = false;
+          scrubPointerIdRef.current = null;
           try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
           void finalizeScrub();
         }}
@@ -865,71 +953,185 @@ export default function PreciseTimeline({
               }}
             />
             {/* Start handle — draggable when onTrimChange is provided. */}
-            <div
-              onPointerDown={onTrimChange ? (e) => {
-                e.stopPropagation();
-                trimDragRef.current = 'start';
-                (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-              } : undefined}
-              onPointerMove={onTrimChange ? (e) => {
-                if (trimDragRef.current !== 'start') return;
-                if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
-                e.stopPropagation();
-                const next = timeFromClientX(e.clientX);
-                if (next === null || !trimRange) return;
-                onTrimChange(clamp(next, 0, trimRange.end - 0.04), trimRange.end);
-              } : undefined}
-              onPointerUp={onTrimChange ? (e) => {
-                trimDragRef.current = null;
-                try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
-              } : undefined}
-              style={{
-                position: 'absolute',
-                left: `calc(10px + (100% - 20px) * ${trimStartPct / 100} - ${onTrimChange ? 6 : 1}px)`,
-                top: 2,
-                bottom: 2,
-                width: onTrimChange ? 12 : 2,
-                background: onTrimChange ? 'transparent' : trimAccent,
-                borderLeft: onTrimChange ? `3px solid ${trimAccent}` : undefined,
-                cursor: onTrimChange ? 'ew-resize' : 'default',
-                pointerEvents: onTrimChange ? 'auto' : 'none',
-                zIndex: 8,
-                touchAction: 'none',
-              }}
-            />
+            {onTrimChange ? (
+              <>
+                {/* In-track boundary marker: visible, ALWAYS inert. The grab moved
+                    to the above-track tab, so this only shows the exact trim
+                    boundary and never initiates a drag. */}
+                <div
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    left: `calc(10px + (100% - 20px) * ${trimStartPct / 100} - ${HANDLE_STRIPE_W / 2}px)`,
+                    top: 2,
+                    bottom: 2,
+                    width: HANDLE_STRIPE_W,
+                    background: trimAccent,
+                    pointerEvents: 'none',
+                    zIndex: 8,
+                  }}
+                />
+                {/* Above-track grab tab — the ONLY drag initiator for the start
+                    handle. Anchors its RIGHT edge at the trim-start x and extends
+                    LEFT (splaying away from the end tab as the points converge);
+                    shrinks to fit near the left edge but always stays above-track.
+                    Feeds pointer-x into the SAME timeFromClientX -> onTrimChange
+                    path — the clamp bounds and onTrimChange call are byte-identical
+                    to the previous in-track handle; only the grab location moved. */}
+                <div
+                  aria-label="Trim start — drag to adjust"
+                  title="Drag to set trim start"
+                  onPointerDown={(e) => {
+                    tempDebugPointer('tl-start', e.nativeEvent); // TEMP-DEBUG-POINTER
+                    e.stopPropagation();
+                    trimDragRef.current = 'start';
+                    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+                  }}
+                  onPointerMove={(e) => {
+                    if (trimDragRef.current !== 'start') return;
+                    if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+                    tempDebugPointer('tl-start', e.nativeEvent); // TEMP-DEBUG-POINTER
+                    e.stopPropagation();
+                    const next = timeFromClientX(e.clientX);
+                    if (next === null || !trimRange) return;
+                    onTrimChange(clamp(next, 0, trimRange.end - 0.04), trimRange.end);
+                  }}
+                  onPointerUp={(e) => {
+                    tempDebugPointer('tl-start', e.nativeEvent); // TEMP-DEBUG-POINTER
+                    trimDragRef.current = null;
+                    try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+                  }}
+                  style={{
+                    position: 'absolute',
+                    right: trimStartTabRight,
+                    width: trimStartTabWidth,
+                    top: -(TRIM_TAB_H + 2),
+                    height: TRIM_TAB_H,
+                    background: trimAccent,
+                    border: '1px solid rgba(0,0,0,0.35)',
+                    borderRadius: '7px 2px 2px 7px',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                    cursor: 'ew-resize',
+                    pointerEvents: 'auto',
+                    touchAction: 'none',
+                    zIndex: 10,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 3,
+                    boxSizing: 'border-box',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <span aria-hidden style={{ width: 2, height: '46%', borderRadius: 1, background: 'rgba(255,255,255,0.92)', pointerEvents: 'none' }} />
+                  <span aria-hidden style={{ width: 2, height: '46%', borderRadius: 1, background: 'rgba(255,255,255,0.92)', pointerEvents: 'none' }} />
+                </div>
+              </>
+            ) : (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `calc(10px + (100% - 20px) * ${trimStartPct / 100} - 1px)`,
+                  top: 2,
+                  bottom: 2,
+                  width: 2,
+                  background: trimAccent,
+                  pointerEvents: 'none',
+                  zIndex: 8,
+                  touchAction: 'none',
+                }}
+              />
+            )}
             {/* End handle */}
-            <div
-              onPointerDown={onTrimChange ? (e) => {
-                e.stopPropagation();
-                trimDragRef.current = 'end';
-                (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-              } : undefined}
-              onPointerMove={onTrimChange ? (e) => {
-                if (trimDragRef.current !== 'end') return;
-                if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
-                e.stopPropagation();
-                const next = timeFromClientX(e.clientX);
-                if (next === null || !trimRange) return;
-                onTrimChange(trimRange.start, clamp(next, trimRange.start + 0.04, d));
-              } : undefined}
-              onPointerUp={onTrimChange ? (e) => {
-                trimDragRef.current = null;
-                try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
-              } : undefined}
-              style={{
-                position: 'absolute',
-                left: `calc(10px + (100% - 20px) * ${trimEndPct / 100} - ${onTrimChange ? 6 : 1}px)`,
-                top: 2,
-                bottom: 2,
-                width: onTrimChange ? 12 : 2,
-                background: onTrimChange ? 'transparent' : trimAccent,
-                borderRight: onTrimChange ? `3px solid ${trimAccent}` : undefined,
-                cursor: onTrimChange ? 'ew-resize' : 'default',
-                pointerEvents: onTrimChange ? 'auto' : 'none',
-                zIndex: 8,
-                touchAction: 'none',
-              }}
-            />
+            {onTrimChange ? (
+              <>
+                {/* In-track boundary marker: visible, ALWAYS inert. The grab moved
+                    to the above-track tab, so this only shows the exact trim
+                    boundary and never initiates a drag. */}
+                <div
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    left: `calc(10px + (100% - 20px) * ${trimEndPct / 100} - ${HANDLE_STRIPE_W / 2}px)`,
+                    top: 2,
+                    bottom: 2,
+                    width: HANDLE_STRIPE_W,
+                    background: trimAccent,
+                    pointerEvents: 'none',
+                    zIndex: 8,
+                  }}
+                />
+                {/* Above-track grab tab — the ONLY drag initiator for the end
+                    handle. Anchors its LEFT edge at the trim-end x and extends
+                    RIGHT (splaying away from the start tab as the points converge);
+                    shrinks to fit near the right edge but always stays above-track.
+                    Feeds pointer-x into the SAME timeFromClientX -> onTrimChange
+                    path — the clamp bounds and onTrimChange call are byte-identical
+                    to the previous in-track handle; only the grab location moved. */}
+                <div
+                  aria-label="Trim end — drag to adjust"
+                  title="Drag to set trim end"
+                  onPointerDown={(e) => {
+                    tempDebugPointer('tl-end', e.nativeEvent); // TEMP-DEBUG-POINTER
+                    e.stopPropagation();
+                    trimDragRef.current = 'end';
+                    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+                  }}
+                  onPointerMove={(e) => {
+                    if (trimDragRef.current !== 'end') return;
+                    if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+                    tempDebugPointer('tl-end', e.nativeEvent); // TEMP-DEBUG-POINTER
+                    e.stopPropagation();
+                    const next = timeFromClientX(e.clientX);
+                    if (next === null || !trimRange) return;
+                    onTrimChange(trimRange.start, clamp(next, trimRange.start + 0.04, d));
+                  }}
+                  onPointerUp={(e) => {
+                    tempDebugPointer('tl-end', e.nativeEvent); // TEMP-DEBUG-POINTER
+                    trimDragRef.current = null;
+                    try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+                  }}
+                  style={{
+                    position: 'absolute',
+                    left: trimEndTabLeft,
+                    width: trimEndTabWidth,
+                    top: -(TRIM_TAB_H + 2),
+                    height: TRIM_TAB_H,
+                    background: trimAccent,
+                    border: '1px solid rgba(0,0,0,0.35)',
+                    borderRadius: '2px 7px 7px 2px',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                    cursor: 'ew-resize',
+                    pointerEvents: 'auto',
+                    touchAction: 'none',
+                    zIndex: 10,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 3,
+                    boxSizing: 'border-box',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <span aria-hidden style={{ width: 2, height: '46%', borderRadius: 1, background: 'rgba(255,255,255,0.92)', pointerEvents: 'none' }} />
+                  <span aria-hidden style={{ width: 2, height: '46%', borderRadius: 1, background: 'rgba(255,255,255,0.92)', pointerEvents: 'none' }} />
+                </div>
+              </>
+            ) : (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `calc(10px + (100% - 20px) * ${trimEndPct / 100} - 1px)`,
+                  top: 2,
+                  bottom: 2,
+                  width: 2,
+                  background: trimAccent,
+                  pointerEvents: 'none',
+                  zIndex: 8,
+                  touchAction: 'none',
+                }}
+              />
+            )}
           </>
         ) : null}
         {phaseMarkers && d > 0 ? phaseMarkers.map((m) => {
@@ -970,7 +1172,10 @@ export default function PreciseTimeline({
                 background: selected ? '#34C759' : 'rgba(52,199,89,0.75)',
                 border: selected ? '2px solid #fff' : '1px solid rgba(0,0,0,0.35)',
                 cursor: 'ew-resize',
-                zIndex: 3,
+                // Above the inert in-track trim stripe (z8) so a marker coincident
+                // with a trim boundary paints on top and stays grabbable. (The trim
+                // grab itself now lives on the above-track tab at z10.)
+                zIndex: 9,
                 boxSizing: 'border-box',
                 display: 'flex',
                 alignItems: 'flex-start',
@@ -1032,7 +1237,11 @@ export default function PreciseTimeline({
                 border: '2px solid rgba(255,255,255,0.9)',
                 boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
                 cursor: 'ew-resize',
-                zIndex: 4,
+                // Above the inert in-track trim stripe (z8): the first/last frame-stop
+                // balls sit exactly on the start/end boundaries, so the ball paints on
+                // top there and stays independently grabbable. (The handle grab now
+                // lives on the above-track tab at z10, clear of these on-track balls.)
+                zIndex: 9,
                 touchAction: 'none',
               }}
             />
