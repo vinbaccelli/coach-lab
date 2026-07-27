@@ -27,6 +27,14 @@ import {
 } from '@/lib/stroMotionDraft';
 import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 
+// TEMP-DEBUG-PHASE-MARKER — build-freshness probe ONLY. No editor logic depends
+// on this. Fires once when this module is EVALUATED (i.e. when the lazy chunk is
+// actually fetched and run by the browser), which is the question being asked:
+// is the browser running THIS source, or a cached bundle? Remove with the grep
+// tag once the pipeline question is settled.
+const PHASE_MARKER = '106245';
+console.log(`PHASE-MARKER-${PHASE_MARKER} [module-eval] FrameMaskEditor.tsx module evaluated`);
+
 export interface FrameMaskEditorProps {
   sourceFrame: ImageBitmap;
   mask: AlphaMask;
@@ -68,6 +76,11 @@ export default function FrameMaskEditor({
   isRegenerating = false,
   isMobile = false,
 }: FrameMaskEditorProps) {
+  // TEMP-DEBUG-PHASE-MARKER — fires on every render of THIS component instance.
+  // Together with the module-eval log above it separates "chunk never fetched"
+  // from "chunk fetched but component never rendered". Remove with the grep tag.
+  console.log(`PHASE-MARKER-${PHASE_MARKER} [render] FrameMaskEditor rendering`);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -178,32 +191,86 @@ export default function FrameMaskEditor({
 
   const applyAtPoint = useCallback(
     (clientX: number, clientY: number, isFirstInStroke = false) => {
+      console.log(
+        `[TEMP-DEBUG-BAIL] applyAtPoint entered, brushMode=${brushMode} isFirstInStroke=${isFirstInStroke} hasCanvasRef=${!!canvasRef.current}`,
+      );
       const canvas = canvasRef.current;
-      if (!canvas) return;
+      if (!canvas) {
+        console.log('[TEMP-DEBUG-BAIL] guard canvas: canvasRef.current=null -> BAILING');
+        return;
+      }
+      console.log('[TEMP-DEBUG-BAIL] guard canvas: present -> proceeding');
       const rect = canvas.getBoundingClientRect();
       // rect already accounts for CSS transform (zoom + pan), so this gives native canvas coords
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
       const x = (clientX - rect.left) * scaleX;
       const y = (clientY - rect.top) * scaleY;
+      const inBounds = x >= 0 && y >= 0 && x <= canvas.width && y <= canvas.height;
+      console.log(
+        `[TEMP-DEBUG-BAIL] coords: client=(${Math.round(clientX)},${Math.round(clientY)}) rect=(${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}x${Math.round(rect.height)}) ` +
+          `-> canvas=(${Math.round(x)},${Math.round(y)}) of ${canvas.width}x${canvas.height} inBounds=${inBounds} scaleX=${scaleX.toFixed(3)} scaleY=${scaleY.toFixed(3)}`,
+      );
+
+      const maskPresent = !!maskRef.current && !!maskRef.current.data;
+      console.log(
+        `[TEMP-DEBUG-BAIL] mask check: maskPresent=${maskPresent} maskDataLen=${maskRef.current?.data?.length ?? 'n/a'} maskWH=${maskRef.current?.width}x${maskRef.current?.height}`,
+      );
 
       // Push undo snapshot once per stroke (not per pixel)
       if (isFirstInStroke && !strokeUndoPushedRef.current) {
+        console.log('[TEMP-DEBUG-BAIL] undo snapshot: pushing (first-in-stroke, not yet pushed)');
         pushUndo({ ...maskRef.current, data: new Uint8ClampedArray(maskRef.current.data) });
         strokeUndoPushedRef.current = true;
+      } else {
+        console.log(
+          `[TEMP-DEBUG-BAIL] undo snapshot: skipped isFirstInStroke=${isFirstInStroke} alreadyPushed=${strokeUndoPushedRef.current}`,
+        );
       }
 
       let next: AlphaMask;
       if (brushMode === 'flood-remove' && sourcePixelsRef.current) {
+        console.log('[TEMP-DEBUG-BAIL] mode branch: flood-remove -> proceeding');
         next = floodRemoveInMask(maskRef.current, sourcePixelsRef.current, canvas.width, x, y);
       } else if (brushMode === 'add' || brushMode === 'remove') {
+        console.log(`[TEMP-DEBUG-BAIL] mode branch: ${brushMode} -> proceeding to applyBrushToMask`);
         next = applyBrushToMask(maskRef.current, x, y, brushSize * scaleX, brushMode);
+        console.log(
+          `[TEMP-DEBUG-BAIL] applyBrushToMask returned: sameRef=${next === maskRef.current} dataLen=${next?.data?.length}`,
+        );
       } else {
+        // TEMP-DEBUG-PAINT — the one silent no-op in this function: flood mode
+        // with no cached source pixels (getImageData failed / tainted canvas).
+        console.warn(
+          `[TEMP-DEBUG-PAINT] applyAtPoint NO-OP mode=${brushMode} sourcePixels=${!!sourcePixelsRef.current}`,
+        );
+        console.log(
+          `[TEMP-DEBUG-BAIL] guard mode-dispatch: brushMode=${brushMode} sourcePixelsPresent=${!!sourcePixelsRef.current} -> BAILING (fell through all branches)`,
+        );
         return;
       }
 
+      // TEMP-DEBUG-PAINT — first point of each stroke only (the O(w*h) count is
+      // too expensive per pointermove). Remove this block with the grep tag.
+      if (isFirstInStroke) {
+        let before = 0;
+        let after = 0;
+        for (let i = 0; i < next.data.length; i++) {
+          if (maskRef.current.data[i] > 0) before++;
+          if (next.data[i] > 0) after++;
+        }
+        console.log(
+          `[TEMP-DEBUG-PAINT] applyAtPoint mode=${brushMode} client=(${Math.round(clientX)},${Math.round(clientY)}) ` +
+            `→ canvas=(${Math.round(x)},${Math.round(y)}) of ${canvas.width}x${canvas.height} | ` +
+            `rect=${Math.round(rect.width)}x${Math.round(rect.height)} scaleX=${scaleX.toFixed(3)} ` +
+            `brushPx=${(brushSize * scaleX).toFixed(1)} | maskPx ${before}→${after} (delta ${after - before})`,
+        );
+      }
+
+      console.log('[TEMP-DEBUG-BAIL] reached end: calling maskRef.current=next then onMaskChange(next)');
       maskRef.current = next;
       onMaskChange(next);
+      console.log('[TEMP-DEBUG-BAIL] onMaskChange(next) call returned (onMaskChange is synchronous dispatch)');
     },
     [brushMode, brushSize, onMaskChange, pushUndo, zoom],
   );
@@ -223,6 +290,13 @@ export default function FrameMaskEditor({
       setAutoMatteBusy(false);
     }
   }, [onMaskChange, sourceFrame]);
+
+  // TEMP-DEBUG-REDRAW — instrumentation state for the overlay effect below.
+  // Purely diagnostic; remove this block and the log inside the effect with the
+  // grep tag. Does not participate in any render or draw decision.
+  const redrawCountRef = useRef(0);
+  const lastMaskIdentityRef = useRef<AlphaMask | null>(null);
+  const lastChecksumRef = useRef<number | null>(null);
 
   // Draw mask overlay on the edit canvas
   useEffect(() => {
@@ -250,6 +324,27 @@ export default function FrameMaskEditor({
       px[i * 4 + 3] = Math.max(px[i * 4 + 3], Math.round((a / 255) * 200));
     }
     ctx.putImageData(overlay, 0, 0);
+
+    // TEMP-DEBUG-REDRAW — did this effect re-run, did the MASK actually differ,
+    // and did the resulting PIXELS actually differ? Answers "paint works but
+    // screen never redraws" definitively. Read AFTER putImageData so the
+    // checksum reflects exactly what was committed to the visible canvas.
+    redrawCountRef.current += 1;
+    let maskPx = 0;
+    for (let i = 0; i < w * h; i++) if (mask.data[i] > 0) maskPx++;
+    let checksum = 0;
+    for (let i = 0; i < px.length; i += 997) checksum = (checksum + px[i] * (i % 251 + 1)) % 2147483647;
+    const sameMaskObject = lastMaskIdentityRef.current === mask;
+    const prevChecksum = lastChecksumRef.current;
+    console.log(
+      `[TEMP-DEBUG-REDRAW] overlay effect run #${redrawCountRef.current} canvas=${w}x${h} ` +
+        `isVisibleEditCanvas=${canvas === canvasRef.current} maskPx=${maskPx} of ${w * h} ` +
+        `sameMaskObjectAsLastRun=${sameMaskObject} checksum=${checksum} ` +
+        `prevChecksum=${prevChecksum === null ? 'none' : prevChecksum} ` +
+        `pixelsChanged=${prevChecksum === null ? 'n/a' : checksum !== prevChecksum}`,
+    );
+    lastMaskIdentityRef.current = mask;
+    lastChecksumRef.current = checksum;
 
   }, [sourceFrame, mask]);
 
@@ -329,6 +424,26 @@ export default function FrameMaskEditor({
           color: '#fff',
         }}
       >
+        {/* TEMP-DEBUG-PHASE-MARKER — unmistakable visible build stamp. Remove with
+            the grep tag once the build/serve question is settled. */}
+        <div
+          data-phase-marker={PHASE_MARKER}
+          style={{
+            background: '#FF00FF',
+            color: '#000',
+            fontWeight: 900,
+            fontSize: 20,
+            letterSpacing: 1,
+            textAlign: 'center',
+            padding: '10px 12px',
+            borderRadius: 8,
+            marginBottom: 12,
+            border: '3px solid #00FF00',
+          }}
+        >
+          MARKER-{PHASE_MARKER}
+        </div>
+
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, gap: 12 }}>
           <div style={{ minWidth: 0 }}>
@@ -570,18 +685,43 @@ export default function FrameMaskEditor({
                 display: 'block',
               }}
               onPointerDown={(e) => {
-                if (e.altKey && zoom > 1) return;
+                // TEMP-DEBUG-PAINT — proves whether React's handler on THIS canvas
+                // receives the stroke at all, independent of whether painting works.
+                console.log(
+                  `[TEMP-DEBUG-PAINT] canvas pointerdown target=<${(e.target as HTMLElement).tagName.toLowerCase()}> ` +
+                    `isEditCanvas=${e.target === canvasRef.current} button=${e.button} alt=${e.altKey} zoom=${zoom}`,
+                );
+                console.log(
+                  `[TEMP-DEBUG-BAIL] onPointerDown entered, brushMode=${brushMode} button=${e.button} altKey=${e.altKey} zoom=${zoom} pointerId=${e.pointerId} pointerType=${e.pointerType}`,
+                );
+                if (e.altKey && zoom > 1) {
+                  console.log(`[TEMP-DEBUG-BAIL] guard altKey-pan: altKey=${e.altKey} zoom=${zoom} (zoom>1) -> BAILING`);
+                  return;
+                }
+                console.log(`[TEMP-DEBUG-BAIL] guard altKey-pan: altKey=${e.altKey} zoom=${zoom} -> proceeding`);
                 paintingRef.current = true;
                 strokeUndoPushedRef.current = false;
                 (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+                console.log('[TEMP-DEBUG-BAIL] onPointerDown: paintingRef=true, calling applyAtPoint(isFirstInStroke=true)');
                 applyAtPoint(e.clientX, e.clientY, true);
               }}
               onPointerMove={(e) => {
-                if (!paintingRef.current || brushMode === 'flood-remove') return;
+                if (!paintingRef.current || brushMode === 'flood-remove') {
+                  console.log(
+                    `[TEMP-DEBUG-BAIL] onPointerMove guard: paintingRef=${paintingRef.current} brushMode=${brushMode} -> BAILING`,
+                  );
+                  return;
+                }
                 applyAtPoint(e.clientX, e.clientY, false);
               }}
-              onPointerUp={() => { paintingRef.current = false; strokeUndoPushedRef.current = false; }}
-              onPointerLeave={() => { paintingRef.current = false; strokeUndoPushedRef.current = false; }}
+              onPointerUp={() => {
+                console.log('[TEMP-DEBUG-BAIL] onPointerUp: paintingRef=false, strokeUndoPushedRef=false');
+                paintingRef.current = false; strokeUndoPushedRef.current = false;
+              }}
+              onPointerLeave={() => {
+                console.log('[TEMP-DEBUG-BAIL] onPointerLeave: paintingRef=false, strokeUndoPushedRef=false');
+                paintingRef.current = false; strokeUndoPushedRef.current = false;
+              }}
             />
             {/* Brush circle cursor */}
             {cursorPos && brushMode !== 'flood-remove' ? (

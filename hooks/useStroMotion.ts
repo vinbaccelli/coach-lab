@@ -382,6 +382,9 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   }, [invalidatePreview, videoRef, getBackgroundPlate]);
 
   const updateFrameMask = useCallback((frameIndex: number, mask: AlphaMask) => {
+    // TEMP-DEBUG-PAINT — the far end of the paint chain. If applyAtPoint logs but
+    // this does not, the break is in the onMaskChange wiring, not the brush.
+    console.log(`[TEMP-DEBUG-PAINT] updateFrameMask frame=${frameIndex} maskLen=${mask.data.length}`);
     setDraft((prev) => {
       if (!prev) return prev;
       const frames = prev.frames.map((f) =>

@@ -2981,9 +2981,35 @@ function Home() {
     canvasRefB.current?.clearAll();
   }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl]);
 
-  /** Full page reload should not inherit URL field or stale session state */
+  /**
+   * Full page reload should not inherit URL field or stale session state.
+   *
+   * RUN-ONCE, AND IT MUST STAY THAT WAY. This effect calls resetSession(), which
+   * calls cleanupVideoEl() — removeAttribute('src') + load() — destroying the
+   * coach's loaded video. It is only ever correct to do that at mount, before a
+   * video exists.
+   *
+   * The trap it fell into: the reload verdict is IMMUTABLE (the
+   * PerformanceNavigationTiming entry is fixed for the page's lifetime, so
+   * `nav.type === 'reload'` stays true forever), while the dep `resetSession` is
+   * a useCallback whose identity churns — resetSession depends on
+   * resetStroMotion (page.tsx:2982), which depends on StroMotion state
+   * (page.tsx:1387). So any StroMotion-state change re-ran this effect, found
+   * the reload verdict still true, and wiped the video out from under the coach
+   * mid-session: the "video disappears / no frame buttons" bug.
+   *
+   * The ref makes the effect idempotent, so no future dependency churn — from
+   * this chain or any other, including React Fast Refresh and StrictMode's
+   * double-invoke — can fire a second session reset. Do not replace it with a
+   * narrower dep array; that would fix one trigger and leave the class open.
+   */
+  const reloadResetDoneRef = useRef(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (reloadResetDoneRef.current) return;
+    // Latch BEFORE the work: the verdict is immutable, so evaluating it once is
+    // the whole contract, and a throw must not license a second attempt.
+    reloadResetDoneRef.current = true;
     try {
       const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
       if (nav?.type === 'reload') {

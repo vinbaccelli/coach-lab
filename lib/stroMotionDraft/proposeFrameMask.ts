@@ -2,7 +2,7 @@
 
 import { buildMatteAlphaMask } from '@/lib/objectMultiplier';
 import { normalizeObjectBox, type StroMotionSubjectBox } from '@/lib/stroMotion';
-import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureFrame';
+import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureSource';
 import { maskHasContent } from '@/lib/stroMotionDraft/frameMask';
 import { cloneAlphaMask, embedRegionMask, fillBoxMask } from '@/lib/stroMotionDraft/maskUtils';
 import type { AlphaMask, StroMotionObjectType } from '@/lib/stroMotionDraft/types';
