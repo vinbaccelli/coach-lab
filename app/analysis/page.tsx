@@ -1520,6 +1520,20 @@ function Home() {
     if (timeSec === undefined) return;
     setStroActiveFrameIndex(index);
     void seekStroVideo(timeSec);
+
+    // A frame that already carries a mask — from AI auto-detect or from a manual
+    // Select Area — opens straight into the editor. Auto-detect commits its
+    // result to the SAME `working` field the manual path writes, so this one
+    // branch serves both: the editor loads the AI's background removal as the
+    // working mask and every existing tool (add/remove brush, zoom, pan,
+    // selection scoping) operates on it with no AI-specific code path.
+    //
+    // Frames with no mask deliberately keep the old seek-only behaviour —
+    // opening the editor there would only show the "no selection yet"
+    // placeholder, so Select Area remains the way in.
+    if (frame && frameHasMask(frame) && frame.sourceFrame) {
+      setStroEditingFrameIndex(index);
+    }
   }, [seekStroVideo, stroEffectiveSampleTimes, stroMotionDraft, setStroActiveFrameIndex]);
 
   const finishStroRegionSelect = useCallback((
@@ -1537,7 +1551,10 @@ function Home() {
     const normalized = stroObjectType === 'player'
       ? normalizeSubjectBox(raw)
       : normalizeObjectBox(raw);
-    void selectStroAreaForFrame(index, normalized)
+    // seedFromSelectionBox: the coach just DREW this box, so the editor opens on
+    // a solid fill of it (blue = keep) and the add/remove brush is usable on the
+    // first stroke — no Auto BG needed. "Re-propose" deliberately omits this.
+    void selectStroAreaForFrame(index, normalized, { seedFromSelectionBox: true })
       .then((ok) => {
         setStroEditingFrameIndex(index);
         if (!ok) {
@@ -1633,6 +1650,35 @@ function Home() {
     return { det, fallback, kps };
   }, [videoRef, canvasRef, seekStroVideo]);
 
+  /**
+   * Read the APP'S EXISTING skeleton for a frame time and normalize it to
+   * FULL-FRAME [0,1] coordinates.
+   *
+   * Same three-rung source the angle/metric features use — baked Precision AI
+   * Track pose → the live playback cache → an on-demand detection — so background
+   * removal and the visible skeleton are always looking at the same joints, and
+   * any future improvement to the skeleton improves BG removal for free.
+   * Keypoints arrive in video-native pixels (poseWorkerBridge maps worker/bitmap
+   * space back before delivery), so normalizing is a plain divide.
+   */
+  const readExistingSkeletonNorm = useCallback(async (
+    timeSec: number,
+  ): Promise<Array<{ x: number; y: number; score: number }> | null> => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0) return null;
+    const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
+    const cached = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>(
+      (best, f) => (!best || Math.abs(f.timeSeconds - timeSec) < Math.abs(best.timeSeconds - timeSec) ? f : best),
+      null,
+    );
+    let kps = canvasRef.current?.getBakedPoseAt?.(timeSec)
+      ?? (cached && Math.abs(cached.timeSeconds - timeSec) < 0.2 ? cached.keypoints : null);
+    if (!kps) kps = await canvasRef.current?.detectPoseAtTime?.(timeSec) ?? null;
+    if (!kps?.length) return null;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    return kps.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0 }));
+  }, [videoRef, canvasRef]);
+
   // PLAYER-mode spec builder: pose → whole-body box + pose scribble. Returns a
   // spec for the atomic batch (autoProcessStroFrames) — it does NOT commit.
   const buildPlayerFrameSpec = useCallback(async (index: number): Promise<StroAutoFrameSpec | null> => {
@@ -1690,6 +1736,8 @@ function Home() {
         x, y, w: Math.min(vw, maxX + padX) - x, h: Math.min(vh, maxY + padY) - y,
       })),
       scribble: poseScribble(kps, vw, vh),
+      // Same joints, normalized — this is what builds the mask-limit zone.
+      keypoints: kps.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0 })),
     };
   }, [stroMotionDraft, videoRef, canvasRef, seekStroVideo]);
 
@@ -1777,6 +1825,11 @@ function Home() {
         frameIndex: results[i].index,
         selectionBox: normalizeObjectBox(subjectBoxFromRegion(b)),
         scribble: kps && vw && vh ? poseScribble(kps, vw, vh) : null,
+        // Same joints, normalized — builds the mask-limit zone. Object mode reads
+        // the existing skeleton exactly like player mode does.
+        keypoints: kps && vw && vh
+          ? kps.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0 }))
+          : null,
       });
     }
     return autoProcessStroFrames(specs, (done, total) =>
@@ -1792,6 +1845,12 @@ function Home() {
     const pending = draft.frames.filter((f) => !f.selectionBox).map((f) => ({ index: f.index, timeSec: f.timeSec }));
     if (pending.length === 0) { setProcessingStatus('All frames already have a selection.'); return; }
     stroAutoSelectBusyRef.current = true;
+    // Background removal is driven by the app's existing skeleton, so make sure it
+    // is on for the duration. If the coach already had it on it simply STAYS on
+    // (and persists into Generate); if we switched it on ourselves we switch it
+    // back off once the pass finishes, leaving their display choice untouched.
+    const skeletonWasOn = skeletonOn;
+    if (!skeletonWasOn) setSkeletonOn(true);
     try {
       let ok = 0;
       if (stroObjectType !== 'player') {
@@ -1836,8 +1895,9 @@ function Home() {
       setProcessingStatus('Auto-detect hit an error (see console). Try Select Area on a frame manually.');
     } finally {
       stroAutoSelectBusyRef.current = false;
+      if (!skeletonWasOn) setSkeletonOn(false);
     }
-  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, videoRef]);
+  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, videoRef, skeletonOn]);
 
   // SPEC: no auto-trigger. Opening StroMotion only opens the toolbar; the AI
   // pass starts when the coach presses "AI auto-detect" after choosing the
@@ -2981,9 +3041,35 @@ function Home() {
     canvasRefB.current?.clearAll();
   }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl]);
 
-  /** Full page reload should not inherit URL field or stale session state */
+  /**
+   * Full page reload should not inherit URL field or stale session state.
+   *
+   * RUN-ONCE, AND IT MUST STAY THAT WAY. This effect calls resetSession(), which
+   * calls cleanupVideoEl() — removeAttribute('src') + load() — destroying the
+   * coach's loaded video. It is only ever correct to do that at mount, before a
+   * video exists.
+   *
+   * The trap it fell into: the reload verdict is IMMUTABLE (the
+   * PerformanceNavigationTiming entry is fixed for the page's lifetime, so
+   * `nav.type === 'reload'` stays true forever), while the dep `resetSession` is
+   * a useCallback whose identity churns — resetSession depends on
+   * resetStroMotion (page.tsx:2982), which depends on StroMotion state
+   * (page.tsx:1387). So any StroMotion-state change re-ran this effect, found
+   * the reload verdict still true, and wiped the video out from under the coach
+   * mid-session: the "video disappears / no frame buttons" bug.
+   *
+   * The ref makes the effect idempotent, so no future dependency churn — from
+   * this chain or any other, including React Fast Refresh and StrictMode's
+   * double-invoke — can fire a second session reset. Do not replace it with a
+   * narrower dep array; that would fix one trigger and leave the class open.
+   */
+  const reloadResetDoneRef = useRef(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (reloadResetDoneRef.current) return;
+    // Latch BEFORE the work: the verdict is immutable, so evaluating it once is
+    // the whole contract, and a throw must not license a second attempt.
+    reloadResetDoneRef.current = true;
     try {
       const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
       if (nav?.type === 'reload') {
@@ -7163,10 +7249,14 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             proposalEmpty={!maskHasContent(frame.aiSnapshot) && !maskHasContent(frame.working)}
             backgroundPlate={stroMotionDraft.backgroundPlate}
             selectionBox={frame.selectionBox}
+            videoNativeSize={{ width: stroMotionDraft.videoWidth, height: stroMotionDraft.videoHeight }}
             onMaskChange={(mask) => updateFrameMask(frame.index, mask)}
             onReset={() => resetFrameMask(frame.index)}
-            onRegenerate={() => {
-              void reproposeFrameMask(frame.index).then(() => {
+            onRegenerate={async () => {
+              // Auto BG / Re-propose = auto-detect for this frame, same path,
+              // driven by the app's existing skeleton at this frame's time.
+              const kps = await readExistingSkeletonNorm(frame.timeSec);
+              await reproposeFrameMask(frame.index, { keypoints: kps }).then(() => {
                 void canvasRef.current?.waitForRender?.();
               });
             }}

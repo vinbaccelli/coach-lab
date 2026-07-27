@@ -3,7 +3,7 @@
 import { renderStroMotionDraftComposite } from '@/lib/stroMotionDraft/compositeFromDraft';
 import { exportStroMotionDraftPng } from '@/lib/stroMotionDraft/exportDraft';
 import { clearStroMotionDraft } from '@/lib/stroMotionDraft/clearDraft';
-import { cloneAlphaMask } from '@/lib/stroMotionDraft/maskUtils';
+import { cloneAlphaMask, fillBoxMask } from '@/lib/stroMotionDraft/maskUtils';
 import { countExportReadyFrames, maskHasContent, statusAfterMaskEdit } from '@/lib/stroMotionDraft/frameMask';
 import { hydrateDraftBitmapsForExport } from '@/lib/stroMotionDraft/exportDraft';
 import { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
@@ -32,6 +32,11 @@ export interface StroAutoFrameSpec {
   frameIndex: number;
   selectionBox: StroMotionSubjectBox;
   scribble?: Array<{ x: number; y: number }> | null;
+  /**
+   * The app's EXISTING skeleton for this frame — COCO-17, FULL-FRAME normalized.
+   * Read by page.tsx from the same source the angle/metric features use.
+   */
+  keypoints?: Array<{ x: number; y: number; score: number }> | null;
 }
 
 export interface SyncDraftParams {
@@ -215,6 +220,28 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       markReady?: boolean;
       /** Pose-derived scribble (normalized) → pose-anchored segmentation. */
       scribble?: Array<{ x: number; y: number }> | null;
+      /**
+       * Open the editor on a SOLID fill of the selection box (blue = keep)
+       * instead of the AI proposal.
+       *
+       * Set by the coach's manual "Select Area" path: the AI ladder can return a
+       * sparse matte, and a sparse mask gives the add/remove brush nothing
+       * meaningful to cut into — the coach then has to hit Auto BG (which mattes
+       * the WHOLE frame) just to get a workable starting mask. Seeding the drawn
+       * box solid makes Remove immediately meaningful and Add immediately
+       * extendable, with no Auto BG round-trip.
+       *
+       * Deliberately OFF for `reproposeFrameMask`, whose entire purpose is
+       * "re-run the AI proposal from scratch".
+       */
+      seedFromSelectionBox?: boolean;
+      /**
+       * Run the SAME skeleton-guided AI pipeline auto-detect uses. Set by the
+       * editor's Auto-BG / Re-propose so the two produce identical results.
+       */
+      useSkeletonGuidance?: boolean;
+      /** The app's existing skeleton for this frame (COCO-17, full-frame normalized). */
+      keypoints?: Array<{ x: number; y: number; score: number }> | null;
     },
   ): Promise<boolean> => {
     const video = videoRef.current;
@@ -239,11 +266,25 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         current.objectType,
         plate,
         opts?.scribble ?? null,
+        !!opts?.useSkeletonGuidance,
+        opts?.keypoints ?? null,
       );
 
       if (!proposal) return false;
 
       const hasProposal = maskHasContent(proposal.aiSnapshot);
+
+      // The mask the editor OPENS on. `padding: 0` so the blue region lands on
+      // exactly the box the coach drew — the same box the editor outlines in
+      // yellow — rather than fillBoxMask's default 4% bleed.
+      const working = opts?.seedFromSelectionBox
+        ? fillBoxMask(
+            proposal.sourceFrame.width,
+            proposal.sourceFrame.height,
+            selectionBox,
+            0,
+          )
+        : proposal.working;
 
       setDraft((prev) => {
         if (!prev) {
@@ -261,8 +302,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             selectionBox,
             sourceFrame: proposal.sourceFrame,
             aiSnapshot: proposal.aiSnapshot,
-            working: proposal.working,
-            readyMask: markReady ? cloneAlphaMask(proposal.working) : null,
+            working,
+            readyMask: markReady ? cloneAlphaMask(working) : null,
             status: (markReady ? 'ready' : 'edited') as StroMotionFrameStatus,
           };
         });
@@ -323,6 +364,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             current.objectType,
             plate,
             spec.scribble ?? null,
+            true,                       // skeleton guidance on
+            spec.keypoints ?? null,     // the app's existing skeleton, full-frame
           );
           if (proposal && maskHasContent(proposal.aiSnapshot)) {
             built.push({
@@ -382,6 +425,9 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   }, [invalidatePreview, videoRef, getBackgroundPlate]);
 
   const updateFrameMask = useCallback((frameIndex: number, mask: AlphaMask) => {
+    // TEMP-DEBUG-PAINT — the far end of the paint chain. If applyAtPoint logs but
+    // this does not, the break is in the onMaskChange wiring, not the brush.
+    console.log(`[TEMP-DEBUG-PAINT] updateFrameMask frame=${frameIndex} maskLen=${mask.data.length}`);
     setDraft((prev) => {
       if (!prev) return prev;
       const frames = prev.frames.map((f) =>
@@ -412,11 +458,19 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     invalidatePreview();
   }, [invalidatePreview]);
 
-  const reproposeFrameMask = useCallback(async (frameIndex: number): Promise<boolean> => {
+  const reproposeFrameMask = useCallback(async (
+    frameIndex: number,
+    opts?: { keypoints?: Array<{ x: number; y: number; score: number }> | null },
+  ): Promise<boolean> => {
     const current = draftRef.current;
     const frame = current?.frames[frameIndex];
     if (!frame?.selectionBox) return false;
-    return selectAreaForFrame(frameIndex, frame.selectionBox);
+    // Auto-BG / Re-propose IS auto-detect for one frame — same code path, same
+    // result. The caller supplies the existing skeleton via `opts.keypoints`.
+    return selectAreaForFrame(frameIndex, frame.selectionBox, {
+      useSkeletonGuidance: true,
+      keypoints: opts?.keypoints ?? null,
+    });
   }, [selectAreaForFrame]);
 
   const markFrameReady = useCallback((frameIndex: number): boolean => {

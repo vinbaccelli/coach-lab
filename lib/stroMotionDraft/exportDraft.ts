@@ -1,6 +1,6 @@
 'use client';
 
-import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureFrame';
+import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureSource';
 import { renderStroMotionDraftComposite } from '@/lib/stroMotionDraft/compositeFromDraft';
 import { countExportReadyFrames, getCompositeMask } from '@/lib/stroMotionDraft/frameMask';
 import type { StroMotionBackground, StroMotionDraft, StroMotionFrameDraft, StroMotionVideoOrder } from '@/lib/stroMotionDraft/types';

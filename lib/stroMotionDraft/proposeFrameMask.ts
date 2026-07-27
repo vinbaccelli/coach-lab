@@ -2,9 +2,9 @@
 
 import { buildMatteAlphaMask } from '@/lib/objectMultiplier';
 import { normalizeObjectBox, type StroMotionSubjectBox } from '@/lib/stroMotion';
-import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureFrame';
+import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureSource';
 import { maskHasContent } from '@/lib/stroMotionDraft/frameMask';
-import { cloneAlphaMask, embedRegionMask, fillBoxMask } from '@/lib/stroMotionDraft/maskUtils';
+import { cloneAlphaMask, embedRegionMask, fillBoxMask, intersectMaskWithBox, resampleAlphaMask } from "@/lib/stroMotionDraft/maskUtils";
 import type { AlphaMask, StroMotionObjectType } from '@/lib/stroMotionDraft/types';
 
 export interface ProposeFrameMaskResult {
@@ -232,6 +232,28 @@ export async function proposeFrameMask(
   backgroundPlate?: { bitmap: ImageBitmap; scale: number } | null,
   /** Pose-derived scribble (normalized points over athlete + implement). */
   scribble?: Array<{ x: number; y: number }> | null,
+  /**
+   * AI auto-detect only. Enables two skeleton-guided refinements:
+   *   1. the scribble is re-derived by posing the SELECTION-BOX CROP, so the
+   *      single-pose detector cannot lock onto a different human, and
+   *   2. the finished mask is filtered to components the skeleton reaches,
+   *      dropping detached background blobs (foliage) the segmenter let through.
+   * Off by default so the manual Select Area and Re-propose paths keep their
+   * exact current behaviour and pay no extra pose cost.
+   */
+  useSkeletonGuidance = false,
+  /**
+   * The APP'S EXISTING skeleton for this frame — COCO-17, FULL-FRAME NORMALIZED.
+   *
+   * Supplied by the caller (page.tsx reads it from the same source the angle and
+   * metric features use: baked AI-Track pose → live cache → on-demand detection).
+   * This replaces the short-lived separate crop-based detector, which returned 0
+   * joints on real footage. Reusing the app's skeleton also means every future
+   * improvement to it improves background removal for free, and the coach's LOCK
+   * tool already decides WHICH human it follows — so no cropping is needed to
+   * disambiguate people.
+   */
+  skeletonKeypoints?: Array<{ x: number; y: number; score: number }> | null,
 ): Promise<ProposeFrameMaskResult | null> {
   if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
@@ -242,12 +264,55 @@ export async function proposeFrameMask(
 
   let aiSnapshot: AlphaMask | null = null;
 
-  // 0. Pose-anchored segmentation — the athlete + implement, cut cleanly. Only
-  //    runs on the auto path (a scribble is present); falls through on failure.
-  if (scribble && scribble.length >= 2) {
+  // TEMP-DEBUG-SKELZONE — captured so the overlay can show WHERE each stage
+  // landed. Remove with the grep tag.
+  let dbgBounds: { x: number; y: number; w: number; h: number } | null = null;
+  let dbgPersonMask: AlphaMask | null = null;
+
+  // The skeleton used for the limit zone is the app's EXISTING one, handed in by
+  // the caller in FULL-FRAME normalized coordinates. Nothing here crops, so there
+  // is no crop→frame mapping to get wrong: the frame, the skeleton, the segmenter
+  // output and the mask all live in one coordinate space.
+  const guideScribble = scribble ?? null;
+  const guideKeypoints = useSkeletonGuidance ? (skeletonKeypoints ?? null) : null;
+
+  // 0a. PERSON SEGMENTATION (MediaPipe Selfie Segmentation) on the FULL FRAME.
+  //
+  //     Deliberately NOT cropped. Cropping bought a little model resolution but
+  //     paid for it with a crop→frame coordinate mapping on every mask, which is
+  //     precisely the class of bug that has cost us the most here. With the frame,
+  //     the skeleton, the segmenter output and the mask all in ONE space, there is
+  //     no mapping left to get wrong — the intersection below is a plain index-wise
+  //     AND over arrays of identical dimensions.
+  //
+  //     Picking the right human is handled upstream by the app's existing skeleton
+  //     (plus the coach's Lock tool), not by cropping.
+  //
+  //     KNOWN AND ACCEPTED FOR THIS PHASE: this model segments PEOPLE, so the
+  //     racket may come back missing or partial. That is Phase B.
+  if (useSkeletonGuidance) {
+    try {
+      const { segmentPersonInImage } = await import('@/lib/stroMotionDraft/selfieSegmenter');
+      const person = await segmentPersonInImage(sourceFrame);
+      if (person) {
+        // Guard rather than assume: the segmenter answers at the input's size, but
+        // if that ever changes, resample instead of silently misaligning.
+        const sized = resampleAlphaMask(person, vw, vh);
+        dbgPersonMask = sized; // TEMP-DEBUG-SKELZONE (pre-intersection)
+        if (maskHasContent(sized)) aiSnapshot = sized;
+      }
+    } catch {
+      aiSnapshot = null; // fall through to the scribble segmenter below
+    }
+  }
+
+  // 0b. Pose-anchored segmentation (MagicTouch) — retained as the fallback when
+  //     person segmentation is unavailable or finds nobody. Unlike 0a this model
+  //     is class-agnostic and prompted, so it can pick up the implement too.
+  if (!maskHasContent(aiSnapshot) && guideScribble && guideScribble.length >= 2) {
     try {
       const { segmentSubjectMask } = await import('@/lib/mediapipeSegmenter');
-      const seg = await segmentSubjectMask(sourceFrame, scribble, vw, vh);
+      const seg = await segmentSubjectMask(sourceFrame, guideScribble, vw, vh);
       if (seg && maskHasContent(seg)) aiSnapshot = seg;
     } catch {
       aiSnapshot = null;
@@ -285,9 +350,63 @@ export async function proposeFrameMask(
     aiSnapshot = await matteMaskInSelection(sourceFrame, box, vw, vh);
   }
 
+  // 2b. HARD LIMIT — the mask may only exist inside the thickened-skeleton zone.
+  //
+  //     final = segmenter_output ∩ zone, enforced. Placed AFTER every rung so it
+  //     bounds whichever one produced the mask, and BEFORE the rung-3 guarantee so
+  //     an empty result falls through to the box fill rather than to a blank frame.
+  //
+  //     There is NO path here that leaves a mask unbounded. Previously this block
+  //     applied the filter only `if (filtered.applied)`, and the filter itself
+  //     declined on a weak pose — so on precisely the frames where the segmenter
+  //     grabs crowd and scenery, the unfiltered mask sailed through. In a
+  //     StroMotion composite a single leaked blob overlays every later frame and
+  //     hides the athlete, so the limit has to hold on every frame or it is not a
+  //     limit. When no zone can be built, the coach's selection box is used as the
+  //     boundary instead — weaker, but still hard.
+  if (useSkeletonGuidance && aiSnapshot && maskHasContent(aiSnapshot)) {
+    let bounded: AlphaMask | null = null;
+    if (guideKeypoints) {
+      try {
+        const { filterMaskBySkeletonShape } = await import('@/lib/stroMotionDraft/skeletonMaskFilter');
+        const filtered = filterMaskBySkeletonShape(aiSnapshot, guideKeypoints);
+        if (filtered.applied) bounded = filtered.mask;
+      } catch {
+        bounded = null;
+      }
+    }
+    // No usable zone (pose too weak, or the filter threw) — fall back to the
+    // selection box so the mask is still hard-bounded to what the coach chose.
+    if (!bounded) bounded = intersectMaskWithBox(aiSnapshot, box, 0);
+    aiSnapshot = bounded;
+  }
+
   // 3. Guaranteed non-empty proposal.
   if (!maskHasContent(aiSnapshot)) {
     aiSnapshot = fillBoxMask(vw, vh, box);
+  }
+
+  // TEMP-DEBUG-SKELZONE — render skeleton + zone + segmenter output over the
+  // frame so the alignment (or lack of it) is visible. Remove with the grep tag.
+  if (useSkeletonGuidance) {
+    try {
+      const [{ renderSkeletonDebug }, { buildSkeletonShapeRegion }] = await Promise.all([
+        import('@/lib/stroMotionDraft/skeletonDebugOverlay'),
+        import('@/lib/stroMotionDraft/skeletonMaskFilter'),
+      ]);
+      const zone = guideKeypoints
+        ? buildSkeletonShapeRegion(guideKeypoints, vw, vh)?.region ?? null
+        : null;
+      renderSkeletonDebug({
+        label: `t=${timeSec.toFixed(2)}s`,
+        sourceFrame,
+        keypoints: guideKeypoints,
+        zone,
+        personMask: dbgPersonMask,
+        bounds: dbgBounds,
+        finalMask: aiSnapshot,
+      });
+    } catch { /* diagnostics must never break the pipeline */ }
   }
 
   return {
