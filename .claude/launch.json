@@ -12,6 +12,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["next", "dev", "--port", "3001"],
       "port": 3001
+    },
+    {
+      "name": "coachlab-verify",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "--port", "3007"],
+      "port": 3007
     }
   ]
 }
