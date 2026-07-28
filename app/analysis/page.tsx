@@ -31,7 +31,8 @@ import YouTubeEmbed from '@/components/YouTubeEmbed';
 import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
-import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
+import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
+import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
 import { useStroMotion } from '@/hooks/useStroMotion';
 const StroMotionPanel = React.lazy(() => import('@/components/StroMotionPanel'));
 const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/SnapshotScrollPanel'));
@@ -1428,6 +1429,13 @@ function Home() {
     }
   }, [stroMotionDraft, stroMotionStatus, stroPreviewVideoUrl]);
 
+  /**
+   * YouTube authorization — a SEPARATE Google grant from sign-in (Google refuses
+   * to issue youtube.upload alongside drive.file), so being signed in says
+   * nothing about being able to upload. Drives the post-recording toast.
+   */
+  const youtubeConn = useYouTubeConnection(ENABLE_YOUTUBE_UPLOAD);
+
   const seekStroVideo = useCallback(async (timeSec: number) => {
     const v = videoRef.current;
     if (!v) return;
@@ -1520,6 +1528,20 @@ function Home() {
     if (timeSec === undefined) return;
     setStroActiveFrameIndex(index);
     void seekStroVideo(timeSec);
+
+    // A frame that already carries a mask — from AI auto-detect or from a manual
+    // Select Area — opens straight into the editor. Auto-detect commits its
+    // result to the SAME `working` field the manual path writes, so this one
+    // branch serves both: the editor loads the AI's background removal as the
+    // working mask and every existing tool (add/remove brush, zoom, pan,
+    // selection scoping) operates on it with no AI-specific code path.
+    //
+    // Frames with no mask deliberately keep the old seek-only behaviour —
+    // opening the editor there would only show the "no selection yet"
+    // placeholder, so Select Area remains the way in.
+    if (frame && frameHasMask(frame) && frame.sourceFrame) {
+      setStroEditingFrameIndex(index);
+    }
   }, [seekStroVideo, stroEffectiveSampleTimes, stroMotionDraft, setStroActiveFrameIndex]);
 
   const finishStroRegionSelect = useCallback((
@@ -1537,7 +1559,10 @@ function Home() {
     const normalized = stroObjectType === 'player'
       ? normalizeSubjectBox(raw)
       : normalizeObjectBox(raw);
-    void selectStroAreaForFrame(index, normalized)
+    // seedFromSelectionBox: the coach just DREW this box, so the editor opens on
+    // a solid fill of it (blue = keep) and the add/remove brush is usable on the
+    // first stroke — no Auto BG needed. "Re-propose" deliberately omits this.
+    void selectStroAreaForFrame(index, normalized, { seedFromSelectionBox: true })
       .then((ok) => {
         setStroEditingFrameIndex(index);
         if (!ok) {
@@ -1633,6 +1658,182 @@ function Home() {
     return { det, fallback, kps };
   }, [videoRef, canvasRef, seekStroVideo]);
 
+  /**
+   * The pose for EXACTLY `timeSec`, in video-native pixels. ONE resolver, shared
+   * by the auto pass and by Auto-BG / Redo mask, so those two can never disagree.
+   *
+   * WHY THIS REPLACED THE OLD THREE-RUNG READ
+   * The old order was: baked → live playback cache (±0.2s) → on-demand detection.
+   * That middle rung is where the skeleton offset came from. It accepted the
+   * NEAREST cached pose within 0.2s — at 30fps, a pose from up to six frames away
+   * — and those cache entries are stamped with `video.currentTime` at the moment
+   * the worker's result ARRIVES, not the time of the frame that was sent, so they
+   * are systematically late on top of being approximate. Building the limit zone
+   * from a pose belonging to a different frame translates the whole zone off the
+   * athlete, which is exactly the symptom that was reported.
+   *
+   * The replacement is not a longer wait — there is nothing to wait for. The
+   * capture path seeks a dedicated mirror element and AWAITS its `seeked` event
+   * before decoding (captureFrame.ts), and `detectPoseAtTime` runs the detector on
+   * that very bitmap, at the same timeSec, through the same serialized capture
+   * queue as the frame the mask is built from. So the exact answer is available by
+   * awaiting, and it is exact by construction rather than by timing.
+   *
+   * Baked Precision AI Track data still wins when it genuinely covers the time:
+   * it is MediaPipe heavy run on exactly-seeked frames, sampled at 30–60fps and
+   * interpolated, which is a better skeleton than an on-demand MoveNet pass. It is
+   * only trusted INSIDE a track's range, though — `lookupBakedPose` clamps to the
+   * nearest end sample for times outside it, and `findBakedTrack` tolerates 0.1s
+   * of overhang, so near a boundary "baked" can quietly mean "the pose from up to
+   * 0.1s away". `isRangeBaked(t - m, t + m)` reduces to `start <= t && end >= t`,
+   * which is the strict-inside test that shuts that door.
+   *
+   * There is deliberately NO cache fallback when the detection fails. A wrong-frame
+   * zone is worse than no zone: with no keypoints, proposeFrameMask bounds the mask
+   * by the coach's own selection box, which is still hard and still on-position.
+   */
+  const resolveExactPoseAt = useCallback(async (
+    timeSec: number,
+  ): Promise<{ kps: Array<{ x: number; y: number; score: number }> | null; source: 'baked' | 'exact' | 'none' }> => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { kps: null, source: 'none' };
+
+    // `isRangeBaked` carries a 0.05s tolerance on each end; passing the range
+    // shrunk by exactly that much makes the test "timeSec is inside the track".
+    const BAKED_EDGE_MARGIN = 0.05;
+    if (canvas.isRangeBaked?.(timeSec - BAKED_EDGE_MARGIN, timeSec + BAKED_EDGE_MARGIN)) {
+      const baked = canvas.getBakedPoseAt?.(timeSec);
+      if (baked?.length) return { kps: baked, source: 'baked' };
+    }
+
+    const exact = await canvas.detectPoseAtTime?.(timeSec) ?? null;
+    return exact?.length ? { kps: exact, source: 'exact' } : { kps: null, source: 'none' };
+  }, [canvasRef]);
+
+  /**
+   * Read the APP'S EXISTING skeleton for a frame time and normalize it to
+   * FULL-FRAME [0,1] coordinates.
+   *
+   * Reads through `resolveExactPoseAt`, so background removal and the visible
+   * skeleton look at the same joints and any future improvement to the skeleton
+   * improves BG removal for free. Keypoints arrive in video-native pixels
+   * (poseWorkerBridge maps worker/bitmap space back before delivery), so
+   * normalizing is a plain divide.
+   */
+  const readExistingSkeletonNorm = useCallback(async (
+    timeSec: number,
+  ): Promise<Array<{ x: number; y: number; score: number }> | null> => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0) return null;
+    const { kps } = await resolveExactPoseAt(timeSec);
+    if (!kps?.length) return null;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    return kps.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0 }));
+  }, [videoRef, resolveExactPoseAt]);
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // TEMP-DEBUG-POSETIME — measurement probe for the "skeleton offset on the auto
+  // pass" investigation. Adds NO behaviour: it only exposes a console function.
+  // Run in the console with the StroMotion draft open:
+  //     await window.__stroPoseTiming()            // every draft frame
+  //     await window.__stroPoseTiming([1.2, 1.5])  // specific times
+  // For each time it reports which source production NOW uses (`source`), which
+  // rung the OLD three-rung read would have taken (`oldRung`), how far that old
+  // answer sits from an exact detection on the exact frame, and what the exact
+  // path costs. `oldRung=cache` with a non-trivial `offsetMeanPx` is the bug this
+  // change removed — kept so the fix stays demonstrable. Remove with the grep tag.
+  // ───────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const dist = (
+      a: Array<{ x: number; y: number; score: number }>,
+      b: Array<{ x: number; y: number; score: number }>,
+    ) => {
+      let sum = 0, max = 0, n = 0;
+      for (let i = 0; i < Math.min(a.length, b.length); i++) {
+        if ((a[i].score ?? 0) < 0.2 || (b[i].score ?? 0) < 0.2) continue;
+        const d = Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y);
+        sum += d; n++;
+        if (d > max) max = d;
+      }
+      return { mean: n ? sum / n : NaN, max, n };
+    };
+    const shoulderWidth = (k: Array<{ x: number; y: number; score: number }>) =>
+      k[5] && k[6] ? Math.hypot(k[5].x - k[6].x, k[5].y - k[6].y) : NaN;
+
+    (window as unknown as Record<string, unknown>).__stroPoseTiming = async (times?: number[]) => {
+      const video = videoRef.current;
+      if (!video || video.videoWidth === 0) { console.error('[POSETIME] no loaded video'); return null; }
+      const list = times ?? stroMotionDraft?.frames.map((f) => f.timeSec) ?? [];
+      if (!list.length) { console.error('[POSETIME] no frame times — open a StroMotion draft or pass times'); return null; }
+
+      const rows: Array<Record<string, unknown>> = [];
+      for (const t of list) {
+        // What production uses NOW.
+        const { source } = await resolveExactPoseAt(t);
+        // What the OLD three-rung read would have taken, kept for comparison.
+        const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
+        const nearest = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>(
+          (best, f) => (!best || Math.abs(f.timeSeconds - t) < Math.abs(best.timeSeconds - t) ? f : best), null,
+        );
+        const baked = canvasRef.current?.getBakedPoseAt?.(t) ?? null;
+        const cacheDt = nearest ? Math.abs(nearest.timeSeconds - t) : NaN;
+        const rung = baked ? 'baked' : (nearest && cacheDt < 0.2 ? 'cache' : 'ondemand');
+        const chosen = baked ?? (nearest && cacheDt < 0.2 ? nearest.keypoints : null);
+
+        // Exact: detect ON the frame the mask is built from (same mirror element,
+        // same serialized capture queue, same timeSec) — twice, to see whether a
+        // second look at the same frame moves at all (i.e. whether any settle
+        // time exists to wait for).
+        const e0 = performance.now();
+        const exact1 = await canvasRef.current?.detectPoseAtTime?.(t) ?? null;
+        const ms1 = performance.now() - e0;
+        const e1 = performance.now();
+        const exact2 = await canvasRef.current?.detectPoseAtTime?.(t) ?? null;
+        const ms2 = performance.now() - e1;
+
+        // Capture cost at this time: cold (mirror elsewhere) vs warm (already there).
+        const c0 = performance.now();
+        const b1 = await captureVideoFrameAtTime(video, t);
+        const capCold = performance.now() - c0;
+        const c1 = performance.now();
+        const b2 = await captureVideoFrameAtTime(video, t);
+        const capWarm = performance.now() - c1;
+        try { b1.close(); b2.close(); } catch { /* ok */ }
+
+        const sw = exact1 ? shoulderWidth(exact1) : NaN;
+        const vsExact = chosen && exact1 ? dist(chosen, exact1) : null;
+        const repeat = exact1 && exact2 ? dist(exact1, exact2) : null;
+
+        rows.push({
+          t: +t.toFixed(3),
+          source,
+          oldRung: rung,
+          cacheDt: Number.isFinite(cacheDt) ? +cacheDt.toFixed(3) : null,
+          shoulderPx: Number.isFinite(sw) ? Math.round(sw) : null,
+          offsetMeanPx: vsExact ? Math.round(vsExact.mean) : null,
+          offsetMaxPx: vsExact ? Math.round(vsExact.max) : null,
+          offsetMeanPctShoulder: vsExact && Number.isFinite(sw) ? Math.round((vsExact.mean / sw) * 100) : null,
+          repeatMaxPx: repeat ? +repeat.max.toFixed(2) : null,
+          detect1ms: Math.round(ms1),
+          detect2ms: Math.round(ms2),
+          captureColdMs: Math.round(capCold),
+          captureWarmMs: Math.round(capWarm),
+        });
+      }
+      console.table(rows);
+      console.log('[POSETIME] rows:', JSON.stringify(rows));
+      console.log(
+        '[POSETIME] READ: `source` = what the mask uses now (baked | exact). `oldRung` = what the ' +
+        'old read would have used; where that says `cache`, `offset*` is how far off the zone used ' +
+        'to be. `repeatMaxPx` = how much two exact detections of the SAME frame differ (≈0 ⇒ the ' +
+        'frame is stable and there is no settle time to wait for). `detect*ms` = per-frame cost.',
+      );
+      return rows;
+    };
+    return () => { delete (window as unknown as Record<string, unknown>).__stroPoseTiming; };
+  }, [videoRef, canvasRef, stroMotionDraft, resolveExactPoseAt]);
+
   // PLAYER-mode spec builder: pose → whole-body box + pose scribble. Returns a
   // spec for the atomic batch (autoProcessStroFrames) — it does NOT commit.
   const buildPlayerFrameSpec = useCallback(async (index: number): Promise<StroAutoFrameSpec | null> => {
@@ -1642,20 +1843,26 @@ function Home() {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return null;
 
-    // Seek FIRST — the pose read uses the video's current frame.
+    // Move the coach's playhead to this frame so the pass is visible as it runs.
+    // The pose read below does NOT depend on this: it resolves through the
+    // dedicated capture mirror at an exact timeSec, not from whatever the visible
+    // element happens to be showing.
     await seekStroVideo(timeSec);
 
-    // Prefer the Precision AI Track pose, then the playback cache, then on-demand.
-    const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
-    const cached = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>((best, f) => {
-      if (!best || Math.abs(f.timeSeconds - timeSec) < Math.abs(best.timeSeconds - timeSec)) return f;
-      return best;
-    }, null);
-    let keypointsForFrame = canvasRef.current?.getBakedPoseAt?.(timeSec)
-      ?? (cached && Math.abs(cached.timeSeconds - timeSec) < 0.2 ? cached.keypoints : null);
-    if (!keypointsForFrame) {
-      keypointsForFrame = await canvasRef.current?.detectPoseAtTime?.(timeSec) ?? null;
+    // The skeleton for EXACTLY this frame — baked when the time is inside a track,
+    // an on-demand detection on the frame's own bitmap otherwise. Same resolver
+    // Auto-BG / Redo mask uses, so the two cannot produce different zones.
+    const poseT0 = performance.now();
+    const { kps: keypointsForFrame, source: poseSource } = await resolveExactPoseAt(timeSec);
+    const poseMs = Math.round(performance.now() - poseT0);
+
+    // TEMP-DEBUG-POSETIME — in-situ record of which source answered and what it
+    // cost, logged from the REAL auto pass. Inert: one console line per frame.
+    // Remove with the grep tag.
+    if (typeof window !== 'undefined') {
+      console.log(`[POSETIME] frame=${index} t=${timeSec.toFixed(3)} source=${poseSource} poseMs=${poseMs}`);
     }
+
     if (!keypointsForFrame?.length) return null;
 
     const validKps = keypointsForFrame.filter(kp => kp.score >= 0.2);
@@ -1690,8 +1897,10 @@ function Home() {
         x, y, w: Math.min(vw, maxX + padX) - x, h: Math.min(vh, maxY + padY) - y,
       })),
       scribble: poseScribble(kps, vw, vh),
+      // Same joints, normalized — this is what builds the mask-limit zone.
+      keypoints: kps.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0 })),
     };
-  }, [stroMotionDraft, videoRef, canvasRef, seekStroVideo]);
+  }, [stroMotionDraft, videoRef, seekStroVideo, resolveExactPoseAt]);
 
   /**
    * OBJECT-mode batch auto-select: detect the implement on every pending frame
@@ -1777,6 +1986,11 @@ function Home() {
         frameIndex: results[i].index,
         selectionBox: normalizeObjectBox(subjectBoxFromRegion(b)),
         scribble: kps && vw && vh ? poseScribble(kps, vw, vh) : null,
+        // Same joints, normalized — builds the mask-limit zone. Object mode reads
+        // the existing skeleton exactly like player mode does.
+        keypoints: kps && vw && vh
+          ? kps.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0 }))
+          : null,
       });
     }
     return autoProcessStroFrames(specs, (done, total) =>
@@ -1792,6 +2006,12 @@ function Home() {
     const pending = draft.frames.filter((f) => !f.selectionBox).map((f) => ({ index: f.index, timeSec: f.timeSec }));
     if (pending.length === 0) { setProcessingStatus('All frames already have a selection.'); return; }
     stroAutoSelectBusyRef.current = true;
+    // Background removal is driven by the app's existing skeleton, so make sure it
+    // is on for the duration. If the coach already had it on it simply STAYS on
+    // (and persists into Generate); if we switched it on ourselves we switch it
+    // back off once the pass finishes, leaving their display choice untouched.
+    const skeletonWasOn = skeletonOn;
+    if (!skeletonWasOn) setSkeletonOn(true);
     try {
       let ok = 0;
       if (stroObjectType !== 'player') {
@@ -1836,8 +2056,9 @@ function Home() {
       setProcessingStatus('Auto-detect hit an error (see console). Try Select Area on a frame manually.');
     } finally {
       stroAutoSelectBusyRef.current = false;
+      if (!skeletonWasOn) setSkeletonOn(false);
     }
-  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, videoRef]);
+  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, videoRef, skeletonOn]);
 
   // SPEC: no auto-trigger. Opening StroMotion only opens the toolbar; the AI
   // pass starts when the coach presses "AI auto-detect" after choosing the
@@ -2981,9 +3202,35 @@ function Home() {
     canvasRefB.current?.clearAll();
   }, [cleanupVideoEl, resetStroMotion, revokeBlobUrl]);
 
-  /** Full page reload should not inherit URL field or stale session state */
+  /**
+   * Full page reload should not inherit URL field or stale session state.
+   *
+   * RUN-ONCE, AND IT MUST STAY THAT WAY. This effect calls resetSession(), which
+   * calls cleanupVideoEl() — removeAttribute('src') + load() — destroying the
+   * coach's loaded video. It is only ever correct to do that at mount, before a
+   * video exists.
+   *
+   * The trap it fell into: the reload verdict is IMMUTABLE (the
+   * PerformanceNavigationTiming entry is fixed for the page's lifetime, so
+   * `nav.type === 'reload'` stays true forever), while the dep `resetSession` is
+   * a useCallback whose identity churns — resetSession depends on
+   * resetStroMotion (page.tsx:2982), which depends on StroMotion state
+   * (page.tsx:1387). So any StroMotion-state change re-ran this effect, found
+   * the reload verdict still true, and wiped the video out from under the coach
+   * mid-session: the "video disappears / no frame buttons" bug.
+   *
+   * The ref makes the effect idempotent, so no future dependency churn — from
+   * this chain or any other, including React Fast Refresh and StrictMode's
+   * double-invoke — can fire a second session reset. Do not replace it with a
+   * narrower dep array; that would fix one trigger and leave the class open.
+   */
+  const reloadResetDoneRef = useRef(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (reloadResetDoneRef.current) return;
+    // Latch BEFORE the work: the verdict is immutable, so evaluating it once is
+    // the whole contract, and a throw must not license a second attempt.
+    reloadResetDoneRef.current = true;
     try {
       const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
       if (nav?.type === 'reload') {
@@ -4736,7 +4983,17 @@ function Home() {
       fd.append('title', `AngleMotion analysis ${localDateTimeForFolder()}`);
       const res = await fetch('/api/youtube/upload', { method: 'POST', body: fd });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Upload failed');
+      if (!res.ok) {
+        // The grant is missing or was revoked — recoverable in two clicks, so
+        // re-read the connection state and let the toast offer Connect rather
+        // than reporting a failure the coach cannot act on.
+        if (data?.needsConnect) {
+          await youtubeConn.refresh();
+          setProcessingStatus('Connect YouTube first, then upload.');
+          return;
+        }
+        throw new Error(data.error ?? 'Upload failed');
+      }
       setCaptureYoutubeUrl(typeof data.url === 'string' ? data.url : null);
       setShowCaptureSaveToast(false);
       setCaptureSaveModalOpen(true);
@@ -4745,7 +5002,7 @@ function Home() {
     } finally {
       setCaptureYoutubeBusy(false);
     }
-  }, [captureDownloadStatus, captureYoutubeBusy]);
+  }, [captureDownloadStatus, captureYoutubeBusy, youtubeConn]);
 
   /** During tab capture, paint & pose-use the live MediaRecorder preview stream — not YouTube thumbnail pose. */
   const embedLiveVideoA = embedCapturePanelId === 'A';
@@ -7010,7 +7267,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           <span style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontWeight: 600 }}>Your video is ready to analyse.</span>
             <span style={{ color: '#6e6e73' }}>
-              Download a copy, upload to your YouTube as unlisted, or dismiss.
+              {!ENABLE_YOUTUBE_UPLOAD
+                ? 'Download a copy, or dismiss.'
+                : youtubeConn.connected
+                  ? 'Download a copy, upload to your YouTube as unlisted, or dismiss.'
+                  : 'Download a copy, or connect YouTube to upload it as unlisted.'}
             </span>
             {captureDownloadStatus === 'preparing' && (
               <span style={{ fontSize: 11, color: '#6e6e73', fontWeight: 500 }}>
@@ -7042,25 +7303,44 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           >
             {captureDownloadStatus === 'ready_webm' ? 'Download video' : 'Download MP4'}
           </button>
+          {/* Gated like every other export surface, and — since YouTube is its own
+              grant — split by whether THIS coach has authorized it. An upload
+              button that 403s is worse than a connect button that works. */}
+          {ENABLE_YOUTUBE_UPLOAD && !youtubeConn.loading && (
           <button
             type="button"
             disabled={
-              captureDownloadStatus === 'preparing' || captureYoutubeBusy
+              captureDownloadStatus === 'preparing' || captureYoutubeBusy || youtubeConn.connecting
             }
-            onClick={() => void handleYoutubeUploadCapture()}
+            onClick={() => {
+              if (youtubeConn.connected) void handleYoutubeUploadCapture();
+              else void youtubeConn.connect();
+            }}
+            title={youtubeConn.connected
+              ? 'Upload this video to your YouTube channel as Unlisted'
+              : 'Authorize AngleMotion to upload to your YouTube channel. Opens a Google window; your recording is not affected.'}
             style={{
               padding: '10px 16px',
               borderRadius: 10,
               border: '1px solid #E5E5E5',
-              background: captureYoutubeBusy ? '#F5F5F5' : '#FFFFFF',
+              background: captureYoutubeBusy || youtubeConn.connecting ? '#F5F5F5' : '#FFFFFF',
               color: '#1A1A1A',
               fontWeight: 600,
               cursor:
-                captureDownloadStatus === 'preparing' || captureYoutubeBusy ? 'not-allowed' : 'pointer',
+                captureDownloadStatus === 'preparing' || captureYoutubeBusy || youtubeConn.connecting
+                  ? 'not-allowed'
+                  : 'pointer',
             }}
           >
-            {captureYoutubeBusy ? 'Uploading…' : 'Upload to YouTube (Unlisted)'}
+            {captureYoutubeBusy
+              ? 'Uploading…'
+              : youtubeConn.connecting
+                ? 'Connecting…'
+                : youtubeConn.connected
+                  ? 'Upload to YouTube (Unlisted)'
+                  : 'Connect YouTube'}
           </button>
+          )}
           <button
             type="button"
             onClick={() => setShowCaptureSaveToast(false)}
@@ -7085,7 +7365,16 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           stroProposingFrame && stroProposingFrameIndex === stroEditingFrameIndex;
         const workingMask = frame?.working ?? frame?.aiSnapshot ?? frame?.readyMask ?? null;
 
-        if (isProposingThisFrame || !frame?.sourceFrame || !workingMask) {
+        // Gate on whether there is anything to EDIT, not on whether a proposal is
+        // running. Those came to the same thing once, and the difference matters:
+        // swapping the editor out mid-re-propose unmounts it, and the undo stack
+        // lives in a ref INSIDE it — so the snapshot "Redo mask" takes for Ctrl+Z
+        // was being destroyed by the very act of running the redo. A frame that
+        // already has a sourceFrame and a mask keeps showing them (buttons disable
+        // themselves via `isRegenerating`); only a frame with nothing yet falls
+        // through to the modal, which is the first-proposal case that wording is
+        // actually for.
+        if (!frame?.sourceFrame || !workingMask) {
           return (
             <div
               style={{
@@ -7163,12 +7452,18 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             proposalEmpty={!maskHasContent(frame.aiSnapshot) && !maskHasContent(frame.working)}
             backgroundPlate={stroMotionDraft.backgroundPlate}
             selectionBox={frame.selectionBox}
+            videoNativeSize={{ width: stroMotionDraft.videoWidth, height: stroMotionDraft.videoHeight }}
             onMaskChange={(mask) => updateFrameMask(frame.index, mask)}
             onReset={() => resetFrameMask(frame.index)}
-            onRegenerate={() => {
-              void reproposeFrameMask(frame.index).then(() => {
-                void canvasRef.current?.waitForRender?.();
-              });
+            onRegenerate={async () => {
+              // Auto BG / Re-propose = auto-detect for this frame, same path,
+              // driven by the app's existing skeleton at this frame's time.
+              const kps = await readExistingSkeletonNorm(frame.timeSec);
+              const ok = await reproposeFrameMask(frame.index, { keypoints: kps });
+              void canvasRef.current?.waitForRender?.();
+              // False = the pipeline declined to replace the mask; the editor
+              // surfaces that instead of looking like the click did nothing.
+              return ok;
             }}
             onMarkReady={() => {
               if (!handleStroMarkReady(frame.index)) return;
