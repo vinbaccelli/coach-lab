@@ -11,10 +11,12 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { X, Download, Play, Video, FileText, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Youtube, Loader2, ExternalLink } from 'lucide-react';
+import { X, Download, Play, Video, FileText, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Loader2, ExternalLink } from 'lucide-react';
 import type { Snapshot } from '@/lib/snapshots';
 import { runExportPipeline } from '@/lib/export/exportService';
 import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
+import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
+import { YouTubeUploadOption } from '@/components/shared/YouTubeUploadOption';
 
 const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1] as const;
 
@@ -80,7 +82,12 @@ export default function GenerateWorkspace({
   const [noteOverrides, setNoteOverrides] = useState<Record<string, string>>({});
   const [players, setPlayers] = useState<PlayerOption[]>([]);
   const [attachPlayerId, setAttachPlayerId] = useState<string>('');
-  const [includeVideoUpload, setIncludeVideoUpload] = useState(ENABLE_YOUTUBE_UPLOAD);
+  const youtube = useYouTubeConnection(ENABLE_YOUTUBE_UPLOAD);
+  // Defaults to the coach's ACTUAL authorization, not to the build flag, so an
+  // export never silently attempts an upload nobody authorized. Keyed on
+  // `connected` so it follows a connect/disconnect made while this panel is open.
+  const [includeVideoUpload, setIncludeVideoUpload] = useState(false);
+  useEffect(() => { setIncludeVideoUpload(youtube.connected); }, [youtube.connected]);
   const [newPlayerName, setNewPlayerName] = useState<string | null>(null);
   const [creatingPlayer, setCreatingPlayer] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -226,7 +233,14 @@ export default function GenerateWorkspace({
         onProgress: setExportStatus,
       });
       if (!result.ok) {
-        setExportError(result.error ?? 'Export failed — try again.');
+        // A revoked or missing grant is fixable in two clicks, so say that
+        // instead of surfacing an error the coach can do nothing with.
+        if (result.needsConnect) {
+          void youtube.refresh();
+          setExportError('YouTube is not connected. Connect it above, then export again.');
+        } else {
+          setExportError(result.error ?? 'Export failed — try again.');
+        }
         if (result.youtubeUrl) setResultYoutubeUrl(result.youtubeUrl);
         return;
       }
@@ -236,7 +250,7 @@ export default function GenerateWorkspace({
     } finally {
       setExporting(false);
     }
-  }, [exporting, includedSnaps.length, reportTitle, includeVideoUpload, videoBlob, sectionsForReport, attachPlayerId]);
+  }, [exporting, includedSnaps.length, reportTitle, includeVideoUpload, videoBlob, sectionsForReport, attachPlayerId, youtube]);
 
   if (!open) return null;
 
@@ -472,10 +486,13 @@ export default function GenerateWorkspace({
                   + New player
                 </button>
                 {ENABLE_YOUTUBE_UPLOAD && (
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'rgba(255,255,255,0.7)', whiteSpace: 'nowrap' }}>
-                    <input type="checkbox" checked={includeVideoUpload} onChange={(e) => setIncludeVideoUpload(e.target.checked)} disabled={!videoBlob} />
-                    <Youtube size={13} /> Upload video
-                  </label>
+                  <YouTubeUploadOption
+                    youtube={youtube}
+                    checked={includeVideoUpload}
+                    onCheckedChange={setIncludeVideoUpload}
+                    videoReady={!!videoBlob}
+                    noVideoHint="Record the replay video first to include it."
+                  />
                 )}
               </div>
               {newPlayerName !== null && (
@@ -503,9 +520,6 @@ export default function GenerateWorkspace({
                 {exporting ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
                 {exporting ? (exportStatus ?? 'Exporting…') : 'Export Google Docs report'}
               </button>
-              {ENABLE_YOUTUBE_UPLOAD && includeVideoUpload && !videoBlob && (
-                <p style={{ margin: 0, fontSize: 10, color: 'rgba(255,255,255,0.45)' }}>Record the replay video first to include it (uploaded Unlisted to your YouTube).</p>
-              )}
               {exportError && <p style={{ margin: 0, fontSize: 11, color: '#FF453A', fontWeight: 600 }}>{exportError}</p>}
               {(resultDocUrl || resultYoutubeUrl) && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

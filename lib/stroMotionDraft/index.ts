@@ -10,9 +10,23 @@ export {
 } from '@/lib/stroMotionDraft/compositeFromDraft';
 export { allFramesReady, countExportReadyFrames, countFramesWithPreviewMask, countReadyFrames, frameHasMask, getCompositeMask, getExportMask, getPreviewMask, maskHasContent } from '@/lib/stroMotionDraft/frameMask';
 export { exportStroMotionDraftPng, hydrateDraftBitmapsForExport } from '@/lib/stroMotionDraft/exportDraft';
-export { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureFrame';
+// `captureFrameFromElement` is deliberately NOT re-exported: it seeks whatever
+// element it is given, which is the bug Phase 2 removed. Import it from
+// captureFrame directly if you genuinely mean "this exact element".
+export { waitForDecodableFrame } from '@/lib/stroMotionDraft/captureFrame';
+// Phase 2: `captureVideoFrameAtTime` now comes from captureSource — same name and
+// signature as before, but it captures from a DEDICATED element instead of the
+// element it is handed. Every existing caller (Canvas.tsx, page.tsx and the
+// pipeline modules) is isolated by that swap alone, with no call-site change.
+export {
+  captureVideoFrameAtTime,
+  createCaptureSource,
+  createCaptureSourceFromBlob,
+  disposeCaptureSources,
+} from '@/lib/stroMotionDraft/captureSource';
+export type { CaptureSource, CaptureSourceOptions } from '@/lib/stroMotionDraft/captureSource';
 export { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
-export { applyBrushToMask, cloneAlphaMask, embedRegionMask, extractAlphaMaskFromBitmap, fillBoxMask, floodRemoveInMask, mergeMasksPreferForeground } from '@/lib/stroMotionDraft/maskUtils';
+export { applyBrushStrokeToMask, applyBrushToMask, cloneAlphaMask, embedRegionMask, extractAlphaMaskFromBitmap, fillBoxMask, floodRemoveInMask, intersectMaskWithBox, mergeMasksPreferForeground, resampleAlphaMask } from '@/lib/stroMotionDraft/maskUtils';
 export { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
 export type {
   AlphaMask,

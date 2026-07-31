@@ -1,0 +1,89 @@
+   ▲ Next.js 15.5.18
+   - Local:        http://localhost:3001
+   - Network:      http://192.168.0.3:3001
+   - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 2.8s
+ ○ Compiling /middleware ...
+ ✓ Compiled /middleware in 1278ms (171 modules)
+ ○ Compiling / ...
+<w> [webpack.cache.PackFileCacheStrategy] Serializing big strings (102kiB) impacts deserialization performance (consider using Buffer instead and decode when needed)
+<w> [webpack.cache.PackFileCacheStrategy] Serializing big strings (250kiB) impacts deserialization performance (consider using Buffer instead and decode when needed)
+ ✓ Compiled / in 9.1s (899 modules)
+ GET / 200 in 2406ms
+ ✓ Compiled in 1410ms (360 modules)
+ GET / 200 in 181ms
+ ○ Compiling /decoder ...
+ ✓ Compiled /decoder in 4.2s (906 modules)
+ GET /decoder 200 in 5335ms
+ ○ Compiling /api/players ...
+ ✓ Compiled /api/players in 1522ms (989 modules)
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ GET /api/players 200 in 4343ms
+ ○ Compiling /api/google/upload-image ...
+ ✓ Compiled /api/google/upload-image in 8.2s (1966 modules)
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/google/upload-image 403 in 10820ms
+ ○ Compiling /login ...
+ ✓ Compiled /login in 2.2s (915 modules)
+ GET /login 200 in 2295ms
+ ○ Compiling /auth/callback ...
+ ✓ Compiled /auth/callback in 670ms (994 modules)
+ GET /auth/callback?code=4ec583ed-3ef5-4f8f-9b8a-fae1059d92aa&redirect=%2Fdecoder 307 in 1857ms
+ GET /decoder 200 in 827ms
+ ○ Compiling /api/players ...
+ ✓ Compiled /api/players in 1212ms (596 modules)
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ GET /api/players 200 in 2920ms
+ ✓ Compiled /api/google/upload-image in 312ms (1573 modules)
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+(node:73125) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+ POST /api/google/upload-image 200 in 7261ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/google/upload-image 200 in 3148ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/google/upload-image 200 in 3450ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/google/upload-image 200 in 3215ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/google/upload-image 200 in 3141ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/google/upload-image 200 in 4166ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/google/upload-image 200 in 3045ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/google/upload-image 200 in 3402ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/google/upload-image 200 in 3145ms
+ ○ Compiling /api/players/[id]/entries ...
+ ✓ Compiled /api/players/[id]/entries in 2.5s (1971 modules)
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ POST /api/players/622b6279-7a1f-4e9c-9c01-3f4c6650516b/entries 200 in 16045ms
+ ○ Compiling / ...
+ ✓ Compiled / in 1238ms (1605 modules)
+ GET / 200 in 3859ms
+ ○ Compiling /players ...
+ ✓ Compiled /players in 1593ms (2012 modules)
+ GET /players 200 in 2211ms
+ ✓ Compiled /api/players in 288ms (1616 modules)
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ GET /api/players 200 in 891ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ GET /api/players 200 in 405ms
+ ○ Compiling /players/[id] ...
+ ✓ Compiled /players/[id] in 739ms (2045 modules)
+ GET /players/622b6279-7a1f-4e9c-9c01-3f4c6650516b 200 in 3981ms
+ ○ Compiling /api/players/[id] ...
+ ✓ Compiled /api/players/[id] in 888ms (2045 modules)
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ GET /api/players/622b6279-7a1f-4e9c-9c01-3f4c6650516b 200 in 2996ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ ○ Compiling /api/players/[id]/sessions ...
+ ✓ Compiled /api/players/[id]/sessions in 540ms (2049 modules)
+ GET /api/players/622b6279-7a1f-4e9c-9c01-3f4c6650516b 200 in 724ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ GET /api/players/622b6279-7a1f-4e9c-9c01-3f4c6650516b/sessions 200 in 2140ms
+Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server.
+ GET /api/players/622b6279-7a1f-4e9c-9c01-3f4c6650516b/sessions 200 in 604ms

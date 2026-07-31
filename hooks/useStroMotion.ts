@@ -3,8 +3,8 @@
 import { renderStroMotionDraftComposite } from '@/lib/stroMotionDraft/compositeFromDraft';
 import { exportStroMotionDraftPng } from '@/lib/stroMotionDraft/exportDraft';
 import { clearStroMotionDraft } from '@/lib/stroMotionDraft/clearDraft';
-import { cloneAlphaMask } from '@/lib/stroMotionDraft/maskUtils';
-import { countExportReadyFrames, maskHasContent, statusAfterMaskEdit } from '@/lib/stroMotionDraft/frameMask';
+import { cloneAlphaMask, fillBoxMask } from '@/lib/stroMotionDraft/maskUtils';
+import { countExportReadyFrames, countMaskPixels, maskHasContent, statusAfterMaskEdit } from '@/lib/stroMotionDraft/frameMask';
 import { hydrateDraftBitmapsForExport } from '@/lib/stroMotionDraft/exportDraft';
 import { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
 import { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
@@ -32,7 +32,23 @@ export interface StroAutoFrameSpec {
   frameIndex: number;
   selectionBox: StroMotionSubjectBox;
   scribble?: Array<{ x: number; y: number }> | null;
+  /**
+   * The app's EXISTING skeleton for this frame — COCO-17, FULL-FRAME normalized.
+   * Read by page.tsx from the same source the angle/metric features use.
+   */
+  keypoints?: Array<{ x: number; y: number; score: number }> | null;
 }
+
+/**
+ * How much of the coach's selection box a re-proposed mask must cover before it is
+ * allowed to REPLACE an existing mask. Expressed as a fraction of the box because
+ * that is scale-invariant: it reads the same for a whole athlete and for a racket
+ * in OBJECT mode. A real subject fills a large share of the box drawn around it;
+ * a collapsed segmenter∩zone intersection lands orders of magnitude below this.
+ * The absolute floor covers tiny boxes, where a percentage means almost nothing.
+ */
+const MIN_PROPOSAL_BOX_FRACTION = 0.005;
+const MIN_PROPOSAL_ABS_PX = 64;
 
 export interface SyncDraftParams {
   objectType: StroMotionObjectType;
@@ -215,6 +231,28 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       markReady?: boolean;
       /** Pose-derived scribble (normalized) → pose-anchored segmentation. */
       scribble?: Array<{ x: number; y: number }> | null;
+      /**
+       * Open the editor on a SOLID fill of the selection box (blue = keep)
+       * instead of the AI proposal.
+       *
+       * Set by the coach's manual "Select Area" path: the AI ladder can return a
+       * sparse matte, and a sparse mask gives the add/remove brush nothing
+       * meaningful to cut into — the coach then has to hit Auto BG (which mattes
+       * the WHOLE frame) just to get a workable starting mask. Seeding the drawn
+       * box solid makes Remove immediately meaningful and Add immediately
+       * extendable, with no Auto BG round-trip.
+       *
+       * Deliberately OFF for `reproposeFrameMask`, whose entire purpose is
+       * "re-run the AI proposal from scratch".
+       */
+      seedFromSelectionBox?: boolean;
+      /**
+       * Run the SAME skeleton-guided AI pipeline auto-detect uses. Set by the
+       * editor's Auto-BG / Re-propose so the two produce identical results.
+       */
+      useSkeletonGuidance?: boolean;
+      /** The app's existing skeleton for this frame (COCO-17, full-frame normalized). */
+      keypoints?: Array<{ x: number; y: number; score: number }> | null;
     },
   ): Promise<boolean> => {
     const video = videoRef.current;
@@ -239,11 +277,61 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         current.objectType,
         plate,
         opts?.scribble ?? null,
+        !!opts?.useSkeletonGuidance,
+        opts?.keypoints ?? null,
       );
 
       if (!proposal) return false;
 
       const hasProposal = maskHasContent(proposal.aiSnapshot);
+
+      // The mask the editor OPENS on. `padding: 0` so the blue region lands on
+      // exactly the box the coach drew — the same box the editor outlines in
+      // yellow — rather than fillBoxMask's default 4% bleed.
+      const working = opts?.seedFromSelectionBox
+        ? fillBoxMask(
+            proposal.sourceFrame.width,
+            proposal.sourceFrame.height,
+            selectionBox,
+            0,
+          )
+        : proposal.working;
+
+      // ── DEGENERATE-RESULT GUARD ──────────────────────────────────────────
+      // `maskHasContent` is true for a SINGLE lit pixel. That is the right test
+      // for "did the pipeline produce anything at all", and the wrong one for
+      // "is this worth showing the coach": when the segmenter has a bad frame,
+      // the strict AND with the skeleton zone can survive with a few dozen
+      // pixels — enough to pass every emptiness check on the way here, including
+      // proposeFrameMask's own fill-the-box rescue, and then replace a perfectly
+      // good mask with something invisible. That is exactly what "Redo mask
+      // cleared my mask" is: not a display failure, a near-empty commit.
+      //
+      // So the bar for REPLACING existing work is coverage, not existence. A real
+      // subject fills a decent share of the box the coach drew around it; a failed
+      // intersection does not come close. When the new mask is below that bar and
+      // there is already a mask worth keeping, we keep the coach's and report the
+      // refusal — the pipeline may fail, but it may not destroy work on the way.
+      //
+      // Only the re-propose paths can trip this: `seedFromSelectionBox` (manual
+      // Select Area) hands over a solid box, which is never degenerate.
+      const fw = proposal.sourceFrame.width;
+      const fh = proposal.sourceFrame.height;
+      const boxW = Math.max(0, Math.min(1, selectionBox.width)) * fw;
+      const boxH = Math.max(0, Math.min(1, selectionBox.height)) * fh;
+      const boxPx = Math.max(1, Math.round(boxW * boxH));
+      const newPx = countMaskPixels(working);
+      const existing = frame.working ?? frame.readyMask ?? frame.aiSnapshot ?? null;
+      const existingPx = existing ? countMaskPixels(existing) : 0;
+      const floor = Math.max(MIN_PROPOSAL_ABS_PX, Math.round(boxPx * MIN_PROPOSAL_BOX_FRACTION));
+      if (newPx < floor && existingPx >= floor) {
+        console.warn(
+          `[StroMotion] proposal covered ${newPx}px of a ${boxPx}px selection (floor ${floor}px) — ` +
+          `keeping the existing ${existingPx}px mask instead of replacing it with an empty one.`,
+        );
+        try { proposal.sourceFrame.close(); } catch { /* closed */ }
+        return false;
+      }
 
       setDraft((prev) => {
         if (!prev) {
@@ -261,8 +349,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             selectionBox,
             sourceFrame: proposal.sourceFrame,
             aiSnapshot: proposal.aiSnapshot,
-            working: proposal.working,
-            readyMask: markReady ? cloneAlphaMask(proposal.working) : null,
+            working,
+            readyMask: markReady ? cloneAlphaMask(working) : null,
             status: (markReady ? 'ready' : 'edited') as StroMotionFrameStatus,
           };
         });
@@ -323,6 +411,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             current.objectType,
             plate,
             spec.scribble ?? null,
+            true,                       // skeleton guidance on
+            spec.keypoints ?? null,     // the app's existing skeleton, full-frame
           );
           if (proposal && maskHasContent(proposal.aiSnapshot)) {
             built.push({
@@ -382,6 +472,9 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   }, [invalidatePreview, videoRef, getBackgroundPlate]);
 
   const updateFrameMask = useCallback((frameIndex: number, mask: AlphaMask) => {
+    // TEMP-DEBUG-PAINT — the far end of the paint chain. If applyAtPoint logs but
+    // this does not, the break is in the onMaskChange wiring, not the brush.
+    console.log(`[TEMP-DEBUG-PAINT] updateFrameMask frame=${frameIndex} maskLen=${mask.data.length}`);
     setDraft((prev) => {
       if (!prev) return prev;
       const frames = prev.frames.map((f) =>
@@ -412,11 +505,19 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     invalidatePreview();
   }, [invalidatePreview]);
 
-  const reproposeFrameMask = useCallback(async (frameIndex: number): Promise<boolean> => {
+  const reproposeFrameMask = useCallback(async (
+    frameIndex: number,
+    opts?: { keypoints?: Array<{ x: number; y: number; score: number }> | null },
+  ): Promise<boolean> => {
     const current = draftRef.current;
     const frame = current?.frames[frameIndex];
     if (!frame?.selectionBox) return false;
-    return selectAreaForFrame(frameIndex, frame.selectionBox);
+    // Auto-BG / Re-propose IS auto-detect for one frame — same code path, same
+    // result. The caller supplies the existing skeleton via `opts.keypoints`.
+    return selectAreaForFrame(frameIndex, frame.selectionBox, {
+      useSkeletonGuidance: true,
+      keypoints: opts?.keypoints ?? null,
+    });
   }, [selectAreaForFrame]);
 
   const markFrameReady = useCallback((frameIndex: number): boolean => {
