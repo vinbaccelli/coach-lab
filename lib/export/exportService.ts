@@ -52,6 +52,13 @@ export interface ExportPipelineResult {
   youtubeUrl?: string;
   docUrl?: string;
   error?: string;
+  /**
+   * The upload failed only because this coach has no YouTube grant — never
+   * connected, or revoked it since. Distinct from `error` on purpose: this is
+   * the one failure the coach can fix in two clicks, so the UI offers the
+   * connect popup instead of showing them a message they can do nothing with.
+   */
+  needsConnect?: boolean;
 }
 
 const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 365;
@@ -60,14 +67,27 @@ const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 365;
 export async function uploadVideoToYouTube(
   blob: Blob,
   title: string,
-): Promise<{ ok: boolean; url?: string; error?: string }> {
+): Promise<{ ok: boolean; url?: string; error?: string; needsConnect?: boolean }> {
   const form = new FormData();
   const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
   form.append('video', new File([blob], `anglemotion-${Date.now()}.${ext}`, { type: blob.type || 'video/mp4' }));
   form.append('title', title);
   const res = await fetch('/api/youtube/upload', { method: 'POST', body: form });
-  const body = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
-  if (!res.ok || !body.url) return { ok: false, error: body.error ?? `YouTube upload failed (${res.status})` };
+  // `needsConnect` is set by /api/youtube/upload when there is no stored YouTube
+  // grant. It was being dropped here, which left the UI unable to tell a missing
+  // connection apart from a failed upload.
+  const body = (await res.json().catch(() => ({}))) as {
+    url?: string;
+    error?: string;
+    needsConnect?: boolean;
+  };
+  if (!res.ok || !body.url) {
+    return {
+      ok: false,
+      error: body.error ?? `YouTube upload failed (${res.status})`,
+      needsConnect: body.needsConnect === true,
+    };
+  }
   return { ok: true, url: body.url };
 }
 
@@ -141,7 +161,9 @@ export async function runExportPipeline(input: ExportPipelineInput): Promise<Exp
   if (input.videoBlob) {
     progress('Uploading video to YouTube (Unlisted)…');
     const yt = await uploadVideoToYouTube(input.videoBlob, input.title);
-    if (!yt.ok) return { ok: false, error: yt.error };
+    // Stops before the Docs step either way — but carries WHY up, so a missing
+    // grant becomes a reconnect prompt rather than a dead-end error.
+    if (!yt.ok) return { ok: false, error: yt.error, needsConnect: yt.needsConnect };
     youtubeUrl = yt.url;
   }
 

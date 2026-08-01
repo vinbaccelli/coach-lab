@@ -148,7 +148,23 @@ export interface CanvasHandle {
   getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
   /** Run pose detection ON DEMAND at a specific video time (for StroMotion
    *  auto-detect when the coach hasn't played through with the skeleton on). */
-  detectPoseAtTime: (timeSec: number) => Promise<Array<{ x: number; y: number; score: number; name: string }> | null>;
+  /** `frame`: an already-captured bitmap for this same time. Caller keeps ownership. */
+  detectPoseAtTime: (timeSec: number, frame?: ImageBitmap) => Promise<Array<{ x: number; y: number; score: number; name: string }> | null>;
+  /**
+   * EXACT-POSE LOCK — hands the skeleton to whoever is pushing exact per-frame
+   * poses, and shuts every fast source out for the duration.
+   *
+   * While locked:
+   *   - the live worker no longer owns the displayed pose,
+   *   - no live poses are written into the time-indexed cache, and
+   *   - the draw path stops preferring the baked (interpolated + smoothed) track.
+   *
+   * So the ONLY thing that can appear on screen is what `setSkeletonKeypoints`
+   * puts there — which is the same pose the mask is built from. Used by Motion
+   * Layer, where a fast approximate skeleton is both visually alarming and the
+   * thing that kept leaking into the mask.
+   */
+  setExactPoseLock: (on: boolean) => void;
   /** Current frame's pose keypoints (for snapshot capture). */
   getSkeletonKeypoints: () => Array<{ x: number; y: number; score: number; name: string }> | null;
   /** Restore skeleton keypoints from a snapshot (for phase switching). */
@@ -1982,6 +1998,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
     // When true, skeleton overlay + detection is temporarily suppressed (e.g. after Clear All / Undo).
     const skeletonSuppressedRef = useRef(false);
+    /**
+     * While true, ONLY explicitly-pushed exact poses may drive the skeleton —
+     * see `setExactPoseLock` on the handle. Deliberately a ref: it gates the
+     * render loop and the worker callback, both of which read refs, and it must
+     * take effect on the very next frame rather than after a re-render.
+     */
+    const exactPoseLockRef = useRef(false);
     const poseBridgeRef = useRef<PoseWorkerBridge | null>(null);
     const pendingFocusRef = useRef<{ x: number; y: number } | null>(null);
     // Continuous auto-focus crop target (torso centroid, normalized). Distinct
@@ -2660,21 +2683,50 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         racketTrailRef.current = trail;
       },
       getSkeletonFrames: () => skeletonFramesRef.current,
-      detectPoseAtTime: async (timeSec: number) => {
+      /**
+       * Pose for exactly `timeSec`.
+       *
+       * `frame` is an OPTIONAL bitmap the caller has already captured for this
+       * same time. Supplying it makes the skeleton and whatever else that bitmap
+       * feeds — the segmenter, in the background-removal path — provably the same
+       * frame, instead of two independent seeks that merely ought to agree. It
+       * also saves the second seek+decode.
+       *
+       * OWNERSHIP: a caller-supplied bitmap is NOT closed here; the caller still
+       * owns it. Only a bitmap captured inside this function is closed here.
+       */
+      detectPoseAtTime: async (timeSec: number, frame?: ImageBitmap) => {
         const video = videoRef.current;
         if (!video || video.videoWidth === 0) return null;
         try {
-          const { acquirePoseDetector } = await import('@/lib/sharedPoseDetector');
+          const { acquirePoseDetector, markDetectStart, markDetectEnd } = await import('@/lib/sharedPoseDetector');
           const det = await acquirePoseDetector();
-          const bmp = await captureVideoFrameAtTime(video, timeSec);
-          const poses = await det.estimatePoses(bmp as unknown as HTMLCanvasElement, { flipHorizontal: false });
-          try { (bmp as ImageBitmap).close?.(); } catch { /* ok */ }
+          const bmp = frame ?? await captureVideoFrameAtTime(video, timeSec);
+          // TEMP-DEBUG-DETECTORRACE — see lib/sharedPoseDetector.ts.
+          markDetectStart(`detectPoseAtTime t=${timeSec.toFixed(3)}`);
+          let poses;
+          try {
+            poses = await det.estimatePoses(bmp as unknown as HTMLCanvasElement, { flipHorizontal: false });
+          } finally {
+            markDetectEnd();
+          }
+          if (!frame) { try { (bmp as ImageBitmap).close?.(); } catch { /* ok */ } }
           const raw = poses?.[0]?.keypoints as Array<{ x: number; y: number; score?: number; name?: string }> | undefined;
           if (!raw?.length) return null;
           return raw.map((k) => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' }));
         } catch {
           return null;
         }
+      },
+      setExactPoseLock: (on: boolean) => {
+        exactPoseLockRef.current = on;
+        // Releasing hands the skeleton back to the normal sources; holding starts
+        // from a clean slate so a stale live pose cannot linger under the lock.
+        if (on) {
+          latestKeypointsRef.current = null;
+          skeletonSuppressedRef.current = true;
+        }
+        renderDirtyRef.current = true;
       },
       getSkeletonKeypoints: () => latestKeypointsRef.current ? [...latestKeypointsRef.current] : null,
       setSkeletonKeypoints: (kps, provenance) => {
@@ -3169,6 +3221,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // page.tsx; this only governs the rendered skeleton overlay.
     const liveSkeletonActive = () => {
       const v = videoRef.current;
+      // The exact-pose lock outranks everything: while it is held the live worker
+      // may still RUN, but it owns nothing on screen.
+      if (exactPoseLockRef.current) return false;
       return poseModeRef.current === 'live'   // LIVE mode only — SNAPSHOT shows its frozen pose (spec §1)
         && poseLoopActiveRef.current          // skeleton enabled & loop running (false when locked off)
         && !!poseBridgeRef.current            // worker/bridge present
@@ -3225,8 +3280,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           return;
         }
         if (keypoints) {
-          // Cache stays warm regardless of mode (time-indexed history).
-          const v = videoRef.current;
+          // Cache stays warm regardless of mode (time-indexed history) — EXCEPT
+          // under the exact-pose lock. Entries here are stamped with
+          // `video.currentTime` at the moment the worker's result ARRIVES, so they
+          // are systematically late; recording them during a Motion Layer pass is
+          // what repeatedly re-seeded the stale pose that leaked back into the
+          // mask. Locked ⇒ nothing fast is written, so there is nothing stale to
+          // leak later.
+          const v = exactPoseLockRef.current ? null : videoRef.current;
           if (v) {
             const nowT = v.currentTime;
             const lastFrame = skeletonFramesRef.current.at(-1);
@@ -3347,6 +3408,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       const sendFrame = () => {
         if (!poseLoopActiveRef.current) return;
+        // ── NO LIVE INFERENCE UNDER THE EXACT-POSE LOCK ────────────────────
+        // The lock used to suppress only the live pose's DISPLAY and its cache
+        // write, letting the loop keep running "harmlessly". It is not harmless:
+        // `detectPoseAtTime` and the bridge's main-thread fallback share ONE
+        // MoveNet instance (lib/sharedPoseDetector.ts is a module singleton, and
+        // poseWorkerBridge acquires that same instance for its fallback), and a
+        // TFJS detector is not re-entrant. Two overlapping estimatePoses calls
+        // interleave and hand back crossed results — so the "exact" pose for a
+        // Motion Layer frame could come back carrying the live frame's answer.
+        // That is the wrong-leg frame, and because the same keypoints build the
+        // mask-limit zone, it is also the over-removal.
+        // Suppressing the SOURCE (not just the display) is what makes the lock's
+        // guarantee real: while it is held, the only detection running is the
+        // per-frame exact one the pass explicitly awaits.
+        if (exactPoseLockRef.current) { scheduleNext(); return; }
         const bridge = poseBridgeRef.current;
         const v = videoRef.current;
         if (bridge && v) {
@@ -3365,6 +3441,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // smoothing so the pose snaps to this frame instead of EMA-converging.
       const detectStaticFrame = () => {
         if (!poseLoopActiveRef.current) return;
+        // Same reasoning as sendFrame: the pass seeks frame to frame, and every
+        // seek would otherwise fire a live detection into the shared detector
+        // while the exact one for that frame is still in flight.
+        if (exactPoseLockRef.current) return;
         const v = videoRef.current;
         const bridge = poseBridgeRef.current;
         if (!v || !bridge || !v.paused) return;
@@ -4362,9 +4442,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           (video && video.readyState >= 2 && video.videoWidth > 0) ||
           (yt && ytDim.w > 0 && ytDim.h > 0);
 
+        // Under the exact-pose lock the lock IS the draw authority.
+        //
+        // The pass used to switch the coach's skeleton ON just to make its pushed
+        // poses visible, and switch it back afterwards. That is what started the
+        // live loop competing for the shared detector (see sendFrame), and it also
+        // latched Metrics' data column on via the skeleton-enabled effect in
+        // page.tsx. Neither belongs to "show the coach this frame's exact pose".
+        // Since a locked overlay can only ever show an explicitly pushed pose,
+        // authorising the draw from the lock gives the same picture with none of
+        // the side effects — and `skeletonSuppressedRef` still blanks the overlay
+        // between frames, so "still settling" stays honest.
+        const lockOwnsSkeleton = exactPoseLockRef.current;
         if (
-          skeletonEnabledRef.current &&
-          skeletonDrawEnabledRef.current &&
+          (lockOwnsSkeleton || (skeletonEnabledRef.current && skeletonDrawEnabledRef.current)) &&
           !skeletonSuppressedRef.current &&
           skeletonDimsOk
         ) {
@@ -4373,13 +4464,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // precedence over live inference — the pose is looked up by MEDIA
           // time, so it stays perfectly glued to the player at 1×, 2×, any
           // speed, playing or paused.
-          const bakedPose = poseModeRef.current === 'live' && video && !bakingRef.current
+          // Under the exact-pose lock the pushed pose IS the answer: the baked
+          // track is interpolated between samples and centre-smoothed, so letting
+          // it win here would put a different skeleton on screen from the one the
+          // mask was built with — which is exactly the mismatch a coach spots.
+          const bakedPose = !exactPoseLockRef.current && poseModeRef.current === 'live' && video && !bakingRef.current
             ? lookupBakedPose(video.currentTime)
             : null;
           // Once ANY section is tracked, the skeleton shows ONLY inside tracked
           // sections (per coach request) — outside them it hides instead of
           // falling back to live jitter. Track another section to extend.
+          // Same reasoning: the "only show inside tracked sections" rule exists to
+          // hide live jitter, and an exact pushed pose is the opposite of jitter.
           const hiddenByTrackScope =
+            !exactPoseLockRef.current &&
             bakedTracksRef.current.length > 0 &&
             !bakedPose &&
             !bakingRef.current &&
@@ -6135,7 +6233,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // (the play-loop is idle while paused, so the new focus would otherwise
         // not reach the worker until the next play/seek).
         const fv = videoRef.current;
-        if (fv?.paused) poseBridgeRef.current?.sendFrame(fv);
+        // Not while the exact-pose lock is held — see sendFrame: one shared,
+        // non-reentrant detector, so a click-to-focus detection landing mid-pass
+        // would corrupt the exact pose for whichever frame is in flight.
+        if (fv?.paused && !exactPoseLockRef.current) poseBridgeRef.current?.sendFrame(fv);
         skeletonSuppressedRef.current = false;
         renderDirtyRef.current = true;
         return true;

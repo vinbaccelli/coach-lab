@@ -18,6 +18,22 @@ export function maskHasContent(mask: AlphaMask | null | undefined): boolean {
   return false;
 }
 
+/**
+ * How many pixels the mask actually covers.
+ *
+ * `maskHasContent` answers "did anything survive", which is deliberately the
+ * loosest possible test — one lit pixel passes. Callers deciding whether a mask
+ * is good enough to REPLACE existing work need the magnitude, not the boolean:
+ * a few dozen surviving pixels is indistinguishable from success by the former
+ * and obviously a failure by the latter.
+ */
+export function countMaskPixels(mask: AlphaMask | null | undefined): number {
+  if (!mask?.data?.length) return 0;
+  let n = 0;
+  for (let i = 0; i < mask.data.length; i++) if (mask.data[i] > 0) n++;
+  return n;
+}
+
 /** Mask for live canvas preview — any coach-reviewed or AI-proposed mask. */
 export function getPreviewMask(frame: StroMotionFrameDraft): AlphaMask | null {
   if (frame.readyMask && maskHasContent(frame.readyMask)) return frame.readyMask;

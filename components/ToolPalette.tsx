@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   MousePointer2,
@@ -432,16 +432,28 @@ const scrollArea: React.CSSProperties = {
   padding: '8px 10px 12px',
 };
 
+/**
+ * ONE `padding` string, never shorthand + longhand together.
+ *
+ * This used to spread a base carrying shorthand `padding` and then add
+ * `paddingBottom` on top when `mobileChrome` was set. React warns about exactly
+ * that — "Removing a style property during rerender (paddingBottom) when a
+ * conflicting property is set (padding)" — because when the flag flips back off
+ * it removes the longhand while the shorthand is still present, and the result
+ * depends on property order rather than on intent. Composing the bottom value
+ * into a single shorthand keeps one source of truth for the box.
+ */
 function scrollAreaFor(io: boolean, mobileChrome?: boolean): React.CSSProperties {
-  let base = scrollArea;
-  if (io) base = { ...scrollArea, padding: '6px 4px 10px', gap: 4, alignItems: 'center' };
-  if (mobileChrome) {
-    base = {
-      ...base,
-      paddingBottom: 'calc(8px + var(--anglemotion-install-banner-height, 0px))',
-    };
-  }
-  return base;
+  const top = io ? '6px' : '8px';
+  const side = io ? '4px' : '10px';
+  const bottom = mobileChrome
+    ? 'calc(8px + var(--anglemotion-install-banner-height, 0px))'
+    : io ? '10px' : '12px';
+  return {
+    ...scrollArea,
+    ...(io ? { gap: 4, alignItems: 'center' as const } : null),
+    padding: `${top} ${side} ${bottom}`,
+  };
 }
 
 function ToolbarScrollArea({
@@ -521,6 +533,369 @@ function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolea
     };
   }
   return base;
+}
+
+
+/**
+ * Shared chrome the toolbar's presentational pieces need.
+ *
+ * WHY THESE FIVE COMPONENTS LIVE AT MODULE SCOPE.
+ * They used to be declared inside ToolPalette's render body. A component
+ * declared in a render body gets a NEW function identity on every render, and
+ * React compares element types by identity — so every ToolPalette render
+ * unmounted and remounted the entire row list, the lead, the collapse control
+ * and the footer, rebuilding that DOM from scratch each time. That full teardown
+ * is what the coach saw as the toolbar shaking vertically, and it got much worse
+ * during a Motion Layer pass, which re-renders the page once per frame
+ * (setProcessingStatus) — ToolPalette is not memoized and its props object is
+ * rebuilt every page render, so it re-renders unconditionally.
+ *
+ * Hoisting them fixes the identity; this bag carries what they used to close
+ * over. It is one object rather than ~20 loose props so the 78 call sites stay
+ * readable, and it is memoized in the body so it is not itself a churn source.
+ */
+interface ToolbarChrome {
+  io: boolean;
+  denseMobile: boolean;
+  mobileChrome: boolean;
+  phoneLayout: boolean;
+  compactToolbarChrome: boolean;
+  collapsed: boolean;
+  showCollapseControl: boolean;
+  toolbarLabelsExpanded: boolean;
+  screenshotSaving: boolean;
+  iconBox: number;
+  textMuted: string;
+  pressedKey: string | null;
+  rb: (active: boolean, pressed: boolean, iconOnly?: boolean, dense?: boolean) => React.CSSProperties;
+  fire: (key: string, action: () => void) => void;
+  pop: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  onClear: () => void;
+  onCleanSession?: () => void;
+  onScreenshotSave?: () => void;
+  onToggleCollapsed?: () => void;
+  onToggleToolbarLabels?: () => void;
+  authContent?: React.ReactNode;
+}
+
+function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
+  const {
+    mobileChrome, onScreenshotSave, screenshotSaving, denseMobile, io, rb,
+    pressedKey, fire, iconBox, onUndo, onRedo, onClear, onCleanSession, authContent,
+  } = chrome;
+  return (
+    <div
+      style={{
+        flexShrink: 0,
+        paddingBottom: mobileChrome
+          ? 'calc(4px + env(safe-area-inset-bottom, 0px) + var(--anglemotion-install-banner-height, 0px))'
+          : undefined,
+      }}
+    >
+      <div style={{ height: 1, background: '#D1D1D6', margin: '8px 0' }} />
+      {onScreenshotSave ? (
+        <Row chrome={chrome}
+          k="screenshot"
+          icon={screenshotSaving
+            ? <span style={{ width: denseMobile || io ? 16 : 20, height: denseMobile || io ? 16 : 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width={denseMobile || io ? 16 : 20} height={denseMobile || io ? 16 : 20} style={{ animation: 'spin 1s linear infinite' }}>
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
+                </svg>
+              </span>
+            : <Camera size={denseMobile || io ? 16 : 20} />
+          }
+          label={screenshotSaving ? 'Saving…' : 'Screenshot'}
+          tooltip="Capture the current frame with drawings and save to player"
+          onPress={screenshotSaving ? () => {} : onScreenshotSave}
+        />
+      ) : null}
+      <Row chrome={chrome} k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} tooltip="Undo the last drawing action" label="Undo" onPress={onUndo} />
+      <Row chrome={chrome} k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} tooltip="Redo the last undone action" label="Redo" onPress={onRedo} />
+      <Row chrome={chrome} k="cl" destructive icon={<Trash2 size={denseMobile || io ? 16 : 20} />} tooltip="Clear all drawings, skeleton, markers, and data" label="Clear all" onPress={onClear} />
+      {onCleanSession ? (
+        <button
+          type="button"
+          aria-label="Clear session"
+          data-destructive="true"
+          style={{
+            ...rb(false, pressedKey === 'clean', io, denseMobile || io),
+            color: '#FF3B30',
+            borderColor: '#D1D1D6',
+            background: pressedKey === 'clean' ? '#FFECEC' : '#FFFFFF',
+            transform: pressedKey === 'clean' ? 'scale(0.95)' : undefined,
+            ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire('clean', onCleanSession);
+          }}
+        >
+          <span
+            style={{
+              display: 'flex',
+              width: iconBox,
+              height: iconBox,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <RefreshCw size={denseMobile || io ? 16 : 18} />
+          </span>
+          {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Clear session</span>}
+        </button>
+      ) : null}
+      <Link
+        href="/"
+        aria-label="Control Panel"
+        style={{
+          ...rb(false, false, io, denseMobile),
+          textDecoration: 'none',
+          color: 'inherit',
+          ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
+        }}
+        onPointerDown={() => haptic()}
+      >
+        <span style={{ display: 'flex', width: iconBox, height: iconBox, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <ToolbarIcon size={denseMobile ? 16 : 18}><Home /></ToolbarIcon>
+        </span>
+        {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
+      </Link>
+      {authContent ? <div style={{ marginTop: 4 }}>{authContent}</div> : null}
+    </div>
+  );
+}
+
+function ToolbarLead({ chrome }: { chrome: ToolbarChrome }) {
+  const {
+    io, denseMobile, rb, pressedKey, fire, iconBox, showCollapseControl,
+    compactToolbarChrome, mobileChrome, phoneLayout, onToggleToolbarLabels,
+    toolbarLabelsExpanded,
+  } = chrome;
+  return (
+    <>
+      {/* Logo */}
+      <div style={{ display: 'flex', justifyContent: io ? 'center' : 'center', padding: io ? '2px 0' : '6px 8px 10px' }}>
+        {io
+          ? <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 36, height: 36, borderRadius: 7 }} />
+          : <img src="/logo-rect-new.jpg" alt="Anglemotion" style={{ width: '100%', maxWidth: 180, height: 'auto', borderRadius: 6 }} />
+        }
+      </div>
+      {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
+        <button
+          type="button"
+          aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
+          style={{
+            ...rb(false, pressedKey === 'expand', io, denseMobile),
+            justifyContent: 'center',
+            transform: pressedKey === 'expand' ? 'scale(0.95)' : undefined,
+            ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0 } : null),
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire('expand', onToggleToolbarLabels);
+          }}
+        >
+          <span
+            style={{
+              display: 'flex',
+              width: iconBox,
+              height: iconBox,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <ToolbarChevron expanded={toolbarLabelsExpanded} />
+          </span>
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+function CollapseControl({ chrome }: { chrome: ToolbarChrome }) {
+  const { showCollapseControl, onToggleCollapsed, denseMobile, io, rb, pressedKey, fire, collapsed } = chrome;
+  return showCollapseControl && onToggleCollapsed ? (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          padding: denseMobile ? '2px 2px 4px' : '4px 4px 6px',
+          flexShrink: 0,
+        }}
+      >
+        <button
+          type="button"
+          aria-label={collapsed ? 'Expand toolbar' : 'Collapse toolbar'}
+          style={{
+            ...rb(false, pressedKey === 'collapse', io, denseMobile),
+            boxSizing: 'border-box',
+            width: io ? 44 : denseMobile ? 36 : 40,
+            height: io ? 44 : undefined,
+            minHeight: 44,
+            maxHeight: io ? 44 : undefined,
+            padding: 0,
+            justifyContent: 'center',
+            margin: io ? '0 auto' : undefined,
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire('collapse', onToggleCollapsed);
+          }}
+        >
+          <ChevronRight size={18} strokeWidth={2} style={{ display: collapsed ? 'block' : 'none' }} />
+          <ChevronLeft size={18} strokeWidth={2} style={{ display: collapsed ? 'none' : 'block' }} />
+        </button>
+      </div>
+    ) : null;
+}
+
+function Row({
+    k,
+    chrome,
+    active,
+    icon,
+    label,
+    onPress,
+    sub,
+    destructive,
+    tooltip,
+  }: {
+    k: string;
+    active?: boolean;
+    icon: React.ReactNode;
+    label: string;
+    onPress: () => void;
+    sub?: string;
+    destructive?: boolean;
+    tooltip?: string;
+    chrome: ToolbarChrome;
+  }) {
+    const { pressedKey, io, denseMobile, rb, fire, iconBox, textMuted } = chrome;
+    const pressed = pressedKey === k;
+    const rowStyle = {
+      ...rb(!!active, pressed, io, denseMobile),
+      ...(destructive && !active
+        ? {
+            color: '#FF3B30',
+            background: pressed ? '#FFECEC' : '#FFFFFF',
+            borderColor: '#D1D1D6',
+          }
+        : null),
+      transform: pressed ? 'scale(0.95)' : undefined,
+      justifyContent: io ? ('center' as const) : ('flex-start' as const),
+      ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0 } : null),
+    };
+    if (io) {
+      return (
+        <button
+          type="button"
+          aria-label={sub ? `${label} — ${sub}` : label}
+          title={tooltip ?? label}
+          data-active={active ? 'true' : undefined}
+          data-destructive={destructive ? 'true' : undefined}
+          style={rowStyle}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            fire(k, onPress);
+          }}
+        >
+          <span
+            style={{
+              display: 'flex',
+              width: iconBox,
+              height: iconBox,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {icon}
+          </span>
+        </button>
+      );
+    }
+    return (
+      <button
+        type="button"
+        title={tooltip ?? label}
+        data-active={active ? 'true' : undefined}
+        data-destructive={destructive ? 'true' : undefined}
+        style={rowStyle}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          fire(k, onPress);
+        }}
+      >
+        <span style={{ display: 'flex', width: 26, justifyContent: 'center', flexShrink: 0 }}>
+          {icon}
+        </span>
+        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
+          <span style={{ lineHeight: 1.2, fontSize: 13, fontWeight: 500 }}>{label}</span>
+          {sub ? <span style={{ fontSize: 11, fontWeight: 400, color: textMuted }}>{sub}</span> : null}
+        </span>
+      </button>
+    );
+}
+
+function BackHeader({
+    title,
+    icon,
+    onBack,
+    chrome,
+  }: {
+    title: string;
+    icon: React.ReactNode;
+    onBack?: () => void;
+    chrome: ToolbarChrome;
+  }) {
+  const { rb, pressedKey, io, denseMobile, fire, pop } = chrome;
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Back"
+        style={{
+          ...rb(false, pressedKey === `back-${title}`, io, denseMobile),
+          ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0, justifyContent: 'center' } : null),
+          fontWeight: 600,
+          fontSize: io ? undefined : 16,
+        }}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          fire(`back-${title}`, () => {
+            onBack?.();
+            pop();
+          });
+        }}
+      >
+        {io ? <ChevronLeft size={18} strokeWidth={2} /> : (
+          <>
+            <ChevronLeft size={18} strokeWidth={2} />
+            Back
+          </>
+        )}
+      </button>
+      {!io ? (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-start',
+          gap: 10,
+          padding: '10px 4px 4px',
+          color: '#1D1D1F',
+          fontWeight: 600,
+          fontSize: 16,
+          position: 'relative',
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', color: 'currentColor' }}>{icon}</span>
+        {title}
+      </div>
+      ) : null}
+    </>
+  );
 }
 
 export default function ToolPalette(props: ToolPaletteProps) {
@@ -627,8 +1002,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
     : Boolean(iconOnlyLayout || mobileChrome || collapsed || phoneLayout);
   const io = iconOnlyMode;
   const useVerticalThickness = Boolean((compactToolbarChrome || phoneLayout) && !io);
-  const rb = (active: boolean, pressed: boolean, iconOnly = io, dense = denseMobile || iconOnly): React.CSSProperties =>
-    rowBase(active, pressed, iconOnly, dense);
+  // Stable across renders so the `chrome` bag below can actually memoize: rb only
+  // closes over io/denseMobile (as default args), and both are memo deps too, so
+  // the identity and the values can never drift apart.
+  const rb = useCallback(
+    (active: boolean, pressed: boolean, iconOnly = io, dense = denseMobile || iconOnly): React.CSSProperties =>
+      rowBase(active, pressed, iconOnly, dense),
+    [io, denseMobile],
+  );
   const textMuted = '#6E6E73';
   const textSubtle = '#8E8E93';
   const shellStyle: React.CSSProperties = {
@@ -679,300 +1060,25 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   const iconBox = denseMobile || io ? 20 : 26;
 
-  const GlobalActionsFooter = () => (
-    <div
-      style={{
-        flexShrink: 0,
-        paddingBottom: mobileChrome
-          ? 'calc(4px + env(safe-area-inset-bottom, 0px) + var(--anglemotion-install-banner-height, 0px))'
-          : undefined,
-      }}
-    >
-      <div style={{ height: 1, background: '#D1D1D6', margin: '8px 0' }} />
-      {onScreenshotSave ? (
-        <Row
-          k="screenshot"
-          icon={screenshotSaving
-            ? <span style={{ width: denseMobile || io ? 16 : 20, height: denseMobile || io ? 16 : 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width={denseMobile || io ? 16 : 20} height={denseMobile || io ? 16 : 20} style={{ animation: 'spin 1s linear infinite' }}>
-                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
-                </svg>
-              </span>
-            : <Camera size={denseMobile || io ? 16 : 20} />
-          }
-          label={screenshotSaving ? 'Saving…' : 'Screenshot'}
-          tooltip="Capture the current frame with drawings and save to player"
-          onPress={screenshotSaving ? () => {} : onScreenshotSave}
-        />
-      ) : null}
-      <Row k="u" icon={<Undo2 size={denseMobile || io ? 16 : 20} />} tooltip="Undo the last drawing action" label="Undo" onPress={onUndo} />
-      <Row k="r" icon={<Redo2 size={denseMobile || io ? 16 : 20} />} tooltip="Redo the last undone action" label="Redo" onPress={onRedo} />
-      <Row k="cl" destructive icon={<Trash2 size={denseMobile || io ? 16 : 20} />} tooltip="Clear all drawings, skeleton, markers, and data" label="Clear all" onPress={onClear} />
-      {onCleanSession ? (
-        <button
-          type="button"
-          aria-label="Clear session"
-          data-destructive="true"
-          style={{
-            ...rb(false, pressedKey === 'clean', io, denseMobile || io),
-            color: '#FF3B30',
-            borderColor: '#D1D1D6',
-            background: pressedKey === 'clean' ? '#FFECEC' : '#FFFFFF',
-            transform: pressedKey === 'clean' ? 'scale(0.95)' : undefined,
-            ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
-          }}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            fire('clean', onCleanSession);
-          }}
-        >
-          <span
-            style={{
-              display: 'flex',
-              width: iconBox,
-              height: iconBox,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <RefreshCw size={denseMobile || io ? 16 : 18} />
-          </span>
-          {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Clear session</span>}
-        </button>
-      ) : null}
-      <Link
-        href="/"
-        aria-label="Control Panel"
-        style={{
-          ...rb(false, false, io, denseMobile),
-          textDecoration: 'none',
-          color: 'inherit',
-          ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
-        }}
-        onPointerDown={() => haptic()}
-      >
-        <span style={{ display: 'flex', width: iconBox, height: iconBox, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <ToolbarIcon size={denseMobile ? 16 : 18}><Home /></ToolbarIcon>
-        </span>
-        {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
-      </Link>
-      {authContent ? <div style={{ marginTop: 4 }}>{authContent}</div> : null}
-    </div>
-  );
+  /**
+   * The chrome bag handed to the module-scope toolbar pieces (see ToolbarChrome).
+   * Memoized so it is not a re-render source of its own; the pieces are plain
+   * components, so a changed value re-renders them but never remounts them.
+   */
+  const chrome: ToolbarChrome = useMemo(() => ({
+    io, denseMobile, mobileChrome, phoneLayout, compactToolbarChrome, collapsed,
+    showCollapseControl, toolbarLabelsExpanded, screenshotSaving, iconBox,
+    textMuted, pressedKey, rb, fire, pop,
+    onUndo, onRedo, onClear, onCleanSession, onScreenshotSave,
+    onToggleCollapsed, onToggleToolbarLabels, authContent,
+  }), [
+    io, denseMobile, mobileChrome, phoneLayout, compactToolbarChrome, collapsed,
+    showCollapseControl, toolbarLabelsExpanded, screenshotSaving, iconBox,
+    pressedKey, rb, fire, pop,
+    onUndo, onRedo, onClear, onCleanSession, onScreenshotSave,
+    onToggleCollapsed, onToggleToolbarLabels, authContent,
+  ]);
 
-  const ToolbarLead = () => (
-    <>
-      {/* Logo */}
-      <div style={{ display: 'flex', justifyContent: io ? 'center' : 'center', padding: io ? '2px 0' : '6px 8px 10px' }}>
-        {io
-          ? <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 36, height: 36, borderRadius: 7 }} />
-          : <img src="/logo-rect-new.jpg" alt="Anglemotion" style={{ width: '100%', maxWidth: 180, height: 'auto', borderRadius: 6 }} />
-        }
-      </div>
-      {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
-        <button
-          type="button"
-          aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
-          style={{
-            ...rb(false, pressedKey === 'expand', io, denseMobile),
-            justifyContent: 'center',
-            transform: pressedKey === 'expand' ? 'scale(0.95)' : undefined,
-            ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0 } : null),
-          }}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            fire('expand', onToggleToolbarLabels);
-          }}
-        >
-          <span
-            style={{
-              display: 'flex',
-              width: iconBox,
-              height: iconBox,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <ToolbarChevron expanded={toolbarLabelsExpanded} />
-          </span>
-        </button>
-      ) : null}
-    </>
-  );
-
-  const CollapseControl = () =>
-    showCollapseControl && onToggleCollapsed ? (
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'flex-end',
-          padding: denseMobile ? '2px 2px 4px' : '4px 4px 6px',
-          flexShrink: 0,
-        }}
-      >
-        <button
-          type="button"
-          aria-label={collapsed ? 'Expand toolbar' : 'Collapse toolbar'}
-          style={{
-            ...rb(false, pressedKey === 'collapse', io, denseMobile),
-            boxSizing: 'border-box',
-            width: io ? 44 : denseMobile ? 36 : 40,
-            height: io ? 44 : undefined,
-            minHeight: 44,
-            maxHeight: io ? 44 : undefined,
-            padding: 0,
-            justifyContent: 'center',
-            margin: io ? '0 auto' : undefined,
-          }}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            fire('collapse', onToggleCollapsed);
-          }}
-        >
-          <ChevronRight size={18} strokeWidth={2} style={{ display: collapsed ? 'block' : 'none' }} />
-          <ChevronLeft size={18} strokeWidth={2} style={{ display: collapsed ? 'none' : 'block' }} />
-        </button>
-      </div>
-    ) : null;
-
-  const Row = ({
-    k,
-    active,
-    icon,
-    label,
-    onPress,
-    sub,
-    destructive,
-    tooltip,
-  }: {
-    k: string;
-    active?: boolean;
-    icon: React.ReactNode;
-    label: string;
-    onPress: () => void;
-    sub?: string;
-    destructive?: boolean;
-    tooltip?: string;
-  }) => {
-    const pressed = pressedKey === k;
-    const rowStyle = {
-      ...rb(!!active, pressed, io, denseMobile),
-      ...(destructive && !active
-        ? {
-            color: '#FF3B30',
-            background: pressed ? '#FFECEC' : '#FFFFFF',
-            borderColor: '#D1D1D6',
-          }
-        : null),
-      transform: pressed ? 'scale(0.95)' : undefined,
-      justifyContent: io ? ('center' as const) : ('flex-start' as const),
-      ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0 } : null),
-    };
-    if (io) {
-      return (
-        <button
-          type="button"
-          aria-label={sub ? `${label} — ${sub}` : label}
-          title={tooltip ?? label}
-          data-active={active ? 'true' : undefined}
-          data-destructive={destructive ? 'true' : undefined}
-          style={rowStyle}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            fire(k, onPress);
-          }}
-        >
-          <span
-            style={{
-              display: 'flex',
-              width: iconBox,
-              height: iconBox,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            {icon}
-          </span>
-        </button>
-      );
-    }
-    return (
-      <button
-        type="button"
-        title={tooltip ?? label}
-        data-active={active ? 'true' : undefined}
-        data-destructive={destructive ? 'true' : undefined}
-        style={rowStyle}
-        onPointerDown={(e) => {
-          e.preventDefault();
-          fire(k, onPress);
-        }}
-      >
-        <span style={{ display: 'flex', width: 26, justifyContent: 'center', flexShrink: 0 }}>
-          {icon}
-        </span>
-        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
-          <span style={{ lineHeight: 1.2, fontSize: 13, fontWeight: 500 }}>{label}</span>
-          {sub ? <span style={{ fontSize: 11, fontWeight: 400, color: textMuted }}>{sub}</span> : null}
-        </span>
-      </button>
-    );
-  };
-
-  const BackHeader = ({
-    title,
-    icon,
-    onBack,
-  }: {
-    title: string;
-    icon: React.ReactNode;
-    onBack?: () => void;
-  }) => (
-    <>
-      <button
-        type="button"
-        aria-label="Back"
-        style={{
-          ...rb(false, pressedKey === `back-${title}`, io, denseMobile),
-          ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0, justifyContent: 'center' } : null),
-          fontWeight: 600,
-          fontSize: io ? undefined : 16,
-        }}
-        onPointerDown={(e) => {
-          e.preventDefault();
-          fire(`back-${title}`, () => {
-            onBack?.();
-            pop();
-          });
-        }}
-      >
-        {io ? <ChevronLeft size={18} strokeWidth={2} /> : (
-          <>
-            <ChevronLeft size={18} strokeWidth={2} />
-            Back
-          </>
-        )}
-      </button>
-      {!io ? (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-start',
-          gap: 10,
-          padding: '10px 4px 4px',
-          color: '#1D1D1F',
-          fontWeight: 600,
-          fontSize: 16,
-          position: 'relative',
-        }}
-      >
-        <span style={{ display: 'flex', alignItems: 'center', color: 'currentColor' }}>{icon}</span>
-        {title}
-      </div>
-      ) : null}
-    </>
-  );
 
   const chk = (
     key: string,
@@ -1050,13 +1156,13 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'recording' && recordingHubContent) {
     return (
       <div style={shellStyle}>
-        <CollapseControl />
+        <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <ToolbarLead />
-          <BackHeader title="Recording Hub" icon={<RecordHubIcon size={18} />} />
+          <ToolbarLead chrome={chrome} />
+          <BackHeader chrome={chrome} title="Recording Hub" icon={<RecordHubIcon size={18} />} />
           {recordingHubContent}
         </ToolbarScrollArea>
-        <GlobalActionsFooter />
+        <GlobalActionsFooter chrome={chrome} />
       </div>
     );
   }
@@ -1064,10 +1170,10 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'style') {
     return (
       <div style={shellStyle}>
-        <CollapseControl />
+        <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <ToolbarLead />
-          <BackHeader title="Default style" icon={<Palette size={18} />} />
+          <ToolbarLead chrome={chrome} />
+          <BackHeader chrome={chrome} title="Default style" icon={<Palette size={18} />} />
           {!io ? (
           <>
           <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: textMuted }}>
@@ -1194,7 +1300,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             </div>
           )}
         </ToolbarScrollArea>
-        <GlobalActionsFooter />
+        <GlobalActionsFooter chrome={chrome} />
       </div>
     );
   }
@@ -1202,34 +1308,34 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'draw') {
     return (
       <div style={shellStyle}>
-        <CollapseControl />
+        <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <ToolbarLead />
-          <BackHeader title="Draw" icon={<Pen size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
+          <ToolbarLead chrome={chrome} />
+          <BackHeader chrome={chrome} title="Draw" icon={<Pen size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
           {/* V1 spec: Style sits at the TOP of the Draw list (set the look first). */}
-          <Row
+          <Row chrome={chrome}
             k="st-d"
             icon={<Palette size={18} />}
             label="Style"
             tooltip="Change line color, thickness, and dash style for drawing tools"
             onPress={() => push('style')}
           />
-          <Row k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} tooltip="Freehand drawing tool" label="Pen" onPress={() => setTool('pen')} />
-          <Row k="line" active={activeTool === 'line'} icon={<Minus size={18} />} tooltip="Draw a straight line" label="Line" onPress={() => setTool('line')} />
-          <Row k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} tooltip="Draw an arrow with direction" label="Arrow" onPress={() => setTool('arrow')} />
+          <Row chrome={chrome} k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} tooltip="Freehand drawing tool" label="Pen" onPress={() => setTool('pen')} />
+          <Row chrome={chrome} k="line" active={activeTool === 'line'} icon={<Minus size={18} />} tooltip="Draw a straight line" label="Line" onPress={() => setTool('line')} />
+          <Row chrome={chrome} k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} tooltip="Draw an arrow with direction" label="Arrow" onPress={() => setTool('arrow')} />
           <div data-tour-id="tour-angle">
-            <Row k="angle-d" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} tooltip="Measure angle between three points (click vertex, then two arms)" label="Angle" onPress={() => setTool('angle')} />
+            <Row chrome={chrome} k="angle-d" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} tooltip="Measure angle between three points (click vertex, then two arms)" label="Angle" onPress={() => setTool('angle')} />
           </div>
-          <Row k="aa-d" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} tooltip="Draw an arrow that measures direction angle" label="Angle arrow" onPress={() => setTool('arrowAngle')} />
-          <Row k="rect" active={activeTool === 'rect'} icon={<Square size={18} />} tooltip="Draw a rectangle" label="Rectangle" onPress={() => setTool('rect')} />
-          <Row k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} tooltip="Draw a circle or ellipse" label="Circle" onPress={() => setTool('circle')} />
-          <Row k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} tooltip="Trace the racket swing path" label="Swing path" onPress={() => setTool('manualSwing')} />
-          <Row k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} tooltip="Connect joint points to measure body alignment" label="Joint chain" onPress={() => setTool('jointChain')} />
-          <Row k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
-          <Row k="ruler" active={activeTool === 'ruler'} icon={<Ruler size={18} />} tooltip="Measure real-world distances (calibrate first)" label="Ruler" onPress={() => setTool('ruler')} />
-          <Row k="anglediff" icon={<Activity size={18} />} tooltip="Draw two angle arrows (e.g. hips then shoulders) — the angle difference is auto-calculated" label="Angle differential" onPress={() => setTool('arrowAngle')} />
+          <Row chrome={chrome} k="aa-d" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} tooltip="Draw an arrow that measures direction angle" label="Angle arrow" onPress={() => setTool('arrowAngle')} />
+          <Row chrome={chrome} k="rect" active={activeTool === 'rect'} icon={<Square size={18} />} tooltip="Draw a rectangle" label="Rectangle" onPress={() => setTool('rect')} />
+          <Row chrome={chrome} k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} tooltip="Draw a circle or ellipse" label="Circle" onPress={() => setTool('circle')} />
+          <Row chrome={chrome} k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} tooltip="Trace the racket swing path" label="Swing path" onPress={() => setTool('manualSwing')} />
+          <Row chrome={chrome} k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} tooltip="Connect joint points to measure body alignment" label="Joint chain" onPress={() => setTool('jointChain')} />
+          <Row chrome={chrome} k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
+          <Row chrome={chrome} k="ruler" active={activeTool === 'ruler'} icon={<Ruler size={18} />} tooltip="Measure real-world distances (calibrate first)" label="Ruler" onPress={() => setTool('ruler')} />
+          <Row chrome={chrome} k="anglediff" icon={<Activity size={18} />} tooltip="Draw two angle arrows (e.g. hips then shoulders) — the angle difference is auto-calculated" label="Angle differential" onPress={() => setTool('arrowAngle')} />
           {onPrecisionDrawToggle && (
-            <Row
+            <Row chrome={chrome}
               k="precision"
               active={precisionDrawEnabled}
               icon={<Crosshair size={18} />}
@@ -1239,7 +1345,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             />
           )}
         </ToolbarScrollArea>
-        <GlobalActionsFooter />
+        <GlobalActionsFooter chrome={chrome} />
       </div>
     );
   }
@@ -1247,14 +1353,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'angle') {
     return (
       <div style={shellStyle}>
-        <CollapseControl />
+        <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <ToolbarLead />
-          <BackHeader title="Angle" icon={<AngleToolIcon size={18} />} />
-          <Row k="angle" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} tooltip="Measure angle between three points" label="Angle" onPress={() => setTool('angle')} />
-          <Row k="aa" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} tooltip="Draw an arrow that measures direction angle" label="Angle arrow" onPress={() => setTool('arrowAngle')} />
+          <ToolbarLead chrome={chrome} />
+          <BackHeader chrome={chrome} title="Angle" icon={<AngleToolIcon size={18} />} />
+          <Row chrome={chrome} k="angle" active={activeTool === 'angle'} icon={<AngleToolIcon size={18} />} tooltip="Measure angle between three points" label="Angle" onPress={() => setTool('angle')} />
+          <Row chrome={chrome} k="aa" active={activeTool === 'arrowAngle'} icon={<ArrowAngleToolIcon size={18} />} tooltip="Draw an arrow that measures direction angle" label="Angle arrow" onPress={() => setTool('arrowAngle')} />
         </ToolbarScrollArea>
-        <GlobalActionsFooter />
+        <GlobalActionsFooter chrome={chrome} />
       </div>
     );
   }
@@ -1262,14 +1368,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'skeleton') {
     return (
       <div style={shellStyle}>
-        <CollapseControl />
+        <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <ToolbarLead />
-          <BackHeader title="Skeleton" icon={<PersonStanding size={18} />} />
+          <ToolbarLead chrome={chrome} />
+          <BackHeader chrome={chrome} title="Skeleton" icon={<PersonStanding size={18} />} />
           {/* THE skeleton switch (spec): activate/deactivate lives HERE only —
               opening this toolbar never toggles the skeleton. */}
           {onSkeletonActiveChange !== undefined && (
-            <Row
+            <Row chrome={chrome}
               k="sov"
               active={skeletonActive ?? false}
               icon={<PersonStanding size={io ? 18 : 20} />}
@@ -1279,7 +1385,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             />
           )}
           {/* Refresh */}
-          <Row
+          <Row chrome={chrome}
             k="reskel"
             icon={<RefreshCw size={io ? 16 : 18} />}
             label="Refresh pose overlay"
@@ -1291,7 +1397,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               whole video, or the green timeline section if the coach dragged it;
               popup asks the tracking speed). */}
           {onOpenPrecisionTrack !== undefined && precisionTrackState === 'idle' && (
-            <Row
+            <Row chrome={chrome}
               k="ptrack"
               icon={<Sparkles size={18} strokeWidth={2} />}
               label="AI Track"
@@ -1300,7 +1406,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             />
           )}
           {precisionTrackState === 'running' && onPrecisionTrackCancel !== undefined && (
-            <Row
+            <Row chrome={chrome}
               k="ptrack-run"
               active
               icon={<Sparkles size={18} strokeWidth={2} />}
@@ -1311,7 +1417,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           {precisionTrackState === 'ready' && (
             <>
               {onOpenPrecisionTrack !== undefined && (
-                <Row
+                <Row chrome={chrome}
                   k="ptrack-more"
                   icon={<Sparkles size={18} strokeWidth={2} />}
                   label="AI Track — another section"
@@ -1320,7 +1426,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 />
               )}
               {onPrecisionTrackClear !== undefined && (
-                <Row
+                <Row chrome={chrome}
                   k="ptrack-clear"
                   active
                   icon={<Sparkles size={18} strokeWidth={2} />}
@@ -1363,7 +1469,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             </p>
           ) : null}
         </ToolbarScrollArea>
-        <GlobalActionsFooter />
+        <GlobalActionsFooter chrome={chrome} />
       </div>
     );
   }
@@ -1371,14 +1477,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'tools') {
     return (
       <div style={shellStyle}>
-        <CollapseControl />
+        <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <ToolbarLead />
-          <BackHeader title="Tools" icon={<LayoutGrid size={18} />} />
-          <Row k="met-t" icon={<BarChart3 size={18} />} tooltip="Skeleton, drawing tools, and measurements" label="Metrics" onPress={() => push('aimetrics')} />
-          <Row k="sm-t" icon={<Layers size={18} />} tooltip="Create multi-frame ghost overlay composites" label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
+          <ToolbarLead chrome={chrome} />
+          <BackHeader chrome={chrome} title="Tools" icon={<LayoutGrid size={18} />} />
+          <Row chrome={chrome} k="met-t" icon={<BarChart3 size={18} />} tooltip="Skeleton, drawing tools, and measurements" label="Metrics" onPress={() => push('aimetrics')} />
+          <Row chrome={chrome} k="sm-t" icon={<Layers size={18} />} tooltip="Create multi-frame ghost overlay composites" label="Stromotion" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
         </ToolbarScrollArea>
-        <GlobalActionsFooter />
+        <GlobalActionsFooter chrome={chrome} />
       </div>
     );
   }
@@ -1386,14 +1492,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'stromotion') {
     return (
       <div style={shellStyle}>
-        <CollapseControl />
+        <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <ToolbarLead />
-          <BackHeader title="Stromotion" icon={<Layers size={18} />} />
+          <ToolbarLead chrome={chrome} />
+          <BackHeader chrome={chrome} title="Stromotion" icon={<Layers size={18} />} />
           {stroMotionPanel ?? (
             <>
               {onStroMotionToggle ? (
-                <Row
+                <Row chrome={chrome}
                   k="sm-on"
                   active={stroMotionEnabled}
                   icon={<Layers size={18} />}
@@ -1409,7 +1515,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             </>
           )}
         </ToolbarScrollArea>
-        <GlobalActionsFooter />
+        <GlobalActionsFooter chrome={chrome} />
       </div>
     );
   }
@@ -1418,13 +1524,13 @@ export default function ToolPalette(props: ToolPaletteProps) {
     const metricIcon = denseMobile || io ? 16 : 18;
     return (
       <div style={shellStyle}>
-        <CollapseControl />
+        <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-          <ToolbarLead />
-          <BackHeader title="Metrics" icon={<BarChart3 size={18} />} />
+          <ToolbarLead chrome={chrome} />
+          <BackHeader chrome={chrome} title="Metrics" icon={<BarChart3 size={18} />} />
 
           {/* Skeleton sub-screen */}
-          <Row
+          <Row chrome={chrome}
             k="sk-met"
             active={activeTool === 'skeleton'}
             icon={<PersonStanding size={metricIcon} />}
@@ -1433,7 +1539,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             onPress={() => { setTool('skeleton'); push('skeleton'); }}
           />
           {skeletonLockedProp && onSkeletonLockToggle && (
-            <Row
+            <Row chrome={chrome}
               k="sk-unlock"
               icon={<Crosshair size={metricIcon} />}
               tooltip="Unlock skeleton to click on a different player"
@@ -1443,11 +1549,11 @@ export default function ToolPalette(props: ToolPaletteProps) {
           )}
 
           {/* Draw tools (all available inside Metrics) */}
-          <Row k="m-draw" icon={<Pen size={metricIcon} />} tooltip="All drawing and measurement tools (pen, angle, ruler, etc.)" label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
+          <Row chrome={chrome} k="m-draw" icon={<Pen size={metricIcon} />} tooltip="All drawing and measurement tools (pen, angle, ruler, etc.)" label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
 
           {/* Activate Data Column */}
           {onDataColumnToggle && (
-            <Row
+            <Row chrome={chrome}
               k="m-datacol"
               active={dataColumnActive}
               icon={<BarChart3 size={metricIcon} />}
@@ -1459,31 +1565,31 @@ export default function ToolPalette(props: ToolPaletteProps) {
           {/* Column entries are rendered only in the floating on-canvas column —
               the duplicate in-toolbar list was removed to avoid two sources. */}
           {dataColumnActive && onAddNote && (
-            <Row k="m-addnote" icon={<Type size={metricIcon} />} tooltip="Add a text note to the data column" label="Add note" onPress={onAddNote} />
+            <Row chrome={chrome} k="m-addnote" icon={<Type size={metricIcon} />} tooltip="Add a text note to the data column" label="Add note" onPress={onAddNote} />
           )}
           {dataColumnActive && onUndoMeasurement && (
-            <Row k="m-undolast" icon={<Undo2 size={metricIcon} />} tooltip="Remove the last entry" label="Undo last" onPress={onUndoMeasurement} />
+            <Row chrome={chrome} k="m-undolast" icon={<Undo2 size={metricIcon} />} tooltip="Remove the last entry" label="Undo last" onPress={onUndoMeasurement} />
           )}
           {dataColumnActive && onClearMeasurements && (
-            <Row k="m-clearcol" icon={<Trash2 size={metricIcon} />} tooltip="Clear all entries" label="Clear column" onPress={onClearMeasurements} destructive />
+            <Row chrome={chrome} k="m-clearcol" icon={<Trash2 size={metricIcon} />} tooltip="Clear all entries" label="Clear column" onPress={onClearMeasurements} destructive />
           )}
 
           {/* AI auto-detect from skeleton */}
           {onAutoDetectMeasurements && (
-            <Row k="m-aidetect" icon={<Sparkles size={metricIcon} />} tooltip="Auto-detect joint angles, hip-shoulder differential, and foot direction from skeleton" label="AI Detect Angles" onPress={onAutoDetectMeasurements} />
+            <Row chrome={chrome} k="m-aidetect" icon={<Sparkles size={metricIcon} />} tooltip="Auto-detect joint angles, hip-shoulder differential, and foot direction from skeleton" label="AI Detect Angles" onPress={onAutoDetectMeasurements} />
           )}
 
           {/* Create Snapshot — freeze the current frame into a snapshot */}
           {onOpenPhases && (
-            <Row k="m-snapshot" icon={<Target size={metricIcon} />} tooltip="Create a snapshot — freeze the current frame (skeleton + drawings + data column)" label="Snapshot" onPress={onOpenPhases} />
+            <Row chrome={chrome} k="m-snapshot" icon={<Target size={metricIcon} />} tooltip="Create a snapshot — freeze the current frame (skeleton + drawings + data column)" label="Snapshot" onPress={onOpenPhases} />
           )}
 
           {/* Generate — capture phase screenshots + slow-mo replay */}
           {onMetricsGenerate && (
-            <Row k="m-generate" icon={<Layers size={metricIcon} />} tooltip="Capture every phase and replay the stroke in slow motion" label="Generate" onPress={onMetricsGenerate} />
+            <Row chrome={chrome} k="m-generate" icon={<Layers size={metricIcon} />} tooltip="Capture every phase and replay the stroke in slow motion" label="Generate" onPress={onMetricsGenerate} />
           )}
         </ToolbarScrollArea>
-        <GlobalActionsFooter />
+        <GlobalActionsFooter chrome={chrome} />
       </div>
     );
   }
@@ -1491,18 +1597,18 @@ export default function ToolPalette(props: ToolPaletteProps) {
   /* ── Home ─────────────────────────────────────────────────────────── */
   return (
     <div style={shellStyle}>
-      <CollapseControl />
+      <CollapseControl chrome={chrome} />
       <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
-        <ToolbarLead />
-        <Row k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} tooltip="Select and move drawn shapes" label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
-        <Row
+        <ToolbarLead chrome={chrome} />
+        <Row chrome={chrome} k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} tooltip="Select and move drawn shapes" label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
+        <Row chrome={chrome}
           k="met-h"
           active={activeTool === 'skeleton'}
           icon={<BarChart3 size={denseMobile ? 16 : 20} />}
           label="Metrics"
           onPress={() => { onExitDrawContext?.(); push('aimetrics'); }}
         />
-        <Row
+        <Row chrome={chrome}
           k="sm-h"
           icon={<Layers size={denseMobile ? 16 : 20} />}
           label="Stromotion"
@@ -1510,7 +1616,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         />
         {recordingHubContent ? (
           <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
-            <Row
+            <Row chrome={chrome}
               k="cp"
               icon={<RecordHubIcon size={denseMobile ? 16 : 20} />}
               label="Recording Hub"
@@ -1519,7 +1625,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           </div>
         ) : null}
       </ToolbarScrollArea>
-      <GlobalActionsFooter />
+      <GlobalActionsFooter chrome={chrome} />
     </div>
   );
 }

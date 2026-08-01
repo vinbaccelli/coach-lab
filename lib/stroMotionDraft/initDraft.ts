@@ -1,6 +1,6 @@
 'use client';
 
-import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureFrame';
+import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureSource';
 import { defaultFrameLabel } from '@/lib/stroMotionDraft/frameMask';
 import type {
   StroMotionDraft,
