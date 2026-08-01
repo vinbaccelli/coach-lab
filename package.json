@@ -29,6 +29,7 @@
     "react-dom": "^18.3.1",
     "server-only": "^0.0.1",
     "stripe": "^22.2.2",
+    "tesseract.js": "^5.1.1",
     "webm-fix-duration": "^1.0.1"
   },
   "devDependencies": {

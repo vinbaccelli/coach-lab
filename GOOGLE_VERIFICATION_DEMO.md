@@ -1,4 +1,23 @@
-# GOOGLE_VERIFICATION_DEMO.md — TEMPORARY FOR GOOGLE OAUTH VERIFICATION
+# GOOGLE_VERIFICATION_DEMO.md — HISTORICAL (verification approved 2026-07-28)
+
+> **This process is complete.** Google approved the `documents`, `drive.file` and
+> `youtube.upload` scopes on 2026-07-28. Per "How to revert everything" below,
+> `lib/featureFlags.ts` now hardcodes `ENABLE_GOOGLE_EXPORTS = true` and
+> `ENABLE_YOUTUBE_UPLOAD = true` — the permanent post-approval state — and the
+> temporary `NEXT_PUBLIC_GOOGLE_VERIFICATION_DEMO` env indirection is deleted.
+> Nothing in the app reads that env var any more; setting it now does nothing.
+>
+> **Teardown still outstanding** (external, none of it required for the app to
+> work — do it whenever convenient, or keep it for future re-verification):
+> the `anglemotionverification` Vercel project, the `google-verification` git
+> branch, and the verification callback URL in Supabase's redirect allowlist.
+>
+> Kept rather than deleted because the scope inventory and the sign-in/scope
+> gating notes below are the record of what was approved and why.
+
+---
+
+## Original document — TEMPORARY FOR GOOGLE OAUTH VERIFICATION
 
 Purpose: expose the Google Docs / Drive / YouTube features on a **separate
 verification deployment** so the Google OAuth demo videos can be recorded,

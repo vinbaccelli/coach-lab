@@ -12,10 +12,18 @@ async function callGemini(model: string, parts: GeminiPart[]): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY is not configured on the server.');
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+  // The key travels in the x-goog-api-key HEADER, not the `?key=` query string.
+  // Both are accepted, but a query string is the part of a request most likely to
+  // be captured verbatim by proxies, platform request logs and error reporting —
+  // so the header is the safer of the two equivalent options, and it is the
+  // documented form for the newer AQ-format authorization keys.
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': key,
+    },
     body: JSON.stringify({
       contents: [{ role: 'user', parts }],
       generationConfig: {

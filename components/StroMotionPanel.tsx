@@ -556,9 +556,17 @@ export default function StroMotionPanel({
                     <button
                       type="button"
                       onClick={() => onSelectFrame(frame.index)}
+                      // Once a frame carries a mask this click opens the editor
+                      // on it, so say so rather than leaving the label looking
+                      // like a plain seek target.
+                      title={frame.hasMask
+                        ? 'Open this frame in the mask editor'
+                        : 'Go to this frame'}
                       style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, textAlign: 'left', fontSize: 11 }}
                     >
-                      <strong>{frame.label}</strong>
+                      <strong style={frame.hasMask ? { textDecoration: 'underline dotted', textUnderlineOffset: 3 } : undefined}>
+                        {frame.label}
+                      </strong>
                     </button>
                     <span style={{ fontSize: 10, fontWeight: 700, color: statusColor(frame.status) }}>
                       {statusLabel(frame.status)}

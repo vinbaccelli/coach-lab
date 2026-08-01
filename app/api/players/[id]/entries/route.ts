@@ -18,6 +18,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     screenshots?: string[];
     source?: string;
     metadata?: Record<string, unknown>;
+    /**
+     * Pre-structured Docs sections (heading / lines / notes / one image each).
+     *
+     * ADDITIVE: callers that don't send this keep the previous behaviour exactly
+     * — sections are derived from `screenshots`. The match decoder's 6-section
+     * report needs headings and bullet lines, which the screenshots-only shape
+     * cannot express, and `insertSessionAtTop` already accepts this structure.
+     */
+    sections?: Array<{ heading?: string; imageUrl?: string; lines?: string[]; notes?: string }>;
   };
 
   if (!body.category || !body.folder_label?.trim()) {
@@ -62,7 +71,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         const docId = await ensurePlayerDoc(docs, drive, session.supabase, player, 'match');
         await insertSessionAtTop(docs, docId, {
           title: body.folder_label.trim(),
-          sections: (body.screenshots ?? []).map((url) => ({ imageUrl: url })),
+          sections: body.sections?.length
+            ? body.sections
+            : (body.screenshots ?? []).map((url) => ({ imageUrl: url })),
           youtubeUrl: body.youtube_url ?? undefined,
           notes: body.body_text?.trim() || undefined,
         });
