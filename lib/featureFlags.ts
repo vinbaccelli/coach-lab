@@ -2,28 +2,50 @@
  * Feature flags.
  *
  * ENABLE_GOOGLE_EXPORTS — master switch for the Google Docs/Drive export
- * surface AND the sensitive OAuth scopes requested at sign-in. While Google's
- * verification review is pending, requesting the sensitive scopes shows every
- * user a "Google hasn't verified this app" warning — so until approval we
- * sign in with basic profile scopes only (no warning) and hide all export UI.
- * Flip to true after approval; every code path is intact behind the flags.
+ * surface AND the sensitive OAuth scopes requested at sign-in. ON.
  *
- * ENABLE_YOUTUBE_UPLOAD — YouTube upload UI (unverified projects get uploads
- * locked private by YouTube). Requires ENABLE_GOOGLE_EXPORTS.
+ * ENABLE_YOUTUBE_UPLOAD — "the YouTube upload feature EXISTS". A build-time kill
+ * switch only. It does NOT mean a given coach can upload: YouTube has its own
+ * grant now, so the real per-coach gate is the runtime `connected` flag from
+ * hooks/useYouTubeConnection (backed by /api/youtube/status). Flipping this off
+ * hides every YouTube surface; leaving it on shows "Connect YouTube" to coaches
+ * who have not authorized it yet.
+ *
+ * Google's OAuth verification was approved on 2026-07-28 for `documents`,
+ * `drive.file` and `youtube.upload`. Requesting all three together at sign-in,
+ * though, gets Google's consent screen to reject the request outright: 400
+ * invalid_request, "This request contains scopes that cannot be requested
+ * together: [youtube.upload, drive.file]". YouTube scopes are not combinable
+ * with other sensitive scopes in one OAuth grant — a Google policy constraint,
+ * not a bug in this app.
+ *
+ * `drive.file` cannot be the one dropped: the Docs export creates the
+ * `AngleMotion/Reports` and `AngleMotion/Players/<name>` folder structure,
+ * uploads snapshot images into it, and sets sharing permissions — all Drive
+ * writes that `documents` alone does not cover (see lib/google/drive.ts,
+ * app/api/google/report/route.ts, app/api/google/upload-image/route.ts).
+ *
+ * So GOOGLE_EXPORT_SCOPES below requests `documents drive.file` only, and
+ * YouTube runs an entirely separate consent: app/api/youtube/connect →
+ * /connect/callback stores its own refresh token, encrypted, in
+ * public.youtube_connections, and /api/youtube/upload mints an access token
+ * from that (lib/youtube/connection.ts). Nothing about YouTube touches sign-in
+ * any more — THIS FLAG NO LONGER AFFECTS THE SIGN-IN SCOPES AT ALL, which is
+ * what makes it safe to toggle.
+ *
+ * ONE CONSEQUENCE WORTH KNOWING BEFORE TOGGLING ENABLE_GOOGLE_EXPORTS (which
+ * does still gate sign-in scopes — hooks/useAuth.ts, app/login/LoginClient.tsx,
+ * components/WorkspaceChrome.tsx, keep all three in sync): a session created
+ * while it was off holds no Docs/Drive grant, so those buttons appear but the
+ * APIs reject them until the user signs out and back in.
  */
-// TEMPORARY FOR GOOGLE OAUTH VERIFICATION
-// Env override so the SEPARATE verification deployment
-// (anglemotionverification.vercel.app, env NEXT_PUBLIC_GOOGLE_VERIFICATION_DEMO=1)
-// can show the full Google Docs/Drive/YouTube surface for Google's demo video.
-// anglemotion.com production does NOT set this env var, so both flags compile
-// to `false` there — behavior is byte-identical to the previous hardcoded values.
-// Revert: restore the two exports to `= false;` and delete this block + the
-// env var (full instructions in GOOGLE_VERIFICATION_DEMO.md).
-const GOOGLE_VERIFICATION_DEMO = process.env.NEXT_PUBLIC_GOOGLE_VERIFICATION_DEMO === '1';
+export const ENABLE_GOOGLE_EXPORTS = true;
+export const ENABLE_YOUTUBE_UPLOAD = true;
 
-export const ENABLE_GOOGLE_EXPORTS = GOOGLE_VERIFICATION_DEMO;
-export const ENABLE_YOUTUBE_UPLOAD = GOOGLE_VERIFICATION_DEMO;
-
-/** Sensitive scopes requested at sign-in when exports are enabled. */
+/**
+ * Sensitive scopes requested at sign-in when exports are enabled. Deliberately
+ * NOT including youtube.upload — see the block above for why it cannot share
+ * a request with drive.file.
+ */
 export const GOOGLE_EXPORT_SCOPES =
-  'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file';
+  'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file';

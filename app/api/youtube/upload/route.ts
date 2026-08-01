@@ -2,16 +2,26 @@ import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { Readable } from 'stream';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { getYouTubeAccessToken } from '@/lib/youtube/connection';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
+  // The Supabase session still identifies the coach — but it no longer supplies
+  // the token. Its Google grant covers documents + drive.file, and Google refuses
+  // to issue youtube.upload alongside those, so the YouTube credential lives in
+  // its own store (lib/youtube/connection.ts) from its own consent.
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!session.googleAccessToken) {
+
+  const accessToken = await getYouTubeAccessToken(session.userId);
+  if (!accessToken) {
+    // `needsConnect` distinguishes "you have never connected YouTube" (or the
+    // grant was revoked) from a genuine upload failure, so the UI can offer the
+    // connect popup instead of an error the coach cannot act on.
     return NextResponse.json(
-      { error: 'Google access token missing — sign out and sign in again to grant YouTube scope.' },
+      { error: 'YouTube not connected', needsConnect: true },
       { status: 403 },
     );
   }
@@ -28,7 +38,7 @@ export async function POST(req: Request) {
   if (!file) return NextResponse.json({ error: 'Missing video file' }, { status: 400 });
 
   const oauth2 = new google.auth.OAuth2();
-  oauth2.setCredentials({ access_token: session.googleAccessToken });
+  oauth2.setCredentials({ access_token: accessToken });
   const youtube = google.youtube({ version: 'v3', auth: oauth2 });
 
   const buf = Buffer.from(await file.arrayBuffer());
