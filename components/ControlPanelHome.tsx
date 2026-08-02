@@ -242,7 +242,7 @@ export default function ControlPanelHome() {
               {([
                 ['AI skeleton + 13+ auto angles', true, true, true],
                 ['Editable AI skeleton (drag any joint)', true, false, false],
-                ['StroMotion / motion-trail composites', true, false, true],
+                ['Motion Layer / motion-trail composites', true, false, true],
                 ['Slow-mo phase replay videos', true, true, true],
                 ['Google Docs coaching reports', true, false, false],
                 ['One-click YouTube publish', true, false, false],
@@ -294,7 +294,7 @@ export default function ControlPanelHome() {
             {
               name: 'Carlos M.',
               role: 'Head Coach · Miami, FL',
-              text: 'The video analysis tool is a game changer. My players can finally see exactly where their technique breaks down. The frame-by-frame comparison with StroMotion is incredible.',
+              text: 'The video analysis tool is a game changer. My players can finally see exactly where their technique breaks down. The frame-by-frame comparison with Motion Layer is incredible.',
               stars: 5,
             },
             {
@@ -312,7 +312,7 @@ export default function ControlPanelHome() {
             {
               name: 'Chiara B.',
               role: 'Private Coach · Rome',
-              text: 'The StroMotion feature alone is worth it. Showing a player their swing path across 6 frames side by side is more powerful than any verbal feedback I can give.',
+              text: 'The Motion Layer feature alone is worth it. Showing a player their swing path across 6 frames side by side is more powerful than any verbal feedback I can give.',
               stars: 5,
             },
             {

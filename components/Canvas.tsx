@@ -9,7 +9,6 @@ import React, {
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg } from '@/lib/drawingTools';
-import { estimateFootVector } from '@/lib/biomechanics/measurements';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
@@ -148,7 +147,23 @@ export interface CanvasHandle {
   getSkeletonFrames: () => Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>;
   /** Run pose detection ON DEMAND at a specific video time (for StroMotion
    *  auto-detect when the coach hasn't played through with the skeleton on). */
-  detectPoseAtTime: (timeSec: number) => Promise<Array<{ x: number; y: number; score: number; name: string }> | null>;
+  /** `frame`: an already-captured bitmap for this same time. Caller keeps ownership. */
+  detectPoseAtTime: (timeSec: number, frame?: ImageBitmap) => Promise<Array<{ x: number; y: number; score: number; name: string }> | null>;
+  /**
+   * EXACT-POSE LOCK — hands the skeleton to whoever is pushing exact per-frame
+   * poses, and shuts every fast source out for the duration.
+   *
+   * While locked:
+   *   - the live worker no longer owns the displayed pose,
+   *   - no live poses are written into the time-indexed cache, and
+   *   - the draw path stops preferring the baked (interpolated + smoothed) track.
+   *
+   * So the ONLY thing that can appear on screen is what `setSkeletonKeypoints`
+   * puts there — which is the same pose the mask is built from. Used by Motion
+   * Layer, where a fast approximate skeleton is both visually alarming and the
+   * thing that kept leaking into the mask.
+   */
+  setExactPoseLock: (on: boolean) => void;
   /** Current frame's pose keypoints (for snapshot capture). */
   getSkeletonKeypoints: () => Array<{ x: number; y: number; score: number; name: string }> | null;
   /** Restore skeleton keypoints from a snapshot (for phase switching). */
@@ -320,6 +335,13 @@ export interface CanvasProps {
   skeletonShowHeadLine?: boolean;
   skeletonShowHeadDirection?: boolean;
   skeletonShowFootLine?: boolean;
+  /**
+   * Fired ONCE when live MediaPipe is engaged but this device cannot sustain it
+   * (GPU delegate unavailable, or measured inference over the live budget), and
+   * the live skeleton has been auto-reverted to MoveNet. The page shows the
+   * "run AI Track for feet" notice.
+   */
+  onFootLineLiveUnsupported?: (reason: 'cpu-delegate' | 'too-slow' | 'init-failed') => void;
   skeletonClassicColors?: boolean;
   skeletonParts?: SkeletonPartVisibility;
   ballSampleMode?: boolean;
@@ -569,60 +591,81 @@ function drawSkeletonOverlay(
     }
   }
 
-  // Foot direction lines — ONE shared algorithm with the AI foot-direction
-  // measurement (lib/biomechanics/measurements.ts computeFootDirection): a real
-  // ankle→toe when the pose carries a MediaPipe foot_index keypoint (AI Track /
-  // AI Detect), otherwise the canonical shin-perpendicular estimateFootVector().
-  // bodyCenterX (hip midpoint) and facing (nose vs hips) are derived exactly as
-  // measurements does, so the drawn line and the AI number always agree.
+  // FEET — drawn exactly as MediaPipe draws them.
+  //
+  // Verified against a from-scratch reference renderer (app/dev/mediapipe-
+  // reference), which runs PoseLandmarker + PoseLandmarker.POSE_CONNECTIONS with
+  // no app code in the path. That comparison established two things:
+  //
+  //   1. the coordinates reaching here are BYTE-EXACT against the native ones
+  //      (0.000 px on all six ankle/heel/toe landmarks) — the COCO-17 round trip
+  //      never moved them, so nothing here needs to "correct" a position; and
+  //   2. every visible difference was in the DRAWING. MediaPipe's foot is a
+  //      CLOSED TRIANGLE — connections 27-29 (ankle→heel), 29-31 (heel→toe) and
+  //      27-31 (ankle→toe). We drew only the first two, an open V, and the edge
+  //      we omitted is precisely the one that reads as foot DIRECTION. We also
+  //      extended the tip 15% past the toe, drawing off the shoe onto the ground;
+  //      MediaPipe ends exactly on the landmark.
+  //
+  // There is deliberately NO estimate here any more. The shin-perpendicular
+  // fallback measured up to 121° wrong and collapsed to a flat backward line
+  // whenever its perpendicular pointed above the ankle. It only ever ran on poses
+  // with no MediaPipe feet (live MoveNet), where a real foot simply is not
+  // available — and a confidently wrong foot is worse than none.
   if (showFootLine) {
-    const FOOT_MIN_SCORE = 0.2; // matches measurements.ts MIN_SCORE
-    const lHip = keypoints[11], rHip = keypoints[12];
-    const hipXs = [lHip, rHip].filter((h) => h && h.score >= FOOT_MIN_SCORE).map((h) => h!.x);
-    const bodyCenterX = hipXs.length ? hipXs.reduce((a, b) => a + b, 0) / hipXs.length : null;
-    const nose = keypoints[0];
-    const facing: 1 | -1 = bodyCenterX != null && nose && nose.score >= FOOT_MIN_SCORE
-      ? (nose.x >= bodyCenterX ? 1 : -1)
-      : 1;
+    /** Below this the landmark is noise; above VIS_SOLID it is drawn full strength. */
+    const VIS_MIN = 0.1;
+    const VIS_SOLID = 0.3;
 
-    for (const [kneeIdx, ankleIdx, toeName] of [[13, 15, 'left_foot_index'], [14, 16, 'right_foot_index']] as Array<[number, number, string]>) {
+    /** Appended MediaPipe foot landmark (index 17+) by name — NO score gate here. */
+    const namedFoot = (nm: string) => {
+      for (let fi = 17; fi < keypoints.length; fi++) {
+        const cand = keypoints[fi];
+        if (cand?.name === nm) return cand;
+      }
+      return null;
+    };
+
+    for (const [ankleIdx, kneeIdx, heelName, toeName] of [
+      [15, 13, 'left_heel', 'left_foot_index'],
+      [16, 14, 'right_heel', 'right_foot_index'],
+    ] as Array<[number, number, string, string]>) {
       if (!isJointVisible(kneeIdx, parts, keypoints[kneeIdx]?.name) || !isJointVisible(ankleIdx, parts, keypoints[ankleIdx]?.name)) continue;
       const ankle = keypoints[ankleIdx];
       if (!ankle || ankle.score < scoreThreshold) continue;
-      let toe: { x: number; y: number; score: number; name?: string } | null = null;
-      for (let fi = 17; fi < keypoints.length; fi++) {
-        const cand = keypoints[fi];
-        if (cand?.name === toeName && cand.score >= 0.3) { toe = cand; break; }
-      }
+
+      const heelKp = namedFoot(heelName);
+      const toeKp = namedFoot(toeName);
+      const toe = toeKp && toeKp.score >= VIS_MIN ? toeKp : null;
+      const heel = heelKp && heelKp.score >= VIS_MIN ? heelKp : null;
+      // No usable MediaPipe foot ⇒ draw nothing. Live MoveNet poses land here.
+      if (!toe && !heel) continue;
 
       const ax = ankle.x * sx, ay = ankle.y * sy;
-      let tipX: number, tipY: number, estimated = false;
-
-      if (toe) {
-        // PRECISE: real ankle→toe (same as measurements' real-toe branch).
-        const tx2 = toe.x * sx, ty2 = toe.y * sy;
-        tipX = tx2 + (tx2 - ax) * 0.15;
-        tipY = ty2 + (ty2 - ay) * 0.15;
-      } else {
-        // ESTIMATE: the canonical shin-perpendicular direction (identical inputs
-        // to computeFootDirection), drawn ~0.45× the shin from the ankle.
-        const knee = keypoints[kneeIdx];
-        if (!knee || knee.score < scoreThreshold) continue;
-        const v = estimateFootVector(knee, ankle, bodyCenterX, facing);
-        const shinLen = Math.hypot(ankle.x - knee.x, ankle.y - knee.y) || 1;
-        const len = shinLen * 0.45;
-        tipX = (ankle.x + v.x * len) * sx;
-        tipY = (ankle.y + v.y * len) * sy;
-        estimated = true;
-      }
-
       ctx.save();
       ctx.strokeStyle = classicColors ? '#FFD700' : '#007AFF';
       ctx.lineWidth = 2;
-      ctx.setLineDash(estimated ? [5, 4] : []); // dashed = estimate (no real toe)
+      ctx.setLineDash([]);
+      // A landmark the model was unsure of is shown FAINT rather than hidden —
+      // it is still a real observation, and hiding it is what used to hand the
+      // frame to the estimate.
+      const weakest = Math.min(toe?.score ?? 1, heel?.score ?? 1);
+      if (weakest < VIS_SOLID) ctx.globalAlpha *= 0.45;
+
       ctx.beginPath();
-      ctx.moveTo(ax, ay);
-      ctx.lineTo(tipX, tipY);
+      if (heel && toe) {
+        // MediaPipe's native closed foot triangle: ankle→heel→toe→ankle.
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(heel.x * sx, heel.y * sy);
+        ctx.lineTo(toe.x * sx, toe.y * sy);
+        ctx.closePath();           // the 27-31 ankle→toe edge
+      } else if (toe) {
+        ctx.moveTo(ax, ay);        // connection 27-31 alone
+        ctx.lineTo(toe.x * sx, toe.y * sy);
+      } else if (heel) {
+        ctx.moveTo(ax, ay);        // connection 27-29 alone
+        ctx.lineTo(heel!.x * sx, heel!.y * sy);
+      }
       ctx.stroke();
       ctx.restore();
     }
@@ -1733,7 +1776,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       skeletonShowAngles = true,
       skeletonShowHeadLine = false,
       skeletonShowHeadDirection = false,
-      skeletonShowFootLine = true,
+      // OFF by default — matches page.tsx's own default and the "pin off on
+      // skeleton-enable" reset. This is only a fallback for a caller that omits
+      // the prop entirely; page.tsx always passes an explicit value.
+      skeletonShowFootLine = false,
+      onFootLineLiveUnsupported,
       skeletonClassicColors = true,
       skeletonParts,
       ballSampleMode = false,
@@ -1806,16 +1853,55 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // rather than interpolating across a hole.
       if (span <= 0 || span > 0.5) return t - a.t < c.t - t ? a.kps : c.kps;
       const f = (t - a.t) / span;
-      const n = Math.min(a.kps.length, c.kps.length);
-      const out: BakedSample['kps'] = new Array(n);
-      for (let i = 0; i < n; i++) {
-        const p = a.kps[i], q = c.kps[i];
-        out[i] = {
-          x: p.x + (q.x - p.x) * f,
-          y: p.y + (q.y - p.y) * f,
-          score: Math.min(p.score, q.score),
-          name: p.name,
-        };
+      // MATCH BY NAME, NOT BY INDEX.
+      //
+      // The COCO-17 slots 0–16 are always present in a fixed order, but the real
+      // MediaPipe foot landmarks (left/right heel + foot_index) are APPENDED at
+      // 17+ only when their visibility clears 0.3, so a given foot's index moves
+      // from sample to sample. Blending by index therefore mixed one sample's
+      // LEFT toe with the next sample's RIGHT toe and labelled the result
+      // 'left_foot_index' — a foot line pointing at the midpoint between the two
+      // feet, flickering as the appended set changed. `smoothBakedTrack` already
+      // matches by name (lib/trackSmoothing.ts); this now agrees with it.
+      //
+      // Indices 0–16 are unaffected: the positional fast path below hits on every
+      // one of them (same name at the same index in both samples), so the COCO
+      // slots interpolate exactly as before and stay at their fixed indices —
+      // which every positional consumer (metrics, the Motion Layer zone) relies on.
+      const byName = new Map<string, BakedSample['kps'][number]>();
+      for (const k of c.kps) if (k.name) byName.set(k.name, k);
+
+      const out: BakedSample['kps'] = [];
+      const usedFromC = new Set<string>();
+      const lerp = (p: BakedSample['kps'][number], q: BakedSample['kps'][number]) => ({
+        x: p.x + (q.x - p.x) * f,
+        y: p.y + (q.y - p.y) * f,
+        score: Math.min(p.score, q.score),
+        name: p.name,
+      });
+
+      for (let i = 0; i < a.kps.length; i++) {
+        const p = a.kps[i];
+        // Fast path: same name at the same index (always true for 0–16).
+        const sameIdx = c.kps[i];
+        const q = sameIdx && sameIdx.name === p.name ? sameIdx : (p.name ? byName.get(p.name) : undefined);
+        if (q) {
+          out.push(lerp(p, q));
+          if (p.name) usedFromC.add(p.name);
+        } else {
+          // Present in A only — a foot whose visibility dipped in the next
+          // sample. Carry it rather than dropping it: at bake sampling rates the
+          // two samples are ~16–33 ms apart, so holding the one real observation
+          // keeps the foot line continuous instead of making it strobe.
+          out.push({ x: p.x, y: p.y, score: p.score, name: p.name });
+        }
+      }
+      // Present in C only — same reasoning, appended after the COCO slots so the
+      // 0–16 positions are never disturbed.
+      for (const q of c.kps) {
+        if (!q.name || usedFromC.has(q.name)) continue;
+        if (a.kps.some((p) => p.name === q.name)) continue;
+        out.push({ x: q.x, y: q.y, score: q.score, name: q.name });
       }
       return out;
     };
@@ -1982,7 +2068,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
     // When true, skeleton overlay + detection is temporarily suppressed (e.g. after Clear All / Undo).
     const skeletonSuppressedRef = useRef(false);
+    /**
+     * While true, ONLY explicitly-pushed exact poses may drive the skeleton —
+     * see `setExactPoseLock` on the handle. Deliberately a ref: it gates the
+     * render loop and the worker callback, both of which read refs, and it must
+     * take effect on the very next frame rather than after a re-render.
+     */
+    const exactPoseLockRef = useRef(false);
     const poseBridgeRef = useRef<PoseWorkerBridge | null>(null);
+
+    // ── LIVE MEDIAPIPE (foot lines ON) ────────────────────────────────────
+    // When the foot-line toggle is on, the live skeleton comes from MediaPipe in
+    // VIDEO mode instead of the MoveNet worker: ONE model, one coordinate
+    // system, body AND feet. MoveNet is not run alongside it — running both
+    // would double GPU work for no benefit.
+    /** One inference in flight at a time; VIDEO mode is stateful and not re-entrant. */
+    const mpLiveBusyRef = useRef(false);
+    /** Next allowed detection time — throttles to MP_LIVE_HZ. */
+    const mpLiveNextAtRef = useRef(0);
+    /** Recent STEADY-STATE inference costs, for the latency guard. */
+    const mpLiveSamplesRef = useRef<number[]>([]);
+    /** Warmup detections still to discard before the guard starts judging. */
+    const mpLiveWarmupLeftRef = useRef(0);
+    /** Latched true when this device cannot sustain live MediaPipe → MoveNet again. */
+    const mpLiveDisabledRef = useRef(false);
+    /** So the unsupported notice fires once per session, not once per frame. */
+    const mpLiveNotifiedRef = useRef(false);
     const pendingFocusRef = useRef<{ x: number; y: number } | null>(null);
     // Continuous auto-focus crop target (torso centroid, normalized). Distinct
     // from pendingFocusRef, which is the coach's explicit skeleton-lock click.
@@ -2234,6 +2345,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; renderDirtyRef.current = true; },  [skeletonShowHeadLine]);
     useEffect(() => { skeletonShowHeadDirectionRef.current = skeletonShowHeadDirection; renderDirtyRef.current = true; }, [skeletonShowHeadDirection]);
     useEffect(() => { skeletonShowFootLineRef.current  = skeletonShowFootLine; renderDirtyRef.current = true; },  [skeletonShowFootLine]);
+    const onFootLineLiveUnsupportedRef = useRef(onFootLineLiveUnsupported);
+    useEffect(() => { onFootLineLiveUnsupportedRef.current = onFootLineLiveUnsupported; }, [onFootLineLiveUnsupported]);
+    /**
+     * Toggling foot lines swaps the LIVE pose model, so the stale-sample state
+     * from the other model must not survive the switch: the interpolator would
+     * otherwise blend a MoveNet pose into a MediaPipe one (or vice-versa) across
+     * the boundary, which is exactly the cross-model mixing the AI Track pass
+     * refuses to do. Turning the toggle OFF also releases the GPU graph.
+     */
+    useEffect(() => {
+      posePrevSampleRef.current = null;
+      poseLatestSampleRef.current = null;
+      mpLiveSamplesRef.current = [];
+      mpLiveWarmupLeftRef.current = 3; // must match MP_LIVE_WARMUP_SKIP
+      mpLiveNextAtRef.current = 0;
+      mpLiveBusyRef.current = false;
+      if (skeletonShowFootLine) {
+        // Warm it now so the first playing frame is not the one paying init.
+        void import('@/lib/mediapipePose').then((m) => m.preloadLiveLandmarker()).catch(() => {});
+      } else {
+        void import('@/lib/mediapipePose').then((m) => m.disposeLiveLandmarker()).catch(() => {});
+      }
+    }, [skeletonShowFootLine]);
+    useEffect(() => () => {
+      void import('@/lib/mediapipePose').then((m) => m.disposeLiveLandmarker()).catch(() => {});
+    }, []);
     useEffect(() => { skeletonClassicColorsRef.current = skeletonClassicColors; renderDirtyRef.current = true; }, [skeletonClassicColors]);
     useEffect(() => { skeletonPartsRef.current = skeletonParts; renderDirtyRef.current = true; }, [skeletonParts]);
     useEffect(() => { ballSampleModeRef.current = ballSampleMode; }, [ballSampleMode]);
@@ -2660,21 +2797,50 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         racketTrailRef.current = trail;
       },
       getSkeletonFrames: () => skeletonFramesRef.current,
-      detectPoseAtTime: async (timeSec: number) => {
+      /**
+       * Pose for exactly `timeSec`.
+       *
+       * `frame` is an OPTIONAL bitmap the caller has already captured for this
+       * same time. Supplying it makes the skeleton and whatever else that bitmap
+       * feeds — the segmenter, in the background-removal path — provably the same
+       * frame, instead of two independent seeks that merely ought to agree. It
+       * also saves the second seek+decode.
+       *
+       * OWNERSHIP: a caller-supplied bitmap is NOT closed here; the caller still
+       * owns it. Only a bitmap captured inside this function is closed here.
+       */
+      detectPoseAtTime: async (timeSec: number, frame?: ImageBitmap) => {
         const video = videoRef.current;
         if (!video || video.videoWidth === 0) return null;
         try {
-          const { acquirePoseDetector } = await import('@/lib/sharedPoseDetector');
+          const { acquirePoseDetector, markDetectStart, markDetectEnd } = await import('@/lib/sharedPoseDetector');
           const det = await acquirePoseDetector();
-          const bmp = await captureVideoFrameAtTime(video, timeSec);
-          const poses = await det.estimatePoses(bmp as unknown as HTMLCanvasElement, { flipHorizontal: false });
-          try { (bmp as ImageBitmap).close?.(); } catch { /* ok */ }
+          const bmp = frame ?? await captureVideoFrameAtTime(video, timeSec);
+          // TEMP-DEBUG-DETECTORRACE — see lib/sharedPoseDetector.ts.
+          markDetectStart(`detectPoseAtTime t=${timeSec.toFixed(3)}`);
+          let poses;
+          try {
+            poses = await det.estimatePoses(bmp as unknown as HTMLCanvasElement, { flipHorizontal: false });
+          } finally {
+            markDetectEnd();
+          }
+          if (!frame) { try { (bmp as ImageBitmap).close?.(); } catch { /* ok */ } }
           const raw = poses?.[0]?.keypoints as Array<{ x: number; y: number; score?: number; name?: string }> | undefined;
           if (!raw?.length) return null;
           return raw.map((k) => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' }));
         } catch {
           return null;
         }
+      },
+      setExactPoseLock: (on: boolean) => {
+        exactPoseLockRef.current = on;
+        // Releasing hands the skeleton back to the normal sources; holding starts
+        // from a clean slate so a stale live pose cannot linger under the lock.
+        if (on) {
+          latestKeypointsRef.current = null;
+          skeletonSuppressedRef.current = true;
+        }
+        renderDirtyRef.current = true;
       },
       getSkeletonKeypoints: () => latestKeypointsRef.current ? [...latestKeypointsRef.current] : null,
       setSkeletonKeypoints: (kps, provenance) => {
@@ -3169,6 +3335,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // page.tsx; this only governs the rendered skeleton overlay.
     const liveSkeletonActive = () => {
       const v = videoRef.current;
+      // The exact-pose lock outranks everything: while it is held the live worker
+      // may still RUN, but it owns nothing on screen.
+      if (exactPoseLockRef.current) return false;
       return poseModeRef.current === 'live'   // LIVE mode only — SNAPSHOT shows its frozen pose (spec §1)
         && poseLoopActiveRef.current          // skeleton enabled & loop running (false when locked off)
         && !!poseBridgeRef.current            // worker/bridge present
@@ -3225,8 +3394,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           return;
         }
         if (keypoints) {
-          // Cache stays warm regardless of mode (time-indexed history).
-          const v = videoRef.current;
+          // Cache stays warm regardless of mode (time-indexed history) — EXCEPT
+          // under the exact-pose lock. Entries here are stamped with
+          // `video.currentTime` at the moment the worker's result ARRIVES, so they
+          // are systematically late; recording them during a Motion Layer pass is
+          // what repeatedly re-seeded the stale pose that leaked back into the
+          // mask. Locked ⇒ nothing fast is written, so there is nothing stale to
+          // leak later.
+          const v = exactPoseLockRef.current ? null : videoRef.current;
           if (v) {
             const nowT = v.currentTime;
             const lastFrame = skeletonFramesRef.current.at(-1);
@@ -3323,6 +3498,103 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         poseScheduleRef.current = null;
       };
 
+      // ── LIVE MEDIAPIPE ────────────────────────────────────────────────────
+      /** Detection rate when MediaPipe drives the live pose. */
+      const MP_LIVE_HZ = 15;
+      /** Same budget poseWorker uses to decide THUNDER is too slow (SWAP_THRESHOLD_MS). */
+      const MP_LIVE_BUDGET_MS = 70;
+      const MP_LIVE_GUARD_SAMPLES = 6;
+      /**
+       * Detections to THROW AWAY before judging speed. The first detectForVideo
+       * on a fresh graph measured 1568 ms on a perfectly capable GPU (shader
+       * compilation + first texture uploads); counting it would revert the very
+       * devices this feature is for. Warmup is not the steady state.
+       */
+      const MP_LIVE_WARMUP_SKIP = 3;
+
+      /** MediaPipe owns the live pose while foot lines are on and it is coping. */
+      const useMediaPipeLive = () =>
+        skeletonShowFootLineRef.current
+        && !mpLiveDisabledRef.current
+        && !bakingRef.current                     // the bake drives its own detection
+        && bakedTracksRef.current.length === 0;   // tracks own the display once they exist
+
+      /** Latch MediaPipe off for the session and tell the page why. */
+      const revertMediaPipeLive = (reason: 'cpu-delegate' | 'too-slow' | 'init-failed') => {
+        if (mpLiveDisabledRef.current) return;
+        mpLiveDisabledRef.current = true;
+        console.warn(`[Canvas] live MediaPipe reverted to MoveNet (${reason})`);
+        void import('@/lib/mediapipePose').then((m) => m.disposeLiveLandmarker()).catch(() => {});
+        if (!mpLiveNotifiedRef.current) {
+          mpLiveNotifiedRef.current = true;
+          onFootLineLiveUnsupportedRef.current?.(reason);
+        }
+      };
+
+      /**
+       * One throttled MediaPipe detection, published exactly where the worker's
+       * results go — so the render loop's interpolation, the time-indexed cache
+       * and every consumer behave identically whichever model produced the pose.
+       */
+      const runMediaPipeLive = async (v: HTMLVideoElement) => {
+        if (mpLiveBusyRef.current) return;
+        const now = performance.now();
+        if (now < mpLiveNextAtRef.current) return;
+        mpLiveBusyRef.current = true;
+        try {
+          const mp = await import('@/lib/mediapipePose');
+          const res = await mp.detectPoseLive(v);
+          if (!res) { revertMediaPipeLive('init-failed'); return; }
+          if (res.delegate === 'CPU') { revertMediaPipeLive('cpu-delegate'); return; }
+
+          // Latency guard, mirroring poseWorker's adaptive downgrade: discard
+          // warmup, then judge a handful of steady-state samples on the MEDIAN so
+          // one slow frame cannot latch the revert.
+          mpLiveWarmupLeftRef.current -= 1;
+          if (mpLiveWarmupLeftRef.current < 0) {
+            const s = mpLiveSamplesRef.current;
+            s.push(res.ms);
+            if (s.length === MP_LIVE_GUARD_SAMPLES) {
+              const med = [...s].sort((a, b) => a - b)[s.length >> 1];
+              console.log(`[Canvas] live MediaPipe steady-state median ${med.toFixed(0)}ms (budget ${MP_LIVE_BUDGET_MS}ms)`);
+              if (med > MP_LIVE_BUDGET_MS) { revertMediaPipeLive('too-slow'); return; }
+            }
+          }
+
+          // Schedule from COMPLETION, so a slow device naturally detects less
+          // often instead of queueing work it cannot keep up with.
+          mpLiveNextAtRef.current = performance.now() + 1000 / MP_LIVE_HZ;
+
+          const kps = res.kps;
+          if (!kps || exactPoseLockRef.current) return;
+          if (skeletonSuppressedRef.current || !skeletonDrawEnabledRef.current) {
+            if (liveSkeletonActive()) latestKeypointsRef.current = null;
+            return;
+          }
+          // Time-indexed cache — same write the bridge's onResult performs.
+          const nowT = v.currentTime;
+          const lastFrame = skeletonFramesRef.current.at(-1);
+          if (!lastFrame || Math.abs(nowT - lastFrame.timeSeconds) > 1 / 60) {
+            skeletonFramesRef.current.push({ timeSeconds: nowT, keypoints: kps });
+            if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+              skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+            }
+          }
+          if (liveSkeletonActive()) {
+            // prev+latest is what the render loop interpolates between, so a
+            // 15 Hz detection still displays at full framerate.
+            posePrevSampleRef.current = poseLatestSampleRef.current;
+            poseLatestSampleRef.current = { kps, ts: performance.now() };
+            latestKeypointsRef.current = kps;
+            renderDirtyRef.current = true;
+          }
+        } catch (e) {
+          console.warn('[Canvas] live MediaPipe frame failed:', e);
+        } finally {
+          mpLiveBusyRef.current = false;
+        }
+      };
+
       // While PLAYING: drive detection from presented frames (rVFC) / rAF.
       // While PAUSED: do NOT poll. requestVideoFrameCallback never fires while
       // paused (which stalled updates after pause), and re-inferring a static
@@ -3347,8 +3619,29 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       const sendFrame = () => {
         if (!poseLoopActiveRef.current) return;
+        // ── NO LIVE INFERENCE UNDER THE EXACT-POSE LOCK ────────────────────
+        // The lock used to suppress only the live pose's DISPLAY and its cache
+        // write, letting the loop keep running "harmlessly". It is not harmless:
+        // `detectPoseAtTime` and the bridge's main-thread fallback share ONE
+        // MoveNet instance (lib/sharedPoseDetector.ts is a module singleton, and
+        // poseWorkerBridge acquires that same instance for its fallback), and a
+        // TFJS detector is not re-entrant. Two overlapping estimatePoses calls
+        // interleave and hand back crossed results — so the "exact" pose for a
+        // Motion Layer frame could come back carrying the live frame's answer.
+        // That is the wrong-leg frame, and because the same keypoints build the
+        // mask-limit zone, it is also the over-removal.
+        // Suppressing the SOURCE (not just the display) is what makes the lock's
+        // guarantee real: while it is held, the only detection running is the
+        // per-frame exact one the pass explicitly awaits.
+        if (exactPoseLockRef.current) { scheduleNext(); return; }
         const bridge = poseBridgeRef.current;
         const v = videoRef.current;
+        // FOOT LINES ON ⇒ MediaPipe owns the live pose; MoveNet does not run.
+        if (v && useMediaPipeLive()) {
+          void runMediaPipeLive(v);
+          scheduleNext();
+          return;
+        }
         if (bridge && v) {
           // Once any AI Track exists, the tracks own the skeleton display
           // entirely (it hides outside tracked sections) — live inference is
@@ -3365,9 +3658,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // smoothing so the pose snaps to this frame instead of EMA-converging.
       const detectStaticFrame = () => {
         if (!poseLoopActiveRef.current) return;
+        // Same reasoning as sendFrame: the pass seeks frame to frame, and every
+        // seek would otherwise fire a live detection into the shared detector
+        // while the exact one for that frame is still in flight.
+        if (exactPoseLockRef.current) return;
         const v = videoRef.current;
+        if (!v || !v.paused) return;
+        // Same source rule as sendFrame: whichever model owns the live pose
+        // must also own the paused frame, or pausing would swap the skeleton.
+        if (useMediaPipeLive()) {
+          mpLiveNextAtRef.current = 0; // a static frame is worth detecting now
+          void runMediaPipeLive(v);
+          return;
+        }
         const bridge = poseBridgeRef.current;
-        if (!v || !bridge || !v.paused) return;
+        if (!bridge) return;
         bridge.frameSkip = poseFrameSkipRef.current;
         bridge.resetSmoothing();
         bridge.sendFrame(v);
@@ -4362,9 +4667,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           (video && video.readyState >= 2 && video.videoWidth > 0) ||
           (yt && ytDim.w > 0 && ytDim.h > 0);
 
+        // Under the exact-pose lock the lock IS the draw authority.
+        //
+        // The pass used to switch the coach's skeleton ON just to make its pushed
+        // poses visible, and switch it back afterwards. That is what started the
+        // live loop competing for the shared detector (see sendFrame), and it also
+        // latched Metrics' data column on via the skeleton-enabled effect in
+        // page.tsx. Neither belongs to "show the coach this frame's exact pose".
+        // Since a locked overlay can only ever show an explicitly pushed pose,
+        // authorising the draw from the lock gives the same picture with none of
+        // the side effects — and `skeletonSuppressedRef` still blanks the overlay
+        // between frames, so "still settling" stays honest.
+        const lockOwnsSkeleton = exactPoseLockRef.current;
         if (
-          skeletonEnabledRef.current &&
-          skeletonDrawEnabledRef.current &&
+          (lockOwnsSkeleton || (skeletonEnabledRef.current && skeletonDrawEnabledRef.current)) &&
           !skeletonSuppressedRef.current &&
           skeletonDimsOk
         ) {
@@ -4373,13 +4689,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // precedence over live inference — the pose is looked up by MEDIA
           // time, so it stays perfectly glued to the player at 1×, 2×, any
           // speed, playing or paused.
-          const bakedPose = poseModeRef.current === 'live' && video && !bakingRef.current
+          // Under the exact-pose lock the pushed pose IS the answer: the baked
+          // track is interpolated between samples and centre-smoothed, so letting
+          // it win here would put a different skeleton on screen from the one the
+          // mask was built with — which is exactly the mismatch a coach spots.
+          const bakedPose = !exactPoseLockRef.current && poseModeRef.current === 'live' && video && !bakingRef.current
             ? lookupBakedPose(video.currentTime)
             : null;
           // Once ANY section is tracked, the skeleton shows ONLY inside tracked
           // sections (per coach request) — outside them it hides instead of
           // falling back to live jitter. Track another section to extend.
+          // Same reasoning: the "only show inside tracked sections" rule exists to
+          // hide live jitter, and an exact pushed pose is the opposite of jitter.
           const hiddenByTrackScope =
+            !exactPoseLockRef.current &&
             bakedTracksRef.current.length > 0 &&
             !bakedPose &&
             !bakingRef.current &&
@@ -6135,7 +6458,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // (the play-loop is idle while paused, so the new focus would otherwise
         // not reach the worker until the next play/seek).
         const fv = videoRef.current;
-        if (fv?.paused) poseBridgeRef.current?.sendFrame(fv);
+        // Not while the exact-pose lock is held — see sendFrame: one shared,
+        // non-reentrant detector, so a click-to-focus detection landing mid-pass
+        // would corrupt the exact pose for whichever frame is in flight.
+        if (fv?.paused && !exactPoseLockRef.current) poseBridgeRef.current?.sendFrame(fv);
         skeletonSuppressedRef.current = false;
         renderDirtyRef.current = true;
         return true;
@@ -7623,7 +7949,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 </span>
                 <button
                   type="button"
-                  aria-label="Use AI-detected object region for StroMotion"
+                  aria-label="Use AI-detected object region for Motion Layer"
                   title="Use the detected racket/object region"
                   style={{
                     fontSize: 13,

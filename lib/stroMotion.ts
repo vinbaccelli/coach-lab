@@ -1168,7 +1168,7 @@ export function clearStroMotionResult(result: StroMotionResult | null): void {
   });
 }
 
-export function exportStroMotionPNG(canvas: HTMLCanvasElement, filename = 'stromotion.png'): void {
+export function exportStroMotionPNG(canvas: HTMLCanvasElement, filename = 'motion-layer.png'): void {
   try {
     const link = document.createElement('a');
     link.download = filename;
@@ -1207,7 +1207,7 @@ export async function stroMotionResultToDataURL(result: StroMotionResult): Promi
 
 export async function exportStroMotionPNGFromResult(
   result: StroMotionResult,
-  filename = 'stromotion.png',
+  filename = 'motion-layer.png',
 ): Promise<void> {
   const canvas = await renderStroMotionResultToCanvas(result);
   exportStroMotionPNG(canvas, filename);
@@ -1215,7 +1215,7 @@ export async function exportStroMotionPNGFromResult(
 
 export async function exportStroMotionPNGAfterRender(
   canvas: HTMLCanvasElement,
-  filename = 'stromotion.png',
+  filename = 'motion-layer.png',
   waitForPaint?: () => Promise<void>,
 ): Promise<void> {
   if (waitForPaint) {
@@ -1286,7 +1286,7 @@ export async function exportStroMotionVideo(
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename ?? `stromotion.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`;
+    a.download = filename ?? `motion-layer.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`;
     document.body.appendChild(a);
     a.click();
     a.remove();

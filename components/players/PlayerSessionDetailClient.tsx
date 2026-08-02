@@ -4,14 +4,7 @@ import Link from 'next/link';
 import { ArrowLeft, Download } from 'lucide-react';
 import SessionArtifactPreview from '@/components/sessions/SessionArtifactPreview';
 import type { PlayerSession } from '@/lib/sessions/types';
-
-const typeLabels: Record<string, string> = {
-  stromotion: 'StroMotion',
-  ai_metrics: 'AI Metrics',
-  combined: 'Combined analysis',
-  recording: 'Recording',
-  other: 'Analysis',
-};
+import { analysisTypeLabel, sanitizeLegacyLabel } from '@/lib/sessions/displayLabels';
 
 export default function PlayerSessionDetailClient({
   playerId,
@@ -22,8 +15,12 @@ export default function PlayerSessionDetailClient({
   playerName: string;
   session: PlayerSession;
 }) {
-  const label = typeLabels[session.analysisType] ?? session.analysisType;
+  const label = analysisTypeLabel(session.analysisType);
   const videoUrl = session.videoRef.url;
+  // session.title is coach-set free text; sessions saved before the StroMotion →
+  // Motion Layer rename can still have the old word baked into it (the app used
+  // to default new titles to "... — StroMotion"). Sanitized here, not in the DB.
+  const title = sanitizeLegacyLabel(session.title);
 
   return (
     <div style={{ maxWidth: 720, margin: '0 auto' }}>
@@ -72,7 +69,7 @@ export default function PlayerSessionDetailClient({
         </div>
 
         <h1 style={{ margin: '12px 0 8px', fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em' }}>
-          {session.title}
+          {title}
         </h1>
 
         {session.coachNotes?.trim() ? (

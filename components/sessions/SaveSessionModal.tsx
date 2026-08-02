@@ -89,7 +89,7 @@ export default function SaveSessionModal({
       videoRef: buildVideoRef(),
     };
     if (!sessionDraftHasContent(mergedDraft) && !title.trim()) {
-      setErr('Nothing to save — run StroMotion or AI Metrics first, or add notes.');
+      setErr('Nothing to save — run Motion Layer or AI Metrics first, or add notes.');
       return;
     }
     setBusy(true);
