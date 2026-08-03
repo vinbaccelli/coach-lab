@@ -41,3 +41,33 @@ export async function acquirePoseDetector(
 export function releasePoseDetector() {
   refCount = Math.max(0, refCount - 1);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEMP-DEBUG-DETECTORRACE — proves the exact-pose lock actually stops concurrent
+// use of this singleton. MoveNet/TFJS detectors are NOT re-entrant: two
+// overlapping estimatePoses calls interleave and can return each other's answer,
+// which is how a Motion Layer frame ended up with the live frame's pose (wrong
+// leg → wrong mask zone → over-removal). Every caller of the shared detector
+// brackets its call with these, so a single warning here is a real overlap.
+// Expected after the fix: silence for the whole auto pass. Remove with the tag.
+// ─────────────────────────────────────────────────────────────────────────────
+let detectInFlight = 0;
+let detectInFlightLabel: string | null = null;
+
+export function markDetectStart(label: string): void {
+  detectInFlight++;
+  if (detectInFlight > 1) {
+    console.error(
+      `[DETECTORRACE] CONCURRENT estimatePoses on the shared detector: "${label}" ` +
+        `started while "${detectInFlightLabel}" was still in flight (${detectInFlight} in flight). ` +
+        `Results from this window are unreliable.`,
+    );
+    console.trace('[DETECTORRACE] overlapping call site');
+  }
+  detectInFlightLabel = label;
+}
+
+export function markDetectEnd(): void {
+  detectInFlight = Math.max(0, detectInFlight - 1);
+  if (detectInFlight === 0) detectInFlightLabel = null;
+}

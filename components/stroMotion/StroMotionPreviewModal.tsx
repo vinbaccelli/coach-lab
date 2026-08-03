@@ -11,9 +11,11 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Download, X, FileText, Youtube, Loader2, ExternalLink } from 'lucide-react';
+import { Download, X, FileText, Loader2, ExternalLink } from 'lucide-react';
 import { runExportPipeline } from '@/lib/export/exportService';
 import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
+import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
+import { YouTubeUploadOption } from '@/components/shared/YouTubeUploadOption';
 
 export interface StroMotionFrameToggle {
   index: number;
@@ -92,7 +94,12 @@ export default function StroMotionPreviewModal({
   const [notes, setNotes] = useState('');
   const [players, setPlayers] = useState<PlayerOption[]>([]);
   const [attachPlayerId, setAttachPlayerId] = useState('');
-  const [includeVideoUpload, setIncludeVideoUpload] = useState(ENABLE_YOUTUBE_UPLOAD);
+  const youtube = useYouTubeConnection(ENABLE_YOUTUBE_UPLOAD);
+  // Defaults to the coach's ACTUAL authorization, not to the build flag. Keyed on
+  // `connected` so it follows a connect/disconnect that happens while the modal is
+  // open — otherwise an export could silently attempt an upload nobody authorized.
+  const [includeVideoUpload, setIncludeVideoUpload] = useState(false);
+  useEffect(() => { setIncludeVideoUpload(youtube.connected); }, [youtube.connected]);
   const [newPlayerName, setNewPlayerName] = useState<string | null>(null);
   const [creatingPlayer, setCreatingPlayer] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -103,7 +110,7 @@ export default function StroMotionPreviewModal({
 
   useEffect(() => {
     if (!open) return;
-    setReportTitle((prev) => prev || `StroMotion — ${new Date().toLocaleDateString()}`);
+    setReportTitle((prev) => prev || `Motion Layer — ${new Date().toLocaleDateString()}`);
     fetch('/api/players')
       .then((r) => (r.ok ? r.json() : null))
       .then((body: { players?: PlayerOption[] } | null) => { if (body?.players) setPlayers(body.players); })
@@ -143,10 +150,10 @@ export default function StroMotionPreviewModal({
     setResultYoutubeUrl(null);
     try {
       const result = await runExportPipeline({
-        title: reportTitle.trim() || 'AngleMotion — StroMotion',
+        title: reportTitle.trim() || 'AngleMotion — Motion Layer',
         videoBlob: ENABLE_YOUTUBE_UPLOAD && includeVideoUpload && videoBlob ? videoBlob : null,
         sections: [{
-          heading: 'StroMotion composite',
+          heading: 'Motion Layer composite',
           image: pngUrl,
           notes: notes.trim() || undefined,
         }],
@@ -155,7 +162,14 @@ export default function StroMotionPreviewModal({
         onProgress: setExportStatus,
       });
       if (!result.ok) {
-        setExportError(result.error ?? 'Export failed — try again.');
+        // A revoked or missing grant is fixable in two clicks, so say that
+        // instead of surfacing an error the coach can do nothing with.
+        if (result.needsConnect) {
+          void youtube.refresh();
+          setExportError('YouTube is not connected. Connect it below, then export again.');
+        } else {
+          setExportError(result.error ?? 'Export failed — try again.');
+        }
         if (result.youtubeUrl) setResultYoutubeUrl(result.youtubeUrl);
         return;
       }
@@ -165,7 +179,7 @@ export default function StroMotionPreviewModal({
     } finally {
       setExporting(false);
     }
-  }, [exporting, pngUrl, reportTitle, includeVideoUpload, videoBlob, notes, settingsLines, attachPlayerId]);
+  }, [exporting, pngUrl, reportTitle, includeVideoUpload, videoBlob, notes, settingsLines, attachPlayerId, youtube]);
 
   if (!open) return null;
 
@@ -176,7 +190,7 @@ export default function StroMotionPreviewModal({
     <div
       role="dialog"
       aria-modal
-      aria-label="StroMotion Generate"
+      aria-label="Motion Layer Generate"
       style={{
         position: 'fixed',
         inset: 0,
@@ -208,7 +222,7 @@ export default function StroMotionPreviewModal({
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>StroMotion — Generate & Export</h2>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Motion Layer — Generate & Export</h2>
             <p style={{ margin: '4px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.65)' }}>
               Review the still image and looping video, tune the render, then export.
             </p>
@@ -246,13 +260,13 @@ export default function StroMotionPreviewModal({
                   fontSize: 14,
                 }}
               >
-                {isGenerating ? 'Generating StroMotion image…' : 'Waiting for preview…'}
+                {isGenerating ? 'Generating Motion Layer image…' : 'Waiting for preview…'}
               </div>
             ) : (
               <>
                 <img
                   src={pngUrl}
-                  alt="StroMotion composite"
+                  alt="Motion Layer composite"
                   style={{
                     width: '100%',
                     borderRadius: 10,
@@ -452,13 +466,12 @@ export default function StroMotionPreviewModal({
           />
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             {ENABLE_YOUTUBE_UPLOAD && (
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>
-                <input type="checkbox" checked={includeVideoUpload} onChange={(e) => setIncludeVideoUpload(e.target.checked)} disabled={!videoBlob} />
-                <Youtube size={13} /> Upload video to YouTube (Unlisted)
-              </label>
-            )}
-            {ENABLE_YOUTUBE_UPLOAD && !videoBlob && (
-              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)' }}>Build the video preview first to include it.</span>
+              <YouTubeUploadOption
+                youtube={youtube}
+                checked={includeVideoUpload}
+                onCheckedChange={setIncludeVideoUpload}
+                videoReady={!!videoBlob}
+              />
             )}
             <div style={{ flex: 1 }} />
             <button type="button" onClick={() => void handleExportReport()} disabled={exporting || !pngUrl} style={actionBtn}>

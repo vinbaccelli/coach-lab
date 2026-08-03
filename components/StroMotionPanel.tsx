@@ -439,7 +439,7 @@ export default function StroMotionPanel({
           <div style={{ height: 1, background: '#D1D1D6', width: '100%', margin: '4px 0' }} />
 
           <button type="button" disabled={!canGenerate} onClick={onGenerate} style={ib()}>
-            <LB icon={<Check size={18} />} label="Generate StroMotion" />
+            <LB icon={<Check size={18} />} label="Generate Motion Layer" />
           </button>
 
           {(frames.length > 0 || isPreviewReady) ? (
@@ -556,9 +556,17 @@ export default function StroMotionPanel({
                     <button
                       type="button"
                       onClick={() => onSelectFrame(frame.index)}
+                      // Once a frame carries a mask this click opens the editor
+                      // on it, so say so rather than leaving the label looking
+                      // like a plain seek target.
+                      title={frame.hasMask
+                        ? 'Open this frame in the mask editor'
+                        : 'Go to this frame'}
                       style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, textAlign: 'left', fontSize: 11 }}
                     >
-                      <strong>{frame.label}</strong>
+                      <strong style={frame.hasMask ? { textDecoration: 'underline dotted', textUnderlineOffset: 3 } : undefined}>
+                        {frame.label}
+                      </strong>
                     </button>
                     <span style={{ fontSize: 10, fontWeight: 700, color: statusColor(frame.status) }}>
                       {statusLabel(frame.status)}
@@ -624,11 +632,11 @@ export default function StroMotionPanel({
         </div>
       ) : isPreviewReady ? (
         <div style={{ fontSize: 12, marginTop: 8, fontWeight: 600, color: '#34C759' }}>
-          StroMotion ready — {frameCount} layers
+          Motion Layer ready — {frameCount} layers
         </div>
       ) : allReady ? (
         <div style={{ fontSize: 11, marginTop: 8, color: 'var(--cl-text-muted)' }}>
-          All frames ready — press Generate StroMotion.
+          All frames ready — press Generate Motion Layer.
         </div>
       ) : frames.length > 0 ? (
         <div style={{ fontSize: 11, marginTop: 8, color: 'var(--cl-text-muted)' }}>
@@ -694,7 +702,7 @@ export default function StroMotionPanel({
         disabled={!canGenerate}
         style={{ ...primaryBtnStyle, marginTop: 8, opacity: canGenerate ? 1 : 0.5, cursor: canGenerate ? 'pointer' : 'not-allowed' }}
       >
-        {isGenerating ? `Generating ${progressCurrent}/${progressTotal}` : 'Generate StroMotion'}
+        {isGenerating ? `Generating ${progressCurrent}/${progressTotal}` : 'Generate Motion Layer'}
       </button>
 
       {previewPngUrl ? (
@@ -706,7 +714,7 @@ export default function StroMotionPanel({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <img
               src={previewPngUrl}
-              alt="StroMotion preview"
+              alt="Motion Layer preview"
               style={{ width: '100%', borderRadius: 8, border: '1px solid var(--cl-border, #ddd)', cursor: onOpenPreview ? 'pointer' : 'default' }}
               onClick={onOpenPreview}
             />
