@@ -28,7 +28,7 @@ const features = [
     b: 'Shoulder, hip, knee, elbow — AngleMotion reads 13+ joint angles automatically and shows the numbers right on the frame. Compare a serve to a model, prove why a stroke breaks down, and back every note with a real measurement instead of a guess.',
   },
   {
-    h: 'See what the eye can’t — with StroMotion.',
+    h: 'See what the eye can’t — with Motion Layer.',
     b: 'Turn any swing into a multi-position motion-trail composite — as a still and as video. The whole stroke, frozen across space, so a student instantly sees the path their body took. The demo that sells your coaching and the shareable that markets it.',
     micro: 'Plus — it looks incredible.',
   },
@@ -73,7 +73,7 @@ const COMPARE_ROWS: Array<{ label: string; cells: Array<'y' | 'n' | 'q' | string
   { label: 'Slow-mo / frame-by-frame', cells: ['y', 'y', 'y'] },
   { label: 'Drawing / telestration', cells: ['y', 'y', 'y'] },
   { label: 'Side-by-side compare', cells: ['y', 'y', 'y'] },
-  { label: 'StroMotion / motion-trail composite', cells: ['y', 'n', 'y'] },
+  { label: 'Motion Layer / motion-trail composite', cells: ['y', 'n', 'y'] },
   { label: 'Coaching report (Google Docs)', cells: ['y', 'q', 'q'] },
   { label: 'Player database / client file', cells: ['y', 'y', 'q'] },
   { label: 'Videos stay local (no cloud lock-in)', cells: ['y', 'n', 'n'] },
@@ -82,7 +82,7 @@ const COMPARE_ROWS: Array<{ label: string; cells: Array<'y' | 'n' | 'q' | string
 ];
 
 const faqs = [
-  { q: 'What is AngleMotion?', a: 'A browser-based tennis video-analysis platform: AI skeleton + angle detection you can edit by hand, StroMotion composites, slow-motion phase replays, a recording hub, and per-player Google Docs coaching reports — all in one place.' },
+  { q: 'What is AngleMotion?', a: 'A browser-based tennis video-analysis platform: AI skeleton + angle detection you can edit by hand, Motion Layer composites, slow-motion phase replays, a recording hub, and per-player Google Docs coaching reports — all in one place.' },
   { q: 'Does the AI replace my judgment?', a: 'No. Every skeleton point and angle the AI detects is editable — drag it, correct it, trust it. AI does the fast 90%; you own the 10% that matters.' },
   { q: 'Do my videos get uploaded to a cloud?', a: 'No. Your footage is processed locally in your browser and stays on your device. Only the reports and clips you explicitly export go to your own Google Drive / YouTube.' },
   { q: 'What do I need to run it?', a: 'Just a browser — nothing to install. A laptop or desktop with graphics acceleration on gives the smoothest AI skeleton.' },
@@ -124,7 +124,7 @@ export default function LandingPage() {
           AI that sees every angle.<br /><span style={{ color: ACCENT }}>Coaching that stays yours.</span>
         </h1>
         <p style={{ fontSize: 'clamp(15px, 2.4vw, 19px)', color: MUTED, lineHeight: 1.55, maxWidth: 680, margin: '0 auto 28px' }}>
-          Auto-detect 13+ joint angles and every skeleton point — then edit anything by hand. Build slow-mo phase replays, StroMotion trails, and a branded coaching report your students actually keep. Runs in your browser; your footage stays yours.
+          Auto-detect 13+ joint angles and every skeleton point — then edit anything by hand. Build slow-mo phase replays, Motion Layer trails, and a branded coaching report your students actually keep. Runs in your browser; your footage stays yours.
         </p>
         <div style={{ display: 'flex', gap: 14, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
           <Link href="/login" style={{ ...ctaBtn, fontSize: 16, padding: '14px 30px' }}>Start Free</Link>
@@ -178,7 +178,7 @@ export default function LandingPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 18 }}>
             {[
               ['1', 'Record', 'Drop in any tennis video, or capture live in your browser.'],
-              ['2', 'Analyze', 'AI maps the skeleton and angles; you edit and add StroMotion + slow-mo.'],
+              ['2', 'Analyze', 'AI maps the skeleton and angles; you edit and add Motion Layer + slow-mo.'],
               ['3', 'Share', 'Export a branded Google Docs report or push to YouTube in one click.'],
             ].map(([n, t, d]) => (
               <div key={n} style={{ background: '#fff', border: '1px solid #EEE', borderRadius: 14, padding: 20 }}>

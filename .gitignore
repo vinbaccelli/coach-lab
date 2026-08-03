@@ -29,7 +29,18 @@ yarn-error.log*
 # Vercel
 .vercel
 
+# onnxruntime-web runtime for the SAM racket segmenter. Self-hosted (never CDN)
+# but NOT committed — ~50MB that already ships inside node_modules and is staged
+# into place by scripts/copy-ort-wasm.mjs on predev/prebuild. The model weights
+# under public/models/sam2 ARE committed; only this runtime is regenerated.
+/public/ort/
+
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
 .next-verify
+# Per-port dev build dirs (NEXT_DIST_DIR). Concurrent `next dev` processes must
+# NOT share one distDir — they overwrite each other's chunks and the client then
+# 404s on a chunk it was told to load, which surfaces as the full-screen Next
+# error overlay.
+.next-*

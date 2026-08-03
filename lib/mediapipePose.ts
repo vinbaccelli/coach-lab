@@ -139,17 +139,30 @@ function landmarksToKeypoints(
       out[b].x = t.x; out[b].y = t.y; out[b].score = t.score;
     }
   }
+  // ALWAYS append all four foot landmarks, carrying their REAL visibility.
+  //
+  // This used to drop any foot below visibility 0.3, which made the appended set
+  // variable-length AND — far worse — indistinguishable downstream from "this
+  // pose has no feet at all". A consumer that found no foot fell through to the
+  // shin-perpendicular ESTIMATE, which measured up to 121° wrong and collapsed to
+  // a flat backward line. MediaPipe always returns all 33 landmarks; dropping
+  // them here threw away the very information that says "the model did look at
+  // the foot, and this is where it thinks it is".
+  //
+  // Consumers gate on `score` themselves (the draw path fades below 0.3 and
+  // ignores below 0.1), so nothing starts trusting a weak landmark — they simply
+  // stop mistaking a weak one for a missing one. Every pose from this module now
+  // carries exactly 21 entries, which also makes the appended block positionally
+  // stable frame to frame.
   for (const { mp, name } of FOOT_FROM_MEDIAPIPE) {
     const p = pts[mp];
-    const score = p?.visibility ?? 0;
-    if (p && score >= 0.3) {
-      out.push({
-        x: flip ? vw - (p.x ?? 0) * vw : (p.x ?? 0) * vw,
-        y: (p.y ?? 0) * vh,
-        score,
-        name: flip ? FOOT_SWAP[name] : name,
-      });
-    }
+    if (!p) continue;
+    out.push({
+      x: flip ? vw - (p.x ?? 0) * vw : (p.x ?? 0) * vw,
+      y: (p.y ?? 0) * vh,
+      score: p.visibility ?? 0,
+      name: flip ? FOOT_SWAP[name] : name,
+    });
   }
   // Reject junk detections: require a minimally-visible core body.
   const core = [5, 6, 11, 12].filter((i) => out[i].score >= 0.3).length;
@@ -258,6 +271,105 @@ export async function detectPosePrecise(
       score: Math.max(ka.score, kb.score),
     };
   });
+}
+
+// ── LIVE path: a SECOND landmarker, in VIDEO running mode ──────────────────
+//
+// Deliberately a separate instance from the IMAGE-mode ones above. Two reasons:
+//   1. `setOptions({runningMode})` is an async graph rebuild — far too expensive
+//      to flip per call, and AI Track/AI Detect interleave with live playback.
+//   2. VIDEO mode is STATEFUL: it reuses the previous frame's region of interest
+//      instead of re-running the person detector every frame. Measured on real
+//      footage, that makes it 1.55x faster than IMAGE mode (28.8 ms vs 44.6 ms
+//      per frame, FULL model, GPU delegate) — the whole reason live is viable.
+// Sharing one instance between the two would destroy both properties.
+//
+// FULL model only. HEAVY measured 75.7 ms (p95 114 ms) and is not live-viable.
+
+let liveLandmarker: PoseLandmarkerT | null = null;
+let liveLandmarkerPromise: Promise<PoseLandmarkerT | null> | null = null;
+let liveDelegateUsed: 'GPU' | 'CPU' | null = null;
+/** Monotonic timestamp for detectForVideo — MediaPipe rejects non-increasing. */
+let liveTimestamp = 0;
+
+/** Which delegate the live landmarker actually got. 'CPU' is not live-viable. */
+export function liveLandmarkerDelegate(): 'GPU' | 'CPU' | null {
+  return liveDelegateUsed;
+}
+
+async function getLiveLandmarker(): Promise<PoseLandmarkerT | null> {
+  if (!liveLandmarkerPromise) {
+    liveLandmarkerPromise = (async () => {
+      const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision');
+      const fileset = await FilesetResolver.forVisionTasks('/mediapipe-wasm');
+      const make = (delegate: 'GPU' | 'CPU') =>
+        PoseLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: MODEL_ASSET.full, delegate },
+          runningMode: 'VIDEO',
+          numPoses: 1,
+        });
+      let lm: PoseLandmarkerT;
+      try {
+        lm = await make('GPU');
+        liveDelegateUsed = 'GPU';
+      } catch {
+        // CPU measured at 79.5 ms — returned anyway so the caller can see the
+        // delegate and decide, rather than silently running an unusable path.
+        lm = await make('CPU');
+        liveDelegateUsed = 'CPU';
+      }
+      liveLandmarker = lm;
+      console.log(`[mediapipePose] LIVE landmarker ready (VIDEO mode, full, ${liveDelegateUsed})`);
+      return lm;
+    })().catch((e) => {
+      console.error('[mediapipePose] live landmarker init FAILED:', e);
+      liveLandmarkerPromise = null;
+      liveDelegateUsed = null;
+      return null;
+    });
+  }
+  return liveLandmarkerPromise;
+}
+
+/** Warm the live landmarker so the first toggled-on frame does not pay the load. */
+export function preloadLiveLandmarker(): void {
+  if (typeof window === 'undefined') return;
+  void getLiveLandmarker();
+}
+
+/** Release the live landmarker (toggle off / unmount) — frees the GPU graph. */
+export function disposeLiveLandmarker(): void {
+  try { liveLandmarker?.close(); } catch { /* already closed */ }
+  liveLandmarker = null;
+  liveLandmarkerPromise = null;
+  liveDelegateUsed = null;
+  liveTimestamp = 0;
+}
+
+/**
+ * One live detection on the CURRENT video frame, VIDEO running mode.
+ *
+ * Returns the COCO-17 + named-feet array and the wall-clock cost of the
+ * inference, so the caller can enforce its own latency budget (the app treats
+ * >55 ms as not-live-viable, matching poseWorker's THUNDER→LIGHTNING threshold).
+ */
+export async function detectPoseLive(
+  video: HTMLVideoElement,
+): Promise<{ kps: PoseKeypoint[] | null; ms: number; delegate: 'GPU' | 'CPU' | null } | null> {
+  if (!video || video.videoWidth < 16 || video.readyState < 2) return null;
+  const lm = await getLiveLandmarker();
+  if (!lm) return null;
+  // Strictly increasing, and never behind the clock.
+  liveTimestamp = Math.max(liveTimestamp + 1, Math.round(performance.now()));
+  const t0 = performance.now();
+  try {
+    const res = lm.detectForVideo(video, liveTimestamp);
+    const kps = landmarksToKeypoints(res?.landmarks?.[0], video.videoWidth, video.videoHeight, false);
+    return { kps, ms: performance.now() - t0, delegate: liveDelegateUsed };
+  } catch (e) {
+    console.warn('[mediapipePose] live detectForVideo failed:', e);
+    return { kps: null, ms: performance.now() - t0, delegate: liveDelegateUsed };
+  }
 }
 
 /** Foot landmarks only (video pixels) — thin wrapper over the full detection. */

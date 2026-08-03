@@ -21,7 +21,7 @@ export function buildStroMotionSessionSlice(input: StroMotionAdapterInput): Stro
       id: newArtifactId(),
       kind: 'stromotion_png',
       mime: 'image/png',
-      label: 'StroMotion',
+      label: 'Motion Layer',
       dataUrl: input.pngDataUrl,
       width: input.draft.videoWidth,
       height: input.draft.videoHeight,
@@ -33,7 +33,7 @@ export function buildStroMotionSessionSlice(input: StroMotionAdapterInput): Stro
       id: newArtifactId(),
       kind: 'stromotion_video',
       mime: input.videoBlob.type || 'video/webm',
-      label: 'StroMotion animation',
+      label: 'Motion Layer animation',
       blob: input.videoBlob,
     });
   }

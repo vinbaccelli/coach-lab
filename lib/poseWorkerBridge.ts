@@ -354,6 +354,10 @@ export class PoseWorkerBridge {
     const det = this.fallbackDetector;
 
     const run = async () => {
+      // TEMP-DEBUG-DETECTORRACE — this fallback shares the SAME singleton
+      // detector as Canvas.detectPoseAtTime. See lib/sharedPoseDetector.ts.
+      const { markDetectStart, markDetectEnd } = await import('@/lib/sharedPoseDetector');
+      markDetectStart('poseWorkerBridge main-thread fallback');
       try {
         const poses = await det.estimatePoses(video, { flipHorizontal: false });
         const raw = poses?.[0]?.keypoints as PoseKeypoint[] | undefined;
@@ -361,6 +365,7 @@ export class PoseWorkerBridge {
       } catch {
         this.deliverKeypoints(null);
       } finally {
+        markDetectEnd();
         this.inFlight = false;
         const v = this.pendingResendVideo;
         this.pendingResendVideo = null;

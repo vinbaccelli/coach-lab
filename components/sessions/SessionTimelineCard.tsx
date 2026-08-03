@@ -2,14 +2,7 @@
 
 import Link from 'next/link';
 import type { PlayerSession, SessionArtifact } from '@/lib/sessions/types';
-
-const typeLabels: Record<string, string> = {
-  stromotion: 'StroMotion',
-  ai_metrics: 'AI Metrics',
-  combined: 'Combined analysis',
-  recording: 'Recording',
-  other: 'Analysis',
-};
+import { analysisTypeLabel, sanitizeLegacyLabel } from '@/lib/sessions/displayLabels';
 
 function primaryArtifact(session: PlayerSession): SessionArtifact | undefined {
   return (
@@ -27,7 +20,9 @@ export default function SessionTimelineCard({
   playerId: string;
 }) {
   const thumb = primaryArtifact(session);
-  const label = typeLabels[session.analysisType] ?? session.analysisType;
+  const label = analysisTypeLabel(session.analysisType);
+  // See PlayerSessionDetailClient.tsx — sanitized here, not in the DB.
+  const title = sanitizeLegacyLabel(session.title);
   const isDraft = session.status === 'draft';
   const href = isDraft
     ? `/analysis?playerId=${playerId}&sessionId=${session.id}`
@@ -102,7 +97,7 @@ export default function SessionTimelineCard({
               {new Date(session.updatedAt ?? session.createdAt).toLocaleString()}
             </span>
           </div>
-          <div style={{ fontWeight: 700, fontSize: 14, marginTop: 8 }}>{session.title}</div>
+          <div style={{ fontWeight: 700, fontSize: 14, marginTop: 8 }}>{title}</div>
           {session.coachNotes?.trim() ? (
             <p
               style={{

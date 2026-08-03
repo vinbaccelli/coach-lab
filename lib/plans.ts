@@ -51,7 +51,7 @@ export const PLANS: Plan[] = [
     featured: true,
     features: [
       'Everything in Light',
-      'StroMotion composites (image + video)',
+      'Motion Layer composites (image + video)',
       'Slow-motion phase replay videos',
       'Metrics Generate: Google Docs reports',
       'One-click YouTube publish (Unlisted)',

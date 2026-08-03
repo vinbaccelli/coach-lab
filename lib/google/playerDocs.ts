@@ -117,6 +117,16 @@ export interface SessionSection {
   imageUrl?: string;
   lines?: string[];
   notes?: string;
+  /**
+   * Render the heading as a real Docs heading rather than a bold line.
+   *
+   * ADDITIVE AND OPT-IN: callers that omit it get exactly the previous bold-label
+   * behaviour, so the technical-analysis and coaching-report exports are
+   * untouched. The match report sets it to get a genuine type hierarchy — a
+   * document built entirely from bold body text reads as a data dump no matter
+   * how good the numbers are.
+   */
+  headingLevel?: 'h2' | 'h3';
 }
 
 export interface SessionBlock {
@@ -167,7 +177,20 @@ export async function insertSessionAtTop(
   const hasImages = session.sections.some((s) => s.imageUrl);
   if (hasImages) pushBoldLabel('Screenshots');
   for (const section of session.sections) {
-    if (section.heading?.trim()) pushBoldLabel(section.heading.trim());
+    if (section.heading?.trim()) {
+      const text = section.heading.trim();
+      if (section.headingLevel) {
+        const start = at();
+        pushLine(text);
+        headingRanges.push({
+          start,
+          end: start + text.length,
+          style: section.headingLevel === 'h2' ? 'HEADING_2' : 'HEADING_3',
+        });
+      } else {
+        pushBoldLabel(text);
+      }
+    }
     if (section.imageUrl) {
       imageSlots.push({ index: at(), uri: section.imageUrl });
       pushLine(IMG_PLACEHOLDER);
