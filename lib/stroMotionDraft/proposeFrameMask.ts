@@ -301,6 +301,21 @@ export async function proposeFrameMask(
    * responsible for a lookup it has no business owning.
    */
   racketAxis?: RacketAxisForFrame | null,
+  /**
+   * Batch body-scale reference as `unit / width` (`batchScaleUnitNorm`).
+   *
+   * Same shape as `racketAxis` above, and for the same reason: a value only the
+   * whole batch can resolve, computed once in `autoProcessFrames` and handed in
+   * per frame. `poseScaleUnit`'s own collapse defence is intra-frame, so it
+   * cannot catch a pose that degrades as a whole — every internal cross-check
+   * agrees and a 12px shoulder width passes through on a frame where the athlete
+   * is normal-sized. Only the other frames know that did not happen.
+   *
+   * Feeds the zone, the bone core AND the segmenter crop, since all three scale
+   * from `unit`. Null/omitted ⇒ per-frame behaviour, so the manual Select Area
+   * and Re-propose paths are byte-for-byte unchanged.
+   */
+  unitFloorNorm?: number | null,
 ): Promise<ProposeFrameMaskResult | null> {
   if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
@@ -362,7 +377,13 @@ export async function proposeFrameMask(
       // context around the athlete rather than a shape flush against the edge,
       // and clamped to the frame. No pose ⇒ no bounds ⇒ segment the whole frame,
       // which is exactly the previous behaviour.
-      const zoneBounds = guideKeypoints ? skeletonShapeBounds(guideKeypoints, vw, vh) : null;
+      // The crop scales from `unit` too, so a collapsed frame cropped the
+      // segmenter down to a fraction of the athlete. Same batch reference.
+      const zoneBounds = guideKeypoints
+        ? skeletonShapeBounds(guideKeypoints, vw, vh, {
+            ...(unitFloorNorm ? { unitFloorNorm } : {}),
+          })
+        : null;
       let rect: { x: number; y: number; w: number; h: number } | null = null;
       if (zoneBounds) {
         const padX = Math.round(zoneBounds.w * SEGMENT_CROP_PAD);
@@ -467,7 +488,9 @@ export async function proposeFrameMask(
     if (guideKeypoints) {
       try {
         const { filterMaskBySkeletonShape } = await import('@/lib/stroMotionDraft/skeletonMaskFilter');
-        const filtered = filterMaskBySkeletonShape(aiSnapshot, guideKeypoints);
+        const filtered = filterMaskBySkeletonShape(aiSnapshot, guideKeypoints, {
+          ...(unitFloorNorm ? { unitFloorNorm } : {}),
+        });
         if (filtered.applied) {
           bounded = filtered.mask;
           dbgCoreMask = filtered.coreMask ?? null; // TEMP-DEBUG-SKELZONE
@@ -541,7 +564,13 @@ export async function proposeFrameMask(
         import('@/lib/stroMotionDraft/skeletonDebugOverlay'),
         import('@/lib/stroMotionDraft/skeletonMaskFilter'),
       ]);
-      const builtZone = guideKeypoints ? buildSkeletonShapeRegion(guideKeypoints, vw, vh) : null;
+      // Same batch reference the real zone above was built with, so the logged
+      // unit= / headUnit= / headOval= numbers describe the zone that actually ran.
+      const builtZone = guideKeypoints
+        ? buildSkeletonShapeRegion(guideKeypoints, vw, vh, {
+            ...(unitFloorNorm ? { unitFloorNorm } : {}),
+          })
+        : null;
       renderSkeletonDebug({
         label: `t=${timeSec.toFixed(2)}s`,
         sourceFrame,

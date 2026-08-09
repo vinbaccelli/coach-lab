@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/copy-ort-wasm.mjs",
     "predev": "node scripts/copy-ort-wasm.mjs",
     "dev": "next dev",
     "prebuild": "node scripts/copy-ort-wasm.mjs",

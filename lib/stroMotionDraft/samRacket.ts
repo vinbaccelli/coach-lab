@@ -142,8 +142,36 @@ async function getSession(): Promise<SamSession | null> {
 
       // WebGPU where available; the wasm EP is the honest fallback rather than
       // a hard failure on machines without it.
-      let device: 'webgpu' | 'wasm' =
-        typeof navigator !== 'undefined' && (navigator as any).gpu ? 'webgpu' : 'wasm';
+      //
+      // `navigator.gpu` EXISTING IS NOT ENOUGH. The q4f16 weights are fp16, and
+      // the WebGPU EP needs the adapter's `shader-f16` feature to compile its
+      // Transpose shader. An adapter can expose WebGPU (and crossOriginIsolated +
+      // SharedArrayBuffer can both be fine) while still lacking shader-f16 —
+      // measured on Intel gen-9 integrated graphics, where session creation dies
+      // with "Transpose requires f16 but the device does not support it".
+      //
+      // The wasm retry below does NOT rescue that case: measured, the retry fails
+      // with the IDENTICAL WebGPU f16 error, so by the time the catch runs the
+      // load is already unrecoverable and the racket tool reports itself
+      // unavailable. Hence the capability is checked UP FRONT and webgpu is never
+      // attempted on a device that cannot run these weights.
+      let device: 'webgpu' | 'wasm' = 'wasm';
+      if (typeof navigator !== 'undefined' && (navigator as any).gpu) {
+        try {
+          const adapter = await (navigator as any).gpu.requestAdapter();
+          if (adapter?.features?.has('shader-f16')) {
+            device = 'webgpu';
+          } else {
+            console.warn(
+              '[samRacket] WebGPU adapter lacks shader-f16 — using the wasm EP instead ' +
+                '(correct, but ~9s per frame encode rather than ~4s)',
+            );
+          }
+        } catch (e) {
+          // Adapter probe failed outright — wasm is the safe default.
+          console.warn('[samRacket] WebGPU adapter probe failed — using wasm EP:', e);
+        }
+      }
 
       let model: any;
       try {

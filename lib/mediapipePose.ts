@@ -186,6 +186,40 @@ export async function detectFullPoseOnFrame(video: HTMLVideoElement): Promise<Po
   }
 }
 
+/**
+ * Same detection, on an ALREADY-CAPTURED frame instead of the live video element.
+ *
+ * The Motion Layer batch works from bitmaps it has already seeked and captured,
+ * and it must not seek again: the pose has to come from the very pixels that get
+ * segmented, or the zone and the mask describe different moments. Tasks-vision's
+ * `detect()` takes any ImageSource, so this is the same model, the same cached
+ * landmarker and the same COCO-17 + named-feet output convention as
+ * `detectFullPoseOnFrame` — only the input differs.
+ *
+ * `vw`/`vh` are the dimensions the returned pixels should be expressed in. Pass
+ * the VIDEO-NATIVE size (not the bitmap's) when the bitmap is a scaled capture,
+ * so the result lands in the same space every other consumer assumes.
+ */
+export async function detectFullPoseOnBitmap(
+  src: ImageBitmap | HTMLCanvasElement,
+  vw: number,
+  vh: number,
+): Promise<PoseKeypoint[] | null> {
+  if (!src || vw < 16 || vh < 16) return null;
+  const lm = await getLandmarker('full');
+  if (!lm) return null;
+  try {
+    // Landmarks come back NORMALIZED, so the source's own pixel size never enters
+    // the maths — scaling to vw/vh here is what puts them in video space.
+    return landmarksToKeypoints(
+      lm.detect(src as unknown as HTMLCanvasElement)?.landmarks?.[0], vw, vh, false,
+    );
+  } catch (e) {
+    console.warn('[mediapipePose] bitmap detect failed:', e);
+    return null;
+  }
+}
+
 // ── Precision AI Track quality tiers ───────────────────────────────────────
 // The coach picks a "tracking speed" (0.1×–0.5×). Slower = more precise, mapped
 // to a bigger model + test-time augmentation + denser frame sampling. Sampling

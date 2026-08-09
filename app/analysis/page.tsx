@@ -1719,7 +1719,7 @@ function Home() {
      * FRAME-EXACT pose, detected on this frame's own bitmap. This is the one the
      * mask-limit zone must be built from. Null when detection found nobody.
      */
-    zoneKps: Array<{ x: number; y: number; score: number }> | null;
+    zoneKps: Array<{ x: number; y: number; score: number; name?: string }> | null;
   }> => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return { det: null, fallback: null, kps: null, zoneKps: null };
@@ -1756,8 +1756,14 @@ function Home() {
     // `detectPoseAtTime` is called through the ref rather than through
     // `resolveExactPoseAt` only because that resolver is declared BELOW this
     // callback — naming it in the dependency array would evaluate it before
-    // initialization. The call is identical: exact detection is now that
-    // resolver's only rung.
+    // initialization.
+    //
+    // The two are NO LONGER identical: `resolveExactPoseAt` now prefers the
+    // foot-capable MediaPipe model and falls back to this shared detector, so
+    // OBJECT mode still gets a COCO-17 pose with no feet. That is deliberate and
+    // costs nothing here — object mode segments a racket, not a person, so heels
+    // and toes are irrelevant to its zone. Player mode, which is where feet
+    // matter, goes through the resolver.
     const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
     const cached = skFrames.reduce<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number }> } | null>((best, f) => {
       if (!best || Math.abs(f.timeSeconds - timeSec) < Math.abs(best.timeSeconds - timeSec)) return f;
@@ -1775,7 +1781,10 @@ function Home() {
     // Display EXACTLY what the zone will be built from — under the exact-pose lock
     // this is the only skeleton that can reach the screen.
     canvasRef.current?.setSkeletonKeypoints?.(
-      zoneKps ? zoneKps.map((k) => ({ x: k.x, y: k.y, score: k.score ?? 0, name: '' })) : null,
+      // `name` carried — same reason as showExactPose: blanking it deletes any
+      // foot landmark from the displayed pose. (Object mode's detector is
+      // COCO-17 today, so this is a no-op here and correct if that changes.)
+      zoneKps ? zoneKps.map((k) => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' })) : null,
       'snapshot',
     );
 
@@ -1896,10 +1905,42 @@ function Home() {
   ): Promise<{ kps: Array<{ x: number; y: number; score: number; name?: string }> | null; source: 'exact' | 'none' }> => {
     const canvas = canvasRef.current;
     if (!canvas) return { kps: null, source: 'none' };
+    const video = videoRef.current;
+
+    // FOOT-CAPABLE MODEL FIRST.
+    //
+    // `detectPoseAtTime` runs the SHARED detector — MoveNet, COCO-17, and COCO-17
+    // HAS NO FEET. That is why Motion Layer clipped shoes and drew no foot lines
+    // on a plain auto-detect: every consumer downstream was reading a pose that
+    // never contained a heel or a toe to begin with. Both symptoms are this one
+    // resolver, so both are fixed here rather than patched at each consumer.
+    //
+    // mediapipePose returns the documented drop-in shape — COCO-17 at the same
+    // indices/names plus the four real foot landmarks appended at 17+ — so every
+    // existing reader is unaffected and the feet simply become available.
+    // Falls through to the shared detector if the model will not load.
+    if (video && video.videoWidth > 0) {
+      let owned: ImageBitmap | null = null;
+      try {
+        const [{ detectFullPoseOnBitmap }, { captureVideoFrameAtTime }] = await Promise.all([
+          import('@/lib/mediapipePose'),
+          import('@/lib/stroMotionDraft/captureSource'),
+        ]);
+        // The caller OWNS any bitmap it passed in — only a bitmap captured here
+        // is closed here, matching detectPoseAtTime's own contract.
+        const bmp = frame ?? (owned = await captureVideoFrameAtTime(video, timeSec));
+        const withFeet = await detectFullPoseOnBitmap(bmp, video.videoWidth, video.videoHeight);
+        if (withFeet?.length) return { kps: withFeet, source: 'exact' };
+      } catch {
+        /* fall through to the shared detector */
+      } finally {
+        if (owned) { try { owned.close(); } catch { /* already released */ } }
+      }
+    }
 
     const exact = await canvas.detectPoseAtTime?.(timeSec, frame ?? undefined) ?? null;
     return exact?.length ? { kps: exact, source: 'exact' } : { kps: null, source: 'none' };
-  }, [canvasRef]);
+  }, [canvasRef, videoRef]);
 
   /**
    * Read the APP'S EXISTING skeleton for a frame time and normalize it to
@@ -1914,13 +1955,19 @@ function Home() {
   const readExistingSkeletonNorm = useCallback(async (
     timeSec: number,
     frame?: ImageBitmap | null,
-  ): Promise<Array<{ x: number; y: number; score: number }> | null> => {
+  ): Promise<Array<{ x: number; y: number; score: number; name?: string }> | null> => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return null;
     const { kps } = await resolveExactPoseAt(timeSec, frame);
     if (!kps?.length) return null;
     const vw = video.videoWidth, vh = video.videoHeight;
-    return kps.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0 }));
+    // `name` MUST survive the normalize. The MediaPipe foot landmarks live past
+    // index 16 and are identified ONLY by name — dropping it here (which this
+    // used to do) silently deleted the feet from every pose that had them, so the
+    // zone's namedJoint lookup found nothing and fell through to the disc even
+    // after AI Track had produced real ones. `resolveExactPoseAt` carries the
+    // field through for exactly this reason; the last step was throwing it away.
+    return kps.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0, name: k.name }));
   }, [videoRef, resolveExactPoseAt]);
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -2059,10 +2106,17 @@ function Home() {
    * in, so they are pushed through unchanged.
    */
   const showExactPose = useCallback((
-    kps: Array<{ x: number; y: number; score: number }> | null,
+    kps: Array<{ x: number; y: number; score: number; name?: string }> | null,
   ): void => {
     canvasRef.current?.setSkeletonKeypoints?.(
-      kps ? kps.map((k) => ({ x: k.x, y: k.y, score: k.score ?? 0, name: '' })) : null,
+      // `name` is CARRIED, not blanked. This used to hard-code `name: ''` on
+      // every joint, which silently deleted the foot landmarks from the DISPLAY
+      // pose: the overlay looks heels and toes up by name (namedToe in
+      // Canvas.tsx), found nothing, and drew no foot lines during a Motion Layer
+      // pass — even on frames where the pose genuinely carried them. The COCO-17
+      // slots are positional and never needed the field; the feet are identified
+      // by nothing else.
+      kps ? kps.map((k) => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' })) : null,
       'snapshot',
     );
   }, [canvasRef]);
@@ -2167,7 +2221,8 @@ function Home() {
     pending: Array<{ index: number; timeSec: number }>,
   ): Promise<number> => {
     type Box = { x: number; y: number; w: number; h: number };
-    type Kps = Array<{ x: number; y: number; score: number }> | null;
+    // `name?` so foot landmarks survive into the spec, matching player mode.
+    type Kps = Array<{ x: number; y: number; score: number; name?: string }> | null;
     const results: Array<{ index: number; timeSec: number; det: Box | null; fallback: Box | null; kps: Kps; zoneKps: Kps }> = [];
     // Yield to the browser between frames so the paint loop keeps running and the
     // live skeleton doesn't appear frozen during the (main-thread) detection pass.
@@ -2270,7 +2325,9 @@ function Home() {
         // Same joints, normalized — builds the mask-limit zone. Object mode now
         // uses the frame-exact pose, exactly like player mode.
         keypoints: zone && vw && vh
-          ? zone.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0 }))
+          // `name` carried, matching player mode — the zone identifies foot
+          // landmarks by nothing else.
+          ? zone.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0, name: k.name }))
           : null,
       });
     }
@@ -2358,6 +2415,23 @@ function Home() {
             };
           }
           if (spec) specs.push(spec);
+        }
+        // FOOT LINES ON, AUTOMATICALLY, WHEN THE PASS ACTUALLY FOUND FEET.
+        //
+        // The foot arrows are behind the coach's "Foot line" checkbox, which
+        // defaults OFF (Canvas.tsx gates the draw on skeletonShowFootLineRef).
+        // So a pass could detect perfect heels and toes and still render nothing,
+        // which reads as "the feet did not work" — the coach has no way to know
+        // there is a checkbox standing between them and the result.
+        //
+        // Switched on only when real foot landmarks are present, so this never
+        // turns on an overlay that would have nothing to draw. It is a one-way
+        // enable: the coach can still turn it back off and this will not fight
+        // them, because it only ever fires on a pass that found feet.
+        if (specs.some((s) => s.keypoints?.some(
+          (k) => k.name === 'left_foot_index' || k.name === 'right_foot_index',
+        ))) {
+          setSkeletonShowFootLine(true);
         }
         ok = await autoProcessStroFrames(specs, (done, total) =>
           setProcessingStatus(`Removing background: frame ${done}/${total}…`),
@@ -2838,8 +2912,12 @@ function Home() {
     setScreenshotSaving(true);
     try {
       // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive.
-      // Supabase storage is the fallback (and the only path while the Google
-      // export scopes are disabled pending verification).
+      // Supabase storage is the fallback — used whenever the Drive upload
+      // fails, and was the ONLY path while ENABLE_GOOGLE_EXPORTS was off
+      // pending Google's OAuth verification (approved 2026-07-28; the flag
+      // flipped true in 399b3b2 on 2026-08-03). Screenshots saved before that
+      // date are Supabase-only and have no Drive folder — expected for their
+      // era, not a bug.
       let imageUrl: string | null = null;
       if (ENABLE_GOOGLE_EXPORTS) {
         try {
@@ -2882,8 +2960,9 @@ function Home() {
           return;
         }
         // Best-effort: append to the player's Google Doc (AngleMotion/Players/<Name>).
-        // A Docs failure must not fail the screenshot save. Skipped entirely
-        // while the Google export scopes are disabled pending verification.
+        // A Docs failure must not fail the screenshot save. Gated on the same
+        // flag as the upload above — both run together now that exports are
+        // enabled (ENABLE_GOOGLE_EXPORTS = true as of 399b3b2, 2026-08-03).
         if (ENABLE_GOOGLE_EXPORTS) {
           try {
             const docRes = await fetch(`/api/players/${playerId}/google-doc`, {
@@ -7879,7 +7958,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               // pose settles, then display exactly the pose the mask uses.
               const video = videoRef.current;
               let shot: ImageBitmap | null = null;
-              let kps: Array<{ x: number; y: number; score: number }> | null = null;
+              // `name?` so the MediaPipe foot landmarks survive to the display.
+              let kps: Array<{ x: number; y: number; score: number; name?: string }> | null = null;
               canvasRef.current?.setExactPoseLock?.(true);
               try {
                 if (video && video.videoWidth > 0) {
@@ -7897,7 +7977,10 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               const vh = video?.videoHeight ?? 0;
               canvasRef.current?.setSkeletonKeypoints?.(
                 kps && vw && vh
-                  ? kps.map((k) => ({ x: k.x * vw, y: k.y * vh, score: k.score ?? 0, name: '' }))
+                  // `name` carried: readExistingSkeletonNorm now returns real
+                  // foot landmarks, and blanking here would drop them from the
+                  // editor's displayed pose exactly as showExactPose did.
+                  ? kps.map((k) => ({ x: k.x * vw, y: k.y * vh, score: k.score ?? 0, name: k.name ?? '' }))
                   : null,
                 'snapshot',
               );

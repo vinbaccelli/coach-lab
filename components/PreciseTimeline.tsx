@@ -809,10 +809,38 @@ export default function PreciseTimeline({
     border: '1px solid rgba(255,255,255,0.18)',
     background: 'rgba(255,255,255,0.08)',
     color: '#fff',
+    // The dropdown POPUP is a separate rendering surface: <option> children
+    // inherit `color: #fff` above, but NOT the translucent background — the
+    // popup gets the platform default instead. On Windows Chrome that default
+    // is white, so every option rendered white-on-white and the FPS / Speed /
+    // A-B menus were unreadable (invisible, though still clickable). macOS
+    // draws the popup as a native menu with system colors, which is why it
+    // never showed there. Declaring the control dark makes the popup dark, so
+    // the white option text is correct and matches the timeline bar.
+    colorScheme: 'dark',
     padding: '0 10px',
     fontSize: 13,
     cursor: 'pointer',
     minWidth: 72,
+  }), []);
+
+  /**
+   * Explicit colours for the <option> rows inside the dropdown popup.
+   *
+   * `colorScheme: 'dark'` alone was not enough on Windows Chrome: it darkened
+   * the HOVERED row (which is why hovering revealed the text) but resting rows
+   * still painted on the platform's white popup surface, leaving the inherited
+   * white option text invisible until the pointer passed over it.
+   *
+   * The popup does not inherit the select's translucent background, so the
+   * option rows need a real, opaque background of their own — an rgba() here
+   * would composite against white and wash out for the same reason. Setting
+   * both colour and background on the options themselves makes every row
+   * legible at rest, hovered or not.
+   */
+  const optionStyle: React.CSSProperties = useMemo(() => ({
+    color: '#fff',
+    background: '#1D1D1F',
   }), []);
 
   const thumbSize = phoneChrome ? 26 : 24;
@@ -1288,9 +1316,10 @@ export default function PreciseTimeline({
               flexShrink: 0,
             }}
           >
-            <option value="A">A</option>
-            <option value="B">B</option>
+            <option style={optionStyle} value="A">A</option>
+            <option style={optionStyle} value="B">B</option>
             <option
+              style={optionStyle}
               value="AB"
               disabled={compareAbDisabled}
               title={compareAbDisabled ? 'AB sync requires both slots to use local video files (not YouTube or embedded links)' : undefined}
@@ -1343,7 +1372,7 @@ export default function PreciseTimeline({
                   aria-label="Playback speed"
                 >
                   {SPEED_OPTIONS.map((r) => (
-                    <option key={r} value={r}>{r}×</option>
+                    <option style={optionStyle} key={r} value={r}>{r}×</option>
                   ))}
                 </select>
               </div>
@@ -1355,11 +1384,11 @@ export default function PreciseTimeline({
                   style={{ ...selectStyle, minWidth: 100, height: 36 }}
                   title={fpsMode === 'auto' ? `Auto ≈ ${autoFps ?? '…'}fps` : `Step size: ${(1000 / selectedFps).toFixed(2)}ms`}
                 >
-                  {source.kind === 'html' && <option value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
-                  <option value="30">30</option>
-                  <option value="60">60</option>
-                  <option value="120">120</option>
-                  <option value="custom">Custom…</option>
+                  {source.kind === 'html' && <option style={optionStyle} value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
+                  <option style={optionStyle} value="30">30</option>
+                  <option style={optionStyle} value="60">60</option>
+                  <option style={optionStyle} value="120">120</option>
+                  <option style={optionStyle} value="custom">Custom…</option>
                 </select>
                 {fpsMode === 'custom' && (
                   <input
@@ -1398,7 +1427,7 @@ export default function PreciseTimeline({
                 aria-label="Playback speed"
               >
                 {SPEED_OPTIONS.map((r) => (
-                  <option key={r} value={r}>{r}×</option>
+                  <option style={optionStyle} key={r} value={r}>{r}×</option>
                 ))}
               </select>
             </div>
@@ -1411,11 +1440,11 @@ export default function PreciseTimeline({
                 style={{ ...selectStyle, minWidth: 100 }}
                 title={fpsMode === 'auto' ? `Auto ≈ ${autoFps ?? '…'}fps` : `Step size: ${(1000 / selectedFps).toFixed(2)}ms`}
               >
-                {source.kind === 'html' && <option value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
-                <option value="30">30</option>
-                <option value="60">60</option>
-                <option value="120">120</option>
-                <option value="custom">Custom…</option>
+                {source.kind === 'html' && <option style={optionStyle} value="auto">Auto{autoFps ? ` (${autoFps})` : ''}</option>}
+                <option style={optionStyle} value="30">30</option>
+                <option style={optionStyle} value="60">60</option>
+                <option style={optionStyle} value="120">120</option>
+                <option style={optionStyle} value="custom">Custom…</option>
               </select>
               {fpsMode === 'custom' && (
                 <input

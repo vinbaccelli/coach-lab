@@ -541,6 +541,129 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       console.warn('[racketArc] trajectory pass failed:', e);
     }
 
+    // ── PHASE 0a2 — FOOT-CAPABLE POSE ON EVERY FRAME ────────────────────────
+    //
+    // The zone has been able to read REAL feet for a while: it stamps an
+    // ankle→toe capsule whenever the pose carries MediaPipe's named foot
+    // landmarks, and falls back to an orientation-agnostic disc when it does not
+    // (skeletonMaskFilter, "Real MediaPipe toes, when present"). The catch was
+    // that only AI Track / AI Detect ever produced those landmarks, so a plain
+    // first auto-detect ran on MoveNet's COCO-17 — which HAS NO FEET — and every
+    // frame took the disc fallback. Shoes fell outside the zone.
+    //
+    // MoveNet is there for LATENCY, and this pass has none of that pressure: it
+    // is 1–15 frames, already seeking and already running a segmenter per frame.
+    // So the batch now runs the foot-capable model itself and the feet are real
+    // on the FIRST auto-detect, with no AI Track prerequisite.
+    //
+    // WHY THE WHOLE POSE, NOT JUST THE FEET GRAFTED ON. The zone builds the foot
+    // capsule from ankle(COCO-17) → toe(named). Taking the ankle from MoveNet and
+    // the toe from MediaPipe would join two models' idea of the same leg, and any
+    // disagreement between them skews the capsule off the shoe. mediapipePose's
+    // output is explicitly "MoveNet-compatible COCO-17 ... + the four real foot
+    // keypoints APPENDED at 17+", i.e. a documented drop-in for exactly these
+    // consumers — the same array shape AI Track already feeds them. One model,
+    // one leg, consistent geometry.
+    //
+    // Falls back to the caller's existing pose per frame, so a model that will not
+    // load degrades to precisely the old behaviour rather than losing the zone.
+    const feetPose = new Map<number, Array<{ x: number; y: number; score: number; name?: string }>>();
+    let feetMs = 0;
+    let feetOk = 0;
+    try {
+      const [{ detectFullPoseOnBitmap }, { captureVideoFrameAtTime }] = await Promise.all([
+        import('@/lib/mediapipePose'),
+        import('@/lib/stroMotionDraft/captureSource'),
+      ]);
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      /** Does this pose already carry MediaPipe's named foot landmarks? */
+      const hasFeet = (kps: StroAutoFrameSpec['keypoints']) =>
+        !!kps?.some((k) => k.name === 'left_foot_index' || k.name === 'right_foot_index');
+      for (const spec of specs) {
+        const frame = current.frames[spec.frameIndex];
+        if (!frame) continue;
+        // The caller's resolver is foot-capable now, so on the normal path the
+        // pose ARRIVES with feet and this pass has nothing to add. Skipping then
+        // is what keeps the ~190ms/frame from being paid twice for one answer;
+        // this remains a genuine fallback for any spec built without them.
+        if (hasFeet(spec.keypoints)) { feetOk++; continue; }
+        try {
+          // Reuse Phase 0's bitmap when it ran ('arc'); otherwise capture ONCE
+          // here and hand it to Phase 1 as `preCapturedFrame`. Either way the
+          // pose and the segmentation see identical pixels, and the capture is
+          // shared rather than paid for twice.
+          let bmp = preCaptured.get(spec.frameIndex) ?? null;
+          if (!bmp) {
+            bmp = await captureVideoFrameAtTime(video, frame.timeSec);
+            preCaptured.set(spec.frameIndex, bmp);
+          }
+          const t0 = performance.now();
+          const pose = await detectFullPoseOnBitmap(bmp, vw, vh);
+          feetMs += performance.now() - t0;
+          // Normalize to full-frame [0,1] — the space `spec.keypoints` is in and
+          // the space proposeFrameMask documents for `skeletonKeypoints`.
+          if (pose?.length) {
+            feetPose.set(
+              spec.frameIndex,
+              pose.map((k) => ({ x: k.x / vw, y: k.y / vh, score: k.score ?? 0, name: k.name })),
+            );
+            feetOk++;
+          }
+        } catch (err) {
+          console.warn('[skelZone] foot pose failed on frame', spec.frameIndex, err);
+        }
+      }
+      if (specs.length) {
+        const ran = feetPose.size;
+        console.log(
+          `[skelZone] foot-capable pose: ${feetOk}/${specs.length} frames have feet ` +
+          `(${specs.length - ran} already carried them, ${ran} detected here in ` +
+          `${feetMs.toFixed(0)}ms${ran ? `, ${(feetMs / ran).toFixed(0)}ms/frame` : ''})`,
+        );
+      }
+    } catch (e) {
+      // No feet ⇒ the zone's existing disc fallback, i.e. the previous behaviour.
+      console.warn('[skelZone] foot-capable pose pass unavailable:', e);
+    }
+
+    /** The pose the zone should use for a frame: foot-capable when we got one. */
+    const poseFor = (spec: StroAutoFrameSpec) =>
+      feetPose.get(spec.frameIndex) ?? spec.keypoints ?? null;
+
+    // ── PHASE 0b — BATCH BODY SCALE ─────────────────────────────────────────
+    //
+    // Like the racket axis above, this can only be answered with the whole batch
+    // in hand — and for a sharper reason. `poseScaleUnit` already cross-checks a
+    // suspicious shoulder line against hip width and the pose bbox, but those
+    // checks live INSIDE one frame, so they only survive a single collapse. When
+    // the whole pose degrades the three measures shrink together, agree with each
+    // other, and a 12px shoulder width is accepted on a frame where the athlete
+    // is the same size as everywhere else (measured: 66, 64, 56, 12, 45 px).
+    //
+    // The athlete does not shrink to a fifth of their size and back inside 0.75s,
+    // and only the other frames know that. This is upstream of the head oval, the
+    // zone and the segmenter crop — all three scale from `unit` — so stabilising
+    // it here stabilises all three at once.
+    //
+    // Unscoped by racketMode: a mask-quality correction for every auto-process
+    // run, not a diagnostic. Costs a little arithmetic over poses already in
+    // hand — no capture, no model, no seek.
+    let unitFloorNorm: number | null = null;
+    try {
+      const { batchScaleUnitNorm } = await import('@/lib/stroMotionDraft/skeletonMaskFilter');
+      unitFloorNorm = batchScaleUnitNorm(
+        // Same pose the zone will be built from, so the batch reference and the
+        // per-frame unit are measured off one skeleton rather than two.
+        specs.map((s) => ({ keypoints: poseFor(s) })),
+        video.videoWidth,
+        video.videoHeight,
+      );
+    } catch (e) {
+      // A missing reference just means every frame behaves as it did before.
+      console.warn('[skelZone] batch body-scale pass failed:', e);
+    }
+
     // Phase 1 — build ALL proposals in memory. No draft writes here, so nothing
     // can interleave, re-sync, or leave a frame partially committed.
     /** Phase-0 bitmaps that proposeFrameMask accepted ownership of. */
@@ -566,11 +689,16 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             plate,
             spec.scribble ?? null,
             true,                       // skeleton guidance on
-            spec.keypoints ?? null,     // the app's existing skeleton, full-frame
-            // Both null unless Phase 0 ran (mode 'arc'), so the default and
-            // 'blob' paths call this exactly as they did before.
+            // Foot-capable pose from Phase 0a2 when it succeeded, else the app's
+            // existing skeleton — COCO-17 indices either way, feet named at 17+.
+            poseFor(spec),
+            // Phase 0a2 captures a bitmap per frame, so this is now populated on
+            // every run rather than only under racketMode 'arc'. Ownership is
+            // unchanged: proposeFrameMask claims it, and the sweep after Phase 1
+            // releases anything it declined.
             preCaptured.get(spec.frameIndex) ?? null,
             axisByFrame.get(spec.frameIndex) ?? null,
+            unitFloorNorm,
           );
           // A non-null proposal has TAKEN the bitmap: it comes back as
           // `proposal.sourceFrame` and is closed by the commit below or by the

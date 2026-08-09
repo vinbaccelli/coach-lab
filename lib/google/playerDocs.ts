@@ -93,7 +93,15 @@ export async function ensurePlayerDoc(
   if (folderId) {
     await drive.files.update({ fileId: docId, addParents: folderId, fields: 'id' }).catch(() => {});
   }
-  await supabase.from('players').update({ [meta.column]: docId }).eq('id', player.id);
+  // `folderId` was computed and used above but never written to the row, so
+  // google_folder_id stayed null even when the Drive folder genuinely existed
+  // (players.google_folder_id — surfaced as the "Open Drive folder" link in
+  // PlayerProfileClient.tsx). Persist it alongside the doc id whenever we have
+  // one; a failed folder lookup (folderId null) leaves the column untouched
+  // rather than clobbering a value a previous export already wrote.
+  await supabase.from('players')
+    .update({ [meta.column]: docId, ...(folderId ? { google_folder_id: folderId } : {}) })
+    .eq('id', player.id);
 
   return docId;
 }

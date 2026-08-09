@@ -515,6 +515,24 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 Open Drive folder ↗
               </a>
             ) : null}
+            {/* Every link above is conditional on a doc id that stays null until
+                the first export, while the "Reports" heading and the caption
+                below render unconditionally — so a player who simply has no
+                reports yet looked identical to a broken page (heading present,
+                zero links). Say so explicitly instead.
+
+                Names the DOC specifically, not "reports" generally: this row is
+                only about google_doc_id / google_match_doc_id / entry doc_urls,
+                and a player can have entries (screenshots) with none of those —
+                seen live on Azaliya, 5 saved entries but no Doc ever exported.
+                "No reports yet" read as "nothing saved" and looked like data
+                loss even though her entries were sitting right below it. */}
+            {!player.google_doc_id && !player.google_match_doc_id && !player.google_folder_id
+              && !entries.some((e) => e.metadata?.doc_url) ? (
+              <span style={{ fontSize: 12, color: '#78716c', fontWeight: 600 }}>
+                No Google Doc yet — use Save Report to create one.
+              </span>
+            ) : null}
           </div>
         </div>
         <p style={{ margin: '0 0 10px', fontSize: 12, color: '#78716c' }}>

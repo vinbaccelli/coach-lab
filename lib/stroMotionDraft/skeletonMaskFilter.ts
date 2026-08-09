@@ -150,13 +150,53 @@ export interface CapsuleWidths {
   thighFlareInner: number;
 }
 
+/**
+ * THE HEAD OVAL'S ON-SCREEN HEIGHT, as a multiple of `headUnit`. THIS is the
+ * number to tune when the oval is too big or too small.
+ *
+ * The drawn height is NOT `head` on its own — two multipliers stack:
+ *
+ *   headOval = 2 × headUnit × thicknessScale × head
+ *            = 2 × headUnit × 0.95 × head
+ *
+ * which is why tuning the `headUnit` CAP barely moved the picture: that caps the
+ * first factor while this one sits on top untouched. At the old `head: 0.62` the
+ * oval drew at 2 × 0.95 × 0.62 = 1.18 × headUnit — measured on real footage as
+ * unit=66 → headOval=78, unit=50 → headOval=59-71 — and a head is not 1.18× the
+ * shoulder width, so the oval reached past the skull and took background with it.
+ *
+ * 0.62 → 0.53 → 0.57, and the last step is a correction: 0.53 (1.01 × headUnit)
+ * overshot the tuning. The debug overlay tinted the top of the head CYAN, which
+ * is `inP && !inF` — the segmenter FOUND those pixels and the zone REJECTED them
+ * (see the tint mapping and the "if the head top is CYAN, the oval is the
+ * problem" note in skeletonDebugOverlay). Cyan is not extra coverage; it is the
+ * oval cutting real head away, and it never reaches the composite.
+ *
+ * 0.57 puts the drawn height at 2 × 0.95 × 0.57 ≈ 1.08 × headUnit — between the
+ * 1.18 that grabbed background (GREEN, genuinely over-covering) and the 1.01 that
+ * clipped (CYAN). Biased to the low side, because the original complaint was
+ * over-coverage and cyan at the very top of the hair is the cheaper error.
+ *
+ * `headWidth` is deliberately left at 0.42. The over-coverage reported was
+ * VERTICAL, and the old oval was too tall for its width anyway — aspect 1.18/0.80
+ * = 1.47 against a real head's ~1.3. Moving only the major axis brings the shape
+ * to 1.08/0.80 ≈ 1.36, close to a real head; touching the minor axis would risk
+ * the ears in one direction and background at the temples in the other.
+ *
+ * KEEP THE CROP ABOVE THIS. `HEAD_CROP_PAD_PER_UNIT` is pinned at 0.62, so the
+ * segmenter's crop reaches 2 × 0.95 × 0.62 = 1.178 × unit against this oval's
+ * 1.08 — a ~9% margin. That ordering is required, not incidental: the crop
+ * decides what the model is shown at all, so it must stay strictly larger than
+ * the shape it has to contain. If this value is ever raised past ~0.62, raise the
+ * crop with it.
+ */
 export const DEFAULT_CAPSULE_WIDTHS: CapsuleWidths = {
   upperArm: 0.34,
   forearm: 0.28,
   thigh: 0.42,
   shin: 0.30,
   torso: 0.34,
-  head: 0.62,
+  head: 0.57,
   headWidth: 0.42,
   neck: 0.30,
   foot: 0.42,
@@ -184,6 +224,16 @@ export interface SkeletonShapeOptions {
    * NOT affected by `thicknessScale` — it is a position, not a thickness.
    */
   headBaseOffset?: number;
+  /**
+   * Batch body-scale reference as `unit / width` (see `batchScaleUnitNorm`).
+   *
+   * Read by EVERY consumer of `poseScaleUnit` — the zone, the bone core and the
+   * segmenter crop — because all three scale from `unit`, and a frame whose unit
+   * collapsed shrinks all three at once. That is the whole point of fixing it
+   * here rather than in any one of them: one stable body scale, and the head
+   * oval, the zone and the crop stabilise together.
+   */
+  unitFloorNorm?: number;
   /**
    * How far past the wrist the implement capsule reaches, as a multiple of the
    * forearm length. Mirrors poseScribble's own 1.2 extrapolation so the racket
@@ -259,11 +309,83 @@ export interface SkeletonFilterResult {
   skipReason?: string;
 }
 
-const DEFAULT_IMPLEMENT_REACH = 1.2;
+/**
+ * WAS 1.2, NOW 0 — the implement corridor no longer extrapolates past the wrist.
+ *
+ * This was a GUESS at where a held racket sits, made by extending the forearm
+ * direction 1.2× past the wrist. It predates SAM: the racket is now segmented
+ * from an actual click (`lib/stroMotionDraft/samRacket.ts`) and unioned into the
+ * mask by `unionRacketIntoMask`, called from the frame editor's racket-apply
+ * action (`components/stroMotion/FrameMaskEditor.tsx`) — a real detection, not an
+ * extrapolation, and a code path this file never touches either way. The
+ * corridor's own comment already called this what it is: "a guess derived from
+ * forearm direction, not a detection" (see the bone-core exclusion note below,
+ * which distrusted this shape from the start).
+ *
+ * With SAM covering the racket, the corridor is pure downside. It is stamped for
+ * BOTH wrists unconditionally, so the non-racket arm always produces a phantom
+ * corridor — and when that arm is raised, the corridor runs up past the
+ * shoulder, lands ABOVE AND BESIDE THE HEAD, and the zone's AND lets the
+ * segmenter keep whatever background pixels the corridor allowed there. That is
+ * the out-of-oval selection reported near the head — not the oval, not the neck,
+ * not the shoulders: a guess about a racket that was never being used to find
+ * the racket in the first place, because SAM already does that job better.
+ *
+ * 0 rather than deleting the loop: `stampCapsule(wr, wr, halfWidth)` with a=b is
+ * a capsule of zero length, which is exactly a DISC of radius `wu * W.implement`
+ * centred on the wrist (see stampCapsule — a=b ⇒ lenSq=0 ⇒ t=0 ⇒ every pixel is
+ * tested against `a` alone). So the hand itself STAYS in the body zone; only the
+ * extrapolated reach past it is gone. Reversible in one line if a future
+ * geometric fallback is ever wanted again.
+ */
+const DEFAULT_IMPLEMENT_REACH = 0;
 const DEFAULT_NECK_OVERSHOOT = 0.35;
 /** Global trim on every capsule/oval half-width. 0.95 = 5% thinner than the raw widths. */
 export const DEFAULT_ZONE_THICKNESS_SCALE = 0.95;
 const DEFAULT_HEAD_BASE_OFFSET = 0;
+/**
+ * Head padding the segmenter CROP keeps, as a multiple of the zone unit —
+ * deliberately DECOUPLED from `DEFAULT_CAPSULE_WIDTHS.head`, which the crop used
+ * to borrow.
+ *
+ * The oval was tightened (0.62 → 0.53) to stop it reaching past the skull. The
+ * crop must NOT follow it down: the two have opposite failure modes. An oval
+ * that is slightly too big takes some background, which the segmenter can still
+ * reject; a crop that is slightly too small means the head is never shown to the
+ * model at all, and no amount of zone tuning can put back a head the segmenter
+ * never saw — the failure `skeletonShapeBounds` documents at its own head note.
+ *
+ * Pinned at 0.62, the value the crop was already using, so tightening the oval
+ * changes the oval and nothing else.
+ */
+const HEAD_CROP_PAD_PER_UNIT = 0.62;
+/**
+ * Where the NECK capsule's TOP end sits, as a fraction of the
+ * neckAnchor(shoulder-midpoint) → nose segment. 0 = the shoulder midpoint, which
+ * is also the head oval's own base; 1 = the nose, which is what this used to be.
+ *
+ * WHY IT WAS THE NOSE, AND WHY THAT LEAKED. The capsule exists to cover the
+ * throat, where the head oval is useless: the oval RISES from the shoulder
+ * midpoint, so it tapers to a POINT exactly where the neck is widest. Anchoring
+ * the capsule at the nose covered that — and kept going, straight up the lower
+ * half of the head at full width.
+ *
+ * That is the out-of-oval selection at the head. The zone is ANDed with the
+ * segmenter, so every pixel the capsule allowed beside the jaw, the ears and the
+ * hairline survived even though it sat outside the oval: background between the
+ * neck and the shoulder, collar, stray hair. Rounds of resizing the OVAL could
+ * never fix it, because the leaking pixels were never inside the oval's budget in
+ * the first place — they belonged to a different shape.
+ *
+ * At 0 the capsule stops at the oval's base, so above the shoulder line the head
+ * is bounded by the oval alone. The end disc still reaches ~0.285 × unit above
+ * the anchor, but by then the ellipse is already ~0.35 × unit wide there, so the
+ * disc sits INSIDE the oval and adds nothing outside it.
+ *
+ * Dial back toward the nose (0.3–0.5) if the real neck starts clipping just above
+ * the shoulders; that is the failure this trades against.
+ */
+const NECK_TOP_FROM_NOSE = 0;
 /**
  * Guards on the shoulder line before its normal is trusted as the head's up
  * direction: a normal taken from a few px of baseline is noise, and would spin the
@@ -329,7 +451,7 @@ const SHOULDER_PER_BBOX_DIAGONAL = 0.25; // the long-standing whole-pose fallbac
  */
 
 /** Which measurement `poseScaleUnit` ended up trusting. Reported in diagnostics. */
-export type PoseScaleSource = 'shoulder' | 'hip' | 'bbox';
+export type PoseScaleSource = 'shoulder' | 'hip' | 'bbox' | 'batch';
 
 /**
  * THE HEAD IS THE EXCEPTION TO SHOULDER-WIDTH SCALING.
@@ -375,10 +497,40 @@ const SHOULDER_PER_HEAD_SPAN = 2.2;      // conservative: head landmarks span �
  *
  * The estimates above are anthropometric approximations riding on detected
  * joints; a mis-detected hip or a spurious ear would otherwise scale the head
- * oval without limit. 1.6 comfortably covers the measured deficit (68px needed
- * ~90px, a 1.32× lift) while making a runaway impossible.
+ * oval without limit.
+ *
+ * 1.6 → 1.35 → 1.10, and the last step is only safe BECAUSE OF THE BATCH FLOOR.
+ *
+ * The wide ceiling existed to rescue frames whose shoulder line had collapsed
+ * relative to their neighbours — the measured case was 68px needing ~90px, a
+ * 1.32× lift. That is a COLLAPSE, and collapses are now caught upstream by
+ * `batchScaleUnitNorm`: the same frame today has its `unit` floored to
+ * 0.9 × median(≈90) ≈ 81px before the head is measured at all, and 81 × 1.10 ≈ 89
+ * — essentially the 90 it needed. The lift that used to be the head's job is now
+ * done by a stable body scale, so the head no longer has to reach for it.
+ *
+ * What remained was the mirror-image failure. With `unit` stable, the frames
+ * where the head still ran large were exactly the ones deferring to `headSpan`:
+ *
+ *   t=0.00 unit=66 headUnit=66 (1.00×) shoulder   headOval=78   ← tracks unit
+ *   t=0.75 unit=64 headUnit=65 (1.02×) headSpan   headOval=77
+ *   t=1.50 unit=56 headUnit=56 (1.00×) shoulder   headOval=66   ← tracks unit
+ *   t=2.25 unit=50 headUnit=50 (1.00×) shoulder   headOval=59   ← tracks unit (batch)
+ *   t=3.00 unit=50 headUnit=61 (1.22×) headSpan   headOval=71   ← 20% over its neighbour
+ *
+ * Frames sourced from `shoulder` track the stable unit and are correct; frames
+ * sourced from `headSpan` run above it and over-cover, grabbing background around
+ * the skull. Since the head really is ~the same on-screen size across a batch and
+ * `unit` is now near-constant, `headUnit` should be near-constant too — so the
+ * ceiling is tightened to a modest 1.10, which bounds every estimate to the
+ * stable scale while still leaving a genuinely side-on head somewhere to grow.
+ *
+ * The lift machinery is deliberately KEPT rather than deleted: a side-on batch
+ * foreshortens every frame together, so the median is short too and the batch
+ * floor does not lift it. That case still needs the torso/headSpan lift — it just
+ * no longer needs 35% of headroom to work in.
  */
-const HEAD_UNIT_MAX_INFLATION = 1.6;
+const HEAD_UNIT_MAX_INFLATION = 1.10;
 
 /** Which measurement the HEAD scale ended up using. Reported in diagnostics. */
 export type HeadScaleSource = 'shoulder' | 'torso' | 'headSpan';
@@ -400,15 +552,18 @@ export function poseHeadScaleUnit(
   keypoints: NormKeypoint[] | null | undefined,
   width: number,
   height: number,
+  /**
+   * Batch body-scale reference (see `batchScaleUnitNorm`), forwarded to
+   * `poseScaleUnit` so the head is measured against a STABLE shoulder unit.
+   * Omitted ⇒ per-frame behaviour, exactly as before.
+   */
+  unitFloorNorm?: number | null,
 ): { unit: number; source: HeadScaleSource } | null {
-  const base = poseScaleUnit(keypoints, width, height);
+  const base = poseScaleUnit(keypoints, width, height, unitFloorNorm);
   if (!base || !keypoints) return base ? { unit: base.unit, source: 'shoulder' } : null;
 
   const J = (i: number) => joint(keypoints, i, width, height);
-  let best = { unit: base.unit, source: 'shoulder' as HeadScaleSource };
-  const consider = (value: number, source: HeadScaleSource) => {
-    if (value > best.unit) best = { unit: value, source };
-  };
+  const lifts: Array<{ unit: number; source: HeadScaleSource }> = [];
 
   // 1. Torso height — shoulder midpoint to hip midpoint.
   const ls = J(L_SHOULDER), rs = J(R_SHOULDER), lh = J(L_HIP), rh = J(R_HIP);
@@ -416,7 +571,7 @@ export function poseHeadScaleUnit(
     const sm = { x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2 };
     const hm = { x: (lh.x + rh.x) / 2, y: (lh.y + rh.y) / 2 };
     const torsoH = Math.hypot(sm.x - hm.x, sm.y - hm.y);
-    if (torsoH >= 1) consider(torsoH * SHOULDER_PER_TORSO_HEIGHT, 'torso');
+    if (torsoH >= 1) lifts.push({ unit: torsoH * SHOULDER_PER_TORSO_HEIGHT, source: 'torso' });
   }
 
   // 2. Head landmark span — the largest pairwise distance among nose/eyes/ears.
@@ -430,12 +585,113 @@ export function poseHeadScaleUnit(
       if (d > span) span = d;
     }
   }
-  if (span >= 1) consider(span * SHOULDER_PER_HEAD_SPAN, 'headSpan');
+  if (span >= 1) lifts.push({ unit: span * SHOULDER_PER_HEAD_SPAN, source: 'headSpan' });
+
+  // WHEN BOTH ESTIMATES EXIST, TAKE THE SMALLER LIFT — NOT THE LARGER.
+  //
+  // This used to be a running max, which meant a SINGLE bad estimate decided the
+  // head scale outright: a hip detected too low stretches `torsoH`, a spurious
+  // ear stretches `span`, and either one alone could drive the oval to the
+  // ceiling with nothing to contradict it. Measured on real footage the winner
+  // was `torso` on every single frame, saturating the cap wherever the shoulder
+  // line collapsed.
+  //
+  // Two independent estimates AGREEING is the real signal; the louder of the two
+  // is not. Taking the smaller means a lift survives only if both measures back
+  // it, while a lone outlier is held down by its sober partner. With one
+  // estimate available there is nothing to cross-check against, so it stands as
+  // before — the ceiling below is what bounds that case.
+  let best = { unit: base.unit, source: 'shoulder' as HeadScaleSource };
+  if (lifts.length > 0) {
+    const pick = lifts.length > 1
+      ? lifts.reduce((a, b) => (b.unit < a.unit ? b : a))
+      : lifts[0];
+    // Still only ever a LIFT: a frontal frame where the estimates agree with the
+    // shoulder line must come back as `poseScaleUnit`'s answer verbatim.
+    if (pick.unit > best.unit) best = pick;
+  }
 
   // Never let an approximation run away from the pose it came from.
   const ceiling = base.unit * HEAD_UNIT_MAX_INFLATION;
   if (best.unit > ceiling) best = { unit: ceiling, source: best.source };
   return best;
+}
+
+/**
+ * How far below the batch median a single frame's unit may legitimately fall.
+ *
+ * Not 1.0: an athlete really does recede from the camera a little across a
+ * stroboscopic batch, and clamping every frame onto the median would flatten
+ * that. 0.90 leaves room for genuine perspective while catching a collapse,
+ * which is an order-of-magnitude event (66px → 12px), not a 10% one.
+ */
+const BATCH_UNIT_FLOOR_FRACTION = 0.90;
+
+/** Fewer frames than this and a "median" is not evidence of anything. */
+const BATCH_UNIT_MIN_FRAMES = 3;
+
+/** Half of COCO-17 visible before a frame may contribute to the reference. */
+const BATCH_UNIT_MIN_VISIBLE_JOINTS = 8;
+
+/**
+ * TEMPORAL STABILIZATION of the BODY SCALE, resolved across a whole batch.
+ *
+ * WHY THIS EXISTS — AND WHY IT IS THE ROOT FIX. `poseScaleUnit` already defends
+ * against a collapsed shoulder line by cross-checking it against hip width and
+ * the pose bbox. That defence is INTRA-FRAME, so it only survives a SINGLE
+ * collapse: when the whole pose degrades at once, all three measures shrink
+ * together, agree with each other, and a 12px "shoulder width" is accepted as
+ * consistent on a frame where the athlete is normal-sized. Measured:
+ *
+ *   t=0.00 unit=66  t=0.75 unit=64  t=1.50 unit=56  t=2.25 unit=12  t=3.00 unit=45
+ *
+ * Nothing WITHIN a frame can catch that — the frame is internally coherent and
+ * simply wrong. Only the other frames know the athlete did not shrink to a fifth
+ * of their size and back inside 0.75s.
+ *
+ * This is upstream of the head oval, the zone AND the segmenter crop, because all
+ * three are scaled from `unit`. Stabilising it here fixes the head-oval size
+ * variation that earlier work was chasing at the head-oval formula — that was
+ * treating the symptom.
+ *
+ * NORMALIZED, NOT PIXELS. The value is `unit / width`, so one reference is valid
+ * in both the mask pixel space (`filterMaskBySkeletonShape`) and the video pixel
+ * space (`skeletonShapeBounds`) without the caller tracking which is which. This
+ * assumes the mask keeps the frame's aspect ratio, which it does — it is a
+ * scaled copy of the frame.
+ *
+ * MEDIAN, NOT MEAN, and by design: the collapsed frames are exactly the outliers
+ * a mean would let drag the reference down, which would defeat the whole point.
+ * That is also why no separate "confidence" weighting is applied — the median IS
+ * the robustness mechanism, and a collapsed pose can still report a confident
+ * `shoulder` source, so filtering on source would not have excluded it anyway.
+ * A light visibility gate keeps frames with almost no detected pose out.
+ *
+ * Returns null when too few frames yield a usable pose, in which case every frame
+ * falls back to per-frame behaviour exactly as before.
+ */
+export function batchScaleUnitNorm(
+  frames: Array<{ keypoints: NormKeypoint[] | null | undefined }>,
+  width: number,
+  height: number,
+): number | null {
+  if (width < 1 || height < 1) return null;
+  const norms: number[] = [];
+  for (const f of frames) {
+    const kps = f.keypoints;
+    if (!kps) continue;
+    const visible = kps.filter((k) => k && k.score >= MIN_SCORE).length;
+    if (visible < BATCH_UNIT_MIN_VISIBLE_JOINTS) continue;
+    // Deliberately unfloored: this measures what each frame reports on its own.
+    const s = poseScaleUnit(kps, width, height);
+    if (!s || s.unit < 1) continue;
+    norms.push(s.unit / width);
+  }
+  if (norms.length < BATCH_UNIT_MIN_FRAMES) return null;
+
+  norms.sort((a, b) => a - b);
+  const mid = norms.length >> 1;
+  return norms.length % 2 === 1 ? norms[mid] : (norms[mid - 1] + norms[mid]) / 2;
 }
 
 /**
@@ -475,6 +731,16 @@ export function poseScaleUnit(
   keypoints: NormKeypoint[] | null | undefined,
   width: number,
   height: number,
+  /**
+   * Batch body-scale reference as `unit / width` (see `batchScaleUnitNorm`).
+   *
+   * The cross-checks below are all INTRA-frame, so they only catch a single
+   * collapse — when the whole pose degrades at once they agree with each other
+   * and pass a wrong answer through. This is the one input that knows what the
+   * OTHER frames measured, so it is the only thing that can catch that case.
+   * Omitted ⇒ per-frame behaviour, exactly as before.
+   */
+  unitFloorNorm?: number | null,
 ): { unit: number; source: PoseScaleSource } | null {
   if (!keypoints || keypoints.length < 17 || width < 1 || height < 1) return null;
   const J = (i: number) => joint(keypoints, i, width, height);
@@ -501,15 +767,33 @@ export function poseScaleUnit(
 
   const reference = refs[0] ?? null;
 
+  // TEMPORAL FLOOR — applied to whatever the intra-frame logic below concludes,
+  // because the failure it catches is a frame that is internally CONSISTENT and
+  // still wrong. A whole-pose collapse shrinks the shoulder line, the hip width
+  // and the bbox together, so every cross-check agrees and the answer sails
+  // through; only the rest of the batch knows the athlete did not really shrink.
+  const floorPx =
+    unitFloorNorm && unitFloorNorm > 0
+      ? unitFloorNorm * width * BATCH_UNIT_FLOOR_FRACTION
+      : 0;
+  const withFloor = (
+    unit: number,
+    source: PoseScaleSource,
+  ): { unit: number; source: PoseScaleSource } =>
+    // `source: 'batch'` so the diagnostics say plainly that this frame's own
+    // measurement was rejected, rather than quietly reporting a shoulder width
+    // it never measured.
+    floorPx > 0 && unit < floorPx ? { unit: floorPx, source: 'batch' } : { unit, source };
+
   // Believe the shoulder line unless the rest of the pose contradicts it.
   if (shoulderW >= 1 && (!reference || shoulderW >= reference.value * SHOULDER_COLLAPSE_RATIO)) {
-    return { unit: shoulderW, source: 'shoulder' };
+    return withFloor(shoulderW, 'shoulder');
   }
   if (reference && reference.value >= 1) {
-    return { unit: reference.value, source: reference.source };
+    return withFloor(reference.value, reference.source);
   }
   // Nothing usable at all (and no believable shoulder line either).
-  return shoulderW >= 1 ? { unit: shoulderW, source: 'shoulder' } : null;
+  return shoulderW >= 1 ? withFloor(shoulderW, 'shoulder') : null;
 }
 
 /**
@@ -634,6 +918,11 @@ function stampCapsuleAlpha(
  *     the least reliable shape to paint from. Head coverage is a ZONE-sizing
  *     question and was addressed by the scale floor in `poseScaleUnit`.
  * Both remain in the zone; they are simply not treated as ground truth.
+ *
+ * DELIBERATELY INCLUDED, by the same test: the FEET (ankle → heel → toe). They
+ * are real MediaPipe landmarks rather than an extrapolation, so they are evidence
+ * in exactly the way the limb bones are — and the shoe is the part of the athlete
+ * the segmenter most reliably loses (see the feet block below).
  */
 export function buildBoneCoreAlpha(
   keypoints: NormKeypoint[] | null | undefined,
@@ -642,7 +931,7 @@ export function buildBoneCoreAlpha(
   opts: SkeletonShapeOptions = {},
 ): { core: Uint8ClampedArray; corePx: number } | null {
   if (!keypoints || keypoints.length < 17 || width < 1 || height < 1) return null;
-  const scale = poseScaleUnit(keypoints, width, height);
+  const scale = poseScaleUnit(keypoints, width, height, opts.unitFloorNorm);
   if (!scale) return null;
 
   const W = { ...DEFAULT_CAPSULE_WIDTHS, ...(opts.widths ?? {}) };
@@ -679,6 +968,46 @@ export function buildBoneCoreAlpha(
       wu * W.torso, CORE_FEATHER,
     );
     stamped = true;
+  }
+
+  // FEET — ankle → heel → toe, force-kept like any other tracked bone.
+  //
+  // WHY THE FOOT NEEDS THIS AND THE ZONE IS NOT ENOUGH. The zone only ALLOWS;
+  // the final mask is zone ∩ segmenter, so a shoe the segmenter never reports is
+  // dropped no matter how well the foot capsule covers it. That is exactly what
+  // the debug overlay was showing: the shoe tinted MAGENTA — `inZone` true, `inP`
+  // false — "the zone allows this, but the segmenter found nothing".
+  //
+  // And the segmenter has a structural reason to miss it. The multiclass model's
+  // classes are background / hair / body-skin / face-skin / clothes / others, and
+  // PERSON_CLASSES deliberately omits class 5 "others" (accessories). Footwear is
+  // the one part of the athlete most likely to land outside `clothes`, so the
+  // shoe can be correctly segmented as "not clothes" and still vanish from the
+  // cutout. No capsule width fixes that; only positive evidence does.
+  //
+  // These are REAL DETECTIONS, not extrapolations — MediaPipe's own heel and toe
+  // landmarks, gated at MIN_CORE_SCORE like every other core bone. That is the
+  // line this file draws: the implement tip and the head oval stay out of the
+  // core because they are guesses, while a detected bone between two confident
+  // joints is evidence. A tracked foot is the latter.
+  for (const [ai, heelName, toeName] of [
+    [L_ANKLE, 'left_heel', 'left_foot_index'],
+    [R_ANKLE, 'right_heel', 'right_foot_index'],
+  ] as const) {
+    const a = J(ai);
+    if (!a) continue;
+    const heel = namedJoint(keypoints, heelName, width, height, MIN_CORE_SCORE);
+    const toe = namedJoint(keypoints, toeName, width, height, MIN_CORE_SCORE);
+    if (heel) {
+      stampCapsuleAlpha(core, width, height, a, heel, wu * W.foot, CORE_FEATHER);
+      stamped = true;
+    }
+    if (toe) {
+      // From the heel when present — that is the sole line, the part actually
+      // resting on the court and the part the segmenter loses most often.
+      stampCapsuleAlpha(core, width, height, heel ?? a, toe, wu * W.foot, CORE_FEATHER);
+      stamped = true;
+    }
   }
 
   if (!stamped) return null;
@@ -829,7 +1158,7 @@ export function buildSkeletonShapeRegion(
   // of the pose so a collapsed shoulder detection cannot shrink the whole zone.
   // See poseScaleUnit; the crop in skeletonShapeBounds reads the same helper, so
   // the zone and the segmenter's input can never disagree about the body's size.
-  const scale = poseScaleUnit(keypoints, width, height);
+  const scale = poseScaleUnit(keypoints, width, height, opts.unitFloorNorm);
   if (!scale) return null;
   const unit = scale.unit;
 
@@ -842,7 +1171,9 @@ export function buildSkeletonShapeRegion(
   // The HEAD's own scale — shoulder width floored by measures that do not
   // foreshorten. Used for the head oval ONLY; every other capsule below stays on
   // `unit`, because those parts genuinely do foreshorten with the shoulders.
-  const headScale = poseHeadScaleUnit(keypoints, width, height) ?? { unit, source: 'shoulder' as HeadScaleSource };
+  const headScale =
+    poseHeadScaleUnit(keypoints, width, height, opts.unitFloorNorm)
+    ?? { unit, source: 'shoulder' as HeadScaleSource };
   const headUnit = headScale.unit;
 
   const region = new Uint8Array(width * height);
@@ -966,16 +1297,38 @@ export function buildSkeletonShapeRegion(
   //
   // The disc is still stamped underneath so the heel and the ankle joint stay
   // covered, and so a pose WITHOUT feet behaves exactly as before.
-  for (const [ai, toeName] of [[L_ANKLE, 'left_foot_index'], [R_ANKLE, 'right_foot_index']] as const) {
+  for (const [ai, heelName, toeName] of [
+    [L_ANKLE, 'left_heel', 'left_foot_index'],
+    [R_ANKLE, 'right_heel', 'right_foot_index'],
+  ] as const) {
     const a = J(ai);
     if (!a) continue;
     stampCapsule(region, width, height, a, a, wu * W.foot);
     shapes.capsules.push({ a, b: a, halfWidth: wu * W.foot, label: 'foot disc' });
 
+    // ANKLE → HEEL → TOE, following the foot as three points rather than two.
+    //
+    // A single ankle→toe capsule is a straight line, but a real foot bends at the
+    // ankle: the heel sits BEHIND and BELOW it, outside that line. Whenever the
+    // heel is available the chain is stamped in two segments, which covers the
+    // back of the shoe the straight capsule missed. Same landmarks the foot LINES
+    // consume, so the zone and the drawn foot direction agree by construction.
+    //
+    // Each segment is stamped independently and both fall back cleanly: heel but
+    // no toe still gains the ankle→heel segment, toe but no heel keeps exactly
+    // the previous ankle→toe behaviour.
+    const heel = namedJoint(keypoints, heelName, width, height);
     const toe = namedJoint(keypoints, toeName, width, height);
+    if (heel) {
+      stampCapsule(region, width, height, a, heel, wu * W.foot);
+      shapes.capsules.push({ a, b: heel, halfWidth: wu * W.foot, label: 'foot (real heel)' });
+    }
     if (toe) {
-      stampCapsule(region, width, height, a, toe, wu * W.foot);
-      shapes.capsules.push({ a, b: toe, halfWidth: wu * W.foot, label: 'foot (real toe)' });
+      // From the heel when we have it — that is the actual sole line — otherwise
+      // from the ankle, unchanged.
+      const from = heel ?? a;
+      stampCapsule(region, width, height, from, toe, wu * W.foot);
+      shapes.capsules.push({ a: from, b: toe, halfWidth: wu * W.foot, label: 'foot (real toe)' });
     }
   }
 
@@ -1072,8 +1425,17 @@ export function buildSkeletonShapeRegion(
         x: neckAnchor.x + (neckAnchor.x - nose.x) * overshoot,
         y: neckAnchor.y + (neckAnchor.y - nose.y) * overshoot,
       };
-      stampCapsule(region, width, height, nose, chest, wu * W.neck);
-      shapes.capsules.push({ a: nose, b: chest, halfWidth: wu * W.neck, label: 'neck' });
+      // TOP END: NOT the nose — see NECK_TOP_FROM_NOSE. Running the capsule up to
+      // the nose put a full-width band beside the lower head, outside the oval,
+      // and the zone's AND then let the segmenter keep whatever sat in it.
+      const neckTop = {
+        x: neckAnchor.x + (nose.x - neckAnchor.x) * NECK_TOP_FROM_NOSE,
+        y: neckAnchor.y + (nose.y - neckAnchor.y) * NECK_TOP_FROM_NOSE,
+      };
+      stampCapsule(region, width, height, neckTop, chest, wu * W.neck);
+      // Pushed with the SAME endpoints that were stamped, so the debug overlay
+      // outlines the shape that actually ran rather than the old one.
+      shapes.capsules.push({ a: neckTop, b: chest, halfWidth: wu * W.neck, label: 'neck' });
     }
   }
 
@@ -1120,7 +1482,7 @@ export function skeletonShapeBounds(
   // SAME floored unit the zone uses — this function sizes the segmenter's crop,
   // and a crop that shrank with a collapsed shoulder line meant the model never
   // saw the head at all, so no amount of zone tuning could put it back.
-  const scale = poseScaleUnit(keypoints, width, height);
+  const scale = poseScaleUnit(keypoints, width, height, opts.unitFloorNorm);
   if (!scale) return null;
   const unit = scale.unit;
 
@@ -1137,7 +1499,7 @@ export function skeletonShapeBounds(
   // foreshortened, so the pad that has to cover it should not either. Same
   // reasoning as the head, applied to the crop: take the larger scale, which is a
   // no-op on a normal frontal frame.
-  const headScale = poseHeadScaleUnit(keypoints, width, height);
+  const headScale = poseHeadScaleUnit(keypoints, width, height, opts.unitFloorNorm);
   const cropUnit = Math.max(unit, headScale?.unit ?? unit);
   const wu = cropUnit * (opts.thicknessScale ?? DEFAULT_ZONE_THICKNESS_SCALE);
 
@@ -1185,7 +1547,9 @@ export function skeletonShapeBounds(
     const headLift = (opts.headBaseOffset ?? DEFAULT_HEAD_BASE_OFFSET) * unit;
     // `wu` already carries the head/crop scale, so this pad grows with the oval
     // it has to contain — the zone and the crop cannot disagree about the head.
-    grow(headAnchor, headLift + wu * Math.max(2 * W.head, W.headWidth));
+    // HEAD_CROP_PAD_PER_UNIT, not W.head — see that constant. The crop keeps the
+    // generosity it always had even though the oval itself was tightened.
+    grow(headAnchor, headLift + wu * Math.max(2 * HEAD_CROP_PAD_PER_UNIT, W.headWidth));
   }
   if (!any) return null;
 

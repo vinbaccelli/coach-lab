@@ -1966,7 +1966,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     // Drawing state refs
     const strokesRef      = useRef<Stroke[]>([]);
-    const historyRef      = useRef<Stroke[][]>([[]]);
+    /**
+     * One undo step = a snapshot of BOTH annotation collections.
+     *
+     * This used to snapshot `strokesRef` alone, which silently broke undo for
+     * every annotation that lives in `angleMeasRef` instead — the angle tool
+     * writes there and then calls pushHistory (see the 'angle' case in
+     * onPointerDown), so the entry it pushed was byte-identical to the previous
+     * one. Ctrl+Z then stepped between two identical strokes arrays: nothing
+     * moved on screen, and the angle itself was never restored because undo
+     * never touched the collection holding it. To the coach that reads as
+     * "undo is dead" on a perfectly ordinary drawing.
+     *
+     * Snapshotting both keeps the two collections in step through undo/redo,
+     * which also fixes `stampAutoMeasurements` (adds strokes AND angles in one
+     * action — undo used to strip the strokes and strand the angles).
+     */
+    const historyRef      = useRef<Array<{ strokes: Stroke[]; angles: AngleMeas[] }>>([
+      { strokes: [], angles: [] },
+    ]);
     const historyIdxRef   = useRef<number>(0);
     const activeStrokeRef = useRef<Stroke | null>(null);
     const angleMeasRef    = useRef<AngleMeas[]>([]);
@@ -2665,7 +2683,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const pushHistory = useCallback(() => {
       const idx = historyIdxRef.current;
       historyRef.current = historyRef.current.slice(0, idx + 1);
-      historyRef.current.push([...strokesRef.current]);
+      historyRef.current.push({
+        strokes: [...strokesRef.current],
+        angles: [...angleMeasRef.current],
+      });
       if (historyRef.current.length > 50) historyRef.current.shift();
       historyIdxRef.current = historyRef.current.length - 1;
       renderDirtyRef.current = true;
@@ -2745,13 +2766,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderDirtyRef.current = true;
         if (historyIdxRef.current > 0) {
           historyIdxRef.current--;
-          strokesRef.current = [...historyRef.current[historyIdxRef.current]];
+          const snap = historyRef.current[historyIdxRef.current];
+          strokesRef.current = [...snap.strokes];
+          angleMeasRef.current = [...snap.angles];
         }
       },
       redo: () => {
         if (historyIdxRef.current < historyRef.current.length - 1) {
           historyIdxRef.current++;
-          strokesRef.current = [...historyRef.current[historyIdxRef.current]];
+          const snap = historyRef.current[historyIdxRef.current];
+          strokesRef.current = [...snap.strokes];
+          angleMeasRef.current = [...snap.angles];
           skeletonSuppressedRef.current = true;
           renderDirtyRef.current = true;
         }
@@ -2837,6 +2862,30 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // Releasing hands the skeleton back to the normal sources; holding starts
         // from a clean slate so a stale live pose cannot linger under the lock.
         if (on) {
+          latestKeypointsRef.current = null;
+          skeletonSuppressedRef.current = true;
+        } else if (!skeletonEnabledRef.current || !skeletonDrawEnabledRef.current) {
+          // RELEASE MUST CLEAN UP TOO — this was the "skeleton on the last frame"
+          // leak.
+          //
+          // The pass pushes an exact pose per frame via setSkeletonKeypoints,
+          // which also clears `skeletonSuppressedRef`. When the pass finishes, the
+          // LAST frame's pose is still sitting in `latestKeypointsRef` with
+          // suppression off. While the lock was held that was fine: the render
+          // gate treats the lock itself as the draw authority (see
+          // `lockOwnsSkeleton`) and deliberately bypasses the coach's toggle, so
+          // the coach sees the exact pose the mask was built from.
+          //
+          // The moment the lock drops, that pose has no owner. Nothing switched
+          // the coach's skeleton on, so nothing is responsible for switching it
+          // off — and the last pushed pose stays live for any later path that
+          // authorises a draw, showing a skeleton on the final frame that the
+          // coach never enabled.
+          //
+          // Acquiring already starts from a clean slate; releasing now does the
+          // same, so the lock is symmetric and cannot hand its state to anyone.
+          // Guarded on the coach's OWN flags: when the skeleton genuinely is on,
+          // the pose stays and the normal sources resume untouched.
           latestKeypointsRef.current = null;
           skeletonSuppressedRef.current = true;
         }
@@ -3207,7 +3256,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const parsed = JSON.parse(json);
           if (Array.isArray(parsed)) {
             strokesRef.current = parsed;
-            historyRef.current = [parsed];
+            // Seed the baseline with the angles currently on screen, so the two
+            // collections stay in step: restoring strokes must not leave undo
+            // able to resurrect angles that belong to a different snapshot.
+            historyRef.current = [{ strokes: parsed, angles: [...angleMeasRef.current] }];
             historyIdxRef.current = 0;
             renderDirtyRef.current = true;
           }
@@ -6669,6 +6721,48 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
+      // ── Data column HEADER drag + RESIZE corner (BEFORE pan) ─────────────
+      // Must run before shouldPan for exactly the reason the overlay endpoint
+      // drag above does. `panModeEnabledRef` makes shouldPan true at ANY zoom
+      // level, so with pan mode on the pan branch swallowed every pointer-down
+      // and the column could not be moved or resized at all — it was the LAST
+      // consumer in this handler, behind five earlier `return`s.
+      //
+      // Only the header and the resize corner are claimed here. The column ROW
+      // hit-testing deliberately stays below pan: rows cover the column BODY,
+      // and claiming that area early would steal pan drags that merely start
+      // over the column.
+      {
+        const mcItemsEarly = measurementColumnRef.current;
+        const canvasEarly = canvasRef.current;
+        if (mcItemsEarly !== null && canvasEarly) {
+          const cW = cssW(canvasEarly), cH = cssH(canvasEarly);
+          const s = mcScaleRef.current;
+          const mW = Math.round(MC_BASE_W * s);
+          const rowH = Math.round(22 * s);
+          const mH = mcItemsEarly.length > 0
+            ? mcItemsEarly.length * rowH + Math.round(28 * s)
+            : Math.round(48 * s);
+          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
+          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
+          // Resize corner (bottom-right ~22px box) — checked first.
+          const rc = 22;
+          if (pos.x >= mX + mW - rc && pos.x <= mX + mW + 6 && pos.y >= mY + mH - rc && pos.y <= mY + mH + 6) {
+            mcResizingRef.current = { startX: pos.x, startY: pos.y, origScale: s };
+            isDraggingRef.current = true;
+            e.preventDefault();
+            return;
+          }
+          const headerH = Math.round(26 * s);
+          if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + headerH) {
+            mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
+            isDraggingRef.current = true;
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+
       // If the pointer lands on the webcam PiP, preserve PiP drag/resize even
       // when pan mode is active.  We pre-check here so the PiP hit can veto
       // the pan-mode condition inside shouldPan.
@@ -6707,21 +6801,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const mH = mcItemsNow.length > 0 ? mcItemsNow.length * rowH + Math.round(28 * s) : Math.round(48 * s);
           const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
           const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
-          // Resize corner (bottom-right ~22px box) — checked first.
-          const rc = 22;
-          if (pos.x >= mX + mW - rc && pos.x <= mX + mW + 6 && pos.y >= mY + mH - rc && pos.y <= mY + mH + 6) {
-            mcResizingRef.current = { startX: pos.x, startY: pos.y, origScale: s };
-            isDraggingRef.current = true;
-            e.preventDefault();
-            return;
-          }
-          const headerH = Math.round(26 * s);
-          if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + headerH) {
-            mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
-            isDraggingRef.current = true;
-            e.preventDefault();
-            return;
-          }
+          // NOTE: the header drag and the resize corner are hit-tested EARLIER,
+          // above the pan branch (see "Data column HEADER drag + RESIZE corner"),
+          // because pan mode swallowed them here. Only row hit-testing remains.
           // Click on a column row → highlight the matching AI line (make it the
           // active, sole drag target) so the coach picks WHICH line to edit.
           // Long-press / second click still opens the numeric edit prompt.
