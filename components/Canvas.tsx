@@ -139,6 +139,13 @@ export interface CanvasHandle {
   /** Backward-compat alias for ExportModal */
   getCompositeCanvas: () => HTMLCanvasElement | null;
   captureStream: (fps?: number) => MediaStream | null;
+  /**
+   * Style mode: apply a style patch to the currently selected mark.
+   *
+   * Returns false when nothing is selected, which is the toolbar's signal to
+   * treat the change as a next-draw default instead.
+   */
+  applyStyleToSelection: (patch: Partial<ContextualStyleSnapshot>) => boolean;
   undo: () => void;
   redo: () => void;
   getDetectedSwings: () => SwingSegment[];
@@ -300,6 +307,14 @@ export interface CanvasProps {
   circleSpinning?: boolean;
   outlineEraserSize?: number;
   onOutlineEraserSizeChange?: (size: number) => void;
+  /**
+   * Explicit Style mode ("edit style after drawing"). While true, a canvas
+   * click NEVER draws or pans — it selects the mark under the pointer so the
+   * toolbar's style controls edit THAT mark instead of the next-draw defaults.
+   */
+  styleMode?: boolean;
+  /** Fires with the selected mark's current style, or null when nothing is selected. */
+  onStyleSelectionChange?: (snapshot: ContextualStyleSnapshot | null) => void;
   webcamPipMode?: WebcamPipMode;
   webcamOpacity?: number;
   stroMotionResult?: StroMotionResult | null;
@@ -1017,6 +1032,9 @@ const CONTEXTUAL_STROKE_TOOLS = new Set([
   'line', 'arrow', 'arrowAngle', 'circle', 'bodyCircle', 'rect', 'triangle', 'jointChain',
 ]);
 
+/** How close (logical px) a pointer must be to claim an existing mark. */
+const SELECT_HIT_T = 28;
+
 /** Visual radius of a joint ball (logical px). */
 const JOINT_NODE_RADIUS = 8;
 /** Hit target for dragging a joint (touch gets a larger target). */
@@ -1025,6 +1043,18 @@ const JOINT_NODE_HIT_POINTER = 16;
 
 function isContextualStrokeTool(tool: string): boolean {
   return CONTEXTUAL_STROKE_TOOLS.has(tool);
+}
+
+/**
+ * Which committed strokes Style mode can actually restyle.
+ *
+ * Mirrors the early-outs inside applyContextualChange / buildContextualSnapshot:
+ * text carries fontSize rather than lw (it has its own edit affordance), and the
+ * swing paths are generated geometry. Selecting those would light up a selection
+ * box whose controls then silently do nothing, so they are not selectable.
+ */
+function isStyleableStrokeTool(tool: string): boolean {
+  return tool !== 'text' && tool !== 'swingPath' && tool !== 'manualSwing';
 }
 
 type ContextualTarget =
@@ -1758,6 +1788,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       circleSpinning = false,
       outlineEraserSize = 0,
       onOutlineEraserSizeChange,
+      styleMode = false,
+      onStyleSelectionChange,
       webcamPipMode = 'rectangle',
       webcamOpacity = 1,
       stroMotionResult,
@@ -2057,11 +2089,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const [jointChainUiActive, setJointChainUiActive] = useState(false);
 
     const contextualTargetRef = useRef<ContextualTarget | null>(null);
-    const [contextualOpen, setContextualOpen] = useState(false);
-    const [contextualAnchor, setContextualAnchor] = useState({ x: 0, y: 0 });
-    const [contextualSnapshot, setContextualSnapshot] = useState<ContextualStyleSnapshot>(
-      DEFAULT_CONTEXTUAL_SNAPSHOT,
-    );
+    /**
+     * Has the OPEN style bar already pushed its undo entry?
+     *
+     * A style edit is one undo step per selection, not one per slider tick:
+     * the first patch pushes a new history entry, every later patch REWRITES
+     * that same entry in place. Pushing per patch would blow the 50-entry cap
+     * on a single thickness drag and make Ctrl+Z step back one pixel at a time.
+     */
+    const contextualDirtyRef = useRef(false);
+    /** Explicit Style mode: canvas clicks select a mark instead of drawing. */
+    const styleModeRef = useRef(false);
+    const applyContextualChangeRef = useRef<((patch: Partial<ContextualStyleSnapshot>) => void) | null>(null);
+    const onStyleSelectionChangeRef = useRef(onStyleSelectionChange);
+    useEffect(() => { onStyleSelectionChangeRef.current = onStyleSelectionChange; }, [onStyleSelectionChange]);
+    useEffect(() => {
+      styleModeRef.current = styleMode === true;
+      // Leaving Style mode drops the selection — the toolbar's style controls
+      // go back to setting the NEXT mark's defaults.
+      if (styleMode !== true && contextualTargetRef.current) {
+        contextualTargetRef.current = null;
+        contextualDirtyRef.current = false;
+        onStyleSelectionChangeRef.current?.(null);
+        renderDirtyRef.current = true;
+      }
+    }, [styleMode]);
     /** CSS-pixel selection rect on the object-multiplier overlay (relative to overlay box). */
     const [objMultOverlayPx, setObjMultOverlayPx] = useState<{ l: number; t: number; w: number; h: number } | null>(null);
     const objMultOverlayDownRef = useRef<{ cx: number; cy: number } | null>(null);
@@ -2692,12 +2744,30 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       renderDirtyRef.current = true;
     }, []);
 
+    /**
+     * Rewrite the CURRENT history entry from live state instead of adding one.
+     *
+     * Used to coalesce a continuous edit (dragging the thickness/opacity slider
+     * on a selected mark) into the single entry its first change already
+     * pushed. history[historyIdx] must always equal what is on screen, so an
+     * edit that does not push has to update the top entry — otherwise undo
+     * would jump back to a stale style before it ever undid the edit.
+     */
+    const replaceHistoryTop = useCallback(() => {
+      historyRef.current[historyIdxRef.current] = {
+        strokes: [...strokesRef.current],
+        angles: [...angleMeasRef.current],
+      };
+      renderDirtyRef.current = true;
+    }, []);
+
     // ── Exposed handle ─────────────────────────────────────────────────────
 
     useImperativeHandle(ref, () => ({
       clearAll: () => {
         contextualTargetRef.current = null;
-        setContextualOpen(false);
+        contextualDirtyRef.current = false;
+        onStyleSelectionChangeRef.current?.(null);
         strokesRef.current = [];
         angleMeasRef.current = [];
         activeStrokeRef.current = null;
@@ -2757,6 +2827,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const canvas = canvasRef.current;
         if (!canvas) return null;
         return (canvas as unknown as { captureStream(f: number): MediaStream }).captureStream(fps);
+      },
+      applyStyleToSelection: (patch) => {
+        if (!contextualTargetRef.current) return false;
+        applyContextualChangeRef.current?.(patch);
+        return true;
       },
       undo: () => {
         // Undo affects DRAWINGS only. It must NOT touch the live skeleton — a
@@ -4314,6 +4389,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const hasActiveInteraction =
           !!activeStrokeRef.current ||
           !!selectionRef.current ||
+          !!contextualTargetRef.current ||
           !!liveAngleRef.current ||
           isSelectingStroRegionRef.current ||
           precisionAnchorPointerIdRef.current !== null ||
@@ -5271,6 +5347,62 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
+        // ── Style-mode selection indicator: STATIC, deliberately ───────────
+        // Purely "which mark is this" — not the mark's own style. It does NOT
+        // touch strokesRef/angleMeasRef and does NOT redraw the mark itself:
+        // if the coach also has Pulse on for this mark, that marching-dash
+        // animation is entirely the unmodified "Completed strokes" /
+        // "Locked angle measurements" loops above rendering the mark's own
+        // `spinning` field — this box is a second, independent layer on top
+        // that never varies over time, so the two read as clearly separate:
+        // "this is selected" (static) vs. "this mark pulses" (its own style).
+        //
+        // Earlier iterations tried to make THIS box itself pulse/glow to
+        // solve visibility, which conflated the two concepts. Static, with
+        // enough contrast to read at a glance, is what was actually asked
+        // for both times: once before pulse was ever discussed, and again
+        // now, after pulse turned out to mean something else entirely.
+        const ctxTarget = contextualTargetRef.current;
+        if (ctxTarget) {
+          const bb = contextualTargetBBox(ctxTarget);
+          if (bb) {
+            const px = bb.x0 - 8, py = bb.y0 - 8;
+            const pw = (bb.x1 - bb.x0) + 16, ph = (bb.y1 - bb.y0) + 16;
+            ctx.save();
+            ctx.globalAlpha = 1;
+            ctx.setLineDash([]);
+            ctx.lineDashOffset = 0;
+            ctx.lineCap = 'butt';
+            ctx.lineJoin = 'miter';
+
+            // Light fill so the selected region reads immediately, even
+            // before the eye picks out the border.
+            ctx.fillStyle = 'rgba(0,122,255,0.12)';
+            ctx.fillRect(px, py, pw, ph);
+            // Solid blue border...
+            ctx.strokeStyle = '#0A84FF';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(px, py, pw, ph);
+            // ...plus a thin white inset line, so the box still reads on a
+            // similarly-blue patch of video (grass, sky, a blue jersey).
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(px + 2, py + 2, pw - 4, ph - 4);
+
+            const HZ = 7;
+            ctx.fillStyle = '#FFFFFF';
+            ctx.strokeStyle = '#0A84FF';
+            ctx.lineWidth = 1.5;
+            for (const [hx, hy] of [
+              [px, py], [px + pw, py], [px, py + ph], [px + pw, py + ph],
+            ]) {
+              ctx.fillRect(hx - HZ / 2, hy - HZ / 2, HZ, HZ);
+              ctx.strokeRect(hx - HZ / 2, hy - HZ / 2, HZ, HZ);
+            }
+            ctx.restore();
+          }
+        }
+
         // ── StroMotion rubber-band region selection ───────────────────────
         if (isSelectingStroRegionRef.current && stroRegionStartRef.current && stroRegionCurrentRef.current) {
           const p1 = stroRegionStartRef.current;
@@ -5693,11 +5825,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     };
 
     const closeContextualStyle = useCallback(() => {
-      if (contextualTargetRef.current) {
-        pushHistory();
-      }
+      // No pushHistory() here. Every style change already wrote its own entry
+      // (applyContextualChange: push the first, rewrite the rest), so pushing
+      // again on close appended a byte-identical duplicate — and a duplicate
+      // entry is exactly what makes Ctrl+Z look dead, since the first press
+      // steps onto a state indistinguishable from the current one.
       contextualTargetRef.current = null;
-      setContextualOpen(false);
+      contextualDirtyRef.current = false;
+      onStyleSelectionChangeRef.current?.(null);
       if (
         selectionRef.current?.kind === 'stroke' ||
         selectionRef.current?.kind === 'angle' ||
@@ -5706,7 +5841,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         selectionRef.current = null;
       }
       renderDirtyRef.current = true;
-    }, [pushHistory]);
+    }, []);
+
+    /**
+     * Select a committed mark for restyling: this is the piece that was missing.
+     *
+     * contextualTargetRef was declared but never assigned, so the whole
+     * contextual-style path was dead code — applyContextualChange returned at
+     * `if (!target) return`. Everything downstream (snapshot builder, patch
+     * applier) already existed and is reused verbatim; this just gives it a
+     * target and hands the mark's current style to the toolbar so its colour /
+     * thickness controls show — and edit — THAT mark.
+     */
+    const openContextualStyle = useCallback((target: ContextualTarget) => {
+      if (target.kind === 'stroke') {
+        const s = strokesRef.current[target.idx];
+        if (!s || !isStyleableStrokeTool(s.tool)) return;
+      } else if (!angleMeasRef.current[target.idx]) {
+        return;
+      }
+      contextualTargetRef.current = target;
+      contextualDirtyRef.current = false;
+      onStyleSelectionChangeRef.current?.(buildContextualSnapshot(target));
+      renderDirtyRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const notifyDrawCommitted = useCallback(() => {
       onDrawCommittedRef.current?.();
@@ -5756,10 +5915,40 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         angleMeasRef.current = angles;
       }
 
-      setContextualSnapshot(buildContextualSnapshot(target));
+      // Undo integration. history[historyIdx] is always "what is on screen", so
+      // the first change of a selection PUSHES the post-change state (leaving
+      // the pre-change state one step back, where Ctrl+Z finds it) and every
+      // later change of the same selection rewrites that entry. One selection =
+      // one undo step, no matter how many slider ticks it took.
+      //
+      // Only the patches that actually mutate a stroke/angle count. The eraser
+      // toggle and its size live in refs outside both collections, so recording
+      // them would append an entry identical to the previous one — the dead
+      // Ctrl+Z press this file already had to fix once.
+      const mutatedGeometry =
+        patch.color !== undefined || patch.lineWidth !== undefined ||
+        patch.opacity !== undefined || patch.dashed !== undefined ||
+        patch.spinning !== undefined;
+      if (!mutatedGeometry) {
+        onStyleSelectionChangeRef.current?.(buildContextualSnapshot(target));
+        renderDirtyRef.current = true;
+        return;
+      }
+      if (contextualDirtyRef.current) {
+        replaceHistoryTop();
+      } else {
+        contextualDirtyRef.current = true;
+        pushHistory();
+      }
+
+      onStyleSelectionChangeRef.current?.(buildContextualSnapshot(target));
       renderDirtyRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [onOutlineEraserSizeChange]);
+    }, [onOutlineEraserSizeChange, pushHistory, replaceHistoryTop]);
+
+    // Reached from the imperative handle (declared far above this point), so it
+    // goes through a ref rather than a direct lexical reference.
+    useEffect(() => { applyContextualChangeRef.current = applyContextualChange; }, [applyContextualChange]);
 
     const precisionToolUsesToggleDownUp = (t: ToolType): boolean =>
       t === 'erase' ||
@@ -5954,6 +6143,103 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return inside ? 0 : Math.hypot(pos.x - cx, pos.y - cy);
       }
       return Infinity;
+    };
+
+    /**
+     * The mark under the pointer, or null — Style mode's hit-test.
+     *
+     * Same distance functions as the Select tool (hitTestStroke covers line /
+     * arrow / pen segment proximity, shape outlines, and the text bounding
+     * box; angles use vertex + both legs), so "what did I click" means the
+     * same thing in both. Iterates BACK-TO-FRONT so the topmost (last-drawn)
+     * mark wins an overlap: distances tie at 0 wherever two filled shapes
+     * overlap, and a strict `<` otherwise keeps the one painted underneath.
+     */
+    const pickStyleTarget = (pos: Pt): ContextualTarget | null => {
+      let best: ContextualTarget | null = null;
+      let bestDist = SELECT_HIT_T;
+      for (let i = strokesRef.current.length - 1; i >= 0; i--) {
+        const s = strokesRef.current[i];
+        if (!isStyleableStrokeTool(s.tool)) continue;
+        const d = hitTestStroke(s, pos);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { kind: 'stroke', idx: i };
+        }
+      }
+      for (let i = angleMeasRef.current.length - 1; i >= 0; i--) {
+        const m = angleMeasRef.current[i];
+        const d = Math.min(
+          Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
+          distToSegment(pos, m.v, m.p1),
+          distToSegment(pos, m.v, m.p2),
+        );
+        if (d < bestDist) {
+          bestDist = d;
+          best = { kind: 'angle', idx: i };
+        }
+      }
+      return best;
+    };
+
+    /**
+     * Bounding box of a style-selected mark, in logical px.
+     *
+     * Drives the static selection indicator only — WHICH mark the toolbar's
+     * controls are about to change, nothing about the mark's own style. Kept
+     * separate from the Select tool's transient drag highlight (which reads
+     * selectionRef and clears on pointer-up) because a style selection has to
+     * outlive the click that made it, and because reusing selectionRef for
+     * that would leave it non-null across a later pointer-up, where
+     * onPointerUp's selection branch returns early and would swallow the
+     * commit of a brand-new drawing.
+     */
+    const contextualTargetBBox = (
+      target: ContextualTarget,
+    ): { x0: number; y0: number; x1: number; y1: number } | null => {
+      if (target.kind === 'angle') {
+        const m = angleMeasRef.current[target.idx];
+        if (!m) return null;
+        return {
+          x0: Math.min(m.v.x, m.p1.x, m.p2.x),
+          y0: Math.min(m.v.y, m.p1.y, m.p2.y),
+          x1: Math.max(m.v.x, m.p1.x, m.p2.x),
+          y1: Math.max(m.v.y, m.p1.y, m.p2.y),
+        };
+      }
+      const s = strokesRef.current[target.idx];
+      if (!s) return null;
+      if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
+        const pts = (s as StrokePen | StrokeSwing).pts;
+        if (pts.length === 0) return null;
+        return {
+          x0: Math.min(...pts.map((p) => p.x)), y0: Math.min(...pts.map((p) => p.y)),
+          x1: Math.max(...pts.map((p) => p.x)), y1: Math.max(...pts.map((p) => p.y)),
+        };
+      }
+      if (s.tool === 'jointChain') {
+        const jc = s as StrokeJointChain;
+        if (jc.nodes.length === 0) return null;
+        return {
+          x0: Math.min(...jc.nodes.map((p) => p.x)), y0: Math.min(...jc.nodes.map((p) => p.y)),
+          x1: Math.max(...jc.nodes.map((p) => p.x)), y1: Math.max(...jc.nodes.map((p) => p.y)),
+        };
+      }
+      if (s.tool === 'line' || s.tool === 'arrow' || s.tool === 'arrowAngle') {
+        const l = s as StrokeLine | StrokeArrow;
+        return {
+          x0: Math.min(l.p1.x, l.p2.x), y0: Math.min(l.p1.y, l.p2.y),
+          x1: Math.max(l.p1.x, l.p2.x), y1: Math.max(l.p1.y, l.p2.y),
+        };
+      }
+      if (s.tool === 'circle' || s.tool === 'bodyCircle' || s.tool === 'rect' || s.tool === 'triangle') {
+        const el = s as StrokeEllipse;
+        return { x0: el.cx - el.rx, y0: el.cy - el.ry, x1: el.cx + el.rx, y1: el.cy + el.ry };
+      }
+      if (s.tool === 'text') {
+        return getTextBBox(s as StrokeText);
+      }
+      return null;
     };
 
     const translateStroke = (s: Stroke, dx: number, dy: number): Stroke => {
@@ -6489,7 +6775,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
 
-      if (contextualTargetRef.current && outlineEraserSizeRef.current <= 0) {
+      if (
+        !styleModeRef.current &&
+        contextualTargetRef.current &&
+        outlineEraserSizeRef.current <= 0
+      ) {
         closeContextualStyle();
       }
 
@@ -6544,6 +6834,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // Object multiplier selection is handled by a dedicated overlay (see JSX).
+
+      // ── STYLE MODE: the pointer selects a mark. It never draws. ───────────
+      // An explicit mode, entered from the toolbar's Style button. It sits here
+      // — below the genuinely modal flows above (precision anchor, pinch, the
+      // click-to-focus session, StroMotion region select) and ABOVE overlay
+      // endpoints, the data column, pan and every draw path — so that while
+      // Style mode is on, a click can do exactly one thing: pick the mark to
+      // restyle, or clear the selection.
+      //
+      // The previous attempt made the ACTIVE DRAW TOOL double as the selector,
+      // which is why clicking with the Line tool just drew another line: the
+      // line tool has no "clicked an existing mark" branch at all, so the press
+      // fell straight through to beginDrawToolAt. Owning the pointer up front,
+      // in a mode of its own, is what removes that whole class of conflict.
+      if (styleModeRef.current) {
+        const hit = pickStyleTarget(pos);
+        if (hit) {
+          openContextualStyle(hit);
+        } else if (contextualTargetRef.current) {
+          closeContextualStyle();
+        }
+        isDraggingRef.current = false;
+        e.preventDefault();
+        return;
+      }
 
       // ── Pan: activates immediately on pointer-down with no delay ────────
       // Triggers: middle-click, Space+drag, zoom tool while zoomed,
@@ -6888,7 +7203,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
-        const HIT_T = 28;
+        const HIT_T = SELECT_HIT_T;
         const nodeHitR = e.pointerType === 'touch' ? JOINT_NODE_HIT_TOUCH : JOINT_NODE_HIT_POINTER;
         let best: Selection = null;
         let bestDist = Infinity;
@@ -6906,7 +7221,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
-        for (let i = 0; i < strokesRef.current.length; i++) {
+        // Back-to-front so the TOPMOST (last-drawn) mark wins an overlap: the
+        // distances tie at 0 anywhere two filled shapes overlap, and a strict
+        // `<` keeps whichever was seen first — which, iterating forwards, was
+        // the one painted UNDERNEATH the mark the coach was pointing at.
+        for (let i = strokesRef.current.length - 1; i >= 0; i--) {
           const d = hitTestStroke(strokesRef.current[i], pos);
           if (d < bestDist) {
             bestDist = d;
@@ -6914,7 +7233,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
-        for (let i = 0; i < angleMeasRef.current.length; i++) {
+        for (let i = angleMeasRef.current.length - 1; i >= 0; i--) {
           const m = angleMeasRef.current[i];
           const d = Math.min(
             Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
@@ -7188,6 +7507,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
+      // ── Style mode: no drag consumers exist, so a move does nothing ──────
+      // Placed after the pinch and precision consumers above so two-finger
+      // zoom still works while styling.
+      if (styleModeRef.current) return;
+
       // ── Pan drag ────────────────────────────────────────────────────────
       if (isPanningRef.current && panStartRef.current) {
         const canvas = canvasRef.current;
@@ -7415,6 +7739,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // ── Style mode: the press only ever selected a mark ───────────────────
+      // Nothing was started on pointer-down (no stroke, no pan, no drag), so
+      // there is nothing to finalise. Returning here also keeps a stale
+      // selectionRef left over from an earlier Select-tool gesture from
+      // pushing a no-op undo entry on every click.
+      if (styleModeRef.current) {
+        isDraggingRef.current = false;
+        try {
+          (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+
       if (webcamPipDragRef.current) {
         webcamPipDragRef.current = null;
         isDraggingRef.current = false;
@@ -7489,7 +7828,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       commitActiveStroke();
-    }, [pushHistory, commitActiveStroke]);
+    }, [pushHistory, commitActiveStroke, openContextualStyle]);
 
     // ── Pointer cancel ───────────────────────────────────────────────────────
     // OS / browser interruptions (incoming call, gesture nav, pointer steal)
@@ -8333,6 +8672,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             onBlur={commitTextEdit}
           />
         )}
+
       </div>
     );
   },

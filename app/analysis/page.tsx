@@ -13,6 +13,7 @@ import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Camera, Plus, Trash2, Upload } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
+import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
@@ -424,6 +425,22 @@ function Home() {
   const [playbackTarget, setPlaybackTarget] = useState<'A' | 'B' | 'AB'>('A');
   /** Which video panel receives undo / clear / new drawings when comparing. */
   const [markupTarget, setMarkupTarget] = useState<'A' | 'B' | 'both'>('A');
+  /**
+   * STYLE MODE — "edit style after drawing".
+   *
+   * While on, a canvas click selects an existing mark instead of drawing, and
+   * the Style panel's colour / thickness / dash controls edit THAT mark. With
+   * nothing selected the same controls keep setting the next mark's defaults,
+   * so the panel has one job in both states.
+   */
+  const [styleMode, setStyleMode] = useState(false);
+  /** Current style of the selected mark, or null when nothing is selected. */
+  const [styleSelection, setStyleSelection] = useState<ContextualStyleSnapshot | null>(null);
+  // Read from handleToolChange, which is memoized with no deps.
+  const styleModeRef = useRef(false);
+  const styleSelectionRef = useRef<ContextualStyleSnapshot | null>(null);
+  useEffect(() => { styleModeRef.current = styleMode; }, [styleMode]);
+  useEffect(() => { styleSelectionRef.current = styleSelection; }, [styleSelection]);
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Distance from bottom of video stage to reserve for playback UI + 16px gap (px). */
@@ -1463,6 +1480,28 @@ function Home() {
   const ytIframeControllerB = useMemo(() => createYoutubeIframeController(ytPlayerBRef), []);
 
   const handleToolChange = useCallback((t: ToolType) => {
+    // STYLE MODE, behaviour (b): picking a drawing tool hands that tool the
+    // style currently on screen — the selected mark's — and drops back into
+    // drawing. So "select a mark, recolour it, click Line" makes the next line
+    // match it. With nothing selected there is nothing to copy: the panel was
+    // editing the defaults directly, which the tool already uses.
+    //
+    // ANY tool choice leaves style mode, not just a drawing one. Picking
+    // Select or Zoom while style mode was on would otherwise leave the canvas
+    // silently refusing to draw with no lit control explaining why.
+    if (styleModeRef.current) {
+      const sel = styleSelectionRef.current;
+      if (sel && DRAW_CONTEXT_TOOLS.includes(t)) {
+        setDrawingOptions((prev) => ({
+          ...prev,
+          color: sel.color,
+          lineWidth: sel.lineWidth,
+          dashed: sel.dashed,
+        }));
+      }
+      setStyleMode(false);
+      setStyleSelection(null);
+    }
     setActiveTool(t);
     setDrawContextActive(DRAW_CONTEXT_TOOLS.includes(t));
     if (t === 'objectMultiplier') {
@@ -4516,8 +4555,86 @@ function Home() {
     }
   }, [youtubeVideoIdB, genericEmbedSrcB, hubCaptureTarget, markEmbedReadyB]);
 
+  /**
+   * STYLE MODE, behaviour (a): route the Style panel's controls to the mark the
+   * coach selected on the canvas, instead of to the next-draw defaults.
+   *
+   * Only the three properties a committed mark actually carries are diverted
+   * (colour, thickness, dash). Anything else in the same patch — text size,
+   * arrow-at-end — has no meaning for an already-drawn mark and still updates
+   * the defaults. With no selection this is a plain pass-through, so the
+   * choose-style-before-drawing flow is byte-for-byte unchanged.
+   */
   const handleOptionsChange = useCallback((opts: Partial<DrawingOptions>) => {
+    if (styleSelection) {
+      const patch: Partial<ContextualStyleSnapshot> = {};
+      if (opts.color !== undefined) patch.color = opts.color;
+      if (opts.lineWidth !== undefined) patch.lineWidth = opts.lineWidth;
+      if (opts.dashed !== undefined) patch.dashed = opts.dashed;
+      if (Object.keys(patch).length > 0) {
+        // Routed the same way every other markup op is (see
+        // applyMarkupToTargets), but inlined: that helper is declared ~1000
+        // lines below this callback, and naming it in this dep array would
+        // evaluate it during render, before its `const` is initialised.
+        let applied = false;
+        const targets =
+          markupTarget === 'both'
+            ? [canvasRef, canvasRefB]
+            : [markupTarget === 'B' ? canvasRefB : canvasRef];
+        for (const t of targets) {
+          if (t.current?.applyStyleToSelection?.(patch)) applied = true;
+        }
+        if (applied) {
+          // Keep the panel's swatches in step with the mark it just changed.
+          setStyleSelection((prev) => (prev ? { ...prev, ...patch } : prev));
+          const rest = { ...opts };
+          delete rest.color;
+          delete rest.lineWidth;
+          delete rest.dashed;
+          if (Object.keys(rest).length > 0) setDrawingOptions((prev) => ({ ...prev, ...rest }));
+          return;
+        }
+      }
+    }
     setDrawingOptions(prev => ({ ...prev, ...opts }));
+  }, [styleSelection, markupTarget]);
+
+  /**
+   * STYLE MODE, behaviour (a) extended to Highlight pulse: same diversion as
+   * handleOptionsChange, kept as its own callback because "Highlight pulse"
+   * is wired through ToolPalette's own onCircleSpinningChange prop rather
+   * than through onOptionsChange — circleSpinning has always been a sibling
+   * of DrawingOptions, not a field on it (see the `circleSpinning` useState
+   * below vs. the `drawingOptions` one), so it never passed through
+   * handleOptionsChange's patch-building at all. That's the actual reason
+   * toggling Pulse on a selected mark did nothing: the toggle was reaching
+   * setCircleSpinning (the next-draw default) unconditionally, never
+   * applyStyleToSelection, regardless of whether a mark was selected.
+   */
+  const handleCircleSpinningChange = useCallback((spinning: boolean) => {
+    if (styleSelection) {
+      let applied = false;
+      const targets =
+        markupTarget === 'both'
+          ? [canvasRef, canvasRefB]
+          : [markupTarget === 'B' ? canvasRefB : canvasRef];
+      for (const t of targets) {
+        if (t.current?.applyStyleToSelection?.({ spinning })) applied = true;
+      }
+      if (applied) {
+        setStyleSelection((prev) => (prev ? { ...prev, spinning } : prev));
+        return;
+      }
+    }
+    setCircleSpinning(spinning);
+  }, [styleSelection, markupTarget]);
+
+  /** Style button: enter/leave style mode. Leaving always drops the selection. */
+  const handleStyleModeToggle = useCallback(() => {
+    setStyleMode((on) => {
+      if (on) setStyleSelection(null);
+      return !on;
+    });
   }, []);
 
   // ── Auto Swing Detection ──────────────────────────────────────────────────
@@ -5839,9 +5956,12 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onAutoSwing:                     handleAutoSwing,
     onRacketMultiplier:              handleRacketMultiplier,
     circleSpinning,
-    onCircleSpinningChange:          setCircleSpinning,
+    onCircleSpinningChange:          handleCircleSpinningChange,
     outlineEraserSize,
     onOutlineEraserSizeChange:       setOutlineEraserSize,
+    styleMode,
+    onStyleModeToggle:               handleStyleModeToggle,
+    styleSelection,
     skeletonShowAngles,
     onSkeletonShowAnglesChange:      setSkeletonShowAngles,
     skeletonShowHeadLine,
@@ -6644,6 +6764,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   circleSpinning={circleSpinning}
                   outlineEraserSize={outlineEraserSize}
                   onOutlineEraserSizeChange={setOutlineEraserSize}
+                  styleMode={styleMode}
+                  onStyleSelectionChange={setStyleSelection}
                   webcamPipMode={webcamPipMode}
                   webcamOpacity={webcamOpacity}
                   webcamActive={webcamActive && markupTarget !== 'B'}
@@ -7361,6 +7483,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       circleSpinning={circleSpinning}
                       outlineEraserSize={outlineEraserSize}
                       onOutlineEraserSizeChange={setOutlineEraserSize}
+                      styleMode={styleMode}
+                      onStyleSelectionChange={setStyleSelection}
                       webcamPipMode={webcamPipMode}
                       webcamOpacity={webcamOpacity}
                       webcamActive={webcamActive && markupTarget === 'B'}

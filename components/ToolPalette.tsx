@@ -49,6 +49,18 @@ interface ToolPaletteProps {
   compact?: boolean;
   drawingOptions: DrawingOptions;
   onOptionsChange: (opts: Partial<DrawingOptions>) => void;
+  /**
+   * Style mode: canvas clicks select an existing mark instead of drawing, and
+   * this panel's colour / thickness / dash controls edit that mark.
+   */
+  styleMode?: boolean;
+  onStyleModeToggle?: () => void;
+  /**
+   * The selected mark's current style, or null when nothing is selected. When
+   * set, the controls below DISPLAY these values (not the next-draw defaults)
+   * so the swatches show what the coach is actually editing.
+   */
+  styleSelection?: { color: string; lineWidth: number; dashed: boolean; spinning: boolean } | null;
   onUndo: () => void;
   onRedo: () => void;
   onClear: () => void;
@@ -904,6 +916,9 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onToolChange,
     drawingOptions,
     onOptionsChange,
+    styleMode = false,
+    onStyleModeToggle,
+    styleSelection = null,
     onUndo,
     onRedo,
     onClear,
@@ -1168,16 +1183,48 @@ export default function ToolPalette(props: ToolPaletteProps) {
   }
 
   if (top === 'style') {
+    // In style mode with a mark selected, every control below shows and edits
+    // THAT mark. Otherwise they show and edit the next-draw defaults.
+    const styleVals = styleMode && styleSelection ? styleSelection : drawingOptions;
+    // `spinning` (Highlight pulse) isn't part of DrawingOptions — it has
+    // always been a sibling prop (`circleSpinning`), not a `styleVals` field —
+    // so it needs its own resolution rather than reading off `styleVals`.
+    const pulseVal = styleMode && styleSelection ? styleSelection.spinning : !!circleSpinning;
     return (
       <div style={shellStyle}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
-          <BackHeader chrome={chrome} title="Default style" icon={<Palette size={18} />} />
+          {/*
+            Back deliberately KEEPS style mode on: the tool list is one screen
+            back, and picking a tool there is how the coach hands it the style
+            they just set (landing back in drawing). The Style row on that
+            screen stays lit, so the mode is never invisible.
+          */}
+          <BackHeader
+            chrome={chrome}
+            title={styleMode ? 'Style a mark' : 'Default style'}
+            icon={<Palette size={18} />}
+          />
+          {/* Style mode toggle — pressing it again turns style mode back off. */}
+          {onStyleModeToggle && (
+            <Row chrome={chrome}
+              k="style-mode"
+              active={styleMode}
+              icon={<MousePointer2 size={18} />}
+              tooltip="Click a finished mark on the video, then change its color or thickness here"
+              label={styleMode ? 'Style mode: ON' : 'Style mode'}
+              onPress={onStyleModeToggle}
+            />
+          )}
           {!io ? (
           <>
           <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: textMuted }}>
-            Sets the look for your next mark. Tap a finished shape on the video to edit it there.
+            {styleMode
+              ? (styleSelection
+                  ? 'Editing the selected mark. Pick a drawing tool to give it this style and start drawing.'
+                  : 'Click a mark on the video to select it. Clicks will not draw while style mode is on.')
+              : 'Sets the look for your next mark. Turn on style mode to edit a mark you already drew.'}
           </p>
           <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 4px 0' }}>
             Preset colors
@@ -1190,7 +1237,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               type="button"
               aria-label={`Color ${c}`}
               style={{
-                ...rb(drawingOptions.color === c, pressedKey === `c-${c}`, io),
+                ...rb(styleVals.color === c, pressedKey === `c-${c}`, io),
                 justifyContent: io ? 'center' : 'flex-start',
                 transform: pressedKey === `c-${c}` ? 'scale(0.95)' : undefined,
               }}
@@ -1205,7 +1252,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                   height: io ? 26 : 22,
                   borderRadius: 6,
                   background: c,
-                  border: drawingOptions.color === c ? '2px solid #007AFF' : '1px solid #D1D1D6',
+                  border: styleVals.color === c ? '2px solid #007AFF' : '1px solid #D1D1D6',
                 }}
               />
               {io ? null : c}
@@ -1215,21 +1262,26 @@ export default function ToolPalette(props: ToolPaletteProps) {
             {io ? null : <span style={{ fontSize: 13, fontWeight: 600 }}>Custom</span>}
             <input
               type="color"
-              value={drawingOptions.color}
+              value={styleVals.color}
               onChange={(e) => onOptionsChange({ color: e.target.value })}
               style={{ marginLeft: io ? 0 : 'auto', width: io ? 32 : 44, height: io ? 32 : 32, border: 'none', background: 'transparent' }}
             />
           </label>
           <ThicknessPxBar
-            value={drawingOptions.lineWidth}
+            value={styleVals.lineWidth}
             onChange={(v) => onOptionsChange({ lineWidth: v })}
             vertical={useVerticalThickness}
           />
-          <div style={{ display: 'flex', gap: io ? 4 : 8, marginTop: 6, ...(io ? { justifyContent: 'center' } : null) }}>
+          {/*
+            Stacked, not side-by-side: two flex:1 buttons sharing one row had
+            no room to show their label text in the compact toolbar column and
+            got cut off. Full-width, one under the other, always fits.
+          */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: io ? 4 : 8, marginTop: 6, ...(io ? { alignItems: 'center' } : null) }}>
             <button
               type="button"
               aria-label="Solid line"
-              style={{ ...rb(!drawingOptions.dashed, pressedKey === 'solid', io), flex: io ? undefined : 1, justifyContent: 'center', ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : null) }}
+              style={{ ...rb(!styleVals.dashed, pressedKey === 'solid', io), justifyContent: 'center', ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : { width: '100%' }) }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('solid', () => onOptionsChange({ dashed: false }));
@@ -1240,7 +1292,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             <button
               type="button"
               aria-label="Dashed line"
-              style={{ ...rb(!!drawingOptions.dashed, pressedKey === 'dash', io), flex: io ? undefined : 1, justifyContent: 'center', ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : null) }}
+              style={{ ...rb(!!styleVals.dashed, pressedKey === 'dash', io), justifyContent: 'center', ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : { width: '100%' }) }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 fire('dash', () => onOptionsChange({ dashed: true }));
@@ -1253,7 +1305,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             chk(
               'spin',
               'Highlight pulse',
-              !!circleSpinning,
+              pulseVal,
               onCircleSpinningChange,
               <Sparkles size={18} strokeWidth={2} />,
             )}
@@ -1313,12 +1365,25 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <ToolbarLead chrome={chrome} />
           <BackHeader chrome={chrome} title="Draw" icon={<Pen size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
           {/* V1 spec: Style sits at the TOP of the Draw list (set the look first). */}
+          {/*
+            Opening Style also ENTERS style mode, so the coach can click a mark
+            they already drew and restyle it. Pressing the toggle inside the
+            panel turns it back off; picking any drawing tool from this list
+            gives that tool the current style and returns to drawing.
+          */}
           <Row chrome={chrome}
             k="st-d"
+            active={styleMode}
             icon={<Palette size={18} />}
             label="Style"
-            tooltip="Change line color, thickness, and dash style for drawing tools"
-            onPress={() => push('style')}
+            tooltip="Set the look for the next mark, or click a finished mark to restyle it"
+            onPress={() => {
+              // Pressing Style while it is already on turns it off in place —
+              // "click Style again to exit", without a pointless re-navigation.
+              if (styleMode) { onStyleModeToggle?.(); return; }
+              onStyleModeToggle?.();
+              push('style');
+            }}
           />
           <Row chrome={chrome} k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} tooltip="Freehand drawing tool" label="Pen" onPress={() => setTool('pen')} />
           <Row chrome={chrome} k="line" active={activeTool === 'line'} icon={<Minus size={18} />} tooltip="Draw a straight line" label="Line" onPress={() => setTool('line')} />
