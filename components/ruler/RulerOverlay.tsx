@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   Ruler,
   RefreshCw,
@@ -16,9 +16,21 @@ import {
   computeScale,
   measureWithHomography,
   measureWithScale,
-  formatDistance,
   dist2D,
 } from '@/lib/ruler/homography';
+import {
+  parseLengthToMeters,
+  formatLength,
+  formatScale,
+  defaultUnitFor,
+  racketPrefill,
+  LENGTH_UNIT_LABEL,
+  MIN_CALIBRATION_PX,
+  MIN_SCALE_PX_PER_M,
+  MAX_SCALE_PX_PER_M,
+  type LengthUnit,
+  type UnitSystem,
+} from '@/lib/ruler/units';
 import type { Point2D, RulerCalibration, RulerMeasurement, RulerMode } from '@/lib/ruler/types';
 
 interface Props {
@@ -28,19 +40,44 @@ interface Props {
   onClose: () => void;
   /** Report a completed measurement to the data column */
   onMeasurement?: (value: number, unit: string) => void;
+  /**
+   * Calibration is owned by the PAGE, not by this overlay.
+   *
+   * This component is conditionally rendered (`activeTool === 'ruler'`), so it
+   * unmounts the moment the coach picks any other tool. Holding the
+   * calibration in local state meant every tool switch silently threw it away
+   * and forced a re-calibration — the scale survived only as long as the
+   * ruler was the active tool. Lifting it to the page makes the lifetime what
+   * it should be: the loaded clip.
+   */
+  calibration: RulerCalibration | null;
+  onCalibrationChange: (cal: RulerCalibration | null) => void;
+  unitSystem: UnitSystem;
+  onUnitSystemChange: (system: UnitSystem) => void;
 }
 
 type CalibStep = 'pick-preset' | 'place-points' | 'done';
 
 let measureIdCounter = 0;
 
-export default function RulerOverlay({ containerWidth, containerHeight, onClose, onMeasurement }: Props) {
-  const [mode, setMode] = useState<RulerMode>('calibrate');
-  const [calibStep, setCalibStep] = useState<CalibStep>('pick-preset');
+export default function RulerOverlay({
+  containerWidth,
+  containerHeight,
+  onClose,
+  onMeasurement,
+  calibration,
+  onCalibrationChange,
+  unitSystem,
+  onUnitSystemChange,
+}: Props) {
+  const [mode, setMode] = useState<RulerMode>(calibration ? 'measure' : 'calibrate');
+  const [calibStep, setCalibStep] = useState<CalibStep>(calibration ? 'done' : 'pick-preset');
   const [selectedPreset, setSelectedPreset] = useState<RulerPreset | null>(null);
-  const [customDistance, setCustomDistance] = useState<string>('1.07');
+  /** Free-form reference length ("68.6", "27 in", `5'11"`) + the unit for bare numbers. */
+  const [customDistance, setCustomDistance] = useState<string>('');
+  const [customUnit, setCustomUnit] = useState<LengthUnit>(defaultUnitFor(unitSystem));
+  const [calibError, setCalibError] = useState<string | null>(null);
   const [calibPoints, setCalibPoints] = useState<Point2D[]>([]);
-  const [calibration, setCalibration] = useState<RulerCalibration | null>(null);
   const [measurements, setMeasurements] = useState<RulerMeasurement[]>([]);
 
   // For drawing a measurement line
@@ -53,47 +90,91 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }, []);
 
+  /**
+   * The reference length in METERS for the current preset, or null if the
+   * coach's typed value is unusable. Presets carry their own known length;
+   * only 'custom' reads the input.
+   */
+  const resolveReferenceMeters = useCallback((preset: RulerPreset): number | null => {
+    if (preset.id !== 'custom') return preset.referenceDistance ?? null;
+    return parseLengthToMeters(customDistance, customUnit);
+  }, [customDistance, customUnit]);
+
   // ---- Calibration clicks ----
+  // Everything is computed OUTSIDE the state updater on purpose: a setState
+  // updater must be a pure function of prev state (React may invoke it more
+  // than once), so firing onCalibrationChange / setCalibError from inside one
+  // risks duplicate parent updates and dropped error messages.
   const handleCalibClick = useCallback((e: React.PointerEvent) => {
     if (!selectedPreset) return;
     const pt = getSvgPoint(e);
-    setCalibPoints(prev => {
-      const next = [...prev, pt];
-      if (next.length === selectedPreset.pointCount) {
-        // Finalize calibration
-        const dstPoints = selectedPreset.id === 'custom'
-          ? [{ x: 0, y: 0 }, { x: parseFloat(customDistance) || 1, y: 0 }]
-          : selectedPreset.dstPoints;
+    const next = [...calibPoints, pt];
 
-        let cal: RulerCalibration;
-        if (selectedPreset.method === 'homography' && next.length === 4) {
-          const h = computeHomography(next, dstPoints);
-          cal = {
-            method: 'homography',
-            presetId: selectedPreset.id,
-            srcPoints: next,
-            dstPoints,
-            homography: h ?? undefined,
-          };
-        } else {
-          const refDist = selectedPreset.id === 'custom'
-            ? (parseFloat(customDistance) || 1)
-            : (selectedPreset.referenceDistance ?? 1);
-          const scale = computeScale(next[0], next[1], refDist);
-          cal = {
-            method: 'simple',
-            presetId: selectedPreset.id,
-            srcPoints: next,
-            dstPoints,
-            scale,
-          };
-        }
-        setCalibration(cal);
-        setCalibStep('done');
+    if (next.length < selectedPreset.pointCount) {
+      setCalibPoints(next);
+      return;
+    }
+
+    // ---- Finalize calibration (with guards) ----
+    const fail = (msg: string) => {
+      setCalibError(msg);
+      setCalibPoints([]);
+    };
+
+    if (selectedPreset.method === 'homography' && next.length === 4) {
+      const h = computeHomography(next, selectedPreset.dstPoints);
+      if (!h || h.some(v => !Number.isFinite(v))) {
+        // Degenerate quad (collinear / duplicate corners) — gaussElim returns
+        // null or non-finite values rather than a usable matrix.
+        fail('Those 4 points don’t form a usable shape. Click the corners again.');
+        return;
       }
-      return next;
+      setCalibPoints(next);
+      setCalibError(null);
+      onCalibrationChange({
+        method: 'homography',
+        presetId: selectedPreset.id,
+        srcPoints: next,
+        dstPoints: selectedPreset.dstPoints,
+        homography: h,
+      });
+      setCalibStep('done');
+      setMode('measure');
+      return;
+    }
+
+    const refMeters = resolveReferenceMeters(selectedPreset);
+    if (refMeters === null || refMeters <= 0) {
+      fail('Enter a valid length first (e.g. 68.6 cm, 27 in, 1.8 m).');
+      return;
+    }
+
+    // Divide-by-zero guard: a reference line of ~0 px yields an infinite scale
+    // and would make every later measurement nonsense.
+    if (dist2D(next[0], next[1]) < MIN_CALIBRATION_PX) {
+      fail('That reference line is too short. Draw along the full length of the object.');
+      return;
+    }
+
+    const scale = computeScale(next[0], next[1], refMeters);
+    if (!Number.isFinite(scale) || scale < MIN_SCALE_PX_PER_M || scale > MAX_SCALE_PX_PER_M) {
+      fail('That length and line don’t look right together. Check the value and try again.');
+      return;
+    }
+
+    setCalibPoints(next);
+    setCalibError(null);
+    onCalibrationChange({
+      method: 'simple',
+      presetId: selectedPreset.id,
+      srcPoints: next,
+      dstPoints: [{ x: 0, y: 0 }, { x: refMeters, y: 0 }],
+      scale,
+      referenceMeters: refMeters,
     });
-  }, [selectedPreset, customDistance, getSvgPoint]);
+    setCalibStep('done');
+    setMode('measure');
+  }, [selectedPreset, calibPoints, resolveReferenceMeters, getSvgPoint, onCalibrationChange]);
 
   // ---- Measure clicks ----
   const handleMeasureDown = useCallback((e: React.PointerEvent) => {
@@ -119,27 +200,47 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
       distM = measureWithScale(calibration.scale ?? 1, drawStart, end);
     }
 
+    if (!Number.isFinite(distM)) { setDrawStart(null); setDrawCurrent(null); return; }
+
     setMeasurements(prev => [
       ...prev,
       { id: `m${++measureIdCounter}`, p1: drawStart, p2: end, distanceM: distM },
     ]);
+    // The data column stores the canonical meters value; its own display
+    // formatting is unchanged. Unit switching here never rewrites what was
+    // already sent, so the column stays internally consistent.
     onMeasurement?.(Math.round(distM * 100) / 100, 'm');
     setDrawStart(null);
     setDrawCurrent(null);
   }, [drawStart, calibration, getSvgPoint, onMeasurement]);
 
   const resetCalibration = useCallback(() => {
-    setCalibration(null);
+    onCalibrationChange(null);
     setCalibPoints([]);
     setCalibStep('pick-preset');
     setSelectedPreset(null);
     setMeasurements([]);
+    setCalibError(null);
     setMode('calibrate');
-  }, []);
+  }, [onCalibrationChange]);
 
   const clearMeasurements = useCallback(() => setMeasurements([]), []);
 
-  const isCalibrating = mode === 'calibrate' && calibStep === 'place-points';
+  /**
+   * A custom reference needs a usable length BEFORE the points mean anything.
+   * Blank is "not filled in yet" (no error styling); non-blank-but-unparseable
+   * is a real mistake worth flagging as the coach types.
+   */
+  const customLenMeters = selectedPreset?.id === 'custom'
+    ? parseLengthToMeters(customDistance, customUnit)
+    : null;
+  const customLenInvalid = selectedPreset?.id === 'custom'
+    && customDistance.trim() !== ''
+    && customLenMeters === null;
+  /** Gate point placement until a custom length is actually usable. */
+  const awaitingCustomLength = selectedPreset?.id === 'custom' && customLenMeters === null;
+
+  const isCalibrating = mode === 'calibrate' && calibStep === 'place-points' && !awaitingCustomLength;
   const isMeasuring = mode === 'measure';
 
   const nextPointLabel = selectedPreset && isCalibrating
@@ -199,7 +300,7 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
         {measurements.map(m => {
           const mx = (m.p1.x + m.p2.x) / 2;
           const my = (m.p1.y + m.p2.y) / 2;
-          const label = formatDistance(m.distanceM);
+          const label = formatLength(m.distanceM, unitSystem);
           return (
             <g key={m.id}>
               <line x1={m.p1.x} y1={m.p1.y} x2={m.p2.x} y2={m.p2.y}
@@ -236,7 +337,7 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
                   y={(previewLine.p1.y + previewLine.p2.y) / 2 + 1}
                   textAnchor="middle" dominantBaseline="middle"
                   fontSize={11} fontWeight="600" fill="#F59E0B">
-                  {formatDistance(previewDist)}
+                  {formatLength(previewDist, unitSystem)}
                 </text>
               </>
             )}
@@ -285,6 +386,38 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.5)', padding: 2 }}>
             <X size={14} />
           </button>
+        </div>
+
+        {/*
+          Units toggle — a pure DISPLAY switch. Calibration is stored in meters,
+          so flipping this re-renders every existing measurement instantly and
+          never invalidates the scale.
+        */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px',
+          borderBottom: '1px solid rgba(255,255,255,0.08)',
+        }}>
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', flex: 1 }}>Units</span>
+          <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
+            {(['metric', 'imperial'] as const).map(sys => (
+              <button
+                key={sys}
+                onClick={() => {
+                  onUnitSystemChange(sys);
+                  // Keep the typing unit sensible for the new system, but only
+                  // when the coach hasn't already typed something — retyping
+                  // their value out from under them would be worse.
+                  if (!customDistance.trim()) setCustomUnit(defaultUnitFor(sys));
+                }}
+                style={{
+                  padding: '3px 10px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 600,
+                  background: unitSystem === sys ? '#F59E0B' : 'transparent',
+                  color: unitSystem === sys ? '#1a1a1a' : 'rgba(255,255,255,0.6)',
+                }}>
+                {sys === 'metric' ? 'cm / m' : 'ft / in'}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Body */}
@@ -342,21 +475,92 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
                 <span style={{ fontWeight: 700 }}>{selectedPreset.icon} {selectedPreset.label}</span>
               </div>
 
-              {/* Custom distance input */}
+              {/* Custom length input: value + unit, or free-form text */}
               {selectedPreset.id === 'custom' && (
                 <div style={{ marginBottom: 10 }}>
                   <label style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', display: 'block', marginBottom: 4 }}>
-                    Known distance (meters):
+                    Known length of the object you’re drawing along:
                   </label>
-                  <input
-                    type="number" step="0.01" min="0.01" value={customDistance}
-                    onChange={e => setCustomDistance(e.target.value)}
-                    style={{
-                      width: '100%', padding: '5px 8px', borderRadius: 6,
-                      border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)',
-                      color: '#fff', fontSize: 13, boxSizing: 'border-box',
-                    }}
-                  />
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={customDistance}
+                      placeholder={unitSystem === 'imperial' ? `27  or  5'11"` : '68.6  or  1.8 m'}
+                      onChange={e => { setCustomDistance(e.target.value); setCalibError(null); }}
+                      style={{
+                        flex: 1, minWidth: 0, padding: '5px 8px', borderRadius: 6,
+                        border: `1px solid ${customLenInvalid ? 'rgba(248,113,113,0.7)' : 'rgba(255,255,255,0.2)'}`,
+                        background: 'rgba(255,255,255,0.08)',
+                        color: '#fff', fontSize: 13, boxSizing: 'border-box',
+                      }}
+                    />
+                    <select
+                      value={customUnit}
+                      onChange={e => setCustomUnit(e.target.value as LengthUnit)}
+                      aria-label="Unit"
+                      style={{
+                        padding: '5px 6px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.2)',
+                        background: 'rgba(30,30,36,0.95)', color: '#fff', fontSize: 12, cursor: 'pointer',
+                      }}>
+                      {(['cm', 'm', 'in', 'ft', 'mm'] as const).map(u => (
+                        <option key={u} value={u}>{LENGTH_UNIT_LABEL[u]}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 4, lineHeight: 1.4 }}>
+                    You can also type the unit inline — “27 in”, “1.8 m”, “5 ft 11 in”.
+                  </div>
+
+                  {/* Racket hint + one-tap prefill */}
+                  <div style={{
+                    marginTop: 8, padding: '7px 9px', borderRadius: 8,
+                    background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.25)',
+                  }}>
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', lineHeight: 1.45 }}>
+                      💡 <strong style={{ color: '#F59E0B' }}>Tip:</strong> a racket is an easy reference —
+                      it’s always in frame. Most adult rackets are{' '}
+                      <strong>{unitSystem === 'imperial' ? '27 in (68.6 cm)' : '68.6 cm (27 in)'}</strong>.
+                      Draw along the racket and use that length.
+                    </div>
+                    <button
+                      onClick={() => {
+                        const pre = racketPrefill(unitSystem);
+                        setCustomDistance(pre.value);
+                        setCustomUnit(pre.unit);
+                        setCalibError(null);
+                      }}
+                      style={{
+                        marginTop: 6, width: '100%', padding: '5px 0', borderRadius: 6, border: 'none',
+                        cursor: 'pointer', background: 'rgba(245,158,11,0.85)', color: '#1a1a1a',
+                        fontWeight: 700, fontSize: 11,
+                      }}>
+                      Use racket length ({unitSystem === 'imperial' ? '27 in' : '68.6 cm'})
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Non-custom presets: show the known length being assumed */}
+              {selectedPreset.id !== 'custom' && selectedPreset.referenceDistance != null && (
+                <div style={{
+                  marginBottom: 10, fontSize: 11, color: 'rgba(255,255,255,0.6)',
+                  padding: '5px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.05)',
+                }}>
+                  Assumed length:{' '}
+                  <strong style={{ color: '#F59E0B' }}>
+                    {formatLength(selectedPreset.referenceDistance, unitSystem)}
+                  </strong>
+                </div>
+              )}
+
+              {calibError && (
+                <div style={{
+                  marginBottom: 10, padding: '6px 9px', borderRadius: 6, fontSize: 11, lineHeight: 1.4,
+                  background: 'rgba(248,113,113,0.12)', border: '1px solid rgba(248,113,113,0.35)',
+                  color: '#FCA5A5',
+                }}>
+                  {calibError}
                 </div>
               )}
 
@@ -375,18 +579,28 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
 
               {/* Current instruction */}
               <div style={{
-                padding: '8px 10px', borderRadius: 8, background: 'rgba(59,130,246,0.15)',
-                border: '1px solid rgba(59,130,246,0.3)', marginBottom: 8,
+                padding: '8px 10px', borderRadius: 8,
+                background: awaitingCustomLength ? 'rgba(255,255,255,0.06)' : 'rgba(59,130,246,0.15)',
+                border: `1px solid ${awaitingCustomLength ? 'rgba(255,255,255,0.12)' : 'rgba(59,130,246,0.3)'}`,
+                marginBottom: 8,
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                  <MousePointer size={12} color="#60A5FA" />
-                  <span style={{ fontSize: 11, fontWeight: 600, color: '#60A5FA' }}>
-                    Click point {calibPoints.length + 1} of {selectedPreset.pointCount}
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', lineHeight: 1.4 }}>
-                  {nextPointLabel}
-                </div>
+                {awaitingCustomLength ? (
+                  <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', lineHeight: 1.4 }}>
+                    Enter the known length above, then click the two ends of the object.
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                      <MousePointer size={12} color="#60A5FA" />
+                      <span style={{ fontSize: 11, fontWeight: 600, color: '#60A5FA' }}>
+                        Click point {calibPoints.length + 1} of {selectedPreset.pointCount}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', lineHeight: 1.4 }}>
+                      {nextPointLabel}
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Placed points list */}
@@ -412,17 +626,29 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
                 marginBottom: 10,
               }}>
                 <CheckCircle size={13} color="#4ADE80" />
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#4ADE80' }}>Calibrated</div>
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>
                     {RULER_PRESETS.find(p => p.id === calibration.presetId)?.label ?? ''}
+                    {calibration.referenceMeters != null
+                      ? ` · ${formatLength(calibration.referenceMeters, unitSystem)} ref`
+                      : ''}
                     {' · '}
                     {calibration.method === 'homography' ? 'Perspective corrected' : 'Simple scale'}
                   </div>
+                  {calibration.method === 'simple' && calibration.scale != null && (
+                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 1 }}>
+                      {formatScale(calibration.scale, unitSystem)}
+                    </div>
+                  )}
                 </div>
-                <button onClick={resetCalibration} style={{
-                  background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.4)', padding: 2,
-                }}>
+                <button
+                  onClick={resetCalibration}
+                  title="Re-calibrate"
+                  aria-label="Re-calibrate"
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.4)', padding: 2,
+                  }}>
                   <RefreshCw size={12} />
                 </button>
               </div>
@@ -469,7 +695,7 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
                           }}>
                             <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>#{i + 1}</span>
                             <span style={{ fontSize: 13, fontWeight: 700, color: '#F59E0B' }}>
-                              {formatDistance(m.distanceM)}
+                              {formatLength(m.distanceM, unitSystem)}
                             </span>
                             <button onClick={() => setMeasurements(prev => prev.filter(x => x.id !== m.id))}
                               style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', padding: 0 }}>
@@ -491,7 +717,9 @@ export default function RulerOverlay({ containerWidth, containerHeight, onClose,
           padding: '6px 14px', borderTop: '1px solid rgba(255,255,255,0.06)',
           fontSize: 10, color: 'rgba(255,255,255,0.3)', lineHeight: 1.4,
         }}>
-          Tip: Use "Net Post" (1.07 m) for a quick calibration, or "Service Box" for perspective-corrected measurements
+          Tip: no court markings in frame? Use <strong style={{ color: 'rgba(255,255,255,0.5)' }}>Racket</strong> —
+          it’s in almost every clip and most adult rackets are 27 in (68.6 cm). "Service Box" gives
+          perspective-corrected measurements.
         </div>
       </div>
     </div>

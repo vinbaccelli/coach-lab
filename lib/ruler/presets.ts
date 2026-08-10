@@ -1,4 +1,5 @@
 import type { Point2D } from './types';
+import { RACKET_LENGTH_M } from './units';
 
 export type CalibrationMethod = 'simple' | 'homography';
 
@@ -17,6 +18,20 @@ export interface RulerPreset {
 }
 
 export const RULER_PRESETS: RulerPreset[] = [
+  {
+    // First in the list on purpose: it is the only reference that is in frame
+    // in essentially every clip, so a coach who knows nothing about the court
+    // (or the player's height) can still calibrate immediately.
+    id: 'racket',
+    label: 'Racket',
+    icon: '🎾',
+    description: 'Click the butt cap then the tip of the racket — most adult rackets are 27 in (68.6 cm)',
+    pointCount: 2,
+    pointLabels: ['Racket butt cap (bottom of handle)', 'Racket tip (top of frame)'],
+    dstPoints: [{ x: 0, y: 0 }, { x: RACKET_LENGTH_M, y: 0 }],
+    referenceDistance: RACKET_LENGTH_M,
+    method: 'simple',
+  },
   {
     id: 'net-post-height',
     label: 'Net Post',
