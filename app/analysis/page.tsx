@@ -113,6 +113,8 @@ const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportM
 import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import RulerOverlay from '@/components/ruler/RulerOverlay';
+import type { RulerCalibration } from '@/lib/ruler/types';
+import type { UnitSystem } from '@/lib/ruler/units';
 import { uploadDataUrl } from '@/lib/supabase/storage';
 import { proposePhaseMarkers } from '@/lib/biomechanics/phaseDetection';
 import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
@@ -395,6 +397,20 @@ function Home() {
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
   const [circleSpinning, setCircleSpinning] = useState(false);
   const [outlineEraserSize, setOutlineEraserSize] = useState(0);
+  /**
+   * RULER LENGTH CALIBRATION (feature #6) — owned here, not in RulerOverlay.
+   *
+   * SCOPE: per loaded clip. The overlay is conditionally rendered
+   * (`activeTool === 'ruler'`), so keeping calibration inside it meant any
+   * tool switch unmounted the component and silently discarded the scale.
+   * Hoisting it here gives it the lifetime it should have — and the effect
+   * below clears it whenever `videoSrc` changes, because pixels-per-meter is a
+   * property of THIS camera framing: reusing a previous clip's scale would
+   * report confidently wrong real-world numbers, which is worse than asking
+   * the coach to re-calibrate.
+   */
+  const [rulerCalibration, setRulerCalibration] = useState<RulerCalibration | null>(null);
+  const [rulerUnitSystem, setRulerUnitSystem] = useState<UnitSystem>('metric');
   const [skeletonShowAngles, setSkeletonShowAngles] = useState(true);
   const [skeletonShowHeadLine, setSkeletonShowHeadLine] = useState(false);
   const [skeletonShowHeadDirection, setSkeletonShowHeadDirection] = useState(false);
@@ -1351,6 +1367,15 @@ function Home() {
   // The baked track dies with its video (Canvas clears it too) — reset the UI,
   // and forget any manual section selection so the next video starts as "whole".
   useEffect(() => { setPrecisionTrackState('idle'); setMetricsTrimUserAdjusted(false); }, [videoSrc]);
+
+  /**
+   * A ruler calibration is only valid for the clip it was measured on — camera
+   * distance and framing set the pixels-per-meter scale. Clearing on clip
+   * change forces a deliberate re-calibration instead of silently applying a
+   * stale scale to new footage. (The unit system is a display preference, not
+   * a measurement, so it deliberately persists across clips.)
+   */
+  useEffect(() => { setRulerCalibration(null); }, [videoSrc]);
 
   /**
    * Record the replay to MP4 — SLOW-MASTER strategy: the section is always
@@ -6809,6 +6834,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     containerWidth={canvasSize.width}
                     containerHeight={canvasSize.height}
                     onClose={() => setActiveTool('select')}
+                    calibration={rulerCalibration}
+                    onCalibrationChange={(cal) =>
+                      setRulerCalibration(cal ? { ...cal, videoKey: videoSrc } : null)}
+                    unitSystem={rulerUnitSystem}
+                    onUnitSystemChange={setRulerUnitSystem}
                     onMeasurement={(value, unit) => {
                       if (dataColumnActive) {
                         setPendingMeasurement({ type: 'ruler', value, unit });
