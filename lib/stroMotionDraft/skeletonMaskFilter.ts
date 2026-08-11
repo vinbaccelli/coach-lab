@@ -196,7 +196,12 @@ export const DEFAULT_CAPSULE_WIDTHS: CapsuleWidths = {
   thigh: 0.42,
   shin: 0.30,
   torso: 0.34,
-  head: 0.57,
+  // REVERTED TO THE 399b3b2 VALUE (0.62). The Windows session trimmed this to
+  // 0.57; measured on Vin's footage that lost a visible chunk of skull, and he
+  // confirmed the earlier cutout was the better one. Kept as the generous value
+  // per this file's own doctrine: over-keeping background is a brush stroke,
+  // clipping through the athlete is a visible defect.
+  head: 0.62,
   headWidth: 0.42,
   neck: 0.30,
   foot: 0.42,
@@ -338,7 +343,19 @@ export interface SkeletonFilterResult {
  * extrapolated reach past it is gone. Reversible in one line if a future
  * geometric fallback is ever wanted again.
  */
-const DEFAULT_IMPLEMENT_REACH = 0;
+// REVERTED TO THE 399b3b2 VALUE (1.2) — the corridor is BACK.
+//
+// The note above argues for 0 on the grounds that the extrapolated reach is a
+// guess. That reasoning still stands, and Vin has overruled it deliberately: the
+// corridor is what carried the hand and the near-wrist arm coverage he
+// remembers, and losing it is part of the "arm missing / poor fine external
+// cuts" he rejected. The known cost is accepted — the corridor can allow a
+// phantom region past the wrist (over the head on an overhead frame), which the
+// segmenter's AND usually rejects and the brush can clear.
+//
+// This is a coverage-vs-tidiness trade, chosen for coverage. Auto-racket (Phase
+// 2) is the real answer for the implement, at which point this can go back to 0.
+const DEFAULT_IMPLEMENT_REACH = 1.2;
 const DEFAULT_NECK_OVERSHOOT = 0.35;
 /** Global trim on every capsule/oval half-width. 0.95 = 5% thinner than the raw widths. */
 export const DEFAULT_ZONE_THICKNESS_SCALE = 0.95;
@@ -530,7 +547,12 @@ const SHOULDER_PER_HEAD_SPAN = 2.2;      // conservative: head landmarks span �
  * floor does not lift it. That case still needs the torso/headSpan lift — it just
  * no longer needs 35% of headroom to work in.
  */
-const HEAD_UNIT_MAX_INFLATION = 1.10;
+// REVERTED TO THE 399b3b2 VALUE (1.6). The Windows session cut this to 1.10,
+// which on a SIDE-ON frame — where the shoulder line foreshortens and the lift is
+// exactly what keeps the head at full size — capped the oval ~31% shorter. That
+// is the "big head chunk missing on the split-step frame" Vin reported. 1.6 still
+// makes a runaway impossible; it was chosen against a measured 1.32x deficit.
+const HEAD_UNIT_MAX_INFLATION = 1.6;
 
 /** Which measurement the HEAD scale ended up using. Reported in diagnostics. */
 export type HeadScaleSource = 'shoulder' | 'torso' | 'headSpan';
@@ -587,28 +609,25 @@ export function poseHeadScaleUnit(
   }
   if (span >= 1) lifts.push({ unit: span * SHOULDER_PER_HEAD_SPAN, source: 'headSpan' });
 
-  // WHEN BOTH ESTIMATES EXIST, TAKE THE SMALLER LIFT — NOT THE LARGER.
+  // TAKE THE LARGEST LIFT — REVERTED TO THE 399b3b2 BEHAVIOUR.
   //
-  // This used to be a running max, which meant a SINGLE bad estimate decided the
-  // head scale outright: a hip detected too low stretches `torsoH`, a spurious
-  // ear stretches `span`, and either one alone could drive the oval to the
-  // ceiling with nothing to contradict it. Measured on real footage the winner
-  // was `torso` on every single frame, saturating the cap wherever the shoulder
-  // line collapsed.
+  // The Windows session changed this to take the SMALLER of the two estimates,
+  // on the reasoning that two measures agreeing is better evidence than the
+  // louder one alone. That is sound in the abstract, and it was the third of
+  // three compounding cuts to the head on the same commit (this, the 0.62→0.57
+  // width, and the 1.6→1.10 ceiling). Together they took ~37% off the oval on a
+  // foreshortened frame, which is what Vin saw and rejected.
   //
-  // Two independent estimates AGREEING is the real signal; the louder of the two
-  // is not. Taking the smaller means a lift survives only if both measures back
-  // it, while a lone outlier is held down by its sober partner. With one
-  // estimate available there is nothing to cross-check against, so it stands as
-  // before — the ceiling below is what bounds that case.
+  // Restoring the max is the deliberate trade: this file's doctrine is that
+  // over-keeping a little background is a brush stroke while clipping the athlete
+  // is a visible defect, so on the head the generous estimate wins. The ceiling
+  // below still bounds a lone bad estimate — that is what makes taking the max
+  // safe rather than unbounded.
   let best = { unit: base.unit, source: 'shoulder' as HeadScaleSource };
-  if (lifts.length > 0) {
-    const pick = lifts.length > 1
-      ? lifts.reduce((a, b) => (b.unit < a.unit ? b : a))
-      : lifts[0];
+  for (const lift of lifts) {
     // Still only ever a LIFT: a frontal frame where the estimates agree with the
     // shoulder line must come back as `poseScaleUnit`'s answer verbatim.
-    if (pick.unit > best.unit) best = pick;
+    if (lift.unit > best.unit) best = lift;
   }
 
   // Never let an approximation run away from the pose it came from.
