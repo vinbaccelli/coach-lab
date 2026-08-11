@@ -8,6 +8,11 @@ import { countExportReadyFrames, countMaskPixels, maskHasContent, statusAfterMas
 import { hydrateDraftBitmapsForExport } from '@/lib/stroMotionDraft/exportDraft';
 import { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
 import { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
+// The SAM embedding-cache key, for the auto-racket add-on below. Imported from
+// samRacketKey (no imports, no state) rather than samRacket, so this hook carries
+// none of the SAM session, encoder or decoder code — those stay behind the
+// dynamic import inside autoRacketPass and load only when a racket is found.
+import { racketFrameKey } from '@/lib/stroMotionDraft/samRacketKey';
 import { buildMedianBackgroundPlate, type BackgroundPlate } from '@/lib/stroMotionDraft/backgroundPlate';
 import type {
   AlphaMask,
@@ -288,6 +293,49 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     invalidateFrameAt(frameIndex, timeSec);
   }, [invalidateFrameAt]);
 
+  /**
+   * Clear every frame's SELECTION so the next Auto Detect re-runs the whole batch
+   * from scratch — fresh pose, fresh segmentation, fresh batch-unit floor.
+   *
+   * WHY THIS IS NEEDED. Auto Detect only processes frames with no `selectionBox`
+   * (`pending` in handleStroAutoSelectAll), so on an already-detected clip it
+   * reports "All frames already have a selection" and does nothing. That makes the
+   * BATCH path — the only one with the stabilized unit — impossible to re-test
+   * without rebuilding the draft, which forced testing through "Redo mask" instead.
+   *
+   * Keeps the frames, their times and their labels; drops only the derived work
+   * (selection, captured bitmap, masks, ready state), exactly like `invalidateFrameAt`
+   * does for one frame when its time changes. `batchUnitFloorNorm` is cleared too,
+   * so the next batch recomputes it rather than reusing a reference measured from
+   * poses that are about to be re-detected.
+   */
+  const clearAllSelections = useCallback((): number => {
+    let cleared = 0;
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const frames = prev.frames.map((f) => {
+        if (!f.selectionBox && !f.sourceFrame && !f.aiSnapshot) return f;
+        cleared++;
+        if (f.sourceFrame) {
+          try { f.sourceFrame.close(); } catch { /* already released */ }
+        }
+        return {
+          ...f,
+          status: 'pending' as StroMotionFrameStatus,
+          selectionBox: null,
+          sourceFrame: null,
+          aiSnapshot: null,
+          working: null,
+          readyMask: null,
+        };
+      });
+      return { ...prev, frames, batchUnitFloorNorm: null };
+    });
+    invalidatePreview();
+    console.log(`[StroMotion] cleared selections on ${cleared} frame(s) — Auto Detect will re-run the full batch`);
+    return cleared;
+  }, [invalidatePreview]);
+
   const updateFrameLabel = useCallback((frameIndex: number, label: string) => {
     setDraft((prev) => {
       if (!prev) return prev;
@@ -362,6 +410,16 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         !!opts?.useSkeletonGuidance,
         opts?.keypoints ?? null,
         opts?.frame ?? null,
+        // racketAxis — genuinely batch-only diagnostic data a single frame cannot
+        // resolve, and nothing in the mask ladder reads it.
+        null,
+        // unitFloorNorm — THE FIX. This argument used to be omitted entirely, and
+        // that omission is the "terrible super thin selection": with no floor,
+        // `poseScaleUnit` re-derives `unit` from THIS frame alone and collapses
+        // (batch 46px vs re-run 5px, measured on the same frame), shrinking the
+        // zone, the segmenter crop and the head oval by ~10x. Reusing the batch's
+        // stored median makes Redo mask agree with a fresh batch detect.
+        current.batchUnitFloorNorm ?? null,
       );
 
       if (!proposal) return false;
@@ -664,6 +722,88 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       console.warn('[skelZone] batch body-scale pass failed:', e);
     }
 
+    // PERSIST IT ON THE DRAFT — this is what lets "Redo mask" match the batch.
+    //
+    // Written HERE, before Phase 1, so it is stored on every exit path including
+    // the "nothing built" early return. Without it the single-frame re-run derives
+    // a raw per-frame unit that can collapse ~10x (measured: batch 46px vs re-run
+    // 5px on the same frame), which is the thin-selection bug. See
+    // `batchUnitFloorNorm` in types.ts.
+    //
+    // Safe to write at this point: Phase 1's "no draft writes" rule exists so
+    // per-frame commits cannot interleave with seeks mid-loop, and this lands
+    // before that loop starts. The Phase 2 commit spreads `prev`, so it survives.
+    if (unitFloorNorm != null) {
+      console.log(
+        `[skelZone] batch body-scale reference: unit/width=${unitFloorNorm.toFixed(5)} ` +
+        `(~${(unitFloorNorm * video.videoWidth).toFixed(0)}px here) — stored for single-frame re-runs`,
+      );
+      setDraft((prev) => (prev ? { ...prev, batchUnitFloorNorm: unitFloorNorm } : prev));
+    }
+
+    // ── PHASE A — AUTO-RACKET DETECTION, ALL FRAMES, THEN FREE THE DETECTOR ──
+    //
+    // WHY THIS IS ITS OWN PHASE INSTEAD OF PER-FRAME. Auto-racket needs D-FINE
+    // (detect) and SAM-2 (segment); the person cutout needs the MediaPipe selfie
+    // segmenter. Interleaved per frame, all three cycle and coexist, and on a
+    // wasm / low-VRAM machine that is real memory and GPU pressure during the
+    // work whose quality matters most. Phased, each model loads ONCE and is alone
+    // while it runs:
+    //
+    //   PHASE A (here)      D-FINE only        → boxes, then D-FINE disposed
+    //   PHASE 1 (below)     selfie segmenter   → the person cutout, alone
+    //   PHASE C (after)     SAM-2 only         → racket segmented + unioned
+    //
+    // Slower by both models' load times. That is the accepted trade: the cutout
+    // is what the coach judges, so it gets the cleanest memory state in the pass.
+    //
+    // Skipped entirely when the flag is off — the detector is never even imported.
+    const racketBoxes = new Map<number, import('@/lib/stroMotionDraft/autoRacketPass').RacketBoxForFrame>();
+    let racketPassActive = false;
+    try {
+      const { autoRacketActive, detectRacketBoxesForBatch } =
+        await import('@/lib/stroMotionDraft/autoRacketPass');
+      racketPassActive = autoRacketActive(current.objectType);
+      if (racketPassActive) {
+        console.log('[autoRacket] PHASE A — detecting on all frames (D-FINE alone)…');
+        const { captureVideoFrameAtTime } = await import('@/lib/stroMotionDraft/captureSource');
+        const inputs: import('@/lib/stroMotionDraft/autoRacketPass').RacketDetectInput[] = [];
+        for (const spec of specs) {
+          const frame = current.frames[spec.frameIndex];
+          if (!frame) continue;
+          // Reuse the bitmap Phase 0a2 already captured; capture here only when
+          // it did not (a pose that already carried feet skips that capture).
+          // Anything captured here goes into `preCaptured`, so Phase 1 hands it
+          // to proposeFrameMask and the existing ownership sweep still applies.
+          let bmp = preCaptured.get(spec.frameIndex) ?? null;
+          if (!bmp) {
+            try {
+              bmp = await captureVideoFrameAtTime(video, frame.timeSec);
+              preCaptured.set(spec.frameIndex, bmp);
+            } catch (err) {
+              console.warn('[autoRacket] capture failed for detection on frame', spec.frameIndex, err);
+              continue;
+            }
+          }
+          inputs.push({
+            frameIndex: spec.frameIndex,
+            frame: bmp,
+            keypoints: poseFor(spec),
+            label: racketFrameKey(spec.frameIndex, frame.timeSec),
+          });
+        }
+        const found = await detectRacketBoxesForBatch(inputs, {
+          vw: video.videoWidth,
+          vh: video.videoHeight,
+          unitFloorNorm,
+        });
+        found.forEach((v, k) => racketBoxes.set(k, v));
+      }
+    } catch (e) {
+      // Detection is optional; a failure here must never stop the cutout pass.
+      console.warn('[autoRacket] PHASE A failed — continuing with the person cutout only:', e);
+    }
+
     // Phase 1 — build ALL proposals in memory. No draft writes here, so nothing
     // can interleave, re-sync, or leave a frame partially committed.
     /** Phase-0 bitmaps that proposeFrameMask accepted ownership of. */
@@ -706,6 +846,9 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
           // release — see the sweep after Phase 1.
           if (proposal) handedOff.add(spec.frameIndex);
           if (proposal && maskHasContent(proposal.aiSnapshot)) {
+            // NO racket work here — see the PHASE A / PHASE C blocks around this
+            // loop. This loop is the person cutout and nothing else, so it runs
+            // with neither D-FINE nor SAM-2 resident.
             built.push({
               frameIndex: spec.frameIndex,
               selectionBox: spec.selectionBox,
@@ -738,6 +881,50 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       setStatus('configuring');
       setProgress({ current: 0, total: 0 });
       return 0;
+    }
+
+    // ── PHASE C — SEGMENT THE DETECTED RACKETS WITH SAM-2, ALONE ────────────
+    //
+    // Every person mask above is already finished, and D-FINE was disposed at the
+    // end of Phase A, so SAM-2 is the only heavy model that loads here. Only the
+    // frames Phase A actually found a box on are touched — a frame with no racket
+    // pays no encode at all.
+    //
+    // The union is max()-only (measured: 320k random trials and real SAM output,
+    // zero person pixels lowered), so this can add the racket and nothing else.
+    // Every failure path leaves that frame's mask exactly as the cutout built it.
+    if (racketPassActive && racketBoxes.size > 0) {
+      console.log(`[autoRacket] PHASE C — segmenting ${racketBoxes.size} racket(s) with SAM (alone)…`);
+      const { segmentRacketIntoMask } = await import('@/lib/stroMotionDraft/autoRacketPass');
+      for (const b of built) {
+        const hit = racketBoxes.get(b.frameIndex);
+        if (!hit) continue;
+        const frame = current.frames[b.frameIndex];
+        if (!frame) continue;
+        try {
+          const r = await segmentRacketIntoMask({
+            mask: b.aiSnapshot,
+            frame: b.sourceFrame,
+            // The manual Object tool's own cache key, so a frame segmented here
+            // makes that tool instant on it and neither path encodes twice.
+            samKey: racketFrameKey(b.frameIndex, frame.timeSec),
+            hit,
+          });
+          if (r.applied) {
+            b.aiSnapshot = r.mask;
+            // The editor opens on `working`, so the coach sees the racket already
+            // in the mask and can brush or re-click from there.
+            b.working = cloneAlphaMask(r.mask);
+            console.log(`[autoRacket] frame ${b.frameIndex}: ${r.reason}`);
+          } else {
+            console.log(`[autoRacket] frame ${b.frameIndex}: not segmented — ${r.reason}`);
+          }
+        } catch (e) {
+          console.warn('[autoRacket] PHASE C failed on frame', b.frameIndex, e);
+        }
+        // Yield so the paint loop keeps running through the SAM encodes.
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      }
     }
 
     // Phase 2 — commit the COMPLETE set in ONE update. Every built frame becomes
@@ -924,6 +1111,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     syncDraft,
     updateFrameTime,
     updateFrameLabel,
+    clearAllSelections,
     selectAreaForFrame,
     autoProcessFrames,
     updateFrameMask,

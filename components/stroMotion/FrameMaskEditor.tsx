@@ -341,12 +341,12 @@ export default function FrameMaskEditor({
         const res = await encodeFrameForRacket(racketKey, sourceFrame);
         if (!live) return;
         setRacketReady(!!res);
-        if (!res) setRacketNote('Racket tool unavailable — the segmenter could not load on this machine.');
+        if (!res) setRacketNote('Object select unavailable — the segmenter could not load on this machine.');
       } catch (e) {
         console.warn('[samRacket] prepare failed:', e);
         if (live) {
           setRacketReady(false);
-          setRacketNote('Racket tool could not prepare this frame.');
+          setRacketNote('Object select could not prepare this frame.');
         }
       } finally {
         if (live) setRacketPreparing(false);
@@ -392,7 +392,7 @@ export default function FrameMaskEditor({
         setRacketNote(null);
       } catch (e) {
         console.warn('[samRacket] decode failed:', e);
-        setRacketNote('Racket tool failed on this frame.');
+        setRacketNote('Object select failed on this frame.');
       } finally {
         setRacketBusy(false);
       }
@@ -460,7 +460,7 @@ export default function FrameMaskEditor({
       maskRef.current = merged;
       onMaskChange(merged);
       racketClear();
-      setRacketNote('Racket added — brush to finish the details.');
+      setRacketNote('Object added — brush to finish the details.');
     })();
   }, [racketMask, pushUndo, onMaskChange, racketClear]);
 
@@ -1029,9 +1029,9 @@ export default function FrameMaskEditor({
               type="button"
               style={{ ...toolBtn, ...(brushMode === 'racket' ? activeTool : {}) }}
               onClick={() => setBrushMode('racket')}
-              title="Racket — click on the racket to add it; click again to grow it"
+              title="Object select — click on the racket, bat or implement to add it; click again to grow it"
             >
-              <Target size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Racket
+              <Target size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Object
             </button>
           ) : null}
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginLeft: 4 }} title="Brush size in canvas pixels">
@@ -1106,7 +1106,7 @@ export default function FrameMaskEditor({
               {racketPreparing
                 ? 'Preparing the racket tool for this frame — one-off, a few seconds…'
                 : !racketReady
-                ? 'Racket tool not ready for this frame.'
+                ? 'Object select not ready for this frame.'
                 : racketBusy
                   ? 'Segmenting…'
                   : racketPoints.length === 0

@@ -69,20 +69,49 @@ import {
   type StroMotionFrameCount,
   type StroMotionVideoOrder,
 } from '@/lib/stroMotionDraft';
-import { racketFrameKey, samRacketEnabled } from '@/lib/stroMotionDraft/samRacketKey';
+import { racketFrameKey } from '@/lib/stroMotionDraft/samRacketKey';
 const FrameMaskEditor = React.lazy(() => import('@/components/stroMotion/FrameMaskEditor'));
 const StroMotionPreviewModal = React.lazy(() => import('@/components/stroMotion/StroMotionPreviewModal'));
 
 /**
- * SAM racket embedding key for a draft frame, or null when the feature flag is
- * off — which is what hides the tool entirely.
+ * SAM embedding key for a draft frame — the key that also DECIDES WHETHER THE
+ * MANUAL "Object select" TOOL IS SHOWN (FrameMaskEditor renders it only when this
+ * is non-null).
  *
- * Imported from samRacketKey, NOT samRacket: that file is two pure functions
- * with no imports, so this route carries none of the session, encoder, decoder
- * or union code — and touches no part of SAM until the coach uses the tool.
+ * WHY THIS IS NO LONGER BEHIND `samRacketEnabled()`.
+ * -------------------------------------------------
+ * It used to return null unless localStorage['samRacket'] === '1', which was the
+ * right call when the click tool was a brand-new opt-in feature being A/B'd. It
+ * stopped being right the moment AUTO-RACKET shipped: auto-racket is gated on the
+ * object MODE, not on that flag, so a coach in Object mode got an auto-detected
+ * racket proposed onto the mask AND NO BUTTON TO FIX IT. Auto-detect misses, and
+ * leaves gaps on a blurred racket; the correction tool has to be there when it
+ * does, or the proposal is worse than nothing.
+ *
+ * So the manual tool is now ALWAYS available and INDEPENDENT of auto-detect:
+ * auto proposes, the coach corrects. Explicit `samRacket = '0'` still hides it as
+ * a kill switch.
+ *
+ * THE LAZY-SAM DOCTRINE IS UNAFFECTED, and this is the part worth being careful
+ * about: this function returns a STRING. It loads no model, imports no
+ * transformers.js, and encodes nothing. SAM is still touched only when the coach
+ * SELECTS the tool — that guard is the `brushMode !== 'racket'` early return in
+ * FrameMaskEditor's prepare effect, not this flag. Showing the button costs
+ * nothing until it is used.
+ *
+ * Imported from samRacketKey, NOT samRacket: that file is pure functions with no
+ * imports, so this route carries none of the session, encoder, decoder or union
+ * code.
  */
 function samRacketFrameKey(index: number, timeSec: number): string | null {
-  return samRacketEnabled() ? racketFrameKey(index, timeSec) : null;
+  if (typeof window !== 'undefined') {
+    try {
+      if (window.localStorage.getItem('samRacket') === '0') return null;
+    } catch {
+      /* storage blocked (private mode) — the tool stays available */
+    }
+  }
+  return racketFrameKey(index, timeSec);
 }
 
 
@@ -789,6 +818,7 @@ function Home() {
     updateFrameMask,
     resetFrameMask,
     reproposeFrameMask,
+    clearAllSelections: clearStroSelections,
     markFrameReady: markStroFrameReady,
     generatePreview: generateStroPreview,
     hydrateDraftForExport: hydrateStroDraftForExport,
@@ -2157,6 +2187,27 @@ function Home() {
     };
     return () => { delete (window as unknown as Record<string, unknown>).__stroPoseTiming; };
   }, [videoRef, canvasRef, stroMotionDraft, resolveExactPoseAt]);
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // TEMP-DEBUG-REDETECT — force a FRESH full-batch re-detect on an already-
+  // detected clip. Adds NO behaviour of its own; it exposes the hook's existing
+  // `clearAllSelections` so a run can be repeated from the console:
+  //
+  //     window.__stroClearSelections()   // then press Auto Detect
+  //
+  // Auto Detect only processes frames with no selectionBox, so on a detected clip
+  // it reports "All frames already have a selection" and does nothing — which made
+  // the BATCH path (the only one with the stabilized unit) impossible to re-test
+  // without rebuilding the draft. Remove with the grep tag.
+  // ───────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    (window as unknown as Record<string, unknown>).__stroClearSelections = () => {
+      const n = clearStroSelections();
+      return `cleared ${n} frame(s) — now press Auto Detect to re-run the full batch`;
+    };
+    return () => { delete (window as unknown as Record<string, unknown>).__stroClearSelections; };
+  }, [clearStroSelections]);
 
   /**
    * Show EXACTLY the pose the mask is about to be built from — or nothing.
@@ -8119,7 +8170,39 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 if (video && video.videoWidth > 0) {
                   shot = await captureVideoFrameAtTime(video, frame.timeSec);
                 }
-                kps = await readExistingSkeletonNorm(frame.timeSec, shot);
+                // ── POSE RETRY LADDER — Redo mask only ────────────────────────
+                //
+                // Redo mask ALREADY re-detected the pose on every click; what it
+                // could not do is get a DIFFERENT answer, because the landmarker
+                // runs in IMAGE mode and `detect()` is a stateless forward pass —
+                // same pixels, same twenty joints, however many times you click.
+                //
+                // So instead of re-rolling one dice, this tries four genuinely
+                // different computations (plain / mirrored / heavy / heavy+mirrored)
+                // and keeps whichever recovers the most gated joints. Mirroring is
+                // the one that matters for a dropped FAR arm: it cancels the model's
+                // left/right bias on an occluded limb. See poseRetryLadder.ts.
+                //
+                // ONLY on this path. The batch keeps its single fast pass — this is
+                // a coach-initiated, one-frame action, so it can afford four.
+                if (shot && video && video.videoWidth > 0) {
+                  const { detectBestPoseOnBitmap } = await import('@/lib/stroMotionDraft/poseRetryLadder');
+                  const best = await detectBestPoseOnBitmap(
+                    shot, video.videoWidth, video.videoHeight, { label: `frame ${frame.index}` },
+                  );
+                  // Normalized to [0,1] — the space proposeFrameMask documents for
+                  // `skeletonKeypoints`, matching readExistingSkeletonNorm's contract.
+                  kps = best
+                    ? best.keypoints.map((k) => ({
+                        x: k.x / video.videoWidth,
+                        y: k.y / video.videoHeight,
+                        score: k.score ?? 0,
+                        name: k.name,
+                      }))
+                    : null;
+                }
+                // No bitmap (or the ladder found nothing) — the original resolver.
+                if (!kps) kps = await readExistingSkeletonNorm(frame.timeSec, shot);
               } catch (err) {
                 if (shot) { try { shot.close(); } catch { /* already released */ } shot = null; }
                 console.warn('[StroMotion] single-capture pose read failed; falling back', err);

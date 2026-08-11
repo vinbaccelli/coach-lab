@@ -220,6 +220,70 @@ export async function detectFullPoseOnBitmap(
   }
 }
 
+/**
+ * ONE ATTEMPT of a pose detection on a bitmap, with an optional bigger model and
+ * optional horizontal-flip test-time augmentation.
+ *
+ * WHY THIS EXISTS — AND WHY IT IS NOT A "RETRY".
+ * `getLandmarker` runs in `runningMode: 'IMAGE'` and `lm.detect()` is a STATELESS
+ * forward pass: identical pixels in ⇒ identical landmarks out, every time. So
+ * calling `detectFullPoseOnBitmap` again on the same frame cannot produce a
+ * different answer — there is no per-call randomness to re-roll. Recovering a
+ * joint the default pass dropped therefore requires genuinely DIFFERENT
+ * COMPUTATION, not another roll of the same dice.
+ *
+ * The two levers that change the computation are the ones `detectPosePrecise`
+ * already uses for the Precision AI Track tiers, reused here for a single frame:
+ *   - MODEL: 'heavy' sees detail 'full' misses, at a latency cost that is
+ *     irrelevant for a one-frame, coach-initiated action.
+ *   - FLIP: mirroring removes the model's own left/right bias, which is exactly
+ *     the bias that drops a FAR (occluded) arm on a side-on stance. The mirror is
+ *     undone by `landmarksToKeypoints(..., flip=true)`, which also swaps
+ *     anatomical L/R back — reusing that here rather than re-deriving it is the
+ *     whole reason this lives in this module.
+ *
+ * PURELY ADDITIVE: no existing caller, model choice, threshold or option is
+ * changed by this function.
+ */
+export async function detectPoseAttemptOnBitmap(
+  src: ImageBitmap | HTMLCanvasElement,
+  vw: number,
+  vh: number,
+  opts: { model?: PoseModel; flip?: boolean } = {},
+): Promise<PoseKeypoint[] | null> {
+  if (!src || vw < 16 || vh < 16) return null;
+  const want = opts.model ?? 'full';
+  const lm = (await getLandmarker(want)) ?? (await getLandmarker('full'));
+  if (!lm) return null;
+
+  let input: ImageBitmap | HTMLCanvasElement = src;
+  if (opts.flip) {
+    // Mirror into a scratch canvas. Sized from the SOURCE, not from vw/vh: the
+    // bitmap may be a scaled capture, and landmarks come back normalized so only
+    // the aspect matters here.
+    const sw = (src as ImageBitmap).width ?? vw;
+    const sh = (src as ImageBitmap).height ?? vh;
+    if (!flipScratch) flipScratch = document.createElement('canvas');
+    if (flipScratch.width !== sw) flipScratch.width = sw;
+    if (flipScratch.height !== sh) flipScratch.height = sh;
+    const ctx = flipScratch.getContext('2d');
+    if (!ctx) return null;
+    ctx.setTransform(-1, 0, 0, 1, sw, 0);
+    ctx.drawImage(src as CanvasImageSource, 0, 0, sw, sh);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    input = flipScratch;
+  }
+
+  try {
+    return landmarksToKeypoints(
+      lm.detect(input as unknown as HTMLCanvasElement)?.landmarks?.[0], vw, vh, !!opts.flip,
+    );
+  } catch (e) {
+    console.warn('[mediapipePose] attempt detect failed:', e);
+    return null;
+  }
+}
+
 // ── Precision AI Track quality tiers ───────────────────────────────────────
 // The coach picks a "tracking speed" (0.1×–0.5×). Slower = more precise, mapped
 // to a bigger model + test-time augmentation + denser frame sampling. Sampling
