@@ -12,35 +12,43 @@
  * No imports, no state, no side effects.
  */
 
+/** Motion Layer object types that mean "the coach is working on an implement". */
+const IMPLEMENT_MODES = new Set(['racket', 'custom']);
+
 /**
  * Is auto-racket on for this frame?
  *
- * DEFAULT OFF, unconditionally — no mode-based fallback.
+ * DEFAULT ON in the implement modes ('racket' / 'custom'), OFF in 'player' and
+ * 'ball' — so testers get the feature without setting anything, which is the
+ * point of turning it on for the launch build. A coach who selected Racket has
+ * said the implement is what this layer is about, and that is the consent the
+ * per-frame cost needs.
  *
- * A mode-based default (on in 'racket'/'custom') was tried and is exactly the
- * bug this replaced: `useStroMotion`'s `objectType` state defaults to 'racket'
- * ({@link file://./../../hooks/useStroMotion.ts} `useState<StroMotionObjectType>('racket')`),
- * so "remove the flag to turn it off" silently fell through to that default and
- * kept firing — `[autoRacket]` logs kept appearing with no `autoRacket` key set
- * at all. A flag that can be defeated by deleting itself is not a flag. The ONLY
- * way this returns true now is an explicit opt-in:
+ * TURNING IT OFF IS EXPLICIT, and this is the part worth remembering: because the
+ * default is mode-based, DELETING the key does not disable the feature — it falls
+ * back to the mode. That behaviour was mistaken for a bug once. To actually turn
+ * it off you must say so:
  *
- *   localStorage.setItem('autoRacket', '1')   // force on
- *   localStorage.setItem('autoRacket', '0')   // force off (same as unset)
- *   window.__autoRacket = true                // console override, either direction
+ *   localStorage.setItem('autoRacket', '0')   // OFF, even in Racket mode
+ *   localStorage.setItem('autoRacket', '1')   // ON, in any mode
+ *   localStorage.removeItem('autoRacket')     // back to the mode default (ON in Racket)
+ *   window.__autoRacket = true | false        // console override, either direction
  *
- * `objectType` is still accepted (and still required by callers, since the mode
- * is genuine context worth logging) but no longer participates in the decision.
+ * `useStroMotion`'s `objectType` defaults to 'racket', so a fresh session lands in
+ * an implement mode and auto-racket is live.
  */
-export function autoRacketEnabled(_objectType: string): boolean {
+export function autoRacketEnabled(objectType: string): boolean {
   if (typeof window === 'undefined') return false;
   const w = window as unknown as Record<string, unknown>;
   if (w.__autoRacket === true) return true;
   if (w.__autoRacket === false) return false;
+  let stored: string | null = null;
   try {
-    return window.localStorage.getItem('autoRacket') === '1';
+    stored = window.localStorage.getItem('autoRacket');
   } catch {
-    // Private mode / storage disabled — stay off, the safe default.
-    return false;
+    // Private mode / storage disabled — fall through to the mode default.
   }
+  if (stored === '1') return true;
+  if (stored === '0') return false;
+  return IMPLEMENT_MODES.has(objectType);
 }

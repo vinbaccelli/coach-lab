@@ -42,19 +42,16 @@
  * SELF-HOSTED, like every other model here — /models/dfine-n/**. The spike loaded
  * from the HF CDN because probes may; production may not.
  *
- * COST, AND WHY THE FLAG IS EXPLICIT-OPT-IN-ONLY
- * -----------------------------------------------
+ * COST, AND WHAT KEEPS IT HONEST
+ * ------------------------------
  * samRacket.ts states that nothing may trigger a SAM encode except actual racket
  * use, because an earlier version pre-encoded every frame in the batch and cost
- * 35–60s to coaches who never touched the feature. That rule still stands: this
- * path runs ONLY when `localStorage['autoRacket'] === '1'` (see
- * autoRacketFlags.ts) — a plain explicit flag, not a mode-based default, after a
- * mode-based default (on in the implement object types) turned out to be
- * indistinguishable from "always on": `objectType` defaults to 'racket', so
- * deleting the flag to turn the feature off silently fell through to on. Detection
- * is also ordered FIRST so the expensive encode is paid only on frames that
- * actually contain a wrist-gated racket — a frame with no racket costs one ~400ms
- * detection and no SAM at all.
+ * 35–60s to coaches who never touched the feature. That rule still holds under
+ * the launch default (ON in the implement object modes, see autoRacketFlags.ts):
+ * a coach in Racket mode HAS asked for the implement, and a Player-mode run still
+ * touches none of this. Detection is also ordered FIRST so the expensive encode is
+ * paid only on frames that actually contain a wrist-gated racket — a frame with no
+ * racket costs one ~400ms detection and no SAM at all.
  */
 
 import { poseScaleUnit } from '@/lib/stroMotionDraft/skeletonMaskFilter';

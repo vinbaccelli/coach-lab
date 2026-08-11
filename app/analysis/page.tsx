@@ -70,6 +70,8 @@ import {
   type StroMotionVideoOrder,
 } from '@/lib/stroMotionDraft';
 import { racketFrameKey } from '@/lib/stroMotionDraft/samRacketKey';
+// One switch for every Motion Layer diagnostic; OFF by default (see debugFlags.ts).
+import { stroDebugEnabled } from '@/lib/stroMotionDraft/debugFlags';
 const FrameMaskEditor = React.lazy(() => import('@/components/stroMotion/FrameMaskEditor'));
 const StroMotionPreviewModal = React.lazy(() => import('@/components/stroMotion/StroMotionPreviewModal'));
 
@@ -2268,7 +2270,9 @@ function Home() {
     // TEMP-DEBUG-POSETIME — in-situ record of which source answered and what it
     // cost, logged from the REAL auto pass. Inert: one console line per frame.
     // Remove with the grep tag.
-    if (typeof window !== 'undefined') {
+    // Gated pre-launch — one line per frame is console spam for a real coach.
+    // `window.__stroSkelDebug = true` brings it back.
+    if (stroDebugEnabled()) {
       console.log(`[POSETIME] frame=${index} t=${timeSec.toFixed(3)} source=${poseSource} poseMs=${poseMs}`);
     }
 

@@ -71,9 +71,9 @@ export interface RacketBoxForFrame {
  * entirely — and therefore never even dynamic-import the detector — rather than
  * loading a model only to discover the feature is off.
  *
- * DEFAULT OFF. See autoRacketFlags.ts: only `localStorage['autoRacket'] === '1'`
- * (or `window.__autoRacket === true`) turns this on. A mode-based default was
- * tried and was the "it runs even with the flag removed" bug.
+ * DEFAULT ON in the implement modes ('racket' / 'custom'), OFF elsewhere — see
+ * autoRacketFlags.ts. Turning it off is explicit (`localStorage['autoRacket']='0'`);
+ * REMOVING the key falls back to the mode default, which is on in Racket mode.
  */
 export function autoRacketActive(objectType: string): boolean {
   return autoRacketEnabled(objectType);

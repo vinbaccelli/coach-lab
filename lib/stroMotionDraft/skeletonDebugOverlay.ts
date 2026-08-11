@@ -16,6 +16,7 @@
  * Remove this file and its call site (grep the tag) once the pipeline is trusted.
  */
 
+import { stroDebugEnabled } from '@/lib/stroMotionDraft/debugFlags';
 import type { AlphaMask } from '@/lib/stroMotionDraft/types';
 import type { SkeletonZoneShapes } from '@/lib/stroMotionDraft/skeletonMaskFilter';
 
@@ -28,11 +29,13 @@ import type { SkeletonZoneShapes } from '@/lib/stroMotionDraft/skeletonMaskFilte
  * `__stroSkelDebug` is the original name and still works, so anything that set it
  * previously keeps behaving the same.
  */
+/**
+ * OFF BY DEFAULT since the pre-launch pass. This used to be OPT-OUT (`!== false`),
+ * which put the debug panel and its per-frame canvases in front of real coaches.
+ * Enable with `window.__stroSkelDebug = true`. See debugFlags.ts.
+ */
 function debugEnabled(): boolean {
-  if (typeof window === 'undefined') return false;
-  const w = window as unknown as Record<string, unknown>;
-  if (w.__stroShowZone !== undefined) return w.__stroShowZone !== false;
-  return w.__stroSkelDebug !== false;
+  return stroDebugEnabled();
 }
 
 const BONES: Array<[number, number]> = [
@@ -229,10 +232,14 @@ function panel(): HTMLDivElement {
 
 /**
  * Draw the diagnostic composite and append it to the floating panel.
- * Always logs the stats, even when rendering is unavailable.
+ *
+ * Logs the stats too — but only when diagnostics are ON. That line fires once per
+ * frame, so leaving it unconditional meant a real coach's console filled up during
+ * every Motion Layer run. Enable with `window.__stroSkelDebug = true`.
  */
 export function renderSkeletonDebug(input: SkeletonDebugInput): SkeletonDebugStats {
   const stats = computeSkeletonDebugStats(input);
+  if (!stroDebugEnabled()) return stats;
   // eslint-disable-next-line no-console
   console.log(
     `[TEMP-DEBUG-SKELZONE] frame=${stats.label ?? '?'} joints=${stats.visibleJoints} ` +

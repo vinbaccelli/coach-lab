@@ -13,6 +13,8 @@ import { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
 // none of the SAM session, encoder or decoder code — those stay behind the
 // dynamic import inside autoRacketPass and load only when a racket is found.
 import { racketFrameKey } from '@/lib/stroMotionDraft/samRacketKey';
+// One switch for every Motion Layer diagnostic; OFF by default (see debugFlags.ts).
+import { stroDebugEnabled } from '@/lib/stroMotionDraft/debugFlags';
 import { buildMedianBackgroundPlate, type BackgroundPlate } from '@/lib/stroMotionDraft/backgroundPlate';
 import type {
   AlphaMask,
@@ -960,7 +962,11 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   const updateFrameMask = useCallback((frameIndex: number, mask: AlphaMask) => {
     // TEMP-DEBUG-PAINT — the far end of the paint chain. If applyAtPoint logs but
     // this does not, the break is in the onMaskChange wiring, not the brush.
-    console.log(`[TEMP-DEBUG-PAINT] updateFrameMask frame=${frameIndex} maskLen=${mask.data.length}`);
+    // Gated pre-launch: this fires on every brush commit, so it filled a real
+    // coach's console. `window.__stroSkelDebug = true` brings it back.
+    if (stroDebugEnabled()) {
+      console.log(`[TEMP-DEBUG-PAINT] updateFrameMask frame=${frameIndex} maskLen=${mask.data.length}`);
+    }
     setDraft((prev) => {
       if (!prev) return prev;
       const frames = prev.frames.map((f) =>

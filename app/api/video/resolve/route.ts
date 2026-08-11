@@ -1,15 +1,26 @@
 import { NextResponse } from 'next/server';
+import { getRouteSession } from '@/lib/auth/routeSession';
+import { guardVideoUrl } from '@/lib/security/videoUrlGuard';
 
-function isHttpUrl(u: string) {
-  return u.startsWith('http://') || u.startsWith('https://');
-}
-
+/**
+ * Resolve a pasted URL to something the player can stream.
+ *
+ * AUTHENTICATED AND HOST-GUARDED for the same reason as /api/video/stream: it
+ * used to accept any `http(s)` string from anyone. It does not fetch the URL
+ * itself, but it hands back a `/api/video/stream` path built from it, so letting
+ * an unvalidated URL through here just moves the problem one hop. Both routes run
+ * the same guard — see lib/security/videoUrlGuard.ts.
+ */
 export async function GET(req: Request) {
+  const session = await getRouteSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+
   const { searchParams } = new URL(req.url);
-  const url = searchParams.get('url')?.trim() ?? '';
-  if (!url || !isHttpUrl(url)) {
-    return NextResponse.json({ ok: false, error: 'Missing/invalid url' }, { status: 400 });
+  const guard = guardVideoUrl(searchParams.get('url'));
+  if (!guard.ok) {
+    return NextResponse.json({ ok: false, error: guard.error }, { status: guard.status });
   }
+  const url = guard.url.toString();
 
   // Fast path: direct video file URL
   if (url.match(/\.(mp4|webm|mov)(\?.*)?$/i)) {
@@ -29,4 +40,3 @@ export async function GET(req: Request) {
     { status: 422 },
   );
 }
-
