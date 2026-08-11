@@ -5,6 +5,19 @@ import { normalizeObjectBox, type StroMotionSubjectBox } from '@/lib/stroMotion'
 import { captureVideoFrameAtTime } from '@/lib/stroMotionDraft/captureSource';
 import { maskHasContent } from '@/lib/stroMotionDraft/frameMask';
 import { cloneAlphaMask, embedRegionMask, fillBoxMask, intersectMaskWithBox, resampleAlphaMask } from "@/lib/stroMotionDraft/maskUtils";
+// Flag ONLY — a couple of localStorage reads with no imports of its own. The
+// detector and SAM both stay behind dynamic imports that are never reached
+// outside the implement modes, so a Player-mode run pays one boolean for this.
+import { autoRacketEnabled } from '@/lib/stroMotionDraft/autoRacketFlags';
+// Flag ONLY — a localStorage read with no imports of its own, so a default run
+// never loads the correction code. Default OFF; see maskAutoFix.ts.
+import {
+  ARM_RESCUE_TUNING,
+  HAT_EXTRA_HEAD_UNITS,
+  autoArmRescueEnabled,
+  autoFixHolesEnabled,
+  autoHatAllowanceEnabled,
+} from '@/lib/stroMotionDraft/maskAutoFixFlags';
 import type { AlphaMask, StroMotionObjectType } from '@/lib/stroMotionDraft/types';
 // TYPE-ONLY: erased at compile time, so this adds no runtime import of the
 // trajectory module — which stays behind the same dynamic import as the racket
@@ -316,6 +329,16 @@ export async function proposeFrameMask(
    * and Re-propose paths are byte-for-byte unchanged.
    */
   unitFloorNorm?: number | null,
+  /**
+   * SAM embedding-cache key for this frame — `racketFrameKey(frameIndex, timeSec)`.
+   *
+   * Required by AUTO-RACKET and used for nothing else; omit it and that rung
+   * cannot run, whatever the mode says. Handed in rather than built here because
+   * this function is given a `timeSec` but never a frame INDEX, and the key must
+   * be byte-identical to the one the racket CLICK tool uses or the two would
+   * encode the same frame twice into a 420MB budget instead of sharing one entry.
+   */
+  samFrameKey?: string | null,
 ): Promise<ProposeFrameMaskResult | null> {
   if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
@@ -339,6 +362,19 @@ export async function proposeFrameMask(
   // output and the mask all live in one coordinate space.
   const guideScribble = scribble ?? null;
   const guideKeypoints = useSkeletonGuidance ? (skeletonKeypoints ?? null) : null;
+
+  // Skeleton-shape settings for THIS frame, resolved ONCE. The segmenter crop,
+  // the zone, the bone core and the debug overlay all read this same object, so
+  // they cannot be built from different settings — the class of bug that made the
+  // crop smaller than the shape it had to contain.
+  //
+  // Both opt-ins default OFF, in which case this is byte-for-byte the object the
+  // pipeline has always passed.
+  const shapeOpts = {
+    ...(unitFloorNorm ? { unitFloorNorm } : {}),
+    ...(autoArmRescueEnabled() ? { armRescue: ARM_RESCUE_TUNING } : {}),
+    ...(autoHatAllowanceEnabled() ? { headTopExtraUnits: HAT_EXTRA_HEAD_UNITS } : {}),
+  };
 
   // 0a. PERSON SEGMENTATION (MediaPipe Selfie Segmentation) around the ATHLETE.
   //
@@ -380,9 +416,7 @@ export async function proposeFrameMask(
       // The crop scales from `unit` too, so a collapsed frame cropped the
       // segmenter down to a fraction of the athlete. Same batch reference.
       const zoneBounds = guideKeypoints
-        ? skeletonShapeBounds(guideKeypoints, vw, vh, {
-            ...(unitFloorNorm ? { unitFloorNorm } : {}),
-          })
+        ? skeletonShapeBounds(guideKeypoints, vw, vh, shapeOpts)
         : null;
       let rect: { x: number; y: number; w: number; h: number } | null = null;
       if (zoneBounds) {
@@ -488,9 +522,7 @@ export async function proposeFrameMask(
     if (guideKeypoints) {
       try {
         const { filterMaskBySkeletonShape } = await import('@/lib/stroMotionDraft/skeletonMaskFilter');
-        const filtered = filterMaskBySkeletonShape(aiSnapshot, guideKeypoints, {
-          ...(unitFloorNorm ? { unitFloorNorm } : {}),
-        });
+        const filtered = filterMaskBySkeletonShape(aiSnapshot, guideKeypoints, shapeOpts);
         if (filtered.applied) {
           bounded = filtered.mask;
           dbgCoreMask = filtered.coreMask ?? null; // TEMP-DEBUG-SKELZONE
@@ -503,6 +535,36 @@ export async function proposeFrameMask(
     // selection box so the mask is still hard-bounded to what the coach chose.
     if (!bounded) bounded = intersectMaskWithBox(aiSnapshot, box, 0);
     aiSnapshot = bounded;
+  }
+
+  // 2b-fix. SKELETON-GUIDED INTERIOR HOLE FILL — opt-in, DEFAULT OFF.
+  //
+  //     Fills segmenter dropouts INSIDE the athlete: the patch of shorts or shirt
+  //     the model lost, the strip between two legs that are close together. The
+  //     same correction the coach makes with the Add brush.
+  //
+  //     HERE, on purpose. After 2b so it sees the FINAL person mask — zone-ANDed
+  //     and bone-core-unioned — and before the racket rungs, so racket pixels can
+  //     never close a loop against the body and manufacture a hole that was not
+  //     the segmenter's doing.
+  //
+  //     A hole must be topologically ENCLOSED, fully inside the skeleton zone, and
+  //     small relative to the athlete's own scale. Open gaps — legs apart, a raised
+  //     arm — are not enclosed and are invisible to it by construction. Strictly
+  //     additive and zone-bounded, so its worst case is a small kept patch the
+  //     brush can undo; it can never cut the player. See maskAutoFix.ts.
+  if (useSkeletonGuidance && guideKeypoints && aiSnapshot && autoFixHolesEnabled()) {
+    try {
+      const { fillSkeletonInteriorHoles } = await import('@/lib/stroMotionDraft/maskAutoFix');
+      // Same shapeOpts, so the containment zone it tests against is the SAME zone
+      // the mask was just ANDed with — including any hat allowance.
+      const fixed = fillSkeletonInteriorHoles(aiSnapshot, guideKeypoints, vw, vh, shapeOpts);
+      if (fixed.applied) aiSnapshot = fixed.mask;
+      else if (fixed.skipReason) console.log(`[autoFixHoles] declined — ${fixed.skipReason}`);
+    } catch (e) {
+      // Optional corrections may never break the mask pipeline.
+      console.warn('[autoFixHoles] failed — mask left unchanged:', e);
+    }
   }
 
   // 2c. RACKET — a motion-difference candidate, unioned in AFTER the body zone.
@@ -551,6 +613,63 @@ export async function proposeFrameMask(
     }
   }
 
+  // 2d. AUTO-RACKET — D-FINE detects the implement, SAM-2 segments it.
+  //
+  //     AFTER the body zone for the same reason 2c is: the racket is outside the
+  //     skeleton's shape by definition, so unioning it before 2b would delete it.
+  //     Unioned with the SAME `unionRacketIntoMask` the coach's manual click uses,
+  //     so an auto racket and a clicked one land in the mask identically.
+  //
+  //     THIS REPLACES THE CLICK AS A STARTING POINT, NOT AS A MECHANISM. The
+  //     editor's Racket tool is untouched: the coach can still click to grow,
+  //     correct or replace whatever this proposed, because both paths write the
+  //     same soft-alpha union into the same working mask.
+  //
+  //     ORDERING IS THE COST CONTROL. Detection (~0.2–0.6s) runs FIRST and the
+  //     SAM ENCODE (~4s WebGPU / ~9s wasm) is paid ONLY once a wrist-gated box
+  //     exists — so a frame with no racket in it costs one detection and no SAM.
+  //     The encode uses the CLICK PATH'S key and cache, so a frame auto-segmented
+  //     here makes the Racket tool instant on it, and vice versa.
+  //
+  //     Fail-closed everywhere: no detector, no detection, nothing near a wrist,
+  //     or an implausible mask ⇒ the frame is left exactly as rung 2c left it and
+  //     the coach clicks. A wrong box would be worse than no box, because SAM
+  //     would return a confident, cleanly-cut piece of the court.
+  if (useSkeletonGuidance && guideKeypoints && samFrameKey && aiSnapshot && autoRacketEnabled(objectType)) {
+    try {
+      const { detectRacketBox } = await import('@/lib/stroMotionDraft/racketDetect');
+      const hit = await detectRacketBox({
+        frame: sourceFrame,
+        keypoints: guideKeypoints,
+        vw,
+        vh,
+        unitFloorNorm: unitFloorNorm ?? null,
+        label: samFrameKey,
+      });
+      if (hit) {
+        const { encodeFrameForRacket, decodeRacketMaskFromBox, unionRacketIntoMask } =
+          await import('@/lib/stroMotionDraft/samRacket');
+        const enc = await encodeFrameForRacket(samFrameKey, sourceFrame);
+        if (enc) {
+          const seg = await decodeRacketMaskFromBox(samFrameKey, hit.box);
+          if (seg) {
+            dbgRacketMask = seg.mask; // TEMP-DEBUG-SKELZONE
+            aiSnapshot = unionRacketIntoMask(aiSnapshot, seg.mask);
+            console.log(
+              `[autoRacket] ${samFrameKey}: unioned ${hit.cls} (det ${hit.score.toFixed(3)}, ` +
+              `SAM #${seg.chosen} ${seg.candidates[seg.chosen].areaPct.toFixed(2)}% of frame)`,
+            );
+          }
+        } else {
+          console.warn(`[autoRacket] ${samFrameKey}: SAM unavailable — detection found but not segmented`);
+        }
+      }
+    } catch (e) {
+      // Same rule as every optional pass: it may never break the mask pipeline.
+      console.warn('[autoRacket] pass failed — frame keeps the manual click path:', e);
+    }
+  }
+
   // 3. Guaranteed non-empty proposal.
   if (!maskHasContent(aiSnapshot)) {
     aiSnapshot = fillBoxMask(vw, vh, box);
@@ -567,9 +686,7 @@ export async function proposeFrameMask(
       // Same batch reference the real zone above was built with, so the logged
       // unit= / headUnit= / headOval= numbers describe the zone that actually ran.
       const builtZone = guideKeypoints
-        ? buildSkeletonShapeRegion(guideKeypoints, vw, vh, {
-            ...(unitFloorNorm ? { unitFloorNorm } : {}),
-          })
+        ? buildSkeletonShapeRegion(guideKeypoints, vw, vh, shapeOpts)
         : null;
       renderSkeletonDebug({
         label: `t=${timeSec.toFixed(2)}s`,

@@ -8,6 +8,13 @@ import { countExportReadyFrames, countMaskPixels, maskHasContent, statusAfterMas
 import { hydrateDraftBitmapsForExport } from '@/lib/stroMotionDraft/exportDraft';
 import { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
 import { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
+// The SAM embedding-cache key. Imported from samRacketKey (no imports, no state)
+// rather than samRacket, so this hook carries none of the SAM session, encoder or
+// decoder code. Passed UNCONDITIONALLY — unlike the racket TOOL's key, which
+// page.tsx gates on `samRacketEnabled()`, because auto-racket is gated on the
+// object MODE instead and the two must not switch each other on. The key is only
+// ever a string; whether anything encodes is decided downstream.
+import { racketFrameKey } from '@/lib/stroMotionDraft/samRacketKey';
 import { buildMedianBackgroundPlate, type BackgroundPlate } from '@/lib/stroMotionDraft/backgroundPlate';
 import type {
   AlphaMask,
@@ -362,6 +369,14 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         !!opts?.useSkeletonGuidance,
         opts?.keypoints ?? null,
         opts?.frame ?? null,
+        // racketAxis and unitFloorNorm are BATCH-resolved references a
+        // single-frame re-propose cannot have. Explicit nulls — exactly what
+        // omitting them already meant — so the SAM key lands in the right slot.
+        null,
+        null,
+        // SAM embedding key, so "Redo mask" on one frame re-runs auto-racket too
+        // rather than silently dropping it on the path the coach uses to correct.
+        racketFrameKey(frameIndex, frame.timeSec),
       );
 
       if (!proposal) return false;
@@ -699,6 +714,10 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             preCaptured.get(spec.frameIndex) ?? null,
             axisByFrame.get(spec.frameIndex) ?? null,
             unitFloorNorm,
+            // SAM embedding key for auto-racket. Identical to the one the Racket
+            // tool builds for this frame, so an auto-segmented frame makes the
+            // manual tool instant on it and neither pays the ~4s encode twice.
+            racketFrameKey(spec.frameIndex, frame.timeSec),
           );
           // A non-null proposal has TAKEN the bitmap: it comes back as
           // `proposal.sourceFrame` and is closed by the commit below or by the

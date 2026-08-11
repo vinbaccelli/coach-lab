@@ -205,8 +205,63 @@ export const DEFAULT_CAPSULE_WIDTHS: CapsuleWidths = {
   thighFlareInner: 0.14,
 };
 
+/**
+ * ARM RESCUE — an OPT-IN loosening of the bone core's confidence gate, for arms
+ * only. Absent ⇒ the core behaves exactly as it always has.
+ *
+ * THE CASE IT EXISTS FOR: a side-on split-step, where the far arm's elbow and
+ * wrist score below `MIN_CORE_SCORE` while the shoulder is solid. The strict gate
+ * refuses both arm bones, so a limb the pose is actually tracking is never forced
+ * on and the segmenter's miss stands.
+ *
+ * WHY IT IS NOT JUST A LOWER NUMBER. Painting from a shaky joint is the exact
+ * failure `MIN_CORE_SCORE` was raised to prevent, so score is loosened only where
+ * two independent checks make a hallucination unlikely:
+ *   - the SHOULDER still has to clear the ORIGINAL gate. It is the chain's anchor
+ *     and the steadiest joint in an arm; a rescue hanging off an uncertain
+ *     shoulder is exactly the fake limb we do not want.
+ *   - the bone's LENGTH has to be anatomically plausible against the athlete's own
+ *     `unit`. A hallucinated elbow or wrist typically lands at an implausible
+ *     distance, and that is geometric evidence rather than another confidence
+ *     number from the same detector that already hedged.
+ * The forearm additionally requires its upper arm to have been painted, so a
+ * floating hand can never produce a bar of "athlete" on its own.
+ *
+ * The core is still ANDed with the zone downstream, so even a wrong rescue cannot
+ * paint outside the athlete's own allowed shape.
+ */
+export interface BoneCoreArmRescue {
+  /** Loosened floor for the ELBOW and WRIST. Below `MIN_CORE_SCORE` by design. */
+  minScore: number;
+  /** The SHOULDER's floor — keep at `MIN_CORE_SCORE`; it is the anchor. */
+  anchorMinScore: number;
+  /** Plausible arm-bone length band, as multiples of `unit` (shoulder width). */
+  minLenUnits: number;
+  maxLenUnits: number;
+}
+
 export interface SkeletonShapeOptions {
   widths?: Partial<CapsuleWidths>;
+  /**
+   * Opt-in arm rescue for the BONE CORE (see `BoneCoreArmRescue`). Omitted ⇒ the
+   * strict gate only, i.e. current behaviour.
+   */
+  armRescue?: BoneCoreArmRescue | null;
+  /**
+   * HAT ALLOWANCE — extra head-oval length, in multiples of `headUnit`. Default 0.
+   *
+   * ALLOW-ONLY, and that is the whole safety argument: this grows the ZONE, and
+   * the zone only permits pixels the segmenter independently found. It cannot
+   * paint a hat that is not there — if the model sees no hat, nothing changes.
+   * That is a different risk class from forcing head pixels on, which the bone
+   * core deliberately refuses to do (see `buildBoneCoreAlpha`).
+   *
+   * The oval's BASE is pinned to the shoulder midpoint and only its far vertex
+   * moves, so this extends strictly UPWARD over the skull and never down into the
+   * chest. Width (`semiMinor`) is untouched — a cap makes the head taller, not
+   * wider.
+   */
+  headTopExtraUnits?: number;
   /**
    * ONE dial that scales every thickness in `CapsuleWidths` at once — limbs, torso,
    * neck, feet, implement and both head semi-axes. Defaults to
@@ -1010,6 +1065,61 @@ export function buildBoneCoreAlpha(
     }
   }
 
+  // ── ARM RESCUE (opt-in) — see `BoneCoreArmRescue` ─────────────────────────
+  //
+  // PURELY ADDITIVE, and placed AFTER the strict pass on purpose: every bone the
+  // strict gate accepted is already stamped, and `stampCapsuleAlpha` writes
+  // max(), so anything re-stamped here is a no-op. With `armRescue` absent this
+  // block does not execute and the core is byte-for-byte what it always was.
+  if (opts.armRescue) {
+    const R = opts.armRescue;
+    const unit = scale.unit;
+    /** Elbow/wrist at the LOOSENED floor. */
+    const Jr = (i: number) => joint(keypoints, i, width, height, R.minScore);
+    /** Shoulder at the ORIGINAL floor — the anchor is not loosened. */
+    const Ja = (i: number) => joint(keypoints, i, width, height, R.anchorMinScore);
+    const plausible = (p: Pt, q: Pt) => {
+      const d = Math.hypot(p.x - q.x, p.y - q.y);
+      return d >= R.minLenUnits * unit && d <= R.maxLenUnits * unit;
+    };
+
+    let rescued = 0;
+    for (const [sIdx, eIdx, wIdx, side] of [
+      [L_SHOULDER, L_ELBOW, L_WRIST, 'L'],
+      [R_SHOULDER, R_ELBOW, R_WRIST, 'R'],
+    ] as const) {
+      const shoulder = Ja(sIdx);
+      if (!shoulder) continue; // no confident anchor ⇒ no rescue on this arm
+
+      // Did the strict pass already paint these? If so, leave them alone.
+      const strictElbow = J(eIdx);
+      const strictWrist = J(wIdx);
+
+      let upperArmAnchored = !!(J(sIdx) && strictElbow);
+      const elbow = strictElbow ?? Jr(eIdx);
+      if (!upperArmAnchored && elbow && plausible(shoulder, elbow)) {
+        stampCapsuleAlpha(core, width, height, shoulder, elbow, wu * W.upperArm, CORE_FEATHER);
+        upperArmAnchored = true;
+        stamped = true;
+        rescued++;
+        console.log(`[armRescue] ${side} upper arm force-painted (elbow below strict gate, length plausible)`);
+      }
+
+      // NO FLOATING FOREARM. Without an anchored upper arm a rescued forearm is a
+      // bar of "athlete" hanging off nothing.
+      if (!upperArmAnchored || !elbow) continue;
+      const wrist = strictWrist ?? Jr(wIdx);
+      const forearmAlready = !!(strictElbow && strictWrist);
+      if (!forearmAlready && wrist && plausible(elbow, wrist)) {
+        stampCapsuleAlpha(core, width, height, elbow, wrist, wu * W.forearm, CORE_FEATHER);
+        stamped = true;
+        rescued++;
+        console.log(`[armRescue] ${side} forearm force-painted (wrist below strict gate, length plausible)`);
+      }
+    }
+    if (!rescued) console.log('[armRescue] on, but no arm needed rescuing on this frame');
+  }
+
   if (!stamped) return null;
   let corePx = 0;
   for (let i = 0; i < core.length; i++) if (core[i] > 0) corePx++;
@@ -1419,6 +1529,28 @@ export function buildSkeletonShapeRegion(
     stampEllipse(region, width, height, headCenter, axis, semiMajor, semiMinor);
     shapes.head = { center: headCenter, axis, semiMajor, semiMinor };
 
+    // HAT ALLOWANCE (opt-in, default 0 ⇒ this block does not run).
+    //
+    // A SECOND oval unioned on top of the first, NOT a longer replacement for it.
+    // Lengthening the original looked equivalent and is not: the ellipse's widest
+    // point sits at its centre, and growing the semi-major moves that centre up
+    // the axis, so the oval NARROWS around the jaw and drops zone pixels it used
+    // to cover. Measured — a synthetic-pose check caught exactly that. Stamping
+    // both guarantees the allowance is strictly additive, which is the only
+    // property that makes it safe to leave on.
+    const hatExtra = Math.max(0, opts.headTopExtraUnits ?? 0) * headUnit;
+    if (hatExtra > 0) {
+      const hatSemiMajor = semiMajor + hatExtra;
+      const hatCenter = {
+        x: headBase.x + axis.x * (headLift + hatSemiMajor),
+        y: headBase.y + axis.y * (headLift + hatSemiMajor),
+      };
+      stampEllipse(region, width, height, hatCenter, axis, hatSemiMajor, semiMinor);
+      // The overlay should outline the OUTER bound, which is what the zone now
+      // permits; the union's waist is covered by the first oval either way.
+      shapes.head = { center: hatCenter, axis, semiMajor: hatSemiMajor, semiMinor };
+    }
+
     if (neckAnchor) {
       const overshoot = opts.neckOvershoot ?? DEFAULT_NECK_OVERSHOOT;
       const chest = {
@@ -1549,7 +1681,12 @@ export function skeletonShapeBounds(
     // it has to contain — the zone and the crop cannot disagree about the head.
     // HEAD_CROP_PAD_PER_UNIT, not W.head — see that constant. The crop keeps the
     // generosity it always had even though the oval itself was tightened.
-    grow(headAnchor, headLift + wu * Math.max(2 * HEAD_CROP_PAD_PER_UNIT, W.headWidth));
+    // The hat allowance must reach the CROP too, or the segmenter is never shown
+    // the cap the zone was just widened to admit — the crop decides what the model
+    // sees at all. Doubled to match the oval's own upward growth (base pinned, so
+    // the top moves by 2× the semi-major increase). Default 0 ⇒ unchanged.
+    const hatPad = 2 * Math.max(0, opts.headTopExtraUnits ?? 0) * cropUnit;
+    grow(headAnchor, headLift + hatPad + wu * Math.max(2 * HEAD_CROP_PAD_PER_UNIT, W.headWidth));
   }
   if (!any) return null;
 

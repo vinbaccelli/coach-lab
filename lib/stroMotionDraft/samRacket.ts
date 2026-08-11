@@ -23,13 +23,22 @@
  * frame, LAZILY — the first time the coach selects the Racket tool on that
  * frame — and every click after that is decoder-only and interactive.
  *
- * It deliberately does NOT run in the auto-process batch pass. An earlier
- * version did, on the theory that hiding it inside an existing progress bar was
- * free; instead it loaded the model and encoded every frame on EVERY run whether
- * or not the racket was ever used (~35–60s and ~250MB of embeddings), made the
- * first run look broken while the cached second looked fine, and slowed the app
- * for coaches who never touch the feature. Nothing in this module may be
+ * It deliberately does NOT run unconditionally in the auto-process batch pass. An
+ * earlier version did, on the theory that hiding it inside an existing progress
+ * bar was free; instead it loaded the model and encoded every frame on EVERY run
+ * whether or not the racket was ever used (~35–60s and ~250MB of embeddings), made
+ * the first run look broken while the cached second looked fine, and slowed the
+ * app for coaches who never touch the feature. Nothing in this module may be
  * triggered by anything other than actual racket use.
+ *
+ * THERE ARE NOW TWO THINGS THAT COUNT AS "ACTUAL RACKET USE", and the rule above
+ * is unchanged by the second:
+ *   1. the coach selects the Racket tool on a frame (the click path), and
+ *   2. AUTO-RACKET runs in the batch — but ONLY in the implement object modes,
+ *      i.e. only when the coach has already said the implement is the point of
+ *      this layer, and only on frames where D-FINE actually found a wrist-gated
+ *      racket first. A Player-mode run still touches none of this, and a frame
+ *      with no racket in it still pays no encode. See racketDetect.ts.
  *
  * NO CLIENT-SIDE PROPAGATION. SAM 2's video memory-attention is not exportable
  * to ONNX, and it would not help anyway — it assumes temporal continuity, which
@@ -487,6 +496,145 @@ export async function decodeRacketMask(
     candidates,
     decodeMs,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOX-PROMPTED DECODE — the auto-detected racket, same session, same cache.
+//
+// WHY A SECOND DECODE FUNCTION RATHER THAN A PARAMETER ON THE FIRST.
+// `decodeRacketMask` is the CLICK path: it accumulates the coach's points and
+// gates candidates on covering the newest click. Neither idea exists for an
+// auto-detected box — there is no click to cover and nothing to accumulate — so
+// threading a mode flag through it would mean two behaviours sharing one body,
+// with the shipped, measured interactive path carrying the risk of every future
+// edit to the automatic one. The tensor plumbing is duplicated instead. The
+// SESSION, the EMBEDDING CACHE and the LRU are not: a frame encoded for one path
+// decodes for free on the other, which is the whole point.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A box prompt in FULL-FRAME VIDEO PIXELS (x1,y1 = top-left, x2,y2 = bottom-right). */
+export interface SamPromptBox {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/**
+ * How much of a candidate mask must fall INSIDE the prompt box.
+ *
+ * The box-prompt equivalent of `coversClick`. SAM treats a box as a strong hint,
+ * not a hard boundary, so a candidate is free to wander off into the court behind
+ * the racket; one that is mostly outside the box the detector drew is not the
+ * thing that was detected. Not 1.0 because a genuine racket mask legitimately
+ * spills a little past a tight detector box, especially on a motion-blurred edge.
+ */
+const MIN_IN_BOX_FRACTION = 0.5;
+
+/**
+ * Segment the racket from an AUTO-DETECTED BOX rather than from clicks.
+ *
+ * The frame must already be encoded (`encodeFrameForRacket`). Returns null when
+ * the model is unavailable, the frame is not encoded, or nothing plausible came
+ * back — the caller then leaves the mask alone and the coach's click path is
+ * still there. Fail-closed, exactly like the click path: no racket beats a wrong
+ * racket, and a wrong box would come back as a confident, cleanly-segmented piece
+ * of the court that then unions into every frame of the composite.
+ */
+export async function decodeRacketMaskFromBox(
+  key: string,
+  box: SamPromptBox,
+): Promise<SamDecodeResult | null> {
+  const session = await getSession();
+  const enc = encodedFrames.get(key);
+  if (!session || !enc) return null;
+  if (!(box.x2 > box.x1 && box.y2 > box.y1)) return null;
+
+  enc.lastUsed = ++clock;
+  const { model, processor } = session;
+
+  // is_bounding_box = true — the 4th argument keeps the [batch, nBoxes, 4] shape
+  // instead of the [batch, pointBatch, nPoints, 2] the point path wants.
+  const inputBoxes = processor.reshape_input_points(
+    [[[box.x1, box.y1, box.x2, box.y2]]],
+    enc.proc.original_sizes,
+    enc.proc.reshaped_input_sizes,
+    true,
+  );
+
+  const t0 = performance.now();
+  const out = await model({ ...enc.emb, input_boxes: inputBoxes });
+  const decodeMs = performance.now() - t0;
+
+  const upscaled = await processor.post_process_masks(
+    out.pred_masks,
+    enc.proc.original_sizes,
+    enc.proc.reshaped_input_sizes,
+    { binarize: false },
+  );
+  const t = upscaled[0];
+  const [, nCand, mh, mw] = t.dims as number[];
+  const all = t.data as Float32Array;
+  const per = mh * mw;
+
+  const scores = Array.from(out.iou_scores.data as Float32Array).slice(0, nCand);
+  const bx0 = Math.max(0, Math.floor(box.x1));
+  const by0 = Math.max(0, Math.floor(box.y1));
+  const bx1 = Math.min(mw, Math.ceil(box.x2));
+  const by1 = Math.min(mh, Math.ceil(box.y2));
+
+  const candidates: SamCandidate[] = [];
+  for (let c = 0; c < nCand; c++) {
+    const off = c * per;
+    let on = 0;
+    let inBox = 0;
+    for (let y = 0; y < mh; y++) {
+      const row = off + y * mw;
+      const yIn = y >= by0 && y < by1;
+      for (let x = 0; x < mw; x++) {
+        if (all[row + x] > 0) {
+          on++;
+          if (yIn && x >= bx0 && x < bx1) inBox++;
+        }
+      }
+    }
+    const areaPct = (on / per) * 100;
+    const inBoxFrac = on ? inBox / on : 0;
+
+    let vetoed: string | null = null;
+    if (areaPct > MAX_PLAUSIBLE_AREA_PCT) vetoed = `area ${areaPct.toFixed(1)}% — person/court`;
+    else if (areaPct < MIN_PLAUSIBLE_AREA_PCT) vetoed = `area ${areaPct.toFixed(4)}% — speck`;
+    else if (inBoxFrac < MIN_IN_BOX_FRACTION) vetoed = `${(inBoxFrac * 100).toFixed(0)}% inside the box`;
+
+    // `coversClick` carries the in-box fraction here — same field, and there is
+    // no click on this path for it to mean anything else.
+    candidates.push({ score: scores[c], areaPct, coversClick: inBoxFrac >= MIN_IN_BOX_FRACTION, vetoed });
+  }
+
+  const ok = candidates.map((c, i) => ({ c, i })).filter(({ c }) => !c.vetoed);
+  ok.sort((a, b) => b.c.score - a.c.score);
+  const chosen = ok.length ? ok[0].i : -1;
+
+  console.log(
+    `[autoRacket] ${key}: SAM box-decode ${decodeMs.toFixed(0)}ms → ` +
+      candidates
+        .map((c, i) => `#${i} s=${c.score.toFixed(3)} a=${c.areaPct.toFixed(2)}%${c.vetoed ? ` VETO(${c.vetoed})` : ''}`)
+        .join('  ') +
+      ` → picked ${chosen < 0 ? 'NONE' : `#${chosen}`}`,
+  );
+
+  if (chosen < 0) return null;
+
+  // Same logit → alpha ramp as the click path, so an auto racket and a clicked
+  // one share one alpha convention and can union without a seam.
+  const data = new Uint8ClampedArray(per);
+  const off = chosen * per;
+  for (let p = 0; p < per; p++) {
+    const s = Math.max(0, Math.min(1, all[off + p] / LOGIT_SOFT_WIDTH));
+    data[p] = Math.round(s * s * (3 - 2 * s) * 255);
+  }
+
+  return { mask: { width: mw, height: mh, data }, chosen, candidates, decodeMs };
 }
 
 /**

@@ -69,20 +69,49 @@ import {
   type StroMotionFrameCount,
   type StroMotionVideoOrder,
 } from '@/lib/stroMotionDraft';
-import { racketFrameKey, samRacketEnabled } from '@/lib/stroMotionDraft/samRacketKey';
+import { racketFrameKey } from '@/lib/stroMotionDraft/samRacketKey';
 const FrameMaskEditor = React.lazy(() => import('@/components/stroMotion/FrameMaskEditor'));
 const StroMotionPreviewModal = React.lazy(() => import('@/components/stroMotion/StroMotionPreviewModal'));
 
 /**
- * SAM racket embedding key for a draft frame, or null when the feature flag is
- * off — which is what hides the tool entirely.
+ * SAM embedding key for a draft frame — the key that also DECIDES WHETHER THE
+ * MANUAL "Object select" TOOL IS SHOWN (FrameMaskEditor renders it only when this
+ * is non-null).
  *
- * Imported from samRacketKey, NOT samRacket: that file is two pure functions
- * with no imports, so this route carries none of the session, encoder, decoder
- * or union code — and touches no part of SAM until the coach uses the tool.
+ * WHY THIS IS NO LONGER BEHIND `samRacketEnabled()`.
+ * -------------------------------------------------
+ * It used to return null unless localStorage['samRacket'] === '1', which was the
+ * right call when the click tool was a brand-new opt-in feature being A/B'd. It
+ * stopped being right the moment AUTO-RACKET shipped: auto-racket is gated on the
+ * object MODE, not on that flag, so a coach in Object mode got an auto-detected
+ * racket proposed onto the mask AND NO BUTTON TO FIX IT. Auto-detect misses, and
+ * leaves gaps on a blurred racket; the correction tool has to be there when it
+ * does, or the proposal is worse than nothing.
+ *
+ * So the manual tool is now ALWAYS available and INDEPENDENT of auto-detect:
+ * auto proposes, the coach corrects. Explicit `samRacket = '0'` still hides it as
+ * a kill switch.
+ *
+ * THE LAZY-SAM DOCTRINE IS UNAFFECTED, and this is the part worth being careful
+ * about: this function returns a STRING. It loads no model, imports no
+ * transformers.js, and encodes nothing. SAM is still touched only when the coach
+ * SELECTS the tool — that guard is the `brushMode !== 'racket'` early return in
+ * FrameMaskEditor's prepare effect, not this flag. Showing the button costs
+ * nothing until it is used.
+ *
+ * Imported from samRacketKey, NOT samRacket: that file is pure functions with no
+ * imports, so this route carries none of the session, encoder, decoder or union
+ * code.
  */
 function samRacketFrameKey(index: number, timeSec: number): string | null {
-  return samRacketEnabled() ? racketFrameKey(index, timeSec) : null;
+  if (typeof window !== 'undefined') {
+    try {
+      if (window.localStorage.getItem('samRacket') === '0') return null;
+    } catch {
+      /* storage blocked (private mode) — the tool stays available */
+    }
+  }
+  return racketFrameKey(index, timeSec);
 }
 
 
