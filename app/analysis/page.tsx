@@ -11,7 +11,7 @@ import React, {
 import { createPortal, flushSync } from 'react-dom';
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Camera, Plus, Trash2, Upload } from 'lucide-react';
+import { Camera, Image as ImageIcon, Plus, Trash2, Upload } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
@@ -627,6 +627,8 @@ function Home() {
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
   const [videoLoadErrorA, setVideoLoadErrorA] = useState<string | null>(null);
+  /** Error loading the bundled strategy-board court asset (see loadBundledCourt) */
+  const [courtLoadError, setCourtLoadError] = useState<string | null>(null);
   /** Drag-over state for the two video panels */
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
@@ -3997,6 +3999,26 @@ function Home() {
     loadVideoFileIntoSlot(file, target);
   }, [loadVideoFileIntoSlot]);
 
+  /**
+   * Strategy-board shortcut: loads the bundled court video into slot A through
+   * the same File-based path as a real upload (handleVideoFile), so drawing,
+   * ruler, angle, and text tools work identically — no separate image/canvas
+   * pipeline. It's a short static/looped video, not a real recording; video-only
+   * features (timeline scrub, Motion Layer) simply go unused on it.
+   */
+  const loadBundledCourt = useCallback(async () => {
+    setCourtLoadError(null);
+    try {
+      const res = await fetch('/court/tennis-court.mp4');
+      if (!res.ok) throw new Error(`missing asset (${res.status})`);
+      const blob = await res.blob();
+      const file = new File([blob], 'tennis-court.mp4', { type: blob.type || 'video/mp4' });
+      handleVideoFile(file, 'A');
+    } catch {
+      setCourtLoadError('Tennis court board is not set up yet. Ask your admin to add public/court/tennis-court.mp4.');
+    }
+  }, [handleVideoFile]);
+
   // ── Hub "Alternative — Screen Record" flow ────────────────────────────────
 
   /**
@@ -7081,6 +7103,34 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     >
                       <Upload size={20} /> Upload Video
                     </button>
+                    <button
+                      type="button"
+                      onClick={loadBundledCourt}
+                      style={{
+                        minHeight: 44,
+                        minWidth: 200,
+                        padding: '0 24px',
+                        borderRadius: 14,
+                        border: layoutMode === 'reels' ? '1px solid rgba(255,255,255,0.25)' : '1px solid #E5E5E5',
+                        background: 'transparent',
+                        color: layoutMode === 'reels' ? '#fff' : '#1A1A1A',
+                        fontSize: 14,
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        pointerEvents: 'auto',
+                      }}
+                    >
+                      <ImageIcon size={18} /> Tennis court (strategy board)
+                    </button>
+                    {courtLoadError && (
+                      <span style={{ fontSize: 12, color: '#CC3333', textAlign: 'center', maxWidth: 320 }}>
+                        {courtLoadError}
+                      </span>
+                    )}
                     <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8e8e93', textAlign: 'center', maxWidth: 320 }}>
                       or drag and drop a video file here. See AngleMotion Academy in the Control Panel for import workflows.
                     </span>
