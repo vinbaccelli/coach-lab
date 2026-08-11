@@ -40,6 +40,29 @@ export interface StroMotionDraft {
   sampleTimes: number[];
   videoWidth: number;
   videoHeight: number;
+  /**
+   * BATCH BODY-SCALE REFERENCE as `unit / width` (`batchScaleUnitNorm`), stored so
+   * the SINGLE-FRAME paths can reuse the batch's stabilized answer.
+   *
+   * WHY IT HAS TO LIVE HERE. Only the auto-process pass can COMPUTE this — it is a
+   * median across every frame's pose, and one frame has no way to know the athlete
+   * did not really shrink. But the frame editor's "Redo mask" re-runs the SAME
+   * pipeline for ONE frame, and without this it re-derived a raw per-frame `unit`
+   * that collapses when the shoulder AND hip lines both foreshorten. `poseScaleUnit`
+   * prefers hip width as its sanity reference and never consults the pose bbox while
+   * hips are visible, so a frame where both collapse yields a tiny unit that every
+   * intra-frame cross-check endorses (measured: batch 46px vs re-run 5px on the same
+   * frame). The zone, the segmenter crop and the head oval all scale from `unit`, so
+   * that re-run built them ~10x too small — the "terrible super thin selection".
+   *
+   * On the draft rather than a module ref because it belongs to THESE frames:
+   * clearing or replacing the draft must drop it, and a stale reference from another
+   * video would be worse than none.
+   *
+   * Optional: a draft whose frames were selected manually, with no auto-process pass,
+   * has no batch to take a median from and keeps the previous per-frame behaviour.
+   */
+  batchUnitFloorNorm?: number | null;
 }
 
 export type BrushMode = 'add' | 'remove' | 'flood-remove';
