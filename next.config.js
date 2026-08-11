@@ -16,6 +16,28 @@ const nextConfig = {
   // into that lambda returns an empty 500. Externalized, jsdom loads from
   // node_modules and spawns its worker as a real child process only if used.
   serverExternalPackages: ['jsdom', '@ybd-project/ytdl-core', 'fabric'],
+  // Keep onnxruntime-node's NATIVE BINARIES out of the serverless function.
+  //
+  // Nothing server-side ever runs ONNX: the models are loaded in the BROWSER by
+  // onnxruntime-web (wasm from /ort/, weights from /models/), and
+  // @huggingface/transformers is only ever reached through `await import()`
+  // inside async, browser-only code paths (lib/stroMotionDraft/samRacket.ts,
+  // racketDetect.ts). Webpack still TRACES the dependency it can see
+  // statically, so the binaries get packed into the function even though they
+  // are never executed there.
+  //
+  // That is harmless locally and fatal on Vercel. onnxruntime-node's install
+  // metadata lists `'win32/x64': []` but `'linux/x64': ['cuda12']`, so a Linux
+  // build additionally downloads libonnxruntime_providers_cuda.so /
+  // _tensorrt.so — ~370MB of GPU inference libraries that do not exist on a
+  // Windows install. Hence 44MB traced locally vs 412.91MB on Vercel, over the
+  // 250MB function limit. Vercel has no GPU; these can never be used.
+  // Keyed '**' (every route), not just '/analysis': nothing server-side in this
+  // app ever runs ONNX, so these binaries are dead weight in any function they
+  // get traced into.
+  outputFileTracingExcludes: {
+    '**': ['./node_modules/onnxruntime-node/bin/**'],
+  },
   async headers() {
     return [
       {
