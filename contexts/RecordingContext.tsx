@@ -106,6 +106,12 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
 
   const sourcesRef = useRef<RecordingSources | null>(null);
 
+  /**
+   * A mic stream opened by startRecording because none was registered. Kept
+   * separate from the page's own mic (sourcesRef.getMicStream) so cleanup only
+   * stops the one we own.
+   */
+  const autoMicStreamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
   const displayVideoRef = useRef<HTMLVideoElement | null>(null);
   const webcamVideoElRef = useRef<HTMLVideoElement | null>(null);
@@ -221,6 +227,10 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     docPipWindowRef.current = null;
     try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
     streamRef.current = null;
+    // Only the mic WE opened for this recording — a mic the coach turned on via
+    // the Hub belongs to the page and must keep running past this session.
+    try { autoMicStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
+    autoMicStreamRef.current = null;
     recCanvasRef.current = null;
   }, []);
 
@@ -473,7 +483,21 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     }
 
     const tracks: MediaStreamTrack[] = [...streamRef.current.getTracks()];
-    const micStream = sourcesRef.current?.getMicStream() ?? null;
+    let micStream = sourcesRef.current?.getMicStream() ?? null;
+    const webcamHasAudio = !!webcamStream?.getAudioTracks().some((t) => t.enabled);
+    // The Hub's mic toggle is off by default and getDisplayMedia is requested
+    // with audio:false, so recording without touching that toggle used to
+    // produce a video with NO audio track at all. Open the mic ourselves when
+    // nothing else supplies audio. A denied permission is not fatal — it just
+    // records silently, exactly as before.
+    if (!micStream && !webcamHasAudio) {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        autoMicStreamRef.current = micStream;
+      } catch {
+        micStream = null;
+      }
+    }
     if (micStream) {
       micStream.getAudioTracks().forEach((t) => { if (t.enabled) tracks.push(t); });
     } else if (webcamStream) {

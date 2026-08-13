@@ -90,10 +90,29 @@ export async function deserializeCanvas(
   canvas.renderAll();
 }
 
-/** Take a snapshot of the merged video + canvas as a PNG data URL */
+/**
+ * Take a snapshot of the merged video + canvas as a PNG data URL, at the
+ * video's NATIVE resolution.
+ *
+ * `videoBounds` is the video's rect inside `overlayCanvas`, in BACKING-STORE
+ * pixels with zoom/pan applied — get it from `CanvasOverlay.getVideoBounds()`,
+ * never by recomputing it here.
+ *
+ * Why it is required: the overlay canvas is CONTAINER-sized and the video is
+ * letterboxed within it (plus DPR scaling, plus a zoom/pan transform), so the
+ * annotations occupy only a sub-rect of the canvas. Blitting the whole canvas
+ * over the frame — which this function used to do — stretches the letterbox
+ * bars onto the video and shifts every annotation by the letterbox offset,
+ * scaled by canvasSize/videoRectSize. It only looked right when the container
+ * aspect happened to match the video's.
+ *
+ * When bounds are unavailable we return the clean video frame rather than a
+ * knowingly misaligned composite.
+ */
 export function captureFrame(
   videoEl: HTMLVideoElement,
   overlayCanvas: HTMLCanvasElement,
+  videoBounds?: { dx: number; dy: number; dw: number; dh: number } | null,
 ): string {
   const w = videoEl.videoWidth || videoEl.clientWidth;
   const h = videoEl.videoHeight || videoEl.clientHeight;
@@ -106,8 +125,15 @@ export function captureFrame(
   // Draw current video frame
   ctx.drawImage(videoEl, 0, 0, w, h);
 
-  // Overlay the annotation canvas (scaled to match)
-  ctx.drawImage(overlayCanvas, 0, 0, w, h);
+  // Lift ONLY the region of the overlay that sits over the video, and map it
+  // onto the full output frame.
+  if (videoBounds && videoBounds.dw > 0 && videoBounds.dh > 0) {
+    ctx.drawImage(
+      overlayCanvas,
+      videoBounds.dx, videoBounds.dy, videoBounds.dw, videoBounds.dh,
+      0, 0, w, h,
+    );
+  }
 
   return tmp.toDataURL('image/png');
 }

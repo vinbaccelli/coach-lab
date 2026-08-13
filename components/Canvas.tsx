@@ -136,6 +136,17 @@ export interface CanvasHandle {
   getOverlayAdjustments: () => Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>;
   setOverlayAdjustments: (adj: Record<string, { dx1: number; dy1: number; dx2: number; dy2: number }>) => void;
   getCanvas: () => HTMLCanvasElement | null;
+  /**
+   * The video's rect INSIDE the overlay canvas, in BACKING-STORE pixels, with
+   * the current zoom/pan already applied — i.e. exactly the source rect a
+   * `drawImage(canvas, sx, sy, sw, sh, …)` needs to lift the annotations that
+   * sit over the video. Returns null when no video rect is established.
+   *
+   * Callers must NOT recompute this from videoWidth/videoHeight: the canvas is
+   * letterboxed AND DPR-scaled AND zoom/pan-transformed, and missing any one of
+   * those silently offsets every annotation.
+   */
+  getVideoBounds: () => { dx: number; dy: number; dw: number; dh: number } | null;
   /** Backward-compat alias for ExportModal */
   getCompositeCanvas: () => HTMLCanvasElement | null;
   captureStream: (fps?: number) => MediaStream | null;
@@ -2817,6 +2828,46 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         onProcessingStatus?.(null);
       },
       getCanvas: () => canvasRef.current,
+      getVideoBounds: () => {
+        const canvas = canvasRef.current;
+        const video = videoRef.current;
+        if (!canvas) return null;
+        const dpr = dprRef.current || 1;
+        // Logical (CSS) px — the space drawings are stored in (clientToLogical).
+        const W = canvas.width / dpr;
+        const H = canvas.height / dpr;
+        const vW = video?.videoWidth ?? 0;
+        const vH = video?.videoHeight ?? 0;
+        if (W <= 0 || H <= 0 || vW <= 0 || vH <= 0) return null;
+
+        // Recomputed here rather than read from videoBoundsRef ON PURPOSE.
+        // That ref is written from five branches of the render loop and two of
+        // them fall back to the FULL CONTAINER (dw=W, dh=H) — e.g. the native-
+        // underlay branch before videoWidth is known. Lifting a container-sized
+        // rect onto a vW×vH frame scales X and Y by DIFFERENT factors, which
+        // rotates and shrinks every annotation. Deriving the rect from the
+        // video's own aspect makes the scale uniform by construction, so angles
+        // and lengths survive the round trip.
+        //
+        // This is object-fit: contain, matching the <video> element's own
+        // letterboxing: uniform scale, centred, bars on ONE axis. When the
+        // aspects already match, dx/dy are 0 and this is a no-op.
+        const scale = Math.min(W / vW, H / vH);
+        const cw = vW * scale;
+        const ch = vH * scale;
+        const cx = (W - cw) / 2;
+        const cy = (H - ch) / 2;
+
+        // Then the zoom/pan transform the render loop applies as:
+        //   translate(W/2 + panX, H/2 + panY) · scale(z) · translate(-W/2, -H/2)
+        const z = zoomRef.current;
+        const px = panXRef.current;
+        const py = panYRef.current;
+        const x = (cx - W / 2) * z + W / 2 + px;
+        const y = (cy - H / 2) * z + H / 2 + py;
+        // …and finally to BACKING-STORE px, which drawImage source rects use.
+        return { dx: x * dpr, dy: y * dpr, dw: cw * z * dpr, dh: ch * z * dpr };
+      },
       getCompositeCanvas: () => canvasRef.current,
       captureStream: (fps = 30) => {
         // ALWAYS a fresh stream. The old cached streamRef was created once and

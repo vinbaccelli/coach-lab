@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { getRouteSession } from '@/lib/auth/routeSession';
-import { ensurePlayerDoc, insertSessionAtTop, type PlayerDocRow } from '@/lib/google/playerDocs';
+import {
+  discardCreatedDoc,
+  ensurePlayerDocEx,
+  insertSessionAtTop,
+  isGoogleQuotaError,
+  type PlayerDocRow,
+} from '@/lib/google/playerDocs';
 
 export const runtime = 'nodejs';
 
@@ -47,17 +53,45 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const drive = google.drive({ version: 'v3', auth: oauth2 });
 
   try {
-    const docId = await ensurePlayerDoc(docs, drive, session.supabase, player, 'technical');
-    await insertSessionAtTop(docs, docId, {
+    const block = {
       title: timestampLabel?.trim() ? `Screenshot — ${timestampLabel.trim()}` : undefined,
-      sections: [{ imageUrl }],
+      // Two blank lines under the image so the coach has comment space before
+      // the next entry in the timeline.
+      sections: [{ imageUrl, blankLinesAfter: 2 }],
       notes: notes?.trim() || undefined,
-    });
+    };
+
+    // Reuse the player's existing Technical Analysis doc; only create when they
+    // genuinely have none. `created` tells us whether an orphan would be left
+    // behind if the insert below fails.
+    const { docId, created } = await ensurePlayerDocEx(docs, drive, session.supabase, player, 'technical');
+
+    try {
+      await insertSessionAtTop(docs, docId, block);
+    } catch (e) {
+      // Deliberately NO recreate-and-retry here. Retrying created a second doc
+      // on every failed attempt, which is how this filled the Drive. One doc
+      // per player, or a clear error.
+      if (created) {
+        await discardCreatedDoc(drive, session.supabase, player.id, 'google_doc_id', docId);
+      }
+      throw e;
+    }
 
     return NextResponse.json({ documentId: docId, url: `https://docs.google.com/document/d/${docId}/edit` });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Google Docs export failed';
     console.error('[google-doc] Docs export failed:', msg);
+    if (isGoogleQuotaError(e)) {
+      // Since 2021 Docs/Sheets/Slides count against the 15GB Google account
+      // quota, so a full Drive blocks creating the doc itself — not just image
+      // uploads. Say so plainly; "permission denied" sends people hunting the
+      // wrong problem.
+      return NextResponse.json(
+        { error: 'Your Google Drive is full — free up space (empty Drive Trash, and check Gmail and Google Photos, which share the same storage) and try again.' },
+        { status: 507 },
+      );
+    }
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

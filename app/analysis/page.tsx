@@ -1020,7 +1020,7 @@ function Home() {
     const liveColumn = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
     const overlay = canvasRef.current?.getCanvas?.();
     let screenshot: string | undefined;
-    if (overlay) { try { screenshot = captureFrame(v, overlay); } catch { screenshot = undefined; } }
+    if (overlay) { try { screenshot = captureFrame(v, overlay, canvasRef.current?.getVideoBounds?.()); } catch { screenshot = undefined; } }
     const num = snapshots.length + 1;
     const snap = makeSnapshot(t, `Snapshot ${num}`, String(num));
     if (currentMediaIdRef.current) snap.mediaId = currentMediaIdRef.current;
@@ -1106,7 +1106,7 @@ function Home() {
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       let shot: string | undefined;
       if (video && overlay) {
-        try { shot = captureFrame(video, overlay); } catch { shot = undefined; }
+        try { shot = captureFrame(video, overlay, canvasRef.current?.getVideoBounds?.()); } catch { shot = undefined; }
       }
       updated.push({ ...snap, screenshot: shot });
     }
@@ -2978,6 +2978,9 @@ function Home() {
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
   const [screenshotPlayerList, setScreenshotPlayerList] = useState<Array<{ id: string; display_name: string }>>([]);
   const [screenshotNewPlayerName, setScreenshotNewPlayerName] = useState<string | null>(null);
+  /** Set on a successful Docs export so the picker can offer "Open in Google Doc". */
+  const [screenshotDocUrl, setScreenshotDocUrl] = useState<string | null>(null);
+  const [screenshotSavedTo, setScreenshotSavedTo] = useState<string | null>(null);
 
   /** Capture the current frame into state and open the player picker */
   const handleScreenshotSave = useCallback(async () => {
@@ -2989,7 +2992,7 @@ function Home() {
       if (!video) return;
       let dataUrl: string;
       if (overlayCanvas) {
-        dataUrl = captureFrame(video, overlayCanvas);
+        dataUrl = captureFrame(video, overlayCanvas, canvasRef.current?.getVideoBounds?.());
       } else {
         const tmp = document.createElement('canvas');
         tmp.width = video.videoWidth || 640;
@@ -2998,6 +3001,9 @@ function Home() {
         dataUrl = tmp.toDataURL('image/png');
       }
       setScreenshotDataUrl(dataUrl);
+      // A fresh capture must not inherit the previous save's doc link.
+      setScreenshotDocUrl(null);
+      setScreenshotSavedTo(null);
       // Fetch player list for picker
       try {
         const res = await fetch('/api/players');
@@ -3018,6 +3024,8 @@ function Home() {
     downloadDataURL(screenshotDataUrl, `${prefix}screenshot-${Date.now()}.png`);
     setScreenshotPickerOpen(false);
     setScreenshotDataUrl(null);
+    setScreenshotDocUrl(null);
+    setScreenshotSavedTo(null);
   }, [screenshotDataUrl]);
 
   const handleScreenshotSaveToPlayer = useCallback(async (playerId: string, playerName: string) => {
@@ -3031,6 +3039,7 @@ function Home() {
       return;
     }
     setScreenshotSaving(true);
+    let savedDocUrl: string | null = null;
     try {
       // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive.
       // Supabase storage is the fallback — used whenever the Drive upload
@@ -3045,7 +3054,7 @@ function Home() {
           const driveRes = await fetch('/api/google/upload-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dataUrl: screenshotDataUrl, name: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png` }),
+            body: JSON.stringify({ dataUrl: screenshotDataUrl, name: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png`, playerId }),
           });
           if (driveRes.ok) {
             const body = await driveRes.json() as { url?: string };
@@ -3055,11 +3064,22 @@ function Home() {
       }
 
       if (!imageUrl) {
-        const filename = `${userId}/${Date.now()}.png`;
-        const path = await uploadDataUrl('analysis-screenshots', filename, screenshotDataUrl);
+        // Fallback bucket is `player-assets`, NOT `analysis-screenshots`: the
+        // latter is created by no migration (only player-assets is, in
+        // 20260615140000_player_sessions.sql), so every upload here failed and
+        // left imageUrl null — which is why the save could fail even when Drive
+        // was not the problem.
+        //
+        // player-assets is public=true, so getPublicUrl yields a permanent,
+        // anonymously-fetchable URL — exactly what the Docs API needs to pull
+        // the image server-side, and it cannot expire out from under the doc
+        // the way a signed URL would. Its RLS requires the first path segment to
+        // be the caller's uid.
+        const filename = `${userId}/screenshots/${Date.now()}.png`;
+        const path = await uploadDataUrl('player-assets', filename, screenshotDataUrl);
         if (path) {
-          const { data: signed } = await supabase.storage.from('analysis-screenshots').createSignedUrl(path, 60 * 60 * 24 * 365);
-          imageUrl = signed?.signedUrl ?? null;
+          const { data: pub } = supabase.storage.from('player-assets').getPublicUrl(path);
+          imageUrl = pub?.publicUrl ?? null;
         }
       }
 
@@ -3092,6 +3112,14 @@ function Home() {
               body: JSON.stringify({ imageUrl: signed.signedUrl, timestampLabel: localDateTimeForFolder() }),
             });
             if (docRes.ok) {
+              // The route returns { documentId, url }; the url used to be
+              // thrown away, so the coach had no way to reach the doc.
+              const docBody = (await docRes.json().catch(() => ({}))) as { url?: string };
+              if (docBody.url) {
+                savedDocUrl = docBody.url;
+                setScreenshotDocUrl(docBody.url);
+                setScreenshotSavedTo(playerName);
+              }
               setProcessingStatus(`Saved to ${playerName} + Google Doc`);
             } else {
               const docErr = (await docRes.json().catch(() => ({}))) as { error?: string };
@@ -3107,8 +3135,12 @@ function Home() {
         setProcessingStatus('Upload failed — try again');
         return;
       }
-      setScreenshotPickerOpen(false);
-      setScreenshotDataUrl(null);
+      // Keep the panel open when there's a doc to open, so the link is
+      // reachable; otherwise close as before.
+      if (!savedDocUrl) {
+        setScreenshotPickerOpen(false);
+        setScreenshotDataUrl(null);
+      }
     } finally {
       setScreenshotSaving(false);
     }
@@ -8374,7 +8406,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             alignItems: 'center', justifyContent: 'center',
             padding: 20,
           }}
-          onClick={() => { setScreenshotPickerOpen(false); setScreenshotDataUrl(null); }}
+          onClick={() => { setScreenshotPickerOpen(false); setScreenshotDataUrl(null); setScreenshotDocUrl(null); setScreenshotSavedTo(null); }}
         >
           <div
             style={{
@@ -8388,11 +8420,29 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               <span style={{ fontSize: 16, fontWeight: 700, color: '#1D1D1F' }}>Save Screenshot</span>
               <button
                 type="button"
-                onClick={() => { setScreenshotPickerOpen(false); setScreenshotDataUrl(null); }}
+                onClick={() => { setScreenshotPickerOpen(false); setScreenshotDataUrl(null); setScreenshotDocUrl(null); setScreenshotSavedTo(null); }}
                 style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6E6E73', lineHeight: 1 }}
               >×</button>
             </div>
             <img src={screenshotDataUrl} alt="Screenshot preview" style={{ width: '100%', borderRadius: 10, objectFit: 'cover', maxHeight: 180 }} />
+            {screenshotDocUrl && (
+              <div style={{
+                display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px',
+                borderRadius: 10, background: 'rgba(52,199,89,0.08)', border: '1px solid rgba(52,199,89,0.35)',
+              }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F' }}>
+                  {screenshotSavedTo ? `Saved to ${screenshotSavedTo}` : 'Saved'}
+                </span>
+                <a
+                  href={screenshotDocUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: 13, fontWeight: 600, color: '#007AFF', textDecoration: 'none' }}
+                >
+                  Open in Google Doc →
+                </a>
+              </div>
+            )}
             {screenshotSaving ? (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px',
