@@ -174,10 +174,18 @@ export async function convertWebmToMp4ForScreenRecord(
 
     let code = await ffmpeg.exec(withAudio);
     if (code !== 0) {
+      // Both remaining attempts pass -an, i.e. they DELIBERATELY DROP AUDIO to
+      // salvage the video. That is the right trade, but it must never happen
+      // quietly — a silent MP4 out of a recording that had sound is otherwise
+      // indistinguishable from the mic never being captured at all.
+      console.warn(
+        `[ffmpegWebmToMp4] H.264+AAC pass failed (code ${code}); retrying WITHOUT AUDIO — output will be silent.`,
+      );
       await ffmpeg.deleteFile(outputName).catch(() => {});
       code = await ffmpeg.exec(videoOnly);
     }
     if (code !== 0) {
+      console.warn(`[ffmpegWebmToMp4] libx264 pass failed (code ${code}); falling back to mpeg4, still without audio.`);
       await ffmpeg.deleteFile(outputName).catch(() => {});
       code = await ffmpeg.exec(fallbackMpeg);
     }

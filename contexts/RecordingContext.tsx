@@ -81,8 +81,38 @@ interface RecordingContextValue {
 
 const RecordingContext = createContext<RecordingContextValue | null>(null);
 
-function getBestMimeType(): string {
-  const candidates = [
+/**
+ * Pick a recording mimeType — AUDIO-AWARE.
+ *
+ * THIS IS WHY RECORDINGS HAD NO SOUND. The old list was tried in this order:
+ *   video/mp4;codecs="avc1.42E01E,mp4a.40.2"   ← audio (AAC)
+ *   video/mp4;codecs=avc1                      ← VIDEO ONLY
+ *   video/mp4;codecs=h264                      ← VIDEO ONLY
+ *   …
+ * and it never looked at whether the stream actually had an audio track.
+ * Chrome is fussy about the quoted AAC form, so when entry 1 reports
+ * unsupported and entry 2 reports supported, MediaRecorder is handed a type
+ * declaring ONLY a video codec — and it then silently discards the audio track
+ * it was given. Video records perfectly, sound is absent, and nothing errors.
+ *
+ * So when audio is present we only ever offer types that can MUX audio.
+ */
+function getBestMimeType(hasAudio: boolean): string {
+  const supported = (t: string) =>
+    typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t);
+
+  const audioCapable = [
+    // Both spellings: some builds accept only one of them.
+    'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    // Bare containers negotiate their own default audio codec.
+    'video/webm',
+    'video/mp4',
+  ];
+  const videoOnlyOk = [
     'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
     'video/mp4;codecs=avc1',
     'video/mp4;codecs=h264',
@@ -91,8 +121,9 @@ function getBestMimeType(): string {
     'video/webm;codecs=vp8,opus',
     'video/webm',
   ];
-  for (const t of candidates) {
-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) return t;
+
+  for (const t of hasAudio ? audioCapable : videoOnlyOk) {
+    if (supported(t)) return t;
   }
   return 'video/webm';
 }
@@ -482,31 +513,80 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       paintBackupRef.current = setInterval(paintOnce, 33);
     }
 
+    // ── Audio: resolve EXACTLY ONE mic track for the recording ───────────────
+    //
+    // The recorded video comes from recCanvas.captureStream() (screen + webcam
+    // overlay composited) which is VIDEO ONLY, and getDisplayMedia is requested
+    // with audio:false. So unless a mic track is explicitly added here, the file
+    // has no audio at all — which is exactly what happened.
+    //
+    // Resolution is unconditional and ordered, so it cannot depend on whether
+    // the webcam happens to be on or whether a track is currently muted:
+    //   1. the Hub's mic toggle, if the coach turned it on (explicit intent)
+    //   2. the webcam's own audio — startWebcam requests {video:true,audio:true}
+    //      (app/analysis/page.tsx), so in the screen+webcam flow this already
+    //      exists and needs no second device grant
+    //   3. a dedicated mic capture — covers screen-only recording, no webcam
+    // Exactly one track is pushed, so duplicate/echoing audio is impossible.
     const tracks: MediaStreamTrack[] = [...streamRef.current.getTracks()];
-    let micStream = sourcesRef.current?.getMicStream() ?? null;
-    const webcamHasAudio = !!webcamStream?.getAudioTracks().some((t) => t.enabled);
-    // The Hub's mic toggle is off by default and getDisplayMedia is requested
-    // with audio:false, so recording without touching that toggle used to
-    // produce a video with NO audio track at all. Open the mic ourselves when
-    // nothing else supplies audio. A denied permission is not fatal — it just
-    // records silently, exactly as before.
-    if (!micStream && !webcamHasAudio) {
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        autoMicStreamRef.current = micStream;
-      } catch {
-        micStream = null;
-      }
-    }
-    if (micStream) {
-      micStream.getAudioTracks().forEach((t) => { if (t.enabled) tracks.push(t); });
-    } else if (webcamStream) {
-      webcamStream.getAudioTracks().forEach((t) => { if (t.enabled) tracks.push(t); });
+    let audioTrack: MediaStreamTrack | null = null;
+    let audioFrom = 'none';
+
+    const hubMicTrack = sourcesRef.current?.getMicStream()?.getAudioTracks()[0] ?? null;
+    if (hubMicTrack) {
+      audioTrack = hubMicTrack;
+      audioFrom = 'hub-mic';
     }
 
+    if (!audioTrack) {
+      const webcamAudioTrack = webcamStream?.getAudioTracks()[0] ?? null;
+      if (webcamAudioTrack) {
+        audioTrack = webcamAudioTrack;
+        audioFrom = 'webcam-mic';
+      }
+    }
+
+    if (!audioTrack) {
+      try {
+        const dedicated = await navigator.mediaDevices.getUserMedia({ audio: true });
+        autoMicStreamRef.current = dedicated;
+        audioTrack = dedicated.getAudioTracks()[0] ?? null;
+        audioFrom = 'dedicated-mic';
+      } catch (e) {
+        // Was a bare `catch {}`. A denied/blocked mic is the likeliest reason a
+        // recording is silent, and swallowing the reason cost several rounds.
+        // NotAllowedError = denied/dismissed, NotFoundError = no input device,
+        // NotReadableError = device held by another app.
+        const err = e as { name?: string; message?: string };
+        console.error(
+          `[RecordingProvider] mic getUserMedia FAILED — recording will be silent. ${err?.name ?? 'Error'}: ${err?.message ?? String(e)}`,
+        );
+        setError(
+          err?.name === 'NotAllowedError'
+            ? 'Microphone blocked — allow mic access for this site, then record again (the video will have no sound without it).'
+            : `Microphone unavailable (${err?.name ?? 'error'}) — recording will have no sound.`,
+        );
+      }
+    }
+
+    // Added even when currently DISABLED (muted): a disabled track records
+    // silence but keeps the track in the file, so the Hub's mute toggle works
+    // mid-recording. Filtering on `enabled` meant a mic muted at start produced
+    // a file with no audio track at all and could never be unmuted into it.
+    if (audioTrack) tracks.push(audioTrack);
+
     const combined = new MediaStream(tracks);
-    const mimeType = getBestMimeType();
+    const audioTrackCount = combined.getAudioTracks().length;
+    const mimeType = getBestMimeType(audioTrackCount > 0);
     mimeTypeRef.current = mimeType;
+    console.info(
+      `[RecordingProvider] audio tracks=${audioTrackCount} (source=${audioFrom}` +
+      `, enabled=${audioTrack?.enabled ?? 'n/a'}, label="${audioTrack?.label ?? ''}")` +
+      ` video tracks=${combined.getVideoTracks().length} mimeType=${mimeType}`,
+    );
+    if (audioTrackCount === 0) {
+      console.warn('[RecordingProvider] no audio track — recording will be silent.');
+    }
 
     let recorder: MediaRecorder;
     try {
@@ -519,6 +599,11 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       setError('MediaRecorder not supported in this browser.');
       return;
     }
+    // What the browser ACTUALLY negotiated can differ from what we asked for,
+    // and that is the value the container is written with — so it, not our
+    // request, is the ground truth for whether audio can be in the file.
+    mimeTypeRef.current = recorder.mimeType || mimeType;
+    console.info(`[RecordingProvider] recorder.mimeType=${recorder.mimeType}`);
 
     // User ended capture from the browser chrome → stop + save through our path.
     displayStream.getVideoTracks()[0]?.addEventListener('ended', () => {
