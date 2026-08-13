@@ -54,10 +54,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   try {
     const block = {
-      title: timestampLabel?.trim() ? `Screenshot — ${timestampLabel.trim()}` : undefined,
-      // Two blank lines under the image so the coach has comment space before
-      // the next entry in the timeline.
-      sections: [{ imageUrl, blankLinesAfter: 2 }],
+      // ONE timestamp (this, as the heading) — no separate title line, which
+      // used to duplicate it as "Screenshot — <same timestamp>".
+      timestampOverride: timestampLabel?.trim() || undefined,
+      // "Notes:" in place of the default "Screenshots" label — a fixed anchor
+      // for the coach to type under directly in Docs, not tied to actual note
+      // text (this route never receives any from the client today).
+      imagesLabel: 'Notes:',
+      // No blankLinesAfter: Vin types inline/after himself, no padding.
+      sections: [{ imageUrl }],
       notes: notes?.trim() || undefined,
     };
 

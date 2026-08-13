@@ -284,6 +284,23 @@ export interface SessionBlock {
   youtubeUrl?: string;
   notes?: string;
   settingsLines?: string[];
+  /**
+   * Replace the auto-generated "Session — <now>" heading with this exact text
+   * (still Heading 2, still the ONE timestamp line).
+   *
+   * ADDITIVE AND OPT-IN: omitted, this is byte-identical to before — the
+   * report and match-entries callers are untouched. The screenshot-save route
+   * sets it to the screenshot's own timestamp so the entry doesn't carry two
+   * timestamps (this heading plus a separate title line).
+   */
+  timestampOverride?: string;
+  /**
+   * Replace the bold "Screenshots" label printed once before the entry's
+   * image(s).
+   *
+   * ADDITIVE AND OPT-IN: omitted, this is exactly "Screenshots" as before.
+   */
+  imagesLabel?: string;
 }
 
 /**
@@ -311,7 +328,7 @@ export async function insertSessionAtTop(
     boldRanges.push({ start, end: start + label.length });
   };
 
-  const sessionTitle = `Session — ${new Date().toLocaleString()}`;
+  const sessionTitle = session.timestampOverride?.trim() || `Session — ${new Date().toLocaleString()}`;
   {
     const start = at();
     pushLine(sessionTitle);
@@ -323,7 +340,7 @@ export async function insertSessionAtTop(
   }
 
   const hasImages = session.sections.some((s) => s.imageUrl);
-  if (hasImages) pushBoldLabel('Screenshots');
+  if (hasImages) pushBoldLabel(session.imagesLabel?.trim() || 'Screenshots');
   for (const section of session.sections) {
     if (section.heading?.trim()) {
       const text = section.heading.trim();
