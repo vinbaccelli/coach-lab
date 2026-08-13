@@ -778,12 +778,14 @@ export default function PreciseTimeline({
       : `${phoneChrome ? 4 : compact ? 6 : 10}px 12px calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 10 : compact ? 16 : 18}px) calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 4 : compact ? 6 : 10}px)`,
     paddingLeft: overlay ? 0 : Math.max(12, leadingInsetPx),
     borderRadius: overlay ? 0 : phoneChrome ? 0 : '14px 14px 0 0',
-    background: overlay ? 'transparent' : phoneChrome ? 'rgba(255,255,255,0.06)' : 'rgba(15, 15, 18, 0.58)',
+    // PERF: no backdrop-filter — the timeline sits directly under/over the video,
+    // and a live blur forces a compositor re-blur on every presented frame (the
+    // cause of stuttery playback and unresponsive scrubbing). The translucent
+    // fills below are opaque enough to read as the same frosted chrome without it.
+    background: overlay ? 'transparent' : phoneChrome ? 'rgba(20,20,26,0.82)' : 'rgba(15, 15, 18, 0.88)',
     border: overlay ? 'none' : phoneChrome ? 'none' : '1px solid rgba(255,255,255,0.12)',
     borderBottom: 'none',
     color: '#fff',
-    backdropFilter: overlay ? 'none' : phoneChrome ? 'blur(20px) saturate(1.15)' : 'blur(12px)',
-    WebkitBackdropFilter: overlay ? 'none' : phoneChrome ? 'blur(20px) saturate(1.15)' : 'blur(12px)',
     touchAction: 'manipulation',
   }), [compact, leadingInsetPx, overlay, phoneChrome]);
 

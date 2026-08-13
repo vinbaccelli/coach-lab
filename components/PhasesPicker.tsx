@@ -41,7 +41,7 @@ export default function PhasesPicker({ open, onClose, onSelect }: PhasesPickerPr
       style={{
         position: 'fixed', inset: 0, zIndex: 9600,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
+        background: 'rgba(0,0,0,0.68)',
       }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >

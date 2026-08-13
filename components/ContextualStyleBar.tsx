@@ -82,9 +82,9 @@ export default function ContextualStyleBar({
     background: 'rgba(250, 249, 247, 0.96)',
     border: '1px solid rgba(0,0,0,0.08)',
     borderRadius: 14,
+    // PERF: no backdrop-filter — this bar floats over the video, and a live blur
+    // makes the compositor re-blur on every presented frame.
     boxShadow: '0 12px 40px rgba(0,0,0,0.18)',
-    backdropFilter: 'blur(14px)',
-    WebkitBackdropFilter: 'blur(14px)',
     padding: mobile ? '10px 12px' : '12px 14px',
     fontFamily: 'inherit',
     color: '#1A1A1A',

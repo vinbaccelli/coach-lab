@@ -6492,11 +6492,13 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       variant === 'add'
         ? '1px solid rgba(52,199,89,0.65)'
         : '1px solid rgba(255,255,255,0.35)',
+    // PERF: no backdrop-filter anywhere over the video. A live blur makes the
+    // compositor re-blur its backdrop on EVERY presented video frame, which is
+    // what made playback stutter and scrubbing/stepping feel unresponsive.
+    // A slightly more opaque translucent fill reads the same over moving video.
     background:
-      variant === 'add' ? 'rgba(52,199,89,0.35)' : 'rgba(0,0,0,0.55)',
+      variant === 'add' ? 'rgba(52,199,89,0.78)' : 'rgba(0,0,0,0.72)',
     color: '#fff',
-    backdropFilter: 'blur(10px)',
-    WebkitBackdropFilter: 'blur(10px)',
     boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
   });
 
@@ -7084,7 +7086,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                           padding: '0 16px',
                           borderRadius: 12,
                           border: '1px solid rgba(255,255,255,0.2)',
-                          background: 'rgba(0,0,0,0.55)',
+                          background: 'rgba(0,0,0,0.72)',
                           color: '#fff',
                           fontSize: 13,
                           fontWeight: 600,
@@ -7094,8 +7096,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                           justifyContent: 'center',
                           gap: 8,
                           pointerEvents: 'auto',
-                          backdropFilter: 'blur(8px)',
-                          WebkitBackdropFilter: 'blur(8px)',
                         }}
                       >
                         <Upload size={16} /> Upload Video
@@ -7441,11 +7441,10 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
                     fontSize: '11px', fontWeight: 700,
                     color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
-                    background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250,249,247,0.94)',
+                    background: layoutMode === 'reels' ? 'rgba(0,0,0,0.62)' : 'rgba(250,249,247,0.97)',
                     border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
                     padding: '2px 8px',
                     borderRadius: layoutMode === 'reels' ? 0 : '8px',
-                    backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
                   }}>A</div>
                 )}
               </div>
@@ -7718,13 +7717,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         padding: '6px 10px',
                         borderRadius: layoutMode === 'reels' ? 0 : 10,
                         border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
-                        background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250, 249, 247, 0.94)',
+                        background: layoutMode === 'reels' ? 'rgba(0,0,0,0.62)' : 'rgba(250, 249, 247, 0.97)',
                         color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
                         fontSize: 12,
                         fontWeight: 600,
                         cursor: 'pointer',
-                        backdropFilter: 'blur(14px)',
-                        WebkitBackdropFilter: 'blur(14px)',
                         boxShadow: layoutMode === 'reels' ? 'none' : '0 6px 20px rgba(0,0,0,0.08)',
                       }}
                     >
@@ -7734,11 +7731,10 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
                       fontSize: '11px', fontWeight: 700,
                       color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
-                      background: layoutMode === 'reels' ? 'rgba(0,0,0,0.4)' : 'rgba(250,249,247,0.94)',
+                      background: layoutMode === 'reels' ? 'rgba(0,0,0,0.62)' : 'rgba(250,249,247,0.97)',
                       border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
                       padding: '2px 8px',
                       borderRadius: layoutMode === 'reels' ? 0 : '8px',
-                      backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
                     }}>B</div>
                     {/* Drag-over overlay for Video B */}
                     {isDragOverB && (
@@ -7818,8 +7814,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             fontSize: 13,
             lineHeight: 1.45,
             pointerEvents: 'auto',
-            backdropFilter: 'blur(18px)',
-            WebkitBackdropFilter: 'blur(18px)',
           }}
         >
           <span style={{ flex: '1 1 220px', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -7885,11 +7879,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             borderRadius: 16,
             background: capturePostPhase === 'ready'
               ? 'rgba(22,101,52,0.92)'         // dark green for "ready"
-              : 'rgba(0,0,0,0.82)',
+              : 'rgba(0,0,0,0.88)',
             color: '#FFFFFF',
             boxShadow: '0 14px 40px rgba(0,0,0,0.35)',
-            backdropFilter: 'blur(14px)',
-            WebkitBackdropFilter: 'blur(14px)',
             transition: 'background 0.3s ease',
           }}
         >
@@ -8031,8 +8023,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             alignItems: 'center',
             gap: 12,
             fontSize: 13,
-            backdropFilter: 'blur(18px)',
-            WebkitBackdropFilter: 'blur(18px)',
           }}
         >
           <span style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -8851,8 +8841,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             fontWeight: 600,
             lineHeight: 1.45,
             boxShadow: '0 12px 36px rgba(0,0,0,0.12)',
-            backdropFilter: 'blur(14px)',
-            WebkitBackdropFilter: 'blur(14px)',
             pointerEvents: stroSelectingObject ? 'auto' : 'none',
             textAlign: 'center',
             display: 'flex',

@@ -1675,7 +1675,7 @@ const viewCtrlBtn: React.CSSProperties = {
   height: 32,
   borderRadius: 8,
   border: 'none',
-  background: 'rgba(0,0,0,0.55)',
+  background: 'rgba(0,0,0,0.72)',
   color: '#fff',
   cursor: 'pointer',
   display: 'flex',
@@ -1683,8 +1683,6 @@ const viewCtrlBtn: React.CSSProperties = {
   justifyContent: 'center',
   WebkitTapHighlightColor: 'transparent',
   touchAction: 'manipulation',
-  backdropFilter: 'blur(8px)',
-  WebkitBackdropFilter: 'blur(8px)',
   padding: 0,
 };
 

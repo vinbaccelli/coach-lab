@@ -43,9 +43,10 @@ export default function PrecisionDrawInstructions({
         alignItems: 'center',
         justifyContent: 'center',
         padding: 20,
-        background: 'rgba(0,0,0,0.55)',
-        backdropFilter: 'blur(8px)',
-        WebkitBackdropFilter: 'blur(8px)',
+        // PERF: full-screen scrim — a backdrop blur here covers the video and
+        // forces a compositor re-blur on every presented frame. Darker scrim
+        // instead; it separates the dialog from the background just as well.
+        background: 'rgba(0,0,0,0.72)',
       }}
       onClick={(ev) => {
         if (ev.target === ev.currentTarget) onDismiss();

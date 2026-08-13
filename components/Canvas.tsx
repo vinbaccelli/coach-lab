@@ -8268,7 +8268,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       height: zoomBtnSize,
       borderRadius: 8,
       border: 'none',
-      background: 'rgba(0,0,0,0.55)',
+      // PERF: no backdrop-filter — these sit directly over the video, and a live
+      // blur forces the compositor to re-blur on every presented frame.
+      background: 'rgba(0,0,0,0.72)',
       color: '#fff',
       fontSize: 18,
       fontWeight: 700,
@@ -8278,8 +8280,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       justifyContent: 'center',
       WebkitTapHighlightColor: 'transparent',
       touchAction: 'manipulation',
-      backdropFilter: 'blur(8px)',
-      WebkitBackdropFilter: 'blur(8px)',
     };
 
     return (
@@ -8302,15 +8302,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               maxWidth: 'calc(100% - 24px)',
               padding: '6px 12px',
               borderRadius: 10,
-              background: 'rgba(0,0,0,0.72)',
+              background: 'rgba(0,0,0,0.82)',
               color: '#fff',
               fontSize: 12,
               fontWeight: 600,
               lineHeight: 1.35,
               textAlign: 'center',
               pointerEvents: 'none',
-              backdropFilter: 'blur(8px)',
-              WebkitBackdropFilter: 'blur(8px)',
             }}
           >
             {coachToolHint}
