@@ -31,6 +31,8 @@ export interface DocsSectionPayload {
   lines?: string[];
   notes?: string;
   headingLevel?: 'h2' | 'h3';
+  /** Proportional image box override — see SessionSection.imageObjectSizePt. */
+  imageObjectSizePt?: { width: number; height: number };
 }
 
 /** Which side's report goes into the document. */
@@ -70,15 +72,25 @@ export async function svgToPngDataUrl(svg: string, scale = 2): Promise<string> {
 }
 
 /** Upload a PNG data URL to the coach's Drive; returns a Docs-fetchable URL. */
-async function uploadPng(dataUrl: string, name: string): Promise<string> {
+async function uploadPng(dataUrl: string, name: string, playerId?: string): Promise<string> {
   const res = await fetch('/api/google/upload-image', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dataUrl, name }),
+    body: JSON.stringify({ dataUrl, name, ...(playerId ? { playerId } : {}) }),
   });
   const data = (await res.json()) as { url?: string; error?: string };
   if (!res.ok || !data.url) throw new Error(data.error ?? 'Chart upload failed');
   return data.url;
+}
+
+/**
+ * Upload a single already-rendered image (e.g. the manual recorder's full-page
+ * report capture) through the same Drive pipeline every chart and screenshot
+ * uses. Public wrapper around {@link uploadPng} for callers outside this file
+ * that have exactly one image, not a report's worth of charts.
+ */
+export async function uploadReportImage(dataUrl: string, name: string, playerId?: string): Promise<string> {
+  return uploadPng(dataUrl, name, playerId);
 }
 
 /**

@@ -1,10 +1,11 @@
 'use client';
 
 import type { CSSProperties } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Side } from '@/lib/tennis/gameScore';
 import type { BallType, FinishReason, ManualOutcome, RallyLength } from '@/lib/tennis/compileManualReport';
 import {
+  aggregateManualStats,
   BALL_TYPES,
   compileManualReport,
   isErrorOutcome,
@@ -17,13 +18,9 @@ import { derivePointSignificance, significanceLabel, type PointSignificance } fr
 import SaveReportModal from '@/components/shared/SaveReportModal';
 import MatchReportView from '@/components/decoder/MatchReportView';
 import { buildManualReport } from '@/lib/tennis/manualReportModel';
-import {
-  buildDocsSections,
-  uploadReportCharts,
-  type DocsSectionPayload,
-} from '@/lib/matchAnalysis/exportToDocs';
+import { uploadReportImage, type DocsSectionPayload } from '@/lib/matchAnalysis/exportToDocs';
+import { captureNodeAsPng, reportImageObjectSize } from '@/lib/matchAnalysis/captureReportImage';
 import { formatMatchFolderLabel, localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
-import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
 import {
   applyFormattedPoint,
   defaultMatchFormat,
@@ -122,10 +119,11 @@ export default function ManualMatchRecorder() {
   const [gameNotes, setGameNotes] = useState<string[]>([]);
 
   const [saveOpen, setSaveOpen] = useState(false);
-  const [exportBusy, setExportBusy] = useState(false);
-  /** Docs payload built from the charts — see openSaveModal. */
+  /** Docs payload built from the full-report capture — see openSaveModal. */
   const [saveSections, setSaveSections] = useState<DocsSectionPayload[] | undefined>(undefined);
   const [preparingSave, setPreparingSave] = useState(false);
+  /** The rendered report node — captured as one image for the Doc. See openSaveModal. */
+  const reportCaptureRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch('/api/players')
@@ -174,9 +172,11 @@ export default function ManualMatchRecorder() {
   );
 
   /**
-   * The structured report — the same `SideReport[]` the decoder produces, so it
-   * renders through MatchReportView and exports through buildDocsSections
-   * without a parallel implementation.
+   * The structured report — the same `SideReport[]` shape the decoder
+   * produces, so it renders through the same `MatchReportView` used on the
+   * decoder side rather than a parallel implementation. This is ALSO the node
+   * `openSaveModal` captures as one image for the Doc — the on-screen report
+   * and the Doc's picture are the exact same render.
    */
   const reports = useMemo(
     () =>
@@ -200,26 +200,76 @@ export default function ManualMatchRecorder() {
   }, [matchDate, playerName, opponentName]);
 
   /**
-   * Rasterise + upload the charts, then open the save modal with a structured
-   * Docs payload. Without this the entry saves as one undifferentiated block of
-   * text; with it, the manual match lands in Google Docs looking like the
-   * decoder's report.
+   * PART 1 of the image-export build — the STRUCTURED data, independent of
+   * whatever the Google Doc ends up showing.
    *
-   * A chart-upload failure is NOT fatal: the modal still opens, and the save
-   * falls back to the plain-text body.
+   * Every logged point (winner, outcome, stroke, ball type, rally length,
+   * server, derived significance) plus the computed aggregate stats, stored
+   * verbatim in `player_entries.metadata` (a jsonb column that already existed
+   * on this table but nothing was ever writing to). This is what makes a
+   * future "compare matches" / "player trends over time" view possible — it
+   * does not depend on, or get affected by, what the Doc image looks like.
+   * `version: 1` so a later change to this shape can be told apart from today's.
+   */
+  const matchMetadata = useMemo(
+    () => ({
+      manualMatch: {
+        version: 1,
+        playerName: playerName.trim() || 'Player',
+        opponentName: opponentName.trim() || 'Opponent',
+        matchDate,
+        format,
+        startingScore,
+        finish: finishReason,
+        board,
+        points,
+        stats: aggregateManualStats(points),
+        gameNotes,
+      },
+    }),
+    [playerName, opponentName, matchDate, format, startingScore, finishReason, board, points, gameNotes],
+  );
+
+  /**
+   * PART 2 — capture the report EXACTLY as it renders on screen (not
+   * chart-by-chart) into one PNG, upload it through the same Drive pipeline
+   * every screenshot already uses, and build a single-image Docs section from
+   * it. This REPLACES the previous per-chart Docs payload: the Doc now gets
+   * one picture that looks like the app, sized to its own real aspect ratio
+   * (see reportImageObjectSize) rather than squashed into a landscape box.
+   *
+   * The report is already mounted (just scrolled, since it runs long) by the
+   * time the coach can reach this button, so there is no off-screen render or
+   * viewport trick needed — `captureNodeAsPng` reads the node's full
+   * scrollHeight regardless of what is currently visible.
+   *
+   * A capture/upload failure is NOT fatal: the modal still opens and the save
+   * falls back to the plain-text body — and `matchMetadata` above is
+   * unaffected either way, since the structured record is separate from
+   * whatever image (or lack of one) reaches the Doc.
    */
   const openSaveModal = useCallback(async () => {
     setPreparingSave(true);
     try {
-      const chartUrls = await uploadReportCharts(reports);
-      setSaveSections(buildDocsSections(reports, chartUrls, 'both'));
+      const node = reportCaptureRef.current;
+      if (!node) throw new Error('Report not ready to capture');
+      const captured = await captureNodeAsPng(node);
+      const imageUrl = await uploadReportImage(captured.dataUrl, 'match-report.png');
+      setSaveSections([
+        {
+          heading: 'Match Report',
+          headingLevel: 'h2',
+          imageUrl,
+          imageObjectSizePt: reportImageObjectSize(captured),
+        },
+      ]);
     } catch {
       setSaveSections(undefined);
     } finally {
       setPreparingSave(false);
       setSaveOpen(true);
     }
-  }, [reports]);
+  }, []);
 
   const resetMenus = useCallback(() => {
     setPickWinner(null);
@@ -507,8 +557,11 @@ export default function ManualMatchRecorder() {
         <h2 style={{ color: '#fff', fontSize: 20, fontWeight: 800, margin: '0 0 12px' }}>Match summary</h2>
 
         {/* The structured report + charts — the same component the decoder uses.
-            No `analysis` prop: manual logging has no OCR integrity warnings. */}
-        <div style={{ ...surface, background: '#fff', padding: 20, overflowX: 'auto' }}>
+            No `analysis` prop: manual logging has no OCR integrity warnings.
+            This exact node is what openSaveModal captures as the Doc's image —
+            the ref must stay on the fixed-white-background wrapper, not the
+            page's dark chrome, so the capture matches what a reader expects. */}
+        <div ref={reportCaptureRef} style={{ ...surface, background: '#fff', padding: 20, overflowX: 'auto' }}>
           <MatchReportView reports={reports} />
         </div>
 
@@ -542,45 +595,26 @@ export default function ManualMatchRecorder() {
           </div>
         ) : null}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
+          {/*
+            ONE combined action, replacing the previous pair of buttons. This
+            still does everything the "Save to player folder" button always
+            did (persist `matchMetadata` to `player_entries.metadata`, capture
+            + upload the full-report image, insert it into the player's Doc,
+            with the entry save NEVER failing on a Docs problem — see
+            openSaveModal and the entries route's EntryDocStatus). The old
+            second button called /api/google/create-document directly:
+            plain text, no player folder, no structured persistence — strictly
+            worse at everything this one already does, so it's gone rather
+            than kept redundant alongside a better path.
+          */}
           <button
             type="button"
             disabled={preparingSave}
             onClick={openSaveModal}
             style={{ ...btnLight, background: '#111', color: '#fff', borderColor: '#111' }}
           >
-            {preparingSave ? 'Preparing charts…' : 'Save to player folder'}
+            {preparingSave ? 'Capturing report…' : 'Save & Export to Google Doc'}
           </button>
-          {ENABLE_GOOGLE_EXPORTS && (
-          <button
-            type="button"
-            disabled={exportBusy}
-            onClick={async () => {
-              setExportBusy(true);
-              try {
-                const res = await fetch('/api/google/create-document', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    title: `Manual match — ${playerName} vs ${opponentName}`,
-                    body: gameNotes.length
-                      ? `${reportText}\n\nEND OF GAME NOTES\n${gameNotes.map((n, i) => `${i + 1}. ${n}`).join('\n')}`
-                      : reportText,
-                  }),
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error ?? 'Export failed');
-                if (data.url) window.open(data.url, '_blank', 'noopener,noreferrer');
-              } catch {
-                alert('Could not create Google Doc.');
-              } finally {
-                setExportBusy(false);
-              }
-            }}
-            style={{ ...btnLight, background: '#fff' }}
-          >
-            {exportBusy ? 'Creating…' : 'Export to Google Doc'}
-          </button>
-          )}
           <button type="button" onClick={() => setPhase('setup')} style={{ ...btnLight, background: '#fff' }}>
             New match
           </button>
@@ -600,6 +634,7 @@ export default function ManualMatchRecorder() {
           matchDate={matchDate}
           source="manual_recorder"
           sections={saveSections}
+          metadata={matchMetadata}
         />
       </div>
     );

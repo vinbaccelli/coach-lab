@@ -43,7 +43,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
      * report needs headings and bullet lines, which the screenshots-only shape
      * cannot express, and `insertSessionAtTop` already accepts this structure.
      */
-    sections?: Array<{ heading?: string; imageUrl?: string; lines?: string[]; notes?: string }>;
+    sections?: Array<{
+      heading?: string;
+      imageUrl?: string;
+      lines?: string[];
+      notes?: string;
+      headingLevel?: 'h2' | 'h3';
+      imageObjectSizePt?: { width: number; height: number };
+    }>;
   };
 
   if (!body.category || !body.folder_label?.trim()) {

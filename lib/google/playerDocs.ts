@@ -275,6 +275,17 @@ export interface SessionSection {
    * report exports keep their exact previous spacing.
    */
   blankLinesAfter?: number;
+  /**
+   * Override the fixed 440×248pt image box for THIS section's image.
+   *
+   * ADDITIVE AND OPT-IN: omitted, every image keeps the previous fixed
+   * landscape box — correct for a chart or a screenshot, both roughly
+   * landscape. A full-page report capture is tall portrait; forcing that into
+   * a 248pt-high box would squash it illegibly, so the manual recorder's
+   * full-report export computes its own box from the capture's real aspect
+   * ratio (see lib/matchAnalysis/captureReportImage.ts) and passes it here.
+   */
+  imageObjectSizePt?: { width: number; height: number };
 }
 
 export interface SessionBlock {
@@ -319,7 +330,7 @@ export async function insertSessionAtTop(
   const headingRanges: Array<{ start: number; end: number; style: string }> = [];
   const boldRanges: Array<{ start: number; end: number }> = [];
   const linkRanges: Array<{ start: number; end: number; url: string }> = [];
-  const imageSlots: Array<{ index: number; uri: string }> = [];
+  const imageSlots: Array<{ index: number; uri: string; objectSizePt?: { width: number; height: number } }> = [];
 
   const pushLine = (line: string) => { text += `${line}\n`; };
   const pushBoldLabel = (label: string) => {
@@ -357,7 +368,7 @@ export async function insertSessionAtTop(
       }
     }
     if (section.imageUrl) {
-      imageSlots.push({ index: at(), uri: section.imageUrl });
+      imageSlots.push({ index: at(), uri: section.imageUrl, objectSizePt: section.imageObjectSizePt });
       pushLine(IMG_PLACEHOLDER);
     }
     for (const line of section.lines ?? []) pushLine(`• ${line}`);
@@ -432,11 +443,15 @@ export async function insertSessionAtTop(
     const reqs: docs_v1.Schema$Request[] = [];
     for (const slot of [...imageSlots].sort((a, b) => b.index - a.index)) {
       reqs.push({ deleteContentRange: { range: { startIndex: slot.index, endIndex: slot.index + 1 } } });
+      const size = slot.objectSizePt ?? { width: 440, height: 248 };
       reqs.push({
         insertInlineImage: {
           location: { index: slot.index },
           uri: uriFor(slot.uri),
-          objectSize: { width: { magnitude: 440, unit: 'PT' }, height: { magnitude: 248, unit: 'PT' } },
+          objectSize: {
+            width: { magnitude: size.width, unit: 'PT' },
+            height: { magnitude: size.height, unit: 'PT' },
+          },
         },
       });
     }

@@ -31,7 +31,21 @@ type Props = {
    * Supplying it is what makes a saved report land in Google Docs as a
    * structured report rather than one unstructured block of text.
    */
-  sections?: Array<{ heading?: string; imageUrl?: string; lines?: string[]; notes?: string }>;
+  sections?: Array<{
+    heading?: string;
+    imageUrl?: string;
+    lines?: string[];
+    notes?: string;
+    headingLevel?: 'h2' | 'h3';
+    imageObjectSizePt?: { width: number; height: number };
+  }>;
+  /**
+   * Structured data to persist ALONGSIDE the Doc/report, independent of what the
+   * Doc ends up showing (an image, plain text, whatever). Stored verbatim in
+   * `player_entries.metadata` (jsonb) — this is what makes the underlying data
+   * queryable later even though the Doc itself is now just a picture.
+   */
+  metadata?: Record<string, unknown>;
 };
 
 type MirrorPrompt =
@@ -61,6 +75,7 @@ export default function SaveReportModal({
   matchDate,
   source = 'app',
   sections,
+  metadata,
 }: Props) {
   const [players, setPlayers] = useState<DbPlayer[]>([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -82,6 +97,20 @@ export default function SaveReportModal({
    */
   const docWarningsRef = useRef<string[]>([]);
   const [docWarning, setDocWarning] = useState<string | null>(null);
+  /**
+   * The entry saved AND its Google Doc updated — the link, so the coach can
+   * open it right away instead of hunting for it later. The single combined
+   * "Save & Export to Google Doc" action is silent otherwise: the modal would
+   * just close, and a coach who wants to actually LOOK at the export has to
+   * dig into the player's folder to find it.
+   *
+   * A REF, not state, for the same reason `docWarningsRef` is: `finishSave`
+   * runs synchronously right after `noteDocStatus` sets this, in the same
+   * call — reading a `useState` value there would still see last render's
+   * value, since a setter's effect is never visible until the next render.
+   */
+  const docSuccessUrlRef = useRef<string | null>(null);
+  const [docSuccessUrl, setDocSuccessUrl] = useState<string | null>(null);
   const [pendingPayload, setPendingPayload] = useState<{
     playerId: string;
     folderLabel: string;
@@ -101,20 +130,34 @@ export default function SaveReportModal({
     setCreating(false);
     setNewName('');
     docWarningsRef.current = [];
+    docSuccessUrlRef.current = null;
     setDocWarning(null);
+    setDocSuccessUrl(null);
   }, [open, initialFolder, opponentNameHint]);
 
-  /** Record a doc failure reported by the entries route (see EntryDocStatus). */
+  /** Record the doc outcome reported by the entries route (see EntryDocStatus). */
   const noteDocStatus = useCallback((data: unknown) => {
-    const d = (data as { doc?: { ok?: boolean; reason?: string } } | null)?.doc;
-    if (d && d.ok === false && d.reason) docWarningsRef.current.push(d.reason);
+    const d = (data as { doc?: { ok?: boolean; reason?: string; documentId?: string } } | null)?.doc;
+    if (!d) return;
+    if (d.ok === false && d.reason) docWarningsRef.current.push(d.reason);
+    else if (d.ok === true && d.documentId) {
+      docSuccessUrlRef.current = `https://docs.google.com/document/d/${d.documentId}/edit`;
+    }
   }, []);
 
-  /** Close, unless a Docs problem still needs to be shown first. */
+  /**
+   * Close, unless there's something the coach should see first: a Docs
+   * problem takes priority (it needs acknowledging), otherwise a successful
+   * export shows its link before closing.
+   */
   const finishSave = useCallback(() => {
-    const unique = Array.from(new Set(docWarningsRef.current));
-    if (unique.length) {
-      setDocWarning(unique.join(' '));
+    const uniqueWarnings = Array.from(new Set(docWarningsRef.current));
+    if (uniqueWarnings.length) {
+      setDocWarning(uniqueWarnings.join(' '));
+      return;
+    }
+    if (docSuccessUrlRef.current) {
+      setDocSuccessUrl(docSuccessUrlRef.current);
       return;
     }
     onClose();
@@ -164,6 +207,7 @@ export default function SaveReportModal({
             match_date: matchDate ?? null,
             source,
             ...(sections?.length ? { sections } : {}),
+            ...(metadata ? { metadata } : {}),
           }),
         });
         const data = await res.json();
@@ -212,6 +256,7 @@ export default function SaveReportModal({
       category,
       finishSave,
       matchDate,
+      metadata,
       noteDocStatus,
       opponentName,
       players,
@@ -240,6 +285,7 @@ export default function SaveReportModal({
             match_date: matchDate ?? null,
             source,
             ...(sections?.length ? { sections } : {}),
+            ...(metadata ? { metadata } : {}),
           }),
         });
         const data = await res.json();
@@ -254,7 +300,7 @@ export default function SaveReportModal({
         setBusy(false);
       }
     },
-    [category, finishSave, matchDate, noteDocStatus, pendingPayload, sections, source],
+    [category, finishSave, matchDate, metadata, noteDocStatus, pendingPayload, sections, source],
   );
 
   const handleCreatePlayerAndSave = useCallback(async () => {
@@ -343,6 +389,29 @@ export default function SaveReportModal({
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button type="button" onClick={onClose} style={btnPrimary}>
+                Done
+              </button>
+            </div>
+          </div>
+        ) : docSuccessUrl ? (
+          /* Saved AND the Doc updated — the point of the combined action. The
+             link is shown rather than the modal just closing, so the coach can
+             open the export immediately instead of hunting for it in the
+             player's folder afterward. */
+          <div style={{ marginTop: 18 }}>
+            <p style={{ margin: '0 0 14px', fontSize: 14, lineHeight: 1.5, fontWeight: 600 }}>
+              Saved, and the report is in the player&apos;s Google Doc.
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+              <a
+                href={docSuccessUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block' }}
+              >
+                Open Google Doc
+              </a>
+              <button type="button" onClick={onClose} style={btnGhost}>
                 Done
               </button>
             </div>
