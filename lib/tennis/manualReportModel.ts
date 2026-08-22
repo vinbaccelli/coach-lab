@@ -19,9 +19,9 @@
  * rather than approximated — a chart built from a guess is worse than no chart.
  *
  * WHAT MANUAL HAS THAT THE DECODER DOES NOT
- * Forced (induced) errors as a category of their own, and the BALL TYPE that
- * caused each error. Both come from the coach's own eyes and have no equivalent
- * in the screenshot pipeline.
+ * Forced (induced) errors as a category of their own, the BALL TYPE that caused
+ * each error, and RALLY LENGTH. All three come from the coach's own eyes and
+ * have no equivalent in the screenshot pipeline.
  */
 
 import type { ReportSection, ReportStatRow, SideReport } from '@/lib/matchAnalysis/reportModel';
@@ -38,6 +38,7 @@ import type { Side } from '@/lib/tennis/gameScore';
 import type { FormattedBoard } from '@/lib/tennis/matchFormat';
 import {
   aggregateManualStats,
+  RALLY_LENGTH_BUCKETS,
   type FinishReason,
   type LoggedPoint,
   type ManualStats,
@@ -305,6 +306,62 @@ function sectionBallType(st: ManualStats, side: Side): ReportSection {
   };
 }
 
+/** '2'/'3'/'4'/'5'/'5+' bucket label → the row/legend text. */
+function bucketRowLabel(bucket: string): string {
+  return bucket === '5+' ? '5+ shots' : `${bucket} shots`;
+}
+
+/**
+ * `rallyLengthByEndingSide` keeps the RAW logged value (any positive integer,
+ * or the literal '5+'); this buckets it into the five fixed, ordered display
+ * categories the chart and rows use. Bucketing at read time, not at logging
+ * time, keeps the stored point data exact.
+ */
+function rallyLengthItems(st: ManualStats, side: Side): BarItem[] {
+  const buckets: Record<string, number> = { '2': 0, '3': 0, '4': 0, '5': 0, '5+': 0 };
+  for (const [raw, count] of Object.entries(st.rallyLengthByEndingSide[side])) {
+    const n = raw === '5+' ? '5+' : Number(raw);
+    const b = n === '5+' ? '5+' : n <= 2 ? '2' : n >= 5 ? '5+' : String(n);
+    buckets[b] = (buckets[b] ?? 0) + count;
+  }
+  return RALLY_LENGTH_BUCKETS.map((b) => ({ label: bucketRowLabel(b), value: buckets[b] })).filter(
+    (i) => i.value > 0,
+  );
+}
+
+function sectionRallyLength(st: ManualStats, side: Side): ReportSection {
+  const items = rallyLengthItems(st, side);
+  const total = items.reduce((a, b) => a + b.value, 0);
+  const unspecified = st.rallyUnspecifiedByEndingSide[side];
+  const notes: string[] = [];
+  if (!items.length) {
+    notes.push('No rally lengths were recorded for this side — this step is optional and can be skipped while logging.');
+  }
+  if (unspecified > 0) {
+    notes.push(
+      `${unspecified} point${unspecified === 1 ? '' : 's'} this side ended skipped the rally-length step and are not counted in the chart above.`,
+    );
+  }
+  return {
+    id: 'rally-length',
+    number: 6,
+    heading: 'Rally length',
+    explanation:
+      'How many shots the point ran before this side ended it, winner or error. Short rallies alongside a high error count is a different problem to solve than long rallies wearing a player down.',
+    rows: [
+      row(
+        'Points with a rally length recorded',
+        String(total),
+        'Winners and errors this side ended, with a length logged.',
+      ),
+      ...items.map((i) => row(i.label, String(i.value), undefined, { tier: 'simple' as const })),
+    ],
+    charts: items.length ? [hBarChart({ title: 'Rally length distribution', items })] : [],
+    notes,
+    present: total > 0,
+  };
+}
+
 function sectionServe(input: ManualReportInput, st: ManualStats): ReportSection {
   const a = st.servePointsBySide.player;
   const b = st.servePointsBySide.opponent;
@@ -321,7 +378,7 @@ function sectionServe(input: ManualReportInput, st: ManualStats): ReportSection 
   const any = a.aces + a.doubleFaults + a.returnErrorsWon + b.aces + b.doubleFaults + b.returnErrorsWon > 0;
   return {
     id: 'serve-return',
-    number: 6,
+    number: 7,
     heading: 'Serve & return',
     explanation:
       'What the serve won outright and what it gave away. "Return errors won" are points the server took because the return missed.',
@@ -361,13 +418,20 @@ function sectionSummary(input: ManualReportInput, st: ManualStats, side: Side): 
   if (bestWinner) notes.push(`Most productive shot: ${bestWinner.label} (${bestWinner.value} winner${bestWinner.value === 1 ? '' : 's'}).`);
   if (worstUe) notes.push(`Most costly stroke: ${worstUe.label} (${worstUe.value} unforced error${worstUe.value === 1 ? '' : 's'}).`);
   if (worstBall) notes.push(`Ball that caused the most trouble: ${worstBall.label} (${worstBall.value}).`);
-  if (st.killerPoints) notes.push(`${st.killerPoints} point${st.killerPoints === 1 ? '' : 's'} flagged as decisive by the coach.`);
+  const bigPoints = st.breakPoints + st.setPoints + st.matchPoints;
+  if (bigPoints) {
+    const parts: string[] = [];
+    if (st.breakPoints) parts.push(`${st.breakPoints} break point${st.breakPoints === 1 ? '' : 's'}`);
+    if (st.setPoints) parts.push(`${st.setPoints} set point${st.setPoints === 1 ? '' : 's'}`);
+    if (st.matchPoints) parts.push(`${st.matchPoints} match point${st.matchPoints === 1 ? '' : 's'}`);
+    notes.push(`${parts.join(', ')} played — derived automatically from the score, not flagged by hand.`);
+  }
   if (input.gameNotes?.length) notes.push(...input.gameNotes.map((n, i) => `Game note ${i + 1}: ${n}`));
   if (!notes.length) notes.push('Not enough logged points to draw a pattern yet.');
 
   return {
     id: 'summary',
-    number: 7,
+    number: 8,
     heading: 'Coach’s summary',
     explanation: 'The short version — what worked, what cost points, and what to take into practice.',
     rows: [
@@ -393,6 +457,7 @@ export function buildManualSideReport(input: ManualReportInput, side: Side): Sid
       sectionUnforced(st, side),
       sectionForced(st, side),
       sectionBallType(st, side),
+      sectionRallyLength(st, side),
       sectionServe(input, st),
       sectionSummary(input, st, side),
     ],

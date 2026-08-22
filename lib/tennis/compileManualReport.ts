@@ -1,5 +1,7 @@
 import type { Side } from '@/lib/tennis/gameScore';
 import type { FormattedBoard } from '@/lib/tennis/matchFormat';
+import type { PointSignificance } from '@/lib/tennis/pointSignificance';
+import { significanceLabel } from '@/lib/tennis/pointSignificance';
 
 /**
  * FEATURE C — the ball that caused an error.
@@ -37,6 +39,34 @@ export const STROKES = ['Forehand', 'Backhand', 'Volley', 'Smash', 'Drop Shot'] 
 export type StrokeName = (typeof STROKES)[number];
 
 /**
+ * FEATURE — rally length.
+ *
+ * Only asked for outcomes where a rally actually happened — winners, unforced
+ * errors, and forced errors, never a serve/return outcome (an ace, a double
+ * fault or a return error is by definition a rally of zero real length). The
+ * quick options cover the common cases; `Custom` stores the exact count the
+ * coach typed. Either way the point keeps the RAW value — bucketing into the
+ * five display categories (2/3/4/5/5+) happens only when a chart is built, so
+ * no precision is thrown away at logging time.
+ */
+export const RALLY_LENGTH_OPTIONS = [2, 3, 4, 5] as const;
+export type RallyLength = number | '5+';
+
+/** The five fixed, ordered buckets a rally length is grouped into for display. */
+export const RALLY_LENGTH_BUCKETS = ['2', '3', '4', '5', '5+'] as const;
+
+export function bucketRallyLength(n: RallyLength): (typeof RALLY_LENGTH_BUCKETS)[number] {
+  if (n === '5+') return '5+';
+  if (n <= 2) return '2';
+  if (n >= 5) return '5+';
+  return String(n) as '3' | '4';
+}
+
+export function rallyLengthLabel(n: RallyLength): string {
+  return n === '5+' ? '5+ shots' : n + (n === 1 ? ' shot' : ' shots');
+}
+
+/**
  * A point's ending.
  *
  * `forced` (induced error) is its OWN kind. It used to be folded in with
@@ -53,10 +83,17 @@ export type ManualOutcome =
 export type LoggedPoint = {
   winner: Side;
   outcome: ManualOutcome;
-  /** Coach-flagged decisive moment */
-  killer?: boolean;
+  /**
+   * What the point was worth — break/set/match point — DERIVED from the score
+   * at the moment it was played (lib/tennis/pointSignificance.ts), never asked.
+   * Absent (or empty) means the point was a plain hold with nothing riding on
+   * the game beyond itself.
+   */
+  significance?: PointSignificance[];
   /** FEATURE A — derived from the serve rotation at the time the point was logged. */
   server?: Side;
+  /** How long the rally ran, when asked (never for a serve/return outcome). */
+  rallyLength?: RallyLength;
 };
 
 /** How the match ended, which changes how the report describes its own totals. */
@@ -113,7 +150,19 @@ export type ManualStats = {
   forcedByStroke: Record<Side, Tally>;
   forcedByBallType: Record<Side, Tally>;
   servePointsBySide: Record<Side, ServeSideStats>;
-  killerPoints: number;
+  breakPoints: number;
+  setPoints: number;
+  matchPoints: number;
+  /**
+   * Rally length, keyed by the side whose racket ENDED the point (the winner's
+   * side for a winner, the erring side for an unforced/forced error) — the same
+   * attribution convention as every other per-stroke breakdown here. Keyed by
+   * the raw value's string form (e.g. "4", "9", "5+"); bucketing into the five
+   * display categories happens at chart-build time.
+   */
+  rallyLengthByEndingSide: Record<Side, Tally>;
+  /** Points that were eligible for a rally length (any non-serve outcome) but skipped. */
+  rallyUnspecifiedByEndingSide: Record<Side, number>;
 };
 
 const emptySideTallies = (): Record<Side, Tally> => ({ player: {}, opponent: {} });
@@ -145,27 +194,41 @@ export function aggregateManualStats(points: LoggedPoint[]): ManualStats {
       player: { aces: 0, doubleFaults: 0, returnErrorsWon: 0 },
       opponent: { aces: 0, doubleFaults: 0, returnErrorsWon: 0 },
     },
-    killerPoints: 0,
+    breakPoints: 0,
+    setPoints: 0,
+    matchPoints: 0,
+    rallyLengthByEndingSide: emptySideTallies(),
+    rallyUnspecifiedByEndingSide: { player: 0, opponent: 0 },
   };
 
   for (const pt of points) {
     s.pointsWon[pt.winner] += 1;
-    if (pt.killer) s.killerPoints += 1;
+    for (const sig of pt.significance ?? []) {
+      if (sig.kind === 'break') s.breakPoints += 1;
+      else if (sig.kind === 'set') s.setPoints += 1;
+      else s.matchPoints += 1;
+    }
 
     const o = pt.outcome;
     if (o.kind === 'winner') {
       s.winners += 1;
       bump(s.winnersByStroke[pt.winner], o.stroke);
+      if (pt.rallyLength !== undefined) bump(s.rallyLengthByEndingSide[pt.winner], String(pt.rallyLength));
+      else s.rallyUnspecifiedByEndingSide[pt.winner] += 1;
     } else if (o.kind === 'ue') {
       s.unforcedErrors += 1;
       const side = errorSide(pt);
       bump(s.ueByStroke[side], o.stroke);
       if (o.ballType) bump(s.ueByBallType[side], o.ballType);
+      if (pt.rallyLength !== undefined) bump(s.rallyLengthByEndingSide[side], String(pt.rallyLength));
+      else s.rallyUnspecifiedByEndingSide[side] += 1;
     } else if (o.kind === 'forced') {
       s.forcedErrors += 1;
       const side = errorSide(pt);
       bump(s.forcedByStroke[side], o.stroke);
       if (o.ballType) bump(s.forcedByBallType[side], o.ballType);
+      if (pt.rallyLength !== undefined) bump(s.rallyLengthByEndingSide[side], String(pt.rallyLength));
+      else s.rallyUnspecifiedByEndingSide[side] += 1;
     } else {
       // Serve/return outcomes. The serving side is `pt.server` when known; an ace
       // and a return error are both won by the server, a double fault lost by it.
@@ -262,7 +325,9 @@ export function compileManualReport(
   lines.push('Aces logged: ' + st.aces);
   lines.push('Double faults logged: ' + st.doubleFaults);
   lines.push('Return errors logged: ' + st.returnErrors);
-  if (st.killerPoints) lines.push('Killer points flagged: ' + st.killerPoints);
+  lines.push('Break points played: ' + st.breakPoints);
+  lines.push('Set points played: ' + st.setPoints);
+  lines.push('Match points played: ' + st.matchPoints);
   lines.push('');
 
   lines.push('WINNER BREAKDOWN');
@@ -313,10 +378,14 @@ export function compileManualReport(
 
   lines.push('POINT HISTORY');
   points.forEach((pt, i) => {
-    const killer = pt.killer ? ' [KILLER POINT — decisive moment]' : '';
+    const sig = (pt.significance ?? [])
+      .map((s) => significanceLabel(s.kind).toUpperCase() + ' — ' + nameOf(s.side))
+      .join(' / ');
+    const tag = sig ? ' [' + sig + ']' : '';
     const serving = pt.server ? ' · ' + nameOf(pt.server) + ' serving' : '';
+    const rally = pt.rallyLength !== undefined ? ' · rally ' + rallyLengthLabel(pt.rallyLength) : '';
     lines.push(
-      'Point ' + (i + 1) + ': ' + outcomeTag(pt.outcome) + ' — won by ' + nameOf(pt.winner) + serving + killer,
+      'Point ' + (i + 1) + ': ' + outcomeTag(pt.outcome) + ' — won by ' + nameOf(pt.winner) + serving + rally + tag,
     );
   });
   lines.push('');

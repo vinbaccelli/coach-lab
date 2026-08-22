@@ -3,14 +3,17 @@
 import type { CSSProperties } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Side } from '@/lib/tennis/gameScore';
-import type { BallType, FinishReason, ManualOutcome } from '@/lib/tennis/compileManualReport';
+import type { BallType, FinishReason, ManualOutcome, RallyLength } from '@/lib/tennis/compileManualReport';
 import {
   BALL_TYPES,
   compileManualReport,
   isErrorOutcome,
+  RALLY_LENGTH_OPTIONS,
+  rallyLengthLabel,
   SERVE_OUTCOMES,
   STROKES,
 } from '@/lib/tennis/compileManualReport';
+import { derivePointSignificance, significanceLabel, type PointSignificance } from '@/lib/tennis/pointSignificance';
 import SaveReportModal from '@/components/shared/SaveReportModal';
 import MatchReportView from '@/components/decoder/MatchReportView';
 import { buildManualReport } from '@/lib/tennis/manualReportModel';
@@ -77,7 +80,13 @@ export default function ManualMatchRecorder() {
 
   const [board, setBoard] = useState<FormattedBoard>(() => emptyFormattedBoard());
   const [points, setPoints] = useState<
-    Array<{ winner: Side; outcome: ManualOutcome; killer?: boolean; server?: Side }>
+    Array<{
+      winner: Side;
+      outcome: ManualOutcome;
+      significance?: PointSignificance[];
+      server?: Side;
+      rallyLength?: RallyLength;
+    }>
   >([]);
 
   /** FEATURE A — the origin the serve rotation is derived from. */
@@ -98,7 +107,15 @@ export default function ManualMatchRecorder() {
    * without inventing a value.
    */
   const [ballStepDone, setBallStepDone] = useState(false);
-  const [killerFlag, setKillerFlag] = useState(false);
+  /**
+   * Rally length — asked only when a rally actually happened (not for a
+   * serve/return outcome). Mirrors `ballStepDone`'s skip-friendly pattern: the
+   * step is DONE once answered OR explicitly skipped, never blocking on a value.
+   */
+  const [rallyStepDone, setRallyStepDone] = useState(false);
+  const [pendingRallyLength, setPendingRallyLength] = useState<RallyLength | undefined>(undefined);
+  const [rallyCustomOpen, setRallyCustomOpen] = useState(false);
+  const [rallyCustomValue, setRallyCustomValue] = useState('');
 
   const [gameNoteOpen, setGameNoteOpen] = useState(false);
   const [gameNoteDraft, setGameNoteDraft] = useState('');
@@ -130,6 +147,11 @@ export default function ManualMatchRecorder() {
   const servingNow = useMemo(() => currentServer(origin, board), [origin, board]);
   /** FEATURE F — did the score itself finish the match? */
   const matchComplete = useMemo(() => isMatchOver(board, format), [board, format]);
+  /** Break/set/match point on the point about to be played — DERIVED, never asked. */
+  const pointSignificanceNow = useMemo(
+    () => derivePointSignificance(board, format, servingNow),
+    [board, format, servingNow],
+  );
 
   const startingScoreNote = useMemo(
     () =>
@@ -204,7 +226,10 @@ export default function ManualMatchRecorder() {
     setCat(null);
     setPendingOutcome(null);
     setBallStepDone(false);
-    setKillerFlag(false);
+    setRallyStepDone(false);
+    setPendingRallyLength(undefined);
+    setRallyCustomOpen(false);
+    setRallyCustomValue('');
   }, []);
 
   const commitPoint = useCallback(
@@ -216,16 +241,22 @@ export default function ManualMatchRecorder() {
         nb.phase === 'regular' &&
         (snap.games[0] !== nb.games[0] || snap.games[1] !== nb.games[1]);
       setBoard(nb);
-      // FEATURE A — stamp the server derived from the board BEFORE the point was
-      // applied, so the point records who actually served it.
-      setPoints((p) => [...p, { winner, outcome, killer: killerFlag, server: currentServer(origin, board) }]);
+      // FEATURE A — stamp the server AND the derived significance from the board
+      // BEFORE the point was applied, so both describe the situation the point
+      // was actually played into.
+      const server = currentServer(origin, board);
+      const significance = derivePointSignificance(board, format, server);
+      setPoints((p) => [
+        ...p,
+        { winner, outcome, server, significance, rallyLength: pendingRallyLength },
+      ]);
       resetMenus();
       if (gameEndedRegular) {
         setGameNoteDraft('');
         setGameNoteOpen(true);
       }
     },
-    [board, format, killerFlag, origin, resetMenus],
+    [board, format, origin, pendingRallyLength, resetMenus],
   );
 
   /**
@@ -253,8 +284,9 @@ export default function ManualMatchRecorder() {
     return (
       <div style={{ maxWidth: 560, margin: '0 auto' }}>
         <p style={{ margin: '0 0 16px', fontSize: 14, lineHeight: 1.55, color: 'rgba(255,255,255,0.88)' }}>
-          Configure the match, then record points. Tap who won the point, pick the outcome, optionally mark a killer point,
-          then confirm with <strong>Add point</strong>.
+          Configure the match, then record points. Tap who won the point, pick the outcome,
+          then confirm with <strong>Add point</strong>. Break, set and match points are shown
+          automatically — no need to flag them.
         </p>
         <div style={surface}>
           <label style={lb}>Your player</label>
@@ -612,7 +644,99 @@ export default function ManualMatchRecorder() {
       <button
         type="button"
         onClick={() => setPendingOutcome(null)}
-        style={{ border: 'none', background: 'transparent', color: '#d6d3d1', cursor: 'pointer', fontWeight: 600 }}
+        style={{ border: 'none', background: 'transparent', color: '#666', cursor: 'pointer', fontWeight: 600 }}
+      >
+        Back
+      </button>
+    </div>
+  ) : null;
+
+  /**
+   * Rally length — asked for every outcome that actually involved a rally
+   * (winner, unforced error, forced error), never for a serve/return outcome.
+   * Sits after the ball-type step (when there is one), before the confirm.
+   */
+  const needsRallyStep =
+    !!pendingOutcome && pendingOutcome.kind !== 'serve' && !needsBallStep && !rallyStepDone;
+
+  const setRallyLength = (v: RallyLength | null) => {
+    setPendingRallyLength(v ?? undefined);
+    setRallyStepDone(true);
+    setRallyCustomOpen(false);
+    setRallyCustomValue('');
+  };
+
+  const rallyBack = () => {
+    // Undo whichever step immediately precedes this one, mirroring how the
+    // ball-type panel's own Back fully re-opens the stroke picker.
+    if (pendingOutcome && isErrorOutcome(pendingOutcome)) {
+      setBallStepDone(false);
+    } else {
+      setPendingOutcome(null);
+    }
+  };
+
+  const rallyPanel = needsRallyStep ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontWeight: 800, fontSize: 15, color: '#fff' }}>How long was the rally?</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {RALLY_LENGTH_OPTIONS.map((n) => (
+          <button
+            key={n}
+            type="button"
+            style={{ ...btnLight, minHeight: 48, flex: '1 1 30%' }}
+            onClick={() => setRallyLength(n)}
+          >
+            {n}
+          </button>
+        ))}
+        <button
+          type="button"
+          style={{ ...btnLight, minHeight: 48, flex: '1 1 30%' }}
+          onClick={() => setRallyLength('5+')}
+        >
+          5+
+        </button>
+        <button
+          type="button"
+          style={{ ...btnLight, minHeight: 48, flex: '1 1 30%' }}
+          onClick={() => setRallyCustomOpen((v) => !v)}
+        >
+          Custom
+        </button>
+      </div>
+      {rallyCustomOpen ? (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            type="number"
+            min={1}
+            value={rallyCustomValue}
+            onChange={(e) => setRallyCustomValue(e.target.value)}
+            placeholder="Number of shots"
+            style={{ ...inp, flex: 1 }}
+            autoFocus
+          />
+          <button
+            type="button"
+            disabled={!Number.isInteger(Number(rallyCustomValue)) || Number(rallyCustomValue) < 1}
+            style={{ ...btnLight, flex: 'none', minHeight: 44, padding: '0 16px', background: '#111', color: '#fff', borderColor: '#111' }}
+            onClick={() => setRallyLength(Number(rallyCustomValue))}
+          >
+            Use
+          </button>
+        </div>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => setRallyLength(null)}
+        style={{ ...btnLight, minHeight: 44, background: '#fff', fontSize: 14 }}
+      >
+        Not sure — skip
+      </button>
+      <button
+        type="button"
+        onClick={rallyBack}
+        style={{ border: 'none', background: 'transparent', color: '#666', cursor: 'pointer', fontWeight: 600 }}
       >
         Back
       </button>
@@ -620,12 +744,13 @@ export default function ManualMatchRecorder() {
   ) : null;
 
   const confirmPanel =
-    pendingOutcome && pickWinner && !needsBallStep ? (
+    pendingOutcome && pickWinner && !needsBallStep && !needsRallyStep ? (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 14 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 800, fontSize: 15, color: '#fff' }}>
-          <input type="checkbox" checked={killerFlag} onChange={(e) => setKillerFlag(e.target.checked)} />
-          Killer point (decisive moment)
-        </label>
+        {pendingRallyLength !== undefined ? (
+          <p style={{ margin: 0, fontSize: 13, color: '#fff' }}>
+            Rally: <strong>{rallyLengthLabel(pendingRallyLength)}</strong>
+          </p>
+        ) : null}
         <button
           type="button"
           style={{ ...btnLight, width: '100%', background: '#111', color: '#fff', borderColor: '#111', minHeight: 56 }}
@@ -639,11 +764,15 @@ export default function ManualMatchRecorder() {
         <button
           type="button"
           onClick={() => {
-            setPendingOutcome(null);
-            setBallStepDone(false);
-            setKillerFlag(false);
+            if (pendingOutcome && pendingOutcome.kind !== 'serve') {
+              setRallyStepDone(false);
+              setPendingRallyLength(undefined);
+            } else {
+              setPendingOutcome(null);
+              setBallStepDone(false);
+            }
           }}
-          style={{ border: 'none', background: 'transparent', color: '#d6d3d1', cursor: 'pointer', fontWeight: 600 }}
+          style={{ border: 'none', background: 'transparent', color: '#666', cursor: 'pointer', fontWeight: 600 }}
         >
           Back
         </button>
@@ -674,6 +803,29 @@ export default function ManualMatchRecorder() {
         <div style={{ marginTop: 6, fontSize: 13, fontWeight: 800, color: '#007AFF' }}>
           Serving: {servingNow === 'player' ? playerName.trim() || 'Player' : opponentName.trim() || 'Opponent'}
         </div>
+        {/* Break/Set/Match Point — DERIVED from the score, never asked. */}
+        {pointSignificanceNow.length > 0 ? (
+          <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {pointSignificanceNow.map((sig, i) => (
+              <span
+                key={i}
+                style={{
+                  display: 'inline-block',
+                  padding: '2px 8px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: 0.2,
+                  color: '#fff',
+                  background: sig.kind === 'match' ? '#B3261E' : sig.kind === 'set' ? '#B45309' : '#8A3FFC',
+                }}
+              >
+                {significanceLabel(sig.kind).toUpperCase()} —{' '}
+                {sig.side === 'player' ? playerName.trim() || 'Player' : opponentName.trim() || 'Opponent'}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {matchComplete ? (
           <div style={{ marginTop: 6, fontSize: 12, fontWeight: 800, color: '#1a7f37' }}>
             Match complete on score — finish to save the stats.
@@ -751,7 +903,7 @@ export default function ManualMatchRecorder() {
               <button
                 type="button"
                 onClick={() => setPickWinner(null)}
-                style={{ border: 'none', background: 'transparent', color: '#d6d3d1', cursor: 'pointer', fontWeight: 600 }}
+                style={{ border: 'none', background: 'transparent', color: '#666', cursor: 'pointer', fontWeight: 600 }}
               >
                 Back
               </button>
@@ -773,7 +925,7 @@ export default function ManualMatchRecorder() {
               <button
                 type="button"
                 onClick={() => setCat(null)}
-                style={{ width: '100%', border: 'none', background: 'transparent', color: '#d6d3d1', cursor: 'pointer' }}
+                style={{ width: '100%', border: 'none', background: 'transparent', color: '#666', cursor: 'pointer' }}
               >
                 Back
               </button>
@@ -807,7 +959,7 @@ export default function ManualMatchRecorder() {
               <button
                 type="button"
                 onClick={() => setCat(null)}
-                style={{ border: 'none', background: 'transparent', color: '#d6d3d1', cursor: 'pointer', fontWeight: 600 }}
+                style={{ border: 'none', background: 'transparent', color: '#666', cursor: 'pointer', fontWeight: 600 }}
               >
                 Back
               </button>
@@ -817,6 +969,8 @@ export default function ManualMatchRecorder() {
       )}
 
       {ballTypePanel}
+
+      {rallyPanel}
 
       {confirmPanel}
 
