@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { namesLikelyMatch } from '@/lib/players/opponent';
 
@@ -23,6 +23,15 @@ type Props = {
   opponentNameHint?: string | null;
   matchDate?: string | null;
   source?: string;
+  /**
+   * Pre-structured Docs sections (headings / lines / notes / one image each).
+   *
+   * Optional and ADDITIVE: callers that omit it keep the previous behaviour, so
+   * the entries route falls back to deriving sections from `screenshots`.
+   * Supplying it is what makes a saved report land in Google Docs as a
+   * structured report rather than one unstructured block of text.
+   */
+  sections?: Array<{ heading?: string; imageUrl?: string; lines?: string[]; notes?: string }>;
 };
 
 type MirrorPrompt =
@@ -51,6 +60,7 @@ export default function SaveReportModal({
   opponentNameHint = '',
   matchDate,
   source = 'app',
+  sections,
 }: Props) {
   const [players, setPlayers] = useState<DbPlayer[]>([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -63,6 +73,15 @@ export default function SaveReportModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [mirrorPrompt, setMirrorPrompt] = useState<MirrorPrompt>(null);
+  /**
+   * The entry saved, but its Google Doc did not update.
+   *
+   * NON-BLOCKING BY DESIGN: the save genuinely succeeded, so this is shown as a
+   * closing notice rather than an error — but it IS shown, because a report that
+   * never reached Google used to look exactly like one that did.
+   */
+  const docWarningsRef = useRef<string[]>([]);
+  const [docWarning, setDocWarning] = useState<string | null>(null);
   const [pendingPayload, setPendingPayload] = useState<{
     playerId: string;
     folderLabel: string;
@@ -81,7 +100,25 @@ export default function SaveReportModal({
     setPendingPayload(null);
     setCreating(false);
     setNewName('');
+    docWarningsRef.current = [];
+    setDocWarning(null);
   }, [open, initialFolder, opponentNameHint]);
+
+  /** Record a doc failure reported by the entries route (see EntryDocStatus). */
+  const noteDocStatus = useCallback((data: unknown) => {
+    const d = (data as { doc?: { ok?: boolean; reason?: string } } | null)?.doc;
+    if (d && d.ok === false && d.reason) docWarningsRef.current.push(d.reason);
+  }, []);
+
+  /** Close, unless a Docs problem still needs to be shown first. */
+  const finishSave = useCallback(() => {
+    const unique = Array.from(new Set(docWarningsRef.current));
+    if (unique.length) {
+      setDocWarning(unique.join(' '));
+      return;
+    }
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -126,10 +163,12 @@ export default function SaveReportModal({
             opponent_name: opponentName.trim() || null,
             match_date: matchDate ?? null,
             source,
+            ...(sections?.length ? { sections } : {}),
           }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? 'Save failed');
+        noteDocStatus(data);
 
         if (!skipMirror && opponentName.trim() && selectedPlayer) {
           const opp = opponentName.trim();
@@ -161,7 +200,7 @@ export default function SaveReportModal({
           return;
         }
 
-        onClose();
+        finishSave();
       } catch (e: unknown) {
         setErr(e instanceof Error ? e.message : 'Save failed');
       } finally {
@@ -171,11 +210,13 @@ export default function SaveReportModal({
     [
       bodyText,
       category,
+      finishSave,
       matchDate,
-      onClose,
+      noteDocStatus,
       opponentName,
       players,
       selectedPlayer,
+      sections,
       source,
       youtubeUrl,
     ],
@@ -198,20 +239,22 @@ export default function SaveReportModal({
             opponent_name: pendingPayload.primaryDisplayName || null,
             match_date: matchDate ?? null,
             source,
+            ...(sections?.length ? { sections } : {}),
           }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? 'Save failed');
+        noteDocStatus(data);
         setMirrorPrompt(null);
         setPendingPayload(null);
-        onClose();
+        finishSave();
       } catch (e: unknown) {
         setErr(e instanceof Error ? e.message : 'Save failed');
       } finally {
         setBusy(false);
       }
     },
-    [category, matchDate, onClose, pendingPayload, primaryPlayerName, selectedPlayer?.display_name, source],
+    [category, finishSave, matchDate, noteDocStatus, pendingPayload, sections, source],
   );
 
   const handleCreatePlayerAndSave = useCallback(async () => {
@@ -276,7 +319,35 @@ export default function SaveReportModal({
           </button>
         </div>
 
-        {mirrorPrompt?.kind === 'mirror' ? (
+        {docWarning ? (
+          /* The entry SAVED. Only the Google Doc did not update — shown as a
+             notice, never as a failure, so the coach knows the report is safe
+             but not yet in Docs. */
+          <div style={{ marginTop: 18 }}>
+            <p style={{ margin: '0 0 10px', fontSize: 14, lineHeight: 1.5, fontWeight: 600 }}>
+              Saved to the player folder.
+            </p>
+            <p
+              style={{
+                margin: '0 0 14px',
+                fontSize: 13,
+                lineHeight: 1.5,
+                color: '#8A6D00',
+                background: 'rgba(255,196,0,0.12)',
+                border: '1px solid rgba(255,196,0,0.45)',
+                borderRadius: 10,
+                padding: '10px 12px',
+              }}
+            >
+              The Google Doc wasn&apos;t updated: {docWarning}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="button" onClick={onClose} style={btnPrimary}>
+                Done
+              </button>
+            </div>
+          </div>
+        ) : mirrorPrompt?.kind === 'mirror' ? (
           <div style={{ marginTop: 18 }}>
             <p style={{ margin: '0 0 14px', fontSize: 14, lineHeight: 1.5 }}>
               We noticed <strong>{mirrorPrompt.target.display_name}</strong> is also in your database — save this
@@ -297,7 +368,7 @@ export default function SaveReportModal({
                 onClick={() => {
                   setMirrorPrompt(null);
                   setPendingPayload(null);
-                  onClose();
+                  finishSave();
                 }}
                 style={btnGhost}
               >
@@ -320,7 +391,7 @@ export default function SaveReportModal({
                 onClick={() => {
                   setMirrorPrompt(null);
                   setPendingPayload(null);
-                  onClose();
+                  finishSave();
                 }}
                 style={btnGhost}
               >

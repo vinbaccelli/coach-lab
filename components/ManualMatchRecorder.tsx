@@ -12,6 +12,13 @@ import {
   STROKES,
 } from '@/lib/tennis/compileManualReport';
 import SaveReportModal from '@/components/shared/SaveReportModal';
+import MatchReportView from '@/components/decoder/MatchReportView';
+import { buildManualReport } from '@/lib/tennis/manualReportModel';
+import {
+  buildDocsSections,
+  uploadReportCharts,
+  type DocsSectionPayload,
+} from '@/lib/matchAnalysis/exportToDocs';
 import { formatMatchFolderLabel, localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
 import {
@@ -99,6 +106,9 @@ export default function ManualMatchRecorder() {
 
   const [saveOpen, setSaveOpen] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  /** Docs payload built from the charts — see openSaveModal. */
+  const [saveSections, setSaveSections] = useState<DocsSectionPayload[] | undefined>(undefined);
+  const [preparingSave, setPreparingSave] = useState(false);
 
   useEffect(() => {
     fetch('/api/players')
@@ -141,12 +151,53 @@ export default function ManualMatchRecorder() {
     [playerName, opponentName, points, board, startingScoreNote, finishReason],
   );
 
+  /**
+   * The structured report — the same `SideReport[]` the decoder produces, so it
+   * renders through MatchReportView and exports through buildDocsSections
+   * without a parallel implementation.
+   */
+  const reports = useMemo(
+    () =>
+      buildManualReport({
+        playerName: playerName.trim() || 'Player',
+        opponentName: opponentName.trim() || 'Opponent',
+        points,
+        board,
+        startingScoreNote,
+        finish: finishReason,
+        gameNotes,
+      }),
+    [playerName, opponentName, points, board, startingScoreNote, finishReason, gameNotes],
+  );
+
   const folderLabelDefault = useMemo(() => {
     const d = matchDate.trim().slice(0, 10);
     const a = playerName.trim() || 'Player';
     const b = opponentName.trim() || 'Opponent';
     return `${formatMatchFolderLabel(d, a, b)} — ${localDateTimeForFolder()}`;
   }, [matchDate, playerName, opponentName]);
+
+  /**
+   * Rasterise + upload the charts, then open the save modal with a structured
+   * Docs payload. Without this the entry saves as one undifferentiated block of
+   * text; with it, the manual match lands in Google Docs looking like the
+   * decoder's report.
+   *
+   * A chart-upload failure is NOT fatal: the modal still opens, and the save
+   * falls back to the plain-text body.
+   */
+  const openSaveModal = useCallback(async () => {
+    setPreparingSave(true);
+    try {
+      const chartUrls = await uploadReportCharts(reports);
+      setSaveSections(buildDocsSections(reports, chartUrls, 'both'));
+    } catch {
+      setSaveSections(undefined);
+    } finally {
+      setPreparingSave(false);
+      setSaveOpen(true);
+    }
+  }, [reports]);
 
   const resetMenus = useCallback(() => {
     setPickWinner(null);
@@ -422,19 +473,32 @@ export default function ManualMatchRecorder() {
     return (
       <div style={{ maxWidth: 720, margin: '0 auto' }}>
         <h2 style={{ color: '#fff', fontSize: 20, fontWeight: 800, margin: '0 0 12px' }}>Match summary</h2>
-        <div
-          style={{
-            ...surface,
-            maxHeight: 'min(50vh, 420px)',
-            overflow: 'auto',
-            fontSize: 13,
-            lineHeight: 1.5,
-            whiteSpace: 'pre-wrap',
-            background: '#fff',
-          }}
-        >
-          {reportText}
+
+        {/* The structured report + charts — the same component the decoder uses.
+            No `analysis` prop: manual logging has no OCR integrity warnings. */}
+        <div style={{ ...surface, background: '#fff', padding: 20, overflowX: 'auto' }}>
+          <MatchReportView reports={reports} />
         </div>
+
+        <details style={{ marginTop: 12 }}>
+          <summary style={{ fontSize: 12, color: '#d6d3d1', cursor: 'pointer', userSelect: 'none' }}>
+            Plain-text version
+          </summary>
+          <div
+            style={{
+              ...surface,
+              marginTop: 8,
+              maxHeight: 'min(50vh, 420px)',
+              overflow: 'auto',
+              fontSize: 13,
+              lineHeight: 1.5,
+              whiteSpace: 'pre-wrap',
+              background: '#fff',
+            }}
+          >
+            {reportText}
+          </div>
+        </details>
         {gameNotes.length > 0 ? (
           <div style={{ ...surface, marginTop: 12, background: '#fff' }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>End-of-game notes</div>
@@ -448,10 +512,11 @@ export default function ManualMatchRecorder() {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
           <button
             type="button"
-            onClick={() => setSaveOpen(true)}
+            disabled={preparingSave}
+            onClick={openSaveModal}
             style={{ ...btnLight, background: '#111', color: '#fff', borderColor: '#111' }}
           >
-            Save to player folder
+            {preparingSave ? 'Preparing charts…' : 'Save to player folder'}
           </button>
           {ENABLE_GOOGLE_EXPORTS && (
           <button
@@ -502,6 +567,7 @@ export default function ManualMatchRecorder() {
           opponentNameHint={opponentName.trim()}
           matchDate={matchDate}
           source="manual_recorder"
+          sections={saveSections}
         />
       </div>
     );

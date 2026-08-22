@@ -182,6 +182,15 @@ export interface SaveOutcome {
   displayName: string;
   ok: boolean;
   error?: string;
+  /**
+   * The entry saved, but its Google Doc did not update.
+   *
+   * Distinct from `error`: `ok` stays true because the report IS stored against
+   * the player. Previously the route returned 200 whether or not the Docs write
+   * succeeded, so a save that never reached Google was reported as a clean
+   * success — the same silent failure the manual recorder hit.
+   */
+  docWarning?: string;
 }
 
 /**
@@ -214,9 +223,19 @@ export async function saveReportToPlayers(
           sections,
         }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as {
+        error?: string;
+        doc?: { ok?: boolean; reason?: string };
+      };
       if (!res.ok) throw new Error(data.error ?? 'Save failed');
-      results.push({ playerId: target.playerId, displayName: target.displayName, ok: true });
+      results.push({
+        playerId: target.playerId,
+        displayName: target.displayName,
+        ok: true,
+        ...(data.doc && data.doc.ok === false && data.doc.reason
+          ? { docWarning: data.doc.reason }
+          : {}),
+      });
     } catch (e) {
       results.push({
         playerId: target.playerId,

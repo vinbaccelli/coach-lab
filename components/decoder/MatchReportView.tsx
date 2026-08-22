@@ -23,11 +23,18 @@ export default function MatchReportView({
   analysis,
 }: {
   reports: SideReport[];
-  analysis: MatchAnalysis;
+  /**
+   * Decoder-only context, used solely for the integrity warnings above the
+   * report. OPTIONAL so the manual match recorder can render through this same
+   * component: manual logging has no OCR to contradict itself, so it has no
+   * integrity warnings to show — and everything below this block is driven
+   * entirely by `reports`.
+   */
+  analysis?: MatchAnalysis;
 }) {
   return (
     <div>
-      {analysis.integrityWarnings.length > 0 && (
+      {analysis && analysis.integrityWarnings.length > 0 && (
         <div style={warnBox}>
           <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>
             {analysis.integrityWarnings.length} consistency check(s) flagged

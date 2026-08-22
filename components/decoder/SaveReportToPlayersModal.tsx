@@ -244,10 +244,19 @@ export default function SaveReportToPlayersModal({
             {outcomes.map((o) => (
               <div key={o.playerId} style={{ fontSize: 12.5, padding: '8px 0', borderBottom: '1px solid #F5F5F5' }}>
                 <b>{o.displayName}</b>{' '}
-                {o.ok ? (
-                  <span style={{ color: '#2F7D32' }}>saved to their Match Analysis doc</span>
-                ) : (
+                {!o.ok ? (
                   <span style={{ color: '#b91c1c' }}>failed — {o.error}</span>
+                ) : o.docWarning ? (
+                  /* Saved to the player, but the Docs write did not land. Amber,
+                     not red: the report is stored, only the Doc is missing. */
+                  <>
+                    <span style={{ color: '#2F7D32' }}>saved to their folder</span>
+                    <div style={{ color: '#8A6D00', marginTop: 4, lineHeight: 1.45 }}>
+                      Google Doc not updated: {o.docWarning}
+                    </div>
+                  </>
+                ) : (
+                  <span style={{ color: '#2F7D32' }}>saved to their Match Analysis doc</span>
                 )}
               </div>
             ))}
