@@ -3,8 +3,14 @@
 import type { CSSProperties } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Side } from '@/lib/tennis/gameScore';
-import type { ManualOutcome } from '@/lib/tennis/compileManualReport';
-import { compileManualReport } from '@/lib/tennis/compileManualReport';
+import type { BallType, FinishReason, ManualOutcome } from '@/lib/tennis/compileManualReport';
+import {
+  BALL_TYPES,
+  compileManualReport,
+  isErrorOutcome,
+  SERVE_OUTCOMES,
+  STROKES,
+} from '@/lib/tennis/compileManualReport';
 import SaveReportModal from '@/components/shared/SaveReportModal';
 import { formatMatchFolderLabel, localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
@@ -13,13 +19,34 @@ import {
   defaultMatchFormat,
   emptyFormattedBoard,
   formatFormattedScoreLine,
+  isMatchOver,
   type FormattedBoard,
   type MatchFormatConfig,
 } from '@/lib/tennis/matchFormat';
+import {
+  currentServer,
+  serveOrigin,
+  type ServeOrigin,
+} from '@/lib/tennis/serving';
+import {
+  defaultStartingScore,
+  describeStartingScore,
+  POINT_LABELS,
+  seedBoardFromScore,
+  type PointLabel,
+  type StartingScore,
+} from '@/lib/tennis/startingScore';
 
 type Phase = 'setup' | 'record' | 'summary';
 
-const STROKES = ['Forehand', 'Backhand', 'Volley', 'Smash', 'Drop Shot'] as const;
+/** Outcome categories, data-driven so adding one is a list entry (FEATURES B/C/D). */
+const OUTCOME_CATS = [
+  { key: 'serve', label: 'Serve / Return' },
+  { key: 'ue', label: 'Unforced Error' },
+  { key: 'forced', label: 'Induced / Forced Error' },
+  { key: 'win', label: 'Winner' },
+] as const;
+type OutcomeCat = (typeof OUTCOME_CATS)[number]['key'];
 
 const btnLight: CSSProperties = {
   minHeight: 52,
@@ -42,13 +69,28 @@ export default function ManualMatchRecorder() {
   const [format, setFormat] = useState<MatchFormatConfig>(() => defaultMatchFormat());
 
   const [board, setBoard] = useState<FormattedBoard>(() => emptyFormattedBoard());
-  const [points, setPoints] = useState<Array<{ winner: Side; outcome: ManualOutcome; killer?: boolean }>>([]);
+  const [points, setPoints] = useState<
+    Array<{ winner: Side; outcome: ManualOutcome; killer?: boolean; server?: Side }>
+  >([]);
+
+  /** FEATURE A — the origin the serve rotation is derived from. */
+  const [origin, setOrigin] = useState<ServeOrigin>(() => serveOrigin('player', 0));
+  /** FEATURE E — optional score to begin from. */
+  const [startingScore, setStartingScore] = useState<StartingScore>(() => defaultStartingScore());
+  const [seedError, setSeedError] = useState<string | null>(null);
+  /** FEATURE F — how the match ended, which changes the report's wording. */
+  const [finishReason, setFinishReason] = useState<FinishReason>('in_progress');
 
   const [pickWinner, setPickWinner] = useState<Side | null>(null);
-  /** serve | ue | win — outcome category */
-  const [cat, setCat] = useState<null | 'serve' | 'ue' | 'win'>(null);
-  /** After category chosen: for serve — df/ace; for ue/win — stroke string before confirm */
+  const [cat, setCat] = useState<OutcomeCat | null>(null);
+  /** After category chosen: for serve — the detail; for the rest — stroke, before confirm */
   const [pendingOutcome, setPendingOutcome] = useState<ManualOutcome | null>(null);
+  /**
+   * FEATURE C — the ball-type step is answered (or deliberately skipped).
+   * Tracked separately from `ballType` being set so "not sure" can move on
+   * without inventing a value.
+   */
+  const [ballStepDone, setBallStepDone] = useState(false);
   const [killerFlag, setKillerFlag] = useState(false);
 
   const [gameNoteOpen, setGameNoteOpen] = useState(false);
@@ -74,9 +116,29 @@ export default function ManualMatchRecorder() {
     [board, format, playerName, opponentName],
   );
 
+  /** FEATURE A — who is serving the game in progress, derived from the score. */
+  const servingNow = useMemo(() => currentServer(origin, board), [origin, board]);
+  /** FEATURE F — did the score itself finish the match? */
+  const matchComplete = useMemo(() => isMatchOver(board, format), [board, format]);
+
+  const startingScoreNote = useMemo(
+    () =>
+      describeStartingScore(startingScore, {
+        player: playerName.trim() || 'Player',
+        opponent: opponentName.trim() || 'Opponent',
+      }),
+    [startingScore, playerName, opponentName],
+  );
+
   const reportText = useMemo(
-    () => compileManualReport(playerName.trim() || 'Player', opponentName.trim() || 'Opponent', points),
-    [playerName, opponentName, points],
+    () =>
+      compileManualReport(
+        playerName.trim() || 'Player',
+        opponentName.trim() || 'Opponent',
+        points,
+        { board, startingScoreNote, finish: finishReason },
+      ),
+    [playerName, opponentName, points, board, startingScoreNote, finishReason],
   );
 
   const folderLabelDefault = useMemo(() => {
@@ -90,6 +152,7 @@ export default function ManualMatchRecorder() {
     setPickWinner(null);
     setCat(null);
     setPendingOutcome(null);
+    setBallStepDone(false);
     setKillerFlag(false);
   }, []);
 
@@ -102,15 +165,30 @@ export default function ManualMatchRecorder() {
         nb.phase === 'regular' &&
         (snap.games[0] !== nb.games[0] || snap.games[1] !== nb.games[1]);
       setBoard(nb);
-      setPoints((p) => [...p, { winner, outcome, killer: killerFlag }]);
+      // FEATURE A — stamp the server derived from the board BEFORE the point was
+      // applied, so the point records who actually served it.
+      setPoints((p) => [...p, { winner, outcome, killer: killerFlag, server: currentServer(origin, board) }]);
       resetMenus();
       if (gameEndedRegular) {
         setGameNoteDraft('');
         setGameNoteOpen(true);
       }
     },
-    [board, format, killerFlag, resetMenus],
+    [board, format, killerFlag, origin, resetMenus],
   );
+
+  /**
+   * FEATURE F — leave the recorder with whatever has been logged.
+   *
+   * A match that ran out of score is `completed`; one the coach stopped is
+   * `stopped_early`, and the report says which so a partial log is never
+   * presented as a final result.
+   */
+  const finishMatch = useCallback(() => {
+    setFinishReason(matchComplete ? 'completed' : 'stopped_early');
+    setPhase('summary');
+    resetMenus();
+  }, [matchComplete, resetMenus]);
 
   const surface: CSSProperties = {
     background: '#faf9f7',
@@ -219,13 +297,115 @@ export default function ManualMatchRecorder() {
             </select>
           </details>
 
+          {/* ── FEATURE A — who serves first (alternates by game from here) ── */}
+          <div style={{ marginTop: 18, fontWeight: 800, fontSize: 13, marginBottom: 8 }}>Who serves first?</div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            {(['player', 'opponent'] as Side[]).map((s) => {
+              const active = startingScore.server === s;
+              const label = s === 'player' ? playerName.trim() || 'Player' : opponentName.trim() || 'Opponent';
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setStartingScore((v) => ({ ...v, server: s }))}
+                  style={{
+                    ...btnLight,
+                    minHeight: 44,
+                    fontSize: 14,
+                    border: active ? '2px solid #007AFF' : '2px solid #1a1a1a',
+                    background: active ? 'rgba(0,122,255,0.08)' : '#fff',
+                    color: active ? '#007AFF' : '#111',
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <p style={{ fontSize: 12, color: '#666', margin: '8px 0 0' }}>
+            The serve then alternates every game automatically — you never pick it again.
+          </p>
+
+          {/* ── FEATURE E — optionally begin from a score already in progress ── */}
+          <details style={{ marginTop: 16 }}>
+            <summary style={{ fontSize: 12, color: '#666', cursor: 'pointer', userSelect: 'none', marginBottom: 8 }}>
+              Start from an existing score (optional)
+            </summary>
+            <p style={{ fontSize: 12, color: '#666', margin: '0 0 10px' }}>
+              Pick up a match already under way. Stats will only cover the points you log from here on.
+              Above, choose who is serving the <strong>current</strong> game.
+            </p>
+            <label style={lb}>Games</label>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <input
+                type="number"
+                min={0}
+                max={format.gamesPerSet + 1}
+                value={startingScore.gamesPlayer}
+                onChange={(e) => setStartingScore((v) => ({ ...v, gamesPlayer: Number(e.target.value) }))}
+                style={{ ...inp, textAlign: 'center' }}
+                aria-label={`Games for ${playerName.trim() || 'Player'}`}
+              />
+              <span style={{ fontWeight: 800 }}>–</span>
+              <input
+                type="number"
+                min={0}
+                max={format.gamesPerSet + 1}
+                value={startingScore.gamesOpponent}
+                onChange={(e) => setStartingScore((v) => ({ ...v, gamesOpponent: Number(e.target.value) }))}
+                style={{ ...inp, textAlign: 'center' }}
+                aria-label={`Games for ${opponentName.trim() || 'Opponent'}`}
+              />
+            </div>
+            <label style={lb}>Points in the current game</label>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <select
+                value={startingScore.pointsPlayer}
+                onChange={(e) => setStartingScore((v) => ({ ...v, pointsPlayer: e.target.value as PointLabel }))}
+                style={inp}
+                aria-label={`Points for ${playerName.trim() || 'Player'}`}
+              >
+                {POINT_LABELS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              <span style={{ fontWeight: 800 }}>–</span>
+              <select
+                value={startingScore.pointsOpponent}
+                onChange={(e) => setStartingScore((v) => ({ ...v, pointsOpponent: e.target.value as PointLabel }))}
+                style={inp}
+                aria-label={`Points for ${opponentName.trim() || 'Opponent'}`}
+              >
+                {POINT_LABELS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+          </details>
+
+          {seedError ? (
+            <p style={{ marginTop: 12, marginBottom: 0, color: '#B3261E', fontSize: 13, fontWeight: 700 }}>
+              {seedError}
+            </p>
+          ) : null}
+
           <button
             type="button"
             disabled={!playerName.trim() || !opponentName.trim()}
             onClick={() => {
-              setBoard(emptyFormattedBoard());
+              const seeded = seedBoardFromScore(startingScore, format);
+              if (!seeded.ok) {
+                setSeedError(seeded.error);
+                return;
+              }
+              setSeedError(null);
+              setBoard(seeded.board);
+              // The chosen server serves the game in progress at the seeded score,
+              // so the rotation counts from there rather than from 0 games.
+              setOrigin(serveOrigin(startingScore.server, seeded.gamesAtStart));
               setPoints([]);
               setGameNotes([]);
+              setFinishReason('in_progress');
               setPhase('record');
               resetMenus();
             }}
@@ -327,8 +507,54 @@ export default function ManualMatchRecorder() {
     );
   }
 
+  /**
+   * FEATURE C — an error still needs the ball that caused it. Sits between the
+   * stroke and the confirm step, and only for the two error kinds.
+   */
+  const needsBallStep = !!pendingOutcome && isErrorOutcome(pendingOutcome) && !ballStepDone;
+
+  const setBallType = (bt: BallType | null) => {
+    setPendingOutcome((o) => {
+      if (!o || !isErrorOutcome(o)) return o;
+      return bt ? { ...o, ballType: bt } : { ...o, ballType: undefined };
+    });
+    setBallStepDone(true);
+  };
+
+  const ballTypePanel = needsBallStep ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontWeight: 800, fontSize: 15, color: '#fff' }}>What ball caused it?</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {BALL_TYPES.map((bt) => (
+          <button
+            key={bt}
+            type="button"
+            style={{ ...btnLight, minHeight: 48, flex: '1 1 45%' }}
+            onClick={() => setBallType(bt)}
+          >
+            {bt}
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={() => setBallType(null)}
+        style={{ ...btnLight, minHeight: 44, background: '#fff', fontSize: 14 }}
+      >
+        Not sure — skip
+      </button>
+      <button
+        type="button"
+        onClick={() => setPendingOutcome(null)}
+        style={{ border: 'none', background: 'transparent', color: '#d6d3d1', cursor: 'pointer', fontWeight: 600 }}
+      >
+        Back
+      </button>
+    </div>
+  ) : null;
+
   const confirmPanel =
-    pendingOutcome && pickWinner ? (
+    pendingOutcome && pickWinner && !needsBallStep ? (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 14 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 800, fontSize: 15, color: '#fff' }}>
           <input type="checkbox" checked={killerFlag} onChange={(e) => setKillerFlag(e.target.checked)} />
@@ -348,6 +574,7 @@ export default function ManualMatchRecorder() {
           type="button"
           onClick={() => {
             setPendingOutcome(null);
+            setBallStepDone(false);
             setKillerFlag(false);
           }}
           style={{ border: 'none', background: 'transparent', color: '#d6d3d1', cursor: 'pointer', fontWeight: 600 }}
@@ -377,6 +604,15 @@ export default function ManualMatchRecorder() {
       >
         <div style={{ fontSize: 11, fontWeight: 800, opacity: 0.55, marginBottom: 4 }}>CURRENT SCORE</div>
         {scoreLine}
+        {/* FEATURE A — derived server, shown every point so it is never guessed. */}
+        <div style={{ marginTop: 6, fontSize: 13, fontWeight: 800, color: '#007AFF' }}>
+          Serving: {servingNow === 'player' ? playerName.trim() || 'Player' : opponentName.trim() || 'Opponent'}
+        </div>
+        {matchComplete ? (
+          <div style={{ marginTop: 6, fontSize: 12, fontWeight: 800, color: '#1a7f37' }}>
+            Match complete on score — finish to save the stats.
+          </div>
+        ) : null}
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 14 }}>
@@ -392,9 +628,19 @@ export default function ManualMatchRecorder() {
         >
           Exit
         </button>
+        {/* FEATURE F — explicit finish, available at any moment. */}
         <button
           type="button"
-          onClick={() => setPhase('summary')}
+          onClick={() => {
+            if (
+              points.length > 0 &&
+              !matchComplete &&
+              !confirm('Finish the match now and save the stats collected so far?')
+            ) {
+              return;
+            }
+            finishMatch();
+          }}
           style={{
             ...btnLight,
             flex: 'none',
@@ -406,7 +652,7 @@ export default function ManualMatchRecorder() {
             borderColor: '#007AFF',
           }}
         >
-          End match
+          Finish match
         </button>
       </div>
 
@@ -425,15 +671,16 @@ export default function ManualMatchRecorder() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: '#fff' }}>Outcome</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                <button type="button" style={{ ...btnLight, minHeight: 48 }} onClick={() => setCat('serve')}>
-                  1) Serve
-                </button>
-                <button type="button" style={{ ...btnLight, minHeight: 48 }} onClick={() => setCat('ue')}>
-                  2) Unforced Error
-                </button>
-                <button type="button" style={{ ...btnLight, minHeight: 48 }} onClick={() => setCat('win')}>
-                  3) Winner / Induced
-                </button>
+                {OUTCOME_CATS.map((c, i) => (
+                  <button
+                    key={c.key}
+                    type="button"
+                    style={{ ...btnLight, minHeight: 48 }}
+                    onClick={() => setCat(c.key)}
+                  >
+                    {i + 1}) {c.label}
+                  </button>
+                ))}
               </div>
               <button
                 type="button"
@@ -444,21 +691,19 @@ export default function ManualMatchRecorder() {
               </button>
             </div>
           ) : cat === 'serve' ? (
+            /* FEATURE B — rendered from SERVE_OUTCOMES, so "Return error" is a
+               list entry rather than another hardcoded button. */
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                style={{ ...btnLight }}
-                onClick={() => setPendingOutcome({ kind: 'serve', detail: 'double_fault' })}
-              >
-                Double fault
-              </button>
-              <button
-                type="button"
-                style={{ ...btnLight }}
-                onClick={() => setPendingOutcome({ kind: 'serve', detail: 'ace' })}
-              >
-                Ace
-              </button>
+              {SERVE_OUTCOMES.map((o) => (
+                <button
+                  key={o.detail}
+                  type="button"
+                  style={{ ...btnLight }}
+                  onClick={() => setPendingOutcome({ kind: 'serve', detail: o.detail })}
+                >
+                  {o.label}
+                </button>
+              ))}
               <button
                 type="button"
                 onClick={() => setCat(null)}
@@ -467,8 +712,12 @@ export default function ManualMatchRecorder() {
                 Back
               </button>
             </div>
-          ) : cat === 'ue' || cat === 'win' ? (
+          ) : (
+            /* FEATURE D — the same stroke list serves winners and both error kinds. */
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, color: '#fff' }}>
+                {cat === 'win' ? 'Winner — which stroke?' : 'Which stroke made the error?'}
+              </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {STROKES.map((s) => (
                   <button
@@ -476,7 +725,13 @@ export default function ManualMatchRecorder() {
                     type="button"
                     style={{ ...btnLight, minHeight: 48, flex: '1 1 45%' }}
                     onClick={() =>
-                      setPendingOutcome(cat === 'ue' ? { kind: 'ue', stroke: s } : { kind: 'winner', stroke: s })
+                      setPendingOutcome(
+                        cat === 'ue'
+                          ? { kind: 'ue', stroke: s }
+                          : cat === 'forced'
+                            ? { kind: 'forced', stroke: s }
+                            : { kind: 'winner', stroke: s },
+                      )
                     }
                   >
                     {s}
@@ -491,9 +746,11 @@ export default function ManualMatchRecorder() {
                 Back
               </button>
             </div>
-          ) : null}
+          )}
         </>
       )}
+
+      {ballTypePanel}
 
       {confirmPanel}
 

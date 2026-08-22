@@ -64,6 +64,17 @@ function matchOver(board: FormattedBoard, cfg: MatchFormatConfig): boolean {
   return setsWon(board, 0) >= need || setsWon(board, 1) >= need;
 }
 
+/**
+ * Has the score itself finished the match?
+ *
+ * Exposed for FEATURE F, which has to tell a match that ENDED ON THE SCORE apart
+ * from one the coach stopped early — the report wording differs, and calling a
+ * partial log "final" would misrepresent it.
+ */
+export function isMatchOver(board: FormattedBoard, cfg: MatchFormatConfig): boolean {
+  return matchOver(board, cfg);
+}
+
 function isDecidingSet(board: FormattedBoard, cfg: MatchFormatConfig): boolean {
   const need = setsNeeded(cfg.bestOf);
   const p = setsWon(board, 0);
