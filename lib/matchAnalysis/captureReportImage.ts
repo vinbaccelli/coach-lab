@@ -69,31 +69,72 @@ export async function captureNodeAsPng(node: HTMLElement): Promise<CapturedImage
   return { dataUrl, width, height };
 }
 
-function decodedSize(dataUrl: string): Promise<{ width: number; height: number }> {
+function decodeImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('Captured report image failed to decode'));
     img.src = dataUrl;
   });
 }
 
-/** Google Docs' usable page width at 1" margins on US Letter (8.5in − 2×1in, in points). */
+function decodedSize(dataUrl: string): Promise<{ width: number; height: number }> {
+  return decodeImage(dataUrl).then((img) => ({ width: img.naturalWidth, height: img.naturalHeight }));
+}
+
+/** Google Docs' usable page box at 1" margins on US Letter, in points. */
 const DOC_PAGE_WIDTH_PT = 468;
+const DOC_PAGE_HEIGHT_PT = 648;
 
 /**
- * The `objectSize` a Docs `insertInlineImage` request should use so a TALL
- * portrait capture keeps its real proportions.
- *
- * Every other image this app inserts (a chart, a screenshot) is roughly
- * landscape, so `insertSessionAtTop` has always used one fixed 440×248pt box —
- * fine for those, but it would squash a full multi-section report into an
- * illegibly thin strip. This sizes to the page's full width instead and lets
- * the height follow the capture's own aspect ratio, however tall that makes it
- * — Docs simply flows the image across as many pages as it needs.
+ * The `objectSize` a Docs `insertInlineImage` request should use so a capture
+ * keeps its real proportions at the page's full width.
  */
 export function reportImageObjectSize(captured: CapturedImage): { width: number; height: number } {
   const width = DOC_PAGE_WIDTH_PT;
   const height = Math.max(1, Math.round(width * (captured.height / captured.width)));
   return { width, height };
+}
+
+/**
+ * Cut a tall capture into PAGE-SIZED tiles.
+ *
+ * WHY THIS EXISTS — a full report is roughly 700 CSS px wide and many thousands
+ * tall, so inserting it as ONE inline image asked Docs for an object about 468
+ * × 6000–10000 PT: an image over a hundred inches tall, from a single PNG of
+ * ~20 megapixels that Google also has to fetch server-side before it can place
+ * it. That is far outside what an inline image is meant to be, and the retry
+ * path could not save it either — `drive.google.com/thumbnail?sz=w1600` will
+ * not render a strip that long. The Doc was left holding the text that had
+ * already been written and no picture: precisely the reported symptom.
+ *
+ * Each tile is instead exactly one page box, so every insert is an ordinary,
+ * fast, unremarkable image — and the report reads down the document page by
+ * page the way a printed report would.
+ */
+export async function sliceCaptureIntoPages(captured: CapturedImage): Promise<CapturedImage[]> {
+  const img = await decodeImage(captured.dataUrl);
+  const sliceHeightPx = Math.max(
+    1,
+    Math.round(captured.width * (DOC_PAGE_HEIGHT_PT / DOC_PAGE_WIDTH_PT)),
+  );
+  if (captured.height <= sliceHeightPx) return [captured];
+
+  const slices: CapturedImage[] = [];
+  for (let top = 0; top < captured.height; top += sliceHeightPx) {
+    const h = Math.min(sliceHeightPx, captured.height - top);
+    const canvas = document.createElement('canvas');
+    canvas.width = captured.width;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas 2D context unavailable while slicing the report');
+    // Opaque white behind every tile, for the same reason the capture itself
+    // is composited onto white: a Doc page is white and a transparent PNG
+    // would drop the report's dark text.
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, top, captured.width, h, 0, 0, captured.width, h);
+    slices.push({ dataUrl: canvas.toDataURL('image/png'), width: captured.width, height: h });
+  }
+  return slices;
 }

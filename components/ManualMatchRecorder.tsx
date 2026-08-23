@@ -11,7 +11,7 @@ import {
   isErrorOutcome,
   RALLY_LENGTH_OPTIONS,
   rallyLengthLabel,
-  SERVE_OUTCOMES,
+  serveOutcomesFor,
   STROKES,
 } from '@/lib/tennis/compileManualReport';
 import { derivePointSignificance, significanceLabel, type PointSignificance } from '@/lib/tennis/pointSignificance';
@@ -19,7 +19,11 @@ import SaveReportModal from '@/components/shared/SaveReportModal';
 import MatchReportView from '@/components/decoder/MatchReportView';
 import { buildManualReport } from '@/lib/tennis/manualReportModel';
 import { uploadReportImage, type DocsSectionPayload } from '@/lib/matchAnalysis/exportToDocs';
-import { captureNodeAsPng, reportImageObjectSize } from '@/lib/matchAnalysis/captureReportImage';
+import {
+  captureNodeAsPng,
+  reportImageObjectSize,
+  sliceCaptureIntoPages,
+} from '@/lib/matchAnalysis/captureReportImage';
 import { formatMatchFolderLabel, localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import {
   applyFormattedPoint,
@@ -46,12 +50,17 @@ import {
 
 type Phase = 'setup' | 'record' | 'summary';
 
-/** Outcome categories, data-driven so adding one is a list entry (FEATURES B/C/D). */
+/**
+ * Outcome categories, data-driven so adding one is a list entry (FEATURES B/C/D).
+ * `hint` is the plain-language sub-line shown under each button — the pair
+ * coaches most disagree on is Unforced vs Induced, so those two get the most
+ * direct wording.
+ */
 const OUTCOME_CATS = [
-  { key: 'serve', label: 'Serve / Return' },
-  { key: 'ue', label: 'Unforced Error' },
-  { key: 'forced', label: 'Induced / Forced Error' },
-  { key: 'win', label: 'Winner' },
+  { key: 'serve', label: 'Serve / Return', hint: 'Ace, double fault, or a missed return' },
+  { key: 'ue', label: 'Unforced Error', hint: 'A miss with no real pressure — their own mistake' },
+  { key: 'forced', label: 'Induced / Forced Error', hint: 'The opponent forced the mistake' },
+  { key: 'win', label: 'Winner', hint: 'A clean shot the opponent could not reach' },
 ] as const;
 type OutcomeCat = (typeof OUTCOME_CATS)[number]['key'];
 
@@ -231,17 +240,19 @@ export default function ManualMatchRecorder() {
   );
 
   /**
-   * PART 2 — capture the report EXACTLY as it renders on screen (not
-   * chart-by-chart) into one PNG, upload it through the same Drive pipeline
-   * every screenshot already uses, and build a single-image Docs section from
-   * it. This REPLACES the previous per-chart Docs payload: the Doc now gets
-   * one picture that looks like the app, sized to its own real aspect ratio
-   * (see reportImageObjectSize) rather than squashed into a landscape box.
+   * Capture the report EXACTLY as it renders on screen, cut it into page-sized
+   * tiles, upload each through the same Drive pipeline every screenshot uses,
+   * and build one Docs section per tile.
+   *
+   * WHY TILES RATHER THAN ONE IMAGE — a single full-report PNG asked Docs for
+   * an inline image over a hundred inches tall, which it would not place; the
+   * Doc ended up with the already-written text and no picture. One page-box
+   * per tile keeps every insert ordinary and fast. See sliceCaptureIntoPages.
    *
    * The report is already mounted (just scrolled, since it runs long) by the
    * time the coach can reach this button, so there is no off-screen render or
-   * viewport trick needed — `captureNodeAsPng` reads the node's full
-   * scrollHeight regardless of what is currently visible.
+   * viewport trick needed — the capture reads the node's full height
+   * regardless of what is currently visible.
    *
    * A capture/upload failure is NOT fatal: the modal still opens and the save
    * falls back to the plain-text body — and `matchMetadata` above is
@@ -254,15 +265,19 @@ export default function ManualMatchRecorder() {
       const node = reportCaptureRef.current;
       if (!node) throw new Error('Report not ready to capture');
       const captured = await captureNodeAsPng(node);
-      const imageUrl = await uploadReportImage(captured.dataUrl, 'match-report.png');
-      setSaveSections([
-        {
-          heading: 'Match Report',
-          headingLevel: 'h2',
-          imageUrl,
-          imageObjectSizePt: reportImageObjectSize(captured),
-        },
-      ]);
+      const tiles = await sliceCaptureIntoPages(captured);
+      const urls = await Promise.all(
+        tiles.map((t, i) => uploadReportImage(t.dataUrl, `match-report-${i + 1}.png`)),
+      );
+      setSaveSections(
+        tiles.map((tile, i) => ({
+          // Only the first tile carries the heading; the rest continue it, so
+          // the Doc reads as one report rather than N repeated sections.
+          ...(i === 0 ? { heading: 'Match Report', headingLevel: 'h2' as const } : {}),
+          imageUrl: urls[i],
+          imageObjectSizePt: reportImageObjectSize(tile),
+        })),
+      );
     } catch {
       setSaveSections(undefined);
     } finally {
@@ -333,11 +348,46 @@ export default function ManualMatchRecorder() {
   if (phase === 'setup') {
     return (
       <div style={{ maxWidth: 560, margin: '0 auto' }}>
-        <p style={{ margin: '0 0 16px', fontSize: 14, lineHeight: 1.55, color: 'rgba(255,255,255,0.88)' }}>
+        <p style={{ margin: '0 0 12px', fontSize: 14, lineHeight: 1.55, color: '#444' }}>
           Configure the match, then record points. Tap who won the point, pick the outcome,
           then confirm with <strong>Add point</strong>. Break, set and match points are shown
           automatically — no need to flag them.
         </p>
+
+        {/* Collapsed by default — a returning coach doesn't need this every time. */}
+        <details style={{ marginBottom: 16 }}>
+          <summary style={{ fontSize: 12, color: '#666', cursor: 'pointer', userSelect: 'none', fontWeight: 600 }}>
+            How this works
+          </summary>
+          <div style={{ ...surface, marginTop: 8, background: '#fff' }}>
+            <ol style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7, color: '#333' }}>
+              <li>
+                <strong>Who won the point</strong> — tap the player's name.
+              </li>
+              <li>
+                <strong>Outcome</strong> — Serve/Return, Unforced Error, Induced/Forced Error, or Winner.
+              </li>
+              <li>
+                <strong>Stroke</strong> — which shot ended the point (skipped for serve outcomes).
+              </li>
+              <li>
+                <strong>Ball type</strong> — what ball caused an error, deep or angled for example.{' '}
+                <em>Optional — "Not sure — skip" moves on.</em>
+              </li>
+              <li>
+                <strong>Rally length</strong> — how many shots the point ran.{' '}
+                <em>Optional — skip if you didn't count.</em>
+              </li>
+            </ol>
+            <p style={{ fontSize: 12, color: '#666', margin: '12px 0 0', lineHeight: 1.6 }}>
+              Two things you never have to enter: who is <strong>serving</strong> (it alternates by game
+              from the server you pick at the start) and whether a point is a{' '}
+              <strong>break, set, or match point</strong> — both are worked out from the score and shown
+              automatically.
+            </p>
+          </div>
+        </details>
+
         <div style={surface}>
           <label style={lb}>Your player</label>
           <input list="player-pick" value={playerName} onChange={(e) => setPlayerName(e.target.value)} style={inp} />
@@ -554,7 +604,27 @@ export default function ManualMatchRecorder() {
   if (phase === 'summary') {
     return (
       <div style={{ maxWidth: 720, margin: '0 auto' }}>
-        <h2 style={{ color: '#fff', fontSize: 20, fontWeight: 800, margin: '0 0 12px' }}>Match summary</h2>
+        <h2 style={{ color: '#111', fontSize: 20, fontWeight: 800, margin: '0 0 12px' }}>Match summary</h2>
+
+        {/* Deliberately OUTSIDE reportCaptureRef below — this explains the
+            report, it isn't part of it, so it must never end up in the Doc's
+            captured image. */}
+        <details style={{ marginBottom: 12 }}>
+          <summary style={{ fontSize: 12, color: '#666', cursor: 'pointer', userSelect: 'none', fontWeight: 600 }}>
+            What do AM and EER mean?
+          </summary>
+          <div style={{ ...surface, marginTop: 8, background: '#fff' }}>
+            <p style={{ margin: '0 0 8px', fontSize: 13, lineHeight: 1.6, color: '#333' }}>
+              <strong>AM — Aggressive Margin.</strong> Winners minus unforced errors. Above zero means a
+              side created more than it gave away; below zero means the reverse.
+            </p>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: '#333' }}>
+              <strong>EER — Error Efficiency Ratio.</strong> Winners divided by unforced errors. Above 1
+              means winners outnumbered unforced errors; the higher it is, the more efficient the side
+              was being aggressive.
+            </p>
+          </div>
+        </details>
 
         {/* The structured report + charts — the same component the decoder uses.
             No `analysis` prop: manual logging has no OCR integrity warnings.
@@ -566,7 +636,7 @@ export default function ManualMatchRecorder() {
         </div>
 
         <details style={{ marginTop: 12 }}>
-          <summary style={{ fontSize: 12, color: '#d6d3d1', cursor: 'pointer', userSelect: 'none' }}>
+          <summary style={{ fontSize: 12, color: '#666', cursor: 'pointer', userSelect: 'none' }}>
             Plain-text version
           </summary>
           <div
@@ -656,7 +726,7 @@ export default function ManualMatchRecorder() {
 
   const ballTypePanel = needsBallStep ? (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ fontWeight: 800, fontSize: 15, color: '#fff' }}>What ball caused it?</div>
+      <div style={{ fontWeight: 800, fontSize: 15, color: '#111' }}>What ball caused it?</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {BALL_TYPES.map((bt) => (
           <button
@@ -713,7 +783,7 @@ export default function ManualMatchRecorder() {
 
   const rallyPanel = needsRallyStep ? (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ fontWeight: 800, fontSize: 15, color: '#fff' }}>How long was the rally?</div>
+      <div style={{ fontWeight: 800, fontSize: 15, color: '#111' }}>How long was the rally?</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {RALLY_LENGTH_OPTIONS.map((n) => (
           <button
@@ -782,7 +852,7 @@ export default function ManualMatchRecorder() {
     pendingOutcome && pickWinner && !needsBallStep && !needsRallyStep ? (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 14 }}>
         {pendingRallyLength !== undefined ? (
-          <p style={{ margin: 0, fontSize: 13, color: '#fff' }}>
+          <p style={{ margin: 0, fontSize: 13, color: '#111' }}>
             Rally: <strong>{rallyLengthLabel(pendingRallyLength)}</strong>
           </p>
         ) : null}
@@ -909,6 +979,13 @@ export default function ManualMatchRecorder() {
         </button>
       </div>
 
+      {/* First-point hint only — gone as soon as one point is logged, no storage needed. */}
+      {points.length === 0 && !pendingOutcome && !pickWinner ? (
+        <p style={{ margin: '0 0 10px', fontSize: 12.5, color: '#666', lineHeight: 1.5 }}>
+          Tap who won the point to begin — you can go Back at any step.
+        </p>
+      ) : null}
+
       {!pendingOutcome && (
         <>
           {!pickWinner ? (
@@ -922,16 +999,27 @@ export default function ManualMatchRecorder() {
             </div>
           ) : !cat ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ fontWeight: 800, fontSize: 15, color: '#fff' }}>Outcome</div>
+              <div style={{ fontWeight: 800, fontSize: 15, color: '#111' }}>Outcome</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                 {OUTCOME_CATS.map((c, i) => (
                   <button
                     key={c.key}
                     type="button"
-                    style={{ ...btnLight, minHeight: 48 }}
+                    style={{
+                      ...btnLight,
+                      minHeight: 64,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      justifyContent: 'center',
+                      gap: 3,
+                      paddingLeft: 14,
+                      paddingRight: 14,
+                    }}
                     onClick={() => setCat(c.key)}
                   >
-                    {i + 1}) {c.label}
+                    <span>{i + 1}) {c.label}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#666' }}>{c.hint}</span>
                   </button>
                 ))}
               </div>
@@ -944,19 +1032,31 @@ export default function ManualMatchRecorder() {
               </button>
             </div>
           ) : cat === 'serve' ? (
-            /* FEATURE B — rendered from SERVE_OUTCOMES, so "Return error" is a
-               list entry rather than another hardcoded button. */
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {SERVE_OUTCOMES.map((o) => (
-                <button
-                  key={o.detail}
-                  type="button"
-                  style={{ ...btnLight }}
-                  onClick={() => setPendingOutcome({ kind: 'serve', detail: o.detail })}
-                >
-                  {o.label}
-                </button>
-              ))}
+            /* Only the serve/return outcomes that are actually POSSIBLE given
+               who served and who won — see serveOutcomesFor for the full
+               matrix. An ace that loses the point, or a double fault that wins
+               it, can no longer be logged because they can no longer be
+               tapped. */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, color: '#111' }}>
+                {servingNow === 'player' ? playerName.trim() || 'Player' : opponentName.trim() || 'Opponent'} served
+                — how did the point end?
+              </div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {serveOutcomesFor(servingNow, pickWinner).map((o) => (
+                  <button
+                    key={o.detail}
+                    type="button"
+                    style={{ ...btnLight }}
+                    onClick={() => setPendingOutcome({ kind: 'serve', detail: o.detail })}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              <p style={{ margin: 0, fontSize: 12, color: '#666', lineHeight: 1.5 }}>
+                Only outcomes possible for this server and point winner are shown.
+              </p>
               <button
                 type="button"
                 onClick={() => setCat(null)}
@@ -968,7 +1068,7 @@ export default function ManualMatchRecorder() {
           ) : (
             /* FEATURE D — the same stroke list serves winners and both error kinds. */
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ fontWeight: 800, fontSize: 15, color: '#fff' }}>
+              <div style={{ fontWeight: 800, fontSize: 15, color: '#111' }}>
                 {cat === 'win' ? 'Winner — which stroke?' : 'Which stroke made the error?'}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>

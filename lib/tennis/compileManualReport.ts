@@ -22,9 +22,9 @@ export type BallType = (typeof BALL_TYPES)[number];
  * the Aggressive Margin.
  */
 export const SERVE_OUTCOMES = [
-  { detail: 'ace', label: 'Ace' },
-  { detail: 'double_fault', label: 'Double fault' },
-  { detail: 'return_error', label: 'Return error' },
+  { detail: 'ace', label: 'Ace', pointGoesTo: 'server' },
+  { detail: 'double_fault', label: 'Double fault', pointGoesTo: 'returner' },
+  { detail: 'return_error', label: 'Return error', pointGoesTo: 'server' },
 ] as const;
 export type ServeDetail = (typeof SERVE_OUTCOMES)[number]['detail'];
 
@@ -37,6 +37,52 @@ export type ServeDetail = (typeof SERVE_OUTCOMES)[number]['detail'];
  */
 export const STROKES = ['Forehand', 'Backhand', 'Volley', 'Smash', 'Drop Shot'] as const;
 export type StrokeName = (typeof STROKES)[number];
+
+/**
+ * Which outcomes are actually POSSIBLE given who served and who won the point.
+ *
+ * THE FULL MATRIX, worked through per category:
+ *
+ *   SERVE / RETURN — every one of these is decided by the serve itself, so each
+ *   has exactly ONE side it can hand the point to. That makes the whole
+ *   category filterable:
+ *     · Ace           → only the SERVER can win this way. Impossible when the
+ *                       returner won: you cannot ace someone and lose the point.
+ *     · Double fault  → only the RETURNER can win this way. Impossible when the
+ *                       server won: a double fault always LOSES the server the
+ *                       point. (And the returner can never "have" a double
+ *                       fault at all — only the server serves.)
+ *     · Return error  → the RETURNER missed the return, so only the SERVER can
+ *                       win this way. Impossible when the returner won.
+ *   So: server won → { ace, return_error }; returner won → { double_fault }.
+ *   Ace / return_error can never co-appear with double_fault, because the first
+ *   two require the server to win and the third requires them to lose.
+ *
+ *   WINNER — either side can hit a winner on any point, serving or returning
+ *   (a serve+1 forehand, a return winner). Nothing to filter.
+ *
+ *   UNFORCED ERROR — attributed to whoever LOST the point, and either side can
+ *   miss unforced whether they served or returned. Nothing to filter.
+ *
+ *   FORCED / INDUCED ERROR — same: the loser was pushed into it, and either
+ *   side can be pushed. Nothing to filter.
+ *
+ *   STROKE and BALL TYPE — orthogonal to who served. Any stroke can produce
+ *   any of the three rally outcomes, and any ball can cause any error.
+ *
+ *   RALLY LENGTH — already excluded for serve/return outcomes elsewhere (an
+ *   ace, double fault or return error has no rally to measure).
+ *
+ * So the serve/return category is the ONLY one with impossible combinations,
+ * and this is the whole of that rule.
+ */
+export function serveOutcomesFor(
+  server: Side,
+  pointWinner: Side,
+): ReadonlyArray<(typeof SERVE_OUTCOMES)[number]> {
+  const goesTo = pointWinner === server ? 'server' : 'returner';
+  return SERVE_OUTCOMES.filter((o) => o.pointGoesTo === goesTo);
+}
 
 /**
  * FEATURE — rally length.

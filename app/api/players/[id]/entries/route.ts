@@ -20,6 +20,21 @@ import {
  */
 export type EntryDocStatus = { ok: true; documentId: string } | { ok: false; reason: string };
 
+/**
+ * This route does the SLOWEST work in the app and had neither declaration,
+ * unlike every sibling Google route (upload-image, google-doc, create-document
+ * all set `runtime`; upload-image also sets `maxDuration`).
+ *
+ * A match save here runs: a Supabase insert, a Drive folder lookup/create, a
+ * Docs text batchUpdate, and then an image batchUpdate during which GOOGLE
+ * FETCHES THE IMAGE SERVER-SIDE. On the platform default (~10s) a full-report
+ * capture could not finish that last step, and the function was killed AFTER
+ * the text had been written — which is exactly the symptom seen live: the Doc
+ * left holding a bare "Session — <date> / Screenshots" stub with no image.
+ */
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
