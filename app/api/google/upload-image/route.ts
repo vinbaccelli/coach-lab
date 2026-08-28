@@ -24,10 +24,22 @@ export async function POST(req: Request) {
     );
   }
 
-  const { dataUrl, name, playerId } = (await req.json()) as {
+  const { dataUrl, name, playerId, folderId: providedFolderId } = (await req.json()) as {
     dataUrl?: string;
     name?: string;
     playerId?: string;
+    /**
+     * A folder id an EARLIER call in the same batch already resolved (see the
+     * manual recorder's multi-tile report upload, which resolves once via its
+     * first tile and reuses this for the rest). Skips the find-or-create
+     * lookup below entirely. Concurrent calls that each resolve the same
+     * folder chain from scratch race `findOrCreateFolder`'s check-then-create
+     * (see lib/google/drive.ts) — resolving once and passing the id along
+     * avoids both the redundant Drive calls and the race. The single-
+     * screenshot upload path never sends this, so it keeps resolving its own
+     * folder per call exactly as before.
+     */
+    folderId?: string;
   };
   if (!dataUrl?.startsWith('data:image/')) {
     return NextResponse.json({ error: 'dataUrl (image) is required' }, { status: 400 });
@@ -48,8 +60,11 @@ export async function POST(req: Request) {
     // player's docs. Without a playerId (or if the lookup fails) fall back to
     // the shared AngleMotion / Screenshots folder, which is where every
     // screenshot used to land regardless of player.
-    let folderId: string | null = null;
-    if (playerId) {
+    //
+    // Skipped entirely when the caller already resolved a folder (see
+    // `providedFolderId` above) — reused as-is rather than re-resolved.
+    let folderId: string | null = providedFolderId ?? null;
+    if (!folderId && playerId) {
       const { data: player } = await session.supabase
         .from('players')
         .select('id, display_name')
@@ -118,6 +133,10 @@ export async function POST(req: Request) {
       fileId,
       url: `https://drive.google.com/uc?export=view&id=${fileId}`,
       webViewUrl: `https://drive.google.com/file/d/${fileId}/view`,
+      // The folder this upload actually landed in — resolved fresh, or the
+      // caller's own `providedFolderId` echoed back. Lets a caller uploading
+      // several files in one batch resolve once and reuse it for the rest.
+      ...(folderId ? { folderId } : {}),
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Drive upload failed';

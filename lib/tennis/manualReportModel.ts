@@ -335,9 +335,15 @@ function sectionRallyLength(st: ManualStats, side: Side): ReportSection {
   const unspecified = st.rallyUnspecifiedByEndingSide[side];
   const notes: string[] = [];
   if (!items.length) {
-    notes.push('No rally lengths were recorded for this side — this step is optional and can be skipped while logging.');
-  }
-  if (unspecified > 0) {
+    // No chart below — so this is the one note about it, worded so a "no
+    // rally lengths" report never reads as a bug: either every qualifying
+    // point skipped the (optional) step, or this side had none to begin with.
+    notes.push(
+      unspecified > 0
+        ? `No rally lengths recorded for this side — every point this side ended (${unspecified}) skipped this optional step.`
+        : 'No rally lengths were recorded for this side — this step is optional and can be skipped while logging.',
+    );
+  } else if (unspecified > 0) {
     notes.push(
       `${unspecified} point${unspecified === 1 ? '' : 's'} this side ended skipped the rally-length step and are not counted in the chart above.`,
     );

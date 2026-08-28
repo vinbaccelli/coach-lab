@@ -18,7 +18,7 @@ import { derivePointSignificance, significanceLabel, type PointSignificance } fr
 import SaveReportModal from '@/components/shared/SaveReportModal';
 import MatchReportView from '@/components/decoder/MatchReportView';
 import { buildManualReport } from '@/lib/tennis/manualReportModel';
-import { uploadReportImage, type DocsSectionPayload } from '@/lib/matchAnalysis/exportToDocs';
+import type { DocsSectionPayload } from '@/lib/matchAnalysis/exportToDocs';
 import {
   captureNodeAsPng,
   reportImageObjectSize,
@@ -131,6 +131,12 @@ export default function ManualMatchRecorder() {
   /** Docs payload built from the full-report capture — see openSaveModal. */
   const [saveSections, setSaveSections] = useState<DocsSectionPayload[] | undefined>(undefined);
   const [preparingSave, setPreparingSave] = useState(false);
+  /**
+   * Set when the report capture succeeded but one or more page tiles failed
+   * to upload (or all of them did) — see openSaveModal. Shown next to the
+   * Save button so a partial or total image failure is never silent again.
+   */
+  const [saveImageWarning, setSaveImageWarning] = useState<string | null>(null);
   /** The rendered report node — captured as one image for the Doc. See openSaveModal. */
   const reportCaptureRef = useRef<HTMLDivElement>(null);
 
@@ -258,28 +264,104 @@ export default function ManualMatchRecorder() {
    * falls back to the plain-text body — and `matchMetadata` above is
    * unaffected either way, since the structured record is separate from
    * whatever image (or lack of one) reaches the Doc.
+   *
+   * TILE UPLOADS — resolve-once, allSettled, keep-partial.
+   * Every tile used to upload via `Promise.all`, each independently asking
+   * `/api/google/upload-image` to find-or-create the SAME destination folder
+   * from scratch. For a multi-tile report that is N concurrent calls racing
+   * the same find-or-create check (see `findOrCreateFolder`), and `Promise.all`
+   * discards every tile that DID succeed the instant any ONE of them rejects —
+   * which the old bare `catch { setSaveSections(undefined) }` then swallowed
+   * with no trace. Tile 1 now resolves (and reports back) the folder id first;
+   * the rest reuse it via `Promise.allSettled`, so one failure can no longer
+   * erase the others, and whichever failure DOES happen is logged instead of
+   * discarded.
    */
   const openSaveModal = useCallback(async () => {
     setPreparingSave(true);
+    setSaveImageWarning(null);
     try {
       const node = reportCaptureRef.current;
       if (!node) throw new Error('Report not ready to capture');
       const captured = await captureNodeAsPng(node);
       const tiles = await sliceCaptureIntoPages(captured);
-      const urls = await Promise.all(
-        tiles.map((t, i) => uploadReportImage(t.dataUrl, `match-report-${i + 1}.png`)),
+
+      const uploadTile = async (
+        dataUrl: string,
+        name: string,
+        folderId?: string,
+      ): Promise<{ url: string; folderId?: string }> => {
+        const res = await fetch('/api/google/upload-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataUrl, name, ...(folderId ? { folderId } : {}) }),
+        });
+        const data = (await res.json()) as { url?: string; folderId?: string; error?: string };
+        if (!res.ok || !data.url) throw new Error(data.error ?? 'Report image upload failed');
+        return { url: data.url, folderId: data.folderId };
+      };
+
+      // Tile 1 resolves the folder (or fails on its own); tiles 2..N reuse
+      // whatever id it resolved, or — if tile 1 itself failed — each still
+      // gets its own independent attempt rather than being skipped outright.
+      let resolvedFolderId: string | undefined;
+      const first = await uploadTile(tiles[0].dataUrl, 'match-report-1.png').then(
+        (v) => {
+          resolvedFolderId = v.folderId;
+          return { status: 'fulfilled' as const, value: v };
+        },
+        (reason) => ({ status: 'rejected' as const, reason }),
       );
-      setSaveSections(
-        tiles.map((tile, i) => ({
-          // Only the first tile carries the heading; the rest continue it, so
-          // the Doc reads as one report rather than N repeated sections.
-          ...(i === 0 ? { heading: 'Match Report', headingLevel: 'h2' as const } : {}),
-          imageUrl: urls[i],
-          imageObjectSizePt: reportImageObjectSize(tile),
-        })),
+      const rest = await Promise.allSettled(
+        tiles
+          .slice(1)
+          .map((t, i) => uploadTile(t.dataUrl, `match-report-${i + 2}.png`, resolvedFolderId)),
       );
-    } catch {
+      const settled: Array<PromiseSettledResult<{ url: string; folderId?: string }>> = [first, ...rest];
+
+      const sections: DocsSectionPayload[] = [];
+      const failures: string[] = [];
+      settled.forEach((result, i) => {
+        if (result.status === 'fulfilled') {
+          sections.push({
+            // Only the first successful tile carries the heading; the rest
+            // continue it, so the Doc reads as one report rather than N.
+            ...(sections.length === 0 ? { heading: 'Match Report', headingLevel: 'h2' as const } : {}),
+            imageUrl: result.value.url,
+            imageObjectSizePt: reportImageObjectSize(tiles[i]),
+          });
+        } else {
+          failures.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+        }
+      });
+
+      if (failures.length) {
+        console.error(
+          `[openSaveModal] ${failures.length}/${tiles.length} report image tile(s) failed to upload:`,
+          failures,
+        );
+      }
+
+      if (!sections.length) {
+        // Every tile failed — say so rather than silently falling back to text.
+        setSaveSections(undefined);
+        setSaveImageWarning(
+          `Report image upload failed (${failures[0] ?? 'unknown error'}) — the Doc will be saved as text only.`,
+        );
+      } else {
+        setSaveSections(sections);
+        if (failures.length) {
+          setSaveImageWarning(
+            `${failures.length} of ${tiles.length} report image${tiles.length === 1 ? '' : 's'} failed to upload (${failures[0]}) — the Doc will be missing ${failures.length === 1 ? 'that page' : 'those pages'}.`,
+          );
+        }
+      }
+    } catch (e) {
+      console.error('[openSaveModal] report capture failed:', e instanceof Error ? e.message : e);
       setSaveSections(undefined);
+      setSaveImageWarning(
+        `Report capture failed (${e instanceof Error ? e.message : 'unknown error'}) — the Doc will be saved as text only.`,
+      );
     } finally {
       setPreparingSave(false);
       setSaveOpen(true);
@@ -689,6 +771,29 @@ export default function ManualMatchRecorder() {
             New match
           </button>
         </div>
+
+        {/* Honest partial/total image-upload failure — see openSaveModal. The
+            entry itself still saves either way; this only ever describes what
+            happened to the picture(s), matching SaveReportModal's own
+            "saved, but the Doc didn't get X" wording for the same reason: a
+            report that silently lost its image used to look identical to one
+            that didn't. */}
+        {saveImageWarning ? (
+          <p
+            style={{
+              margin: '10px 0 0',
+              fontSize: 13,
+              lineHeight: 1.5,
+              color: '#8A6D00',
+              background: 'rgba(255,196,0,0.12)',
+              border: '1px solid rgba(255,196,0,0.45)',
+              borderRadius: 10,
+              padding: '10px 12px',
+            }}
+          >
+            {saveImageWarning}
+          </p>
+        ) : null}
 
         <SaveReportModal
           open={saveOpen}
