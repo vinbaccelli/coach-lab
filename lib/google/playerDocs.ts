@@ -42,6 +42,12 @@ const KIND_META: Record<PlayerDocKind, { column: 'google_doc_id' | 'google_match
 };
 
 const IMG_PLACEHOLDER = '￼';
+/**
+ * Marks where a hard page break goes — see the "full-page tile" handling in
+ * `insertSessionAtTop`. A Private Use Area code point so it can never collide
+ * with real report text.
+ */
+const PAGE_BREAK_PLACEHOLDER = '';
 
 /**
  * True for Google errors meaning "this token cannot touch that resource" —
@@ -331,6 +337,21 @@ export async function insertSessionAtTop(
   const boldRanges: Array<{ start: number; end: number }> = [];
   const linkRanges: Array<{ start: number; end: number; url: string }> = [];
   const imageSlots: Array<{ index: number; uri: string; objectSizePt?: { width: number; height: number } }> = [];
+  /**
+   * Where a hard page break goes — set once, right before the FIRST section
+   * whose image carries an explicit `imageObjectSizePt` (today, only the
+   * manual recorder's full-report capture sets this; see
+   * lib/matchAnalysis/captureReportImage.ts). That image is sized to fill an
+   * entire Docs page exactly (DOC_PAGE_HEIGHT_PT), so it can never share a
+   * page with ANY preceding text — Docs just pushes it whole to wherever it
+   * next fits, and with no explicit break that could be several pages down
+   * depending on how much preamble (session heading, title, labels) came
+   * before it. Forcing it to start flush at the top of the next page instead
+   * means it lands there deterministically, and every following full-page
+   * tile chains onto its own page cleanly after it (each is exactly one page
+   * tall, so once the first one is page-aligned, the rest already are).
+   */
+  let pageBreakIndex: number | null = null;
 
   const pushLine = (line: string) => { text += `${line}\n`; };
   const pushBoldLabel = (label: string) => {
@@ -353,6 +374,14 @@ export async function insertSessionAtTop(
   const hasImages = session.sections.some((s) => s.imageUrl);
   if (hasImages) pushBoldLabel(session.imagesLabel?.trim() || 'Screenshots');
   for (const section of session.sections) {
+    // `imageObjectSizePt` is only ever set by the manual recorder's full-page
+    // report capture (see the field's own doc comment on `SessionSection`) —
+    // an ordinary screenshot or chart never carries it, so this can't
+    // mis-fire on those.
+    if (pageBreakIndex === null && section.imageUrl && section.imageObjectSizePt) {
+      pageBreakIndex = at();
+      pushLine(PAGE_BREAK_PLACEHOLDER);
+    }
     if (section.heading?.trim()) {
       const text = section.heading.trim();
       if (section.headingLevel) {
@@ -482,6 +511,26 @@ export async function insertSessionAtTop(
         },
       });
     }
+  }
+
+  // 4. The page break, if one was reserved above. Always at a LOWER index
+  //    than every image slot (it precedes the first full-page section), and
+  //    each image swap above nets to a 0 shift for indexes at or below it —
+  //    so this index is still exactly where it was computed, whether it runs
+  //    before, after, or interleaved with step 3.
+  if (pageBreakIndex !== null) {
+    // Narrowed to a local const — captured by the closure below, where TS
+    // cannot otherwise tell the outer `let` won't be reassigned before it runs.
+    const idx = pageBreakIndex;
+    await step('documents.batchUpdate(pageBreak)', () => docs.documents.batchUpdate({
+      documentId: docId,
+      requestBody: {
+        requests: [
+          { deleteContentRange: { range: { startIndex: idx, endIndex: idx + 1 } } },
+          { insertPageBreak: { location: { index: idx } } },
+        ],
+      },
+    }));
   }
 }
 
