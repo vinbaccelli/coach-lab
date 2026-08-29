@@ -4590,6 +4590,20 @@ function Home() {
     [recordingSession, downloadBlob],
   );
 
+  const handleRecordingUploadYoutubeCropped = useCallback(
+    async (region: PixelRegion) => {
+      const session = recordingSession;
+      const src = session?.videoBlob;
+      if (!src) return { ok: false, error: 'No recording to upload.' };
+
+      const cropped = await exportCroppedVideo(src, region);
+      if (!cropped.ok) return { ok: false, error: cropped.error || 'Could not crop the recording.' };
+
+      return uploadVideoToYouTube(cropped.blob, `AngleMotion recording ${localDateTimeForFolder()}`);
+    },
+    [recordingSession],
+  );
+
   const handleScreenRecordDownloadYes = useCallback(() => {
     const pack = screenRecordBlobRef.current;
     if (!pack) return;
@@ -8910,6 +8924,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             onExportCrop={handleRecordingExportCrop}
             youtube={ENABLE_YOUTUBE_UPLOAD ? youtubeConn : undefined}
             onUploadYouTube={ENABLE_YOUTUBE_UPLOAD ? handleRecordingUploadYoutube : undefined}
+            onUploadYoutubeCropped={ENABLE_YOUTUBE_UPLOAD ? handleRecordingUploadYoutubeCropped : undefined}
           />,
           document.body,
         )}

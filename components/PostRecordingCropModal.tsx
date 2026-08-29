@@ -46,6 +46,11 @@ interface Props {
   youtube?: YouTubeConnection;
   /** Uploads the full (uncropped) recording; caller owns the actual fetch (reuses uploadVideoToYouTube). */
   onUploadYouTube?: (blob: Blob) => Promise<{ ok: boolean; url?: string; error?: string; needsConnect?: boolean }>;
+  /** Crops THEN uploads; caller owns both steps (reuses exportCroppedVideo + uploadVideoToYouTube). */
+  onUploadYoutubeCropped?: (
+    region: PixelRegion,
+    aspect: CropAspect,
+  ) => Promise<{ ok: boolean; url?: string; error?: string; needsConnect?: boolean }>;
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -68,6 +73,7 @@ export default function PostRecordingCropModal({
   onExportCrop,
   youtube,
   onUploadYouTube,
+  onUploadYoutubeCropped,
 }: Props) {
   const url = useRef<string>('');
   if (!url.current) url.current = URL.createObjectURL(blob);
@@ -77,6 +83,12 @@ export default function PostRecordingCropModal({
   const [ytBusy, setYtBusy] = useState(false);
   const [ytError, setYtError] = useState<string | null>(null);
   const [ytUrl, setYtUrl] = useState<string | null>(null);
+  // Separate from the choose-phase state above: this one tracks an upload of
+  // the CROPPED output, not the original blob, so the two success/error states
+  // never bleed into each other when the coach flips between phases.
+  const [cropYtBusy, setCropYtBusy] = useState(false);
+  const [cropYtError, setCropYtError] = useState<string | null>(null);
+  const [cropYtUrl, setCropYtUrl] = useState<string | null>(null);
 
   const handleUploadYoutube = useCallback(async () => {
     if (!onUploadYouTube || ytBusy) return;
@@ -209,16 +221,22 @@ export default function PostRecordingCropModal({
     };
   }, [onPointerMove, onPointerUp]);
 
-  const handleExport = useCallback(async () => {
-    if (busy || !crop || !content || !intrinsic) return;
-    setError(null);
+  const computeCropRegion = useCallback((): PixelRegion | null => {
+    if (!crop || !content || !intrinsic) return null;
     const scale = intrinsic.w / content.w;
-    const region: PixelRegion = {
+    return {
       x: crop.x * scale,
       y: crop.y * scale,
       w: crop.w * scale,
       h: crop.h * scale,
     };
+  }, [crop, content, intrinsic]);
+
+  const handleExport = useCallback(async () => {
+    if (busy) return;
+    const region = computeCropRegion();
+    if (!region) return;
+    setError(null);
     try {
       setBusy(true);
       setProgress('Exporting…');
@@ -228,7 +246,28 @@ export default function PostRecordingCropModal({
       setBusy(false);
       setProgress(null);
     }
-  }, [busy, crop, content, intrinsic, aspect, onExportCrop]);
+  }, [busy, computeCropRegion, aspect, onExportCrop]);
+
+  const handleUploadYoutubeCropped = useCallback(async () => {
+    if (!onUploadYoutubeCropped || cropYtBusy) return;
+    const region = computeCropRegion();
+    if (!region) return;
+    setCropYtBusy(true);
+    setCropYtError(null);
+    try {
+      const result = await onUploadYoutubeCropped(region, aspect);
+      if (!result.ok) {
+        if (result.needsConnect) await youtube?.refresh();
+        setCropYtError(result.error ?? 'Upload failed — try again.');
+        return;
+      }
+      setCropYtUrl(result.url ?? null);
+    } catch (e) {
+      setCropYtError(e instanceof Error ? e.message : 'Upload failed — try again.');
+    } finally {
+      setCropYtBusy(false);
+    }
+  }, [onUploadYoutubeCropped, cropYtBusy, computeCropRegion, aspect, youtube]);
 
   const tabBtn = (selected: boolean): React.CSSProperties => ({
     padding: '6px 14px',
@@ -374,6 +413,34 @@ export default function PostRecordingCropModal({
             </span>
           )
         ) : null}
+        {phase === 'crop' && onUploadYoutubeCropped && youtube && !youtube.loading ? (
+          cropYtUrl ? (
+            <a
+              href={cropYtUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#34D399', fontSize: 13, fontWeight: 600, marginRight: 'auto' }}
+            >
+              Uploaded — open on YouTube ↗
+            </a>
+          ) : (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginRight: 'auto' }}>
+              {cropYtError ? <span style={{ color: '#FF6B60', fontSize: 12 }}>{cropYtError}</span> : null}
+              <button
+                type="button"
+                style={{ ...bigBtn('rgba(255,255,255,0.16)'), display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                disabled={busy || cropYtBusy || youtube.connecting || !crop}
+                onClick={() => { if (youtube.connected) void handleUploadYoutubeCropped(); else void youtube.connect(); }}
+                title={youtube.connected
+                  ? 'Crop, then upload this recording to your YouTube channel as Unlisted'
+                  : 'Authorize AngleMotion to upload to your YouTube channel. Opens a Google window; your recording is not affected.'}
+              >
+                {cropYtBusy || youtube.connecting ? <Loader2 size={14} className="animate-spin" /> : <Youtube size={14} />}
+                {cropYtBusy ? 'Uploading…' : youtube.connecting ? 'Connecting…' : youtube.connected ? 'Upload cropped to YouTube' : 'Connect YouTube'}
+              </button>
+            </span>
+          )
+        ) : null}
         {phase === 'choose' ? (
           <>
             <button type="button" style={bigBtn('rgba(255,255,255,0.16)')} onClick={onCancel} disabled={busy}>Cancel</button>
@@ -382,7 +449,18 @@ export default function PostRecordingCropModal({
           </>
         ) : (
           <>
-            <button type="button" style={bigBtn('rgba(255,255,255,0.16)')} onClick={() => setPhase('choose')} disabled={busy}>Back</button>
+            <button
+              type="button"
+              style={bigBtn('rgba(255,255,255,0.16)')}
+              onClick={() => {
+                setCropYtError(null);
+                setCropYtUrl(null);
+                setPhase('choose');
+              }}
+              disabled={busy}
+            >
+              Back
+            </button>
             <button type="button" style={bigBtn('#16A34A')} onClick={handleExport} disabled={busy || !crop}>Crop &amp; download MP4</button>
           </>
         )}
