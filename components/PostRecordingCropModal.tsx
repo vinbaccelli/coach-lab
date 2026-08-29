@@ -280,7 +280,13 @@ export default function PostRecordingCropModal({
     cursor: 'pointer',
   });
 
-  const bigBtn = (bg: string): React.CSSProperties => ({
+  // `isDisabled` is the SAME expression passed to the button's `disabled` prop —
+  // pass it explicitly per button. It used to default to the shared `busy` flag,
+  // which made every other button's disabled state (e.g. "no crop box yet")
+  // invisible: cursor stayed `pointer` and opacity stayed 1 even though a real
+  // click would do nothing, and conversely a button disabled for its OWN reason
+  // could still look fully active. Cursor/opacity must track the actual prop.
+  const bigBtn = (bg: string, isDisabled = busy): React.CSSProperties => ({
     padding: '12px 20px',
     borderRadius: 12,
     border: 'none',
@@ -288,8 +294,8 @@ export default function PostRecordingCropModal({
     color: '#fff',
     fontSize: 15,
     fontWeight: 700,
-    cursor: busy ? 'not-allowed' : 'pointer',
-    opacity: busy ? 0.7 : 1,
+    cursor: isDisabled ? 'not-allowed' : 'pointer',
+    opacity: isDisabled ? 0.5 : 1,
   });
 
   return (
@@ -400,7 +406,7 @@ export default function PostRecordingCropModal({
               {ytError ? <span style={{ color: '#FF6B60', fontSize: 12 }}>{ytError}</span> : null}
               <button
                 type="button"
-                style={{ ...bigBtn('rgba(255,255,255,0.16)'), display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                style={{ ...bigBtn('#CC0000', busy || ytBusy || youtube.connecting), display: 'inline-flex', alignItems: 'center', gap: 8 }}
                 disabled={busy || ytBusy || youtube.connecting}
                 onClick={() => { if (youtube.connected) void handleUploadYoutube(); else void youtube.connect(); }}
                 title={youtube.connected
@@ -428,7 +434,7 @@ export default function PostRecordingCropModal({
               {cropYtError ? <span style={{ color: '#FF6B60', fontSize: 12 }}>{cropYtError}</span> : null}
               <button
                 type="button"
-                style={{ ...bigBtn('rgba(255,255,255,0.16)'), display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                style={{ ...bigBtn('#CC0000', busy || cropYtBusy || youtube.connecting || !crop), display: 'inline-flex', alignItems: 'center', gap: 8 }}
                 disabled={busy || cropYtBusy || youtube.connecting || !crop}
                 onClick={() => { if (youtube.connected) void handleUploadYoutubeCropped(); else void youtube.connect(); }}
                 title={youtube.connected
@@ -461,7 +467,7 @@ export default function PostRecordingCropModal({
             >
               Back
             </button>
-            <button type="button" style={bigBtn('#16A34A')} onClick={handleExport} disabled={busy || !crop}>Crop &amp; download MP4</button>
+            <button type="button" style={bigBtn('#16A34A', busy || !crop)} onClick={handleExport} disabled={busy || !crop}>Crop &amp; download MP4</button>
           </>
         )}
       </div>
