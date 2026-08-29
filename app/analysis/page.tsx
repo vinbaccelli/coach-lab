@@ -34,6 +34,7 @@ import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
 import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
 import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
+import { uploadVideoToYouTube } from '@/lib/export/exportService';
 import { useStroMotion } from '@/hooks/useStroMotion';
 const StroMotionPanel = React.lazy(() => import('@/components/StroMotionPanel'));
 const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/SnapshotScrollPanel'));
@@ -221,6 +222,19 @@ const btnStyle: React.CSSProperties = {
   fontWeight: 500,
   whiteSpace: 'nowrap',
 };
+
+/**
+ * A file dragged out of Chrome's download bar/tray lands in `dataTransfer.files`
+ * as a real File, but Chrome does not run its usual MIME-sniffing pass on it —
+ * `file.type` comes through as `''` even for an actual video. A normal
+ * OS Finder/Explorer drag does not have this gap. Fall back to the extension
+ * when the browser hands us no type at all, rather than rejecting the drop.
+ */
+const VIDEO_EXT_RE = /\.(mp4|mov|m4v|webm|mkv|avi|wmv|flv|ogv|ts|mts|m2ts|3gp)$/i;
+function isLikelyVideoFile(file: File): boolean {
+  if (file.type) return file.type.startsWith('video/');
+  return VIDEO_EXT_RE.test(file.name);
+}
 
 /** YouTube iframe API getDuration can throw minified errors (e.g. this.g.src) during teardown. */
 function safeYoutubePlayerDuration(player: unknown): number | null {
@@ -4186,7 +4200,7 @@ function Home() {
     e.preventDefault();
     setIsDragOverA(false);
     const file = e.dataTransfer.files?.[0];
-    if (!file || !file.type.startsWith('video/')) return;
+    if (!file || !isLikelyVideoFile(file)) return;
     loadVideoFileIntoSlot(file, 'A');
   }, [loadVideoFileIntoSlot]);
 
@@ -4202,7 +4216,7 @@ function Home() {
     e.preventDefault();
     setIsDragOverB(false);
     const file = e.dataTransfer.files?.[0];
-    if (!file || !file.type.startsWith('video/')) return;
+    if (!file || !isLikelyVideoFile(file)) return;
     loadVideoFileIntoSlot(file, 'B');
   }, [loadVideoFileIntoSlot]);
 
@@ -4540,6 +4554,10 @@ function Home() {
     downloadBlob(session.videoBlob, session.ext);
     setRecordingSession(null);
   }, [recordingSession, downloadBlob]);
+
+  const handleRecordingUploadYoutube = useCallback((blob: Blob) => {
+    return uploadVideoToYouTube(blob, `AngleMotion recording ${localDateTimeForFolder()}`);
+  }, []);
 
   const handleRecordingExportCrop = useCallback(
     async (region: PixelRegion, aspect: CropAspect) => {
@@ -8890,6 +8908,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             onCancel={handleRecordingReviewCancel}
             onDownloadFull={handleRecordingDownloadFull}
             onExportCrop={handleRecordingExportCrop}
+            youtube={ENABLE_YOUTUBE_UPLOAD ? youtubeConn : undefined}
+            onUploadYouTube={ENABLE_YOUTUBE_UPLOAD ? handleRecordingUploadYoutube : undefined}
           />,
           document.body,
         )}

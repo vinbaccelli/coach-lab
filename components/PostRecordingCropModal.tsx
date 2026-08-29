@@ -18,6 +18,8 @@
  */
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Youtube, Loader2 } from 'lucide-react';
+import type { YouTubeConnection } from '@/hooks/useYouTubeConnection';
 
 export type CropAspect = 'free' | '9:16' | '16:9';
 export type PixelRegion = { x: number; y: number; w: number; h: number };
@@ -36,6 +38,14 @@ interface Props {
   onDownloadFull: () => void;
   /** region in intrinsic video pixels. May return a promise to show progress. */
   onExportCrop: (region: PixelRegion, aspect: CropAspect) => Promise<void> | void;
+  /**
+   * Same connection state the Metrics/StroMotion export panels and the analysis
+   * capture toast share — one grant, one status, everywhere in the app.
+   * Omit to hide the YouTube option entirely (e.g. behind a feature flag).
+   */
+  youtube?: YouTubeConnection;
+  /** Uploads the full (uncropped) recording; caller owns the actual fetch (reuses uploadVideoToYouTube). */
+  onUploadYouTube?: (blob: Blob) => Promise<{ ok: boolean; url?: string; error?: string; needsConnect?: boolean }>;
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -56,12 +66,36 @@ export default function PostRecordingCropModal({
   onCancel,
   onDownloadFull,
   onExportCrop,
+  youtube,
+  onUploadYouTube,
 }: Props) {
   const url = useRef<string>('');
   if (!url.current) url.current = URL.createObjectURL(blob);
   useEffect(() => () => { if (url.current) URL.revokeObjectURL(url.current); }, []);
 
   const [phase, setPhase] = useState<'choose' | 'crop'>(startInCrop ? 'crop' : 'choose');
+  const [ytBusy, setYtBusy] = useState(false);
+  const [ytError, setYtError] = useState<string | null>(null);
+  const [ytUrl, setYtUrl] = useState<string | null>(null);
+
+  const handleUploadYoutube = useCallback(async () => {
+    if (!onUploadYouTube || ytBusy) return;
+    setYtBusy(true);
+    setYtError(null);
+    try {
+      const result = await onUploadYouTube(blob);
+      if (!result.ok) {
+        if (result.needsConnect) await youtube?.refresh();
+        setYtError(result.error ?? 'Upload failed — try again.');
+        return;
+      }
+      setYtUrl(result.url ?? null);
+    } catch (e) {
+      setYtError(e instanceof Error ? e.message : 'Upload failed — try again.');
+    } finally {
+      setYtBusy(false);
+    }
+  }, [onUploadYouTube, ytBusy, blob, youtube]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [intrinsic, setIntrinsic] = useState<{ w: number; h: number } | null>(null);
   const [content, setContent] = useState<ContentBox | null>(null);
@@ -312,6 +346,34 @@ export default function PostRecordingCropModal({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
         {error ? <span style={{ color: '#FF6B60', fontSize: 12, marginRight: 'auto' }}>{error}</span> : null}
         {busy ? <span style={{ color: '#fff', fontSize: 13, marginRight: 'auto' }}>{progress ?? 'Working…'}</span> : null}
+        {phase === 'choose' && onUploadYouTube && youtube && !youtube.loading ? (
+          ytUrl ? (
+            <a
+              href={ytUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#34D399', fontSize: 13, fontWeight: 600, marginRight: 'auto' }}
+            >
+              Uploaded — open on YouTube ↗
+            </a>
+          ) : (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginRight: 'auto' }}>
+              {ytError ? <span style={{ color: '#FF6B60', fontSize: 12 }}>{ytError}</span> : null}
+              <button
+                type="button"
+                style={{ ...bigBtn('rgba(255,255,255,0.16)'), display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                disabled={busy || ytBusy || youtube.connecting}
+                onClick={() => { if (youtube.connected) void handleUploadYoutube(); else void youtube.connect(); }}
+                title={youtube.connected
+                  ? 'Upload this recording to your YouTube channel as Unlisted'
+                  : 'Authorize AngleMotion to upload to your YouTube channel. Opens a Google window; your recording is not affected.'}
+              >
+                {ytBusy || youtube.connecting ? <Loader2 size={14} className="animate-spin" /> : <Youtube size={14} />}
+                {ytBusy ? 'Uploading…' : youtube.connecting ? 'Connecting…' : youtube.connected ? 'Upload to YouTube' : 'Connect YouTube'}
+              </button>
+            </span>
+          )
+        ) : null}
         {phase === 'choose' ? (
           <>
             <button type="button" style={bigBtn('rgba(255,255,255,0.16)')} onClick={onCancel} disabled={busy}>Cancel</button>
