@@ -317,8 +317,23 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     setProgress(null);
     setElapsed(0);
 
+    // iOS/iPadOS Safari does not implement getDisplayMedia AT ALL (screen
+    // capture is macOS-Safari-only), and any browser on a non-secure origin has
+    // no navigator.mediaDevices either. Both land here. The old copy ("not
+    // supported in this browser") was accurate but the coach never saw it on a
+    // phone, so Start recording looked inert — say what to do instead.
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
-      setError('Screen recording is not supported in this browser.');
+      const iOSLike =
+        typeof navigator !== 'undefined' &&
+        (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+          (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints ?? 0) > 1));
+      setError(
+        iOSLike
+          ? 'Screen recording isn\u2019t available on iPhone/iPad \u2014 Safari on iOS has no screen-capture API. Record on a Mac or PC, or use iOS Screen Recording from Control Centre.'
+          : typeof window !== 'undefined' && !window.isSecureContext
+            ? 'Screen recording needs a secure (https) connection. Open the app over https and try again.'
+            : 'Screen recording is not supported in this browser. Try Chrome, Edge, or Safari on a Mac.',
+      );
       return;
     }
 

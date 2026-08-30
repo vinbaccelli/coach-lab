@@ -524,8 +524,13 @@ function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolea
     fontWeight: 500,
     touchAction: 'manipulation',
     transition: 'transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
+    // Labels WRAP instead of being clipped. `nowrap` + `overflow: hidden` cut
+    // longer labels ("Angle differential", "Precision AI Track") off mid-word on
+    // the narrow phone rail. `minHeight: 44` still guarantees the touch target;
+    // `height: auto` lets a two-line row grow instead of truncating.
+    whiteSpace: 'normal',
+    overflowWrap: 'break-word',
+    height: 'auto',
   };
   if (io) {
     return {
@@ -842,9 +847,25 @@ function Row({
         <span style={{ display: 'flex', width: 26, justifyContent: 'center', flexShrink: 0 }}>
           {icon}
         </span>
-        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
-          <span style={{ lineHeight: 1.2, fontSize: 13, fontWeight: 500 }}>{label}</span>
-          {sub ? <span style={{ fontSize: 11, fontWeight: 400, color: textMuted }}>{sub}</span> : null}
+        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0, flex: 1 }}>
+          <span
+            style={{
+              lineHeight: 1.2,
+              fontSize: 13,
+              fontWeight: 500,
+              // Two lines rather than a clipped one — see rowBase.
+              whiteSpace: 'normal',
+              overflowWrap: 'break-word',
+              textAlign: 'left',
+            }}
+          >
+            {label}
+          </span>
+          {sub ? (
+            <span style={{ fontSize: 11, fontWeight: 400, color: textMuted, whiteSpace: 'normal', overflowWrap: 'break-word' }}>
+              {sub}
+            </span>
+          ) : null}
         </span>
       </button>
     );
@@ -1159,7 +1180,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             </span>
           ) : null}
           {io ? null : (
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+            <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'normal', overflowWrap: 'break-word', minWidth: 0 }}>{label}</span>
           )}
         </>
       )}

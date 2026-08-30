@@ -74,6 +74,7 @@ import { racketFrameKey } from '@/lib/stroMotionDraft/samRacketKey';
 // One switch for every Motion Layer diagnostic; OFF by default (see debugFlags.ts).
 import { stroDebugEnabled } from '@/lib/stroMotionDraft/debugFlags';
 const FrameMaskEditor = React.lazy(() => import('@/components/stroMotion/FrameMaskEditor'));
+import LazyPanelBoundary from '@/components/shared/LazyPanelBoundary';
 const StroMotionPreviewModal = React.lazy(() => import('@/components/stroMotion/StroMotionPreviewModal'));
 
 /**
@@ -2625,23 +2626,32 @@ function Home() {
     invalidateStroPreview();
     setStroPreviewPngUrl(null);
     const frames = stroMotionDraft?.frames ?? [];
-    const next = frames.find((f) => f.index !== index && f.status !== 'ready' && frameHasMask(f));
-    const needsArea = frames.find((f) => f.status !== 'ready' && !frameHasMask(f));
+    // ADVANCE IN FRAME ORDER. This used to be a plain `frames.find(...)` over the
+    // whole draft, so "Ready & Next" on frame 1 could jump BACKWARDS to an older
+    // unfinished frame — and, because the search also required frameHasMask(f),
+    // the common case (frame 2 selected but not yet masked) matched nothing and
+    // dumped the coach back to the main screen to reopen frame 2 by hand. Walk
+    // forward from the frame just finished, then wrap, and open whatever comes
+    // next: a frame with a mask opens the editor, a frame without one opens the
+    // editor's "Select Area" prompt for that same frame. Either way the coach
+    // stays in the per-frame flow. "Close" still exits to the main screen.
+    const pending = frames.filter((f) => f.index !== index && f.status !== 'ready');
+    const next =
+      pending.find((f) => f.index > index) ??
+      pending.find((f) => f.index < index) ??
+      null;
     if (next) {
       setStroEditingFrameIndex(next.index);
       setStroActiveFrameIndex(next.index);
       void seekStroVideo(next.timeSec);
       void canvasRef.current?.waitForRender?.();
+      if (!frameHasMask(next)) {
+        setProcessingStatus(`Frame ${next.index + 1} needs Select Area first.`);
+      }
       return;
     }
     setStroEditingFrameIndex(null);
     void canvasRef.current?.waitForRender?.();
-    if (needsArea) {
-      setStroActiveFrameIndex(needsArea.index);
-      void seekStroVideo(needsArea.timeSec);
-      setProcessingStatus(`Frame ${needsArea.index + 1} still needs Select Area.`);
-      return;
-    }
     setProcessingStatus('All frames ready — press Generate Motion Layer.');
   }, [invalidateStroPreview, markStroFrameReady, seekStroVideo, stroMotionDraft, setStroActiveFrameIndex]);
 
@@ -2900,7 +2910,12 @@ function Home() {
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }, []);
 
+  // LOCAL Suspense boundary. StroMotionPanel is React.lazy; without a boundary
+  // of its own the nearest one is the page-root `fallback={null}`, so opening
+  // Motion Layer blanked the WHOLE analysis page until the chunk arrived (the
+  // black screen reported on iPhone). See components/shared/LazyPanelBoundary.
   const stroMotionPanelEl = (
+    <LazyPanelBoundary label="Motion Layer">
     <StroMotionPanel
       compact
       showLabels={panelShowLabels}
@@ -2954,6 +2969,7 @@ function Home() {
           : undefined
       }
     />
+    </LazyPanelBoundary>
   );
 
   const stroMotionFrameStopsForCanvas = useMemo(() => {
@@ -6454,6 +6470,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         hubLabelsExpanded={toolbarLabelsExpanded}
         onToggleHubLabels={() => setToolbarLabelsExpanded((v) => !v)}
         captureBusy={captureBusy || embedCaptureRecording}
+        onRecordingError={setProcessingStatus}
       />
     ),
   } satisfies React.ComponentProps<typeof ToolPalette>;
@@ -8234,6 +8251,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         }
 
         return (
+          <LazyPanelBoundary overlay label="the frame editor">
           <FrameMaskEditor
             key={frame.index}
             sourceFrame={frame.sourceFrame}
@@ -8354,9 +8372,15 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             isRegenerating={stroProposingFrame && stroProposingFrameIndex === frame.index}
             isMobile={isMobile}
           />
+          </LazyPanelBoundary>
         );
       })() : null}
 
+      {/* Mounted only while OPEN. It used to render unconditionally, so this
+          React.lazy chunk was fetched on every /analysis mount and suspended the
+          page-root boundary (fallback={null}) before first paint. */}
+      {stroPreviewModalOpen ? (
+      <LazyPanelBoundary overlay label="the preview">
       <StroMotionPreviewModal
         open={stroPreviewModalOpen}
         onClose={() => {
@@ -8418,6 +8442,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           `Clip: ${stroStartFrame.toFixed(2)}s – ${stroEndFrame.toFixed(2)}s`,
         ]}
       />
+      </LazyPanelBoundary>
+      ) : null}
 
       {/* ── Screenshot player picker ─────────────────────────────────── */}
       {screenshotPickerOpen && screenshotDataUrl && createPortal(

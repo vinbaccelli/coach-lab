@@ -122,7 +122,11 @@ function rowStyle(active?: boolean, pressed?: boolean): React.CSSProperties {
     fontWeight: 500,
     cursor: 'pointer',
     textAlign: 'left' as const,
-    whiteSpace: 'nowrap' as const,
+    // Labels wrap to two lines instead of being ellipsised on the narrow phone
+    // rail (matches ToolPalette's rowBase). minHeight keeps the touch target.
+    whiteSpace: 'normal' as const,
+    overflowWrap: 'break-word' as const,
+    height: 'auto',
     touchAction: 'manipulation',
   };
 }
@@ -230,7 +234,7 @@ function HubRow({
         ...base,
         ...(danger ? { color: '#FF3B30', borderColor: '#D1D1D6', background: '#FFFFFF' } : null),
         ...(disabled ? { opacity: 0.5, cursor: 'not-allowed' } : null),
-        overflow: 'hidden',
+        ...(iconOnly ? { overflow: 'hidden' } : null),
       }}
       onClick={disabled ? undefined : onClick}
     >
@@ -240,9 +244,9 @@ function HubRow({
           style={{
             minWidth: 0,
             flex: 1,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+            whiteSpace: 'normal',
+            overflowWrap: 'break-word',
+            lineHeight: 1.25,
           }}
         >
           {label}
@@ -447,24 +451,42 @@ export function RecordingHubContent(props: RecordingHubContentProps) {
 
       <div data-tour-id="recording-hub" className={io ? 'anglemotion-recording-hub--icon-only' : undefined} style={gridStyle}>
         {recorderError ? (
-          io ? (
-            <button
-              type="button"
-              title={recorderError}
-              aria-label={recorderError}
+          // The icon-only rail used to show ONLY an AlertCircle here, so on a
+          // phone a fatal "screen recording is not supported" read as the button
+          // doing nothing at all. The rail is narrow, not silent: show the text
+          // too (wrapped), tappable to dismiss, in both layouts.
+          <div
+            role="alert"
+            title={recorderError}
+            onClick={() => setRecorderError(null)}
+            style={{
+              display: 'flex',
+              flexDirection: io ? 'column' : 'row',
+              alignItems: io ? 'center' : 'flex-start',
+              gap: 6,
+              width: '100%',
+              padding: io ? '8px 4px' : '6px 2px',
+              borderRadius: 10,
+              border: '1px solid #fca5a5',
+              background: '#FFF7ED',
+              color: '#9a3412',
+              cursor: 'pointer',
+            }}
+          >
+            <AlertCircle size={16} style={{ flexShrink: 0 }} />
+            <p
               style={{
-                ...iconOnlyRowStyle(false),
-                color: '#9a3412',
-                borderColor: '#fca5a5',
-                background: '#FFF7ED',
+                margin: 0,
+                fontSize: io ? 10 : 11,
+                lineHeight: 1.35,
+                whiteSpace: 'normal',
+                overflowWrap: 'anywhere',
+                textAlign: io ? 'center' : 'left',
               }}
-              onClick={() => setRecorderError(null)}
             >
-              <AlertCircle size={16} />
-            </button>
-          ) : (
-            <p style={{ margin: 0, fontSize: 11, lineHeight: 1.4, color: '#9a3412', padding: '0 2px' }}>{recorderError}</p>
-          )
+              {recorderError}
+            </p>
+          </div>
         ) : null}
         {io && onToggleHubLabels ? (
           <HubRow

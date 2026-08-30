@@ -2636,8 +2636,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const pipDrag = webcamPipDragRef.current;
       if (!pipDrag) return;
       const canvas = canvasRef.current;
-      const cw = canvas?.width ?? 0;
-      const ch = canvas?.height ?? 0;
+      // CSS px, NOT canvas.width/height (device px). `pos`, webcamPipRectRef and
+      // webcamPipHitTest all live in CSS px; clamping against device px made the
+      // bounds dpr× too large on every Retina/phone screen, so a corner drag slid
+      // the PiP off the edge instead of resizing against it — and which corner
+      // misbehaved depended on which edge the PiP was parked at.
+      const cw = canvas ? cssW(canvas) : 0;
+      const ch = canvas ? cssH(canvas) : 0;
       const inset = webcamPipBottomInsetRef.current;
       const o = pipDrag.orig;
       let pip: { x: number; y: number; w: number; h: number };
@@ -2680,8 +2685,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const beginWebcamPipDragAt = useCallback((pos: Pt, pipHit: 'tl' | 'tr' | 'bl' | 'br' | 'inside') => {
       const canvas = canvasRef.current;
-      const cw = canvas?.width ?? 0;
-      const ch = canvas?.height ?? 0;
+      // CSS px — same reason as applyWebcamPipDragMove above.
+      const cw = canvas ? cssW(canvas) : 0;
+      const ch = canvas ? cssH(canvas) : 0;
       let pip = webcamPipRectRef.current;
       if (!pip.w || !pip.h) pip = defaultWebcamPipRect(cw, ch, webcamPipBottomInsetRef.current);
       pip = clampWebcamPip(pip, cw, ch, webcamPipBottomInsetRef.current);
@@ -2898,12 +2904,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       },
       redo: () => {
+        // Same rule as undo above (which was already fixed): the skeleton is a
+        // LIVE OVERLAY, not an undo step. Suppressing it here made a redo of a
+        // drawing blank the skeleton, and suppression is sticky — nothing on the
+        // pose paths ever clears it — so after an AI Track (where live inference
+        // is off and the baked track owns the display) the skeleton never came
+        // back until the coach toggled Skeleton off and on again.
         if (historyIdxRef.current < historyRef.current.length - 1) {
           historyIdxRef.current++;
           const snap = historyRef.current[historyIdxRef.current];
           strokesRef.current = [...snap.strokes];
           angleMeasRef.current = [...snap.angles];
-          skeletonSuppressedRef.current = true;
           renderDirtyRef.current = true;
         }
       },
@@ -4858,23 +4869,61 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // the side effects — and `skeletonSuppressedRef` still blanks the overlay
         // between frames, so "still settling" stays honest.
         const lockOwnsSkeleton = exactPoseLockRef.current;
-        if (
-          (lockOwnsSkeleton || (skeletonEnabledRef.current && skeletonDrawEnabledRef.current)) &&
-          !skeletonSuppressedRef.current &&
-          skeletonDimsOk
-        ) {
-          // Precision AI Track: when a baked track covers the current video
-          // time (and the pose isn't a frozen snapshot restore), it takes
-          // precedence over live inference — the pose is looked up by MEDIA
-          // time, so it stays perfectly glued to the player at 1×, 2×, any
-          // speed, playing or paused.
-          // Under the exact-pose lock the pushed pose IS the answer: the baked
-          // track is interpolated between samples and centre-smoothed, so letting
-          // it win here would put a different skeleton on screen from the one the
-          // mask was built with — which is exactly the mismatch a coach spots.
-          const bakedPose = !exactPoseLockRef.current && poseModeRef.current === 'live' && video && !bakingRef.current
+        // The OUTER draw authority is unchanged: either the exact-pose lock owns
+        // the overlay, or the coach's own two switches are both on. Nothing below
+        // can bypass this.
+        const skeletonAuthorised =
+          lockOwnsSkeleton || (skeletonEnabledRef.current && skeletonDrawEnabledRef.current);
+
+        // Precision AI Track: when a baked track covers the current video
+        // time (and the pose isn't a frozen snapshot restore), it takes
+        // precedence over live inference — the pose is looked up by MEDIA
+        // time, so it stays perfectly glued to the player at 1×, 2×, any
+        // speed, playing or paused.
+        // Under the exact-pose lock the pushed pose IS the answer: the baked
+        // track is interpolated between samples and centre-smoothed, so letting
+        // it win here would put a different skeleton on screen from the one the
+        // mask was built with — which is exactly the mismatch a coach spots.
+        //
+        // HOISTED above the suppression test on purpose — see the gate below.
+        // Guarded on `skeletonAuthorised && skeletonDimsOk` so a disabled skeleton
+        // still costs nothing (the lookup used to be skipped entirely in that
+        // case, and must stay skipped).
+        const bakedPose =
+          skeletonAuthorised && skeletonDimsOk &&
+          !exactPoseLockRef.current && poseModeRef.current === 'live' && video && !bakingRef.current
             ? lookupBakedPose(video.currentTime)
             : null;
+
+        // A BAKED POSE OUTRANKS SUPPRESSION.
+        //
+        // `skeletonSuppressedRef` is a transient "blank it for now" flag set by
+        // edits (Clear All, an exact-pose push that came back empty) — but NOTHING
+        // on the pose paths ever clears it again: all three consumers just early
+        // -return while it is set. Normally the next live detection papers over
+        // that. After an AI Track it cannot: the pose loop stops sending frames
+        // entirely once a baked track exists ("tracks own the display"), so the
+        // flag became permanent and the skeleton never came back — the coach saw
+        // it vanish on the next edit INSIDE a tracked range and stay gone.
+        //
+        // A baked pose is exact, time-indexed and offline-smoothed: it is the
+        // opposite of the jitter suppression exists to hide, and once it exists it
+        // is the ONLY source left. So it may draw through suppression.
+        //
+        // This deliberately does NOT weaken any other gate:
+        //   • the exact-pose lock — `bakedPose` is forced null while the lock is
+        //     held, so under the lock this bypass can never engage and the lock's
+        //     "blank between frames" honesty is untouched;
+        //   • skeletonEnabled / skeletonDrawEnabled — still required via
+        //     `skeletonAuthorised`, which is evaluated first and unchanged;
+        //   • mode isolation — `bakedPose` requires poseMode === 'live', so
+        //     snapshot/frame modes keep showing exactly their own frozen pose;
+        //   • an in-flight bake — `!bakingRef.current` still excluded.
+        if (
+          skeletonAuthorised &&
+          (!skeletonSuppressedRef.current || !!bakedPose) &&
+          skeletonDimsOk
+        ) {
           // Once ANY section is tracked, the skeleton shows ONLY inside tracked
           // sections (per coach request) — outside them it hides instead of
           // falling back to live jitter. Track another section to extend.
@@ -4957,6 +5006,39 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               }
               onSkeletonAnglesUpdateRef.current(angles);
             }
+            ctx.restore();
+          } else if (hiddenByTrackScope && vW > 0 && vH > 0) {
+            // WHY THIS LABEL EXISTS.
+            // `hiddenByTrackScope` is CORRECT behaviour — once a section is
+            // tracked the skeleton shows only inside tracked ranges rather than
+            // falling back to live jitter. But it is silent, and a silently
+            // missing skeleton is indistinguishable from the suppression bug
+            // fixed above. Say which one it is, so the intended case never gets
+            // reported (or "fixed") as a defect again.
+            ctx.save();
+            ctx.translate(dx, dy);
+            const hintText = 'Skeleton hidden — outside tracked range';
+            ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+            ctx.textBaseline = 'middle';
+            ctx.textAlign = 'left';
+            const padX = 10;
+            const boxH = 24;
+            const textW = ctx.measureText(hintText).width;
+            const boxW = textW + padX * 2;
+            const boxX = Math.max(6, Math.round((dw - boxW) / 2));
+            const boxY = 10;
+            ctx.globalAlpha = 0.82;
+            ctx.fillStyle = 'rgba(0,0,0,0.62)';
+            if (typeof ctx.roundRect === 'function') {
+              ctx.beginPath();
+              ctx.roundRect(boxX, boxY, boxW, boxH, 12);
+              ctx.fill();
+            } else {
+              ctx.fillRect(boxX, boxY, boxW, boxH);
+            }
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = 'rgba(255,255,255,0.92)';
+            ctx.fillText(hintText, boxX + padX, boxY + boxH / 2);
             ctx.restore();
           }
         }
@@ -6332,7 +6414,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       let pip = webcamPipRectRef.current;
       if (!pip.w || !pip.h) pip = defaultWebcamPipRect(cw, ch, webcamPipBottomInsetRef.current);
       pip = clampWebcamPip(pip, cw, ch, webcamPipBottomInsetRef.current);
-      const hTol = WEBCAM_PIP_HANDLE_HIT / 2 + 4;
+      // 16 CSS px is fine for a mouse and far too small for a fingertip, whose
+      // contact centroid lands several px off where the coach thinks they tapped.
+      // Widen to a 44pt-class target on coarse pointers only (desktop unchanged).
+      const coarsePointer =
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(pointer: coarse)').matches;
+      const hTol = coarsePointer ? 22 : WEBCAM_PIP_HANDLE_HIT / 2 + 4;
       const corners: Array<{ id: 'tl' | 'tr' | 'bl' | 'br'; x: number; y: number }> = [
         { id: 'tl', x: pip.x, y: pip.y },
         { id: 'tr', x: pip.x + pip.w, y: pip.y },
@@ -8325,6 +8414,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             height: '100%',
             display: 'block',
             touchAction: 'none',
+            // iOS Safari: without these, holding a finger down for ~0.5s over the
+            // canvas raises the system callout / selection magnifier, which fires
+            // pointercancel and kills the hold. That is why the precision cursor
+            // (hold one finger) and slow corner drags never triggered on iPhone.
+            // Desktop is unaffected — these only suppress WebKit touch chrome.
+            WebkitTouchCallout: 'none',
+            WebkitUserSelect: 'none',
+            userSelect: 'none',
+            WebkitTapHighlightColor: 'transparent',
             cursor:
               activeTool === 'objectMultiplier'
                 ? 'default'
