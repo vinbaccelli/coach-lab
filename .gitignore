@@ -44,3 +44,4 @@ next-env.d.ts
 # 404s on a chunk it was told to load, which surfaces as the full-screen Next
 # error overlay.
 .next-*
+.dev-*.log
