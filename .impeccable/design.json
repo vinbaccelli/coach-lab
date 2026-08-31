@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-31T00:00:00.000Z",
+  "title": "Design System: AngleMotion",
+  "extensions": {
+    "colorMeta": {
+      "system-blue": {
+        "role": "primary",
+        "displayName": "System Blue",
+        "canonical": "#007AFF",
+        "tonalRamp": ["#001A38", "#00305F", "#004C99", "#0066CC", "#007AFF", "#4DA2FF", "#8CC3FF", "#D6EAFF"]
+      },
+      "system-green": {
+        "role": "secondary",
+        "displayName": "System Green",
+        "canonical": "#34C759",
+        "tonalRamp": ["#062B12", "#0A4A1F", "#0F6B2D", "#17913D", "#34C759", "#6BD98A", "#A2E9B6", "#DCF7E3"]
+      },
+      "system-red": {
+        "role": "secondary",
+        "displayName": "System Red",
+        "canonical": "#FF3B30",
+        "tonalRamp": ["#3A0703", "#5E0F08", "#8A1810", "#C4251A", "#FF3B30", "#FF7A72", "#FFAEA9", "#FFE1DF"]
+      },
+      "system-orange": {
+        "role": "tertiary",
+        "displayName": "System Orange",
+        "canonical": "#FF9500",
+        "tonalRamp": ["#3A2100", "#5E3600", "#8A5000", "#C46F00", "#FF9500", "#FFB44D", "#FFCE8C", "#FFEBD1"]
+      },
+      "label": {
+        "role": "neutral",
+        "displayName": "Label",
+        "canonical": "#1D1D1F",
+        "tonalRamp": ["#000000", "#1D1D1F", "#3A3A3C", "#545456", "#6E6E73", "#8E8E93", "#C7C7CC", "#F2F2F7"]
+      },
+      "secondary-label": {
+        "role": "neutral",
+        "displayName": "Secondary Label",
+        "canonical": "#6E6E73",
+        "tonalRamp": ["#000000", "#1D1D1F", "#3A3A3C", "#545456", "#6E6E73", "#8E8E93", "#C7C7CC", "#F2F2F7"]
+      },
+      "tertiary-label": {
+        "role": "neutral",
+        "displayName": "Tertiary Label",
+        "canonical": "#8E8E93",
+        "tonalRamp": ["#000000", "#1D1D1F", "#3A3A3C", "#545456", "#6E6E73", "#8E8E93", "#C7C7CC", "#F2F2F7"]
+      },
+      "separator": {
+        "role": "neutral",
+        "displayName": "Separator",
+        "canonical": "#D1D1D6",
+        "tonalRamp": ["#48484A", "#636366", "#8E8E93", "#AEAEB2", "#D1D1D6", "#E5E5EA", "#F2F2F7", "#FFFFFF"]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "canonical": "#FFFFFF",
+        "tonalRamp": ["#8E8E93", "#AEAEB2", "#C7C7CC", "#D1D1D6", "#E5E5EA", "#F2F2F7", "#F5F5F7", "#FFFFFF"]
+      },
+      "grouped-background": {
+        "role": "neutral",
+        "displayName": "Grouped Background",
+        "canonical": "#F5F5F7",
+        "tonalRamp": ["#8E8E93", "#AEAEB2", "#C7C7CC", "#D1D1D6", "#E5E5EA", "#F2F2F7", "#F5F5F7", "#FFFFFF"]
+      },
+      "overlay-panel": {
+        "role": "neutral",
+        "displayName": "Overlay Panel",
+        "canonical": "#1C1C1E",
+        "tonalRamp": ["#000000", "#1C1C1E", "#2C2C2E", "#3A3A3C", "#48484A", "#636366", "#8E8E93", "#AEAEB2"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Marketing hero only. Never inside the app." },
+      "headline": { "displayName": "Headline", "purpose": "Marketing section heads." },
+      "title": { "displayName": "Title", "purpose": "Dialog and panel titles inside the app." },
+      "body": { "displayName": "Body", "purpose": "The app default: tool row labels, panel copy, status text." },
+      "label": { "displayName": "Label", "purpose": "Sub-labels, captions, helper and error text." }
+    },
+    "shadows": [
+      { "name": "toast", "value": "0 12px 36px rgba(0,0,0,0.12)", "purpose": "Transient status pill floating above the workspace." },
+      { "name": "panel-float", "value": "0 16px 44px rgba(0,0,0,0.12)", "purpose": "Floating side panels and popovers." },
+      { "name": "dialog", "value": "0 20px 48px rgba(0,0,0,0.18)", "purpose": "Light modal dialogs on a light ground." },
+      { "name": "dialog-over-video", "value": "0 24px 60px rgba(0,0,0,0.35)", "purpose": "Dark dialogs on the overlay scrim; needs more separation against moving footage." },
+      { "name": "video-chrome", "value": "0 8px 32px rgba(0,0,0,0.4)", "purpose": "Webcam PiP and controls sitting directly on the video." }
+    ],
+    "motion": [
+      { "name": "control", "value": "transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease", "purpose": "Toolbar and control state change. Fast enough that a tap feels instant on touch." },
+      { "name": "standard", "value": "all 0.15s ease", "purpose": "Default token transition (--transition) for non-critical state." },
+      { "name": "emphasized", "value": "all 300ms cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Panel and sheet entry/exit only. Never on a control the coach taps repeatedly." },
+      { "name": "press-scale", "value": "scale(0.95)", "purpose": "Momentary press feedback on toolbar rows, paired with a 10ms haptic on touch devices." }
+    ],
+    "breakpoints": [
+      { "name": "mobile", "value": "768px" },
+      { "name": "touch-landscape", "value": "(hover: none) and (pointer: coarse) and (max-width: 1024px)" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single most likely action in a view. One per surface.",
+      "html": "<button class=\"ds-btn-primary\">Save Report</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 16px; border: none; border-radius: 10px; background: #007AFF; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; touch-action: manipulation; transition: transform 0.12s ease, background 0.12s ease; } .ds-btn-primary:hover { background: #0069DB; } .ds-btn-primary:focus-visible { outline: 2px solid #007AFF; outline-offset: 2px; } .ds-btn-primary:active { transform: scale(0.95); }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "The default control. Hairline border, quiet until touched.",
+      "html": "<button class=\"ds-btn-secondary\">Cancel</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 12px; border: 1px solid #D1D1D6; border-radius: 10px; background: #FFFFFF; color: #1D1D1F; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; touch-action: manipulation; transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease; } .ds-btn-secondary:hover { background: #F5F5F7; } .ds-btn-secondary:focus-visible { outline: 2px solid #007AFF; outline-offset: 2px; } .ds-btn-secondary:active { background: #DCEBFF; color: #007AFF; transform: scale(0.95); }"
+    },
+    {
+      "name": "Destructive Button",
+      "kind": "button",
+      "refersTo": "button-destructive",
+      "description": "Clear All, delete. Red text on white, never a red fill.",
+      "html": "<button class=\"ds-btn-destructive\">Clear all</button>",
+      "css": ".ds-btn-destructive { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 12px; border: 1px solid #D1D1D6; border-radius: 10px; background: #FFFFFF; color: #FF3B30; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 0.12s ease; } .ds-btn-destructive:hover { background: #FFECEC; } .ds-btn-destructive:focus-visible { outline: 2px solid #FF3B30; outline-offset: 2px; }"
+    },
+    {
+      "name": "Tool Row",
+      "kind": "custom",
+      "refersTo": "tool-row-active",
+      "description": "Signature component: the vertical rail's row. Label wraps to two lines, never truncates. Active state is a full blue fill.",
+      "html": "<div class=\"ds-toolrail\"><button class=\"ds-toolrow ds-toolrow--active\"><span class=\"ds-toolrow-icon\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M12 19l7-7 3 3-7 7-3-3z\"/><path d=\"M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z\"/></svg></span><span class=\"ds-toolrow-label\">Angle differential</span></button><button class=\"ds-toolrow\"><span class=\"ds-toolrow-icon\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"/></svg></span><span class=\"ds-toolrow-label\">Motion Layer</span></button></div>",
+      "css": ".ds-toolrail { display: flex; flex-direction: column; gap: 6px; width: 190px; } .ds-toolrow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; height: auto; padding: 10px 12px; border: 1px solid #D1D1D6; border-radius: 10px; background: #FFFFFF; color: #1D1D1F; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 13px; font-weight: 500; text-align: left; cursor: pointer; touch-action: manipulation; transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease; } .ds-toolrow-icon { display: flex; width: 26px; flex-shrink: 0; justify-content: center; } .ds-toolrow-label { flex: 1; min-width: 0; white-space: normal; overflow-wrap: break-word; line-height: 1.2; } .ds-toolrow:hover { background: #F5F5F7; } .ds-toolrow:focus-visible { outline: 2px solid #007AFF; outline-offset: 2px; } .ds-toolrow:active { transform: scale(0.95); background: #DCEBFF; color: #007AFF; } .ds-toolrow--active { background: #007AFF; border-color: #007AFF; color: #FFFFFF; } .ds-toolrow--active:hover { background: #007AFF; }"
+    },
+    {
+      "name": "Icon-Only Tool Row",
+      "kind": "custom",
+      "refersTo": "tool-row-icon-only",
+      "description": "The collapsed rail on narrow viewports. Exactly 44x44 — the silhouette a coach learns with their thumb.",
+      "html": "<div class=\"ds-toolrail-io\"><button class=\"ds-toolrow-io ds-toolrow-io--active\" aria-label=\"Angle differential\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M3 21h18\"/><path d=\"M3 21L14 6\"/></svg></button><button class=\"ds-toolrow-io\" aria-label=\"Motion Layer\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"9\"/></svg></button></div>",
+      "css": ".ds-toolrail-io { display: flex; flex-direction: column; gap: 6px; align-items: center; } .ds-toolrow-io { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 1px solid #D1D1D6; border-radius: 10px; background: #FFFFFF; color: #1D1D1F; cursor: pointer; touch-action: manipulation; overflow: hidden; transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease; } .ds-toolrow-io:focus-visible { outline: 2px solid #007AFF; outline-offset: 2px; } .ds-toolrow-io:active { transform: scale(0.95); } .ds-toolrow-io--active { background: #007AFF; border-color: #007AFF; color: #FFFFFF; }"
+    },
+    {
+      "name": "Status Toast",
+      "kind": "custom",
+      "refersTo": "status-toast",
+      "description": "Centred top-anchored pill. aria-live polite; wraps rather than clipping.",
+      "html": "<div class=\"ds-toast\" role=\"status\">Motion Layer: proposing mask… 3 / 7</div>",
+      "css": ".ds-toast { display: flex; align-items: center; gap: 10px; max-width: min(480px, 100% - 24px); padding: 10px 16px; border: 1px solid #E5E5E5; border-radius: 16px; background: rgba(250,249,247,0.97); color: #1D1D1F; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 13px; font-weight: 600; line-height: 1.45; text-align: center; box-shadow: 0 12px 36px rgba(0,0,0,0.12); }"
+    },
+    {
+      "name": "Inline Error",
+      "kind": "custom",
+      "refersTo": "inline-error",
+      "description": "Warm-tinted failure notice for narrow rails where a toast would be missed. Never reduced to a bare icon.",
+      "html": "<div class=\"ds-inline-error\" role=\"alert\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 8v4\"/><path d=\"M12 16h.01\"/></svg><p>Screen recording isn’t available on iPhone — record on a Mac or PC.</p></div>",
+      "css": ".ds-inline-error { display: flex; align-items: flex-start; gap: 6px; width: 100%; padding: 8px 6px; border: 1px solid #FCA5A5; border-radius: 10px; background: #FFF7ED; color: #9A3412; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; cursor: pointer; } .ds-inline-error svg { flex-shrink: 0; margin-top: 1px; } .ds-inline-error p { margin: 0; font-size: 11px; font-weight: 600; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": null,
+      "description": "Flat at rest. Hairline border and tonal step do the separating, not shadow.",
+      "html": "<div class=\"ds-card\"><h3>Forehand — 12 Aug</h3><p>Contact point 8cm further forward than the March baseline.</p></div>",
+      "css": ".ds-card { padding: 16px; border: 1px solid #D1D1D6; border-radius: 16px; background: #FFFFFF; color: #1D1D1F; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; } .ds-card h3 { margin: 0 0 6px; font-size: 16px; font-weight: 700; line-height: 1.3; } .ds-card p { margin: 0; font-size: 13px; font-weight: 500; line-height: 1.45; color: #6E6E73; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": null,
+      "description": "Hairline field on white; focus is a blue border plus soft ring, never a glow.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Player name\" />",
+      "css": ".ds-input { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #D1D1D6; border-radius: 10px; background: #FFFFFF; color: #1D1D1F; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 13px; font-weight: 500; transition: border-color 0.15s ease, box-shadow 0.15s ease; } .ds-input::placeholder { color: #8E8E93; } .ds-input:focus { outline: none; border-color: #007AFF; box-shadow: 0 0 0 3px rgba(0,122,255,0.12); } .ds-input:disabled { opacity: 0.5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Ready Chip",
+      "kind": "chip",
+      "refersTo": null,
+      "description": "Coach-confirmed state in the Coach Override chain. Green means a human signed off — never 'good' in the abstract.",
+      "html": "<span class=\"ds-chip-ready\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\"><path d=\"M20 6L9 17l-5-5\"/></svg>Ready</span><span class=\"ds-chip-pending\">Pending</span>",
+      "css": ".ds-chip-ready { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; background: rgba(52,199,89,0.12); color: #17913D; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 11px; font-weight: 700; } .ds-chip-pending { display: inline-flex; align-items: center; margin-left: 8px; padding: 4px 10px; border-radius: 999px; background: #F2F2F7; color: #6E6E73; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 11px; font-weight: 600; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Instrument",
+    "overview": "AngleMotion is a precision instrument, and an instrument does not compete with what it measures. The chrome is neutral — white panels, graphite text, hairline separators — so that the only saturated colour on screen belongs to the coach's own marks and the athlete's movement underneath them. When a coach draws an angle across a player's shoulder line, that mark must be the loudest thing in the frame. Every decision in this system is downstream of that.\n\nThe system is Apple-derived and unapologetic about it. It uses the iOS system palette and the platform font stack, because the product is used one-handed on a phone at the side of a court and on a laptop afterwards, and platform-native conventions are what a coach already knows how to operate under sunlight with three seconds to spare. This is not a stylistic preference borrowed for polish; it is the shortest path to a control that reads correctly at a glance.\n\nRestraint here is structural, not decorative. Surfaces are flat while you work and lift only to say \"this floats above your work.\" Controls hold hairline borders and generous padding and stay quiet until touched. Nothing blurs, nothing glows, nothing animates for its own sake. The interface earns its keep by being unnoticeable — and then by being exactly where the coach expects when they reach for it.",
+    "keyCharacteristics": [
+      "Neutral chrome; a single blue voice used sparingly",
+      "Flat at rest, shadow only for floating layers",
+      "Platform-native type and colour, light theme only",
+      "44px touch targets everywhere — parity between phone and desktop is a product requirement, not a courtesy",
+      "Hairline (1px) borders as the default separator, not shadow"
+    ],
+    "rules": [
+      { "name": "The One Voice Rule", "body": "System Blue is the only colour that means \"you can act on this.\" If a surface needs emphasis and the thing is not interactive, it gets weight or spacing, never blue.", "section": "colors" },
+      { "name": "The Earned Colour Rule", "body": "Green, red and orange each carry one meaning and are spent only on it: green for coach-confirmed or live, red for destructive, orange for degraded. A hue with no state behind it does not appear.", "section": "colors" },
+      { "name": "The Hairline-Over-Shadow Rule", "body": "Structure is drawn with a 1px Separator border. Reach for shadow only when a surface genuinely floats.", "section": "colors" },
+      { "name": "The Two-Size Rule", "body": "Inside the app, body copy is 13px and its supporting label is 11px. Reaching for a third in-between size is how a scale rots — 12px, 14px and 15px exist in the codebase today and are drift to be resolved toward 13/11, not precedent to follow.", "section": "typography" },
+      { "name": "The Weight-First Rule", "body": "Build hierarchy with weight (500 → 600 → 700) before size. The app surface has very little room; a heavier 13px outranks a lighter 15px and costs no space.", "section": "typography" },
+      { "name": "The Parity Rule", "body": "Every capability is reachable on both phone and desktop. Layout may differ; the feature set may not. A control that exists only on desktop is a defect, not a tier.", "section": "layout" },
+      { "name": "The No-Blur Rule", "body": "backdrop-filter is banned on any surface over the video. A live blur forces the compositor to re-blur every presented frame, and this is a video product. Four files carry this as a code comment; it is a design rule, not only a performance note.", "section": "elevation" },
+      { "name": "The Flat-Work Rule", "body": "If a surface is part of the work, it has no shadow. If it has a shadow, it must be dismissible.", "section": "elevation" },
+      { "name": "The 44 Rule", "body": "No interactive target is under 44px in either dimension. This is a courtside product used one-handed; it is not negotiable, and it outranks density.", "section": "shapes" }
+    ],
+    "dos": [
+      "Do take every colour from styles/tokens.css via var(--cl-*). The token file is the source of truth; today only ~30 references use it against 1,106 hardcoded hex values, and every new hex literal deepens that gap.",
+      "Do keep System Blue for interactive and selected states only — the One Voice Rule.",
+      "Do hold 44px minimum touch targets in both dimensions, on desktop as well as phone.",
+      "Do wrap label text to a second line instead of truncating or ellipsising it.",
+      "Do separate surfaces with a 1px Separator border before considering shadow.",
+      "Do use a dark dialog only when it sits over video.",
+      "Do give every disabled control an opacity that matches its real state."
+    ],
+    "donts": [
+      "Don't introduce a red brand accent. Red is destructive and stop, only. The landing page already carries an explicit rejection of the previous off-brand red.",
+      "Don't pull colours from Tailwind's default palette. #F59E0B (amber-500), #78716C (stone-500) and bg-blue-600 (#2563EB) are currently leaking in and are all wrong; the unused coach-blue / coach-gray config in tailwind.config.js is dead and should not be revived.",
+      "Don't use backdrop-filter on any surface over the video — the No-Blur Rule.",
+      "Don't build dark-mode-first chrome. This product is a light theme. The only sanctioned dark surfaces are the video-adjacent overlay scrim and its dialogs.",
+      "Don't use #1A1A1A for text. It appears 91 times and is drift; Label (#1D1D1F) is normative.",
+      "Don't add a fourth separator grey. #E5E5E5, #E5E5EA and #E8E8ED are all drift toward Separator (#D1D1D6).",
+      "Don't add radii outside 8 / 10 / 16 / 999. The 4px, 6px, 12px and 14px values in the codebase are drift, not scale.",
+      "Don't write -apple-system, sans-serif as a shorthand — it drops the Windows and Android fallbacks. Use the full stack, via var(--cl-font)."
+    ]
+  }
+}
