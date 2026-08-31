@@ -15,8 +15,14 @@
   --cl-border: #D1D1D6;
   --cl-border-subtle: rgba(209, 209, 214, 0.65);
 
-  --cl-success: #007AFF;
-  --cl-warning: #FF9F0A;
+  /* Success is GREEN, not the accent. Green carries product meaning here: the
+     `ready` frame status in the Coach Override chain, the ✓ on completed steps,
+     and the live-recording dot — all of which already use #34C759 in code.
+     Warning is Apple's LIGHT-mode orange; #FF9F0A is the dark-mode value and
+     this product is light-theme only. Both match what the components draw.
+     See DESIGN.md — The Earned Colour Rule. */
+  --cl-success: #34C759;
+  --cl-warning: #FF9500;
   --cl-destructive: #FF3B30;
 
   --cl-radius-sm: 8px;
