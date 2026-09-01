@@ -148,7 +148,7 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
       overflowY: 'auto',
       WebkitOverflowScrolling: 'touch',
       background: 'linear-gradient(160deg, #0a0a10 0%, #0f1420 100%)',
-      color: '#fff',
+      color: 'var(--cl-text-on-fill)',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     }}>
       {/* AngleMotion nav bar */}
@@ -158,11 +158,11 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
         background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(12px)',
         position: 'sticky', top: 0, zIndex: 20,
       }}>
-        <Link href="/" style={{ fontSize: 14, fontWeight: 800, color: '#fff', textDecoration: 'none', letterSpacing: -0.3 }}>
+        <Link href="/" style={{ fontSize: 14, fontWeight: 800, color: 'var(--cl-text-on-fill)', textDecoration: 'none', letterSpacing: -0.3 }}>
           Angle<span style={{ color: accentColor }}>Motion</span>
         </Link>
         <Link href="/analysis" style={{
-          fontSize: 12, fontWeight: 600, color: '#fff', textDecoration: 'none',
+          fontSize: 12, fontWeight: 600, color: 'var(--cl-text-on-fill)', textDecoration: 'none',
           padding: '6px 14px', borderRadius: 20,
           background: accentColor, opacity: 0.9,
         }}>
@@ -177,7 +177,7 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
             width: 96, height: 96, borderRadius: '50%', margin: '0 auto 16px',
             background: `linear-gradient(135deg, ${accentColor} 0%, #5856D6 100%)`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 36, fontWeight: 900, color: '#fff',
+            fontSize: 36, fontWeight: 900, color: 'var(--cl-text-on-fill)',
             boxShadow: `0 0 0 4px rgba(255,255,255,0.08), 0 8px 32px ${accentColor}40`,
           }}>
             {profile.avatarUrl
@@ -240,7 +240,7 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
                     style={{
                       display: 'block', textAlign: 'center', padding: '10px 0',
                       borderRadius: 10, background: accentColor,
-                      color: '#fff', fontWeight: 700, fontSize: 14,
+                      color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 14,
                       textDecoration: 'none',
                     }}
                   >
@@ -269,7 +269,7 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
                     display: 'flex', alignItems: 'center', gap: 12,
                     padding: '14px 18px', borderRadius: 12,
                     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                    color: '#fff', textDecoration: 'none', fontWeight: 600, fontSize: 14,
+                    color: 'var(--cl-text-on-fill)', textDecoration: 'none', fontWeight: 600, fontSize: 14,
                     transition: 'background 0.15s',
                   }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.09)')}

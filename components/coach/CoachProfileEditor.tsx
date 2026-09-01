@@ -38,17 +38,17 @@ const COLOR_PRESETS = ['#007AFF', '#FF3B30', '#34C759', '#FF9500', '#AF52DE', '#
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '10px 12px', borderRadius: 10,
-  border: '1px solid #D1D1D6', fontSize: 14, background: '#FFF',
-  color: '#1D1D1F', outline: 'none', boxSizing: 'border-box',
+  border: '1px solid var(--cl-border)', fontSize: 14, background: 'var(--cl-bg-panel)',
+  color: 'var(--cl-text-primary)', outline: 'none', boxSizing: 'border-box',
 };
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 12, fontWeight: 700, color: '#6E6E73', marginBottom: 4, display: 'block',
+  fontSize: 12, fontWeight: 700, color: 'var(--cl-text-secondary)', marginBottom: 4, display: 'block',
 };
 
 const sectionStyle: React.CSSProperties = {
   marginBottom: 24, padding: 16, borderRadius: 14,
-  background: '#FFF', border: '1px solid #E5E5EA',
+  background: 'var(--cl-bg-panel)', border: '1px solid var(--cl-border)',
 };
 
 function uid() {
@@ -168,8 +168,8 @@ export default function CoachProfileEditor() {
               rel="noreferrer"
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px',
-                borderRadius: 10, border: '1px solid #D1D1D6', background: '#FFF',
-                color: '#007AFF', fontSize: 13, fontWeight: 600, textDecoration: 'none',
+                borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)',
+                color: 'var(--cl-accent)', fontSize: 13, fontWeight: 600, textDecoration: 'none',
               }}
             >
               <Eye size={15} /> Preview
@@ -181,8 +181,8 @@ export default function CoachProfileEditor() {
             disabled={saving || !name.trim() || !slug.trim()}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 16px',
-              borderRadius: 10, border: 'none', background: saving ? '#8E8E93' : '#007AFF',
-              color: '#FFF', fontSize: 13, fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer',
+              borderRadius: 10, border: 'none', background: saving ? 'var(--cl-text-muted)' : 'var(--cl-accent)',
+              color: 'var(--cl-text-on-fill)', fontSize: 13, fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer',
             }}
           >
             <Save size={15} /> {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
@@ -200,7 +200,7 @@ export default function CoachProfileEditor() {
             width: 72, height: 72, borderRadius: '50%', overflow: 'hidden', flexShrink: 0,
             background: `linear-gradient(135deg, ${accentColor} 0%, #5856D6 100%)`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 28, fontWeight: 900, color: '#fff',
+            fontSize: 28, fontWeight: 900, color: 'var(--cl-text-on-fill)',
           }}>
             {avatarUrl
               ? <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -208,8 +208,8 @@ export default function CoachProfileEditor() {
           </div>
           <label style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px',
-            borderRadius: 10, border: '1px dashed #D1D1D6', background: '#FAFAFA',
-            fontSize: 13, fontWeight: 500, color: '#6E6E73', cursor: 'pointer',
+            borderRadius: 10, border: '1px dashed var(--cl-border)', background: '#FAFAFA',
+            fontSize: 13, fontWeight: 500, color: 'var(--cl-text-secondary)', cursor: 'pointer',
           }}>
             <Upload size={15} />
             {uploadingAvatar ? 'Uploading…' : 'Upload photo'}
@@ -254,7 +254,7 @@ export default function CoachProfileEditor() {
                 key={c} type="button"
                 onClick={() => setAccentColor(c)}
                 style={{
-                  width: 28, height: 28, borderRadius: '50%', border: accentColor === c ? '3px solid #1D1D1F' : '2px solid #E5E5EA',
+                  width: 28, height: 28, borderRadius: '50%', border: accentColor === c ? '3px solid var(--cl-action-primary)' : '2px solid var(--cl-border)',
                   background: c, cursor: 'pointer', padding: 0,
                 }}
               />
@@ -275,8 +275,8 @@ export default function CoachProfileEditor() {
             type="button" onClick={addService}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 12px',
-              borderRadius: 8, border: '1px solid #007AFF', background: 'transparent',
-              color: '#007AFF', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              borderRadius: 8, border: '1px solid var(--cl-accent)', background: 'transparent',
+              color: 'var(--cl-accent)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
             }}
           >
             <Plus size={14} /> Add Service
@@ -285,16 +285,16 @@ export default function CoachProfileEditor() {
 
         {services.map((svc, idx) => (
           <div key={svc.id} style={{
-            padding: 14, borderRadius: 12, border: '1px solid #E5E5EA', background: '#FAFAFA',
+            padding: 14, borderRadius: 12, border: '1px solid var(--cl-border)', background: '#FAFAFA',
             marginBottom: 10,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#8E8E93' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--cl-text-muted)' }}>
                 <GripVertical size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
                 Service {idx + 1}
               </span>
               <button type="button" onClick={() => removeService(svc.id)}
-                style={{ background: 'none', border: 'none', color: '#FF3B30', cursor: 'pointer', padding: 4 }}>
+                style={{ background: 'none', border: 'none', color: 'var(--cl-destructive)', cursor: 'pointer', padding: 4 }}>
                 <Trash2 size={14} />
               </button>
             </div>
@@ -315,7 +315,7 @@ export default function CoachProfileEditor() {
         ))}
 
         {services.length === 0 && (
-          <p style={{ fontSize: 13, color: '#8E8E93', margin: 0 }}>No services yet. Add your coaching packages, session types, or analysis services.</p>
+          <p style={{ fontSize: 13, color: 'var(--cl-text-muted)', margin: 0 }}>No services yet. Add your coaching packages, session types, or analysis services.</p>
         )}
       </div>
 
@@ -327,8 +327,8 @@ export default function CoachProfileEditor() {
             type="button" onClick={addLink}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 12px',
-              borderRadius: 8, border: '1px solid #007AFF', background: 'transparent',
-              color: '#007AFF', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              borderRadius: 8, border: '1px solid var(--cl-accent)', background: 'transparent',
+              color: 'var(--cl-accent)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
             }}
           >
             <Plus size={14} /> Add Link
@@ -337,7 +337,7 @@ export default function CoachProfileEditor() {
 
         {links.map((link, idx) => (
           <div key={link.id} style={{
-            padding: 12, borderRadius: 12, border: '1px solid #E5E5EA', background: '#FAFAFA',
+            padding: 12, borderRadius: 12, border: '1px solid var(--cl-border)', background: '#FAFAFA',
             marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center',
           }}>
             <GripVertical size={14} style={{ color: '#C7C7CC', flexShrink: 0 }} />
@@ -350,14 +350,14 @@ export default function CoachProfileEditor() {
             <input style={{ ...inputStyle, flex: 1 }} value={link.label} onChange={e => updateLink(link.id, 'label', e.target.value)} placeholder="Label" />
             <input style={{ ...inputStyle, flex: 1 }} value={link.url} onChange={e => updateLink(link.id, 'url', e.target.value)} placeholder="https://…" />
             <button type="button" onClick={() => removeLink(link.id)}
-              style={{ background: 'none', border: 'none', color: '#FF3B30', cursor: 'pointer', padding: 4, flexShrink: 0 }}>
+              style={{ background: 'none', border: 'none', color: 'var(--cl-destructive)', cursor: 'pointer', padding: 4, flexShrink: 0 }}>
               <Trash2 size={14} />
             </button>
           </div>
         ))}
 
         {links.length === 0 && (
-          <p style={{ fontSize: 13, color: '#8E8E93', margin: 0 }}>Add your social media, website, or booking links.</p>
+          <p style={{ fontSize: 13, color: 'var(--cl-text-muted)', margin: 0 }}>Add your social media, website, or booking links.</p>
         )}
       </div>
     </div>

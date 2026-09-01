@@ -93,8 +93,8 @@ export default function MatchSetupPanel({
             onClick={() => setFormat(f)}
             style={{
               ...pill,
-              background: setup.format === f ? '#1A1A1A' : '#fff',
-              color: setup.format === f ? '#fff' : '#1A1A1A',
+              background: setup.format === f ? 'var(--cl-action-primary)' : 'var(--cl-bg-panel)',
+              color: setup.format === f ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
             }}
           >
             {f === 'singles' ? 'Singles' : 'Doubles'}
@@ -135,7 +135,7 @@ export default function MatchSetupPanel({
             >
               ⇄ Swap sides
             </button>
-            {setup.swapSides && <span style={{ fontSize: 10, color: '#6E6E73' }}>(swapped)</span>}
+            {setup.swapSides && <span style={{ fontSize: 10, color: 'var(--cl-text-secondary)' }}>(swapped)</span>}
           </div>
 
           <div style={{ fontSize: 11.5, marginBottom: 8 }}>
@@ -145,7 +145,7 @@ export default function MatchSetupPanel({
           </div>
 
           {auto.notes.map((n, i) => (
-            <div key={i} style={{ fontSize: 10.5, color: '#6E6E73', lineHeight: 1.5, marginTop: 3 }}>
+            <div key={i} style={{ fontSize: 10.5, color: 'var(--cl-text-secondary)', lineHeight: 1.5, marginTop: 3 }}>
               · {n}
             </div>
           ))}
@@ -162,7 +162,7 @@ export default function MatchSetupPanel({
 
           {/* The old flow, demoted to a rare fallback. */}
           <details style={{ marginTop: 10 }}>
-            <summary style={{ fontSize: 10.5, color: '#8E8E93', cursor: 'pointer' }}>
+            <summary style={{ fontSize: 10.5, color: 'var(--cl-text-muted)', cursor: 'pointer' }}>
               Advanced — override an individual assignment (you shouldn&apos;t normally need this)
             </summary>
 
@@ -172,7 +172,7 @@ export default function MatchSetupPanel({
                 {Object.entries(auto.clusterToSide).map(([cluster, autoSide]) => (
                   <div key={cluster} style={assignRow}>
                     <code style={chip}>{cluster}</code>
-                    <span style={{ fontSize: 10, color: '#6E6E73', flex: 1 }}>
+                    <span style={{ fontSize: 10, color: 'var(--cl-text-secondary)', flex: 1 }}>
                       auto: Side {applySwap(autoSide, setup.swapSides) ?? '—'}
                     </span>
                     <select
@@ -204,10 +204,10 @@ export default function MatchSetupPanel({
                         <img
                           src={thumbnails[block.screenshotIndex]}
                           alt={`screenshot ${block.screenshotIndex}`}
-                          style={{ width: 120, height: 84, objectFit: 'cover', borderRadius: 6, border: '1px solid #E5E5E5' }}
+                          style={{ width: 120, height: 84, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--cl-border)' }}
                         />
                       )}
-                      <div style={{ fontSize: 9.5, color: '#6E6E73', margin: '3px 0 2px' }}>
+                      <div style={{ fontSize: 9.5, color: 'var(--cl-text-secondary)', margin: '3px 0 2px' }}>
                         #{block.screenshotIndex} → auto:{' '}
                         {setup.statsScreenshotToSide[block.screenshotIndex] ?? 'combined'}
                       </div>
@@ -256,18 +256,18 @@ export function labelOf(setup: MatchSetup, id: SideId): string {
 }
 
 const card: React.CSSProperties = {
-  background: '#fff', border: '1px solid #E5E5E5', borderRadius: 14,
-  padding: 22, marginBottom: 18, color: '#1A1A1A',
+  background: 'var(--cl-bg-panel)', border: '1px solid var(--cl-border)', borderRadius: 14,
+  padding: 22, marginBottom: 18, color: 'var(--cl-text-primary)',
 };
 const h2: React.CSSProperties = { fontSize: 15, fontWeight: 700, margin: '0 0 16px' };
-const hint: React.CSSProperties = { fontSize: 11, color: '#6E6E73', lineHeight: 1.5, margin: '4px 0 0', maxWidth: 620 };
-const fieldLabel: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: '#6E6E73', marginBottom: 6 };
+const hint: React.CSSProperties = { fontSize: 11, color: 'var(--cl-text-secondary)', lineHeight: 1.5, margin: '4px 0 0', maxWidth: 620 };
+const fieldLabel: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: 'var(--cl-text-secondary)', marginBottom: 6 };
 const input: React.CSSProperties = {
-  width: '100%', borderRadius: 8, border: '1px solid #E5E5E5', padding: '9px 11px',
+  width: '100%', borderRadius: 8, border: '1px solid var(--cl-border)', padding: '9px 11px',
   fontSize: 14, marginBottom: 8, boxSizing: 'border-box',
 };
 const pill: React.CSSProperties = {
-  padding: '8px 18px', borderRadius: 999, border: '1px solid #E5E5E5',
+  padding: '8px 18px', borderRadius: 999, border: '1px solid var(--cl-border)',
   fontSize: 13, fontWeight: 600, cursor: 'pointer',
 };
 const autoBox: React.CSSProperties = {
@@ -275,14 +275,14 @@ const autoBox: React.CSSProperties = {
 };
 const swapBtn: React.CSSProperties = {
   padding: '4px 12px', borderRadius: 999, border: '1px solid #D6D3D1',
-  background: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+  background: 'var(--cl-bg-panel)', fontSize: 11, fontWeight: 600, cursor: 'pointer',
 };
-const advLabel: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, color: '#6E6E73', margin: '10px 0 4px' };
+const advLabel: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, color: 'var(--cl-text-secondary)', margin: '10px 0 4px' };
 const assignRow: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0', borderBottom: '1px solid #F0F0EE',
 };
 const chip: React.CSSProperties = {
-  background: '#fff', border: '1px solid #E5E5E5', borderRadius: 6, padding: '2px 7px',
+  background: 'var(--cl-bg-panel)', border: '1px solid var(--cl-border)', borderRadius: 6, padding: '2px 7px',
   fontSize: 11, fontFamily: 'ui-monospace, monospace',
 };
-const select: React.CSSProperties = { fontSize: 11, padding: '4px 6px', borderRadius: 6, border: '1px solid #E5E5E5' };
+const select: React.CSSProperties = { fontSize: 11, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--cl-border)' };

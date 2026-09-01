@@ -76,7 +76,7 @@ export default function TrialBanner() {
         borderRadius: 999,
         background: 'rgba(0,0,0,0.82)',
         border: '1px solid rgba(255,255,255,0.18)',
-        color: '#fff',
+        color: 'var(--cl-text-on-fill)',
         fontSize: 12.5,
         fontWeight: 700,
         textDecoration: 'none',

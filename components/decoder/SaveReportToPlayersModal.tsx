@@ -176,7 +176,7 @@ export default function SaveReportToPlayersModal({
         <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 4px', letterSpacing: -0.2 }}>
           Save to Google Docs
         </h2>
-        <p style={{ fontSize: 12, color: '#6E6E73', lineHeight: 1.55, margin: '0 0 20px' }}>
+        <p style={{ fontSize: 12, color: 'var(--cl-text-secondary)', lineHeight: 1.55, margin: '0 0 20px' }}>
           The report is added to the top of each player&apos;s <b>Match Analysis</b> doc, newest first.
         </p>
 
@@ -199,9 +199,9 @@ export default function SaveReportToPlayersModal({
                   onClick={() => setScope(value)}
                   style={{
                     ...radioPill,
-                    background: scope === value ? '#1A1A1A' : '#fff',
-                    color: scope === value ? '#fff' : '#1A1A1A',
-                    borderColor: scope === value ? '#1A1A1A' : '#E5E5E5',
+                    background: scope === value ? 'var(--cl-action-primary)' : 'var(--cl-bg-panel)',
+                    color: scope === value ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
+                    borderColor: scope === value ? 'var(--cl-action-primary)' : 'var(--cl-border)',
                   }}
                 >
                   {label}
@@ -215,12 +215,12 @@ export default function SaveReportToPlayersModal({
               {slotSelect('A', slotA, 'Player', '— choose a player —')}
               {slotSelect('B', slotB, 'And also (optional)', '— nobody —')}
             </div>
-            <p style={{ fontSize: 11, color: '#8E8E93', lineHeight: 1.5, margin: '0 0 20px' }}>
+            <p style={{ fontSize: 11, color: 'var(--cl-text-muted)', lineHeight: 1.5, margin: '0 0 20px' }}>
               Leave the second empty to save to one player. Both filled saves the same report into both docs.
             </p>
 
             {players.length === 0 && (
-              <p style={{ fontSize: 12, color: '#8E8E93', marginBottom: 12 }}>
+              <p style={{ fontSize: 12, color: 'var(--cl-text-muted)', marginBottom: 12 }}>
                 No players yet — use <b>+ Create new player</b> above.
               </p>
             )}
@@ -275,20 +275,20 @@ const backdrop: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16,
 };
 const panel: React.CSSProperties = {
-  background: '#fff', borderRadius: 16, padding: 26, width: 'min(500px, 100%)',
-  color: '#1A1A1A', maxHeight: '90vh', overflowY: 'auto',
+  background: 'var(--cl-bg-panel)', borderRadius: 16, padding: 26, width: 'min(500px, 100%)',
+  color: 'var(--cl-text-primary)', maxHeight: '90vh', overflowY: 'auto',
 };
 const stepLabel: React.CSSProperties = {
-  fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, color: '#8E8E93',
+  fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, color: 'var(--cl-text-muted)',
   textTransform: 'uppercase', marginBottom: 8,
 };
-const slotLabel: React.CSSProperties = { fontSize: 11, color: '#6E6E73', marginBottom: 5 };
+const slotLabel: React.CSSProperties = { fontSize: 11, color: 'var(--cl-text-secondary)', marginBottom: 5 };
 const selectStyle: React.CSSProperties = {
   width: '100%', fontSize: 13, padding: '9px 10px', borderRadius: 9,
-  border: '1px solid #E5E5E5', background: '#fff', boxSizing: 'border-box',
+  border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', boxSizing: 'border-box',
 };
 const radioPill: React.CSSProperties = {
-  padding: '8px 16px', borderRadius: 999, border: '1px solid #E5E5E5',
+  padding: '8px 16px', borderRadius: 999, border: '1px solid var(--cl-border)',
   fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
 };
 const summaryBox: React.CSSProperties = {
@@ -297,9 +297,9 @@ const summaryBox: React.CSSProperties = {
 };
 const btnPrimary: React.CSSProperties = {
   flex: 1, minHeight: 46, borderRadius: 11, border: 'none',
-  background: '#1A1A1A', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer',
+  background: 'var(--cl-action-primary)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer',
 };
 const btnGhost: React.CSSProperties = {
-  flex: '0 0 100px', minHeight: 46, borderRadius: 11, border: '1px solid #E5E5E5',
-  background: '#fff', fontWeight: 600, fontSize: 13.5, cursor: 'pointer',
+  flex: '0 0 100px', minHeight: 46, borderRadius: 11, border: '1px solid var(--cl-border)',
+  background: 'var(--cl-bg-panel)', fontWeight: 600, fontSize: 13.5, cursor: 'pointer',
 };

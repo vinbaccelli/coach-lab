@@ -123,12 +123,12 @@ const muted: React.CSSProperties = { margin: 0, fontSize: 13, lineHeight: 1.5, o
 
 const primaryBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px',
-  borderRadius: 10, border: 'none', background: '#007AFF', color: '#fff',
+  borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)',
   fontWeight: 700, fontSize: 13, cursor: 'pointer',
 };
 
 const secondaryBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px',
   borderRadius: 10, border: '1px solid rgba(255,255,255,0.18)', background: 'transparent',
-  color: '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+  color: 'var(--cl-text-on-fill)', fontWeight: 600, fontSize: 13, cursor: 'pointer',
 };

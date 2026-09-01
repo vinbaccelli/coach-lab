@@ -44,9 +44,9 @@ export default function PlayersHomeClient() {
     padding: 16,
     borderRadius: 16,
     background: 'rgba(250, 249, 247, 0.96)',
-    border: '1px solid #E5E5E5',
+    border: '1px solid var(--cl-border)',
     textDecoration: 'none',
-    color: '#1A1A1A',
+    color: 'var(--cl-text-primary)',
     transition: 'transform 0.12s ease, box-shadow 0.12s ease',
   } as const;
 
@@ -76,7 +76,7 @@ export default function PlayersHomeClient() {
             style={{
               minWidth: 200,
               borderRadius: 10,
-              border: '1px solid #E5E5E5',
+              border: '1px solid var(--cl-border)',
               padding: '10px 12px',
               fontSize: 14,
             }}
@@ -106,8 +106,8 @@ export default function PlayersHomeClient() {
               padding: '10px 18px',
               borderRadius: 10,
               border: 'none',
-              background: '#1A1A1A',
-              color: '#fff',
+              background: 'var(--cl-action-primary)',
+              color: 'var(--cl-text-on-fill)',
               fontWeight: 700,
               cursor: creating ? 'wait' : 'pointer',
             }}

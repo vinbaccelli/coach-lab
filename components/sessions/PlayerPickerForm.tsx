@@ -21,7 +21,7 @@ const inputStyle: React.CSSProperties = {
   marginTop: 6,
   padding: '10px 12px',
   borderRadius: 10,
-  border: '1px solid #D1D1D6',
+  border: '1px solid var(--cl-border)',
   fontSize: 14,
   boxSizing: 'border-box',
 };
@@ -31,7 +31,7 @@ const labelStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   marginTop: 14,
-  color: '#1A1A1A',
+  color: 'var(--cl-text-primary)',
 };
 
 export default function PlayerPickerForm({ playerId, onPlayerIdChange, disabled }: Props) {
@@ -125,8 +125,8 @@ export default function PlayerPickerForm({ playerId, onPlayerIdChange, disabled 
             style={{
               padding: '8px 12px',
               borderRadius: 8,
-              border: '1px solid #D1D1D6',
-              background: '#fff',
+              border: '1px solid var(--cl-border)',
+              background: 'var(--cl-bg-panel)',
               fontSize: 13,
               cursor: 'pointer',
             }}
@@ -143,8 +143,8 @@ export default function PlayerPickerForm({ playerId, onPlayerIdChange, disabled 
                 padding: '8px 12px',
                 borderRadius: 8,
                 border: 'none',
-                background: '#007AFF',
-                color: '#fff',
+                background: 'var(--cl-accent)',
+                color: 'var(--cl-text-on-fill)',
                 fontSize: 13,
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -159,8 +159,8 @@ export default function PlayerPickerForm({ playerId, onPlayerIdChange, disabled 
               style={{
                 padding: '8px 12px',
                 borderRadius: 8,
-                border: '1px solid #D1D1D6',
-                background: '#fff',
+                border: '1px solid var(--cl-border)',
+                background: 'var(--cl-bg-panel)',
                 fontSize: 13,
                 cursor: 'pointer',
               }}
@@ -211,7 +211,7 @@ export function SaveModalShell({
       <div
         style={{
           background: 'rgba(250, 249, 247, 0.98)',
-          border: '1px solid #E5E5E5',
+          border: '1px solid var(--cl-border)',
           borderRadius: 16,
           padding: 20,
           maxWidth: 480,
@@ -219,7 +219,7 @@ export function SaveModalShell({
           maxHeight: 'min(90vh, 720px)',
           overflowY: 'auto',
           boxShadow: '0 24px 60px rgba(0,0,0,0.18)',
-          color: '#1A1A1A',
+          color: 'var(--cl-text-primary)',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>

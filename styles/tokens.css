@@ -15,6 +15,23 @@
   --cl-border: #D1D1D6;
   --cl-border-subtle: rgba(209, 209, 214, 0.65);
 
+  /* Product-level commit actions (Save Report, Create Player, Start) use a DARK
+     primary button, distinct from --cl-accent, which is the in-workspace tool
+     action. Both are real and documented; see DESIGN.md § Components. Same value
+     as --cl-text-primary by design — one near-black, two semantic roles. */
+  --cl-action-primary: #1D1D1F;
+
+  /* Foreground white — text and icons sitting ON a filled control (accent blue,
+     action-primary dark, destructive red). Distinct from --cl-bg-panel, which is
+     white as a SURFACE. Same value, opposite role: one is what you write on, the
+     other is what you write with. See DESIGN.md — The Two Whites Rule. */
+  --cl-text-on-fill: #FFFFFF;
+
+  /* Inactive control fill / empty track: the off half of a toggle, a secondary
+     playback button, an unfilled progress bar. Apple systemGray5 — deliberately
+     darker than --cl-bg-secondary so it reads against a white panel. */
+  --cl-fill-inactive: #E5E5EA;
+
   /* Success is GREEN, not the accent. Green carries product meaning here: the
      `ready` frame status in the Coach Override chain, the ✓ on completed steps,
      and the live-recording dot — all of which already use #34C759 in code.

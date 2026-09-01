@@ -946,7 +946,7 @@ export default function FrameMaskEditor({
           borderRadius: 14,
           border: '1px solid rgba(255,255,255,0.12)',
           padding: isMobile ? 12 : 16,
-          color: '#fff',
+          color: 'var(--cl-text-on-fill)',
         }}
       >
         {/* TEMP-DEBUG-PHASE-MARKER — the VISIBLE magenta build stamp is gone: it
@@ -963,8 +963,8 @@ export default function FrameMaskEditor({
             // Kept per instruction, but made subordinate to the frame: a compact
             // status strip rather than a full-width shout. Turns loud red only if
             // it ever reports DISTORTED, which is when it should grab the eye.
-            background: fitReadout.includes('✗') ? '#FF3B30' : 'rgba(52,199,89,0.14)',
-            color: fitReadout.includes('✗') ? '#000' : '#34C759',
+            background: fitReadout.includes('✗') ? 'var(--cl-destructive)' : 'rgba(52,199,89,0.14)',
+            color: fitReadout.includes('✗') ? '#000' : 'var(--cl-success)',
             border: '1px solid rgba(52,199,89,0.35)',
             fontWeight: 600,
             fontSize: 10,
@@ -983,14 +983,14 @@ export default function FrameMaskEditor({
           <div style={{ minWidth: 0 }}>
             <strong style={{ fontSize: 16 }}>Refine background removal — {frameLabel}{framePosLabel}</strong>
             {frameStatus === 'ready' ? (
-              <span style={{ marginLeft: 8, fontSize: 11, color: '#34C759', fontWeight: 700 }}>Ready</span>
+              <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--cl-success)', fontWeight: 700 }}>Ready</span>
             ) : null}
             <p style={{ margin: '6px 0 0', fontSize: 12, lineHeight: 1.45, color: 'rgba(255,255,255,0.65)' }}>
               Cyan overlay = kept pixels. Yellow dashed border = your selection box.
               Add brush keeps subject; Remove brush or Flood remove cuts leftover background.
             </p>
             {proposalEmpty ? (
-              <p style={{ margin: '8px 0 0', fontSize: 12, color: '#FF9500', fontWeight: 600 }}>
+              <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--cl-warning)', fontWeight: 600 }}>
                 AI proposal was empty — tap Auto remove background or paint with Add brush.
               </p>
             ) : null}
@@ -1070,7 +1070,7 @@ export default function FrameMaskEditor({
           {onMarkReadyAndNext && frameStatus !== 'ready' ? (
             <button
               type="button"
-              style={{ ...toolBtn, border: '1px solid #34C759', background: 'rgba(52,199,89,0.22)', fontWeight: 700 }}
+              style={{ ...toolBtn, border: '1px solid var(--cl-success)', background: 'rgba(52,199,89,0.22)', fontWeight: 700 }}
               onClick={onMarkReadyAndNext}
               title="Mark ready and open next frame"
             >
@@ -1081,7 +1081,7 @@ export default function FrameMaskEditor({
           {onMarkReady && frameStatus !== 'ready' ? (
             <button
               type="button"
-              style={{ ...toolBtn, border: '1px solid #34C759', background: 'rgba(52,199,89,0.15)', fontWeight: 700 }}
+              style={{ ...toolBtn, border: '1px solid var(--cl-success)', background: 'rgba(52,199,89,0.15)', fontWeight: 700 }}
               onClick={onMarkReady}
               title="Mark this frame ready for export"
             >
@@ -1256,7 +1256,7 @@ export default function FrameMaskEditor({
               : <><Eye size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Preview</>}
           </button>
           {!backgroundPlate ? (
-            <span style={{ fontSize: 11, color: '#FF9500', marginLeft: 4 }}>
+            <span style={{ fontSize: 11, color: 'var(--cl-warning)', marginLeft: 4 }}>
               ⚠ No background — set Start frame first
             </span>
           ) : null}
@@ -1676,7 +1676,7 @@ const viewCtrlBtn: React.CSSProperties = {
   borderRadius: 8,
   border: 'none',
   background: 'rgba(0,0,0,0.72)',
-  color: '#fff',
+  color: 'var(--cl-text-on-fill)',
   cursor: 'pointer',
   display: 'flex',
   alignItems: 'center',
@@ -1691,13 +1691,13 @@ const toolBtn: React.CSSProperties = {
   borderRadius: 8,
   border: '1px solid rgba(255,255,255,0.18)',
   background: 'rgba(255,255,255,0.06)',
-  color: '#fff',
+  color: 'var(--cl-text-on-fill)',
   fontSize: 12,
   fontWeight: 600,
   cursor: 'pointer',
 };
 
 const activeTool: React.CSSProperties = {
-  border: '1px solid #007AFF',
+  border: '1px solid var(--cl-accent)',
   background: 'rgba(0,122,255,0.2)',
 };

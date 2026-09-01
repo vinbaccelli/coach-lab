@@ -273,8 +273,8 @@ export default function PostRecordingCropModal({
     padding: '6px 14px',
     borderRadius: 8,
     border: 'none',
-    background: selected ? '#007AFF' : 'rgba(255,255,255,0.14)',
-    color: '#fff',
+    background: selected ? 'var(--cl-accent)' : 'rgba(255,255,255,0.14)',
+    color: 'var(--cl-text-on-fill)',
     fontSize: 13,
     fontWeight: 600,
     cursor: 'pointer',
@@ -291,7 +291,7 @@ export default function PostRecordingCropModal({
     borderRadius: 12,
     border: 'none',
     background: bg,
-    color: '#fff',
+    color: 'var(--cl-text-on-fill)',
     fontSize: 15,
     fontWeight: 700,
     cursor: isDisabled ? 'not-allowed' : 'pointer',
@@ -312,7 +312,7 @@ export default function PostRecordingCropModal({
         touchAction: 'none',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', color: '#fff' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', color: 'var(--cl-text-on-fill)' }}>
         <strong style={{ fontSize: 16 }}>{phase === 'choose' ? 'Recording complete' : 'Crop recording'}</strong>
         {phase === 'crop' ? (
           <div style={{ display: 'flex', gap: 6 }}>
@@ -346,7 +346,7 @@ export default function PostRecordingCropModal({
                 top: content.top + crop.y,
                 width: crop.w,
                 height: crop.h,
-                border: '2px solid #34C759',
+                border: '2px solid var(--cl-success)',
                 boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)',
                 borderRadius: 4,
                 cursor: 'move',
@@ -381,7 +381,7 @@ export default function PostRecordingCropModal({
                   e.preventDefault();
                 }}
               >
-                <div style={{ width: 18, height: 18, borderRadius: 4, background: '#34C759', border: '2px solid #fff', pointerEvents: 'none' }} />
+                <div style={{ width: 18, height: 18, borderRadius: 4, background: 'var(--cl-success)', border: '2px solid #fff', pointerEvents: 'none' }} />
               </div>
             </div>
           ) : null}
@@ -390,7 +390,7 @@ export default function PostRecordingCropModal({
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
         {error ? <span style={{ color: '#FF6B60', fontSize: 12, marginRight: 'auto' }}>{error}</span> : null}
-        {busy ? <span style={{ color: '#fff', fontSize: 13, marginRight: 'auto' }}>{progress ?? 'Working…'}</span> : null}
+        {busy ? <span style={{ color: 'var(--cl-text-on-fill)', fontSize: 13, marginRight: 'auto' }}>{progress ?? 'Working…'}</span> : null}
         {phase === 'choose' && onUploadYouTube && youtube && !youtube.loading ? (
           ytUrl ? (
             <a
@@ -450,7 +450,7 @@ export default function PostRecordingCropModal({
         {phase === 'choose' ? (
           <>
             <button type="button" style={bigBtn('rgba(255,255,255,0.16)')} onClick={onCancel} disabled={busy}>Cancel</button>
-            <button type="button" style={bigBtn('#007AFF')} onClick={() => setPhase('crop')} disabled={busy}>Crop before download</button>
+            <button type="button" style={bigBtn('var(--cl-accent)')} onClick={() => setPhase('crop')} disabled={busy}>Crop before download</button>
             <button type="button" style={bigBtn('#16A34A')} onClick={onDownloadFull} disabled={busy}>Download full ({ext.toUpperCase()})</button>
           </>
         ) : (

@@ -216,18 +216,18 @@ export default function MatchDecoderClient() {
       {/* ── What was read ──────────────────────────────────────────────── */}
       {counts && (
         <div style={{ ...card, paddingTop: 16, paddingBottom: 16 }}>
-          <div style={{ fontSize: 12.5, color: '#6E6E73' }}>
-            Read <b style={{ color: '#1A1A1A' }}>{counts.total}</b> screenshots — {counts.stats} stats,{' '}
+          <div style={{ fontSize: 12.5, color: 'var(--cl-text-secondary)' }}>
+            Read <b style={{ color: 'var(--cl-text-primary)' }}>{counts.total}</b> screenshots — {counts.stats} stats,{' '}
             {counts.timeline} timeline
             {counts.placement > 0 && `, ${counts.placement} placement map`}
             {counts.unrecognized > 0 && `, ${counts.unrecognized} unrecognized`}. Found{' '}
-            <b style={{ color: '#1A1A1A' }}>{counts.games}</b> games and{' '}
-            <b style={{ color: '#1A1A1A' }}>{counts.points}</b> points.
+            <b style={{ color: 'var(--cl-text-primary)' }}>{counts.games}</b> games and{' '}
+            <b style={{ color: 'var(--cl-text-primary)' }}>{counts.points}</b> points.
           </div>
           <button
             type="button"
             onClick={() => { setDecoded(null); setFiles([]); setSetup(emptySetup()); }}
-            style={{ ...linkBtn, marginTop: 8, color: '#6E6E73' }}
+            style={{ ...linkBtn, marginTop: 8, color: 'var(--cl-text-secondary)' }}
           >
             Start over with different screenshots
           </button>
@@ -285,23 +285,23 @@ function pruneNulls<K extends string | number>(r: Record<K, SideId | null>): Rec
 }
 
 const card: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #E5E5E5',
+  background: 'var(--cl-bg-panel)',
+  border: '1px solid var(--cl-border)',
   borderRadius: 14,
   padding: 22,
   marginBottom: 18,
-  color: '#1A1A1A',
+  color: 'var(--cl-text-primary)',
 };
 const h2: React.CSSProperties = { fontSize: 15, fontWeight: 700, margin: '0 0 10px' };
-const hint: React.CSSProperties = { fontSize: 12, color: '#6E6E73', lineHeight: 1.6, margin: '0 0 14px', maxWidth: 640 };
+const hint: React.CSSProperties = { fontSize: 12, color: 'var(--cl-text-secondary)', lineHeight: 1.6, margin: '0 0 14px', maxWidth: 640 };
 const dropzone: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 150,
   border: '2px dashed #d6d3d1', borderRadius: 12, cursor: 'pointer',
   fontSize: 14, fontWeight: 600, color: '#57534e',
 };
 const btnPrimary: React.CSSProperties = {
-  minHeight: 48, borderRadius: 12, border: 'none', background: '#1A1A1A',
-  color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer',
+  minHeight: 48, borderRadius: 12, border: 'none', background: 'var(--cl-action-primary)',
+  color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 14, cursor: 'pointer',
 };
 const linkBtn: React.CSSProperties = {
   border: 'none', background: 'transparent', color: '#b91c1c', cursor: 'pointer', fontSize: 12, padding: 0,

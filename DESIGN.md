@@ -5,6 +5,9 @@ colors:
   system-blue: "#007AFF"
   system-blue-pressed: "#DCEBFF"
   system-blue-soft: "rgba(0, 122, 255, 0.12)"
+  action-primary: "#1D1D1F"
+  text-on-fill: "#FFFFFF"
+  fill-inactive: "#E5E5EA"
   system-green: "#34C759"
   system-red: "#FF3B30"
   system-orange: "#FF9500"
@@ -72,6 +75,13 @@ components:
   button-primary-pressed:
     backgroundColor: "{colors.system-blue-pressed}"
     textColor: "{colors.system-blue}"
+  button-action-primary:
+    backgroundColor: "{colors.action-primary}"
+    textColor: "{colors.panel}"
+    rounded: "{rounded.md}"
+    padding: "10px 16px"
+    typography: "{typography.body}"
+    height: "44px"
   button-secondary:
     backgroundColor: "{colors.panel}"
     textColor: "{colors.label}"
@@ -166,6 +176,7 @@ variety.
 - **System Blue** (`{colors.system-blue}`): the only interactive voice. Active tool rows, primary actions, selected states, links, focus. It is also the PWA theme colour. If something is blue, it is either interactive or currently selected — never merely emphasised.
 - **System Blue Pressed** (`{colors.system-blue-pressed}`): the momentary press fill on toolbar controls, paired with blue text. It exists so a tap registers visually within one frame on a touch device.
 - **System Blue Soft** (`{colors.system-blue-soft}`): translucent wash for selection ranges and highlight bands over content.
+- **Action Primary** (`{colors.action-primary}`): the fill of a *product-level commit* button — Save Report, Create Player, Start. Deliberately dark rather than blue; see The Two Primaries Rule below. Same value as Label by design: one near-black, two semantic roles.
 
 ### Secondary
 - **System Green** (`{colors.system-green}`): confirmation that a human made a decision. It marks `ready` frame status in the Coach Override chain, the ✓ on completed steps, timeline trim accents, and the live-recording dot. Green means *a coach signed off* or *this is live right now* — it never means "good" in the abstract.
@@ -177,7 +188,9 @@ variety.
 - **Secondary Label** (`{colors.secondary-label}`): sub-labels, helper text, inactive metadata.
 - **Tertiary Label** (`{colors.tertiary-label}`): timestamps, counts, the quietest supporting text.
 - **Separator** (`{colors.separator}`): the 1px border that does nearly all structural work in this system, in place of shadow.
-- **Panel** (`{colors.panel}`): every control and card surface.
+- **Fill Inactive** (`{colors.fill-inactive}`): the resting fill of a control that is *off* — the unselected half of a toggle, a secondary playback button, an unfilled progress track. Apple systemGray5, chosen over Secondary Background because it must read against a white panel.
+- **Panel** (`{colors.panel}`): every control and card surface. White as a *surface*.
+- **Text On Fill** (`{colors.text-on-fill}`): white as a *foreground* — label text and icons sitting on a filled control (accent blue, Action Primary dark, System Red). Same value as Panel, opposite role.
 - **Grouped Background** (`{colors.grouped-background}`): the app ground behind panels.
 - **Secondary Background** (`{colors.secondary-background}`): nested and inset surfaces.
 - **Overlay Scrim** (`{colors.overlay-scrim}`) and **Overlay Panel** (`{colors.overlay-panel}`): the one sanctioned dark context — full-screen editors and dialogs that sit directly over video, where a light panel would blow out the frame beneath.
@@ -187,6 +200,19 @@ variety.
 **The One Voice Rule.** System Blue is the only colour that means "you can act on
 this." If a surface needs emphasis and the thing is not interactive, it gets
 weight or spacing, never blue.
+
+**The Two Primaries Rule.** This product has *two* primary buttons and both are
+correct. **System Blue** is the in-workspace tool action — it lives on the
+analysis surface, where it means "this tool is active." **Action Primary** (the
+dark fill) is the product-level commit — Save Report, Create Player, Start —
+and lives on the player, decoder and report surfaces. Never mix them on one
+surface, and never use blue for a commit that leaves the workspace.
+
+**The Two Whites Rule.** White is two tokens, not one. **Panel** is what you
+write *on*; **Text On Fill** is what you write *with*. They share a value and
+will never diverge in appearance, but they diverge in meaning — and a surface
+token used for label text is how a system loses the ability to restyle its
+filled controls later.
 
 **The Earned Colour Rule.** Green, red and orange each carry one meaning and are
 spent only on it: green for coach-confirmed or live, red for destructive, orange
@@ -296,7 +322,12 @@ density.
 
 ### Buttons
 - **Shape:** gently rounded (10px), 1px Separator border, 44px minimum height.
-- **Primary:** System Blue fill, Panel white text, weight 600, padding `10px 16px`. Used for the single most likely action in a view.
+
+There are **two primary buttons**, split by what the action does — see The Two
+Primaries Rule under Colors. Choosing between them is not a style preference.
+
+- **Tool Primary (System Blue):** System Blue fill, Panel white text, weight 600, padding `10px 16px`. The in-workspace action, on the analysis surface — an active tool, a selected mode.
+- **Action Primary (dark):** Action Primary fill, Panel white text, weight 700, padding `10px 16px`, `border: none`. The product-level commit that leaves the workspace — Save Report, Create Player, Start, Upload. Lives on the player, decoder, report and onboarding surfaces. Its selected-state siblings (segmented controls) use the same fill.
 - **Secondary:** Panel white fill, Label text, Separator border, padding `10px 12px`. The default.
 - **Destructive:** Panel white fill, System Red text, Separator border — red text, never a red fill, except for an active Stop control.
 - **Pressed:** fill shifts to System Blue Pressed with System Blue text, plus a `scale(0.95)` transform over 0.12s. Touch devices get a 10ms haptic on the same event.
@@ -308,6 +339,12 @@ icon in a fixed 26px box plus a left-aligned label that **wraps to two lines**
 rather than truncating; icon-only mode is a centred 44×44 square. Active state is
 a full System Blue fill. Rows never ellipsise — a coach must be able to read the
 whole tool name.
+
+### Inactive Controls
+Any control at rest that is *off* takes Fill Inactive — the unselected half of a
+toggle, a secondary playback button, an unfilled progress track. It is the one
+grey that is a **fill**, not a border; do not reach for Separator here, and do
+not reach for Fill Inactive to draw a line.
 
 ### Cards / Containers
 - **Corner Style:** 16px.
@@ -356,7 +393,9 @@ no video beneath it.
 - **Don't** pull colours from Tailwind's default palette. `#F59E0B` (amber-500), `#78716C` (stone-500) and `bg-blue-600` (`#2563EB`) are currently leaking in and are all wrong; the unused `coach-blue` / `coach-gray` config in `tailwind.config.js` is dead and should not be revived.
 - **Don't** use `backdrop-filter` on any surface over the video — the No-Blur Rule.
 - **Don't** build dark-mode-first chrome. This product is a light theme. The only sanctioned dark surfaces are the video-adjacent overlay scrim and its dialogs.
-- **Don't** use `#1A1A1A` for text. It appears 91 times and is drift; Label (`#1D1D1F`) is normative.
-- **Don't** add a fourth separator grey. `#E5E5E5`, `#E5E5EA` and `#E8E8ED` are all drift toward Separator (`#D1D1D6`).
+- **Don't** reintroduce `#1A1A1A`. It is fully retired: its text uses became Label and its button fills became Action Primary, both `#1D1D1F`.
+- **Don't** add another grey. `#E5E5E5`, `#E5E5EA` and `#E8E8ED` are retired: border uses became Separator (`#D1D1D6`), fill uses became Fill Inactive (`#E5E5EA`).
 - **Don't** add radii outside 8 / 10 / 16 / 999. The 4px, 6px, 12px and 14px values in the codebase are drift, not scale.
+- **Don't** tokenize a colour that becomes *user state*. `PRESET_COLORS` in `ToolPalette.tsx` and `ContextualStyleBar.tsx` are the coach's annotation-drawing swatches: picking one sets `drawingOptions.color`, which lands on `ctx.strokeStyle`. A `var()` there paints nothing and renders the raw token string as the swatch label. Those arrays stay hex.
+- **Don't** put a `var()` token where CSS custom properties don't resolve. Three places in this codebase: an SVG **presentation attribute** (`stroke="…"`, or a lucide `<Icon color={…}>` prop, which becomes one), Next's **`themeColor` metadata** (it emits a `<meta>` tag, not CSS), and a canvas 2D context (`ctx.fillStyle`). In all three a `var()` fails **silently** — no error, wrong or stale colour. Keep the hex literal there and let the token cover the CSS uses.
 - **Don't** write `-apple-system, sans-serif` as a shorthand — it drops the Windows and Android fallbacks. Use the full stack, via `var(--cl-font)`.

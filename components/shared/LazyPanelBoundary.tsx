@@ -42,7 +42,7 @@ const overlayStyle: React.CSSProperties = {
   justifyContent: 'center',
   padding: 16,
   background: 'rgba(0,0,0,0.78)',
-  color: '#fff',
+  color: 'var(--cl-text-on-fill)',
   fontSize: 14,
 };
 
@@ -52,7 +52,7 @@ const inlineStyle: React.CSSProperties = {
   justifyContent: 'center',
   padding: '18px 12px',
   fontSize: 13,
-  color: '#6E6E73',
+  color: 'var(--cl-text-secondary)',
   textAlign: 'center',
 };
 
@@ -90,8 +90,8 @@ class LazyPanelErrorBoundary extends React.Component<
               padding: '8px 16px',
               borderRadius: 8,
               border: 'none',
-              background: '#007AFF',
-              color: '#fff',
+              background: 'var(--cl-accent)',
+              color: 'var(--cl-text-on-fill)',
               fontWeight: 700,
               cursor: 'pointer',
             }}

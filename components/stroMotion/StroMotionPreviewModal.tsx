@@ -213,7 +213,7 @@ export default function StroMotionPreviewModal({
           background: '#141416',
           borderRadius: 16,
           border: '1px solid rgba(255,255,255,0.12)',
-          color: '#fff',
+          color: 'var(--cl-text-on-fill)',
           display: 'flex',
           flexDirection: 'column',
           gap: 16,
@@ -417,13 +417,13 @@ export default function StroMotionPreviewModal({
               onChange={(e) => setReportTitle(e.target.value)}
               placeholder="Report title"
               aria-label="Report title"
-              style={{ flex: '2 1 260px', fontSize: 13, fontWeight: 600, background: 'rgba(0,0,0,0.35)', color: '#fff', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
+              style={{ flex: '2 1 260px', fontSize: 13, fontWeight: 600, background: 'rgba(0,0,0,0.35)', color: 'var(--cl-text-on-fill)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
             />
             <select
               value={attachPlayerId}
               onChange={(e) => setAttachPlayerId(e.target.value)}
               aria-label="Attach to player"
-              style={{ flex: '1 1 220px', fontSize: 12, background: 'rgba(0,0,0,0.35)', color: '#fff', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
+              style={{ flex: '1 1 220px', fontSize: 12, background: 'rgba(0,0,0,0.35)', color: 'var(--cl-text-on-fill)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
             >
               <option value="">No player — just create the report</option>
               {players.map((p) => <option key={p.id} value={p.id}>Attach to {p.display_name}</option>)}
@@ -445,7 +445,7 @@ export default function StroMotionPreviewModal({
                 autoFocus
                 aria-label="New player name"
                 onKeyDown={(e) => { if (e.key === 'Enter' && newPlayerName.trim()) void handleCreatePlayer(); }}
-                style={{ flex: 1, fontSize: 12, background: 'rgba(0,0,0,0.35)', color: '#fff', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
+                style={{ flex: 1, fontSize: 12, background: 'rgba(0,0,0,0.35)', color: 'var(--cl-text-on-fill)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
               />
               <button
                 type="button"
@@ -462,7 +462,7 @@ export default function StroMotionPreviewModal({
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Coach notes for the report…"
             rows={2}
-            style={{ width: '100%', resize: 'vertical', fontSize: 12, background: 'rgba(0,0,0,0.35)', color: '#fff', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
+            style={{ width: '100%', resize: 'vertical', fontSize: 12, background: 'rgba(0,0,0,0.35)', color: 'var(--cl-text-on-fill)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
           />
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             {ENABLE_YOUTUBE_UPLOAD && (
@@ -516,7 +516,7 @@ const iconBtn: React.CSSProperties = {
   borderRadius: 8,
   border: '1px solid rgba(255,255,255,0.15)',
   background: 'rgba(255,255,255,0.06)',
-  color: '#fff',
+  color: 'var(--cl-text-on-fill)',
   cursor: 'pointer',
 };
 
@@ -528,8 +528,8 @@ const actionBtn: React.CSSProperties = {
   padding: '10px 14px',
   borderRadius: 10,
   border: 'none',
-  background: '#007AFF',
-  color: '#fff',
+  background: 'var(--cl-accent)',
+  color: 'var(--cl-text-on-fill)',
   fontWeight: 700,
   fontSize: 13,
   cursor: 'pointer',
@@ -540,7 +540,7 @@ const secondaryBtn: React.CSSProperties = {
   borderRadius: 10,
   border: '1px solid rgba(255,255,255,0.18)',
   background: 'transparent',
-  color: '#fff',
+  color: 'var(--cl-text-on-fill)',
   fontWeight: 600,
   fontSize: 13,
   cursor: 'pointer',
@@ -568,15 +568,15 @@ const chipBtn: React.CSSProperties = {
   borderStyle: 'solid',
   borderColor: 'rgba(255,255,255,0.2)',
   background: 'transparent',
-  color: '#fff',
+  color: 'var(--cl-text-on-fill)',
   fontSize: 11,
   fontWeight: 600,
   cursor: 'pointer',
 };
 
 const chipActive: React.CSSProperties = {
-  background: '#007AFF',
-  borderColor: '#007AFF',
+  background: 'var(--cl-accent)',
+  borderColor: 'var(--cl-accent)',
 };
 
 const resultLink: React.CSSProperties = {

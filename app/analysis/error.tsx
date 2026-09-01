@@ -57,7 +57,7 @@ export default function AnalysisError({
             padding: '10px 20px',
             borderRadius: 8,
             border: 'none',
-            background: '#fff',
+            background: 'var(--cl-bg-panel)',
             color: '#111',
             fontWeight: 600,
             cursor: 'pointer',

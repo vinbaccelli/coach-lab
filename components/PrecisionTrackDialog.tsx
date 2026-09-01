@@ -37,18 +37,18 @@ export default function PrecisionTrackDialog({ scope, lengthSec, onConfirm, onCa
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: '100%', maxWidth: 420, background: '#fff', color: '#1D1D1F',
+          width: '100%', maxWidth: 420, background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)',
           borderRadius: 18, padding: '22px 22px 18px',
           boxShadow: '0 24px 68px rgba(0,0,0,0.4)',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         }}
       >
         <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.3 }}>AI Track</div>
-        <p style={{ margin: '6px 0 4px', fontSize: 13.5, color: '#6E6E73', lineHeight: 1.4 }}>
+        <p style={{ margin: '6px 0 4px', fontSize: 13.5, color: 'var(--cl-text-secondary)', lineHeight: 1.4 }}>
           Records one perfect skeleton track over your video, then plays it back flawlessly
           aligned at <b>any</b> speed. Runs once now — the slower the pass, the more precise the result.
         </p>
-        <div style={{ margin: '10px 0 14px', fontSize: 12.5, fontWeight: 700, color: '#007AFF' }}>
+        <div style={{ margin: '10px 0 14px', fontSize: 12.5, fontWeight: 700, color: 'var(--cl-accent)' }}>
           {scope === 'section' ? `Tracking your selected section · ${secs}s` : `Tracking the whole video · ${secs}s`}
         </div>
 
@@ -62,19 +62,19 @@ export default function PrecisionTrackDialog({ scope, lengthSec, onConfirm, onCa
                 onClick={() => setQuality(o.q)}
                 style={{
                   textAlign: 'left', padding: '11px 13px', borderRadius: 12, cursor: 'pointer',
-                  border: active ? '2px solid #007AFF' : '1px solid #E5E5EA',
-                  background: active ? 'rgba(0,122,255,0.06)' : '#fff',
+                  border: active ? '2px solid var(--cl-accent)' : '1px solid var(--cl-border)',
+                  background: active ? 'rgba(0,122,255,0.06)' : 'var(--cl-bg-panel)',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 15, fontWeight: 800 }}>{o.speed}</span>
                   <span style={{
                     fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 999,
-                    background: o.q === 'balanced' ? '#007AFF' : '#EDEDED',
-                    color: o.q === 'balanced' ? '#fff' : '#6E6E73',
+                    background: o.q === 'balanced' ? 'var(--cl-accent)' : '#EDEDED',
+                    color: o.q === 'balanced' ? 'var(--cl-text-on-fill)' : 'var(--cl-text-secondary)',
                   }}>{o.tag}</span>
                 </div>
-                <div style={{ fontSize: 12, color: '#6E6E73', marginTop: 3, lineHeight: 1.35 }}>{o.desc}</div>
+                <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)', marginTop: 3, lineHeight: 1.35 }}>{o.desc}</div>
               </button>
             );
           })}
@@ -85,8 +85,8 @@ export default function PrecisionTrackDialog({ scope, lengthSec, onConfirm, onCa
             type="button"
             onClick={onCancel}
             style={{
-              flex: '0 0 auto', padding: '11px 18px', borderRadius: 11, border: '1px solid #D1D1D6',
-              background: '#fff', color: '#1D1D1F', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              flex: '0 0 auto', padding: '11px 18px', borderRadius: 11, border: '1px solid var(--cl-border)',
+              background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 14, fontWeight: 700, cursor: 'pointer',
             }}
           >
             Cancel
@@ -96,7 +96,7 @@ export default function PrecisionTrackDialog({ scope, lengthSec, onConfirm, onCa
             onClick={() => onConfirm(quality)}
             style={{
               flex: 1, padding: '11px 18px', borderRadius: 11, border: 'none',
-              background: '#007AFF', color: '#fff', fontSize: 14, fontWeight: 800, cursor: 'pointer',
+              background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontSize: 14, fontWeight: 800, cursor: 'pointer',
             }}
           >
             Start AI Track

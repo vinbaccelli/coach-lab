@@ -26,9 +26,9 @@ const presets: Array<{ strokeType: Exclude<StrokeType, 'custom'>; label: string;
 
 const btnStyle: React.CSSProperties = {
   width: '100%', padding: '12px 16px', borderRadius: 12,
-  border: '1px solid #E5E5EA', background: '#FFF', cursor: 'pointer',
+  border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', cursor: 'pointer',
   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-  fontSize: 14, fontWeight: 600, color: '#1D1D1F',
+  fontSize: 14, fontWeight: 600, color: 'var(--cl-text-primary)',
 };
 
 export default function PhasesPicker({ open, onClose, onSelect }: PhasesPickerProps) {
@@ -47,40 +47,40 @@ export default function PhasesPicker({ open, onClose, onSelect }: PhasesPickerPr
     >
       <div style={{
         width: 'min(400px, 90vw)', maxHeight: '80vh', overflow: 'auto',
-        background: '#FFF', borderRadius: 20, padding: 24,
+        background: 'var(--cl-bg-panel)', borderRadius: 20, padding: 24,
         boxShadow: '0 16px 48px rgba(0,0,0,0.2)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1D1D1F' }}>Add Phases</h2>
-          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#8E8E93' }}>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--cl-text-primary)' }}>Add Phases</h2>
+          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--cl-text-muted)' }}>
             <X size={20} />
           </button>
         </div>
 
-        <p style={{ margin: '0 0 16px', fontSize: 13, color: '#6E6E73', lineHeight: 1.5 }}>
+        <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--cl-text-secondary)', lineHeight: 1.5 }}>
           Choose a stroke preset or custom count. Phase markers will appear on the timeline — drag to adjust positions.
         </p>
 
         {/* Custom count — first option */}
         <div style={{
-          padding: 16, borderRadius: 14, border: '1px solid #007AFF', background: 'rgba(0,122,255,0.04)',
+          padding: 16, borderRadius: 14, border: '1px solid var(--cl-accent)', background: 'rgba(0,122,255,0.04)',
           display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16,
         }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#1D1D1F' }}>Custom</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--cl-text-primary)' }}>Custom</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <input
               type="range" min={1} max={20} step={1}
               value={customCount} onChange={e => setCustomCount(Number(e.target.value))}
               style={{ flex: 1 }}
             />
-            <span style={{ fontSize: 18, fontWeight: 800, color: '#007AFF', minWidth: 28, textAlign: 'center' }}>{customCount}</span>
+            <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--cl-accent)', minWidth: 28, textAlign: 'center' }}>{customCount}</span>
           </div>
           <button
             type="button"
             onClick={() => { onSelect({ type: 'custom', count: customCount }); onClose(); }}
             style={{
               width: '100%', padding: '10px 0', borderRadius: 10, border: 'none',
-              background: '#007AFF', color: '#FFF', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontSize: 14, fontWeight: 700, cursor: 'pointer',
             }}
           >
             Add {customCount} phase{customCount > 1 ? 's' : ''}
@@ -99,7 +99,7 @@ export default function PhasesPicker({ open, onClose, onSelect }: PhasesPickerPr
                 onClick={() => { onSelect({ type: 'preset', strokeType: p.strokeType }); onClose(); }}
               >
                 <span>{p.label}</span>
-                <span style={{ fontSize: 11, color: '#8E8E93', fontWeight: 500 }}>
+                <span style={{ fontSize: 11, color: 'var(--cl-text-muted)', fontWeight: 500 }}>
                   {steps.map(s => s.short).join(' → ')}
                 </span>
               </button>

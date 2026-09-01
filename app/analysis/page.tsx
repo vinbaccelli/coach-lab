@@ -215,11 +215,11 @@ const btnStyle: React.CSSProperties = {
   gap: '6px',
   padding: '8px 14px',
   borderRadius: '12px',
-  border: '1px solid #E5E5E5',
+  border: '1px solid #D1D1D6',
   background: '#FFFFFF',
   cursor: 'pointer',
   fontSize: '13px',
-  color: '#1A1A1A',
+  color: '#1D1D1F',
   fontWeight: 500,
   whiteSpace: 'nowrap',
 };
@@ -6646,7 +6646,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         minHeight: 0,
         overflow: 'hidden',
         background: '#FFFFFF',
-        color: '#1A1A1A',
+        color: '#1D1D1F',
         userSelect: 'none',
         WebkitUserSelect: 'none',
         WebkitTouchCallout: 'none',
@@ -7068,7 +7068,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       <svg width="40" height="40" viewBox="0 0 40 40" style={{ animation: 'spin 1s linear infinite' }}>
                         <circle cx="20" cy="20" r="16" fill="none" stroke="#007AFF" strokeWidth="3" strokeDasharray="75" strokeDashoffset="20" strokeLinecap="round" />
                       </svg>
-                      <span style={{ fontSize: 15, fontWeight: 500, color: layoutMode === 'reels' ? '#fff' : '#1A1A1A', textAlign: 'center', maxWidth: 280 }}>
+                      <span style={{ fontSize: 15, fontWeight: 500, color: layoutMode === 'reels' ? '#fff' : '#1D1D1F', textAlign: 'center', maxWidth: 280 }}>
                         {urlLoadPhase}
                       </span>
                       </div>
@@ -7105,7 +7105,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         <button
                           type="button"
                           onClick={() => { setUrlLoadError(null); triggerVideoUploadA(); }}
-                          style={{ padding: '8px 20px', borderRadius: 10, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontSize: 14, fontWeight: 500, cursor: 'pointer', pointerEvents: 'auto' }}
+                          style={{ padding: '8px 20px', borderRadius: 10, border: '1px solid #D1D1D6', background: '#fff', color: '#1D1D1F', fontSize: 14, fontWeight: 500, cursor: 'pointer', pointerEvents: 'auto' }}
                         >
                           Upload instead
                         </button>
@@ -7155,7 +7155,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       alignItems: 'center', justifyContent: 'center',
                       gap: 16,
                       borderRadius: layoutMode === 'reels' ? 0 : 20,
-                      border: layoutMode === 'reels' ? 'none' : '1px solid #E8E8ED',
+                      border: layoutMode === 'reels' ? 'none' : '1px solid #D1D1D6',
                       background: layoutMode === 'reels' ? 'rgba(0,0,0,0.72)' : '#FAFAFA',
                       padding: 24,
                       pointerEvents: 'none',
@@ -7170,7 +7170,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         minWidth: 200,
                         padding: '0 24px',
                         borderRadius: 14,
-                        border: '1px solid #E5E5E5',
+                        border: '1px solid #D1D1D6',
                         background: '#FFFFFF',
                         fontSize: 15,
                         fontWeight: 600,
@@ -7192,9 +7192,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         minWidth: 200,
                         padding: '0 24px',
                         borderRadius: 14,
-                        border: layoutMode === 'reels' ? '1px solid rgba(255,255,255,0.25)' : '1px solid #E5E5E5',
+                        border: layoutMode === 'reels' ? '1px solid rgba(255,255,255,0.25)' : '1px solid #D1D1D6',
                         background: 'transparent',
-                        color: layoutMode === 'reels' ? '#fff' : '#1A1A1A',
+                        color: layoutMode === 'reels' ? '#fff' : '#1D1D1F',
                         fontSize: 14,
                         fontWeight: 500,
                         cursor: 'pointer',
@@ -7212,7 +7212,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         {courtLoadError}
                       </span>
                     )}
-                    <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8e8e93', textAlign: 'center', maxWidth: 320 }}>
+                    <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8E8E93', textAlign: 'center', maxWidth: 320 }}>
                       or drag and drop a video file here. See AngleMotion Academy in the Control Panel for import workflows.
                     </span>
                     </div>
@@ -7402,11 +7402,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   <div style={{
                     position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none',
                     background: layoutMode === 'reels' ? 'rgba(0,0,0,0.6)' : 'rgba(250, 249, 247, 0.92)',
-                    border: layoutMode === 'reels' ? '3px dashed rgba(255,255,255,0.4)' : '3px dashed #E5E5E5',
+                    border: layoutMode === 'reels' ? '3px dashed rgba(255,255,255,0.4)' : '3px dashed #D1D1D6',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     borderRadius: layoutMode === 'reels' ? 0 : '16px',
                   }}>
-                    <span style={{ color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A', fontSize: '17px', fontWeight: 600 }}>
+                    <span style={{ color: layoutMode === 'reels' ? '#FFFFFF' : '#1D1D1F', fontSize: '17px', fontWeight: 600 }}>
                       Drop Video A here
                     </span>
                   </div>
@@ -7489,9 +7489,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   <div style={{
                     position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
                     fontSize: '11px', fontWeight: 700,
-                    color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
+                    color: layoutMode === 'reels' ? '#FFFFFF' : '#1D1D1F',
                     background: layoutMode === 'reels' ? 'rgba(0,0,0,0.62)' : 'rgba(250,249,247,0.97)',
-                    border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                    border: layoutMode === 'reels' ? 'none' : '1px solid #D1D1D6',
                     padding: '2px 8px',
                     borderRadius: layoutMode === 'reels' ? 0 : '8px',
                   }}>A</div>
@@ -7765,9 +7765,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         zIndex: 92,
                         padding: '6px 10px',
                         borderRadius: layoutMode === 'reels' ? 0 : 10,
-                        border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                        border: layoutMode === 'reels' ? 'none' : '1px solid #D1D1D6',
                         background: layoutMode === 'reels' ? 'rgba(0,0,0,0.62)' : 'rgba(250, 249, 247, 0.97)',
-                        color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
+                        color: layoutMode === 'reels' ? '#FFFFFF' : '#1D1D1F',
                         fontSize: 12,
                         fontWeight: 600,
                         cursor: 'pointer',
@@ -7779,9 +7779,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     <div style={{
                       position: 'absolute', top: 4, left: !isMobile ? panelToolbarInset + 4 : 8,
                       fontSize: '11px', fontWeight: 700,
-                      color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A',
+                      color: layoutMode === 'reels' ? '#FFFFFF' : '#1D1D1F',
                       background: layoutMode === 'reels' ? 'rgba(0,0,0,0.62)' : 'rgba(250,249,247,0.97)',
-                      border: layoutMode === 'reels' ? 'none' : '1px solid #E5E5E5',
+                      border: layoutMode === 'reels' ? 'none' : '1px solid #D1D1D6',
                       padding: '2px 8px',
                       borderRadius: layoutMode === 'reels' ? 0 : '8px',
                     }}>B</div>
@@ -7790,11 +7790,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       <div style={{
                         position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none',
                         background: layoutMode === 'reels' ? 'rgba(0,0,0,0.6)' : 'rgba(250, 249, 247, 0.92)',
-                        border: layoutMode === 'reels' ? '3px dashed rgba(255,255,255,0.4)' : '3px dashed #E5E5E5',
+                        border: layoutMode === 'reels' ? '3px dashed rgba(255,255,255,0.4)' : '3px dashed #D1D1D6',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         borderRadius: layoutMode === 'reels' ? 0 : '16px',
                       }}>
-                        <span style={{ color: layoutMode === 'reels' ? '#FFFFFF' : '#1A1A1A', fontSize: '17px', fontWeight: 600 }}>
+                        <span style={{ color: layoutMode === 'reels' ? '#FFFFFF' : '#1D1D1F', fontSize: '17px', fontWeight: 600 }}>
                           Drop Video B here
                         </span>
                       </div>
@@ -7853,8 +7853,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             padding: '14px 16px',
             borderRadius: 14,
             background: 'rgba(250, 249, 247, 0.97)',
-            border: '1px solid #E5E5E5',
-            color: '#1A1A1A',
+            border: '1px solid #D1D1D6',
+            color: '#1D1D1F',
             boxShadow: '0 16px 44px rgba(0,0,0,0.12)',
             display: 'flex',
             flexWrap: 'wrap',
@@ -7892,8 +7892,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             style={{
               padding: '10px 16px',
               borderRadius: 10,
-              border: '1px solid #E5E5E5',
-              background: '#1A1A1A',
+              border: '1px solid #D1D1D6',
+              background: '#1D1D1F',
               color: '#FFFFFF',
               fontWeight: 600,
               fontSize: 13,
@@ -8064,8 +8064,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             padding: '14px 16px',
             borderRadius: 14,
             background: 'rgba(250, 249, 247, 0.97)',
-            border: '1px solid #E5E5E5',
-            color: '#1A1A1A',
+            border: '1px solid #D1D1D6',
+            color: '#1D1D1F',
             boxShadow: '0 16px 44px rgba(0,0,0,0.12)',
             display: 'flex',
             flexWrap: 'wrap',
@@ -8104,8 +8104,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             style={{
               padding: '10px 16px',
               borderRadius: 10,
-              border: '1px solid #E5E5E5',
-              background: captureDownloadStatus === 'preparing' ? '#F5F5F5' : '#1A1A1A',
+              border: '1px solid #D1D1D6',
+              background: captureDownloadStatus === 'preparing' ? '#F5F5F5' : '#1D1D1F',
               color: captureDownloadStatus === 'preparing' ? '#9ca3af' : '#FFFFFF',
               fontWeight: 600,
               cursor: captureDownloadStatus === 'preparing' ? 'not-allowed' : 'pointer',
@@ -8132,9 +8132,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             style={{
               padding: '10px 16px',
               borderRadius: 10,
-              border: '1px solid #E5E5E5',
+              border: '1px solid #D1D1D6',
               background: captureYoutubeBusy || youtubeConn.connecting ? '#F5F5F5' : '#FFFFFF',
-              color: '#1A1A1A',
+              color: '#1D1D1F',
               fontWeight: 600,
               cursor:
                 captureDownloadStatus === 'preparing' || captureYoutubeBusy || youtubeConn.connecting
@@ -8157,9 +8157,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             style={{
               padding: '10px 16px',
               borderRadius: 10,
-              border: '1px solid #E5E5E5',
+              border: '1px solid #D1D1D6',
               background: '#FFFFFF',
-              color: '#1A1A1A',
+              color: '#1D1D1F',
               cursor: 'pointer',
               fontWeight: 500,
             }}
@@ -8549,7 +8549,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 10,
                       padding: '10px 14px', borderRadius: 10,
-                      border: '1px solid #E5E5EA', background: '#F9F9F9',
+                      border: '1px solid #D1D1D6', background: '#F9F9F9',
                       color: '#1D1D1F', fontSize: 13, fontWeight: 500,
                       cursor: screenshotSaving ? 'not-allowed' : 'pointer', textAlign: 'left',
                       opacity: screenshotSaving ? 0.6 : 1,
@@ -8893,8 +8893,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             padding: stroSelectingObject ? '10px 12px 10px 16px' : '10px 16px',
             borderRadius: 12,
             background: 'rgba(250, 249, 247, 0.97)',
-            border: '1px solid #E5E5E5',
-            color: '#1A1A1A',
+            border: '1px solid #D1D1D6',
+            color: '#1D1D1F',
             fontSize: 13,
             fontWeight: 600,
             lineHeight: 1.45,
@@ -8930,7 +8930,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 fontSize: 12,
                 fontWeight: 600,
                 cursor: 'pointer',
-                color: '#1A1A1A',
+                color: '#1D1D1F',
               }}
             >
               Cancel

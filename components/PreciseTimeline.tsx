@@ -1550,7 +1550,7 @@ function TimelineMarkers({
                   bottom: h + 4,
                   left: '50%',
                   transform: 'translateX(-50%)',
-                  background: overlay ? 'rgba(0,0,0,0.75)' : '#1A1A1A',
+                  background: overlay ? 'rgba(0,0,0,0.75)' : '#1D1D1F',
                   color: '#fff',
                   fontSize: 10,
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',

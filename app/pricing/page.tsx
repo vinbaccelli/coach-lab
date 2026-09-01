@@ -5,9 +5,9 @@ import Link from 'next/link';
 import { Check } from 'lucide-react';
 import { PLANS, DEMO, planPrice, yearlyPerMonth, type PlanId, type BillingCycle } from '@/lib/plans';
 
-const INK = '#1D1D1F';
-const MUTED = '#6E6E73';
-const ACCENT = '#007AFF';
+const INK = 'var(--cl-text-primary)';
+const MUTED = 'var(--cl-text-secondary)';
+const ACCENT = 'var(--cl-accent)';
 
 export default function PricingPage() {
   const [cycle, setCycle] = useState<BillingCycle>('yearly');
@@ -42,11 +42,11 @@ export default function PricingPage() {
 
   return (
     // Own scroll container — globals.css locks body overflow for the canvas app.
-    <div style={{ height: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch', background: '#F5F5F7', color: INK, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
+    <div style={{ height: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch', background: 'var(--cl-bg-primary)', color: INK, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
       {/* Nav */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '12px 20px', borderBottom: '1px solid #E5E5EA',
+        padding: '12px 20px', borderBottom: '1px solid var(--cl-border)',
         background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(12px)',
         position: 'sticky', top: 0, zIndex: 20,
       }}>
@@ -56,7 +56,7 @@ export default function PricingPage() {
         </Link>
         <Link href="/login" style={{
           fontSize: 12, fontWeight: 600, color: INK, textDecoration: 'none',
-          padding: '6px 14px', borderRadius: 20, border: '1px solid #D1D1D6',
+          padding: '6px 14px', borderRadius: 20, border: '1px solid var(--cl-border)',
         }}>
           Sign In
         </Link>
@@ -83,7 +83,7 @@ export default function PricingPage() {
         {/* Billing toggle */}
         <div style={{ display: 'inline-flex', background: '#EDEDED', borderRadius: 999, padding: 4, marginBottom: 36 }}>
           <button type="button" onClick={() => setCycle('yearly')} style={toggleBtn(cycle === 'yearly')}>
-            Yearly <span style={{ fontSize: 10, fontWeight: 800, color: cycle === 'yearly' ? '#fff' : ACCENT }}>· 2 mo free</span>
+            Yearly <span style={{ fontSize: 10, fontWeight: 800, color: cycle === 'yearly' ? 'var(--cl-text-on-fill)' : ACCENT }}>· 2 mo free</span>
           </button>
           <button type="button" onClick={() => setCycle('monthly')} style={toggleBtn(cycle === 'monthly')}>Monthly</button>
         </div>
@@ -95,15 +95,15 @@ export default function PricingPage() {
             return (
               <div key={plan.id} style={{
                 flex: '1 1 300px', maxWidth: 360, textAlign: 'left',
-                background: '#fff',
-                border: plan.featured ? `2px solid ${ACCENT}` : '1px solid #E5E5EA',
+                background: 'var(--cl-bg-panel)',
+                border: plan.featured ? `2px solid ${ACCENT}` : '1px solid var(--cl-border)',
                 borderRadius: 18, padding: 26,
                 boxShadow: plan.featured ? '0 14px 44px rgba(0,122,255,0.14)' : '0 1px 3px rgba(0,0,0,0.04)',
                 display: 'flex', flexDirection: 'column',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <span style={{ fontSize: 18, fontWeight: 800 }}>{plan.name}</span>
-                  {plan.featured && <span style={{ fontSize: 10, fontWeight: 800, background: ACCENT, color: '#fff', padding: '2px 8px', borderRadius: 999 }}>MOST POPULAR</span>}
+                  {plan.featured && <span style={{ fontSize: 10, fontWeight: 800, background: ACCENT, color: 'var(--cl-text-on-fill)', padding: '2px 8px', borderRadius: 999 }}>MOST POPULAR</span>}
                   {plan.seats > 1 && <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>up to {plan.seats} coaches</span>}
                 </div>
                 <p style={{ fontSize: 13, color: MUTED, margin: '0 0 14px' }}>{plan.tagline}</p>
@@ -120,7 +120,7 @@ export default function PricingPage() {
                   onClick={() => handleCheckout(plan.id)}
                   style={{
                     width: '100%', padding: '12px 0', borderRadius: 12, border: 'none',
-                    background: plan.featured ? ACCENT : '#1D1D1F', color: '#fff', fontSize: 15, fontWeight: 700,
+                    background: plan.featured ? ACCENT : 'var(--cl-action-primary)', color: 'var(--cl-text-on-fill)', fontSize: 15, fontWeight: 700,
                     cursor: loading ? 'not-allowed' : 'pointer', opacity: loading && loading !== plan.id ? 0.5 : 1,
                   }}
                 >
@@ -141,7 +141,7 @@ export default function PricingPage() {
         {/* Demo CTA */}
         <div style={{
           maxWidth: 560, margin: '0 auto', padding: '20px 24px', borderRadius: 16,
-          background: '#fff', border: '1px solid #E5E5EA',
+          background: 'var(--cl-bg-panel)', border: '1px solid var(--cl-border)',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap',
         }}>
           <div style={{ textAlign: 'left' }}>
@@ -169,6 +169,6 @@ export default function PricingPage() {
 function toggleBtn(active: boolean): React.CSSProperties {
   return {
     padding: '8px 18px', borderRadius: 999, border: 'none', cursor: 'pointer',
-    fontSize: 13, fontWeight: 700, background: active ? ACCENT : 'transparent', color: active ? '#fff' : INK,
+    fontSize: 13, fontWeight: 700, background: active ? ACCENT : 'transparent', color: active ? 'var(--cl-text-on-fill)' : INK,
   };
 }

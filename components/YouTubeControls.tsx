@@ -84,7 +84,7 @@ export default function YouTubeControls({
     justifyContent: 'center',
     height: 30,
     width: 30,
-    background: '#fff',
+    background: 'var(--cl-bg-panel)',
   }), []);
 
   return (
@@ -93,7 +93,7 @@ export default function YouTubeControls({
       flexDirection: 'column',
       gap: '8px',
       padding: '8px 16px',
-      borderTop: '1px solid #E8E8ED',
+      borderTop: '1px solid var(--cl-border)',
       background: '#F8F8F8',
       flexShrink: 0,
     }}>
@@ -104,7 +104,7 @@ export default function YouTubeControls({
         <button onClick={() => stepFrame(-1)} style={btnStyle} title="Back 1 frame">◀</button>
         <button onClick={() => stepFrame(1)} style={btnStyle} title="Forward 1 frame">▶</button>
 
-        <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#007AFF', fontWeight: 700, marginLeft: 4 }}>
+        <span style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--cl-accent)', fontWeight: 700, marginLeft: 4 }}>
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
 
@@ -117,8 +117,8 @@ export default function YouTubeControls({
               style={{
                 ...btnStyle,
                 width: 44,
-                background: playbackRate === s ? '#007AFF' : '#fff',
-                color: playbackRate === s ? '#fff' : '#1D1D1F',
+                background: playbackRate === s ? 'var(--cl-accent)' : 'var(--cl-bg-panel)',
+                color: playbackRate === s ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
               }}
             >
               {s}×
@@ -136,8 +136,8 @@ export default function YouTubeControls({
             style={{
               ...btnStyle,
               width: 44,
-              background: frameMode === f ? '#007AFF' : '#fff',
-              color: frameMode === f ? '#fff' : '#1D1D1F',
+              background: frameMode === f ? 'var(--cl-accent)' : 'var(--cl-bg-panel)',
+              color: frameMode === f ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
             }}
           >
             {f}

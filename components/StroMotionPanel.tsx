@@ -34,8 +34,8 @@ function statusLabel(status: StroMotionFrameStatus): string {
 }
 
 function statusColor(status: StroMotionFrameStatus): string {
-  if (status === 'ready') return '#34C759';
-  if (status === 'edited') return '#FF9500';
+  if (status === 'ready') return 'var(--cl-success)';
+  if (status === 'edited') return 'var(--cl-warning)';
   return 'var(--cl-text-muted, #888)';
 }
 
@@ -136,20 +136,20 @@ function StroFrameSubPanel({
       ref={panelRef}
       style={{
         position: 'fixed', left, top, zIndex: 9999, width: Math.max(panelW, 160),
-        background: '#FFF', borderRadius: 14, border: '1px solid #E5E5EA',
+        background: 'var(--cl-bg-panel)', borderRadius: 14, border: '1px solid var(--cl-border)',
         boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
         padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
-        <span style={{ fontSize: 14, fontWeight: 700, color: '#1D1D1F' }}>Frame {frame.index + 1}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--cl-text-primary)' }}>Frame {frame.index + 1}</span>
         <span style={{ fontSize: 11, color: '#AEAEB2' }}>{formatTimeShort(frame.timeSec)}</span>
       </div>
       <button
         type="button"
         disabled={disabled || isGenerating || isProposingFrame}
         onClick={onSelectArea}
-        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: '1px solid #007AFF', background: 'rgba(0,122,255,0.07)', color: '#007AFF' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: '1px solid var(--cl-accent)', background: 'rgba(0,122,255,0.07)', color: 'var(--cl-accent)' }}
       >
         <BoxSelect size={14} />
         {frame.hasSelection ? 'Re-select area' : 'Select Area'}
@@ -158,7 +158,7 @@ function StroFrameSubPanel({
         <button
           type="button"
           onClick={onEditFrame}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: '1px solid #D1D1D6', background: '#FFF', color: '#1D1D1F' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)' }}
         >
           Edit mask
         </button>
@@ -201,9 +201,9 @@ function StroFrameCompactIcon({
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           flexDirection: 'column', gap: 1,
           width: 44, height: 44, borderRadius: 10, cursor: 'pointer',
-          border: isOpen || isSelecting ? '1px solid #007AFF' : hasContent ? '1px solid #34C759' : '1px solid #D1D1D6',
-          background: isOpen || isSelecting ? '#007AFF' : hasContent ? 'rgba(52,199,89,0.08)' : '#FFF',
-          color: isOpen || isSelecting ? '#FFF' : hasContent ? '#34C759' : '#1D1D1F',
+          border: isOpen || isSelecting ? '1px solid var(--cl-accent)' : hasContent ? '1px solid var(--cl-success)' : '1px solid var(--cl-border)',
+          background: isOpen || isSelecting ? 'var(--cl-accent)' : hasContent ? 'rgba(52,199,89,0.08)' : 'var(--cl-bg-panel)',
+          color: isOpen || isSelecting ? 'var(--cl-text-on-fill)' : hasContent ? 'var(--cl-success)' : 'var(--cl-text-primary)',
         }}
       >
         <span style={{ fontSize: 14, fontWeight: 800, lineHeight: 1 }}>{frame.index + 1}</span>
@@ -288,17 +288,17 @@ export default function StroMotionPanel({
       ? {
           display: 'flex', alignItems: 'center', gap: 10,
           width: '100%', minHeight: 44, padding: '8px 12px', borderRadius: 10, cursor: 'pointer',
-          border: active ? '1px solid #007AFF' : '1px solid #D1D1D6',
-          background: active ? '#007AFF' : '#FFFFFF',
-          color: destructive ? '#FF3B30' : active ? '#FFFFFF' : '#1D1D1F',
+          border: active ? '1px solid var(--cl-accent)' : '1px solid var(--cl-border)',
+          background: active ? 'var(--cl-accent)' : 'var(--cl-bg-panel)',
+          color: destructive ? 'var(--cl-destructive)' : active ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
           fontSize: 13, fontWeight: 500,
         }
       : {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           width: 36, height: 36, borderRadius: 8, cursor: 'pointer',
-          border: active ? '1px solid #007AFF' : '1px solid #D1D1D6',
-          background: active ? '#007AFF' : '#FFFFFF',
-          color: destructive ? '#FF3B30' : active ? '#FFFFFF' : '#1D1D1F',
+          border: active ? '1px solid var(--cl-accent)' : '1px solid var(--cl-border)',
+          background: active ? 'var(--cl-accent)' : 'var(--cl-bg-panel)',
+          color: destructive ? 'var(--cl-destructive)' : active ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
           margin: '0 auto',
         };
 
@@ -309,16 +309,16 @@ export default function StroMotionPanel({
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: showLabels ? 6 : 4, alignItems: showLabels ? 'stretch' : 'center', padding: '4px 0', position: 'relative' }}>
         {disabled && (
-          <div style={{ fontSize: showLabels ? 12 : 10, color: '#FF3B30', textAlign: showLabels ? 'left' : 'center', padding: '0 4px', lineHeight: 1.3, marginBottom: 2 }}>
+          <div style={{ fontSize: showLabels ? 12 : 10, color: 'var(--cl-destructive)', textAlign: showLabels ? 'left' : 'center', padding: '0 4px', lineHeight: 1.3, marginBottom: 2 }}>
             {showLabels ? 'Upload a video file first.' : 'Upload\nvideo\nfirst'}
           </div>
         )}
         {/* Frame count */}
         {showLabels ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F' }}>Frames</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--cl-text-primary)' }}>Frames</span>
             <button type="button" disabled={disabled || !canDecrement} onClick={() => canDecrement && onFrameCountChange(STRO_MOTION_FRAME_COUNTS[frameCountIdx - 1])} style={{ ...ib(), width: 36, height: 36, padding: 0, justifyContent: 'center', gap: 0 }}><Minus size={14} /></button>
-            <span style={{ fontSize: 18, fontWeight: 800, minWidth: 28, textAlign: 'center', color: '#1D1D1F' }}>{frameCount}</span>
+            <span style={{ fontSize: 18, fontWeight: 800, minWidth: 28, textAlign: 'center', color: 'var(--cl-text-primary)' }}>{frameCount}</span>
             <button type="button" disabled={disabled || !canIncrement} onClick={() => canIncrement && onFrameCountChange(STRO_MOTION_FRAME_COUNTS[frameCountIdx + 1])} style={{ ...ib(), width: 36, height: 36, padding: 0, justifyContent: 'center', gap: 0 }}><Plus size={14} /></button>
           </div>
         ) : (
@@ -326,12 +326,12 @@ export default function StroMotionPanel({
         <button type="button" disabled={disabled || !canIncrement} onClick={() => canIncrement && onFrameCountChange(STRO_MOTION_FRAME_COUNTS[frameCountIdx + 1])} style={ib()} title="More frames">
           <Plus size={14} strokeWidth={2} />
         </button>
-        <span style={{ fontSize: 14, fontWeight: 700, color: '#1D1D1F', textAlign: 'center', width: 36, display: 'block', lineHeight: 1.4 }}>{frameCount}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--cl-text-primary)', textAlign: 'center', width: 36, display: 'block', lineHeight: 1.4 }}>{frameCount}</span>
         <button type="button" disabled={disabled || !canDecrement} onClick={() => canDecrement && onFrameCountChange(STRO_MOTION_FRAME_COUNTS[frameCountIdx - 1])} style={ib()} title="Fewer frames">
           <Minus size={14} strokeWidth={2} />
         </button>
 
-        <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
+        <div style={{ height: 1, background: 'var(--cl-border)', width: 32, margin: '4px auto' }} />
 
         {/* Per-frame buttons — each opens a mini sub-panel with Select Area */}
         {frames.map((frame) => (
@@ -361,7 +361,7 @@ export default function StroMotionPanel({
           </button>
         )}
 
-        <div style={{ height: 1, background: '#D1D1D6', width: 32, margin: '4px auto' }} />
+        <div style={{ height: 1, background: 'var(--cl-border)', width: 32, margin: '4px auto' }} />
 
         <button type="button" onClick={() => { const idx = OBJECT_TYPES.findIndex(o => o.id === objectType); onObjectTypeChange(OBJECT_TYPES[(idx + 1) % OBJECT_TYPES.length].id); }} title={`Object: ${objectType}`} style={ib()}>
           <BoxSelect size={14} strokeWidth={2} />
@@ -373,7 +373,7 @@ export default function StroMotionPanel({
           </button>
         ) : null}
 
-        <div style={{ height: 1, background: '#D1D1D6', width: 28, margin: '4px auto' }} />
+        <div style={{ height: 1, background: 'var(--cl-border)', width: 28, margin: '4px auto' }} />
 
         <button type="button" disabled={!canGenerate} onClick={onGenerate} title="Generate" style={ib()}>
           <Check size={14} strokeWidth={2} />
@@ -390,7 +390,7 @@ export default function StroMotionPanel({
         {/* Labeled mode: frame buttons + actions with text */}
         {showLabels && (
           <>
-          <div style={{ height: 1, background: '#D1D1D6', width: '100%', margin: '4px 0' }} />
+          <div style={{ height: 1, background: 'var(--cl-border)', width: '100%', margin: '4px 0' }} />
 
           {frames.map((frame) => {
             const selecting = isSelectingArea && selectingFrameIndex === frame.index;
@@ -403,17 +403,17 @@ export default function StroMotionPanel({
                 onClick={() => { onSelectFrame(frame.index); onSelectArea(frame.index); }}
                 style={{
                   ...ib(selecting),
-                  border: selecting ? '1px solid #007AFF' : hasContent ? '1px solid #34C759' : '1px solid #D1D1D6',
-                  background: selecting ? '#007AFF' : hasContent ? 'rgba(52,199,89,0.06)' : '#FFF',
-                  color: selecting ? '#FFF' : hasContent ? '#34C759' : '#1D1D1F',
+                  border: selecting ? '1px solid var(--cl-accent)' : hasContent ? '1px solid var(--cl-success)' : '1px solid var(--cl-border)',
+                  background: selecting ? 'var(--cl-accent)' : hasContent ? 'rgba(52,199,89,0.06)' : 'var(--cl-bg-panel)',
+                  color: selecting ? 'var(--cl-text-on-fill)' : hasContent ? 'var(--cl-success)' : 'var(--cl-text-primary)',
                 }}
               >
-                <span style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: selecting ? 'rgba(255,255,255,0.2)' : '#E5E5EA', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: selecting ? '#FFF' : '#6E6E73' }}>
+                <span style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: selecting ? 'rgba(255,255,255,0.2)' : 'var(--cl-fill-inactive)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: selecting ? 'var(--cl-text-on-fill)' : 'var(--cl-text-secondary)' }}>
                   {frame.index + 1}
                 </span>
                 <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{frame.label}</span>
                 <span style={{ fontSize: 11, opacity: 0.6 }}>{formatTimeShort(frame.timeSec)}</span>
-                {hasContent && <span style={{ fontSize: 10, fontWeight: 700, color: '#34C759' }}>✓</span>}
+                {hasContent && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--cl-success)' }}>✓</span>}
               </button>
             );
           })}
@@ -424,7 +424,7 @@ export default function StroMotionPanel({
             </button>
           )}
 
-          <div style={{ height: 1, background: '#D1D1D6', width: '100%', margin: '4px 0' }} />
+          <div style={{ height: 1, background: 'var(--cl-border)', width: '100%', margin: '4px 0' }} />
 
           <button type="button" onClick={() => { const idx = OBJECT_TYPES.findIndex(o => o.id === objectType); onObjectTypeChange(OBJECT_TYPES[(idx + 1) % OBJECT_TYPES.length].id); }} style={ib()}>
             <LB icon={<BoxSelect size={18} />} label={`Object: ${objectType}`} />
@@ -436,7 +436,7 @@ export default function StroMotionPanel({
             </button>
           ) : null}
 
-          <div style={{ height: 1, background: '#D1D1D6', width: '100%', margin: '4px 0' }} />
+          <div style={{ height: 1, background: 'var(--cl-border)', width: '100%', margin: '4px 0' }} />
 
           <button type="button" disabled={!canGenerate} onClick={onGenerate} style={ib()}>
             <LB icon={<Check size={18} />} label="Generate Motion Layer" />
@@ -603,7 +603,7 @@ export default function StroMotionPanel({
                           Edit mask
                         </button>
                         {frame.status !== 'ready' ? (
-                          <button type="button" style={{ ...miniBtn, color: '#34C759' }} onClick={() => onMarkReady(frame.index)}>
+                          <button type="button" style={{ ...miniBtn, color: 'var(--cl-success)' }} onClick={() => onMarkReady(frame.index)}>
                             <Check size={10} style={{ marginRight: 2, verticalAlign: -1 }} />
                             Ready
                           </button>
@@ -631,7 +631,7 @@ export default function StroMotionPanel({
           Generating composite… {progressCurrent}/{progressTotal}
         </div>
       ) : isPreviewReady ? (
-        <div style={{ fontSize: 12, marginTop: 8, fontWeight: 600, color: '#34C759' }}>
+        <div style={{ fontSize: 12, marginTop: 8, fontWeight: 600, color: 'var(--cl-success)' }}>
           Motion Layer ready — {frameCount} layers
         </div>
       ) : allReady ? (
@@ -822,7 +822,7 @@ const primaryBtnStyle: React.CSSProperties = {
   borderRadius: 10,
   border: 'none',
   background: 'var(--cl-accent, #007AFF)',
-  color: '#fff',
+  color: 'var(--cl-text-on-fill)',
   fontWeight: 700,
   fontSize: 13,
   cursor: 'pointer',

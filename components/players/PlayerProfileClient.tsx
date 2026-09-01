@@ -150,10 +150,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
 
   const panel = {
     background: 'rgba(250, 249, 247, 0.96)',
-    border: '1px solid #E5E5E5',
+    border: '1px solid var(--cl-border)',
     borderRadius: 16,
     padding: 18,
-    color: '#1A1A1A',
+    color: 'var(--cl-text-primary)',
   } as const;
 
   const saveProfile = async () => {
@@ -216,7 +216,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           display: 'inline-flex',
           alignItems: 'center',
           gap: 6,
-          color: '#007AFF',
+          color: 'var(--cl-accent)',
           fontSize: 13,
           marginBottom: 16,
           textDecoration: 'none',
@@ -303,8 +303,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             padding: '10px 20px',
             borderRadius: 10,
             border: 'none',
-            background: '#1A1A1A',
-            color: '#fff',
+            background: 'var(--cl-action-primary)',
+            color: 'var(--cl-text-on-fill)',
             fontWeight: 700,
             cursor: saving ? 'wait' : 'pointer',
           }}
@@ -321,7 +321,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             type="button"
             onClick={() => { if (sheet) void saveSheet(sheet); }}
             disabled={sheetSaving || !sheet}
-            style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#1A1A1A', color: '#fff', fontWeight: 700, fontSize: 12, cursor: sheetSaving ? 'wait' : 'pointer' }}
+            style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: 'var(--cl-action-primary)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: sheetSaving ? 'wait' : 'pointer' }}
           >
             {sheetSaving ? 'Saving…' : 'Save sheet'}
           </button>
@@ -355,7 +355,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                     return next;
                   });
                 }}
-                style={{ width: 30, height: 34, borderRadius: 8, border: '1px solid #E5E5EA', background: '#fff', color: '#8E8E93', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                style={{ width: 30, height: 34, borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-muted)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 <X size={14} />
               </button>
@@ -367,7 +367,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             <button
               type="button"
               onClick={() => setNewRowLabel('')}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed #007AFF', background: 'rgba(0,122,255,0.04)', color: '#007AFF', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed var(--cl-accent)', background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
             >
               <Plus size={14} /> Add row
             </button>
@@ -403,14 +403,14 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                   });
                   setNewRowLabel(null);
                 }}
-                style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#007AFF', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
               >
                 Add
               </button>
               <button
                 type="button"
                 onClick={() => setNewRowLabel(null)}
-                style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #D1D1D6', background: '#fff', color: '#1A1A1A', fontSize: 12, cursor: 'pointer' }}
+                style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}
               >
                 Cancel
               </button>
@@ -422,10 +422,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       <section
         style={{
           background: 'rgba(250, 249, 247, 0.96)',
-          border: '1px solid #E5E5E5',
+          border: '1px solid var(--cl-border)',
           borderRadius: 16,
           padding: 18,
-          color: '#1A1A1A',
+          color: 'var(--cl-text-primary)',
           marginBottom: 16,
         }}
       >
@@ -447,8 +447,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             padding: '10px 16px',
             borderRadius: 10,
             border: 'none',
-            background: '#007AFF',
-            color: '#fff',
+            background: 'var(--cl-accent)',
+            color: 'var(--cl-text-on-fill)',
             fontWeight: 700,
             fontSize: 13,
             cursor: creatingSession ? 'wait' : 'pointer',
@@ -463,10 +463,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       <section
         style={{
           background: 'rgba(250, 249, 247, 0.96)',
-          border: '1px solid #E5E5E5',
+          border: '1px solid var(--cl-border)',
           borderRadius: 16,
           padding: 18,
-          color: '#1A1A1A',
+          color: 'var(--cl-text-primary)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
@@ -479,8 +479,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 rel="noreferrer"
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '8px 14px', borderRadius: 10, background: '#007AFF',
-                  color: '#fff', fontSize: 12, fontWeight: 700, textDecoration: 'none',
+                  padding: '8px 14px', borderRadius: 10, background: 'var(--cl-accent)',
+                  color: 'var(--cl-text-on-fill)', fontSize: 12, fontWeight: 700, textDecoration: 'none',
                 }}
               >
                 Technical Analysis Doc ↗
@@ -493,8 +493,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 rel="noreferrer"
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '8px 14px', borderRadius: 10, background: '#34C759',
-                  color: '#fff', fontSize: 12, fontWeight: 700, textDecoration: 'none',
+                  padding: '8px 14px', borderRadius: 10, background: 'var(--cl-success)',
+                  color: 'var(--cl-text-on-fill)', fontSize: 12, fontWeight: 700, textDecoration: 'none',
                 }}
               >
                 Match Analysis Doc ↗
@@ -507,8 +507,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 rel="noreferrer"
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '8px 14px', borderRadius: 10, background: '#fff',
-                  border: '1px solid #007AFF', color: '#007AFF',
+                  padding: '8px 14px', borderRadius: 10, background: 'var(--cl-bg-panel)',
+                  border: '1px solid var(--cl-accent)', color: 'var(--cl-accent)',
                   fontSize: 12, fontWeight: 700, textDecoration: 'none',
                 }}
               >
@@ -548,9 +548,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
               style={{
                 padding: '7px 14px', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer',
                 borderWidth: 1, borderStyle: 'solid',
-                borderColor: dbTab === key ? '#007AFF' : '#D1D1D6',
-                background: dbTab === key ? '#007AFF' : '#fff',
-                color: dbTab === key ? '#fff' : '#1A1A1A',
+                borderColor: dbTab === key ? 'var(--cl-accent)' : 'var(--cl-border)',
+                background: dbTab === key ? 'var(--cl-accent)' : 'var(--cl-bg-panel)',
+                color: dbTab === key ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
               }}
             >
               {label}
@@ -561,7 +561,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             onChange={(e) => setDbSearch(e.target.value)}
             placeholder="Search reports…"
             aria-label="Search reports"
-            style={{ flex: '1 1 180px', minWidth: 160, padding: '8px 12px', borderRadius: 10, border: '1px solid #D1D1D6', fontSize: 12 }}
+            style={{ flex: '1 1 180px', minWidth: 160, padding: '8px 12px', borderRadius: 10, border: '1px solid var(--cl-border)', fontSize: 12 }}
           />
         </div>
         {timelineEntries.length === 0 ? (
@@ -583,7 +583,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 style={{
                   padding: 14,
                   borderRadius: 12,
-                  background: '#fff',
+                  background: 'var(--cl-bg-panel)',
                   border: '1px solid #E7E5E4',
                   cursor: (e.metadata?.doc_url || player.google_doc_id) ? 'pointer' : 'default',
                 }}
@@ -646,7 +646,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
               value={statMetric || statLabels[0]}
               onChange={(e) => setStatMetric(e.target.value)}
               aria-label="Metric"
-              style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #D1D1D6', fontSize: 12, background: '#fff' }}
+              style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid var(--cl-border)', fontSize: 12, background: 'var(--cl-bg-panel)' }}
             >
               {statLabels.map((l) => <option key={l} value={l}>{l}</option>)}
             </select>
@@ -677,11 +677,11 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                       <span style={{ width: 130, fontSize: 11, color: '#78716c', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
                         {new Date(d.date).toLocaleDateString()}{d.snapshot ? ` · ${d.snapshot}` : ''}
                       </span>
-                      <div style={{ flex: 1, height: 16, background: '#F2F2F7', borderRadius: 8, overflow: 'hidden' }}>
+                      <div style={{ flex: 1, height: 16, background: 'var(--cl-bg-secondary)', borderRadius: 8, overflow: 'hidden' }}>
                         <div style={{
                           width: `${Math.max(2, Math.min(100, (Math.abs(d.value) / span) * 100))}%`,
                           height: '100%',
-                          background: '#007AFF',
+                          background: 'var(--cl-accent)',
                           borderRadius: 8,
                         }} />
                       </div>
@@ -710,7 +710,7 @@ const lb: React.CSSProperties = {
 
 const inp: React.CSSProperties = {
   borderRadius: 10,
-  border: '1px solid #E5E5E5',
+  border: '1px solid var(--cl-border)',
   padding: '10px 12px',
   fontSize: 14,
   width: '100%',

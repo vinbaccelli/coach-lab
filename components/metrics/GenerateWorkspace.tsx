@@ -271,7 +271,7 @@ export default function GenerateWorkspace({
         height: isMobile ? 'auto' : 'min(860px, 96vh)',
         maxHeight: isMobile ? '92vh' : undefined,
         background: '#101014', borderRadius: 16, border: '1px solid rgba(255,255,255,0.12)',
-        color: '#fff', display: 'flex', flexDirection: 'column',
+        color: 'var(--cl-text-on-fill)', display: 'flex', flexDirection: 'column',
         overflowY: isMobile ? 'auto' : 'hidden', overflowX: 'hidden',
       }}>
         {/* Header */}
@@ -303,14 +303,14 @@ export default function GenerateWorkspace({
                 <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)' }}>Replay speed</span>
                 {SPEED_OPTIONS.map((r) => (
                   <button key={r} type="button" onClick={() => onPlaybackRateChange(r)}
-                    style={{ ...speedBtn, ...(playbackRate === r ? { background: '#007AFF', borderColor: '#007AFF' } : {}) }}>
+                    style={{ ...speedBtn, ...(playbackRate === r ? { background: 'var(--cl-accent)', borderColor: 'var(--cl-accent)' } : {}) }}>
                     {r}×
                   </button>
                 ))}
                 <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', marginLeft: 10 }}>Freeze per snapshot</span>
                 {[1, 2, 3, 5].map((s) => (
                   <button key={s} type="button" onClick={() => onHoldSecondsChange(s)}
-                    style={{ ...speedBtn, ...(holdSeconds === s ? { background: '#007AFF', borderColor: '#007AFF' } : {}) }}>
+                    style={{ ...speedBtn, ...(holdSeconds === s ? { background: 'var(--cl-accent)', borderColor: 'var(--cl-accent)' } : {}) }}>
                     {s}s
                   </button>
                 ))}
@@ -445,7 +445,7 @@ export default function GenerateWorkspace({
                         rows={1}
                         style={{
                           width: '100%', marginTop: 4, resize: 'vertical', fontSize: 11,
-                          background: 'rgba(0,0,0,0.35)', color: '#fff', borderRadius: 6,
+                          background: 'rgba(0,0,0,0.35)', color: 'var(--cl-text-on-fill)', borderRadius: 6,
                           border: '1px solid rgba(255,255,255,0.1)', padding: '4px 6px',
                         }}
                       />
@@ -466,14 +466,14 @@ export default function GenerateWorkspace({
                 onChange={(e) => setReportTitle(e.target.value)}
                 placeholder="Report title"
                 aria-label="Report title"
-                style={{ width: '100%', fontSize: 13, fontWeight: 600, background: 'rgba(0,0,0,0.35)', color: '#fff', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
+                style={{ width: '100%', fontSize: 13, fontWeight: 600, background: 'rgba(0,0,0,0.35)', color: 'var(--cl-text-on-fill)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
               />
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <select
                   value={attachPlayerId}
                   onChange={(e) => setAttachPlayerId(e.target.value)}
                   aria-label="Attach to player"
-                  style={{ flex: 1, fontSize: 12, background: 'rgba(0,0,0,0.35)', color: '#fff', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
+                  style={{ flex: 1, fontSize: 12, background: 'rgba(0,0,0,0.35)', color: 'var(--cl-text-on-fill)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
                 >
                   <option value="">No player — just create the report</option>
                   {players.map((p) => <option key={p.id} value={p.id}>Attach to {p.display_name}</option>)}
@@ -504,7 +504,7 @@ export default function GenerateWorkspace({
                     autoFocus
                     aria-label="New player name"
                     onKeyDown={(e) => { if (e.key === 'Enter' && newPlayerName.trim()) void handleCreatePlayer(); }}
-                    style={{ flex: 1, fontSize: 12, background: 'rgba(0,0,0,0.35)', color: '#fff', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
+                    style={{ flex: 1, fontSize: 12, background: 'rgba(0,0,0,0.35)', color: 'var(--cl-text-on-fill)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', padding: '8px 10px' }}
                   />
                   <button
                     type="button"
@@ -547,24 +547,24 @@ export default function GenerateWorkspace({
 const iconBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   width: 34, height: 34, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
-  background: 'rgba(255,255,255,0.06)', color: '#fff', cursor: 'pointer',
+  background: 'rgba(255,255,255,0.06)', color: 'var(--cl-text-on-fill)', cursor: 'pointer',
 };
 
 const primaryBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px',
-  borderRadius: 10, border: 'none', background: '#007AFF', color: '#fff',
+  borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)',
   fontWeight: 700, fontSize: 13, cursor: 'pointer',
 };
 
 const secondaryBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px',
   borderRadius: 8, border: '1px solid rgba(255,255,255,0.18)', background: 'transparent',
-  color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer',
+  color: 'var(--cl-text-on-fill)', fontWeight: 600, fontSize: 12, cursor: 'pointer',
 };
 
 const tabActive: React.CSSProperties = {
-  padding: '7px 14px', borderRadius: 8, border: 'none', background: '#007AFF',
-  color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer',
+  padding: '7px 14px', borderRadius: 8, border: 'none', background: 'var(--cl-accent)',
+  color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer',
 };
 
 const tabIdle: React.CSSProperties = {
@@ -577,7 +577,7 @@ const tabIdle: React.CSSProperties = {
 const speedBtn: React.CSSProperties = {
   padding: '4px 8px', borderRadius: 6,
   borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(255,255,255,0.2)',
-  background: 'transparent', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+  background: 'transparent', color: 'var(--cl-text-on-fill)', fontSize: 11, fontWeight: 600, cursor: 'pointer',
 };
 
 const miniBtn: React.CSSProperties = {
@@ -595,6 +595,6 @@ const navArrow: React.CSSProperties = {
   position: 'absolute', top: '50%', transform: 'translateY(-50%)', zIndex: 2,
   width: 36, height: 36, borderRadius: '50%',
   borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(255,255,255,0.25)',
-  background: 'rgba(0,0,0,0.55)', color: '#fff', cursor: 'pointer',
+  background: 'rgba(0,0,0,0.55)', color: 'var(--cl-text-on-fill)', cursor: 'pointer',
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0,
 };

@@ -610,11 +610,11 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
         gap: '6px',
         padding: '8px 14px',
         borderRadius: '12px',
-        border: '1px solid #E5E5E5',
-        background: '#FFFFFF',
+        border: '1px solid var(--cl-border)',
+        background: 'var(--cl-bg-panel)',
         cursor: 'pointer',
         fontSize: '13px',
-        color: '#1A1A1A',
+        color: 'var(--cl-text-primary)',
         fontWeight: 500,
       };
 
@@ -627,7 +627,7 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
           style={{ ...btnStyle, ...(disabled ? { opacity: 0.5, cursor: 'not-allowed' } : null) }}
           title={disabled ? 'Another capture is in progress' : 'Start screen recording'}
         >
-          <span style={{ color: '#FF3B30', fontSize: compactIcon ? 18 : 16 }}>&#9210;</span>
+          <span style={{ color: 'var(--cl-destructive)', fontSize: compactIcon ? 18 : 16 }}>&#9210;</span>
           {compactIcon ? null : 'Record'}
         </button>
       )}
@@ -640,12 +640,12 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
               width: '10px',
               height: '10px',
               borderRadius: '50%',
-              background: '#FF3B30',
+              background: 'var(--cl-destructive)',
               animation: 'pulse 1.2s ease-in-out infinite',
               flexShrink: 0,
             }}
           />
-          <span style={{ fontFamily: 'monospace', fontSize: '13px', color: '#FF3B30', fontWeight: 700 }}>
+          <span style={{ fontFamily: 'monospace', fontSize: '13px', color: 'var(--cl-destructive)', fontWeight: 700 }}>
             {formatHMS(elapsed)}
           </span>
           <button
@@ -656,11 +656,11 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
               gap: '6px',
               padding: '6px 12px',
               borderRadius: '6px',
-              border: '1px solid #FF3B30',
-              background: '#FF3B30',
+              border: '1px solid var(--cl-destructive)',
+              background: 'var(--cl-destructive)',
               cursor: 'pointer',
               fontSize: '13px',
-              color: '#fff',
+              color: 'var(--cl-text-on-fill)',
               fontWeight: 500,
             }}
             title="Stop recording and save"
@@ -681,7 +681,7 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
       )}
 
       {error && (
-        <span style={{ fontSize: '11px', color: '#FF3B30', maxWidth: '180px' }}>{error}</span>
+        <span style={{ fontSize: '11px', color: 'var(--cl-destructive)', maxWidth: '180px' }}>{error}</span>
       )}
 
       <style>{`

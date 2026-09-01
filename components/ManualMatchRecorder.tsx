@@ -68,7 +68,7 @@ const btnLight: CSSProperties = {
   minHeight: 52,
   borderRadius: 14,
   border: '2px solid #1a1a1a',
-  background: '#ffffff',
+  background: 'var(--cl-bg-panel)',
   color: '#111111',
   fontWeight: 800,
   fontSize: 16,
@@ -441,7 +441,7 @@ export default function ManualMatchRecorder() {
           <summary style={{ fontSize: 12, color: '#666', cursor: 'pointer', userSelect: 'none', fontWeight: 600 }}>
             How this works
           </summary>
-          <div style={{ ...surface, marginTop: 8, background: '#fff' }}>
+          <div style={{ ...surface, marginTop: 8, background: 'var(--cl-bg-panel)' }}>
             <ol style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7, color: '#333' }}>
               <li>
                 <strong>Who won the point</strong> — tap the player's name.
@@ -512,12 +512,12 @@ export default function ManualMatchRecorder() {
                   display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
                   width: '100%', padding: '10px 12px', marginBottom: 6,
                   borderRadius: 10,
-                  border: isActive ? '2px solid #007AFF' : '1.5px solid #ccc',
-                  background: isActive ? 'rgba(0,122,255,0.08)' : '#fff',
+                  border: isActive ? '2px solid var(--cl-accent)' : '1.5px solid #ccc',
+                  background: isActive ? 'rgba(0,122,255,0.08)' : 'var(--cl-bg-panel)',
                   color: '#111', cursor: 'pointer', textAlign: 'left',
                 }}
               >
-                <span style={{ fontWeight: 700, fontSize: 14, color: isActive ? '#007AFF' : '#111' }}>{preset.label}</span>
+                <span style={{ fontWeight: 700, fontSize: 14, color: isActive ? 'var(--cl-accent)' : '#111' }}>{preset.label}</span>
                 <span style={{ fontSize: 12, color: '#666', marginTop: 1 }}>{preset.sub}</span>
               </button>
             );
@@ -577,9 +577,9 @@ export default function ManualMatchRecorder() {
                     ...btnLight,
                     minHeight: 44,
                     fontSize: 14,
-                    border: active ? '2px solid #007AFF' : '2px solid #1a1a1a',
-                    background: active ? 'rgba(0,122,255,0.08)' : '#fff',
-                    color: active ? '#007AFF' : '#111',
+                    border: active ? '2px solid var(--cl-accent)' : '2px solid #1a1a1a',
+                    background: active ? 'rgba(0,122,255,0.08)' : 'var(--cl-bg-panel)',
+                    color: active ? 'var(--cl-accent)' : '#111',
                   }}
                 >
                   {label}
@@ -674,7 +674,7 @@ export default function ManualMatchRecorder() {
               setPhase('record');
               resetMenus();
             }}
-            style={{ ...btnLight, width: '100%', marginTop: 18, background: '#111', color: '#fff', borderColor: '#111' }}
+            style={{ ...btnLight, width: '100%', marginTop: 18, background: '#111', color: 'var(--cl-text-on-fill)', borderColor: '#111' }}
           >
             Start match
           </button>
@@ -695,7 +695,7 @@ export default function ManualMatchRecorder() {
           <summary style={{ fontSize: 12, color: '#666', cursor: 'pointer', userSelect: 'none', fontWeight: 600 }}>
             What do AM and EER mean?
           </summary>
-          <div style={{ ...surface, marginTop: 8, background: '#fff' }}>
+          <div style={{ ...surface, marginTop: 8, background: 'var(--cl-bg-panel)' }}>
             <p style={{ margin: '0 0 8px', fontSize: 13, lineHeight: 1.6, color: '#333' }}>
               <strong>AM — Aggressive Margin.</strong> Winners minus unforced errors. Above zero means a
               side created more than it gave away; below zero means the reverse.
@@ -713,7 +713,7 @@ export default function ManualMatchRecorder() {
             This exact node is what openSaveModal captures as the Doc's image —
             the ref must stay on the fixed-white-background wrapper, not the
             page's dark chrome, so the capture matches what a reader expects. */}
-        <div ref={reportCaptureRef} style={{ ...surface, background: '#fff', padding: 20, overflowX: 'auto' }}>
+        <div ref={reportCaptureRef} style={{ ...surface, background: 'var(--cl-bg-panel)', padding: 20, overflowX: 'auto' }}>
           <MatchReportView reports={reports} />
         </div>
 
@@ -730,14 +730,14 @@ export default function ManualMatchRecorder() {
               fontSize: 13,
               lineHeight: 1.5,
               whiteSpace: 'pre-wrap',
-              background: '#fff',
+              background: 'var(--cl-bg-panel)',
             }}
           >
             {reportText}
           </div>
         </details>
         {gameNotes.length > 0 ? (
-          <div style={{ ...surface, marginTop: 12, background: '#fff' }}>
+          <div style={{ ...surface, marginTop: 12, background: 'var(--cl-bg-panel)' }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>End-of-game notes</div>
             {gameNotes.map((n, i) => (
               <p key={i} style={{ margin: '0 0 6px', fontSize: 14 }}>
@@ -763,11 +763,11 @@ export default function ManualMatchRecorder() {
             type="button"
             disabled={preparingSave}
             onClick={openSaveModal}
-            style={{ ...btnLight, background: '#111', color: '#fff', borderColor: '#111' }}
+            style={{ ...btnLight, background: '#111', color: 'var(--cl-text-on-fill)', borderColor: '#111' }}
           >
             {preparingSave ? 'Capturing report…' : 'Save & Export to Google Doc'}
           </button>
-          <button type="button" onClick={() => setPhase('setup')} style={{ ...btnLight, background: '#fff' }}>
+          <button type="button" onClick={() => setPhase('setup')} style={{ ...btnLight, background: 'var(--cl-bg-panel)' }}>
             New match
           </button>
         </div>
@@ -847,7 +847,7 @@ export default function ManualMatchRecorder() {
       <button
         type="button"
         onClick={() => setBallType(null)}
-        style={{ ...btnLight, minHeight: 44, background: '#fff', fontSize: 14 }}
+        style={{ ...btnLight, minHeight: 44, background: 'var(--cl-bg-panel)', fontSize: 14 }}
       >
         Not sure — skip
       </button>
@@ -929,7 +929,7 @@ export default function ManualMatchRecorder() {
           <button
             type="button"
             disabled={!Number.isInteger(Number(rallyCustomValue)) || Number(rallyCustomValue) < 1}
-            style={{ ...btnLight, flex: 'none', minHeight: 44, padding: '0 16px', background: '#111', color: '#fff', borderColor: '#111' }}
+            style={{ ...btnLight, flex: 'none', minHeight: 44, padding: '0 16px', background: '#111', color: 'var(--cl-text-on-fill)', borderColor: '#111' }}
             onClick={() => setRallyLength(Number(rallyCustomValue))}
           >
             Use
@@ -939,7 +939,7 @@ export default function ManualMatchRecorder() {
       <button
         type="button"
         onClick={() => setRallyLength(null)}
-        style={{ ...btnLight, minHeight: 44, background: '#fff', fontSize: 14 }}
+        style={{ ...btnLight, minHeight: 44, background: 'var(--cl-bg-panel)', fontSize: 14 }}
       >
         Not sure — skip
       </button>
@@ -963,7 +963,7 @@ export default function ManualMatchRecorder() {
         ) : null}
         <button
           type="button"
-          style={{ ...btnLight, width: '100%', background: '#111', color: '#fff', borderColor: '#111', minHeight: 56 }}
+          style={{ ...btnLight, width: '100%', background: '#111', color: 'var(--cl-text-on-fill)', borderColor: '#111', minHeight: 56 }}
           onClick={() => {
             if (!pickWinner || !pendingOutcome) return;
             commitPoint(pickWinner, pendingOutcome);
@@ -999,7 +999,7 @@ export default function ManualMatchRecorder() {
           marginBottom: 12,
           padding: '12px 14px',
           borderRadius: 14,
-          background: '#ffffff',
+          background: 'var(--cl-bg-panel)',
           border: '2px solid #111',
           color: '#111',
           fontWeight: 800,
@@ -1010,7 +1010,7 @@ export default function ManualMatchRecorder() {
         <div style={{ fontSize: 11, fontWeight: 800, opacity: 0.55, marginBottom: 4 }}>CURRENT SCORE</div>
         {scoreLine}
         {/* FEATURE A — derived server, shown every point so it is never guessed. */}
-        <div style={{ marginTop: 6, fontSize: 13, fontWeight: 800, color: '#007AFF' }}>
+        <div style={{ marginTop: 6, fontSize: 13, fontWeight: 800, color: 'var(--cl-accent)' }}>
           Serving: {servingNow === 'player' ? playerName.trim() || 'Player' : opponentName.trim() || 'Opponent'}
         </div>
         {/* Break/Set/Match Point — DERIVED from the score, never asked. */}
@@ -1026,7 +1026,7 @@ export default function ManualMatchRecorder() {
                   fontSize: 11,
                   fontWeight: 800,
                   letterSpacing: 0.2,
-                  color: '#fff',
+                  color: 'var(--cl-text-on-fill)',
                   background: sig.kind === 'match' ? '#B3261E' : sig.kind === 'set' ? '#B45309' : '#8A3FFC',
                 }}
               >
@@ -1075,9 +1075,9 @@ export default function ManualMatchRecorder() {
             minHeight: 44,
             padding: '0 14px',
             fontSize: 14,
-            background: '#007AFF',
-            color: '#fff',
-            borderColor: '#007AFF',
+            background: 'var(--cl-accent)',
+            color: 'var(--cl-text-on-fill)',
+            borderColor: 'var(--cl-accent)',
           }}
         >
           Finish match
@@ -1095,10 +1095,10 @@ export default function ManualMatchRecorder() {
         <>
           {!pickWinner ? (
             <div style={{ display: 'flex', gap: 12 }}>
-              <button type="button" style={{ ...btnLight, background: '#fff' }} onClick={() => setPickWinner('player')}>
+              <button type="button" style={{ ...btnLight, background: 'var(--cl-bg-panel)' }} onClick={() => setPickWinner('player')}>
                 Point → {playerName.trim() || 'Player'}
               </button>
-              <button type="button" style={{ ...btnLight, background: '#fff' }} onClick={() => setPickWinner('opponent')}>
+              <button type="button" style={{ ...btnLight, background: 'var(--cl-bg-panel)' }} onClick={() => setPickWinner('opponent')}>
                 Point → {opponentName.trim() || 'Opponent'}
               </button>
             </div>
@@ -1227,7 +1227,7 @@ export default function ManualMatchRecorder() {
             padding: 16,
           }}
         >
-          <div style={{ ...surface, maxWidth: 400, width: '100%', background: '#fff' }}>
+          <div style={{ ...surface, maxWidth: 400, width: '100%', background: 'var(--cl-bg-panel)' }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Game break — note (optional)</div>
             <textarea
               value={gameNoteDraft}
@@ -1255,7 +1255,7 @@ export default function ManualMatchRecorder() {
                   minHeight: 44,
                   padding: '0 16px',
                   background: '#111',
-                  color: '#fff',
+                  color: 'var(--cl-text-on-fill)',
                   borderColor: '#111',
                 }}
                 onClick={() => {
@@ -1283,6 +1283,6 @@ const inp: CSSProperties = {
   padding: '10px 12px',
   fontSize: 15,
   boxSizing: 'border-box',
-  background: '#fff',
+  background: 'var(--cl-bg-panel)',
   color: '#111',
 };

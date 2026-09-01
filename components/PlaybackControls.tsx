@@ -239,7 +239,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
       flexDirection: 'column',
       gap: '8px',
       padding: '8px 16px',
-      borderTop: '1px solid #E8E8ED',
+      borderTop: '1px solid var(--cl-border)',
       background: '#F8F8F8',
       flexShrink: 0,
     }}>
@@ -250,7 +250,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
         alignItems: 'center',
         gap: '8px',
       }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#007AFF', width: 24 }}>A</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--cl-accent)', width: 24 }}>A</span>
 
         {/* Play/Pause */}
         <button
@@ -271,8 +271,8 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
           }}
           style={{
             ...btnStyle,
-            background: isPlayingA ? '#007AFF' : '#E8E8ED',
-            color: isPlayingA ? '#fff' : '#1D1D1F',
+            background: isPlayingA ? 'var(--cl-accent)' : 'var(--cl-fill-inactive)',
+            color: isPlayingA ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
           }}
           title="Play/Pause (Space)"
         >
@@ -292,8 +292,8 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
           }}
           style={{
             ...btnStyle,
-            background: '#E8E8ED',
-            color: '#1D1D1F',
+            background: 'var(--cl-fill-inactive)',
+            color: 'var(--cl-text-primary)',
           }}
           title="Stop"
         >
@@ -303,7 +303,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
         {/* Step back */}
         <button
           onClick={() => handleFrameStep(-1)}
-          style={{ ...btnStyle, background: '#E8E8ED', color: '#1D1D1F', fontSize: 12 }}
+          style={{ ...btnStyle, background: 'var(--cl-fill-inactive)', color: 'var(--cl-text-primary)', fontSize: 12 }}
           title="Step back 1 frame (←)"
         >
           ◀
@@ -312,7 +312,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
         {/* Step forward */}
         <button
           onClick={() => handleFrameStep(1)}
-          style={{ ...btnStyle, background: '#E8E8ED', color: '#1D1D1F', fontSize: 12 }}
+          style={{ ...btnStyle, background: 'var(--cl-fill-inactive)', color: 'var(--cl-text-primary)', fontSize: 12 }}
           title="Step forward 1 frame (→)"
         >
           ▶
@@ -340,11 +340,11 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
               outline: 'none',
               cursor: 'pointer',
               background: '#D1D5DB',
-              accentColor: '#007AFF',
+              accentColor: 'var(--cl-accent)',
             }}
           />
           {/* Time display below slider */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#6E6E73' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--cl-text-secondary)' }}>
             <span>{formatTime(currentTimeA)}</span>
             <span>{formatTime(durationA)}</span>
           </div>
@@ -357,10 +357,10 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
           display: 'flex',
           alignItems: 'center',
           gap: '8px',
-          borderTop: '1px solid #E8E8ED',
+          borderTop: '1px solid var(--cl-border)',
           paddingTop: '6px',
         }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#FF9500', width: 24 }}>B</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--cl-warning)', width: 24 }}>B</span>
 
           {/* Play/Pause */}
           <button
@@ -377,8 +377,8 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
             }}
             style={{
               ...btnStyle,
-              background: isPlayingB ? '#FF9500' : '#E8E8ED',
-              color: isPlayingB ? '#fff' : '#1D1D1F',
+              background: isPlayingB ? 'var(--cl-warning)' : 'var(--cl-fill-inactive)',
+              color: isPlayingB ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
             }}
             title="Play/Pause Video B"
           >
@@ -398,8 +398,8 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
             }}
             style={{
               ...btnStyle,
-              background: '#E8E8ED',
-              color: '#1D1D1F',
+              background: 'var(--cl-fill-inactive)',
+              color: 'var(--cl-text-primary)',
             }}
             title="Stop Video B"
           >
@@ -412,7 +412,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
               const v = videoRefB?.current;
               if (v) stepVideo(v, -1, setCurrentTimeB);
             }}
-            style={{ ...btnStyle, background: '#E8E8ED', color: '#1D1D1F', fontSize: 12 }}
+            style={{ ...btnStyle, background: 'var(--cl-fill-inactive)', color: 'var(--cl-text-primary)', fontSize: 12 }}
             title="Step back 1 frame (←)"
           >
             ◀
@@ -424,7 +424,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
               const v = videoRefB?.current;
               if (v) stepVideo(v, 1, setCurrentTimeB);
             }}
-            style={{ ...btnStyle, background: '#E8E8ED', color: '#1D1D1F', fontSize: 12 }}
+            style={{ ...btnStyle, background: 'var(--cl-fill-inactive)', color: 'var(--cl-text-primary)', fontSize: 12 }}
             title="Step forward 1 frame (→)"
           >
             ▶
@@ -467,11 +467,11 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
                 outline: 'none',
                 cursor: 'pointer',
                 background: '#D1D5DB',
-                accentColor: '#FF9500',
+                accentColor: 'var(--cl-warning)',
               }}
             />
             {/* Time display below slider */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#6E6E73' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--cl-text-secondary)' }}>
               <span>{formatTime(currentTimeB)}</span>
               <span>{formatTime(durationB)}</span>
             </div>
@@ -485,7 +485,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
         gap: '8px',
         alignItems: 'center',
         flexWrap: 'wrap',
-        borderTop: '1px solid #E8E8ED',
+        borderTop: '1px solid var(--cl-border)',
         paddingTop: '6px',
       }}>
         <span style={{ fontSize: 10, color: '#9ca3af', fontWeight: 600 }}>Speed:</span>
@@ -500,7 +500,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
             if (isSynced && videoRefB?.current) videoRefB.current.playbackRate = s;
             setPlaybackRate(s);
           }}
-          style={{ height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, fontWeight: 600, border: '1px solid #E8E8ED', background: '#fff', cursor: 'pointer' }}
+          style={{ height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, fontWeight: 600, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', cursor: 'pointer' }}
         >
           <option value="0.05">1/20×</option>
           <option value="0.1">1/10×</option>
@@ -522,7 +522,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
               if (isSynced && videoRefB?.current) videoRefB.current.playbackRate = s;
               setPlaybackRate(s);
             }}
-            style={{ width: 60, height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, border: '1px solid #007AFF' }}
+            style={{ width: 60, height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, border: '1px solid var(--cl-accent)' }}
           />
         )}
 
@@ -538,7 +538,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
             setFrameMode(fm);
           }}
           title={`Frame step rate — ← → steps by ${frameSizeMs}ms per frame`}
-          style={{ height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, fontWeight: 600, border: '1px solid #E8E8ED', background: '#fff', cursor: 'pointer' }}
+          style={{ height: 24, padding: '0 4px', borderRadius: 5, fontSize: 10, fontWeight: 600, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', cursor: 'pointer' }}
         >
           <option value="10">10fps</option>
           <option value="30">30fps</option>

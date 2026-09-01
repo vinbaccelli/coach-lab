@@ -46,7 +46,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
         borderRadius: 18,
         background: 'rgba(15, 15, 18, 0.75)',
         border: '1px solid rgba(255,255,255,0.12)',
-        color: '#fff',
+        color: 'var(--cl-text-on-fill)',
         backdropFilter: 'blur(12px)',
       }}>
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>AngleMotion</h1>
@@ -62,8 +62,8 @@ export default function LoginClient({ redirect }: { redirect: string }) {
             height: 44,
             borderRadius: 12,
             border: '1px solid rgba(255,255,255,0.14)',
-            background: loading ? 'rgba(255,255,255,0.08)' : '#007AFF',
-            color: '#fff',
+            background: loading ? 'rgba(255,255,255,0.08)' : 'var(--cl-accent)',
+            color: 'var(--cl-text-on-fill)',
             fontWeight: 800,
             cursor: loading ? 'not-allowed' : 'pointer',
             opacity: supabase ? 1 : 0.6,
@@ -73,7 +73,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
         </button>
 
         {err && (
-          <p style={{ marginTop: 12, fontSize: 12, color: '#FF3B30' }}>
+          <p style={{ marginTop: 12, fontSize: 12, color: 'var(--cl-destructive)' }}>
             {err}
           </p>
         )}
@@ -90,7 +90,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
             marginTop: 12,
             fontSize: 12,
             fontWeight: 600,
-            color: '#007AFF',
+            color: 'var(--cl-accent)',
             textDecoration: 'none',
           }}
         >

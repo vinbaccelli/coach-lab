@@ -357,7 +357,7 @@ export default function RulerOverlay({
         background: 'rgba(15,15,20,0.95)',
         borderRadius: 12,
         border: '1px solid rgba(255,255,255,0.12)',
-        color: '#fff',
+        color: 'var(--cl-text-on-fill)',
         fontSize: 13,
         boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
         overflow: 'hidden',
@@ -376,7 +376,7 @@ export default function RulerOverlay({
                 style={{
                   padding: '3px 8px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 11,
                   background: mode === 'measure' ? '#3B82F6' : 'rgba(255,255,255,0.12)',
-                  color: '#fff', fontWeight: 600,
+                  color: 'var(--cl-text-on-fill)', fontWeight: 600,
                 }}>
                 {mode === 'measure' ? <><Crosshair size={10} style={{ display: 'inline', marginRight: 3 }} />Measuring</> : 'Measure'}
               </button>
@@ -437,7 +437,7 @@ export default function RulerOverlay({
                     display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 10px',
                     borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)',
                     background: 'rgba(255,255,255,0.05)', cursor: 'pointer', textAlign: 'left',
-                    color: '#fff', transition: 'background 0.15s',
+                    color: 'var(--cl-text-on-fill)', transition: 'background 0.15s',
                   }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.2)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}>
@@ -491,7 +491,7 @@ export default function RulerOverlay({
                         flex: 1, minWidth: 0, padding: '5px 8px', borderRadius: 6,
                         border: `1px solid ${customLenInvalid ? 'rgba(248,113,113,0.7)' : 'rgba(255,255,255,0.2)'}`,
                         background: 'rgba(255,255,255,0.08)',
-                        color: '#fff', fontSize: 13, boxSizing: 'border-box',
+                        color: 'var(--cl-text-on-fill)', fontSize: 13, boxSizing: 'border-box',
                       }}
                     />
                     <select
@@ -500,7 +500,7 @@ export default function RulerOverlay({
                       aria-label="Unit"
                       style={{
                         padding: '5px 6px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.2)',
-                        background: 'rgba(30,30,36,0.95)', color: '#fff', fontSize: 12, cursor: 'pointer',
+                        background: 'rgba(30,30,36,0.95)', color: 'var(--cl-text-on-fill)', fontSize: 12, cursor: 'pointer',
                       }}>
                       {(['cm', 'm', 'in', 'ft', 'mm'] as const).map(u => (
                         <option key={u} value={u}>{LENGTH_UNIT_LABEL[u]}</option>
@@ -570,7 +570,7 @@ export default function RulerOverlay({
                     width: 20, height: 20, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 10, fontWeight: 700,
                     background: i < calibPoints.length ? '#3B82F6' : 'rgba(255,255,255,0.1)',
-                    color: i < calibPoints.length ? '#fff' : 'rgba(255,255,255,0.4)',
+                    color: i < calibPoints.length ? 'var(--cl-text-on-fill)' : 'rgba(255,255,255,0.4)',
                     border: i === calibPoints.length ? '2px solid #3B82F6' : '2px solid transparent',
                   }}>{i + 1}</div>
                 ))}
@@ -655,7 +655,7 @@ export default function RulerOverlay({
               {mode === 'calibrate' && (
                 <button onClick={() => setMode('measure')} style={{
                   width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer',
-                  background: '#3B82F6', color: '#fff', fontWeight: 700, fontSize: 13, marginBottom: 8,
+                  background: '#3B82F6', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 13, marginBottom: 8,
                 }}>
                   Start Measuring →
                 </button>

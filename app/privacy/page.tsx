@@ -19,7 +19,7 @@ export default function PrivacyPage() {
       overflowY: 'auto',
       WebkitOverflowScrolling: 'touch',
       background: 'linear-gradient(160deg, #0a0a10 0%, #0f1420 100%)',
-      color: '#fff',
+      color: 'var(--cl-text-on-fill)',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     }}>
       <div style={{
@@ -30,8 +30,8 @@ export default function PrivacyPage() {
       }}>
         <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
           <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
-          <span style={{ fontSize: 14, fontWeight: 800, color: '#fff' }}>
-            Angle<span style={{ color: '#007AFF' }}>Motion</span>
+          <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--cl-text-on-fill)' }}>
+            Angle<span style={{ color: 'var(--cl-accent)' }}>Motion</span>
           </span>
         </Link>
         <Link href="/pricing" style={{

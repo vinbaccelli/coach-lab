@@ -145,7 +145,7 @@ export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onC
           top: region.y,
           width: region.w,
           height: region.h,
-          border: '2px solid #34C759',
+          border: '2px solid var(--cl-success)',
           boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)',
           borderRadius: 4,
           touchAction: 'none',
@@ -183,7 +183,7 @@ export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onC
             e.preventDefault();
           }}
         >
-          <div style={{ width: 20, height: 20, borderRadius: 4, background: '#34C759', border: '2px solid #fff', pointerEvents: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.35)' }} />
+          <div style={{ width: 20, height: 20, borderRadius: 4, background: 'var(--cl-success)', border: '2px solid #fff', pointerEvents: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.35)' }} />
         </div>
       </div>
       <div
@@ -198,7 +198,7 @@ export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onC
           padding: '8px 12px',
           borderRadius: 12,
           background: 'rgba(0,0,0,0.86)',
-          color: '#fff',
+          color: 'var(--cl-text-on-fill)',
           fontSize: 12,
           fontWeight: 600,
           pointerEvents: 'auto',
@@ -213,17 +213,17 @@ export function RegionRecordOverlay({ initialAspect = 'free', initialRegion, onC
             key={a}
             type="button"
             onClick={() => onAspectChange(a)}
-            style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: aspect === a ? '#007AFF' : 'rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer' }}
+            style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: aspect === a ? 'var(--cl-accent)' : 'rgba(255,255,255,0.15)', color: 'var(--cl-text-on-fill)', cursor: 'pointer' }}
           >
             {a === 'free' ? 'Free' : a}
           </button>
         ))}
         <span style={{ opacity: 0.85 }}>Drag to move · corner to resize</span>
-        <button type="button" onClick={onCancel} style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: 'rgba(255,255,255,0.2)', color: '#fff', cursor: 'pointer' }}>Cancel</button>
+        <button type="button" onClick={onCancel} style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: 'rgba(255,255,255,0.2)', color: 'var(--cl-text-on-fill)', cursor: 'pointer' }}>Cancel</button>
         <button
           type="button"
           onClick={() => onConfirm(regionRef.current, aspectRef.current)}
-          style={{ padding: '4px 12px', borderRadius: 8, border: 'none', background: '#34C759', color: '#fff', fontWeight: 700, cursor: 'pointer' }}
+          style={{ padding: '4px 12px', borderRadius: 8, border: 'none', background: 'var(--cl-success)', color: 'var(--cl-text-on-fill)', fontWeight: 700, cursor: 'pointer' }}
         >
           Confirm area
         </button>

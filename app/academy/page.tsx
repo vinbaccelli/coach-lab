@@ -22,7 +22,7 @@ export default function AcademyPage() {
             gap: 6,
             fontSize: 14,
             fontWeight: 700,
-            color: '#007AFF',
+            color: 'var(--cl-accent)',
             textDecoration: 'none',
             marginBottom: 16,
           }}

@@ -489,20 +489,20 @@ function ToolbarScrollArea({
 
 function rowBase(active: boolean, pressed: boolean, io?: boolean, dense?: boolean): React.CSSProperties {
   const compact = io || dense;
-  let background = '#FFFFFF';
-  let color = '#1D1D1F';
+  let background = 'var(--cl-bg-panel)';
+  let color = 'var(--cl-text-primary)';
   // Longhand border properties: callers override borderColor, and mixing that
   // with a `border` shorthand triggers React rerender style warnings.
-  let borderColor = '#D1D1D6';
+  let borderColor = 'var(--cl-border)';
 
   if (active) {
-    background = '#007AFF';
-    color = '#FFFFFF';
-    borderColor = '#007AFF';
+    background = 'var(--cl-accent)';
+    color = 'var(--cl-text-on-fill)';
+    borderColor = 'var(--cl-accent)';
   } else if (pressed) {
-    background = '#DCEBFF';
-    color = '#007AFF';
-    borderColor = '#D1D1D6';
+    background = 'var(--cl-accent-pressed)';
+    color = 'var(--cl-accent)';
+    borderColor = 'var(--cl-border)';
   }
 
   const base: React.CSSProperties = {
@@ -611,7 +611,7 @@ function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
           : undefined,
       }}
     >
-      <div style={{ height: 1, background: '#D1D1D6', margin: '8px 0' }} />
+      <div style={{ height: 1, background: 'var(--cl-border)', margin: '8px 0' }} />
       {onScreenshotSave ? (
         <Row chrome={chrome}
           k="screenshot"
@@ -638,9 +638,9 @@ function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
           data-destructive="true"
           style={{
             ...rb(false, pressedKey === 'clean', io, denseMobile || io),
-            color: '#FF3B30',
-            borderColor: '#D1D1D6',
-            background: pressedKey === 'clean' ? '#FFECEC' : '#FFFFFF',
+            color: 'var(--cl-destructive)',
+            borderColor: 'var(--cl-border)',
+            background: pressedKey === 'clean' ? '#FFECEC' : 'var(--cl-bg-panel)',
             transform: pressedKey === 'clean' ? 'scale(0.95)' : undefined,
             ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
           }}
@@ -795,9 +795,9 @@ function Row({
       ...rb(!!active, pressed, io, denseMobile),
       ...(destructive && !active
         ? {
-            color: '#FF3B30',
-            background: pressed ? '#FFECEC' : '#FFFFFF',
-            borderColor: '#D1D1D6',
+            color: 'var(--cl-destructive)',
+            background: pressed ? '#FFECEC' : 'var(--cl-bg-panel)',
+            borderColor: 'var(--cl-border)',
           }
         : null),
       transform: pressed ? 'scale(0.95)' : undefined,
@@ -917,7 +917,7 @@ function BackHeader({
           justifyContent: 'flex-start',
           gap: 10,
           padding: '10px 4px 4px',
-          color: '#1D1D1F',
+          color: 'var(--cl-text-primary)',
           fontWeight: 600,
           fontSize: 16,
           position: 'relative',
@@ -1046,8 +1046,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
       rowBase(active, pressed, iconOnly, dense),
     [io, denseMobile],
   );
-  const textMuted = '#6E6E73';
-  const textSubtle = '#8E8E93';
+  const textMuted = 'var(--cl-text-secondary)';
+  const textSubtle = 'var(--cl-text-muted)';
   const shellStyle: React.CSSProperties = {
     ...shell,
     ...(mobileChrome ? { flex: 1, minHeight: 0 } : null),
@@ -1148,7 +1148,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
             height: 28,
             alignItems: 'center',
             justifyContent: 'center',
-            color: checked ? '#FFFFFF' : '#1D1D1F',
+            color: checked ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
           }}
         >
           {icon}
@@ -1162,7 +1162,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               checked={checked}
               tabIndex={-1}
               aria-hidden
-              style={{ width: 18, height: 18, accentColor: '#007AFF' }}
+              style={{ width: 18, height: 18, accentColor: 'var(--cl-accent)' }}
             />
           ) : null}
           {icon ? (
@@ -1173,7 +1173,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 height: io ? 28 : undefined,
                 justifyContent: 'center',
                 alignItems: 'center',
-                color: checked ? '#FFFFFF' : '#1D1D1F',
+                color: checked ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
               }}
             >
               {icon}
@@ -1273,7 +1273,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
                   height: io ? 26 : 22,
                   borderRadius: 6,
                   background: c,
-                  border: styleVals.color === c ? '2px solid #007AFF' : '1px solid #D1D1D6',
+                  border: styleVals.color === c ? '2px solid var(--cl-accent)' : '1px solid var(--cl-border)',
                 }}
               />
               {io ? null : c}

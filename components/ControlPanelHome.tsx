@@ -17,8 +17,8 @@ const shell: CSSProperties = {
   maxWidth: 1120,
   margin: '0 auto',
   padding: '24px 16px calc(100px + env(safe-area-inset-bottom, 0px))',
-  background: '#F5F5F7',
-  color: '#1D1D1F',
+  background: 'var(--cl-bg-primary)',
+  color: 'var(--cl-text-primary)',
 };
 
 const cardBase: CSSProperties = {
@@ -27,9 +27,9 @@ const cardBase: CSSProperties = {
   gap: 10,
   padding: 20,
   borderRadius: 16,
-  background: '#FFFFFF',
-  border: '1px solid #D1D1D6',
-  color: '#1D1D1F',
+  background: 'var(--cl-bg-panel)',
+  border: '1px solid var(--cl-border)',
+  color: 'var(--cl-text-primary)',
   textDecoration: 'none',
   transition: 'border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease',
   minHeight: 132,
@@ -41,10 +41,10 @@ export default function ControlPanelHome() {
     <div style={shell}>
       <div style={{ marginBottom: 22 }}>
         <img src="/logo-rect-new.jpg" alt="Anglemotion" style={{ height: 44, width: 'auto', marginBottom: 8, borderRadius: 8 }} />
-        <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 600, letterSpacing: '-0.03em', color: '#1D1D1F' }}>
+        <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 600, letterSpacing: '-0.03em', color: 'var(--cl-text-primary)' }}>
           Control Panel
         </h1>
-        <p style={{ margin: '10px 0 0', fontSize: 13, lineHeight: 1.55, color: '#6E6E73', maxWidth: 720 }}>
+        <p style={{ margin: '10px 0 0', fontSize: 13, lineHeight: 1.55, color: 'var(--cl-text-secondary)', maxWidth: 720 }}>
           Your coaching workspace: open the video lab, manage players and documents, log matches by hand, or run the AI decoder.
           Everything routes into each player&apos;s profile when you connect storage and APIs later.
         </p>
@@ -59,7 +59,7 @@ export default function ControlPanelHome() {
           marginBottom: 28,
           minHeight: 'auto',
           padding: 24,
-          border: '1px solid #007AFF',
+          border: '1px solid var(--cl-accent)',
           background: 'linear-gradient(135deg, rgba(0,122,255,0.10), rgba(0,122,255,0.03))',
           boxShadow: '0 2px 12px rgba(0,122,255,0.10)',
         }}
@@ -67,13 +67,13 @@ export default function ControlPanelHome() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 44, height: 44, borderRadius: 12, background: '#007AFF', color: '#fff',
+            width: 44, height: 44, borderRadius: 12, background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)',
           }}>
             <Video size={24} strokeWidth={2.25} />
           </span>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' }}>Video Analysis</div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: '#007AFF' }}>Primary tool · open the lab</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--cl-accent)' }}>Primary tool · open the lab</div>
           </div>
         </div>
         <p style={{ margin: '4px 0 0', fontSize: 14, lineHeight: 1.55, color: '#3C3C43' }}>
@@ -82,7 +82,7 @@ export default function ControlPanelHome() {
         </p>
       </Link>
 
-      <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: '#8E8E93', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+      <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: 'var(--cl-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
         More tools
       </h2>
       <div
@@ -101,7 +101,7 @@ export default function ControlPanelHome() {
             </span>
             <span style={{ fontSize: 15, fontWeight: 700 }}>AngleMotion Academy</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
             YouTube &amp; Instagram workflows, Drive organization, copyright guidelines, and the recommended
             AngleMotion setup — replace fragile URL pasting with a clear import strategy.
           </p>
@@ -114,14 +114,14 @@ export default function ControlPanelHome() {
             </span>
             <span style={{ fontSize: 15, fontWeight: 700 }}>Player database</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
             Technical sheet, match analysis timeline, and technical analysis with embedded YouTube / SwingVision clips.
             Player profiles are the hub for every document.
           </p>
         </Link>
       </div>
 
-      <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: '#8E8E93', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+      <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: 'var(--cl-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
         Match intelligence
       </h2>
       <div
@@ -140,7 +140,7 @@ export default function ControlPanelHome() {
             </span>
             <span style={{ fontSize: 16, fontWeight: 800 }}>Manual match report</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
             Point-by-point logging when you don&apos;t have automated tracking — server, score, shot type, outcome, notes.
             Designed to feed the AI decoder and the player&apos;s match analysis.
           </p>
@@ -153,14 +153,14 @@ export default function ControlPanelHome() {
             </span>
             <span style={{ fontSize: 16, fontWeight: 800 }}>AI match data decoder</span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: '#6E6E73' }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
             Turn SwingVision exports, Gemini-assisted screenshots, or a finished manual report into stats, ratios, and patterns.
             Output will merge into match analysis when wired to your database.
           </p>
         </Link>
       </div>
 
-      <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: '#1D1D1F' }}>
+      <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: 'var(--cl-text-primary)' }}>
         Profile &amp; business
       </h2>
       <div
@@ -176,7 +176,7 @@ export default function ControlPanelHome() {
             <UserCircle size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Coach profile</span>
           </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--cl-text-secondary)' }}>
             Services, pricing, payment links — your public-facing coaching identity inside AngleMotion.
           </p>
         </Link>
@@ -186,7 +186,7 @@ export default function ControlPanelHome() {
             <Globe size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Public catalog</span>
           </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--cl-text-secondary)' }}>
             Optional showcase: reviews (Trustpilot / Google), socials, website — clients leave reviews with one click.
           </p>
         </Link>
@@ -196,7 +196,7 @@ export default function ControlPanelHome() {
             <CreditCard size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Pricing &amp; Subscribe</span>
           </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--cl-text-secondary)' }}>
             Light $5/mo · Pro $20/mo · Academy $40/mo (or 2 months free yearly) — subscribe via Stripe.
           </p>
         </Link>
@@ -206,33 +206,33 @@ export default function ControlPanelHome() {
             <Settings size={20} strokeWidth={2.25} />
             <span style={{ fontSize: 15, fontWeight: 800 }}>Account &amp; Billing</span>
           </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: '#6E6E73' }}>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--cl-text-secondary)' }}>
             Subscription status, invoices, payment method, cancel or change plan — Stripe customer portal.
           </p>
         </Link>
       </div>
 
-      <p style={{ fontSize: 13, color: '#8E8E93', lineHeight: 1.5, margin: '0 0 32px', maxWidth: 640 }}>
+      <p style={{ fontSize: 13, color: 'var(--cl-text-muted)', lineHeight: 1.5, margin: '0 0 32px', maxWidth: 640 }}>
         V1 workflow: upload MP4 files into Video Analysis; use Academy guides for YouTube unlisted, Drive folders, and social exports.
       </p>
 
       {/* ── Competitor Comparison ─────────────────────────────────────── */}
       <div style={{ marginBottom: 48 }}>
-        <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 800, color: '#1D1D1F', letterSpacing: -0.3 }}>
+        <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 800, color: 'var(--cl-text-primary)', letterSpacing: -0.3 }}>
           How AngleMotion compares
         </h2>
-        <p style={{ margin: '0 0 16px', fontSize: 13, color: '#6E6E73' }}>
+        <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--cl-text-secondary)' }}>
           Head-to-head with the two platforms in our niche — the full coaching workflow, at a fraction of the price.
         </p>
-        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', borderRadius: 14, border: '1px solid #E5E5EA' }}>
-          <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: 12, background: '#FFF' }}>
+        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', borderRadius: 14, border: '1px solid var(--cl-border)' }}>
+          <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: 12, background: 'var(--cl-bg-panel)' }}>
             <thead>
-              <tr style={{ borderBottom: '2px solid #E5E5EA' }}>
-                <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#6E6E73', fontSize: 11 }}>Feature</th>
+              <tr style={{ borderBottom: '2px solid var(--cl-border)' }}>
+                <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: 'var(--cl-text-secondary)', fontSize: 11 }}>Feature</th>
                 {['AngleMotion', 'CoachNow', 'Dartfish'].map((name, i) => (
                   <th key={name} style={{
                     padding: '12px 10px', textAlign: 'center', fontWeight: 700, fontSize: 11,
-                    color: i === 0 ? '#007AFF' : '#1D1D1F',
+                    color: i === 0 ? 'var(--cl-accent)' : 'var(--cl-text-primary)',
                     background: i === 0 ? 'rgba(0,122,255,0.06)' : undefined,
                   }}>{name}</th>
                 ))}
@@ -251,8 +251,8 @@ export default function ControlPanelHome() {
                 ['Videos stay on YOUR device', true, false, false],
                 ['Price (Pro tier, annual)', '$200/yr', '$499/yr', '~€480/yr'],
               ] as Array<[string, ...Array<boolean | string>]>).map((row, ri) => (
-                <tr key={ri} style={{ borderBottom: '1px solid #F2F2F7' }}>
-                  <td style={{ padding: '10px 14px', fontWeight: 600, color: '#1D1D1F', whiteSpace: 'nowrap' }}>{row[0]}</td>
+                <tr key={ri} style={{ borderBottom: '1px solid var(--cl-bg-secondary)' }}>
+                  <td style={{ padding: '10px 14px', fontWeight: 600, color: 'var(--cl-text-primary)', whiteSpace: 'nowrap' }}>{row[0]}</td>
                   {row.slice(1).map((val, ci) => (
                     <td key={ci} style={{
                       padding: '10px 10px', textAlign: 'center',
@@ -261,9 +261,9 @@ export default function ControlPanelHome() {
                     }}>
                       {typeof val === 'boolean'
                         ? val
-                          ? <span style={{ color: '#34C759', fontSize: 16 }}>✓</span>
-                          : <span style={{ color: '#D1D1D6', fontSize: 16 }}>—</span>
-                        : <span style={{ fontSize: 12, color: ci === 0 ? '#007AFF' : '#6E6E73', fontWeight: ci === 0 ? 700 : 500 }}>{val}</span>
+                          ? <span style={{ color: 'var(--cl-success)', fontSize: 16 }}>✓</span>
+                          : <span style={{ color: 'var(--cl-border)', fontSize: 16 }}>—</span>
+                        : <span style={{ fontSize: 12, color: ci === 0 ? 'var(--cl-accent)' : 'var(--cl-text-secondary)', fontWeight: ci === 0 ? 700 : 500 }}>{val}</span>
                       }
                     </td>
                   ))}
@@ -275,17 +275,17 @@ export default function ControlPanelHome() {
       </div>
 
       {/* ── Reviews ─────────────────────────────────────────────────────── */}
-      <div style={{ borderTop: '1px solid #F2F2F7', paddingTop: 40, marginTop: 8 }}>
+      <div style={{ borderTop: '1px solid var(--cl-bg-secondary)', paddingTop: 40, marginTop: 8 }}>
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: 'uppercase', color: '#007AFF', marginBottom: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: 'uppercase', color: 'var(--cl-accent)', marginBottom: 8 }}>
             What coaches say
           </div>
-          <h2 style={{ fontSize: 22, fontWeight: 900, margin: '0 0 4px', color: '#1D1D1F', letterSpacing: -0.3 }}>
+          <h2 style={{ fontSize: 22, fontWeight: 900, margin: '0 0 4px', color: 'var(--cl-text-primary)', letterSpacing: -0.3 }}>
             Real feedback from real coaches
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, color: '#F59E0B' }}>
             {'★★★★★'.split('').map((s, i) => <span key={i}>{s}</span>)}
-            <span style={{ marginLeft: 6, fontSize: 13, color: '#6E6E73', fontWeight: 600 }}>5.0 · Early Access</span>
+            <span style={{ marginLeft: 6, fontSize: 13, color: 'var(--cl-text-secondary)', fontWeight: 600 }}>5.0 · Early Access</span>
           </div>
         </div>
 
@@ -329,8 +329,8 @@ export default function ControlPanelHome() {
             },
           ].map((r, i) => (
             <div key={i} style={{
-              background: '#FFFFFF', borderRadius: 14, padding: '20px 20px 18px',
-              border: '1px solid #E5E5EA',
+              background: 'var(--cl-bg-panel)', borderRadius: 14, padding: '20px 20px 18px',
+              border: '1px solid var(--cl-border)',
               boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
             }}>
               <div style={{ color: '#F59E0B', fontSize: 13, marginBottom: 10, letterSpacing: 1 }}>
@@ -340,8 +340,8 @@ export default function ControlPanelHome() {
                 "{r.text}"
               </p>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#1D1D1F' }}>{r.name}</div>
-                <div style={{ fontSize: 11, color: '#8E8E93' }}>{r.role}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cl-text-primary)' }}>{r.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--cl-text-muted)' }}>{r.role}</div>
               </div>
             </div>
           ))}
@@ -352,7 +352,7 @@ export default function ControlPanelHome() {
             href="mailto:vin@anglemotion.com?subject=AngleMotion Feedback"
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
-              fontSize: 13, fontWeight: 600, color: '#007AFF',
+              fontSize: 13, fontWeight: 600, color: 'var(--cl-accent)',
               textDecoration: 'none',
             }}
           >

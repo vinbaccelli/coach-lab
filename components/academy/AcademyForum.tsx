@@ -39,8 +39,8 @@ const pill: React.CSSProperties = {
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '10px 12px', borderRadius: 10,
-  border: '1px solid #D1D1D6', fontSize: 13, background: '#FFF',
-  color: '#1D1D1F', outline: 'none', boxSizing: 'border-box',
+  border: '1px solid var(--cl-border)', fontSize: 13, background: 'var(--cl-bg-panel)',
+  color: 'var(--cl-text-primary)', outline: 'none', boxSizing: 'border-box',
 };
 
 function timeAgo(dateStr: string): string {
@@ -112,11 +112,11 @@ export default function AcademyForum() {
   return (
     <div style={{ marginTop: 20 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: '#1A1A1A' }}>Q&A Forum</h3>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: 'var(--cl-text-primary)' }}>Q&A Forum</h3>
         <button
           type="button" onClick={() => setShowAsk(true)}
           style={{
-            ...pill, background: '#007AFF', color: '#FFF',
+            ...pill, background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)',
             display: 'flex', alignItems: 'center', gap: 4,
           }}
         >
@@ -132,8 +132,8 @@ export default function AcademyForum() {
             onClick={() => setCategory(c.value)}
             style={{
               ...pill,
-              background: category === c.value ? '#007AFF' : '#F2F2F7',
-              color: category === c.value ? '#FFF' : '#6E6E73',
+              background: category === c.value ? 'var(--cl-accent)' : 'var(--cl-bg-secondary)',
+              color: category === c.value ? 'var(--cl-text-on-fill)' : 'var(--cl-text-secondary)',
             }}
           >{c.label}</button>
         ))}
@@ -142,7 +142,7 @@ export default function AcademyForum() {
       {/* Ask form */}
       {showAsk && (
         <div style={{
-          padding: 16, borderRadius: 14, border: '1px solid #007AFF', background: '#FAFAFA',
+          padding: 16, borderRadius: 14, border: '1px solid var(--cl-accent)', background: '#FAFAFA',
           marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 10,
         }}>
           <input style={inputStyle} value={askTitle} onChange={e => setAskTitle(e.target.value)} placeholder="Question title" />
@@ -161,19 +161,19 @@ export default function AcademyForum() {
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               type="button" onClick={handlePost} disabled={posting || !askTitle.trim()}
-              style={{ ...pill, background: '#007AFF', color: '#FFF', opacity: posting ? 0.5 : 1 }}
+              style={{ ...pill, background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', opacity: posting ? 0.5 : 1 }}
             >{posting ? 'Posting…' : 'Post Question'}</button>
             <button type="button" onClick={() => setShowAsk(false)}
-              style={{ ...pill, background: '#F2F2F7', color: '#6E6E73' }}>Cancel</button>
+              style={{ ...pill, background: 'var(--cl-bg-secondary)', color: 'var(--cl-text-secondary)' }}>Cancel</button>
           </div>
         </div>
       )}
 
       {/* Question list */}
       {loading ? (
-        <p style={{ fontSize: 13, color: '#8E8E93' }}>Loading…</p>
+        <p style={{ fontSize: 13, color: 'var(--cl-text-muted)' }}>Loading…</p>
       ) : filtered.length === 0 ? (
-        <p style={{ fontSize: 13, color: '#8E8E93' }}>No questions yet. Be the first to ask!</p>
+        <p style={{ fontSize: 13, color: 'var(--cl-text-muted)' }}>No questions yet. Be the first to ask!</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {filtered.map(q => (
@@ -181,7 +181,7 @@ export default function AcademyForum() {
               key={q.id}
               style={{
                 display: 'flex', gap: 12, padding: '14px 14px',
-                borderRadius: 12, border: '1px solid #E5E5EA', background: '#FFF',
+                borderRadius: 12, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)',
                 cursor: 'pointer', transition: 'border-color 0.15s',
               }}
               onClick={() => setSelectedQ(q)}
@@ -191,23 +191,23 @@ export default function AcademyForum() {
                 <button
                   type="button"
                   onClick={e => { e.stopPropagation(); handleVote(q.id); }}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#007AFF' }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--cl-accent)' }}
                 >
                   <ChevronUp size={18} />
                 </button>
-                <span style={{ fontSize: 13, fontWeight: 700, color: '#1D1D1F' }}>{q.upvotes}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--cl-text-primary)' }}>{q.upvotes}</span>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: '#1D1D1F', marginBottom: 4 }}>{q.title}</div>
-                {q.body && <div style={{ fontSize: 12, color: '#6E6E73', lineHeight: 1.4, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.body}</div>}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: '#8E8E93' }}>
-                  <span style={{ padding: '2px 8px', borderRadius: 6, background: '#F2F2F7', fontWeight: 600, fontSize: 10, textTransform: 'uppercase' }}>{q.category}</span>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--cl-text-primary)', marginBottom: 4 }}>{q.title}</div>
+                {q.body && <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)', lineHeight: 1.4, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.body}</div>}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--cl-text-muted)' }}>
+                  <span style={{ padding: '2px 8px', borderRadius: 6, background: 'var(--cl-bg-secondary)', fontWeight: 600, fontSize: 10, textTransform: 'uppercase' }}>{q.category}</span>
                   <span>{q.user_name || q.user_email?.split('@')[0]}</span>
                   <span>·</span>
                   <span>{timeAgo(q.created_at)}</span>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#8E8E93', fontSize: 12, flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--cl-text-muted)', fontSize: 12, flexShrink: 0 }}>
                 <MessageSquare size={14} />
               </div>
             </div>
@@ -268,25 +268,25 @@ function QuestionThread({ question, onBack }: { question: Question; onBack: () =
         type="button" onClick={onBack}
         style={{
           display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none',
-          color: '#007AFF', fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: 0, marginBottom: 14,
+          color: 'var(--cl-accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: 0, marginBottom: 14,
         }}
       >
         <ChevronLeft size={16} /> Back to questions
       </button>
 
-      <div style={{ padding: 16, borderRadius: 14, border: '1px solid #E5E5EA', background: '#FFF', marginBottom: 16 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, fontSize: 11, color: '#8E8E93' }}>
-          <span style={{ padding: '2px 8px', borderRadius: 6, background: '#F2F2F7', fontWeight: 600, fontSize: 10, textTransform: 'uppercase' }}>{question.category}</span>
+      <div style={{ padding: 16, borderRadius: 14, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, fontSize: 11, color: 'var(--cl-text-muted)' }}>
+          <span style={{ padding: '2px 8px', borderRadius: 6, background: 'var(--cl-bg-secondary)', fontWeight: 600, fontSize: 10, textTransform: 'uppercase' }}>{question.category}</span>
           <span>{question.user_name || question.user_email?.split('@')[0]}</span>
           <span>·</span>
           <span>{timeAgo(question.created_at)}</span>
         </div>
-        <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 700, color: '#1D1D1F' }}>{question.title}</h3>
+        <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 700, color: 'var(--cl-text-primary)' }}>{question.title}</h3>
         {question.body && <p style={{ margin: 0, fontSize: 13, color: '#4B5563', lineHeight: 1.6 }}>{question.body}</p>}
       </div>
 
       {/* Replies */}
-      <h4 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: '#6E6E73' }}>
+      <h4 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: 'var(--cl-text-secondary)' }}>
         {loading ? 'Loading replies…' : `${replies.length} ${replies.length === 1 ? 'Reply' : 'Replies'}`}
       </h4>
 
@@ -296,27 +296,27 @@ function QuestionThread({ question, onBack }: { question: Question; onBack: () =
             key={r.id}
             style={{
               display: 'flex', gap: 10, padding: '12px 14px',
-              borderRadius: 12, background: '#FFF',
-              border: r.is_coach_answer ? '1px solid #34C759' : '1px solid #E5E5EA',
+              borderRadius: 12, background: 'var(--cl-bg-panel)',
+              border: r.is_coach_answer ? '1px solid var(--cl-success)' : '1px solid var(--cl-border)',
             }}
           >
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flexShrink: 0 }}>
               <button
                 type="button"
                 onClick={() => handleVoteReply(r.id)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#007AFF' }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--cl-accent)' }}
               >
                 <ChevronUp size={16} />
               </button>
-              <span style={{ fontSize: 12, fontWeight: 700, color: '#1D1D1F' }}>{r.upvotes}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--cl-text-primary)' }}>{r.upvotes}</span>
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, fontSize: 11, color: '#8E8E93' }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, fontSize: 11, color: 'var(--cl-text-muted)' }}>
                 <span style={{ fontWeight: 600 }}>{r.user_name || r.user_email?.split('@')[0]}</span>
                 {r.is_coach_answer && (
                   <span style={{
                     display: 'inline-flex', alignItems: 'center', gap: 3, padding: '1px 8px',
-                    borderRadius: 6, background: '#34C75920', color: '#34C759', fontWeight: 700, fontSize: 10,
+                    borderRadius: 6, background: '#34C75920', color: 'var(--cl-success)', fontWeight: 700, fontSize: 10,
                   }}>
                     <Award size={10} /> Coach
                   </span>
@@ -324,7 +324,7 @@ function QuestionThread({ question, onBack }: { question: Question; onBack: () =
                 <span>·</span>
                 <span>{timeAgo(r.created_at)}</span>
               </div>
-              <p style={{ margin: 0, fontSize: 13, color: '#1D1D1F', lineHeight: 1.55 }}>{r.body}</p>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--cl-text-primary)', lineHeight: 1.55 }}>{r.body}</p>
             </div>
           </div>
         ))}
@@ -333,7 +333,7 @@ function QuestionThread({ question, onBack }: { question: Question; onBack: () =
       {/* Reply form */}
       <div style={{
         display: 'flex', gap: 8, padding: 12, borderRadius: 12,
-        border: '1px solid #E5E5EA', background: '#FAFAFA',
+        border: '1px solid var(--cl-border)', background: '#FAFAFA',
       }}>
         <textarea
           style={{ ...inputStyle, flex: 1, minHeight: 40, resize: 'vertical', fontFamily: 'inherit' }}
@@ -342,7 +342,7 @@ function QuestionThread({ question, onBack }: { question: Question; onBack: () =
         <button
           type="button" onClick={handleReply} disabled={posting || !replyBody.trim()}
           style={{
-            ...pill, background: '#007AFF', color: '#FFF', alignSelf: 'flex-end',
+            ...pill, background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', alignSelf: 'flex-end',
             opacity: posting ? 0.5 : 1,
           }}
         >{posting ? '…' : 'Reply'}</button>

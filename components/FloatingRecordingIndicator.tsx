@@ -39,7 +39,7 @@ export default function FloatingRecordingIndicator() {
         borderRadius: 40,
         background: 'rgba(0, 0, 0, 0.9)',
         boxShadow: '0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.1)',
-        color: '#fff',
+        color: 'var(--cl-text-on-fill)',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         userSelect: 'none',
       }}
@@ -50,7 +50,7 @@ export default function FloatingRecordingIndicator() {
           width: 10,
           height: 10,
           borderRadius: '50%',
-          background: isRecording ? '#FF3B30' : '#FFCC00',
+          background: isRecording ? 'var(--cl-destructive)' : '#FFCC00',
           flexShrink: 0,
           animation: isRecording ? 'pulse-dot 1.2s ease-in-out infinite' : 'none',
         }}
@@ -82,7 +82,7 @@ export default function FloatingRecordingIndicator() {
           borderRadius: '50%',
           border: '1px solid rgba(255,255,255,0.2)',
           background: 'rgba(255,255,255,0.1)',
-          color: '#fff',
+          color: 'var(--cl-text-on-fill)',
           cursor: 'pointer',
           padding: 0,
         }}
@@ -105,8 +105,8 @@ export default function FloatingRecordingIndicator() {
           height: 32,
           borderRadius: '50%',
           border: 'none',
-          background: '#FF3B30',
-          color: '#fff',
+          background: 'var(--cl-destructive)',
+          color: 'var(--cl-text-on-fill)',
           cursor: stopping ? 'not-allowed' : 'pointer',
           padding: 0,
           opacity: stopping ? 0.5 : 1,

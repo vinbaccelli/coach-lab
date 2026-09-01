@@ -100,7 +100,7 @@ export default function InstallPrompt() {
       }}
     >
       <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200 p-4 flex items-start gap-3">
-        <div className="shrink-0 w-10 h-10 rounded-xl bg-[#007AFF] flex items-center justify-center text-white text-lg font-bold">
+        <div className="shrink-0 w-10 h-10 rounded-xl bg-[var(--cl-accent)] flex items-center justify-center text-white text-lg font-bold">
           CL
         </div>
 
@@ -116,7 +116,7 @@ export default function InstallPrompt() {
               <button
                 type="button"
                 onClick={handleAndroidInstall}
-                className="mt-2 bg-[#007AFF] text-white text-xs font-semibold px-4 py-1.5 rounded-lg"
+                className="mt-2 bg-[var(--cl-accent)] text-white text-xs font-semibold px-4 py-1.5 rounded-lg"
               >
                 Install
               </button>

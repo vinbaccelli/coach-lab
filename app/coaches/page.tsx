@@ -27,7 +27,7 @@ export default async function CoachesPage() {
       overflowY: 'auto',
       WebkitOverflowScrolling: 'touch',
       background: 'linear-gradient(160deg, #0a0a10 0%, #0f1420 100%)',
-      color: '#fff',
+      color: 'var(--cl-text-on-fill)',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     }}>
       {/* Nav */}
@@ -39,14 +39,14 @@ export default async function CoachesPage() {
       }}>
         <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
           <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
-          <span style={{ fontSize: 14, fontWeight: 800, color: '#fff', letterSpacing: -0.3 }}>
-            Angle<span style={{ color: '#007AFF' }}>Motion</span>
+          <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--cl-text-on-fill)', letterSpacing: -0.3 }}>
+            Angle<span style={{ color: 'var(--cl-accent)' }}>Motion</span>
           </span>
         </Link>
         <div style={{ display: 'flex', gap: 10 }}>
           <Link href="/analysis" style={{
-            fontSize: 12, fontWeight: 600, color: '#fff', textDecoration: 'none',
-            padding: '6px 14px', borderRadius: 20, background: '#007AFF',
+            fontSize: 12, fontWeight: 600, color: 'var(--cl-text-on-fill)', textDecoration: 'none',
+            padding: '6px 14px', borderRadius: 20, background: 'var(--cl-accent)',
           }}>
             Try Free →
           </Link>
@@ -77,7 +77,7 @@ export default async function CoachesPage() {
             </p>
             <Link href="/login" style={{
               display: 'inline-block', padding: '12px 24px', borderRadius: 12,
-              background: '#007AFF', color: '#fff', fontWeight: 700, fontSize: 14,
+              background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 14,
               textDecoration: 'none',
             }}>
               Create Your Profile
@@ -93,7 +93,7 @@ export default async function CoachesPage() {
                   display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
                   padding: '24px 16px', borderRadius: 16,
                   background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                  textDecoration: 'none', color: '#fff',
+                  textDecoration: 'none', color: 'var(--cl-text-on-fill)',
                   transition: 'background 0.15s',
                 }}
               >
@@ -101,7 +101,7 @@ export default async function CoachesPage() {
                   width: 64, height: 64, borderRadius: '50%',
                   background: `linear-gradient(135deg, ${coach.accent_color ?? '#007AFF'} 0%, #5856D6 100%)`,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 24, fontWeight: 900, color: '#fff',
+                  fontSize: 24, fontWeight: 900, color: 'var(--cl-text-on-fill)',
                   boxShadow: `0 4px 16px ${(coach.accent_color ?? '#007AFF')}40`,
                 }}>
                   {coach.avatar_url

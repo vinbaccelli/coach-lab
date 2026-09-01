@@ -14,8 +14,8 @@ import { PLANS, DEMO, planPrice, yearlyPerMonth } from '@/lib/plans';
 // Accent matches the app's design system (styles/tokens.css --cl-accent) for a
 // consistent white/Apple look — no more off-brand red.
 const ACCENT = '#007AFF';
-const INK = '#1D1D1F';
-const MUTED = '#6E6E73';
+const INK = 'var(--cl-text-primary)';
+const MUTED = 'var(--cl-text-secondary)';
 
 const features = [
   {
@@ -102,7 +102,7 @@ export default function LandingPage() {
   const [openFaq, setOpenFaq] = useState<number | null>(0);
 
   return (
-    <div style={{ height: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch', background: '#fff', color: INK, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
+    <div style={{ height: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch', background: 'var(--cl-bg-panel)', color: INK, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
       {/* NAV */}
       <nav style={{ position: 'sticky', top: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(12px)', borderBottom: '1px solid #EEE' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -160,7 +160,7 @@ export default function LandingPage() {
               const Icon = v.Icon;
               return (
                 <div style={{ flex: '1 1 280px', minWidth: 240, height: 200, borderRadius: 16, background: `linear-gradient(135deg, ${v.tint}, #FFFFFF)`, border: '1px solid #E9E9EE', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 20, textAlign: 'center' }}>
-                  <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#fff', boxShadow: '0 4px 16px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'var(--cl-bg-panel)', boxShadow: '0 4px 16px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Icon size={26} color={ACCENT} />
                   </div>
                   <span style={{ fontSize: 13.5, fontWeight: 700, color: INK, maxWidth: 240 }}>{v.caption}</span>
@@ -181,8 +181,8 @@ export default function LandingPage() {
               ['2', 'Analyze', 'AI maps the skeleton and angles; you edit and add Motion Layer + slow-mo.'],
               ['3', 'Share', 'Export a branded Google Docs report or push to YouTube in one click.'],
             ].map(([n, t, d]) => (
-              <div key={n} style={{ background: '#fff', border: '1px solid #EEE', borderRadius: 14, padding: 20 }}>
-                <div style={{ width: 32, height: 32, borderRadius: '50%', background: ACCENT, color: '#fff', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>{n}</div>
+              <div key={n} style={{ background: 'var(--cl-bg-panel)', border: '1px solid #EEE', borderRadius: 14, padding: 20 }}>
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: ACCENT, color: 'var(--cl-text-on-fill)', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>{n}</div>
                 <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 6 }}>{t}</div>
                 <div style={{ fontSize: 14, color: MUTED, lineHeight: 1.5 }}>{d}</div>
               </div>
@@ -197,10 +197,10 @@ export default function LandingPage() {
           Editable AI biomechanics, a coaching-business workflow, and local video — in one tool.
         </h2>
         <p style={{ textAlign: 'center', fontSize: 15, color: MUTED, margin: '0 0 28px' }}>Every rival makes you pick two of the three. Here’s the honest breakdown.</p>
-        <div style={{ overflowX: 'auto', borderRadius: 14, border: '1px solid #E5E5EA', WebkitOverflowScrolling: 'touch' }}>
-          <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 13, background: '#fff' }}>
+        <div style={{ overflowX: 'auto', borderRadius: 14, border: '1px solid var(--cl-border)', WebkitOverflowScrolling: 'touch' }}>
+          <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 13, background: 'var(--cl-bg-panel)' }}>
             <thead>
-              <tr style={{ borderBottom: '2px solid #E5E5EA' }}>
+              <tr style={{ borderBottom: '2px solid var(--cl-border)' }}>
                 <th style={{ padding: '12px 14px', textAlign: 'left', fontSize: 11, color: MUTED, fontWeight: 600 }}>Feature</th>
                 {COMPARE_COLS.map((c, i) => (
                   <th key={c} style={{ padding: '12px 8px', textAlign: 'center', fontSize: 12, fontWeight: 800, color: i === 0 ? ACCENT : INK, background: i === 0 ? 'rgba(0,122,255,0.06)' : undefined }}>{c}</th>
@@ -230,7 +230,7 @@ export default function LandingPage() {
           <h2 style={{ fontSize: 'clamp(24px, 4vw, 34px)', fontWeight: 900, letterSpacing: -0.5, margin: '0 0 8px' }}>Pricing that fits how you coach.</h2>
           <p style={{ fontSize: 15, color: MUTED, margin: '0 0 24px' }}>Start light, go Pro for the full platform + Academy, or run your whole team on one plan.</p>
           <div style={{ display: 'inline-flex', background: '#EDEDED', borderRadius: 999, padding: 4, marginBottom: 32 }}>
-            <button type="button" onClick={() => setAnnual(true)} style={toggleBtn(annual)}>Annual <span style={{ fontSize: 10, fontWeight: 800, color: annual ? '#fff' : ACCENT }}>· 2 mo free</span></button>
+            <button type="button" onClick={() => setAnnual(true)} style={toggleBtn(annual)}>Annual <span style={{ fontSize: 10, fontWeight: 800, color: annual ? 'var(--cl-text-on-fill)' : ACCENT }}>· 2 mo free</span></button>
             <button type="button" onClick={() => setAnnual(false)} style={toggleBtn(!annual)}>Monthly</button>
           </div>
           <div style={{ display: 'flex', gap: 18, justifyContent: 'center', flexWrap: 'wrap', alignItems: 'stretch' }}>
@@ -238,15 +238,15 @@ export default function LandingPage() {
               const price = annual ? plan.priceYearly : plan.priceMonthly;
               return (
                 <div key={plan.id} style={{
-                  flex: '1 1 300px', maxWidth: 350, background: '#fff', textAlign: 'left',
-                  border: plan.featured ? `2px solid ${ACCENT}` : '1px solid #E5E5EA',
+                  flex: '1 1 300px', maxWidth: 350, background: 'var(--cl-bg-panel)', textAlign: 'left',
+                  border: plan.featured ? `2px solid ${ACCENT}` : '1px solid var(--cl-border)',
                   borderRadius: 18, padding: 26,
                   boxShadow: plan.featured ? '0 12px 40px rgba(0,122,255,0.12)' : '0 1px 3px rgba(0,0,0,0.04)',
                   display: 'flex', flexDirection: 'column',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                     <span style={{ fontSize: 17, fontWeight: 800 }}>{plan.name}</span>
-                    {plan.featured && <span style={{ fontSize: 10, fontWeight: 800, background: ACCENT, color: '#fff', padding: '2px 8px', borderRadius: 999 }}>MOST POPULAR</span>}
+                    {plan.featured && <span style={{ fontSize: 10, fontWeight: 800, background: ACCENT, color: 'var(--cl-text-on-fill)', padding: '2px 8px', borderRadius: 999 }}>MOST POPULAR</span>}
                     {plan.seats > 1 && <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>up to {plan.seats} coaches</span>}
                   </div>
                   <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px' }}>{plan.tagline}</p>
@@ -297,7 +297,7 @@ export default function LandingPage() {
       </section>
 
       {/* FOOTER — light */}
-      <footer style={{ background: '#FFFFFF', color: MUTED, padding: '32px 20px', textAlign: 'center', borderTop: '1px solid #EEE' }}>
+      <footer style={{ background: 'var(--cl-bg-panel)', color: MUTED, padding: '32px 20px', textAlign: 'center', borderTop: '1px solid #EEE' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', marginBottom: 14 }}>
           <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 24, height: 24, borderRadius: 5 }} />
           <span style={{ fontSize: 15, fontWeight: 800, color: INK }}>AngleMotion</span>
@@ -317,7 +317,7 @@ export default function LandingPage() {
 
 const navLink: React.CSSProperties = { fontSize: 14, color: INK, textDecoration: 'none', fontWeight: 500 };
 const footLink: React.CSSProperties = { color: MUTED, textDecoration: 'none' };
-const ctaBtn: React.CSSProperties = { display: 'inline-block', background: ACCENT, color: '#fff', fontWeight: 700, fontSize: 14, padding: '9px 20px', borderRadius: 999, textDecoration: 'none', border: 'none', cursor: 'pointer' };
+const ctaBtn: React.CSSProperties = { display: 'inline-block', background: ACCENT, color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 14, padding: '9px 20px', borderRadius: 999, textDecoration: 'none', border: 'none', cursor: 'pointer' };
 function toggleBtn(active: boolean): React.CSSProperties {
-  return { padding: '8px 18px', borderRadius: 999, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700, background: active ? ACCENT : 'transparent', color: active ? '#fff' : INK };
+  return { padding: '8px 18px', borderRadius: 999, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700, background: active ? ACCENT : 'transparent', color: active ? 'var(--cl-text-on-fill)' : INK };
 }

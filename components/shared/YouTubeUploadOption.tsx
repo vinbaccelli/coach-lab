@@ -32,8 +32,8 @@ export function YouTubeUploadOption({
   noVideoHint?: string;
   dark?: boolean;
 }) {
-  const muted = dark ? 'rgba(255,255,255,0.7)' : '#6E6E73';
-  const faint = dark ? 'rgba(255,255,255,0.45)' : '#8E8E93';
+  const muted = dark ? 'rgba(255,255,255,0.7)' : 'var(--cl-text-secondary)';
+  const faint = dark ? 'rgba(255,255,255,0.45)' : 'var(--cl-text-muted)';
 
   const connectBtn: React.CSSProperties = {
     display: 'inline-flex',
@@ -41,9 +41,9 @@ export function YouTubeUploadOption({
     gap: 6,
     padding: '6px 12px',
     borderRadius: 8,
-    border: dark ? '1px solid rgba(255,255,255,0.22)' : '1px solid #E5E5E5',
-    background: dark ? 'rgba(255,255,255,0.06)' : '#FFFFFF',
-    color: dark ? '#fff' : '#1A1A1A',
+    border: dark ? '1px solid rgba(255,255,255,0.22)' : '1px solid var(--cl-border)',
+    background: dark ? 'rgba(255,255,255,0.06)' : 'var(--cl-bg-panel)',
+    color: dark ? 'var(--cl-text-on-fill)' : 'var(--cl-text-primary)',
     fontSize: 11,
     fontWeight: 600,
     cursor: youtube.connecting ? 'wait' : 'pointer',

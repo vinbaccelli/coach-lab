@@ -42,7 +42,7 @@ export default function MatchReportView({
           {analysis.integrityWarnings.map((w, i) => (
             <div key={i} style={{ fontSize: 11, lineHeight: 1.5, marginBottom: 4 }}>{w}</div>
           ))}
-          <div style={{ fontSize: 10, color: '#6E6E73', marginTop: 6 }}>
+          <div style={{ fontSize: 10, color: 'var(--cl-text-secondary)', marginTop: 6 }}>
             These are reported rather than corrected — an automatic fix would be a guess about which of two
             readings was wrong.
           </div>
@@ -52,7 +52,7 @@ export default function MatchReportView({
       {reports.map((report, idx) => (
         <section key={report.sideId} style={{ marginBottom: 56 }}>
           <div style={sideHeader}>
-            <div style={{ fontSize: 11, letterSpacing: 1.2, color: '#6E6E73', fontWeight: 700 }}>
+            <div style={{ fontSize: 11, letterSpacing: 1.2, color: 'var(--cl-text-secondary)', fontWeight: 700 }}>
               SIDE {report.sideId}
             </div>
             <h2 style={{ fontSize: 26, fontWeight: 700, margin: '4px 0 0', letterSpacing: -0.4 }}>
@@ -62,7 +62,7 @@ export default function MatchReportView({
           {report.sections.map((section) => (
             <SectionBlock key={section.id} section={section} />
           ))}
-          {idx === 0 && <hr style={{ border: 0, borderTop: '1px solid #E5E5E5', margin: '48px 0 0' }} />}
+          {idx === 0 && <hr style={{ border: 0, borderTop: '1px solid var(--cl-border)', margin: '48px 0 0' }} />}
         </section>
       ))}
     </div>
@@ -76,12 +76,12 @@ function SectionBlock({ section }: { section: ReportSection }) {
         <span style={{ color: '#C7C7CC', marginRight: 8 }}>{section.number}</span>
         {section.heading}
       </h3>
-      <p style={{ fontSize: 12.5, color: '#6E6E73', lineHeight: 1.6, margin: '0 0 18px', maxWidth: 640 }}>
+      <p style={{ fontSize: 12.5, color: 'var(--cl-text-secondary)', lineHeight: 1.6, margin: '0 0 18px', maxWidth: 640 }}>
         {section.explanation}
       </p>
 
       {!section.present && (
-        <div style={{ fontSize: 12, color: '#8E8E93', fontStyle: 'italic', marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: 'var(--cl-text-muted)', fontStyle: 'italic', marginBottom: 14 }}>
           Not available for this side.
         </div>
       )}
@@ -112,15 +112,15 @@ function SectionBlock({ section }: { section: ReportSection }) {
                 </tr>
               ) : (
                 <tr key={i}>
-                  <td style={{ ...cell, color: '#6E6E73', width: '54%' }}>
-                    <span style={{ color: '#1A1A1A' }}>{row.label}</span>
+                  <td style={{ ...cell, color: 'var(--cl-text-secondary)', width: '54%' }}>
+                    <span style={{ color: 'var(--cl-text-primary)' }}>{row.label}</span>
                     {row.note && row.value !== null && (
-                      <div style={{ fontSize: 10.5, color: '#8E8E93', marginTop: 3, lineHeight: 1.5 }}>
+                      <div style={{ fontSize: 10.5, color: 'var(--cl-text-muted)', marginTop: 3, lineHeight: 1.5 }}>
                         {row.note}
                       </div>
                     )}
                     {row.context && row.value !== null && (
-                      <div style={{ fontSize: 10.5, color: '#8E8E93', marginTop: 3, lineHeight: 1.5, fontStyle: 'italic' }}>
+                      <div style={{ fontSize: 10.5, color: 'var(--cl-text-muted)', marginTop: 3, lineHeight: 1.5, fontStyle: 'italic' }}>
                         {row.context}
                       </div>
                     )}
@@ -174,21 +174,21 @@ const cell: React.CSSProperties = {
 };
 const footnote: React.CSSProperties = {
   fontSize: 11,
-  color: '#8E8E93',
+  color: 'var(--cl-text-muted)',
   lineHeight: 1.6,
   margin: '0 0 8px',
   maxWidth: 640,
 };
 const sideHeader: React.CSSProperties = {
-  borderBottom: '2px solid #1A1A1A',
+  borderBottom: '2px solid var(--cl-text-primary)',
   paddingBottom: 12,
   marginBottom: 32,
 };
 const warnBox: React.CSSProperties = {
-  border: '1px solid #FF9500',
+  border: '1px solid var(--cl-warning)',
   background: 'rgba(255,149,0,0.06)',
   borderRadius: 10,
   padding: 14,
   marginBottom: 32,
-  color: '#1A1A1A',
+  color: 'var(--cl-text-primary)',
 };

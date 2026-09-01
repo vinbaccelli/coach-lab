@@ -31,7 +31,7 @@ export default function PlayerSessionDetailClient({
           alignItems: 'center',
           gap: 6,
           fontSize: 13,
-          color: '#007AFF',
+          color: 'var(--cl-accent)',
           textDecoration: 'none',
           marginBottom: 16,
         }}
@@ -42,10 +42,10 @@ export default function PlayerSessionDetailClient({
       <div
         style={{
           background: 'rgba(250, 249, 247, 0.96)',
-          border: '1px solid #E5E5E5',
+          border: '1px solid var(--cl-border)',
           borderRadius: 16,
           padding: 20,
-          color: '#1A1A1A',
+          color: 'var(--cl-text-primary)',
         }}
       >
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>

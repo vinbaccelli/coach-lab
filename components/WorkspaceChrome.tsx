@@ -66,8 +66,8 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
         height: '100dvh',
         minHeight: '100vh',
         overflow: 'hidden',
-        background: '#F5F5F7',
-        color: '#1D1D1F',
+        background: 'var(--cl-bg-primary)',
+        color: 'var(--cl-text-primary)',
         display: 'flex',
         flexDirection: 'column',
       }}
@@ -81,8 +81,8 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
           gap: '10px 14px',
           padding: '12px 16px',
           paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)',
-          borderBottom: '1px solid #D1D1D6',
-          background: '#FFFFFF',
+          borderBottom: '1px solid var(--cl-border)',
+          background: 'var(--cl-bg-panel)',
           zIndex: 50,
         }}
       >
@@ -94,7 +94,7 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
             gap: 8,
             fontWeight: 600,
             fontSize: 15,
-            color: '#1D1D1F',
+            color: 'var(--cl-text-primary)',
             textDecoration: 'none',
             letterSpacing: '-0.02em',
           }}
@@ -104,7 +104,7 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
               width: 32,
               height: 32,
               borderRadius: 8,
-              background: '#007AFF',
+              background: 'var(--cl-accent)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -120,8 +120,8 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
             style={{
               fontSize: 13,
               fontWeight: 500,
-              color: '#6E6E73',
-              borderLeft: '1px solid #D1D1D6',
+              color: 'var(--cl-text-secondary)',
+              borderLeft: '1px solid var(--cl-border)',
               paddingLeft: 14,
             }}
           >
@@ -137,7 +137,7 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
               <span
                 style={{
                   fontSize: 12,
-                  color: '#6E6E73',
+                  color: 'var(--cl-text-secondary)',
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                   maxWidth: 'min(100%, 220px)',
                   overflow: 'hidden',
@@ -150,14 +150,14 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
               </span>
               <Link
                 href="/pricing"
-                style={{ fontSize: 12, fontWeight: 600, color: '#007AFF', textDecoration: 'none', padding: '0 4px' }}
+                style={{ fontSize: 12, fontWeight: 600, color: 'var(--cl-accent)', textDecoration: 'none', padding: '0 4px' }}
               >
                 Pricing
               </Link>
               <button
                 type="button"
                 onClick={signOut}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #D1D1D6', background: '#FFFFFF', color: '#1D1D1F', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 12px', borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
               >
                 <LogOut size={15} /> Sign out
               </button>
@@ -166,7 +166,7 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
             <button
               type="button"
               onClick={() => void signIn()}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px', borderRadius: 10, border: '1px solid #D1D1D6', background: '#007AFF', color: '#FFFFFF', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px', borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
             >
               <LogIn size={15} /> Sign in with Google
             </button>

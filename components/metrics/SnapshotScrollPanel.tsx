@@ -50,7 +50,7 @@ export default function SnapshotScrollPanel({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--cl-text-on-fill)' }}>
           Snapshot Sequence · {snapshots.length} {snapshots.length === 1 ? 'snapshot' : 'snapshots'}
         </span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -61,8 +61,8 @@ export default function SnapshotScrollPanel({
               disabled={replaying}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px',
-                borderRadius: 8, border: 'none', background: replaying ? '#5856D6' : '#007AFF',
-                color: '#fff', fontSize: 12, fontWeight: 600, cursor: replaying ? 'default' : 'pointer',
+                borderRadius: 8, border: 'none', background: replaying ? '#5856D6' : 'var(--cl-accent)',
+                color: 'var(--cl-text-on-fill)', fontSize: 12, fontWeight: 600, cursor: replaying ? 'default' : 'pointer',
               }}
             >
               <Play size={13} /> {replaying ? 'Replaying…' : 'Replay slow-mo'}
@@ -75,7 +75,7 @@ export default function SnapshotScrollPanel({
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px',
                 borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent',
-                color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                color: 'var(--cl-text-on-fill)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
               }}
             >
               <Download size={13} /> MP4
@@ -103,7 +103,7 @@ export default function SnapshotScrollPanel({
               style={{
                 position: 'absolute', top: 4, right: 4, zIndex: 1,
                 width: 22, height: 22, borderRadius: '50%', border: 'none',
-                background: 'rgba(0,0,0,0.6)', color: '#fff', cursor: 'pointer',
+                background: 'rgba(0,0,0,0.6)', color: 'var(--cl-text-on-fill)', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
               }}
             >
@@ -117,7 +117,7 @@ export default function SnapshotScrollPanel({
               width: 140,
               borderRadius: 10,
               overflow: 'hidden',
-              border: i === activeIndex ? '2px solid #007AFF' : '2px solid transparent',
+              border: i === activeIndex ? '2px solid var(--cl-accent)' : '2px solid transparent',
               background: '#000',
               cursor: 'pointer',
               padding: 0,
@@ -130,7 +130,7 @@ export default function SnapshotScrollPanel({
                 : <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>No capture</span>}
             </div>
             <div style={{ padding: '4px 6px', textAlign: 'left' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--cl-text-on-fill)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {i + 1}. {s.label}
               </div>
               <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)', fontVariantNumeric: 'tabular-nums' }}>

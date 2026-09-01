@@ -39,7 +39,7 @@ export default function SessionTimelineCard({
           gap: 12,
           padding: 14,
           borderRadius: 12,
-          background: '#fff',
+          background: 'var(--cl-bg-panel)',
           border: isDraft ? '1px solid #fcd34d' : '1px solid #E7E5E4',
           cursor: 'pointer',
         }}

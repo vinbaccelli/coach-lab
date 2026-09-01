@@ -17,7 +17,7 @@ interface AcademyResource {
 }
 
 const sectionTitle: React.CSSProperties = {
-  fontSize: 13, fontWeight: 800, color: '#1A1A1A', margin: '0 0 8px',
+  fontSize: 13, fontWeight: 800, color: 'var(--cl-text-primary)', margin: '0 0 8px',
 };
 
 const body: React.CSSProperties = {
@@ -112,30 +112,30 @@ export default function AngleMotionAcademy() {
               onClick={() => setShowUpload(true)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
-                borderRadius: 10, border: '1px solid #007AFF', background: 'rgba(0,122,255,0.06)',
-                color: '#007AFF', fontSize: 13, fontWeight: 600, cursor: 'pointer', width: '100%',
+                borderRadius: 10, border: '1px solid var(--cl-accent)', background: 'rgba(0,122,255,0.06)',
+                color: 'var(--cl-accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer', width: '100%',
               }}
             >
               <Plus size={16} /> Add PDF resource
             </button>
           ) : (
             <div style={{
-              padding: 16, borderRadius: 12, border: '1px solid #E5E5EA', background: '#FAFAFA',
+              padding: 16, borderRadius: 12, border: '1px solid var(--cl-border)', background: '#FAFAFA',
               display: 'flex', flexDirection: 'column', gap: 10,
             }}>
               <input
                 type="text" placeholder="Title" value={uploadTitle}
                 onChange={e => setUploadTitle(e.target.value)}
-                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #D1D1D6', fontSize: 13 }}
+                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--cl-border)', fontSize: 13 }}
               />
               <input
                 type="text" placeholder="Description (optional)" value={uploadDesc}
                 onChange={e => setUploadDesc(e.target.value)}
-                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #D1D1D6', fontSize: 13 }}
+                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--cl-border)', fontSize: 13 }}
               />
               <select
                 value={uploadCategory} onChange={e => setUploadCategory(e.target.value)}
-                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #D1D1D6', fontSize: 13 }}
+                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--cl-border)', fontSize: 13 }}
               >
                 <option value="guide">Guide</option>
                 <option value="ebook">eBook</option>
@@ -143,8 +143,8 @@ export default function AngleMotionAcademy() {
               </select>
               <label style={{
                 display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
-                borderRadius: 10, border: '1px dashed #D1D1D6', background: '#FFF',
-                color: '#6E6E73', fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                borderRadius: 10, border: '1px dashed var(--cl-border)', background: 'var(--cl-bg-panel)',
+                color: 'var(--cl-text-secondary)', fontSize: 13, fontWeight: 500, cursor: 'pointer',
               }}>
                 <Upload size={16} />
                 {uploading ? 'Uploading…' : 'Choose PDF file'}
@@ -155,7 +155,7 @@ export default function AngleMotionAcademy() {
                 />
               </label>
               <button type="button" onClick={() => setShowUpload(false)}
-                style={{ fontSize: 12, color: '#6E6E73', background: 'none', border: 'none', cursor: 'pointer' }}>
+                style={{ fontSize: 12, color: 'var(--cl-text-secondary)', background: 'none', border: 'none', cursor: 'pointer' }}>
                 Cancel
               </button>
             </div>
@@ -211,13 +211,13 @@ function ResourceCard({ resource, admin, onDelete }: { resource: AcademyResource
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
-      borderRadius: 10, border: '1px solid #E5E5EA', background: '#FFF',
+      borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)',
     }}>
-      <FileText size={20} style={{ color: '#FF3B30', flexShrink: 0 }} />
+      <FileText size={20} style={{ color: 'var(--cl-destructive)', flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F' }}>{resource.title}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--cl-text-primary)' }}>{resource.title}</div>
         {resource.description && (
-          <div style={{ fontSize: 11, color: '#6E6E73', marginTop: 2 }}>{resource.description}</div>
+          <div style={{ fontSize: 11, color: 'var(--cl-text-secondary)', marginTop: 2 }}>{resource.description}</div>
         )}
       </div>
       <a
@@ -226,7 +226,7 @@ function ResourceCard({ resource, admin, onDelete }: { resource: AcademyResource
         rel="noreferrer"
         style={{
           display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px',
-          borderRadius: 6, background: '#007AFF', color: '#fff',
+          borderRadius: 6, background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)',
           fontSize: 11, fontWeight: 600, textDecoration: 'none', flexShrink: 0,
         }}
       >
@@ -236,7 +236,7 @@ function ResourceCard({ resource, admin, onDelete }: { resource: AcademyResource
         <button
           type="button"
           onClick={() => onDelete(resource.id)}
-          style={{ background: 'none', border: 'none', color: '#FF3B30', cursor: 'pointer', padding: 4, flexShrink: 0 }}
+          style={{ background: 'none', border: 'none', color: 'var(--cl-destructive)', cursor: 'pointer', padding: 4, flexShrink: 0 }}
         >
           <Trash2 size={14} />
         </button>

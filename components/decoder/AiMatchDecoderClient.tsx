@@ -54,10 +54,10 @@ export default function AiMatchDecoderClient() {
 
   const surface = {
     background: 'rgba(250, 249, 247, 0.96)',
-    border: '1px solid #E5E5E5',
+    border: '1px solid var(--cl-border)',
     borderRadius: 16,
     padding: 18,
-    color: '#1A1A1A',
+    color: 'var(--cl-text-primary)',
   } as const;
 
   return (
@@ -121,8 +121,8 @@ export default function AiMatchDecoderClient() {
             minHeight: 48,
             borderRadius: 12,
             border: 'none',
-            background: '#1A1A1A',
-            color: '#fff',
+            background: 'var(--cl-action-primary)',
+            color: 'var(--cl-text-on-fill)',
             fontWeight: 700,
             cursor: busy ? 'wait' : 'pointer',
             opacity: busy ? 0.75 : 1,
@@ -170,8 +170,8 @@ export default function AiMatchDecoderClient() {
                 minHeight: 48,
                 borderRadius: 12,
                 border: 'none',
-                background: '#1A1A1A',
-                color: '#fff',
+                background: 'var(--cl-action-primary)',
+                color: 'var(--cl-text-on-fill)',
                 fontWeight: 700,
                 cursor: 'pointer',
               }}
@@ -206,8 +206,8 @@ export default function AiMatchDecoderClient() {
                 flex: '1 1 200px',
                 minHeight: 48,
                 borderRadius: 12,
-                border: '1px solid #E5E5E5',
-                background: '#fff',
+                border: '1px solid var(--cl-border)',
+                background: 'var(--cl-bg-panel)',
                 fontWeight: 600,
                 cursor: exportBusy ? 'wait' : 'pointer',
               }}
@@ -235,7 +235,7 @@ export default function AiMatchDecoderClient() {
 const inp: React.CSSProperties = {
   width: '100%',
   borderRadius: 10,
-  border: '1px solid #E5E5E5',
+  border: '1px solid var(--cl-border)',
   padding: '10px 12px',
   fontSize: 14,
   boxSizing: 'border-box',

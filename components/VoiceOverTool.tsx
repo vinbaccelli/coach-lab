@@ -83,7 +83,7 @@ export default function VoiceOverTool({
           paddingLeft: '12px',
           paddingRight: '12px',
           borderRadius: 'var(--radius-sm)',
-          background: isRecording ? '#FF3B30' : 'var(--bg-tertiary)',
+          background: isRecording ? 'var(--cl-destructive)' : 'var(--bg-tertiary)',
           border: 'none',
           cursor: 'pointer',
           display: 'flex',

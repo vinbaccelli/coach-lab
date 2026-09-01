@@ -130,8 +130,8 @@ export default function EmbedCapturePanel({
           padding: '20px 18px',
           borderRadius: 16,
           background: 'rgba(250, 249, 247, 0.97)',
-          border: '1px solid #E5E5E5',
-          color: '#1A1A1A',
+          border: '1px solid var(--cl-border)',
+          color: 'var(--cl-text-primary)',
           boxShadow: '0 12px 40px rgba(0,0,0,0.08)',
           pointerEvents: 'auto',
           fontSize: 13,
@@ -153,8 +153,8 @@ export default function EmbedCapturePanel({
               padding: '12px 16px',
               borderRadius: 12,
               border: 'none',
-              background: '#1A1A1A',
-              color: '#FFFFFF',
+              background: 'var(--cl-action-primary)',
+              color: 'var(--cl-text-on-fill)',
               fontWeight: 700,
               fontSize: 14,
               cursor: 'pointer',
@@ -181,8 +181,8 @@ export default function EmbedCapturePanel({
         padding: '18px 18px',
         borderRadius: 16,
         background: 'rgba(250, 249, 247, 0.97)',
-        border: '1px solid #E5E5E5',
-        color: '#1A1A1A',
+        border: '1px solid var(--cl-border)',
+        color: 'var(--cl-text-primary)',
         boxShadow: '0 12px 40px rgba(0,0,0,0.08)',
         pointerEvents: 'auto',
         fontSize: 13,
@@ -216,7 +216,7 @@ export default function EmbedCapturePanel({
                   <a
                     href={captureFallbackDownloadHref}
                     download
-                    style={{ color: '#007AFF', fontWeight: 600 }}
+                    style={{ color: 'var(--cl-accent)', fontWeight: 600 }}
                   >
                     Get a playable copy
                   </a>
@@ -234,8 +234,8 @@ export default function EmbedCapturePanel({
                   padding: '10px 16px',
                   borderRadius: 10,
                   border: 'none',
-                  background: '#1A1A1A',
-                  color: '#fff',
+                  background: 'var(--cl-action-primary)',
+                  color: 'var(--cl-text-on-fill)',
                   fontWeight: 700,
                   fontSize: 14,
                   cursor: 'pointer',
@@ -252,9 +252,9 @@ export default function EmbedCapturePanel({
                   flex: 1,
                   padding: '10px 16px',
                   borderRadius: 10,
-                  border: '1px solid #E5E5E5',
-                  background: '#fff',
-                  color: '#1A1A1A',
+                  border: '1px solid var(--cl-border)',
+                  background: 'var(--cl-bg-panel)',
+                  color: 'var(--cl-text-primary)',
                   fontWeight: 600,
                   fontSize: 14,
                   cursor: 'pointer',
@@ -278,12 +278,12 @@ export default function EmbedCapturePanel({
                 animation: 'anglemotion-rec-pulse 1.2s ease-in-out infinite',
               }}
             />
-            <span style={{ fontWeight: 700, fontSize: 15, color: '#1A1A1A' }}>
+            <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--cl-text-primary)' }}>
               Recording in progress
             </span>
           </div>
           <div style={{ marginBottom: 12 }}>
-            <div style={{ height: 10, borderRadius: 6, background: '#E5E5E5', overflow: 'hidden' }}>
+            <div style={{ height: 10, borderRadius: 6, background: 'var(--cl-fill-inactive)', overflow: 'hidden' }}>
               <div
                 style={{
                   height: '100%',
@@ -313,8 +313,8 @@ export default function EmbedCapturePanel({
           <div style={{
             width: 72, height: 72,
             borderRadius: '50%',
-            background: '#1A1A1A',
-            color: '#FFFFFF',
+            background: 'var(--cl-action-primary)',
+            color: 'var(--cl-text-on-fill)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 32, fontWeight: 800, fontVariantNumeric: 'tabular-nums',
           }}>
@@ -328,11 +328,11 @@ export default function EmbedCapturePanel({
           <span style={{
             width: 20, height: 20,
             border: '2px solid rgba(26,26,26,0.15)',
-            borderTopColor: '#1A1A1A',
+            borderTopColor: 'var(--cl-text-primary)',
             borderRadius: '50%',
             animation: 'anglemotion-spin 0.7s linear infinite',
           }} />
-          <span style={{ fontWeight: 600, color: '#1A1A1A' }}>
+          <span style={{ fontWeight: 600, color: 'var(--cl-text-primary)' }}>
             {stepStatus || 'Processing your video\u2026'}
           </span>
         </div>
@@ -342,11 +342,11 @@ export default function EmbedCapturePanel({
           <span style={{
             width: 20, height: 20,
             border: '2px solid rgba(26,26,26,0.15)',
-            borderTopColor: '#1A1A1A',
+            borderTopColor: 'var(--cl-text-primary)',
             borderRadius: '50%',
             animation: 'anglemotion-spin 0.7s linear infinite',
           }} />
-          <span style={{ fontWeight: 600, color: '#1A1A1A' }}>Loading video\u2026</span>
+          <span style={{ fontWeight: 600, color: 'var(--cl-text-primary)' }}>Loading video\u2026</span>
         </div>
       ) : (
         /* ── Ready: record options + Start Recording ───────────────────── */
@@ -378,7 +378,7 @@ export default function EmbedCapturePanel({
                       value={startStr}
                       onChange={(e) => setStartStr(e.target.value)}
                       placeholder="1:20"
-                      style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
+                      style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
                     />
                     <span>to</span>
                     <input
@@ -386,7 +386,7 @@ export default function EmbedCapturePanel({
                       value={endStr}
                       onChange={(e) => setEndStr(e.target.value)}
                       placeholder="1:25"
-                      style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid #E5E5E5', background: '#fff', color: '#1A1A1A', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
+                      style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
                     />
                     {sectionInvalid && (
                       <span style={{ display: 'block', width: '100%', fontSize: 11, color: '#B45309' }}>
@@ -418,7 +418,7 @@ export default function EmbedCapturePanel({
               borderRadius: 14,
               border: 'none',
               background: captureAllowed ? '#EF4444' : 'rgba(26,26,26,0.12)',
-              color: captureAllowed ? '#FFFFFF' : 'rgba(26,26,26,0.5)',
+              color: captureAllowed ? 'var(--cl-text-on-fill)' : 'rgba(26,26,26,0.5)',
               fontWeight: 800,
               fontSize: 17,
               cursor: captureAllowed ? 'pointer' : 'not-allowed',
@@ -429,7 +429,7 @@ export default function EmbedCapturePanel({
               minHeight: 52,
             }}
           >
-            <span style={{ width: 10, height: 10, borderRadius: '50%', background: captureAllowed ? '#fff' : 'rgba(26,26,26,0.3)' }} />
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: captureAllowed ? 'var(--cl-bg-panel)' : 'rgba(26,26,26,0.3)' }} />
             Start Recording
           </button>
         </>

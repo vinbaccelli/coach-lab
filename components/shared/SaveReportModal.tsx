@@ -55,13 +55,13 @@ type MirrorPrompt =
 
 const panelStyle: React.CSSProperties = {
   background: 'rgba(250, 249, 247, 0.98)',
-  border: '1px solid #E5E5E5',
+  border: '1px solid var(--cl-border)',
   borderRadius: 16,
   padding: 20,
   maxWidth: 440,
   width: 'min(440px, calc(100vw - 32px))',
   boxShadow: '0 24px 60px rgba(0,0,0,0.18)',
-  color: '#1A1A1A',
+  color: 'var(--cl-text-primary)',
 };
 
 export default function SaveReportModal({
@@ -543,7 +543,7 @@ export default function SaveReportModal({
                 marginTop: 8,
                 border: 'none',
                 background: 'transparent',
-                color: '#007AFF',
+                color: 'var(--cl-accent)',
                 fontWeight: 600,
                 fontSize: 13,
                 cursor: 'pointer',
@@ -560,7 +560,7 @@ export default function SaveReportModal({
 
             <label style={labelStyle}>
               Opponent name{' '}
-              <span style={{ fontWeight: 400, color: '#8e8e93' }}>(optional, for cross-linking)</span>
+              <span style={{ fontWeight: 400, color: 'var(--cl-text-muted)' }}>(optional, for cross-linking)</span>
               <input
                 value={opponentName}
                 onChange={(e) => setOpponentName(e.target.value)}
@@ -576,7 +576,7 @@ export default function SaveReportModal({
             ) : null}
 
             {err ? (
-              <p style={{ color: '#FF3B30', fontSize: 13, marginTop: 12 }}>{err}</p>
+              <p style={{ color: 'var(--cl-destructive)', fontSize: 13, marginTop: 12 }}>{err}</p>
             ) : null}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
@@ -610,18 +610,18 @@ const labelStyle: React.CSSProperties = {
 
 const inputStyle: React.CSSProperties = {
   borderRadius: 10,
-  border: '1px solid #E5E5E5',
+  border: '1px solid var(--cl-border)',
   padding: '10px 12px',
   fontSize: 14,
-  background: '#fff',
+  background: 'var(--cl-bg-panel)',
 };
 
 const btnPrimary: React.CSSProperties = {
   padding: '10px 18px',
   borderRadius: 10,
   border: 'none',
-  background: '#1A1A1A',
-  color: '#fff',
+  background: 'var(--cl-action-primary)',
+  color: 'var(--cl-text-on-fill)',
   fontWeight: 600,
   cursor: 'pointer',
   fontSize: 14,
@@ -630,9 +630,9 @@ const btnPrimary: React.CSSProperties = {
 const btnGhost: React.CSSProperties = {
   padding: '10px 18px',
   borderRadius: 10,
-  border: '1px solid #E5E5E5',
-  background: '#fff',
-  color: '#1A1A1A',
+  border: '1px solid var(--cl-border)',
+  background: 'var(--cl-bg-panel)',
+  color: 'var(--cl-text-primary)',
   fontWeight: 500,
   cursor: 'pointer',
   fontSize: 14,

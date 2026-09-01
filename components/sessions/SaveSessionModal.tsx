@@ -25,7 +25,7 @@ const inputStyle: React.CSSProperties = {
   marginTop: 6,
   padding: '10px 12px',
   borderRadius: 10,
-  border: '1px solid #D1D1D6',
+  border: '1px solid var(--cl-border)',
   fontSize: 14,
   boxSizing: 'border-box',
 };
@@ -35,7 +35,7 @@ const labelStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   marginTop: 14,
-  color: '#1A1A1A',
+  color: 'var(--cl-text-primary)',
 };
 
 export default function SaveSessionModal({
@@ -129,8 +129,8 @@ export default function SaveSessionModal({
               padding: '12px 16px',
               borderRadius: 10,
               border: 'none',
-              background: '#007AFF',
-              color: '#fff',
+              background: 'var(--cl-accent)',
+              color: 'var(--cl-text-on-fill)',
               fontWeight: 700,
               fontSize: 14,
               cursor: busy ? 'wait' : 'pointer',
@@ -146,8 +146,8 @@ export default function SaveSessionModal({
             style={{
               padding: '12px 16px',
               borderRadius: 10,
-              border: '1px solid #D1D1D6',
-              background: '#fff',
+              border: '1px solid var(--cl-border)',
+              background: 'var(--cl-bg-panel)',
               fontSize: 14,
               cursor: 'pointer',
             }}
@@ -158,7 +158,7 @@ export default function SaveSessionModal({
       }
     >
       {fixedPlayerId && fixedPlayerName ? (
-        <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>
+        <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 600, color: 'var(--cl-text-primary)' }}>
           Player: {fixedPlayerName}
         </p>
       ) : (

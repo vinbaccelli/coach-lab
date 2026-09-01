@@ -8,92 +8,293 @@
         "role": "primary",
         "displayName": "System Blue",
         "canonical": "#007AFF",
-        "tonalRamp": ["#001A38", "#00305F", "#004C99", "#0066CC", "#007AFF", "#4DA2FF", "#8CC3FF", "#D6EAFF"]
+        "tonalRamp": [
+          "#001A38",
+          "#00305F",
+          "#004C99",
+          "#0066CC",
+          "#007AFF",
+          "#4DA2FF",
+          "#8CC3FF",
+          "#D6EAFF"
+        ]
       },
       "system-green": {
         "role": "secondary",
         "displayName": "System Green",
         "canonical": "#34C759",
-        "tonalRamp": ["#062B12", "#0A4A1F", "#0F6B2D", "#17913D", "#34C759", "#6BD98A", "#A2E9B6", "#DCF7E3"]
+        "tonalRamp": [
+          "#062B12",
+          "#0A4A1F",
+          "#0F6B2D",
+          "#17913D",
+          "#34C759",
+          "#6BD98A",
+          "#A2E9B6",
+          "#DCF7E3"
+        ]
       },
       "system-red": {
         "role": "secondary",
         "displayName": "System Red",
         "canonical": "#FF3B30",
-        "tonalRamp": ["#3A0703", "#5E0F08", "#8A1810", "#C4251A", "#FF3B30", "#FF7A72", "#FFAEA9", "#FFE1DF"]
+        "tonalRamp": [
+          "#3A0703",
+          "#5E0F08",
+          "#8A1810",
+          "#C4251A",
+          "#FF3B30",
+          "#FF7A72",
+          "#FFAEA9",
+          "#FFE1DF"
+        ]
       },
       "system-orange": {
         "role": "tertiary",
         "displayName": "System Orange",
         "canonical": "#FF9500",
-        "tonalRamp": ["#3A2100", "#5E3600", "#8A5000", "#C46F00", "#FF9500", "#FFB44D", "#FFCE8C", "#FFEBD1"]
+        "tonalRamp": [
+          "#3A2100",
+          "#5E3600",
+          "#8A5000",
+          "#C46F00",
+          "#FF9500",
+          "#FFB44D",
+          "#FFCE8C",
+          "#FFEBD1"
+        ]
       },
       "label": {
         "role": "neutral",
         "displayName": "Label",
         "canonical": "#1D1D1F",
-        "tonalRamp": ["#000000", "#1D1D1F", "#3A3A3C", "#545456", "#6E6E73", "#8E8E93", "#C7C7CC", "#F2F2F7"]
+        "tonalRamp": [
+          "#000000",
+          "#1D1D1F",
+          "#3A3A3C",
+          "#545456",
+          "#6E6E73",
+          "#8E8E93",
+          "#C7C7CC",
+          "#F2F2F7"
+        ]
       },
       "secondary-label": {
         "role": "neutral",
         "displayName": "Secondary Label",
         "canonical": "#6E6E73",
-        "tonalRamp": ["#000000", "#1D1D1F", "#3A3A3C", "#545456", "#6E6E73", "#8E8E93", "#C7C7CC", "#F2F2F7"]
+        "tonalRamp": [
+          "#000000",
+          "#1D1D1F",
+          "#3A3A3C",
+          "#545456",
+          "#6E6E73",
+          "#8E8E93",
+          "#C7C7CC",
+          "#F2F2F7"
+        ]
       },
       "tertiary-label": {
         "role": "neutral",
         "displayName": "Tertiary Label",
         "canonical": "#8E8E93",
-        "tonalRamp": ["#000000", "#1D1D1F", "#3A3A3C", "#545456", "#6E6E73", "#8E8E93", "#C7C7CC", "#F2F2F7"]
+        "tonalRamp": [
+          "#000000",
+          "#1D1D1F",
+          "#3A3A3C",
+          "#545456",
+          "#6E6E73",
+          "#8E8E93",
+          "#C7C7CC",
+          "#F2F2F7"
+        ]
       },
       "separator": {
         "role": "neutral",
         "displayName": "Separator",
         "canonical": "#D1D1D6",
-        "tonalRamp": ["#48484A", "#636366", "#8E8E93", "#AEAEB2", "#D1D1D6", "#E5E5EA", "#F2F2F7", "#FFFFFF"]
+        "tonalRamp": [
+          "#48484A",
+          "#636366",
+          "#8E8E93",
+          "#AEAEB2",
+          "#D1D1D6",
+          "#E5E5EA",
+          "#F2F2F7",
+          "#FFFFFF"
+        ]
       },
       "panel": {
         "role": "neutral",
         "displayName": "Panel",
         "canonical": "#FFFFFF",
-        "tonalRamp": ["#8E8E93", "#AEAEB2", "#C7C7CC", "#D1D1D6", "#E5E5EA", "#F2F2F7", "#F5F5F7", "#FFFFFF"]
+        "tonalRamp": [
+          "#8E8E93",
+          "#AEAEB2",
+          "#C7C7CC",
+          "#D1D1D6",
+          "#E5E5EA",
+          "#F2F2F7",
+          "#F5F5F7",
+          "#FFFFFF"
+        ]
       },
       "grouped-background": {
         "role": "neutral",
         "displayName": "Grouped Background",
         "canonical": "#F5F5F7",
-        "tonalRamp": ["#8E8E93", "#AEAEB2", "#C7C7CC", "#D1D1D6", "#E5E5EA", "#F2F2F7", "#F5F5F7", "#FFFFFF"]
+        "tonalRamp": [
+          "#8E8E93",
+          "#AEAEB2",
+          "#C7C7CC",
+          "#D1D1D6",
+          "#E5E5EA",
+          "#F2F2F7",
+          "#F5F5F7",
+          "#FFFFFF"
+        ]
       },
       "overlay-panel": {
         "role": "neutral",
         "displayName": "Overlay Panel",
         "canonical": "#1C1C1E",
-        "tonalRamp": ["#000000", "#1C1C1E", "#2C2C2E", "#3A3A3C", "#48484A", "#636366", "#8E8E93", "#AEAEB2"]
+        "tonalRamp": [
+          "#000000",
+          "#1C1C1E",
+          "#2C2C2E",
+          "#3A3A3C",
+          "#48484A",
+          "#636366",
+          "#8E8E93",
+          "#AEAEB2"
+        ]
+      },
+      "action-primary": {
+        "role": "primary",
+        "displayName": "Action Primary",
+        "canonical": "#1D1D1F",
+        "tonalRamp": [
+          "#000000",
+          "#1D1D1F",
+          "#3A3A3C",
+          "#545456",
+          "#6E6E73",
+          "#8E8E93",
+          "#C7C7CC",
+          "#F2F2F7"
+        ]
+      },
+      "fill-inactive": {
+        "role": "neutral",
+        "displayName": "Fill Inactive",
+        "canonical": "#E5E5EA",
+        "tonalRamp": [
+          "#48484A",
+          "#636366",
+          "#8E8E93",
+          "#AEAEB2",
+          "#D1D1D6",
+          "#E5E5EA",
+          "#F2F2F7",
+          "#FFFFFF"
+        ]
+      },
+      "text-on-fill": {
+        "role": "neutral",
+        "displayName": "Text On Fill",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "#8E8E93",
+          "#AEAEB2",
+          "#C7C7CC",
+          "#D1D1D6",
+          "#E5E5EA",
+          "#F2F2F7",
+          "#F5F5F7",
+          "#FFFFFF"
+        ]
       }
     },
     "typographyMeta": {
-      "display": { "displayName": "Display", "purpose": "Marketing hero only. Never inside the app." },
-      "headline": { "displayName": "Headline", "purpose": "Marketing section heads." },
-      "title": { "displayName": "Title", "purpose": "Dialog and panel titles inside the app." },
-      "body": { "displayName": "Body", "purpose": "The app default: tool row labels, panel copy, status text." },
-      "label": { "displayName": "Label", "purpose": "Sub-labels, captions, helper and error text." }
+      "display": {
+        "displayName": "Display",
+        "purpose": "Marketing hero only. Never inside the app."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Marketing section heads."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Dialog and panel titles inside the app."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "The app default: tool row labels, panel copy, status text."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Sub-labels, captions, helper and error text."
+      }
     },
     "shadows": [
-      { "name": "toast", "value": "0 12px 36px rgba(0,0,0,0.12)", "purpose": "Transient status pill floating above the workspace." },
-      { "name": "panel-float", "value": "0 16px 44px rgba(0,0,0,0.12)", "purpose": "Floating side panels and popovers." },
-      { "name": "dialog", "value": "0 20px 48px rgba(0,0,0,0.18)", "purpose": "Light modal dialogs on a light ground." },
-      { "name": "dialog-over-video", "value": "0 24px 60px rgba(0,0,0,0.35)", "purpose": "Dark dialogs on the overlay scrim; needs more separation against moving footage." },
-      { "name": "video-chrome", "value": "0 8px 32px rgba(0,0,0,0.4)", "purpose": "Webcam PiP and controls sitting directly on the video." }
+      {
+        "name": "toast",
+        "value": "0 12px 36px rgba(0,0,0,0.12)",
+        "purpose": "Transient status pill floating above the workspace."
+      },
+      {
+        "name": "panel-float",
+        "value": "0 16px 44px rgba(0,0,0,0.12)",
+        "purpose": "Floating side panels and popovers."
+      },
+      {
+        "name": "dialog",
+        "value": "0 20px 48px rgba(0,0,0,0.18)",
+        "purpose": "Light modal dialogs on a light ground."
+      },
+      {
+        "name": "dialog-over-video",
+        "value": "0 24px 60px rgba(0,0,0,0.35)",
+        "purpose": "Dark dialogs on the overlay scrim; needs more separation against moving footage."
+      },
+      {
+        "name": "video-chrome",
+        "value": "0 8px 32px rgba(0,0,0,0.4)",
+        "purpose": "Webcam PiP and controls sitting directly on the video."
+      }
     ],
     "motion": [
-      { "name": "control", "value": "transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease", "purpose": "Toolbar and control state change. Fast enough that a tap feels instant on touch." },
-      { "name": "standard", "value": "all 0.15s ease", "purpose": "Default token transition (--transition) for non-critical state." },
-      { "name": "emphasized", "value": "all 300ms cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Panel and sheet entry/exit only. Never on a control the coach taps repeatedly." },
-      { "name": "press-scale", "value": "scale(0.95)", "purpose": "Momentary press feedback on toolbar rows, paired with a 10ms haptic on touch devices." }
+      {
+        "name": "control",
+        "value": "transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
+        "purpose": "Toolbar and control state change. Fast enough that a tap feels instant on touch."
+      },
+      {
+        "name": "standard",
+        "value": "all 0.15s ease",
+        "purpose": "Default token transition (--transition) for non-critical state."
+      },
+      {
+        "name": "emphasized",
+        "value": "all 300ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Panel and sheet entry/exit only. Never on a control the coach taps repeatedly."
+      },
+      {
+        "name": "press-scale",
+        "value": "scale(0.95)",
+        "purpose": "Momentary press feedback on toolbar rows, paired with a 10ms haptic on touch devices."
+      }
     ],
     "breakpoints": [
-      { "name": "mobile", "value": "768px" },
-      { "name": "touch-landscape", "value": "(hover: none) and (pointer: coarse) and (max-width: 1024px)" }
+      {
+        "name": "mobile",
+        "value": "768px"
+      },
+      {
+        "name": "touch-landscape",
+        "value": "(hover: none) and (pointer: coarse) and (max-width: 1024px)"
+      }
     ]
   },
   "components": [
@@ -176,6 +377,14 @@
       "description": "Coach-confirmed state in the Coach Override chain. Green means a human signed off — never 'good' in the abstract.",
       "html": "<span class=\"ds-chip-ready\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\"><path d=\"M20 6L9 17l-5-5\"/></svg>Ready</span><span class=\"ds-chip-pending\">Pending</span>",
       "css": ".ds-chip-ready { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; background: rgba(52,199,89,0.12); color: #17913D; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 11px; font-weight: 700; } .ds-chip-pending { display: inline-flex; align-items: center; margin-left: 8px; padding: 4px 10px; border-radius: 999px; background: #F2F2F7; color: #6E6E73; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 11px; font-weight: 600; }"
+    },
+    {
+      "name": "Action Primary Button",
+      "kind": "button",
+      "refersTo": "button-action-primary",
+      "description": "Product-level commit that leaves the workspace: Save Report, Create Player, Start. Dark fill, not blue.",
+      "html": "<button class=\"ds-btn-action\">Save Report</button>",
+      "css": ".ds-btn-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 16px; border: none; border-radius: 10px; background: #1D1D1F; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif; font-size: 13px; font-weight: 700; cursor: pointer; touch-action: manipulation; transition: transform 0.12s ease, background 0.12s ease; } .ds-btn-action:hover { background: #000000; } .ds-btn-action:focus-visible { outline: 2px solid #007AFF; outline-offset: 2px; } .ds-btn-action:active { transform: scale(0.95); }"
     }
   ],
   "narrative": {
@@ -189,15 +398,61 @@
       "Hairline (1px) borders as the default separator, not shadow"
     ],
     "rules": [
-      { "name": "The One Voice Rule", "body": "System Blue is the only colour that means \"you can act on this.\" If a surface needs emphasis and the thing is not interactive, it gets weight or spacing, never blue.", "section": "colors" },
-      { "name": "The Earned Colour Rule", "body": "Green, red and orange each carry one meaning and are spent only on it: green for coach-confirmed or live, red for destructive, orange for degraded. A hue with no state behind it does not appear.", "section": "colors" },
-      { "name": "The Hairline-Over-Shadow Rule", "body": "Structure is drawn with a 1px Separator border. Reach for shadow only when a surface genuinely floats.", "section": "colors" },
-      { "name": "The Two-Size Rule", "body": "Inside the app, body copy is 13px and its supporting label is 11px. Reaching for a third in-between size is how a scale rots — 12px, 14px and 15px exist in the codebase today and are drift to be resolved toward 13/11, not precedent to follow.", "section": "typography" },
-      { "name": "The Weight-First Rule", "body": "Build hierarchy with weight (500 → 600 → 700) before size. The app surface has very little room; a heavier 13px outranks a lighter 15px and costs no space.", "section": "typography" },
-      { "name": "The Parity Rule", "body": "Every capability is reachable on both phone and desktop. Layout may differ; the feature set may not. A control that exists only on desktop is a defect, not a tier.", "section": "layout" },
-      { "name": "The No-Blur Rule", "body": "backdrop-filter is banned on any surface over the video. A live blur forces the compositor to re-blur every presented frame, and this is a video product. Four files carry this as a code comment; it is a design rule, not only a performance note.", "section": "elevation" },
-      { "name": "The Flat-Work Rule", "body": "If a surface is part of the work, it has no shadow. If it has a shadow, it must be dismissible.", "section": "elevation" },
-      { "name": "The 44 Rule", "body": "No interactive target is under 44px in either dimension. This is a courtside product used one-handed; it is not negotiable, and it outranks density.", "section": "shapes" }
+      {
+        "name": "The One Voice Rule",
+        "body": "System Blue is the only colour that means \"you can act on this.\" If a surface needs emphasis and the thing is not interactive, it gets weight or spacing, never blue.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Primaries Rule",
+        "section": "colors",
+        "body": "This product has two primary buttons and both are correct. System Blue is the in-workspace tool action — it lives on the analysis surface, where it means \"this tool is active.\" Action Primary (the dark fill) is the product-level commit — Save Report, Create Player, Start — and lives on the player, decoder and report surfaces. Never mix them on one surface, and never use blue for a commit that leaves the workspace."
+      },
+      {
+        "name": "The Two Whites Rule",
+        "section": "colors",
+        "body": "White is two tokens, not one. Panel is what you write on; Text On Fill is what you write with. They share a value and will never diverge in appearance, but they diverge in meaning — and a surface token used for label text is how a system loses the ability to restyle its filled controls later."
+      },
+      {
+        "name": "The Earned Colour Rule",
+        "body": "Green, red and orange each carry one meaning and are spent only on it: green for coach-confirmed or live, red for destructive, orange for degraded. A hue with no state behind it does not appear.",
+        "section": "colors"
+      },
+      {
+        "name": "The Hairline-Over-Shadow Rule",
+        "body": "Structure is drawn with a 1px Separator border. Reach for shadow only when a surface genuinely floats.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two-Size Rule",
+        "body": "Inside the app, body copy is 13px and its supporting label is 11px. Reaching for a third in-between size is how a scale rots — 12px, 14px and 15px exist in the codebase today and are drift to be resolved toward 13/11, not precedent to follow.",
+        "section": "typography"
+      },
+      {
+        "name": "The Weight-First Rule",
+        "body": "Build hierarchy with weight (500 → 600 → 700) before size. The app surface has very little room; a heavier 13px outranks a lighter 15px and costs no space.",
+        "section": "typography"
+      },
+      {
+        "name": "The Parity Rule",
+        "body": "Every capability is reachable on both phone and desktop. Layout may differ; the feature set may not. A control that exists only on desktop is a defect, not a tier.",
+        "section": "layout"
+      },
+      {
+        "name": "The No-Blur Rule",
+        "body": "backdrop-filter is banned on any surface over the video. A live blur forces the compositor to re-blur every presented frame, and this is a video product. Four files carry this as a code comment; it is a design rule, not only a performance note.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Flat-Work Rule",
+        "body": "If a surface is part of the work, it has no shadow. If it has a shadow, it must be dismissible.",
+        "section": "elevation"
+      },
+      {
+        "name": "The 44 Rule",
+        "body": "No interactive target is under 44px in either dimension. This is a courtside product used one-handed; it is not negotiable, and it outranks density.",
+        "section": "shapes"
+      }
     ],
     "dos": [
       "Do take every colour from styles/tokens.css via var(--cl-*). The token file is the source of truth; today only ~30 references use it against 1,106 hardcoded hex values, and every new hex literal deepens that gap.",
@@ -209,14 +464,16 @@
       "Do give every disabled control an opacity that matches its real state."
     ],
     "donts": [
+      "Don't tokenize a colour that becomes user state. PRESET_COLORS in ToolPalette.tsx and ContextualStyleBar.tsx are the coach's annotation-drawing swatches: picking one sets drawingOptions.color, which lands on ctx.strokeStyle. A var() there paints nothing and renders the raw token string as the swatch label. Those arrays stay hex.",
       "Don't introduce a red brand accent. Red is destructive and stop, only. The landing page already carries an explicit rejection of the previous off-brand red.",
       "Don't pull colours from Tailwind's default palette. #F59E0B (amber-500), #78716C (stone-500) and bg-blue-600 (#2563EB) are currently leaking in and are all wrong; the unused coach-blue / coach-gray config in tailwind.config.js is dead and should not be revived.",
       "Don't use backdrop-filter on any surface over the video — the No-Blur Rule.",
       "Don't build dark-mode-first chrome. This product is a light theme. The only sanctioned dark surfaces are the video-adjacent overlay scrim and its dialogs.",
-      "Don't use #1A1A1A for text. It appears 91 times and is drift; Label (#1D1D1F) is normative.",
-      "Don't add a fourth separator grey. #E5E5E5, #E5E5EA and #E8E8ED are all drift toward Separator (#D1D1D6).",
+      "Don't reintroduce #1A1A1A. It is fully retired: its text uses became Label and its button fills became Action Primary, both #1D1D1F.",
+      "Don't add another grey. #E5E5E5, #E5E5EA and #E8E8ED are retired: border uses became Separator (#D1D1D6), fill uses became Fill Inactive (#E5E5EA).",
       "Don't add radii outside 8 / 10 / 16 / 999. The 4px, 6px, 12px and 14px values in the codebase are drift, not scale.",
-      "Don't write -apple-system, sans-serif as a shorthand — it drops the Windows and Android fallbacks. Use the full stack, via var(--cl-font)."
+      "Don't write -apple-system, sans-serif as a shorthand — it drops the Windows and Android fallbacks. Use the full stack, via var(--cl-font).",
+      "Don't put a var() token where CSS custom properties don't resolve: an SVG presentation attribute (stroke=\"…\", or a lucide <Icon color={…}> prop), Next's themeColor metadata (it emits a <meta> tag, not CSS), or a canvas 2D context (ctx.fillStyle). In all three a var() fails silently — no error, wrong or stale colour. Keep the hex literal there."
     ]
   }
 }
