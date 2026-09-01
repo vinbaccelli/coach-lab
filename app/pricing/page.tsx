@@ -81,7 +81,7 @@ export default function PricingPage() {
         </p>
 
         {/* Billing toggle */}
-        <div style={{ display: 'inline-flex', background: '#EDEDED', borderRadius: 999, padding: 4, marginBottom: 36 }}>
+        <div style={{ display: 'inline-flex', background: 'var(--cl-fill-inactive)', borderRadius: 999, padding: 4, marginBottom: 36 }}>
           <button type="button" onClick={() => setCycle('yearly')} style={toggleBtn(cycle === 'yearly')}>
             Yearly <span style={{ fontSize: 10, fontWeight: 800, color: cycle === 'yearly' ? 'var(--cl-text-on-fill)' : ACCENT }}>· 2 mo free</span>
           </button>

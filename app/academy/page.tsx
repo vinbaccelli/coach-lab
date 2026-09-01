@@ -33,7 +33,7 @@ export default function AcademyPage() {
         <h1 style={{ margin: '0 0 8px', fontSize: 26, fontWeight: 900, color: '#111827' }}>
           AngleMotion Academy
         </h1>
-        <p style={{ margin: '0 0 20px', fontSize: 14, color: '#6B7280', lineHeight: 1.5 }}>
+        <p style={{ margin: '0 0 20px', fontSize: 14, color: 'var(--cl-text-secondary)', lineHeight: 1.5 }}>
           How to prepare, store, and import videos for V1 — upload files into AngleMotion after using
           YouTube, Drive, or your camera roll.
         </p>

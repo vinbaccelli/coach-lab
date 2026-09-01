@@ -52,7 +52,7 @@ export default function PlayersHomeClient() {
 
   return (
     <div style={{ maxWidth: 880, margin: '0 auto', padding: '0 0 40px' }}>
-      <p style={{ margin: '0 0 20px', fontSize: 14, lineHeight: 1.55, color: '#57534e' }}>
+      <p style={{ margin: '0 0 20px', fontSize: 14, lineHeight: 1.55, color: 'var(--cl-text-secondary)' }}>
         Premium coaching profiles — technique and match timelines stay synced across devices.
       </p>
 
@@ -117,12 +117,12 @@ export default function PlayersHomeClient() {
         </div>
       </div>
 
-      {err ? <p style={{ color: '#b91c1c', fontWeight: 600, marginBottom: 12 }}>{err}</p> : null}
+      {err ? <p style={{ color: 'var(--cl-destructive-text)', fontWeight: 600, marginBottom: 12 }}>{err}</p> : null}
 
       {loading ? (
-        <p style={{ color: '#57534e' }}>Loading…</p>
+        <p style={{ color: 'var(--cl-text-secondary)' }}>Loading…</p>
       ) : players.length === 0 ? (
-        <p style={{ color: '#57534e', fontSize: 14 }}>No players yet — add one above or create from an upload flow.</p>
+        <p style={{ color: 'var(--cl-text-secondary)', fontSize: 14 }}>No players yet — add one above or create from an upload flow.</p>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
           {players.map((p) => (
@@ -133,7 +133,7 @@ export default function PlayersHomeClient() {
                   height: 52,
                   borderRadius: 14,
                   overflow: 'hidden',
-                  background: '#e7e5e4',
+                  background: 'var(--cl-border)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',

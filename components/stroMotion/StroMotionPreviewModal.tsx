@@ -227,7 +227,7 @@ export default function StroMotionPreviewModal({
               Review the still image and looping video, tune the render, then export.
             </p>
             {errorMessage ? (
-              <p style={{ margin: '8px 0 0', fontSize: 13, color: '#FF453A', fontWeight: 600 }}>
+              <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--cl-destructive-text)', fontWeight: 600 }}>
                 {errorMessage}
               </p>
             ) : null}
@@ -479,7 +479,7 @@ export default function StroMotionPreviewModal({
               {exporting ? (exportStatus ?? 'Exporting…') : 'Export Google Docs report'}
             </button>
           </div>
-          {exportError && <p style={{ margin: 0, fontSize: 11, color: '#FF453A', fontWeight: 600 }}>{exportError}</p>}
+          {exportError && <p style={{ margin: 0, fontSize: 11, color: 'var(--cl-destructive-text)', fontWeight: 600 }}>{exportError}</p>}
           {(resultDocUrl || resultYoutubeUrl) && (
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
               {resultDocUrl && (

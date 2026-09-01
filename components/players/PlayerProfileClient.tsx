@@ -199,13 +199,13 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   };
 
   if (loading) {
-    return <p style={{ color: '#57534e' }}>Loading profile…</p>;
+    return <p style={{ color: 'var(--cl-text-secondary)' }}>Loading profile…</p>;
   }
   // Only a genuinely-absent player is fatal (nothing to render). A failed
   // save / new-session sets `err` while the player is still loaded — that is
   // shown as a recoverable inline banner below, NOT a full-page unmount.
   if (!player) {
-    return <p style={{ color: '#b91c1c' }}>{err || 'Player not found'}</p>;
+    return <p style={{ color: 'var(--cl-destructive-text)' }}>{err || 'Player not found'}</p>;
   }
 
   return (
@@ -234,7 +234,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             borderRadius: 10,
             background: 'rgba(220,38,38,0.08)',
             border: '1px solid rgba(220,38,38,0.25)',
-            color: '#b91c1c',
+            color: 'var(--cl-destructive-text)',
             fontSize: 13,
             fontWeight: 600,
           }}
@@ -326,7 +326,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             {sheetSaving ? 'Saving…' : 'Save sheet'}
           </button>
         </div>
-        <p style={{ margin: '4px 0 14px', fontSize: 12, color: '#78716c' }}>
+        <p style={{ margin: '4px 0 14px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
           Adding or deleting rows also updates your default sheet for new players — existing players keep their rows.
         </p>
         <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
@@ -432,7 +432,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         <h2 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>
           Analysis Sessions
         </h2>
-        <p style={{ margin: '0 0 12px', fontSize: 12, color: '#78716c' }}>
+        <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
           Start from the player, use tools in Video Analysis, then Save Report — newest first.
         </p>
         <button
@@ -529,13 +529,13 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 loss even though her entries were sitting right below it. */}
             {!player.google_doc_id && !player.google_match_doc_id && !player.google_folder_id
               && !entries.some((e) => e.metadata?.doc_url) ? (
-              <span style={{ fontSize: 12, color: '#78716c', fontWeight: 600 }}>
+              <span style={{ fontSize: 12, color: 'var(--cl-text-secondary)', fontWeight: 600 }}>
                 No Google Doc yet — use Save Report to create one.
               </span>
             ) : null}
           </div>
         </div>
-        <p style={{ margin: '0 0 10px', fontSize: 12, color: '#78716c' }}>
+        <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
           Match and technique reports — newest first.
           {player.google_doc_id ? ' Click an entry to open it in the player’s Google Doc.' : ''}
         </p>
@@ -565,7 +565,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           />
         </div>
         {timelineEntries.length === 0 ? (
-          <p style={{ margin: 0, fontSize: 13, color: '#78716c' }}>No entries yet.</p>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--cl-text-secondary)' }}>No entries yet.</p>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {timelineEntries.map((e) => (
@@ -603,7 +603,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                   >
                     {e.category === 'match' ? 'Match analysis' : 'Technique analysis'}
                   </span>
-                  <span style={{ fontSize: 11, color: '#78716c' }}>{new Date(e.created_at).toLocaleString()}</span>
+                  <span style={{ fontSize: 11, color: 'var(--cl-text-secondary)' }}>{new Date(e.created_at).toLocaleString()}</span>
                 </div>
                 <div style={{ fontWeight: 700, fontSize: 14, marginTop: 8 }}>{e.folder_label}</div>
                 {e.youtube_url ? (
@@ -625,7 +625,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                       lineHeight: 1.45,
                       whiteSpace: 'pre-wrap',
                       fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-                      color: '#44403c',
+                      color: 'var(--cl-text-primary)',
                     }}
                   >
                     {e.body_text.length > 600 ? `${e.body_text.slice(0, 600)}…` : e.body_text}
@@ -651,11 +651,11 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
               {statLabels.map((l) => <option key={l} value={l}>{l}</option>)}
             </select>
           </div>
-          <p style={{ margin: '4px 0 14px', fontSize: 12, color: '#78716c' }}>
+          <p style={{ margin: '4px 0 14px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
             Values from every exported report, oldest to newest — watch the progression.
           </p>
           {activeStat.length === 0 ? (
-            <p style={{ margin: 0, fontSize: 13, color: '#78716c' }}>No values yet for this metric.</p>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--cl-text-secondary)' }}>No values yet for this metric.</p>
           ) : (() => {
             const values = activeStat.map((d) => d.value);
             const min = Math.min(...values);
@@ -665,7 +665,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             const unit = activeStat[0]?.unit ?? '';
             return (
               <>
-                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12, fontSize: 12, color: '#44403c' }}>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12, fontSize: 12, color: 'var(--cl-text-primary)' }}>
                   <span><strong>Min</strong> {Math.round(min * 10) / 10}{unit}</span>
                   <span><strong>Avg</strong> {Math.round(avg * 10) / 10}{unit}</span>
                   <span><strong>Max</strong> {Math.round(max * 10) / 10}{unit}</span>
@@ -674,7 +674,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {activeStat.slice(-30).map((d, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ width: 130, fontSize: 11, color: '#78716c', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                      <span style={{ width: 130, fontSize: 11, color: 'var(--cl-text-secondary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
                         {new Date(d.date).toLocaleDateString()}{d.snapshot ? ` · ${d.snapshot}` : ''}
                       </span>
                       <div style={{ flex: 1, height: 16, background: 'var(--cl-bg-secondary)', borderRadius: 8, overflow: 'hidden' }}>

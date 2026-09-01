@@ -492,7 +492,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
         <h2 id="anglemotion-welcome-title" style={{ margin: '0 0 10px', fontSize: 22, fontWeight: 800, lineHeight: 1.25 }}>
           Welcome to AngleMotion
         </h2>
-        <p style={{ margin: '0 0 20px', fontSize: 15, lineHeight: 1.5, color: '#4B5563' }}>
+        <p style={{ margin: '0 0 20px', fontSize: 15, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
           Let us show you around.
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -613,7 +613,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
           <div
             style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}
           >
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', letterSpacing: '0.04em' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--cl-text-secondary)', letterSpacing: '0.04em' }}>
               Step {stepIdx + 1} of {steps.length}
             </span>
             <button
@@ -624,7 +624,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
                 border: 'none',
                 fontSize: 12,
                 fontWeight: 600,
-                color: '#6B7280',
+                color: 'var(--cl-text-secondary)',
                 cursor: 'pointer',
                 padding: '4px 6px',
                 fontFamily: 'inherit',
@@ -676,7 +676,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
                 borderRadius: 10,
                 border: '1px solid var(--cl-border)',
                 background: 'var(--cl-bg-panel)',
-                color: stepIdx === 0 ? '#D1D5DB' : 'var(--cl-text-primary)',
+                color: stepIdx === 0 ? 'var(--cl-border)' : 'var(--cl-text-primary)',
                 fontSize: 18,
                 cursor: stepIdx === 0 ? 'default' : 'pointer',
                 fontFamily: 'inherit',

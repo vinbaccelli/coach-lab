@@ -101,7 +101,7 @@ export default function ContextualStyleBar({
   const label: React.CSSProperties = {
     fontSize: 11,
     fontWeight: 700,
-    color: '#6B7280',
+    color: 'var(--cl-text-secondary)',
     minWidth: mobile ? 72 : 64,
   };
 
@@ -268,7 +268,7 @@ export default function ContextualStyleBar({
       ) : null}
 
       {snapshot.outlineEraserEnabled ? (
-        <p style={{ margin: '8px 0 0', fontSize: 11, color: '#6B7280', lineHeight: 1.4 }}>
+        <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--cl-text-secondary)', lineHeight: 1.4 }}>
           Drag on the line to erase part of it.
         </p>
       ) : null}

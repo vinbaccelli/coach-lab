@@ -63,7 +63,7 @@ export default function PlayerSessionDetailClient({
           >
             {label}
           </span>
-          <span style={{ fontSize: 12, color: '#78716c' }}>
+          <span style={{ fontSize: 12, color: 'var(--cl-text-secondary)' }}>
             {new Date(session.createdAt).toLocaleString()}
           </span>
         </div>
@@ -74,14 +74,14 @@ export default function PlayerSessionDetailClient({
 
         {session.coachNotes?.trim() ? (
           <section style={{ marginTop: 16 }}>
-            <h2 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: '#44403c' }}>Coach notes</h2>
+            <h2 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--cl-text-primary)' }}>Coach notes</h2>
             <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{session.coachNotes}</p>
           </section>
         ) : null}
 
         {videoUrl ? (
           <section style={{ marginTop: 16 }}>
-            <h2 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: '#44403c' }}>Source video</h2>
+            <h2 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--cl-text-primary)' }}>Source video</h2>
             <a href={videoUrl} target="_blank" rel="noreferrer" style={{ fontSize: 14, color: '#2563eb' }}>
               {session.videoRef.label ?? videoUrl}
             </a>
@@ -90,7 +90,7 @@ export default function PlayerSessionDetailClient({
 
         {session.measurements?.measurements?.length ? (
           <section style={{ marginTop: 20 }}>
-            <h2 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: '#44403c' }}>Measurements summary</h2>
+            <h2 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: 'var(--cl-text-primary)' }}>Measurements summary</h2>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
               {session.measurements.measurements.map((m) => (
                 <div key={m.phaseId} style={{ padding: 10, borderRadius: 8, background: '#fafaf9', border: '1px solid #e7e5e4' }}>
@@ -104,7 +104,7 @@ export default function PlayerSessionDetailClient({
         ) : null}
 
         <section style={{ marginTop: 24 }}>
-          <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 700, color: '#44403c' }}>Artifacts</h2>
+          <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 700, color: 'var(--cl-text-primary)' }}>Artifacts</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {session.artifacts.map((artifact) => (
               <div key={artifact.id}>
@@ -129,7 +129,7 @@ export default function PlayerSessionDetailClient({
               </div>
             ))}
             {session.artifacts.length === 0 ? (
-              <p style={{ margin: 0, fontSize: 13, color: '#78716c' }}>No artifacts stored for this session.</p>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--cl-text-secondary)' }}>No artifacts stored for this session.</p>
             ) : null}
           </div>
         </section>

@@ -79,7 +79,7 @@ export default function AiMatchDecoderClient() {
             cursor: 'pointer',
             fontSize: 14,
             fontWeight: 600,
-            color: '#57534e',
+            color: 'var(--cl-text-secondary)',
           }}
         >
           <input
@@ -95,14 +95,14 @@ export default function AiMatchDecoderClient() {
           Tap to add images ({files.length}/{MAX_IMAGES})
         </label>
         {files.length > 0 ? (
-          <ul style={{ margin: '12px 0 0', paddingLeft: 18, fontSize: 13, color: '#44403c' }}>
+          <ul style={{ margin: '12px 0 0', paddingLeft: 18, fontSize: 13, color: 'var(--cl-text-primary)' }}>
             {files.map((f, i) => (
               <li key={`${f.name}-${i}`} style={{ marginBottom: 6 }}>
                 {f.name}{' '}
                 <button
                   type="button"
                   onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
-                  style={{ border: 'none', background: 'transparent', color: '#b91c1c', cursor: 'pointer', fontSize: 12 }}
+                  style={{ border: 'none', background: 'transparent', color: 'var(--cl-destructive-text)', cursor: 'pointer', fontSize: 12 }}
                 >
                   Remove
                 </button>
@@ -130,7 +130,7 @@ export default function AiMatchDecoderClient() {
         >
           {busy ? 'Analyzing…' : 'Generate match report'}
         </button>
-        {err ? <p style={{ color: '#b91c1c', marginTop: 12, fontSize: 13 }}>{err}</p> : null}
+        {err ? <p style={{ color: 'var(--cl-destructive-text)', marginTop: 12, fontSize: 13 }}>{err}</p> : null}
       </div>
 
       {report ? (

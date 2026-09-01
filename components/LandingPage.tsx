@@ -229,7 +229,7 @@ export default function LandingPage() {
         <div style={{ maxWidth: 1080, margin: '0 auto', textAlign: 'center' }}>
           <h2 style={{ fontSize: 'clamp(24px, 4vw, 34px)', fontWeight: 900, letterSpacing: -0.5, margin: '0 0 8px' }}>Pricing that fits how you coach.</h2>
           <p style={{ fontSize: 15, color: MUTED, margin: '0 0 24px' }}>Start light, go Pro for the full platform + Academy, or run your whole team on one plan.</p>
-          <div style={{ display: 'inline-flex', background: '#EDEDED', borderRadius: 999, padding: 4, marginBottom: 32 }}>
+          <div style={{ display: 'inline-flex', background: 'var(--cl-fill-inactive)', borderRadius: 999, padding: 4, marginBottom: 32 }}>
             <button type="button" onClick={() => setAnnual(true)} style={toggleBtn(annual)}>Annual <span style={{ fontSize: 10, fontWeight: 800, color: annual ? 'var(--cl-text-on-fill)' : ACCENT }}>· 2 mo free</span></button>
             <button type="button" onClick={() => setAnnual(false)} style={toggleBtn(!annual)}>Monthly</button>
           </div>

@@ -389,7 +389,7 @@ export default function PostRecordingCropModal({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-        {error ? <span style={{ color: '#FF6B60', fontSize: 12, marginRight: 'auto' }}>{error}</span> : null}
+        {error ? <span style={{ color: 'var(--cl-destructive-text)', fontSize: 12, marginRight: 'auto' }}>{error}</span> : null}
         {busy ? <span style={{ color: 'var(--cl-text-on-fill)', fontSize: 13, marginRight: 'auto' }}>{progress ?? 'Working…'}</span> : null}
         {phase === 'choose' && onUploadYouTube && youtube && !youtube.loading ? (
           ytUrl ? (
@@ -403,7 +403,7 @@ export default function PostRecordingCropModal({
             </a>
           ) : (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginRight: 'auto' }}>
-              {ytError ? <span style={{ color: '#FF6B60', fontSize: 12 }}>{ytError}</span> : null}
+              {ytError ? <span style={{ color: 'var(--cl-destructive-text)', fontSize: 12 }}>{ytError}</span> : null}
               <button
                 type="button"
                 style={{ ...bigBtn('#CC0000', busy || ytBusy || youtube.connecting), display: 'inline-flex', alignItems: 'center', gap: 8 }}
@@ -431,7 +431,7 @@ export default function PostRecordingCropModal({
             </a>
           ) : (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginRight: 'auto' }}>
-              {cropYtError ? <span style={{ color: '#FF6B60', fontSize: 12 }}>{cropYtError}</span> : null}
+              {cropYtError ? <span style={{ color: 'var(--cl-destructive-text)', fontSize: 12 }}>{cropYtError}</span> : null}
               <button
                 type="button"
                 style={{ ...bigBtn('#CC0000', busy || cropYtBusy || youtube.connecting || !crop), display: 'inline-flex', alignItems: 'center', gap: 8 }}
@@ -451,7 +451,7 @@ export default function PostRecordingCropModal({
           <>
             <button type="button" style={bigBtn('rgba(255,255,255,0.16)')} onClick={onCancel} disabled={busy}>Cancel</button>
             <button type="button" style={bigBtn('var(--cl-accent)')} onClick={() => setPhase('crop')} disabled={busy}>Crop before download</button>
-            <button type="button" style={bigBtn('#16A34A')} onClick={onDownloadFull} disabled={busy}>Download full ({ext.toUpperCase()})</button>
+            <button type="button" style={bigBtn('var(--cl-success-text)')} onClick={onDownloadFull} disabled={busy}>Download full ({ext.toUpperCase()})</button>
           </>
         ) : (
           <>
@@ -467,7 +467,7 @@ export default function PostRecordingCropModal({
             >
               Back
             </button>
-            <button type="button" style={bigBtn('#16A34A', busy || !crop)} onClick={handleExport} disabled={busy || !crop}>Crop &amp; download MP4</button>
+            <button type="button" style={bigBtn('var(--cl-success-text)', busy || !crop)} onClick={handleExport} disabled={busy || !crop}>Crop &amp; download MP4</button>
           </>
         )}
       </div>

@@ -410,7 +410,7 @@ export default function RulerOverlay({
                 }}
                 style={{
                   padding: '3px 10px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 600,
-                  background: unitSystem === sys ? '#F59E0B' : 'transparent',
+                  background: unitSystem === sys ? 'var(--cl-warning-text)' : 'transparent',
                   color: unitSystem === sys ? 'var(--cl-text-primary)' : 'rgba(255,255,255,0.6)',
                 }}>
                 {sys === 'metric' ? 'cm / m' : 'ft / in'}
@@ -517,7 +517,7 @@ export default function RulerOverlay({
                     background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.25)',
                   }}>
                     <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', lineHeight: 1.45 }}>
-                      💡 <strong style={{ color: '#F59E0B' }}>Tip:</strong> a racket is an easy reference —
+                      💡 <strong style={{ color: 'var(--cl-warning-text)' }}>Tip:</strong> a racket is an easy reference —
                       it’s always in frame. Most adult rackets are{' '}
                       <strong>{unitSystem === 'imperial' ? '27 in (68.6 cm)' : '68.6 cm (27 in)'}</strong>.
                       Draw along the racket and use that length.
@@ -547,7 +547,7 @@ export default function RulerOverlay({
                   padding: '5px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.05)',
                 }}>
                   Assumed length:{' '}
-                  <strong style={{ color: '#F59E0B' }}>
+                  <strong style={{ color: 'var(--cl-warning-text)' }}>
                     {formatLength(selectedPreset.referenceDistance, unitSystem)}
                   </strong>
                 </div>
@@ -668,7 +668,7 @@ export default function RulerOverlay({
                     borderRadius: 6, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)',
                     marginBottom: 8, lineHeight: 1.4,
                   }}>
-                    <Crosshair size={11} style={{ display: 'inline', marginRight: 4, color: '#F59E0B' }} />
+                    <Crosshair size={11} style={{ display: 'inline', marginRight: 4, color: 'var(--cl-warning-text)' }} />
                     Click and drag on the video to measure distances
                   </div>
 
@@ -693,7 +693,7 @@ export default function RulerOverlay({
                             border: '1px solid rgba(245,158,11,0.2)',
                           }}>
                             <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>#{i + 1}</span>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: '#F59E0B' }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--cl-warning-text)' }}>
                               {formatLength(m.distanceM, unitSystem)}
                             </span>
                             <button onClick={() => setMeasurements(prev => prev.filter(x => x.id !== m.id))}

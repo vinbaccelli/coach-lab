@@ -12,7 +12,7 @@ export default function PlayerSessionTimeline({
 }) {
   if (sessions.length === 0) {
     return (
-      <p style={{ margin: 0, fontSize: 13, color: '#78716c' }}>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--cl-text-secondary)' }}>
         No sessions yet. Start a new analysis session above.
       </p>
     );

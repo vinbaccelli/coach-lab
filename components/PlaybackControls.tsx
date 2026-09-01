@@ -339,7 +339,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
               borderRadius: 3,
               outline: 'none',
               cursor: 'pointer',
-              background: '#D1D5DB',
+              background: 'var(--cl-border)',
               accentColor: 'var(--cl-accent)',
             }}
           />
@@ -466,7 +466,7 @@ export default function PlaybackControls({ videoRef, videoRefB, onRemoveVideoB, 
                 borderRadius: 3,
                 outline: 'none',
                 cursor: 'pointer',
-                background: '#D1D5DB',
+                background: 'var(--cl-border)',
                 accentColor: 'var(--cl-warning)',
               }}
             />

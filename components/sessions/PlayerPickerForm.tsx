@@ -171,7 +171,7 @@ export default function PlayerPickerForm({ playerId, onPlayerIdChange, disabled 
         )}
       </div>
 
-      {err ? <p style={{ margin: '10px 0 0', fontSize: 12, color: '#c0392b' }}>{err}</p> : null}
+      {err ? <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--cl-destructive-text)' }}>{err}</p> : null}
     </div>
   );
 }

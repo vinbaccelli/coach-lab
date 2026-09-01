@@ -91,11 +91,11 @@ function SectionBlock({ section }: { section: ReportSection }) {
           {section.rows.some((r) => r.opponent) && (
             <thead>
               <tr>
-                <th style={{ ...cell, textAlign: 'left', fontSize: 9.5, color: '#A8A8AE', fontWeight: 600 }} />
-                <th style={{ ...cell, textAlign: 'right', fontSize: 9.5, color: '#A8A8AE', fontWeight: 600 }}>
+                <th style={{ ...cell, textAlign: 'left', fontSize: 9.5, color: 'var(--cl-text-secondary)', fontWeight: 600 }} />
+                <th style={{ ...cell, textAlign: 'right', fontSize: 9.5, color: 'var(--cl-text-secondary)', fontWeight: 600 }}>
                   opponent
                 </th>
-                <th style={{ ...cell, textAlign: 'right', fontSize: 9.5, color: '#A8A8AE', fontWeight: 600 }}>
+                <th style={{ ...cell, textAlign: 'right', fontSize: 9.5, color: 'var(--cl-text-secondary)', fontWeight: 600 }}>
                   this side
                 </th>
               </tr>
@@ -131,14 +131,14 @@ function SectionBlock({ section }: { section: ReportSection }) {
                     )}
                   </td>
                   {/* Opponent column: the comparison a coach reads first. */}
-                  <td style={{ ...cell, textAlign: 'right', fontSize: 12, color: '#A8A8AE', width: '16%' }}>
+                  <td style={{ ...cell, textAlign: 'right', fontSize: 12, color: 'var(--cl-text-secondary)', width: '16%' }}>
                     {row.opponent ?? ''}
                   </td>
                   <td style={{ ...cell, textAlign: 'right', fontWeight: 700, fontSize: 16, width: '30%' }}>
                     {row.value !== null ? (
                       row.value
                     ) : (
-                      <span style={{ fontWeight: 400, fontSize: 10.5, color: '#A8A8AE' }}>{row.note}</span>
+                      <span style={{ fontWeight: 400, fontSize: 10.5, color: 'var(--cl-text-secondary)' }}>{row.note}</span>
                     )}
                   </td>
                 </tr>
@@ -161,7 +161,7 @@ function SectionBlock({ section }: { section: ReportSection }) {
       {section.notes.map((note, i) => (
         <p key={i} style={footnote}>{note}</p>
       ))}
-      {section.coverage && <p style={{ ...footnote, color: '#A8A8AE' }}>{section.coverage}</p>}
+      {section.coverage && <p style={{ ...footnote, color: 'var(--cl-text-secondary)' }}>{section.coverage}</p>}
     </div>
   );
 }

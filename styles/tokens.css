@@ -42,6 +42,20 @@
   --cl-warning: #FF9500;
   --cl-destructive: #FF3B30;
 
+  /* TEXT-WEIGHT VARIANTS. The semantic colours above are FILL colours — they are
+     designed to sit behind white text. Used AS text on a light surface they fail
+     contrast (#FF3B30 = 3.5:1, #FF9500 = 2.1:1, both below the 4.5:1 floor).
+     These darker variants are what error and warning TEXT uses; they carry the
+     same meaning at a legible weight. Never use a fill token for body text, and
+     never use these as a fill. See DESIGN.md — The Text-Weight Variant Rule. */
+  --cl-destructive-text: #B91C1C;
+  --cl-warning-text: #B45309;
+  /* Success's text-weight sibling. Also the correct fill for a green button with
+     white text: #16A34A clears 4.5:1 behind white, --cl-success (#34C759) does
+     not (2.3:1). Use --cl-success for the coach-confirmed `ready` state marker;
+     use this wherever green carries TEXT or sits behind white text. */
+  --cl-success-text: #16A34A;
+
   --cl-radius-sm: 8px;
   --cl-radius-md: 10px;
   --cl-radius-lg: 16px;

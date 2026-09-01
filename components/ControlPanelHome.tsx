@@ -109,7 +109,7 @@ export default function ControlPanelHome() {
 
         <Link href="/players" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ color: '#16A34A' }}>
+            <span style={{ color: 'var(--cl-success-text)' }}>
               <Users size={20} strokeWidth={2.25} />
             </span>
             <span style={{ fontSize: 15, fontWeight: 700 }}>Player database</span>
@@ -283,7 +283,7 @@ export default function ControlPanelHome() {
           <h2 style={{ fontSize: 22, fontWeight: 900, margin: '0 0 4px', color: 'var(--cl-text-primary)', letterSpacing: -0.3 }}>
             Real feedback from real coaches
           </h2>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, color: '#F59E0B' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--cl-warning-text)' }}>
             {'★★★★★'.split('').map((s, i) => <span key={i}>{s}</span>)}
             <span style={{ marginLeft: 6, fontSize: 13, color: 'var(--cl-text-secondary)', fontWeight: 600 }}>5.0 · Early Access</span>
           </div>
@@ -333,7 +333,7 @@ export default function ControlPanelHome() {
               border: '1px solid var(--cl-border)',
               boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
             }}>
-              <div style={{ color: '#F59E0B', fontSize: 13, marginBottom: 10, letterSpacing: 1 }}>
+              <div style={{ color: 'var(--cl-warning-text)', fontSize: 13, marginBottom: 10, letterSpacing: 1 }}>
                 {'★'.repeat(r.stars)}
               </div>
               <p style={{ margin: '0 0 14px', fontSize: 13, color: '#3C3C43', lineHeight: 1.6, fontStyle: 'italic' }}>

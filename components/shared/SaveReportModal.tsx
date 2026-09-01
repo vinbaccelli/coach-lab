@@ -378,7 +378,7 @@ export default function SaveReportModal({
                 margin: '0 0 14px',
                 fontSize: 13,
                 lineHeight: 1.5,
-                color: '#8A6D00',
+                color: 'var(--cl-warning-text)',
                 background: 'rgba(255,196,0,0.12)',
                 border: '1px solid rgba(255,196,0,0.45)',
                 borderRadius: 10,

@@ -985,7 +985,7 @@ export default function ManualMatchRecorder() {
               margin: '10px 0 0',
               fontSize: 13,
               lineHeight: 1.5,
-              color: '#8A6D00',
+              color: 'var(--cl-warning-text)',
               background: 'rgba(255,196,0,0.12)',
               border: '1px solid rgba(255,196,0,0.45)',
               borderRadius: 10,
@@ -1416,7 +1416,7 @@ export default function ManualMatchRecorder() {
                   fontWeight: 800,
                   letterSpacing: 0.2,
                   color: 'var(--cl-text-on-fill)',
-                  background: sig.kind === 'match' ? '#B3261E' : sig.kind === 'set' ? '#B45309' : '#8A3FFC',
+                  background: sig.kind === 'match' ? '#B3261E' : sig.kind === 'set' ? 'var(--cl-warning-text)' : '#8A3FFC',
                 }}
               >
                 {significanceLabel(sig.kind).toUpperCase()} —{' '}

@@ -180,7 +180,7 @@ export default function SaveReportToPlayersModal({
           The report is added to the top of each player&apos;s <b>Match Analysis</b> doc, newest first.
         </p>
 
-        {error && <p style={{ color: '#b91c1c', fontSize: 12, marginBottom: 12 }}>{error}</p>}
+        {error && <p style={{ color: 'var(--cl-destructive-text)', fontSize: 12, marginBottom: 12 }}>{error}</p>}
 
         {!outcomes && (
           <>
@@ -245,13 +245,13 @@ export default function SaveReportToPlayersModal({
               <div key={o.playerId} style={{ fontSize: 12.5, padding: '8px 0', borderBottom: '1px solid #F5F5F5' }}>
                 <b>{o.displayName}</b>{' '}
                 {!o.ok ? (
-                  <span style={{ color: '#b91c1c' }}>failed — {o.error}</span>
+                  <span style={{ color: 'var(--cl-destructive-text)' }}>failed — {o.error}</span>
                 ) : o.docWarning ? (
                   /* Saved to the player, but the Docs write did not land. Amber,
                      not red: the report is stored, only the Doc is missing. */
                   <>
                     <span style={{ color: '#2F7D32' }}>saved to their folder</span>
-                    <div style={{ color: '#8A6D00', marginTop: 4, lineHeight: 1.45 }}>
+                    <div style={{ color: 'var(--cl-warning-text)', marginTop: 4, lineHeight: 1.45 }}>
                       Google Doc not updated: {o.docWarning}
                     </div>
                   </>

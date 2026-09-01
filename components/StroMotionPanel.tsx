@@ -464,7 +464,7 @@ export default function StroMotionPanel({
       </ol>
 
       {disabled && disabledReason ? (
-        <p style={{ margin: '0 0 8px', fontSize: 12, color: '#c0392b' }}>{disabledReason}</p>
+        <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--cl-destructive-text)' }}>{disabledReason}</p>
       ) : null}
 
       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Object Type</div>
@@ -844,6 +844,6 @@ const secondaryBtnStyle: React.CSSProperties = {
 
 const dangerBtnStyle: React.CSSProperties = {
   ...secondaryBtnStyle,
-  color: '#c0392b',
+  color: 'var(--cl-destructive-text)',
   borderColor: 'rgba(192,57,43,0.3)',
 };

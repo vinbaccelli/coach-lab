@@ -282,7 +282,7 @@ function QuestionThread({ question, onBack }: { question: Question; onBack: () =
           <span>{timeAgo(question.created_at)}</span>
         </div>
         <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 700, color: 'var(--cl-text-primary)' }}>{question.title}</h3>
-        {question.body && <p style={{ margin: 0, fontSize: 13, color: '#4B5563', lineHeight: 1.6 }}>{question.body}</p>}
+        {question.body && <p style={{ margin: 0, fontSize: 13, color: 'var(--cl-text-secondary)', lineHeight: 1.6 }}>{question.body}</p>}
       </div>
 
       {/* Replies */}

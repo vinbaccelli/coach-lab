@@ -21,11 +21,11 @@ const sectionTitle: React.CSSProperties = {
 };
 
 const body: React.CSSProperties = {
-  fontSize: 12, lineHeight: 1.55, color: '#4B5563', margin: '0 0 14px',
+  fontSize: 12, lineHeight: 1.55, color: 'var(--cl-text-secondary)', margin: '0 0 14px',
 };
 
 const list: React.CSSProperties = {
-  margin: '0 0 14px', paddingLeft: 18, fontSize: 12, lineHeight: 1.55, color: '#4B5563',
+  margin: '0 0 14px', paddingLeft: 18, fontSize: 12, lineHeight: 1.55, color: 'var(--cl-text-secondary)',
 };
 
 export default function AngleMotionAcademy() {

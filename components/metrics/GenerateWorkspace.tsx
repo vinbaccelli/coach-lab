@@ -520,7 +520,7 @@ export default function GenerateWorkspace({
                 {exporting ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
                 {exporting ? (exportStatus ?? 'Exporting…') : 'Export Google Docs report'}
               </button>
-              {exportError && <p style={{ margin: 0, fontSize: 11, color: '#FF453A', fontWeight: 600 }}>{exportError}</p>}
+              {exportError && <p style={{ margin: 0, fontSize: 11, color: 'var(--cl-destructive-text)', fontWeight: 600 }}>{exportError}</p>}
               {(resultDocUrl || resultYoutubeUrl) && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {resultDocUrl && (

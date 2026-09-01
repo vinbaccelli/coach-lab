@@ -207,7 +207,7 @@ export default function EmbedCapturePanel({
             {errorMessage}
           </p>
           {showCaptureDownloadFallback ? (
-            <p style={{ margin: '0 0 14px', fontSize: 12, color: '#44403c', lineHeight: 1.55 }}>
+            <p style={{ margin: '0 0 14px', fontSize: 12, color: 'var(--cl-text-primary)', lineHeight: 1.55 }}>
               Having trouble with screen capture? You can download this video directly and upload it to
               AngleMotion — it only takes a moment.
               {captureFallbackDownloadHref ? (
@@ -294,7 +294,7 @@ export default function EmbedCapturePanel({
                 }}
               />
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 12, color: '#57534e', fontVariantNumeric: 'tabular-nums' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 12, color: 'var(--cl-text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
               <span>
                 {formatTime(recordingElapsedSec)} elapsed
               </span>
@@ -303,7 +303,7 @@ export default function EmbedCapturePanel({
               )}
             </div>
           </div>
-          <p style={{ margin: 0, fontSize: 12, color: '#6B6B6B', textAlign: 'center' }}>
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--cl-text-secondary)', textAlign: 'center' }}>
             Recording in progress — do not switch tabs
           </p>
         </>
@@ -320,7 +320,7 @@ export default function EmbedCapturePanel({
           }}>
             {countdown}
           </div>
-          <p style={{ margin: '12px 0 0', fontSize: 13, color: '#6B6B6B' }}>Starting recording...</p>
+          <p style={{ margin: '12px 0 0', fontSize: 13, color: 'var(--cl-text-secondary)' }}>Starting recording...</p>
         </div>
       ) : preparingCapture || (busy && stepStatus) ? (
         /* ── Preparing / step status ──────────────────────────────────── */
@@ -389,12 +389,12 @@ export default function EmbedCapturePanel({
                       style={{ width: 64, padding: '5px 8px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontFamily: 'ui-monospace, monospace', fontSize: 13 }}
                     />
                     {sectionInvalid && (
-                      <span style={{ display: 'block', width: '100%', fontSize: 11, color: '#B45309' }}>
+                      <span style={{ display: 'block', width: '100%', fontSize: 11, color: 'var(--cl-warning-text)' }}>
                         End time must be after start time.
                       </span>
                     )}
                     {!sectionSeekSupported && (
-                      <span style={{ display: 'block', width: '100%', fontSize: 11, color: '#6B6B6B' }}>
+                      <span style={{ display: 'block', width: '100%', fontSize: 11, color: 'var(--cl-text-secondary)' }}>
                         Section timing works best with YouTube links.
                       </span>
                     )}
@@ -405,7 +405,7 @@ export default function EmbedCapturePanel({
           </div>
 
           {genericIframeNote && (
-            <p style={{ margin: '0 0 12px', fontSize: 11, color: '#6B6B6B' }}>{genericIframeNote}</p>
+            <p style={{ margin: '0 0 12px', fontSize: 11, color: 'var(--cl-text-secondary)' }}>{genericIframeNote}</p>
           )}
 
           <button

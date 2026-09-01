@@ -109,7 +109,7 @@ export default function YouTubeControls({
         </span>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
-          <span style={{ fontSize: 11, color: '#6b7280' }}>Speed</span>
+          <span style={{ fontSize: 11, color: 'var(--cl-text-secondary)' }}>Speed</span>
           {PLAYBACK_SPEEDS.map((s) => (
             <button
               key={s}
@@ -128,7 +128,7 @@ export default function YouTubeControls({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 11, color: '#6b7280', minWidth: 60 }}>Frame</span>
+        <span style={{ fontSize: 11, color: 'var(--cl-text-secondary)', minWidth: 60 }}>Frame</span>
         {[10, 30, 60].map((f) => (
           <button
             key={f}

@@ -213,6 +213,51 @@
           "#F5F5F7",
           "#FFFFFF"
         ]
+      },
+      "destructive-text": {
+        "role": "secondary",
+        "displayName": "Destructive Text",
+        "canonical": "#B91C1C",
+        "tonalRamp": [
+          "#2B0605",
+          "#4A0B09",
+          "#6B1310",
+          "#8F1C17",
+          "#B91C1C",
+          "#D65A56",
+          "#E89B98",
+          "#F7DCDB"
+        ]
+      },
+      "warning-text": {
+        "role": "secondary",
+        "displayName": "Warning Text",
+        "canonical": "#B45309",
+        "tonalRamp": [
+          "#2B1A00",
+          "#4A2E00",
+          "#6B4400",
+          "#8F5C00",
+          "#B45309",
+          "#D68A3E",
+          "#E8B57F",
+          "#F7E3C8"
+        ]
+      },
+      "success-text": {
+        "role": "secondary",
+        "displayName": "Success Text",
+        "canonical": "#16A34A",
+        "tonalRamp": [
+          "#04220E",
+          "#083A18",
+          "#0C5424",
+          "#107234",
+          "#16A34A",
+          "#4FC57C",
+          "#8FDCAD",
+          "#D4F4DF"
+        ]
       }
     },
     "typographyMeta": {
@@ -414,6 +459,11 @@
         "body": "White is two tokens, not one. Panel is what you write on; Text On Fill is what you write with. They share a value and will never diverge in appearance, but they diverge in meaning — and a surface token used for label text is how a system loses the ability to restyle its filled controls later."
       },
       {
+        "name": "The Text-Weight Variant Rule",
+        "section": "colors",
+        "body": "The semantic colours are fill colours, designed to sit behind white text. Used as text on a light surface they fail contrast — System Red is 3.5:1 and System Orange 2.1:1, both under the 4.5:1 floor. So each has a darker text-weight sibling: Destructive Text, Warning Text and Success Text. Same meaning, legible weight. Never set body text to a fill token, and never fill a surface with a text-weight one. One deliberate exception: a green button with white text uses Success Text as its fill, because System Green behind white is 2.3:1."
+      },
+      {
         "name": "The Earned Colour Rule",
         "body": "Green, red and orange each carry one meaning and are spent only on it: green for coach-confirmed or live, red for destructive, orange for degraded. A hue with no state behind it does not appear.",
         "section": "colors"
@@ -479,7 +529,8 @@
       "Don't add another grey. #E5E5E5, #E5E5EA and #E8E8ED are retired: border uses became Separator (#D1D1D6), fill uses became Fill Inactive (#E5E5EA).",
       "Don't add radii outside 8 / 10 / 16 / 999. The 4px, 6px, 12px and 14px values in the codebase are drift, not scale.",
       "Don't write -apple-system, sans-serif as a shorthand — it drops the Windows and Android fallbacks. Use the full stack, via var(--cl-font).",
-      "Don't put a var() token where CSS custom properties don't resolve: an SVG presentation attribute (stroke=\"…\", or a lucide <Icon color={…}> prop), Next's themeColor metadata (it emits a <meta> tag, not CSS), or a canvas 2D context (ctx.fillStyle). In all three a var() fails silently — no error, wrong or stale colour. Keep the hex literal there."
+      "Don't put a var() token where CSS custom properties don't resolve: an SVG presentation attribute (stroke=\"…\", or a lucide <Icon color={…}> prop), Next's themeColor metadata (it emits a <meta> tag, not CSS), or a canvas 2D context (ctx.fillStyle). In all three a var() fails silently — no error, wrong or stale colour. Keep the hex literal there.",
+      "Don't sweep #FAF8F5 into a background token. It is a warm off-white in ScreenRecorder and WebcamDropdown panels; Grouped Background is cool, so mapping it would de-warm those panels. Open question pending a deliberate decision."
     ]
   }
 }

@@ -613,7 +613,7 @@ function Spinner() {
 
 function FeedbackCard({ children, tone }: { children: React.ReactNode; tone: 'muted' | 'rec' | 'info' }) {
   const bg = tone === 'rec' ? 'rgba(255,59,48,0.10)' : tone === 'info' ? '#EFF6FF' : 'rgba(0,0,0,0.04)';
-  const border = tone === 'rec' ? 'rgba(255,59,48,0.35)' : tone === 'info' ? '#BFDBFE' : '#E8E6E1';
+  const border = tone === 'rec' ? 'rgba(255,59,48,0.35)' : tone === 'info' ? '#BFDBFE' : 'var(--cl-border)';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 10, background: bg, border: `1px solid ${border}`, minWidth: 0 }}>
       {children}

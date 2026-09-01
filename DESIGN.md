@@ -6,6 +6,9 @@ colors:
   system-blue-pressed: "#DCEBFF"
   system-blue-soft: "rgba(0, 122, 255, 0.12)"
   action-primary: "#1D1D1F"
+  destructive-text: "#B91C1C"
+  warning-text: "#B45309"
+  success-text: "#16A34A"
   text-on-fill: "#FFFFFF"
   fill-inactive: "#E5E5EA"
   system-green: "#34C759"
@@ -181,6 +184,9 @@ variety.
 ### Secondary
 - **System Green** (`{colors.system-green}`): confirmation that a human made a decision. It marks `ready` frame status in the Coach Override chain, the ✓ on completed steps, timeline trim accents, and the live-recording dot. Green means *a coach signed off* or *this is live right now* — it never means "good" in the abstract.
 - **System Red** (`{colors.system-red}`): destructive and stop only. Clear All, delete, stop recording. Red is never a brand colour on this product.
+- **Destructive Text** (`{colors.destructive-text}`): error and failure *text*. See The Text-Weight Variant Rule.
+- **Warning Text** (`{colors.warning-text}`): caution *text*.
+- **Success Text** (`{colors.success-text}`): green carrying *text*, and the correct fill for a green button with white text — it clears 4.5:1 where System Green does not. System Green stays the coach-confirmed `ready` marker.
 - **System Orange** (`{colors.system-orange}`): caution and degraded state — a capability unavailable on this device, a fallback in effect. Rare by design.
 
 ### Neutral
@@ -213,6 +219,21 @@ write *on*; **Text On Fill** is what you write *with*. They share a value and
 will never diverge in appearance, but they diverge in meaning — and a surface
 token used for label text is how a system loses the ability to restyle its
 filled controls later.
+
+**The Text-Weight Variant Rule.** The semantic colours are **fill** colours,
+designed to sit behind white text. Used *as* text on a light surface they fail
+contrast — System Red is 3.5:1 and System Orange 2.1:1, both under the 4.5:1
+floor. So each has a darker text-weight sibling: **Destructive Text** and
+**Warning Text**, **Success Text**. Same meaning, legible weight. Never set body
+text to a fill token, and never fill a surface with a text-weight one — with one
+deliberate exception: a **green button with white text** uses Success Text as its
+fill, because System Green behind white is 2.3:1.
+
+**Open question — the warm off-white.** `#FAF8F5` (ScreenRecorder and
+WebcamDropdown panels) is a *warm* off-white with no token. Grouped Background
+(`#F5F5F7`) is cool, so mapping it would de-warm those panels — possibly a
+deliberate choice, possibly drift. Left as a hex literal pending a decision;
+do not sweep it into a background token without confirming the intent.
 
 **The Earned Colour Rule.** Green, red and orange each carry one meaning and are
 spent only on it: green for coach-confirmed or live, red for destructive, orange

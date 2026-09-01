@@ -102,7 +102,7 @@ export default function BillingPage() {
               Manage billing (Stripe portal)
             </button>
           </div>
-          {error && <p style={{ margin: '10px 0 0', fontSize: 12, color: '#FF453A', fontWeight: 600 }}>{error}</p>}
+          {error && <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--cl-destructive-text)', fontWeight: 600 }}>{error}</p>}
           <p style={{ ...muted, marginTop: 12, fontSize: 11 }}>
             Invoices, payment method, plan changes, and cancellation are handled in the Stripe customer portal.
           </p>

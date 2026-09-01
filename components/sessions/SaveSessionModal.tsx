@@ -227,7 +227,7 @@ export default function SaveSessionModal({
         </>
       ) : null}
 
-      {err ? <p style={{ margin: '12px 0 0', fontSize: 13, color: '#c0392b' }}>{err}</p> : null}
+      {err ? <p style={{ margin: '12px 0 0', fontSize: 13, color: 'var(--cl-destructive-text)' }}>{err}</p> : null}
     </SaveModalShell>
   );
 }

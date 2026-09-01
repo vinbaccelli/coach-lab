@@ -70,7 +70,7 @@ export default function PrecisionTrackDialog({ scope, lengthSec, onConfirm, onCa
                   <span style={{ fontSize: 15, fontWeight: 800 }}>{o.speed}</span>
                   <span style={{
                     fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 999,
-                    background: o.q === 'balanced' ? 'var(--cl-accent)' : '#EDEDED',
+                    background: o.q === 'balanced' ? 'var(--cl-accent)' : 'var(--cl-fill-inactive)',
                     color: o.q === 'balanced' ? 'var(--cl-text-on-fill)' : 'var(--cl-text-secondary)',
                   }}>{o.tag}</span>
                 </div>

@@ -134,7 +134,7 @@ export default function WebcamDropdown({
           borderRadius: 8,
           border: '1px solid var(--cl-border)',
           background: webcamActive ? 'rgba(74,222,128,0.12)' : 'var(--cl-bg-panel)',
-          color: webcamActive ? '#16a34a' : 'var(--cl-text-primary)',
+          color: webcamActive ? 'var(--cl-success-text)' : 'var(--cl-text-primary)',
           fontSize: 12,
           fontWeight: 600,
           cursor: 'pointer',
@@ -255,7 +255,7 @@ export default function WebcamDropdown({
               <div style={{ padding: '4px 0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13, fontWeight: 600 }}>
                   <span>Opacity</span>
-                  <span style={{ color: '#6B7280' }}>{Math.round(webcamOpacity * 100)}%</span>
+                  <span style={{ color: 'var(--cl-text-secondary)' }}>{Math.round(webcamOpacity * 100)}%</span>
                 </div>
                 <input
                   type="range"
@@ -268,7 +268,7 @@ export default function WebcamDropdown({
                 />
               </div>
 
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--cl-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 PiP shape
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -297,7 +297,7 @@ export default function WebcamDropdown({
                 ))}
               </div>
 
-              <p style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.45, margin: '8px 0 0' }}>
+              <p style={{ fontSize: 12, color: 'var(--cl-text-secondary)', lineHeight: 1.45, margin: '8px 0 0' }}>
                 Drag the PiP on the canvas to move it. Use the corner handle to resize.
               </p>
             </div>

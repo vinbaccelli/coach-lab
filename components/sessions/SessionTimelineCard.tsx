@@ -69,7 +69,7 @@ export default function SessionTimelineCard({
               alignItems: 'center',
               justifyContent: 'center',
               fontSize: 11,
-              color: '#78716c',
+              color: 'var(--cl-text-secondary)',
               textAlign: 'center',
               padding: 4,
             }}
@@ -88,12 +88,12 @@ export default function SessionTimelineCard({
                 padding: '4px 8px',
                 borderRadius: 8,
                 background: isDraft ? '#fef3c7' : '#e0f2fe',
-                color: isDraft ? '#b45309' : '#0369a1',
+                color: isDraft ? 'var(--cl-warning-text)' : '#0369a1',
               }}
             >
               {isDraft ? 'Draft' : label}
             </span>
-            <span style={{ fontSize: 11, color: '#78716c' }}>
+            <span style={{ fontSize: 11, color: 'var(--cl-text-secondary)' }}>
               {new Date(session.updatedAt ?? session.createdAt).toLocaleString()}
             </span>
           </div>
@@ -103,7 +103,7 @@ export default function SessionTimelineCard({
               style={{
                 margin: '6px 0 0',
                 fontSize: 12,
-                color: '#78716c',
+                color: 'var(--cl-text-secondary)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -112,7 +112,7 @@ export default function SessionTimelineCard({
               {session.coachNotes}
             </p>
           ) : isDraft ? (
-            <p style={{ margin: '6px 0 0', fontSize: 12, color: '#b45309' }}>
+            <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--cl-warning-text)' }}>
               Continue in Video Analysis → Save Report when ready
             </p>
           ) : null}

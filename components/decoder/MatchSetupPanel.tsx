@@ -150,12 +150,12 @@ export default function MatchSetupPanel({
             </div>
           ))}
           {auto.ambiguities.map((a, i) => (
-            <div key={i} style={{ fontSize: 10.5, color: '#B45309', lineHeight: 1.5, marginTop: 4 }}>
+            <div key={i} style={{ fontSize: 10.5, color: 'var(--cl-warning-text)', lineHeight: 1.5, marginTop: 4 }}>
               ⚠ {a}
             </div>
           ))}
           {auto.orientationBasis !== 'matched a typed name' && (
-            <div style={{ fontSize: 10.5, color: '#B45309', lineHeight: 1.5, marginTop: 4 }}>
+            <div style={{ fontSize: 10.5, color: 'var(--cl-warning-text)', lineHeight: 1.5, marginTop: 4 }}>
               ⚠ Check the two sides aren&apos;t reversed — if the numbers look swapped, hit Swap sides.
             </div>
           )}

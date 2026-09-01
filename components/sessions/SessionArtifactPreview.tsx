@@ -13,7 +13,7 @@ export default function SessionArtifactPreview({ artifact }: { artifact: Session
 
   if (!url) {
     return (
-      <div style={{ padding: 12, borderRadius: 10, background: '#f5f5f4', fontSize: 12, color: '#78716c' }}>
+      <div style={{ padding: 12, borderRadius: 10, background: '#f5f5f4', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
         {label} (no preview URL)
       </div>
     );

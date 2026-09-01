@@ -186,7 +186,7 @@ export default function MatchDecoderClient() {
             Tap to add screenshots ({files.length}/{MAX_IMAGES})
           </label>
           {files.length > 0 && (
-            <ul style={{ margin: '12px 0 0', paddingLeft: 18, fontSize: 12.5, color: '#44403c' }}>
+            <ul style={{ margin: '12px 0 0', paddingLeft: 18, fontSize: 12.5, color: 'var(--cl-text-primary)' }}>
               {files.map((f, i) => (
                 <li key={`${f.name}-${i}`} style={{ marginBottom: 5 }}>
                   {f.name}{' '}
@@ -209,7 +209,7 @@ export default function MatchDecoderClient() {
           >
             {busy ? progress || 'Reading…' : 'Read screenshots'}
           </button>
-          {error && <p style={{ color: '#b91c1c', marginTop: 12, fontSize: 13 }}>{error}</p>}
+          {error && <p style={{ color: 'var(--cl-destructive-text)', marginTop: 12, fontSize: 13 }}>{error}</p>}
         </div>
       )}
 
@@ -297,12 +297,12 @@ const hint: React.CSSProperties = { fontSize: 12, color: 'var(--cl-text-secondar
 const dropzone: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 150,
   border: '2px dashed #d6d3d1', borderRadius: 12, cursor: 'pointer',
-  fontSize: 14, fontWeight: 600, color: '#57534e',
+  fontSize: 14, fontWeight: 600, color: 'var(--cl-text-secondary)',
 };
 const btnPrimary: React.CSSProperties = {
   minHeight: 48, borderRadius: 12, border: 'none', background: 'var(--cl-action-primary)',
   color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 14, cursor: 'pointer',
 };
 const linkBtn: React.CSSProperties = {
-  border: 'none', background: 'transparent', color: '#b91c1c', cursor: 'pointer', fontSize: 12, padding: 0,
+  border: 'none', background: 'transparent', color: 'var(--cl-destructive-text)', cursor: 'pointer', fontSize: 12, padding: 0,
 };
