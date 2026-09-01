@@ -345,7 +345,7 @@ export default function SaveReportModal({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <div>
             <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>Save to player folder</h2>
-            <p style={{ margin: '6px 0 0', fontSize: 13, color: '#6e6e73', lineHeight: 1.45 }}>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--cl-text-secondary)', lineHeight: 1.45 }}>
               Choose player and folder type. The entry appears on their timeline.
             </p>
           </div>
@@ -358,7 +358,7 @@ export default function SaveReportModal({
               background: 'transparent',
               cursor: 'pointer',
               padding: 4,
-              color: '#6e6e73',
+              color: 'var(--cl-text-secondary)',
             }}
           >
             <X size={20} />
@@ -570,7 +570,7 @@ export default function SaveReportModal({
             </label>
 
             {youtubeUrl ? (
-              <p style={{ fontSize: 12, color: '#6e6e73', margin: '12px 0 0', wordBreak: 'break-all' }}>
+              <p style={{ fontSize: 12, color: 'var(--cl-text-secondary)', margin: '12px 0 0', wordBreak: 'break-all' }}>
                 YouTube: {youtubeUrl}
               </p>
             ) : null}

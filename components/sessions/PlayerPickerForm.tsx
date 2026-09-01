@@ -226,14 +226,14 @@ export function SaveModalShell({
           <div>
             <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>{title}</h2>
             {subtitle ? (
-              <p style={{ margin: '6px 0 0', fontSize: 13, color: '#6e6e73', lineHeight: 1.45 }}>{subtitle}</p>
+              <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--cl-text-secondary)', lineHeight: 1.45 }}>{subtitle}</p>
             ) : null}
           </div>
           <button
             type="button"
             aria-label="Close"
             onClick={onClose}
-            style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 4, color: '#6e6e73' }}
+            style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 4, color: 'var(--cl-text-secondary)' }}
           >
             <X size={20} />
           </button>

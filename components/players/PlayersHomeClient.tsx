@@ -66,7 +66,7 @@ export default function PlayersHomeClient() {
       >
         <div style={{ flex: '1 1 220px' }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>New player</div>
-          <div style={{ fontSize: 12, color: '#6e6e73', marginTop: 4 }}>Create a profile before attaching analyses.</div>
+          <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)', marginTop: 4 }}>Create a profile before attaching analyses.</div>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <input
@@ -150,7 +150,7 @@ export default function PlayersHomeClient() {
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 800, fontSize: 16, letterSpacing: '-0.02em' }}>{p.display_name}</div>
                 {p.nationality ? (
-                  <div style={{ fontSize: 12, color: '#6e6e73', marginTop: 4 }}>{p.nationality}</div>
+                  <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)', marginTop: 4 }}>{p.nationality}</div>
                 ) : (
                   <div style={{ fontSize: 12, color: '#a8a29e', marginTop: 4 }}>Open profile</div>
                 )}

@@ -19,9 +19,10 @@
  * rather than approximated — a chart built from a guess is worse than no chart.
  *
  * WHAT MANUAL HAS THAT THE DECODER DOES NOT
- * Forced (induced) errors as a category of their own, the BALL TYPE that caused
- * each error, and RALLY LENGTH. All three come from the coach's own eyes and
- * have no equivalent in the screenshot pipeline.
+ * Forced (induced) errors as a category of their own, the BALL that caused each
+ * error described on four axes (depth / direction / height / speed), RALLY
+ * LENGTH, and FIRST vs SECOND SERVE. All of them come from the coach's own eyes
+ * and have no equivalent in the screenshot pipeline.
  */
 
 import type { ReportSection, ReportStatRow, SideReport } from '@/lib/matchAnalysis/reportModel';
@@ -38,6 +39,8 @@ import type { Side } from '@/lib/tennis/gameScore';
 import type { FormattedBoard } from '@/lib/tennis/matchFormat';
 import {
   aggregateManualStats,
+  ERROR_CAUSE_DIMENSIONS,
+  mergedCauseTallies,
   RALLY_LENGTH_BUCKETS,
   type FinishReason,
   type LoggedPoint,
@@ -281,28 +284,72 @@ function sectionForced(st: ManualStats, side: Side): ReportSection {
   };
 }
 
-function sectionBallType(st: ManualStats, side: Side): ReportSection {
+/**
+ * What the ball that caused the errors was actually like — on four axes.
+ *
+ * REPLACES the old single "ball type" donut. That chart mixed axes ("Deep +
+ * High" was depth and height at once, "Slice" was spin), so its slices were not
+ * mutually exclusive and its percentages did not mean anything you could act on.
+ *
+ * ONE SECTION, FOUR CHARTS rather than four sections: a coach reads these
+ * together — "short, to the backhand side, high and slow" is one picture of what
+ * beats this player, and splitting it across four headings would bury that.
+ * Each axis is charted only when it has data, since every one is independently
+ * skippable while logging.
+ */
+function sectionErrorCause(st: ManualStats, side: Side): ReportSection {
   // Both error kinds share one picture: the question "what beat this player"
   // does not care whether the miss was scored unforced or forced.
-  const merged: Record<string, number> = { ...st.ueByBallType[side] };
-  for (const [k, v] of Object.entries(st.forcedByBallType[side])) merged[k] = (merged[k] ?? 0) + v;
-  const items = tallyItems(merged);
-  const total = items.reduce((a, b) => a + b.value, 0);
+  const merged = mergedCauseTallies(st.ueByErrorCause[side], st.forcedByErrorCause[side]);
+
+  const perDimension = ERROR_CAUSE_DIMENSIONS.map((d) => {
+    const items = tallyItems(merged[d.key]);
+    return { dimension: d, items, total: items.reduce((a, b) => a + b.value, 0) };
+  });
+  const answered = perDimension.filter((d) => d.total > 0);
+  const grandTotal = answered.reduce((a, b) => a + b.total, 0);
+
+  const rows: ReportStatRow[] = [];
+  for (const d of answered) {
+    rows.push(
+      row(d.dimension.label, String(d.total), `Errors with the ball's ${d.dimension.label.toLowerCase()} recorded.`),
+    );
+    rows.push(
+      ...d.items.map((i) =>
+        row(`${d.dimension.label} — ${i.label}`, String(i.value), undefined, { tier: 'simple' as const }),
+      ),
+    );
+  }
+
+  const notes: string[] = [];
+  if (!grandTotal) {
+    notes.push(
+      'No ball descriptions were recorded — all four questions are optional and can be skipped while logging, or turned off entirely for the match.',
+    );
+  } else {
+    const skipped = ERROR_CAUSE_DIMENSIONS.filter(
+      (d) => !answered.some((a) => a.dimension.key === d.key),
+    ).map((d) => d.label.toLowerCase());
+    if (skipped.length) {
+      notes.push(`Nothing was recorded for ${skipped.join(', ')} — those questions were skipped on every error.`);
+    }
+    notes.push(
+      'Each axis is counted separately, so the four totals need not match: a coach may answer depth on one error and speed on another.',
+    );
+  }
+
   return {
-    id: 'ball-type',
+    id: 'error-cause',
     number: 5,
     heading: 'What ball caused the errors',
     explanation:
-      'The shot that drew the mistake — the tactical counterpart to "which stroke missed". This is recorded by eye and has no equivalent in the screenshot decoder.',
-    rows: [
-      row('Errors with a ball type recorded', String(total), 'Unforced and forced errors combined.'),
-      ...items.map((i) => row(i.label, String(i.value), undefined, { tier: 'simple' as const })),
-    ],
-    charts: items.length ? [donutChart({ title: 'Errors by ball that caused them', slices: items })] : [],
-    notes: items.length
-      ? []
-      : ['No ball types were recorded — this step is optional and can be skipped while logging.'],
-    present: total > 0,
+      'The shot that drew the mistake, broken down by how deep it landed, where it went, how high it came through and how fast it was travelling — the tactical counterpart to "which stroke missed".',
+    rows,
+    charts: answered.map((d) =>
+      hBarChart({ title: `Errors by the ball's ${d.dimension.label.toLowerCase()}`, items: d.items }),
+    ),
+    notes,
+    present: grandTotal > 0,
   };
 }
 
@@ -401,9 +448,140 @@ function sectionServe(input: ManualReportInput, st: ManualStats): ReportSection 
     charts: any ? [chart] : [],
     notes: [
       'Serve outcomes are attributed using the server derived from the starting server and the game count, not a per-point selection.',
-      'Serve speed and first-serve percentage are not available from manual logging — they need the video-based decoder.',
+      'Serve speed is not available from manual logging — it needs the video-based decoder.',
     ],
     present: any,
+  };
+}
+
+/**
+ * FIRST vs SECOND SERVE.
+ *
+ * Present only when the recorder actually asked — the question sits behind the
+ * "Advanced serve stats" setting, and each individual point can still skip it.
+ * When nothing was recorded this section renders as absent rather than as a
+ * match played entirely on first serves.
+ *
+ * DOUBLE FAULTS ARE SECOND SERVES and are counted as such without ever being
+ * asked (see aggregateManualStats). Leaving them out would compute the
+ * second-serve win rate over only the second serves that landed, which flatters
+ * every player who double-faults.
+ */
+function sectionServeNumber(input: ManualReportInput, st: ManualStats, side: Side): ReportSection {
+  const me = st.serveNumberBySide[side];
+  const them = st.serveNumberBySide[other(side)];
+  const known = me.first + me.second;
+  const pct = (n: number, of: number): string | null => (of === 0 ? null : `${fmtNum((n / of) * 100, 1)}%`);
+  const oppKnown = them.first + them.second;
+
+  const rows: ReportStatRow[] = [
+    row('First serves', String(me.first), 'Points played on a first serve.', {
+      opponent: String(them.first),
+      howComputed: 'Serve points this side served with the serve number logged as first.',
+    }),
+    row('Second serves', String(me.second), 'Points played on a second serve, double faults included.', {
+      opponent: String(them.second),
+      howComputed: 'Serve points logged as second, plus every double fault (a double fault is a second serve by definition).',
+    }),
+    row('First-serve percentage', pct(me.first, known), 'How often the point started on a first serve.', {
+      opponent: pct(them.first, oppKnown),
+      tier: 'intermediate',
+      howComputed: 'First serves ÷ (first + second serves with a number recorded).',
+    }),
+    row('Second-serve percentage', pct(me.second, known), 'The share of points played on a second ball.', {
+      opponent: pct(them.second, oppKnown),
+      tier: 'intermediate',
+      howComputed: 'Second serves ÷ (first + second serves with a number recorded).',
+    }),
+    row('Points won on first serve', pct(me.firstWon, me.first), `${me.firstWon} of ${me.first} first-serve points.`, {
+      opponent: pct(them.firstWon, them.first),
+      tier: 'intermediate',
+      howComputed: 'First-serve points this side won ÷ first-serve points this side served.',
+    }),
+    row('Points won on second serve', pct(me.secondWon, me.second), `${me.secondWon} of ${me.second} second-serve points.`, {
+      opponent: pct(them.secondWon, them.second),
+      tier: 'intermediate',
+      howComputed: 'Second-serve points this side won ÷ second-serve points this side served.',
+    }),
+  ];
+
+  const charts: string[] = [];
+  if (known > 0) {
+    charts.push(
+      statTiles({
+        title: 'Serve numbers',
+        tiles: [
+          { label: 'First-serve %', value: pct(me.first, known) ?? '—', formula: `${me.first} of ${known}` },
+          {
+            label: 'Won on 1st serve',
+            value: pct(me.firstWon, me.first) ?? '—',
+            formula: `${me.firstWon} of ${me.first}`,
+          },
+          {
+            label: 'Won on 2nd serve',
+            value: pct(me.secondWon, me.second) ?? '—',
+            formula: `${me.secondWon} of ${me.second}`,
+          },
+        ],
+      }),
+    );
+  }
+  if (known > 0 || oppKnown > 0) {
+    charts.push(
+      compareBarChart({
+        title: 'First and second serve',
+        aLabel: input.playerName,
+        bLabel: input.opponentName,
+        groups: [
+          {
+            label: 'First serves',
+            a: st.serveNumberBySide.player.first,
+            b: st.serveNumberBySide.opponent.first,
+          },
+          {
+            label: 'Second serves',
+            a: st.serveNumberBySide.player.second,
+            b: st.serveNumberBySide.opponent.second,
+          },
+          {
+            label: 'Won on 1st',
+            a: st.serveNumberBySide.player.firstWon,
+            b: st.serveNumberBySide.opponent.firstWon,
+          },
+          {
+            label: 'Won on 2nd',
+            a: st.serveNumberBySide.player.secondWon,
+            b: st.serveNumberBySide.opponent.secondWon,
+          },
+        ],
+      }),
+    );
+  }
+
+  const notes: string[] = [];
+  if (!st.serveNumberRecorded) {
+    notes.push(
+      'No serve numbers were recorded for this match — the first/second serve question was either turned off in the recorder or skipped on every point.',
+    );
+  } else {
+    notes.push('Double faults are counted as second serves and are never asked for — a missed second serve is what a double fault is.');
+    if (me.unspecified > 0) {
+      notes.push(
+        `${me.unspecified} serve point${me.unspecified === 1 ? '' : 's'} this side served had no serve number recorded and are excluded from every percentage above.`,
+      );
+    }
+  }
+
+  return {
+    id: 'serve-number',
+    number: 8,
+    heading: 'First & second serve',
+    explanation:
+      'How often this side got a first serve in, and how much each ball was worth once it did — the difference between a player who is losing points and one who is losing second-serve points.',
+    rows,
+    charts,
+    notes,
+    present: st.serveNumberRecorded > 0,
   };
 }
 
@@ -413,12 +591,12 @@ function sectionSummary(input: ManualReportInput, st: ManualStats, side: Side): 
   const ue = Object.values(st.ueByStroke[me]).reduce((a, b) => a + b, 0);
   const worstUe = tallyItems(st.ueByStroke[me])[0];
   const bestWinner = tallyItems(st.winnersByStroke[me])[0];
-  const worstBall = tallyItems({
-    ...st.ueByBallType[me],
-    ...Object.fromEntries(
-      Object.entries(st.forcedByBallType[me]).map(([k, v]) => [k, (st.ueByBallType[me][k] ?? 0) + v]),
-    ),
-  })[0];
+  const mergedCause = mergedCauseTallies(st.ueByErrorCause[me], st.forcedByErrorCause[me]);
+  // The single loudest signal across all four axes — "deep" and "fast" compete
+  // on equal footing, since either could be the thing that actually beat them.
+  const worstBall = ERROR_CAUSE_DIMENSIONS.flatMap((d) =>
+    tallyItems(mergedCause[d.key]).map((i) => ({ ...i, label: `${i.label} (${d.label.toLowerCase()})` })),
+  ).sort((a, b) => b.value - a.value || a.label.localeCompare(b.label))[0];
 
   const notes: string[] = [];
   if (bestWinner) notes.push(`Most productive shot: ${bestWinner.label} (${bestWinner.value} winner${bestWinner.value === 1 ? '' : 's'}).`);
@@ -437,7 +615,7 @@ function sectionSummary(input: ManualReportInput, st: ManualStats, side: Side): 
 
   return {
     id: 'summary',
-    number: 8,
+    number: 9,
     heading: 'Coach’s summary',
     explanation: 'The short version — what worked, what cost points, and what to take into practice.',
     rows: [
@@ -462,9 +640,10 @@ export function buildManualSideReport(input: ManualReportInput, side: Side): Sid
       sectionWinners(st, side),
       sectionUnforced(st, side),
       sectionForced(st, side),
-      sectionBallType(st, side),
+      sectionErrorCause(st, side),
       sectionRallyLength(st, side),
       sectionServe(input, st),
+      sectionServeNumber(input, st, side),
       sectionSummary(input, st, side),
     ],
   };

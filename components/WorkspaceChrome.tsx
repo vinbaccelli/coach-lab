@@ -63,8 +63,27 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
   return (
     <div
       style={{
+        /*
+          MOBILE-BROWSER VIEWPORT — 100dvh ONLY, deliberately no 100vh floor.
+        
+          `minHeight: '100vh'` used to sit here as a fallback, and on iPhone
+          Safari it silently broke the bottom of every page. On iOS, 100vh is the
+          LARGE viewport (the height the page would have if the toolbar were
+          hidden) while 100dvh is the height actually visible right now; with the
+          toolbar showing, 100vh is the taller of the two, and min-height beats
+          height. So this column was laid out ~60–90px taller than the screen,
+          `body { overflow: hidden }` (app/globals.css) clipped the excess with
+          nothing able to scroll it, and the bottom of <main> — the scroll
+          container itself — sat underneath Safari's tab bar. Scrolling to the end
+          of a long page still left its last button unreachable behind the browser
+          chrome. This is the manual match recorder's "Save & Export to Google
+          Doc" bug, and it applied to every page using this chrome.
+        
+          100dvh alone tracks the visible viewport as the toolbar shows and hides,
+          which is what an overflow:hidden app shell needs. It matches what
+          app/analysis/layout.tsx and the body rule already do.
+        */
         height: '100dvh',
-        minHeight: '100vh',
         overflow: 'hidden',
         background: 'var(--cl-bg-primary)',
         color: 'var(--cl-text-primary)',

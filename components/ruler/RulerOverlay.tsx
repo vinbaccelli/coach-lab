@@ -411,7 +411,7 @@ export default function RulerOverlay({
                 style={{
                   padding: '3px 10px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 600,
                   background: unitSystem === sys ? '#F59E0B' : 'transparent',
-                  color: unitSystem === sys ? '#1a1a1a' : 'rgba(255,255,255,0.6)',
+                  color: unitSystem === sys ? 'var(--cl-text-primary)' : 'rgba(255,255,255,0.6)',
                 }}>
                 {sys === 'metric' ? 'cm / m' : 'ft / in'}
               </button>
@@ -531,7 +531,7 @@ export default function RulerOverlay({
                       }}
                       style={{
                         marginTop: 6, width: '100%', padding: '5px 0', borderRadius: 6, border: 'none',
-                        cursor: 'pointer', background: 'rgba(245,158,11,0.85)', color: '#1a1a1a',
+                        cursor: 'pointer', background: 'rgba(245,158,11,0.85)', color: 'var(--cl-text-primary)',
                         fontWeight: 700, fontSize: 11,
                       }}>
                       Use racket length ({unitSystem === 'imperial' ? '27 in' : '68.6 cm'})

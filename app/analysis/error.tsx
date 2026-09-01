@@ -39,7 +39,7 @@ export default function AnalysisError({
             maxWidth: 'min(90vw, 560px)',
             padding: 12,
             borderRadius: 8,
-            background: '#1a1a1a',
+            background: 'var(--cl-action-primary)',
             color: '#f88',
             fontSize: 12,
             overflow: 'auto',
@@ -58,7 +58,7 @@ export default function AnalysisError({
             borderRadius: 8,
             border: 'none',
             background: 'var(--cl-bg-panel)',
-            color: '#111',
+            color: 'var(--cl-text-primary)',
             fontWeight: 600,
             cursor: 'pointer',
           }}

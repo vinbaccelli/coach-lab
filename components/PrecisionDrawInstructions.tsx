@@ -61,7 +61,7 @@ export default function PrecisionDrawInstructions({
           background: 'rgba(250,248,245,0.98)',
           border: '1px solid rgba(0,0,0,0.08)',
           boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
-          color: '#1d1d1f',
+          color: 'var(--cl-text-primary)',
         }}
       >
         <h2 id="precision-draw-title" style={{ margin: '0 0 14px', fontSize: 18, fontWeight: 700 }}>

@@ -379,6 +379,15 @@ no video beneath it.
 
 ## Do's and Don'ts
 
+**The Presentation-Only Rule.** A colour that models **data**, becomes **user
+state**, or gets **serialised** stays a hex literal. Only presentation values
+become tokens. Everything the token sweep must skip falls out of this one
+sentence: canvas paint (`ctx.fillStyle`), SVG presentation attributes and lucide
+`color=` props, `themeColor` metadata, a coach's stored `accent_color`, the
+annotation swatches in `PRESET_COLORS`, the chart `RAMP` serialised into exported
+SVG, and any colour concatenated with an alpha suffix (`#34C75920`, `${c}40`),
+where a token produces invalid CSS.
+
 ### Do:
 - **Do** take every colour from `styles/tokens.css` via `var(--cl-*)`. The token file is the source of truth; today only ~30 references use it against 1,106 hardcoded hex values, and every new hex literal deepens that gap.
 - **Do** keep System Blue for interactive and selected states only — the One Voice Rule.
@@ -396,6 +405,7 @@ no video beneath it.
 - **Don't** reintroduce `#1A1A1A`. It is fully retired: its text uses became Label and its button fills became Action Primary, both `#1D1D1F`.
 - **Don't** add another grey. `#E5E5E5`, `#E5E5EA` and `#E8E8ED` are retired: border uses became Separator (`#D1D1D6`), fill uses became Fill Inactive (`#E5E5EA`).
 - **Don't** add radii outside 8 / 10 / 16 / 999. The 4px, 6px, 12px and 14px values in the codebase are drift, not scale.
+- **Don't** concatenate a token with an alpha suffix. `'#34C75920'` and `` `${c}40` `` are 8-digit-hex idioms; `var(--cl-success)20` is invalid CSS and the value silently disappears. Keep those hex.
 - **Don't** tokenize a colour that becomes *user state*. `PRESET_COLORS` in `ToolPalette.tsx` and `ContextualStyleBar.tsx` are the coach's annotation-drawing swatches: picking one sets `drawingOptions.color`, which lands on `ctx.strokeStyle`. A `var()` there paints nothing and renders the raw token string as the swatch label. Those arrays stay hex.
 - **Don't** put a `var()` token where CSS custom properties don't resolve. Three places in this codebase: an SVG **presentation attribute** (`stroke="…"`, or a lucide `<Icon color={…}>` prop, which becomes one), Next's **`themeColor` metadata** (it emits a `<meta>` tag, not CSS), and a canvas 2D context (`ctx.fillStyle`). In all three a `var()` fails **silently** — no error, wrong or stale colour. Keep the hex literal there and let the token cover the CSS uses.
 - **Don't** write `-apple-system, sans-serif` as a shorthand — it drops the Windows and Android fallbacks. Use the full stack, via `var(--cl-font)`.

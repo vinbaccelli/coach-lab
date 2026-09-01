@@ -671,11 +671,11 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
       )}
 
       {recState === 'stopped' && (
-        <span style={{ fontSize: '12px', color: '#6e6e73' }}>Saving recording…</span>
+        <span style={{ fontSize: '12px', color: 'var(--cl-text-secondary)' }}>Saving recording…</span>
       )}
 
       {progress && (
-        <span style={{ fontSize: '11px', color: '#6e6e73', fontFamily: 'monospace', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: '11px', color: 'var(--cl-text-secondary)', fontFamily: 'monospace', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {progress}
         </span>
       )}

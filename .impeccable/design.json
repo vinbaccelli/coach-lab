@@ -452,6 +452,11 @@
         "name": "The 44 Rule",
         "body": "No interactive target is under 44px in either dimension. This is a courtside product used one-handed; it is not negotiable, and it outranks density.",
         "section": "shapes"
+      },
+      {
+        "name": "The Presentation-Only Rule",
+        "section": "colors",
+        "body": "A colour that models data, becomes user state, or gets serialised stays a hex literal. Only presentation values become tokens. Everything the token sweep must skip falls out of this one sentence: canvas paint (ctx.fillStyle), SVG presentation attributes and lucide color= props, themeColor metadata, a coach's stored accent_color, the annotation swatches in PRESET_COLORS, the chart RAMP serialised into exported SVG, and any colour concatenated with an alpha suffix (#34C75920, ${c}40), where a token produces invalid CSS."
       }
     ],
     "dos": [
@@ -464,6 +469,7 @@
       "Do give every disabled control an opacity that matches its real state."
     ],
     "donts": [
+      "Don't concatenate a token with an alpha suffix. '#34C75920' and `${c}40` are 8-digit-hex idioms; var(--cl-success)20 is invalid CSS and the value silently disappears. Keep those hex.",
       "Don't tokenize a colour that becomes user state. PRESET_COLORS in ToolPalette.tsx and ContextualStyleBar.tsx are the coach's annotation-drawing swatches: picking one sets drawingOptions.color, which lands on ctx.strokeStyle. A var() there paints nothing and renders the raw token string as the swatch label. Those arrays stay hex.",
       "Don't introduce a red brand accent. Red is destructive and stop, only. The landing page already carries an explicit rejection of the previous off-brand red.",
       "Don't pull colours from Tailwind's default palette. #F59E0B (amber-500), #78716C (stone-500) and bg-blue-600 (#2563EB) are currently leaking in and are all wrong; the unused coach-blue / coach-gray config in tailwind.config.js is dead and should not be revived.",

@@ -4,14 +4,50 @@ import type { PointSignificance } from '@/lib/tennis/pointSignificance';
 import { significanceLabel } from '@/lib/tennis/pointSignificance';
 
 /**
- * FEATURE C — the ball that caused an error.
+ * FEATURE C — the ball that caused an error, described on FOUR independent axes.
  *
- * Data-driven so the UI renders its buttons from this list and the report
- * aggregates from the same source; adding a sixth ball type is a one-line change
- * here and nowhere else.
+ * REPLACES the old single `BALL_TYPES` list ('Deep' | 'Angled' | 'Deep + High' |
+ * 'Slice' | 'Dropshot'), which forced one tap to stand for several unrelated
+ * properties at once: "Deep + High" mixed depth with height, "Slice" described
+ * spin, and a deep-AND-fast ball could only be logged as one of the two. Splitting
+ * it into depth / direction / height / speed means each tap answers exactly one
+ * question, every combination is expressible, and each axis can be charted on its
+ * own instead of a single donut of overlapping categories.
+ *
+ * Data-driven so the UI renders its four panels from this list and the report
+ * aggregates from the same source; every axis is INDEPENDENTLY optional — the
+ * coach may answer all four, some, or none.
  */
-export const BALL_TYPES = ['Deep', 'Angled', 'Deep + High', 'Slice', 'Dropshot'] as const;
-export type BallType = (typeof BALL_TYPES)[number];
+export const ERROR_CAUSE_DIMENSIONS = [
+  { key: 'depth', label: 'Depth', question: 'How deep was the ball?', options: ['Short', 'Half Court', 'Deep'] },
+  { key: 'direction', label: 'Direction', question: 'Where did it go?', options: ['Right', 'Left', 'Center'] },
+  /*
+    HEIGHT is height-and-trajectory, not a pure three-step ramp. 'Slice' is a
+    kind of ball rather than a level — a skidding, backspun trajectory that
+    stays low but is not the same thing as merely low — so it sits AFTER the
+    Flat → Medium → High ramp instead of inside it, leaving that ordering
+    intact for the eye while still being one tap away.
+  */
+  { key: 'height', label: 'Height', question: 'How high was it?', options: ['Flat', 'Medium', 'High', 'Slice'] },
+  { key: 'speed', label: 'Speed', question: 'How fast was it?', options: ['Slow', 'Medium', 'Fast'] },
+] as const;
+
+export type ErrorCauseDimension = (typeof ERROR_CAUSE_DIMENSIONS)[number]['key'];
+
+/** Every axis optional and independent — a skipped axis is simply absent. */
+export type ErrorCause = {
+  depth?: string;
+  direction?: string;
+  height?: string;
+  speed?: string;
+};
+
+export const ERROR_CAUSE_KEYS = ERROR_CAUSE_DIMENSIONS.map((d) => d.key) as readonly ErrorCauseDimension[];
+
+/** True when at least one of the four axes was actually answered. */
+export function hasErrorCause(c: ErrorCause | undefined): c is ErrorCause {
+  return !!c && ERROR_CAUSE_KEYS.some((k) => !!c[k]);
+}
 
 /**
  * FEATURE B — serve/return point outcomes.
@@ -35,7 +71,7 @@ export type ServeDetail = (typeof SERVE_OUTCOMES)[number]['detail'];
  * second "shot type" axis, matching how the recorder has always asked the
  * question: one tap, one stroke.
  */
-export const STROKES = ['Forehand', 'Backhand', 'Volley', 'Smash', 'Drop Shot'] as const;
+export const STROKES = ['Forehand', 'Backhand', 'Volley', 'Swing Volley', 'Smash', 'Drop Shot'] as const;
 export type StrokeName = (typeof STROKES)[number];
 
 /**
@@ -94,6 +130,12 @@ export function serveOutcomesFor(
  * coach typed. Either way the point keeps the RAW value — bucketing into the
  * five display categories (2/3/4/5/5+) happens only when a chart is built, so
  * no precision is thrown away at logging time.
+ *
+ * There is deliberately NO "5+" quick button: it recorded "more than five" and
+ * nothing else, so a 6-shot rally and a 25-shot rally became the same datum.
+ * Anything above five now goes through `Custom`, which takes the exact number.
+ * The literal '5+' stays in the TYPE only so points logged before that change
+ * (already written to `player_entries.metadata`) still read back and bucket.
  */
 export const RALLY_LENGTH_OPTIONS = [2, 3, 4, 5] as const;
 export type RallyLength = number | '5+';
@@ -122,8 +164,8 @@ export function rallyLengthLabel(n: RallyLength): string {
  */
 export type ManualOutcome =
   | { kind: 'serve'; detail: ServeDetail }
-  | { kind: 'ue'; stroke: string; ballType?: BallType }
-  | { kind: 'forced'; stroke: string; ballType?: BallType }
+  | { kind: 'ue'; stroke: string; errorCause?: ErrorCause }
+  | { kind: 'forced'; stroke: string; errorCause?: ErrorCause }
   | { kind: 'winner'; stroke: string };
 
 export type LoggedPoint = {
@@ -140,6 +182,15 @@ export type LoggedPoint = {
   server?: Side;
   /** How long the rally ran, when asked (never for a serve/return outcome). */
   rallyLength?: RallyLength;
+  /**
+   * Which serve the point was played on — 1 for a first serve, 2 for a second.
+   *
+   * Asked for every outcome EXCEPT a double fault, which is a second-serve point
+   * by definition and is derived rather than asked (see aggregateManualStats).
+   * Optional twice over: the whole question is gated behind the recorder's
+   * "Advanced serve stats" setting, and each individual instance can be skipped.
+   */
+  serveNumber?: 1 | 2;
 };
 
 /** How the match ended, which changes how the report describes its own totals. */
@@ -153,7 +204,7 @@ export type ManualReportContext = {
   finish?: FinishReason;
 };
 
-/** Outcomes that carry a ball type (FEATURE C). */
+/** Outcomes that carry an error cause (FEATURE C). */
 export function isErrorOutcome(
   o: ManualOutcome,
 ): o is Extract<ManualOutcome, { kind: 'ue' | 'forced' }> {
@@ -179,6 +230,25 @@ function tallyLines(t: Tally, indent = '  '): string[] {
 
 export type ServeSideStats = { aces: number; doubleFaults: number; returnErrorsWon: number };
 
+/**
+ * First/second-serve counting for one SERVING side.
+ *
+ * `first`/`second` are serve points whose serve number is known; `firstWon`/
+ * `secondWon` are the subset the SERVER won. `unspecified` is every serve point
+ * where the step was skipped (or never asked) — kept so a percentage is never
+ * quietly computed over a denominator smaller than the coach thinks it is.
+ */
+export type ServeNumberStats = {
+  first: number;
+  second: number;
+  firstWon: number;
+  secondWon: number;
+  unspecified: number;
+};
+
+/** A tally per error-cause axis: `{depth: {Deep: 3}, speed: {Fast: 1}, …}`. */
+export type ErrorCauseTallies = Record<ErrorCauseDimension, Tally>;
+
 export type ManualStats = {
   totalPoints: number;
   pointsWon: Record<Side, number>;
@@ -192,10 +262,17 @@ export type ManualStats = {
   errorEfficiencyRatio: number;
   winnersByStroke: Record<Side, Tally>;
   ueByStroke: Record<Side, Tally>;
-  ueByBallType: Record<Side, Tally>;
+  ueByErrorCause: Record<Side, ErrorCauseTallies>;
   forcedByStroke: Record<Side, Tally>;
-  forcedByBallType: Record<Side, Tally>;
+  forcedByErrorCause: Record<Side, ErrorCauseTallies>;
   servePointsBySide: Record<Side, ServeSideStats>;
+  /**
+   * First/second serve, keyed by the side that SERVED the point (not the side
+   * that won it) — a serve statistic belongs to the server.
+   */
+  serveNumberBySide: Record<Side, ServeNumberStats>;
+  /** Serve points across both sides that carry an explicit or derived serve number. */
+  serveNumberRecorded: number;
   breakPoints: number;
   setPoints: number;
   matchPoints: number;
@@ -212,6 +289,30 @@ export type ManualStats = {
 };
 
 const emptySideTallies = (): Record<Side, Tally> => ({ player: {}, opponent: {} });
+
+const emptyCauseTallies = (): ErrorCauseTallies => ({ depth: {}, direction: {}, height: {}, speed: {} });
+
+const emptySideCauseTallies = (): Record<Side, ErrorCauseTallies> => ({
+  player: emptyCauseTallies(),
+  opponent: emptyCauseTallies(),
+});
+
+const emptyServeNumbers = (): ServeNumberStats => ({
+  first: 0,
+  second: 0,
+  firstWon: 0,
+  secondWon: 0,
+  unspecified: 0,
+});
+
+/** Tally whichever of the four axes the coach actually answered. */
+function bumpCause(t: ErrorCauseTallies, c: ErrorCause | undefined) {
+  if (!c) return;
+  for (const k of ERROR_CAUSE_KEYS) {
+    const v = c[k];
+    if (v) bump(t[k], v);
+  }
+}
 
 /**
  * Aggregate the logged points.
@@ -233,19 +334,31 @@ export function aggregateManualStats(points: LoggedPoint[]): ManualStats {
     errorEfficiencyRatio: 0,
     winnersByStroke: emptySideTallies(),
     ueByStroke: emptySideTallies(),
-    ueByBallType: emptySideTallies(),
+    ueByErrorCause: emptySideCauseTallies(),
     forcedByStroke: emptySideTallies(),
-    forcedByBallType: emptySideTallies(),
+    forcedByErrorCause: emptySideCauseTallies(),
     servePointsBySide: {
       player: { aces: 0, doubleFaults: 0, returnErrorsWon: 0 },
       opponent: { aces: 0, doubleFaults: 0, returnErrorsWon: 0 },
     },
+    serveNumberBySide: { player: emptyServeNumbers(), opponent: emptyServeNumbers() },
+    serveNumberRecorded: 0,
     breakPoints: 0,
     setPoints: 0,
     matchPoints: 0,
     rallyLengthByEndingSide: emptySideTallies(),
     rallyUnspecifiedByEndingSide: { player: 0, opponent: 0 },
   };
+
+  /**
+   * Was the serve-number question asked at all in this log?
+   *
+   * The double-fault derivation below is only sound when it is joining real
+   * answers. With "Advanced serve stats" off, nothing carries a serve number,
+   * and deriving second serves from double faults alone would manufacture a
+   * "100% second serve" match out of two or three points.
+   */
+  const serveNumberAsked = points.some((p) => p.serveNumber === 1 || p.serveNumber === 2);
 
   for (const pt of points) {
     s.pointsWon[pt.winner] += 1;
@@ -265,14 +378,14 @@ export function aggregateManualStats(points: LoggedPoint[]): ManualStats {
       s.unforcedErrors += 1;
       const side = errorSide(pt);
       bump(s.ueByStroke[side], o.stroke);
-      if (o.ballType) bump(s.ueByBallType[side], o.ballType);
+      bumpCause(s.ueByErrorCause[side], o.errorCause);
       if (pt.rallyLength !== undefined) bump(s.rallyLengthByEndingSide[side], String(pt.rallyLength));
       else s.rallyUnspecifiedByEndingSide[side] += 1;
     } else if (o.kind === 'forced') {
       s.forcedErrors += 1;
       const side = errorSide(pt);
       bump(s.forcedByStroke[side], o.stroke);
-      if (o.ballType) bump(s.forcedByBallType[side], o.ballType);
+      bumpCause(s.forcedByErrorCause[side], o.errorCause);
       if (pt.rallyLength !== undefined) bump(s.rallyLengthByEndingSide[side], String(pt.rallyLength));
       else s.rallyUnspecifiedByEndingSide[side] += 1;
     } else {
@@ -288,6 +401,42 @@ export function aggregateManualStats(points: LoggedPoint[]): ManualStats {
       } else {
         s.returnErrors += 1;
         s.servePointsBySide[server].returnErrorsWon += 1;
+      }
+    }
+
+    /**
+     * FIRST / SECOND SERVE.
+     *
+     * Attributed to the SERVER (`pt.server`, the derived rotation) — a serve
+     * number is a property of the serve, not of whoever happened to win.
+     *
+     * A DOUBLE FAULT is counted as a second serve WITHOUT being asked: missing
+     * the second serve is what a double fault is, so asking would be a tap that
+     * can only have one answer. Deriving it also keeps the denominator honest —
+     * leave double faults out and second-serve win rate is computed over only
+     * the second serves that went in, which flatters it.
+     */
+    const serveSide: Side | undefined =
+      pt.server ??
+      (pt.outcome.kind === 'serve'
+        ? pt.outcome.detail === 'double_fault'
+          ? errorSide(pt)
+          : pt.winner
+        : undefined);
+    if (serveSide) {
+      const isDoubleFault = pt.outcome.kind === 'serve' && pt.outcome.detail === 'double_fault';
+      const n = isDoubleFault && serveNumberAsked ? 2 : pt.serveNumber;
+      const bucket = s.serveNumberBySide[serveSide];
+      if (n === 1) {
+        bucket.first += 1;
+        if (pt.winner === serveSide) bucket.firstWon += 1;
+        s.serveNumberRecorded += 1;
+      } else if (n === 2) {
+        bucket.second += 1;
+        if (pt.winner === serveSide) bucket.secondWon += 1;
+        s.serveNumberRecorded += 1;
+      } else {
+        bucket.unspecified += 1;
       }
     }
   }
@@ -308,11 +457,43 @@ function outcomeTag(o: ManualOutcome): string {
       : o.kind === 'forced'
         ? 'Forced error ' + o.stroke
         : 'Winner ' + o.stroke;
-  if (isErrorOutcome(o) && o.ballType) {
-    return base + ' (off a ' + o.ballType.toLowerCase() + ' ball)';
+  if (isErrorOutcome(o) && hasErrorCause(o.errorCause)) {
+    return base + ' (off a ' + describeErrorCause(o.errorCause) + ' ball)';
   }
   return base;
 }
+
+/** "deep, center, high, fast" — only the axes that were answered. */
+export function describeErrorCause(c: ErrorCause): string {
+  return ERROR_CAUSE_KEYS.map((k) => c[k])
+    .filter((v): v is string => !!v)
+    .map((v) => v.toLowerCase())
+    .join(', ');
+}
+
+/** Per-axis lines for the plain-text report, skipping axes with nothing in them. */
+function causeLines(t: ErrorCauseTallies, indent = '  '): string[] {
+  const out: string[] = [];
+  for (const d of ERROR_CAUSE_DIMENSIONS) {
+    const entries = Object.entries(t[d.key]);
+    if (!entries.length) continue;
+    out.push(indent + d.label + ':');
+    out.push(...tallyLines(t[d.key], indent + '  '));
+  }
+  return out.length ? out : [indent + '(none recorded)'];
+}
+
+/** Merge the unforced and forced tallies for one side — one picture per axis. */
+function mergedCauseTallies(a: ErrorCauseTallies, b: ErrorCauseTallies): ErrorCauseTallies {
+  const out: ErrorCauseTallies = { depth: {}, direction: {}, height: {}, speed: {} };
+  for (const k of ERROR_CAUSE_KEYS) {
+    for (const [label, n] of Object.entries(a[k])) out[k][label] = (out[k][label] ?? 0) + n;
+    for (const [label, n] of Object.entries(b[k])) out[k][label] = (out[k][label] ?? 0) + n;
+  }
+  return out;
+}
+
+export { mergedCauseTallies };
 
 const SIDES: Side[] = ['player', 'opponent'];
 
@@ -387,8 +568,8 @@ export function compileManualReport(
   for (const side of SIDES) {
     lines.push(nameOf(side) + ' — unforced errors by stroke:');
     lines.push(...tallyLines(st.ueByStroke[side]));
-    lines.push(nameOf(side) + ' — unforced errors by ball that caused them:');
-    lines.push(...tallyLines(st.ueByBallType[side]));
+    lines.push(nameOf(side) + ' — unforced errors by the ball that caused them:');
+    lines.push(...causeLines(st.ueByErrorCause[side]));
   }
   lines.push('');
 
@@ -396,8 +577,8 @@ export function compileManualReport(
   for (const side of SIDES) {
     lines.push(nameOf(side) + ' — forced errors by stroke:');
     lines.push(...tallyLines(st.forcedByStroke[side]));
-    lines.push(nameOf(side) + ' — forced errors by ball that caused them:');
-    lines.push(...tallyLines(st.forcedByBallType[side]));
+    lines.push(nameOf(side) + ' — forced errors by the ball that caused them:');
+    lines.push(...causeLines(st.forcedByErrorCause[side]));
   }
   lines.push('');
 
@@ -414,6 +595,51 @@ export function compileManualReport(
         sp.returnErrorsWon,
     );
   }
+  if (st.serveNumberRecorded > 0) {
+    lines.push('');
+    lines.push('FIRST AND SECOND SERVE');
+    for (const side of SIDES) {
+      const sn = st.serveNumberBySide[side];
+      const known = sn.first + sn.second;
+      const pct = (n: number) => (known === 0 ? '—' : ((n / known) * 100).toFixed(1) + '%');
+      const wonPct = (won: number, of: number) => (of === 0 ? '—' : ((won / of) * 100).toFixed(1) + '%');
+      lines.push(
+        nameOf(side) +
+          ' serving — first serves: ' +
+          sn.first +
+          ' (' +
+          pct(sn.first) +
+          '), second serves: ' +
+          sn.second +
+          ' (' +
+          pct(sn.second) +
+          ')',
+      );
+      lines.push(
+        '  points won on 1st serve: ' +
+          sn.firstWon +
+          '/' +
+          sn.first +
+          ' (' +
+          wonPct(sn.firstWon, sn.first) +
+          '), on 2nd serve: ' +
+          sn.secondWon +
+          '/' +
+          sn.second +
+          ' (' +
+          wonPct(sn.secondWon, sn.second) +
+          ')',
+      );
+      if (sn.unspecified > 0) {
+        lines.push('  serve points with no serve number recorded: ' + sn.unspecified);
+      }
+    }
+    lines.push(
+      'Double faults count as second-serve points and are not asked for; every other serve number is the coach\'s own entry.',
+    );
+    lines.push('');
+  }
+
   points.forEach((pt, i) => {
     if (pt.outcome.kind === 'serve') {
       const who = pt.server ? ' (' + nameOf(pt.server) + ' serving)' : '';
@@ -430,8 +656,9 @@ export function compileManualReport(
     const tag = sig ? ' [' + sig + ']' : '';
     const serving = pt.server ? ' · ' + nameOf(pt.server) + ' serving' : '';
     const rally = pt.rallyLength !== undefined ? ' · rally ' + rallyLengthLabel(pt.rallyLength) : '';
+    const sn = pt.serveNumber ? ' · ' + (pt.serveNumber === 1 ? '1st serve' : '2nd serve') : '';
     lines.push(
-      'Point ' + (i + 1) + ': ' + outcomeTag(pt.outcome) + ' — won by ' + nameOf(pt.winner) + serving + rally + tag,
+      'Point ' + (i + 1) + ': ' + outcomeTag(pt.outcome) + ' — won by ' + nameOf(pt.winner) + serving + sn + rally + tag,
     );
   });
   lines.push('');
@@ -446,7 +673,7 @@ export function compileManualReport(
       opponentName +
       ': ' +
       st.pointsWon.opponent +
-      '. Review the winner/UE breakdowns above (and the ball types driving errors) for session priorities.',
+      '. Review the winner/UE breakdowns above (and the depth/direction/height/speed of the balls driving errors) for session priorities.',
   );
 
   return lines.join('\n');
