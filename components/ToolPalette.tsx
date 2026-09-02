@@ -406,16 +406,80 @@ function haptic() {
   }
 }
 
+/**
+ * Finger travel (px) between press and release that still counts as a tap.
+ * Beyond this the gesture was a SCROLL of the toolbar and the button must not
+ * activate.
+ */
+const TAP_SLOP_PX = 10;
+
+/**
+ * Toolbar press handling.
+ *
+ * WHY THE ACTION RUNS ON RELEASE, NOT ON PRESS.
+ * Every toolbar button used to call `action()` synchronously from
+ * `onPointerDown`, and also `preventDefault()`ed that event. Two consequences,
+ * both wrong inside the tool rail, which is an `overflow-y: auto` scroller:
+ *   1. the button activated the instant the finger landed — before any drag
+ *      could possibly be known — so dragging to scroll fired whatever tool the
+ *      finger happened to start on;
+ *   2. `preventDefault()` on a cancelable pointerdown suppresses the browser's
+ *      native scroll start, so the rail barely scrolled at all.
+ *
+ * Now: the pressed styling still appears immediately (the rail stays as
+ * responsive as it was), but the action is armed and only committed on
+ * pointerup, and only if the pointer travelled less than TAP_SLOP_PX. A scroll
+ * cancels it — either because the finger moved, or because the browser claims
+ * the gesture and sends pointercancel. preventDefault is now applied to
+ * non-touch pointers only, so mouse drags still don't select text while touch
+ * scrolling is left to the browser.
+ */
 function useTapScale() {
   const [id, setId] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fire = useCallback((key: string, action: () => void) => {
-    haptic();
+
+  const fire = useCallback((key: string, action: () => void, e?: React.PointerEvent) => {
     if (timer.current) clearTimeout(timer.current);
+    const commit = () => {
+      haptic();
+      action();
+      timer.current = setTimeout(() => setId(null), 150);
+    };
+    // No pointer event (programmatic caller) → behave exactly as before.
+    if (!e || typeof window === 'undefined') {
+      setId(key);
+      commit();
+      return;
+    }
     setId(key);
-    action();
-    timer.current = setTimeout(() => setId(null), 150);
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const pid = e.pointerId;
+    const travelled = (ev: PointerEvent) =>
+      Math.hypot(ev.clientX - startX, ev.clientY - startY) > TAP_SLOP_PX;
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+    };
+    const abort = () => { cleanup(); setId(null); };
+    function onMove(ev: PointerEvent) {
+      if (ev.pointerId === pid && travelled(ev)) abort();
+    }
+    function onCancel(ev: PointerEvent) {
+      if (ev.pointerId === pid) abort();
+    }
+    function onUp(ev: PointerEvent) {
+      if (ev.pointerId !== pid) return;
+      cleanup();
+      if (travelled(ev)) { setId(null); return; }
+      commit();
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
   }, []);
+
   return { pressedKey: id, fire };
 }
 
@@ -585,7 +649,7 @@ interface ToolbarChrome {
   textMuted: string;
   pressedKey: string | null;
   rb: (active: boolean, pressed: boolean, iconOnly?: boolean, dense?: boolean) => React.CSSProperties;
-  fire: (key: string, action: () => void) => void;
+  fire: (key: string, action: () => void, e?: React.PointerEvent) => void;
   pop: () => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -645,8 +709,8 @@ function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
             ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0, justifyContent: 'center' } : null),
           }}
           onPointerDown={(e) => {
-            e.preventDefault();
-            fire('clean', onCleanSession);
+            if (e.pointerType !== 'touch') e.preventDefault();
+            fire('clean', onCleanSession, e);
           }}
         >
           <span
@@ -710,8 +774,8 @@ function ToolbarLead({ chrome }: { chrome: ToolbarChrome }) {
             ...(io ? { width: 44, height: 44, minHeight: 44, maxHeight: 44, margin: '0 auto', padding: 0 } : null),
           }}
           onPointerDown={(e) => {
-            e.preventDefault();
-            fire('expand', onToggleToolbarLabels);
+            if (e.pointerType !== 'touch') e.preventDefault();
+            fire('expand', onToggleToolbarLabels, e);
           }}
         >
           <span
@@ -757,8 +821,8 @@ function CollapseControl({ chrome }: { chrome: ToolbarChrome }) {
             margin: io ? '0 auto' : undefined,
           }}
           onPointerDown={(e) => {
-            e.preventDefault();
-            fire('collapse', onToggleCollapsed);
+            if (e.pointerType !== 'touch') e.preventDefault();
+            fire('collapse', onToggleCollapsed, e);
           }}
         >
           <ChevronRight size={18} strokeWidth={2} style={{ display: collapsed ? 'block' : 'none' }} />
@@ -814,8 +878,8 @@ function Row({
           data-destructive={destructive ? 'true' : undefined}
           style={rowStyle}
           onPointerDown={(e) => {
-            e.preventDefault();
-            fire(k, onPress);
+            if (e.pointerType !== 'touch') e.preventDefault();
+            fire(k, onPress, e);
           }}
         >
           <span
@@ -840,8 +904,8 @@ function Row({
         data-destructive={destructive ? 'true' : undefined}
         style={rowStyle}
         onPointerDown={(e) => {
-          e.preventDefault();
-          fire(k, onPress);
+          if (e.pointerType !== 'touch') e.preventDefault();
+          fire(k, onPress, e);
         }}
       >
         <span style={{ display: 'flex', width: 26, justifyContent: 'center', flexShrink: 0 }}>
@@ -895,11 +959,11 @@ function BackHeader({
           fontSize: io ? undefined : 16,
         }}
         onPointerDown={(e) => {
-          e.preventDefault();
+          if (e.pointerType !== 'touch') e.preventDefault();
           fire(`back-${title}`, () => {
             onBack?.();
             pop();
-          });
+          }, e);
         }}
       >
         {io ? <ChevronLeft size={18} strokeWidth={2} /> : (
@@ -1136,8 +1200,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
         position: 'relative',
       }}
       onPointerDown={(e) => {
-        e.preventDefault();
-        fire(key, () => onChange(!checked));
+        if (e.pointerType !== 'touch') e.preventDefault();
+        fire(key, () => onChange(!checked), e);
       }}
     >
       {io && icon ? (
@@ -1263,8 +1327,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
                 transform: pressedKey === `c-${c}` ? 'scale(0.95)' : undefined,
               }}
               onPointerDown={(e) => {
-                e.preventDefault();
-                fire(`c-${c}`, () => onOptionsChange({ color: c }));
+                if (e.pointerType !== 'touch') e.preventDefault();
+                fire(`c-${c}`, () => onOptionsChange({ color: c }), e);
               }}
             >
               <span
@@ -1304,8 +1368,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
               aria-label="Solid line"
               style={{ ...rb(!styleVals.dashed, pressedKey === 'solid', io), justifyContent: 'center', ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : { width: '100%' }) }}
               onPointerDown={(e) => {
-                e.preventDefault();
-                fire('solid', () => onOptionsChange({ dashed: false }));
+                if (e.pointerType !== 'touch') e.preventDefault();
+                fire('solid', () => onOptionsChange({ dashed: false }), e);
               }}
             >
               {io ? <Minus size={18} strokeWidth={2} /> : 'Solid line'}
@@ -1315,8 +1379,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
               aria-label="Dashed line"
               style={{ ...rb(!!styleVals.dashed, pressedKey === 'dash', io), justifyContent: 'center', ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : { width: '100%' }) }}
               onPointerDown={(e) => {
-                e.preventDefault();
-                fire('dash', () => onOptionsChange({ dashed: true }));
+                if (e.pointerType !== 'touch') e.preventDefault();
+                fire('dash', () => onOptionsChange({ dashed: true }), e);
               }}
             >
               {io ? <GripHorizontal size={18} strokeWidth={2} /> : 'Dashed'}

@@ -3534,6 +3534,23 @@ function Home() {
     });
   }, [activeTool]);
 
+  /**
+   * Hold-to-activate: the 2s still-hold on the canvas reaches the same state the
+   * toolbar's Precision button sets. Idempotent — if precision is somehow already
+   * on, this is a no-op — and it deliberately does NOT switch the active tool the
+   * way handlePrecisionDrawToggle does, because a drawing tool being active is
+   * the precondition for the hold in the first place.
+   */
+  const handlePrecisionHoldActivate = useCallback(() => {
+    setPrecisionDrawEnabled((prev) => {
+      if (prev) return prev;
+      if (typeof window !== 'undefined' && !hasSeenPrecisionInstructions()) {
+        queueMicrotask(() => setPrecisionInstructionsOpen(true));
+      }
+      return true;
+    });
+  }, []);
+
   const dismissPrecisionInstructions = useCallback(() => {
     markPrecisionInstructionsSeen();
     setPrecisionInstructionsOpen(false);
@@ -6980,6 +6997,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   }
                   webcamCutout={webcamCutout}
                   precisionTouchDraw={isMobile && precisionDrawEnabled}
+                  onPrecisionHoldActivate={isMobile ? handlePrecisionHoldActivate : undefined}
                   webcamPipMobileChrome={isMobile}
                   webcamPipBottomInsetPx={toolbarBottomReservePx}
                   showTourHelpInZoomCluster
@@ -7713,6 +7731,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       }
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={isMobile && precisionDrawEnabled}
+                      onPrecisionHoldActivate={isMobile ? handlePrecisionHoldActivate : undefined}
                       webcamPipMobileChrome={isMobile}
                       webcamPipBottomInsetPx={toolbarBottomReservePx}
                       poseFrameSkip={1}

@@ -66,7 +66,37 @@ const SHAPE_SPIN_SPEED = 0.025;
  * desktop. Deliberately NOT clamped: near the very top edge the crosshair may
  * still leave the canvas, which is accepted behaviour.
  */
-const PRECISION_CURSOR_OFFSET_RATIO = 0.08;
+const PRECISION_CURSOR_OFFSET_RATIO = 0.12;
+/**
+ * Tools under which the OUTLINE ERASER may act, and therefore under which its
+ * cursor must be tracked and drawn.
+ *
+ * This existed as three divergent inline lists: the pointerdown branches
+ * accepted nine tools, hover tracking eight, and the cursor renderer only the
+ * four shape tools. So erasing part of a LINE drew no cursor at all, and with
+ * the Select tool active (which is the state a coach is in right after tapping
+ * a drawing to edit it) the cursor position was never even updated — the
+ * feature looked completely dead while the pointerdown handler was in fact
+ * still willing to erase. One list, used everywhere.
+ */
+/** Still-hold duration (ms) that activates precision mode without the toolbar. */
+const PRECISION_HOLD_MS = 2000;
+/** Finger travel (px) that cancels the hold — past this it is a draw, not a hold. */
+const PRECISION_HOLD_SLOP_PX = 10;
+/**
+ * Tools where a 2-second still hold arms precision mode. Drawing tools only:
+ * holding still over a pan, zoom, skeleton-focus or region-select gesture means
+ * something else entirely, and precision has no meaning there.
+ */
+const PRECISION_HOLD_TOOLS: ReadonlySet<string> = new Set([
+  'pen', 'line', 'arrow', 'arrowAngle', 'circle', 'rect', 'triangle',
+  'bodyCircle', 'text', 'angle', 'manualSwing', 'swingPath', 'jointChain', 'ruler',
+]);
+
+const OUTLINE_ERASER_TOOLS: ReadonlySet<string> = new Set([
+  'select', 'line', 'arrow', 'arrowAngle', 'pen',
+  'circle', 'bodyCircle', 'rect', 'triangle',
+]);
 /** Fade-out duration when anchor finger lifts (ms) */
 const PRECISION_CURSOR_FADE_MS = 220;
 /** Ripple duration at synthetic click (ms) */
@@ -411,6 +441,14 @@ export interface CanvasProps {
    * Zoom / object-multiplier bypass precision routing.
    */
   precisionTouchDraw?: boolean;
+  /**
+   * Fired when a still 2s hold on a drawing tool should switch precision mode
+   * on. The canvas does not own that state — the page does, and the toolbar
+   * toggle writes the same state — so this only asks; the crosshair is armed
+   * locally so it appears on the very next frame rather than waiting for the
+   * prop round-trip.
+   */
+  onPrecisionHoldActivate?: () => void;
   /** Fires after a drawable shape is committed — parent opens toolbar draw-context mode. */
   onDrawCommitted?: () => void;
   poseFrameSkip?: number;
@@ -1847,6 +1885,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamPipMobileChrome = false,
       webcamPipBottomInsetPx = 0,
       precisionTouchDraw = false,
+      onPrecisionHoldActivate,
       onDrawCommitted,
       poseFrameSkip = 0,
       panModeEnabled = false,
@@ -2135,6 +2174,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         canvas?.removeEventListener('touchmove', stopMultiTouchScroll);
       };
     }, [precisionTouchDraw]);
+
+    /** Live ref to the activation callback so the timer never closes over a stale prop. */
+    const onPrecisionHoldActivateRef = useRef(onPrecisionHoldActivate);
+    useEffect(() => { onPrecisionHoldActivateRef.current = onPrecisionHoldActivate; }, [onPrecisionHoldActivate]);
+    /** In-flight 2s hold: timer + the press origin used for the slop test. */
+    const precisionHoldRef = useRef<
+      { timer: ReturnType<typeof setTimeout>; pointerId: number; clientX: number; clientY: number } | null
+    >(null);
+
+    /** Drop any in-flight hold. Safe to call unconditionally. */
+    const cancelPrecisionHold = useCallback(() => {
+      const h = precisionHoldRef.current;
+      if (!h) return;
+      clearTimeout(h.timer);
+      precisionHoldRef.current = null;
+    }, []);
+
+    /** Never leave a hold timer running past unmount. */
+    useEffect(() => () => cancelPrecisionHold(), [cancelPrecisionHold]);
 
     const precisionAnchorPointerIdRef = useRef<number | null>(null);
     const precisionCrosshairTargetRef = useRef<Pt | null>(null);
@@ -5723,7 +5781,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const eraserR = outlineEraserSizeRef.current;
         const eraserPos = outlineEraserPosRef.current;
         const eraserTool = activeToolRef.current;
-        if (eraserR > 0 && eraserPos && (eraserTool === 'circle' || eraserTool === 'bodyCircle' || eraserTool === 'rect' || eraserTool === 'triangle')) {
+        if (eraserR > 0 && eraserPos && OUTLINE_ERASER_TOOLS.has(eraserTool)) {
           ctx.save();
           ctx.globalAlpha = 0.35;
           ctx.fillStyle = 'rgba(255, 59, 48, 0.25)';
@@ -7624,14 +7682,67 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
+      // ── Hold-to-activate precision (alternative to the toolbar toggle) ──
+      // Purely ADDITIVE: the normal draw starts immediately below, exactly as it
+      // always did, so a coach who begins drawing at once is never delayed. Only
+      // a genuinely STILL hold promotes the gesture — any travel past
+      // PRECISION_HOLD_SLOP_PX cancels it in onPointerMove, and lift/cancel
+      // cancels it too. Touch only: precision mode itself is mobile-only, and a
+      // held mouse button means something else.
+      if (
+        e.pointerType === 'touch' &&
+        !precisionTouchDrawRef.current &&
+        onPrecisionHoldActivateRef.current &&
+        PRECISION_HOLD_TOOLS.has(tool)
+      ) {
+        cancelPrecisionHold();
+        const holdClientX = e.clientX;
+        const holdClientY = e.clientY;
+        const holdPointerId = e.pointerId;
+        precisionHoldRef.current = {
+          pointerId: holdPointerId,
+          clientX: holdClientX,
+          clientY: holdClientY,
+          timer: setTimeout(() => {
+            precisionHoldRef.current = null;
+            // The still hold was about to commit a dot — discard it.
+            activeStrokeRef.current = null;
+            isDraggingRef.current = false;
+            // Adopt the held finger as the precision anchor now, so the crosshair
+            // is positioned the moment the prop lands on the next render rather
+            // than waiting for the coach to lift and touch again.
+            precisionAnchorPointerIdRef.current = holdPointerId;
+            const ch = clientToLogical(holdClientX, holdClientY - precisionCursorOffsetY());
+            precisionCrosshairTargetRef.current = ch;
+            precisionCrosshairDisplayRef.current = { ...ch };
+            precisionFadeStartRef.current = null;
+            renderDirtyRef.current = true;
+            try { navigator?.vibrate?.(12); } catch { /* not supported */ }
+            onPrecisionHoldActivateRef.current?.();
+          }, PRECISION_HOLD_MS),
+        };
+      }
+
       beginDrawToolAt(pos, lw);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [beginDrawToolAt, eraseAt, videoRef, webcamPipHitTest, beginWebcamPipDragAt, getPosFromPointerEvent, tryStartWebcamPinch, rollbackTentativeGesture]);
+    }, [beginDrawToolAt, eraseAt, videoRef, webcamPipHitTest, beginWebcamPipDragAt, getPosFromPointerEvent, tryStartWebcamPinch, rollbackTentativeGesture, cancelPrecisionHold]);
 
     // ── Pointer move ───────────────────────────────────────────────────────
 
     const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       const pos = getPos(e);
+
+      // Hold-to-activate precision: any real travel means the coach is drawing,
+      // not holding, so drop the pending activation. Checked before anything
+      // else so a fast stroke can never leave a stale timer armed.
+      const hold = precisionHoldRef.current;
+      if (
+        hold &&
+        hold.pointerId === e.pointerId &&
+        Math.hypot(e.clientX - hold.clientX, e.clientY - hold.clientY) > PRECISION_HOLD_SLOP_PX
+      ) {
+        cancelPrecisionHold();
+      }
 
       // Keep the active-pointer map current (used for multi-touch reconstruction).
       if (activePointersRef.current.has(e.pointerId)) {
@@ -7885,10 +7996,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // Track cursor position for outline eraser preview (even when not dragging)
-      if (outlineEraserSizeRef.current > 0 && (
-        tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle' ||
-        tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' || tool === 'pen'
-      )) {
+      if (outlineEraserSizeRef.current > 0 && OUTLINE_ERASER_TOOLS.has(tool)) {
         outlineEraserPosRef.current = pos;
         renderDirtyRef.current = true;
       }
@@ -7903,6 +8011,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // ── Pointer up ─────────────────────────────────────────────────────────
 
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      // Lifting before the 2s elapses is an ordinary tap/stroke, never precision.
+      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold();
       // ── Normalize: this pointer is gone ───────────────────────────────────
       activePointersRef.current.delete(e.pointerId);
       const remainingTouch = [...activePointersRef.current.values()].filter(
@@ -8054,6 +8164,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // route here so the gesture lock is always released — the single teardown
     // that prevents stuck isDragging / activeStroke / pinch / pip state.
     const onPointerCancel = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold();
       activePointersRef.current.delete(e.pointerId);
       const remainingTouch = [...activePointersRef.current.values()].filter(
         (p) => p.pointerType === 'touch',

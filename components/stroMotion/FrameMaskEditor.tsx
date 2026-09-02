@@ -33,6 +33,8 @@ import {
 } from '@/lib/stroMotionDraft';
 import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 import type { SamCandidate, SamPoint } from '@/lib/stroMotionDraft/samRacket';
+import { usePrecisionTouch } from '@/hooks/usePrecisionTouch';
+import { ENABLE_MOTION_LAYER_PRECISION } from '@/lib/featureFlags';
 
 /**
  * The editor's tool set. `racket` is a CLICK tool, not a brush — it prompts SAM
@@ -230,6 +232,33 @@ export default function FrameMaskEditor({
   const racketLastDrawRef = useRef<{ x: number; y: number; r: number } | null>(null);
   /** Mirror of the negative toggle, readable from the non-reactive draw path. */
   const racketNegativeRef = useRef(false);
+  /** Crosshair position in CLIENT px, mirrored from the hook for the painter. */
+  const precisionCrosshairClientRef = useRef<{ x: number; y: number } | null>(null);
+
+  // ── PRECISION TOUCH (Motion Layer) ───────────────────────────────────────
+  // Additive layer over the existing brush/selection pipeline. Every part of it
+  // is inert when ENABLE_MOTION_LAYER_PRECISION is false — see lib/featureFlags.
+  const [precisionOn, setPrecisionOn] = useState(false);
+  const precisionCanvasRef = useRef<HTMLCanvasElement>(null);
+  const precision = usePrecisionTouch<{ x: number; y: number }>({
+    enabled: ENABLE_MOTION_LAYER_PRECISION,
+    active: precisionOn,
+    canvasRef,
+    // The hook hands points straight back in CLIENT space, because that is what
+    // applyAtPoint already takes — no second transform to drift out of step with
+    // the brush. The crosshair converts to canvas px at paint time using the
+    // same rect maths the click uses.
+    clientToLocal: (clientX, clientY) => ({ x: clientX, y: clientY }),
+    // Brush and selection only. 'racket' is a click tool with its own reticle
+    // and 'flood-remove' is a single-shot fill; neither benefits from an anchor.
+    isHoldEligible: () => brushMode === 'add' || brushMode === 'remove',
+    onActivate: () => setPrecisionOn(true),
+    onCommit: (p) => applyAtPoint(p.x, p.y, true),
+    onChange: () => {
+      precisionCrosshairClientRef.current = precision.crosshairRef.current;
+      drawPrecisionCrosshair();
+    },
+  });
   racketNegativeRef.current = racketNegative;
 
   /**
@@ -248,6 +277,69 @@ export default function FrameMaskEditor({
    * is far too small to aim with. Converting through the real rect makes the
    * reticle the same comfortable size everywhere.
    */
+  /**
+   * Paint the precision crosshair onto its own overlay canvas.
+   *
+   * Uses the SAME screen-px → canvas-px conversion the click path uses, so the
+   * mark and the point it commits are the same number by construction rather
+   * than by two transforms that ought to agree.
+   */
+  /**
+   * The overlay canvas only mounts once precision turns on, which is AFTER the
+   * hook's first onChange fired — so that first paint had nowhere to land.
+   * Repaint on mount, and whenever zoom/pan move the canvas under the crosshair.
+   */
+  useEffect(() => {
+    if (!ENABLE_MOTION_LAYER_PRECISION || !precisionOn) return;
+    drawPrecisionCrosshair();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [precisionOn, zoom, pan.x, pan.y]);
+
+  /**
+   * Precision only means something for the paint brushes. Leaving them (to the
+   * racket click tool or flood-remove) exits cleanly rather than stranding the
+   * coach in a mode with no anchor.
+   */
+  useEffect(() => {
+    if (precisionOn && brushMode !== 'add' && brushMode !== 'remove') setPrecisionOn(false);
+  }, [brushMode, precisionOn]);
+
+  const drawPrecisionCrosshair = useCallback(() => {
+    const c = precisionCanvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, c.width, c.height);
+    const client = precisionCrosshairClientRef.current;
+    if (!client) return;
+    const rect = c.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const k = c.width / rect.width;
+    const x = (client.x - rect.left) * k;
+    const y = (client.y - rect.top) * k;
+    const s = Math.max(3, 18 * k);
+    const gap = s * 0.32;
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const pass of [
+      { w: Math.max(1.5, s * 0.3), c: 'rgba(0,0,0,0.8)' },
+      { w: Math.max(0.8, s * 0.14), c: '#007AFF' },
+    ]) {
+      ctx.strokeStyle = pass.c;
+      ctx.lineWidth = pass.w;
+      ctx.beginPath();
+      ctx.moveTo(x - s, y); ctx.lineTo(x - gap, y);
+      ctx.moveTo(x + gap, y); ctx.lineTo(x + s, y);
+      ctx.moveTo(x, y - s); ctx.lineTo(x, y - gap);
+      ctx.moveTo(x, y + gap); ctx.lineTo(x, y + s);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, s * 0.6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }, []);
+
   const drawRacketReticle = useCallback(() => {
     const c = racketCursorCanvasRef.current;
     if (!c) return;
@@ -1034,6 +1126,16 @@ export default function FrameMaskEditor({
               <Target size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Object
             </button>
           ) : null}
+          {ENABLE_MOTION_LAYER_PRECISION && (brushMode === 'add' || brushMode === 'remove') ? (
+            <button
+              type="button"
+              style={{ ...toolBtn, ...(precisionOn ? activeTool : {}) }}
+              onClick={() => setPrecisionOn((v) => !v)}
+              title="Precision — crosshair sits above your finger; tap with a second finger to paint there. Or just hold still for 2 seconds."
+            >
+              <Crosshair size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Precision
+            </button>
+          ) : null}
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginLeft: 4 }} title="Brush size in canvas pixels">
             <Crosshair size={12} />
             <input
@@ -1384,6 +1486,10 @@ export default function FrameMaskEditor({
                 display: 'block',
               }}
               onPointerDown={(e) => {
+                // Precision first: it consumes only the anchor press and the
+                // second-finger commit. Everything else falls through untouched,
+                // so the brush behaves exactly as it did before.
+                if (precision.onPointerDown(e)) return;
                 // TEMP-DEBUG-PAINT — proves whether React's handler on THIS canvas
                 // receives the stroke at all, independent of whether painting works.
                 dbg(
@@ -1421,6 +1527,7 @@ export default function FrameMaskEditor({
                 applyAtPoint(e.clientX, e.clientY, true);
               }}
               onPointerMove={(e) => {
+                if (precision.onPointerMove(e)) return;
                 // RACKET RETICLE — tracked in CANVAS PIXELS through the exact
                 // same rect maths the click uses, so "where I see it" and "where
                 // it lands" are the same number by construction, not by two
@@ -1448,8 +1555,13 @@ export default function FrameMaskEditor({
                 }
                 applyAtPoint(e.clientX, e.clientY, false);
               }}
-              onPointerUp={() => {
+              onPointerUp={(e) => {
+                if (precision.onPointerUp(e)) return;
                 dbg('[TEMP-DEBUG-BAIL] onPointerUp: paintingRef=false, strokeUndoPushedRef=false');
+                paintingRef.current = false; strokeUndoPushedRef.current = false;
+              }}
+              onPointerCancel={(e) => {
+                precision.onPointerCancel(e);
                 paintingRef.current = false; strokeUndoPushedRef.current = false;
               }}
               onPointerLeave={() => {
@@ -1471,6 +1583,28 @@ export default function FrameMaskEditor({
             {brushMode === 'racket' ? (
               <canvas
                 ref={racketCursorCanvasRef}
+                width={sourceFrame.width}
+                height={sourceFrame.height}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: `${zoom * 100}%`,
+                  height: 'auto',
+                  transform: `translate(${pan.x}px, ${pan.y}px)`,
+                  transformOrigin: '0 0',
+                  pointerEvents: 'none',
+                  display: 'block',
+                }}
+              />
+            ) : null}
+            {/* Precision crosshair overlay. Same intrinsic size and CSS
+                transform as the edit canvas, so it shares one coordinate system
+                and zoom/pan move them together. Mounted only while precision is
+                actually on, and never at all when the feature flag is off. */}
+            {ENABLE_MOTION_LAYER_PRECISION && precisionOn ? (
+              <canvas
+                ref={precisionCanvasRef}
                 width={sourceFrame.width}
                 height={sourceFrame.height}
                 style={{

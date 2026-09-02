@@ -49,3 +49,24 @@ export const ENABLE_YOUTUBE_UPLOAD = true;
  */
 export const GOOGLE_EXPORT_SCOPES =
   'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file';
+
+/**
+ * ENABLE_MOTION_LAYER_PRECISION — precision touch mode inside the Motion Layer
+ * frame editor (components/stroMotion/FrameMaskEditor.tsx) ONLY.
+ *
+ * Precision touch is the hold-one-finger / crosshair-above-the-finger /
+ * second-finger-commit gesture that lets a coach place a point the finger would
+ * otherwise cover. It has been proven on the main analysis canvas
+ * (components/Canvas.tsx) and is permanently on there — that surface has NO
+ * flag and is unaffected by this one.
+ *
+ * This flag exists because the Motion Layer integration is newer and runs in a
+ * different pointer pipeline (its own zoom/pan, its own brush/selection logic).
+ * Turning it OFF makes hooks/usePrecisionTouch inert inside the frame editor:
+ * no listeners, no timers, no crosshair, and every handler returns false, so the
+ * editor's existing brush and selection behaviour is exactly what it was before
+ * precision was added. Nothing about the main canvas changes either way.
+ *
+ * To disable: set to false. That is the whole revert.
+ */
+export const ENABLE_MOTION_LAYER_PRECISION = true;
