@@ -54,8 +54,19 @@ const RACKET_TRAIL_CIRCLE_RADIUS = 8;
 const RACKET_TRAIL_MAX_ALPHA = 0.65;
 /** Radians per animFrame for spinning shapes */
 const SHAPE_SPIN_SPEED = 0.025;
-/** Vertical offset (screen px) from finger to precision crosshair — tuned for one-handed phones */
-const PRECISION_CURSOR_OFFSET_Y = 120;
+/**
+ * Vertical offset from finger to precision crosshair, as a FRACTION of canvas
+ * height — not a fixed pixel count.
+ *
+ * This was 120px flat. On a 375x812 phone the analysis canvas is ~421px tall, so
+ * a fixed 120px put the crosshair off the top of the canvas for any touch in the
+ * upper 29% of the video — the coach held a finger down and no cursor ever
+ * appeared. The same 120px is a negligible nudge on a tall desktop canvas.
+ * A ratio keeps the gesture proportionally identical on phone, tablet and
+ * desktop. Deliberately NOT clamped: near the very top edge the crosshair may
+ * still leave the canvas, which is accepted behaviour.
+ */
+const PRECISION_CURSOR_OFFSET_RATIO = 0.08;
 /** Fade-out duration when anchor finger lifts (ms) */
 const PRECISION_CURSOR_FADE_MS = 220;
 /** Ripple duration at synthetic click (ms) */
@@ -2052,6 +2063,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const dprRef = useRef(1);
     const cssW = (c: HTMLCanvasElement) => c.width / (dprRef.current || 1);
     const cssH = (c: HTMLCanvasElement) => c.height / (dprRef.current || 1);
+    /** Finger→crosshair offset in CSS px, derived from the live canvas height. */
+    const precisionCursorOffsetY = () => {
+      const c = canvasRef.current;
+      return c ? cssH(c) * PRECISION_CURSOR_OFFSET_RATIO : 0;
+    };
 
     // Precision touch drawing (mobile): anchor finger moves crosshair; second finger injects events at crosshair
     const precisionTouchDrawRef = useRef(false);
@@ -2069,6 +2085,57 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         precisionFadeStartRef.current = null;
       }
     }, [precisionTouchDraw]);
+
+    /**
+     * PRECISION MODE: STOP THE BROWSER TAKING THE SECOND FINGER.
+     *
+     * The precision gesture is "hold one finger, tap with a second to commit".
+     * On iOS (both Safari and Chrome, which is WebKit too) the second finger was
+     * being consumed by the browser's own pinch-to-zoom instead, so the commit
+     * never ran.
+     *
+     * `touch-action: none` does NOT prevent this. It governs scrolling and
+     * zooming of an element's own scroll container; the visual-viewport pinch is
+     * a user-agent gesture that ignores it. Nor does `preventDefault()` inside
+     * React's `onPointerDown` — by the time a pointer event is dispatched the UA
+     * gesture is already claimed. The only things that stop it are
+     * `preventDefault()` on WebKit's proprietary `gesture*` events, or on a
+     * NON-PASSIVE `touchmove`. React attaches touch listeners passively, so both
+     * have to be registered natively, here.
+     *
+     * Scope is deliberately narrow on both axes:
+     *   • TIME  — listeners exist only while the precision tool is switched on,
+     *             and each handler re-checks the ref, so nothing is blocked once
+     *             the coach leaves the tool.
+     *   • PLACE — `touchmove` is blocked on the CANVAS only (never the toolbar,
+     *             so panels still scroll). Gesture events are taken on the
+     *             document because the coach may land the second finger outside
+     *             the canvas ("tap with a second finger anywhere"), and those
+     *             only fire for multi-finger gestures — they cannot affect
+     *             one-finger scrolling anywhere.
+     */
+    useEffect(() => {
+      if (!precisionTouchDraw || typeof document === 'undefined') return;
+      const canvas = canvasRef.current;
+      const stopGesture = (ev: Event) => {
+        if (precisionTouchDrawRef.current && ev.cancelable) ev.preventDefault();
+      };
+      const stopMultiTouchScroll = (ev: TouchEvent) => {
+        if (precisionTouchDrawRef.current && ev.touches.length > 1 && ev.cancelable) {
+          ev.preventDefault();
+        }
+      };
+      // 'gesturestart' & co. are WebKit-only and absent from lib.dom, so they are
+      // registered by name rather than through the typed overload.
+      const GESTURES = ['gesturestart', 'gesturechange', 'gestureend'];
+      GESTURES.forEach((t) => document.addEventListener(t, stopGesture, { passive: false }));
+      canvas?.addEventListener('touchmove', stopMultiTouchScroll, { passive: false });
+      return () => {
+        GESTURES.forEach((t) => document.removeEventListener(t, stopGesture));
+        canvas?.removeEventListener('touchmove', stopMultiTouchScroll);
+      };
+    }, [precisionTouchDraw]);
+
     const precisionAnchorPointerIdRef = useRef<number | null>(null);
     const precisionCrosshairTargetRef = useRef<Pt | null>(null);
     const precisionCrosshairDisplayRef = useRef<Pt | null>(null);
@@ -6858,7 +6925,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // ── Priority router (rule 2): two-finger canvas/PiP pinch ─────────────
       // Claimed the instant the 2nd touch arrives (no precision active). Any
       // tentative single-finger consumer the 1st finger started is rolled back.
-      if (e.pointerType === 'touch' && touchPointers().length === 2) {
+      //
+      // The "(no precision active)" half of that contract was documented but
+      // never written: the condition below used to be touch + 2 pointers only.
+      // The gate at the top of this handler already routes a 2nd finger to the
+      // precision commit while an anchor is HELD, so this was latent rather than
+      // live — but the moment no anchor is held (which is exactly the state the
+      // off-canvas-crosshair bug left the tool in), a 2nd finger fell through to
+      // pinch instead of the precision consumer. Guard it for real.
+      if (
+        e.pointerType === 'touch' &&
+        touchPointers().length === 2 &&
+        !precisionTouchDrawRef.current
+      ) {
         const tps = touchPointers();
         const cClient = {
           clientX: (tps[0].clientX + tps[1].clientX) / 2,
@@ -6900,7 +6979,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       if (precisionTouchEligible && precisionAnchorPointerIdRef.current === null) {
         precisionAnchorPointerIdRef.current = e.pointerId;
-        const ch = clientToLogical(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
+        const ch = clientToLogical(e.clientX, e.clientY - precisionCursorOffsetY());
         precisionCrosshairTargetRef.current = ch;
         precisionCrosshairDisplayRef.current = { ...ch };
         precisionFadeStartRef.current = null;
@@ -7624,7 +7703,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         e.pointerType === 'touch' &&
         activeToolRef.current !== 'zoom'
       ) {
-        const ch = clientToLogical(e.clientX, e.clientY - PRECISION_CURSOR_OFFSET_Y);
+        const ch = clientToLogical(e.clientX, e.clientY - precisionCursorOffsetY());
         precisionCrosshairTargetRef.current = ch;
         precisionCrosshairDisplayRef.current = { ...ch };
         renderDirtyRef.current = true;

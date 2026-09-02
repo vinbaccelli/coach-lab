@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AngleMotion — touch probe</title>
+<style>
+  :root { --ink:#1D1D1F; --muted:#6E6E73; --line:#D1D1D6; --accent:#007AFF; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; overflow:hidden;
+    font:13px/1.4 -apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif; color:var(--ink); background:#F5F5F7; }
+  #wrap { display:flex; flex-direction:column; height:100dvh; }
+  header { padding:8px 10px; border-bottom:1px solid var(--line); background:#fff; }
+  h1 { margin:0 0 4px; font-size:14px; font-weight:700; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  label { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; }
+  button { min-height:32px; padding:6px 10px; border:1px solid var(--line); border-radius:8px;
+    background:#fff; color:var(--ink); font-weight:600; font-size:12px; }
+  #stage { position:relative; flex:1; min-height:0; background:#000; }
+  /* EXACTLY what components/Canvas.tsx sets on its canvas element */
+  canvas { position:absolute; inset:0; width:100%; height:100%; display:block;
+    touch-action:none; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent; }
+  #log { height:34vh; overflow:auto; margin:0; padding:6px 8px; background:#1C1C1E; color:#4ade80;
+    font:10px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-all; }
+  .warn { color:#FF9F0A; } .bad { color:#FF6B60; } .ok { color:#4ade80; } .dim { color:#8E8E93; }
+  #vv { font-size:11px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <header>
+    <h1>Touch probe — precision anchor + pinch capture</h1>
+    <div class="row">
+      <label><input type="checkbox" id="blockGesture"> preventDefault <code>gesturestart</code></label>
+      <label><input type="checkbox" id="blockTouchMove"> preventDefault <code>touchmove</code></label>
+      <label>offset % of canvas <input type="number" id="offPct" value="8" min="0" max="40" step="1" style="width:52px"></label>
+      <button id="clear">clear</button>
+    </div>
+    <div id="vv" class="dim">visualViewport scale: 1.00</div>
+  </header>
+  <div id="stage"><canvas id="c"></canvas></div>
+  <pre id="log"></pre>
+</div>
+<script>
+(function(){
+  var cv=document.getElementById('c'), stage=document.getElementById('stage'),
+      log=document.getElementById('log'), vv=document.getElementById('vv'),
+      offPct=document.getElementById('offPct'),
+      blockGesture=document.getElementById('blockGesture'),
+      blockTouchMove=document.getElementById('blockTouchMove');
+  var ctx=cv.getContext('2d'), dpr=Math.min(devicePixelRatio||1,2), seq=0;
+  // mirrors PRECISION_CURSOR_OFFSET_RATIO in components/Canvas.tsx
+  var anchorId=null, target=null, disp=null, commits=[];
+
+  function fit(){ var r=stage.getBoundingClientRect();
+    cv.width=Math.round(r.width*dpr); cv.height=Math.round(r.height*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0); }
+  addEventListener('resize',fit); fit();
+
+  function line(cls,msg){ seq++;
+    var d=document.createElement('div'); if(cls) d.className=cls;
+    d.textContent='#'+seq+' '+msg; log.appendChild(d); log.scrollTop=log.scrollHeight;
+    while(log.childNodes.length>260) log.removeChild(log.firstChild); }
+
+  // --- page-zoom detector: the decisive signal for failure #2 ---
+  if (window.visualViewport){
+    var base=visualViewport.scale;
+    visualViewport.addEventListener('resize',function(){
+      vv.textContent='visualViewport scale: '+visualViewport.scale.toFixed(2);
+      if (visualViewport.scale>base+0.01) line('bad','*** PAGE ZOOMED (native pinch won) scale='+visualViewport.scale.toFixed(2)+' ***');
+    });
+  } else { vv.textContent='visualViewport: unsupported'; }
+
+  // --- iOS-only gesture events. Their mere firing proves WebKit claimed the pinch ---
+  ['gesturestart','gesturechange','gestureend'].forEach(function(t){
+    cv.addEventListener(t,function(e){
+      var blocked=blockGesture.checked;
+      if(blocked) e.preventDefault();
+      line(blocked?'ok':'warn', t+' fired on canvas  scale='+(e.scale||1).toFixed(2)+(blocked?'  [preventDefault APPLIED]':'  [NOT prevented -> page will zoom]'));
+    }, {passive:false});
+  });
+
+  cv.addEventListener('touchstart',function(e){
+    line('dim','touchstart  touches='+e.touches.length+'  cancelable='+e.cancelable);
+  },{passive:false});
+  cv.addEventListener('touchmove',function(e){
+    if(blockTouchMove.checked && e.cancelable){ e.preventDefault();
+      if(e.touches.length>1) line('ok','touchmove '+e.touches.length+' fingers [preventDefault APPLIED]'); }
+  },{passive:false});
+
+  function P(e){ return e.pointerId+'/'+e.pointerType+(e.isPrimary?' PRIMARY':''); }
+
+  // --- mirrors Canvas.tsx onPointerDown: gesture-lock gate, then anchor acquisition ---
+  cv.addEventListener('pointerdown',function(e){
+    if(anchorId!==null && e.pointerId!==anchorId){
+      e.preventDefault();
+      if(disp){ commits.push({x:disp.x,y:disp.y}); line('ok','COMMIT via 2nd finger '+P(e)+' at ('+disp.x.toFixed(0)+','+disp.y.toFixed(0)+')'); }
+      else line('bad','2nd finger '+P(e)+' but NO anchor position to commit');
+      draw(); return;
+    }
+    anchorId=e.pointerId;
+    var r=cv.getBoundingClientRect(), oy=r.height*((+offPct.value||0)/100);
+    target={x:e.clientX-r.left, y:e.clientY-r.top-oy};
+    disp={x:target.x,y:target.y};
+    try{ cv.setPointerCapture(e.pointerId); line('dim','setPointerCapture OK'); }
+    catch(err){ line('bad','setPointerCapture THREW: '+err.message); }
+    e.preventDefault();
+    var off = target.y<0 ? '  *** CROSSHAIR ABOVE CANVAS TOP (y='+target.y.toFixed(0)+') — INVISIBLE ***' : '';
+    line(off?'bad':'ok','pointerdown '+P(e)+' anchor acquired  crosshair=('+target.x.toFixed(0)+','+target.y.toFixed(0)+')'+off);
+    draw();
+  },{passive:false});
+
+  cv.addEventListener('pointermove',function(e){
+    if(e.pointerId!==anchorId||!target) return;
+    var r=cv.getBoundingClientRect(), oy=r.height*((+offPct.value||0)/100);
+    target={x:e.clientX-r.left, y:e.clientY-r.top-oy};
+    disp.x+=(target.x-disp.x)*0.42; disp.y+=(target.y-disp.y)*0.42; draw();
+  },{passive:false});
+
+  cv.addEventListener('pointerup',function(e){
+    if(e.pointerId===anchorId){ line('dim','pointerup '+P(e)+' — anchor released'); anchorId=null; draw(); }
+  });
+  cv.addEventListener('pointercancel',function(e){
+    if(e.pointerId===anchorId){
+      line('bad','*** pointercancel '+P(e)+' — ANCHOR KILLED BY BROWSER (this is why no cursor persists) ***');
+      anchorId=null; draw();
+    } else line('warn','pointercancel '+P(e)+' (non-anchor)');
+  });
+
+  function draw(){
+    var w=cv.width/dpr, h=cv.height/dpr;
+    ctx.clearRect(0,0,w,h); ctx.fillStyle='#000'; ctx.fillRect(0,0,w,h);
+    ctx.strokeStyle='rgba(255,255,255,.16)'; ctx.lineWidth=1;
+    for(var gx=0;gx<w;gx+=40){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,h);ctx.stroke();}
+    for(var gy=0;gy<h;gy+=40){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(w,gy);ctx.stroke();}
+    ctx.fillStyle='rgba(255,255,255,.5)'; ctx.font='11px -apple-system,sans-serif';
+    ctx.fillText('hold one finger, then tap with a second', 10, 18);
+    commits.forEach(function(p){ ctx.fillStyle='#34C759'; ctx.beginPath(); ctx.arc(p.x,p.y,6,0,7); ctx.fill(); });
+    if(disp && anchorId!==null){
+      ctx.strokeStyle='#007AFF'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(disp.x,disp.y,16,0,7); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(disp.x-24,disp.y); ctx.lineTo(disp.x+24,disp.y);
+      ctx.moveTo(disp.x,disp.y-24); ctx.lineTo(disp.x,disp.y+24); ctx.stroke();
+    }
+  }
+  document.getElementById('clear').onclick=function(){ log.innerHTML=''; commits=[]; seq=0; draw(); };
+  draw();
+  line('dim','ready — UA: '+navigator.userAgent.slice(0,90));
+  line('dim','maxTouchPoints='+navigator.maxTouchPoints+'  dpr='+dpr);
+})();
+</script>
+</body>
+</html>
