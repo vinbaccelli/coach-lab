@@ -134,6 +134,14 @@ export default function ManualMatchRecorder() {
 
   const [pickWinner, setPickWinner] = useState<Side | null>(null);
   const [cat, setCat] = useState<OutcomeCat | null>(null);
+  /**
+   * A return error waiting on "which stroke missed it". Aces and double faults
+   * commit straight away — only `return_error` has a returner stroke to ask
+   * about, so only it parks here.
+   */
+  const [pendingReturnErrorStroke, setPendingReturnErrorStroke] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
   /** After category chosen: for serve — the detail; for the rest — stroke, before confirm */
   const [pendingOutcome, setPendingOutcome] = useState<ManualOutcome | null>(null);
   /**
@@ -339,6 +347,29 @@ export default function ManualMatchRecorder() {
    * erase the others, and whichever failure DOES happen is logged instead of
    * discarded.
    */
+  /**
+   * Download the report as a PDF. Deliberately shares openSaveModal's capture
+   * (see lib/matchAnalysis/downloadReportPdf) so the PDF and the Google Doc can
+   * never show different reports — and touches nothing Google-related, so it
+   * works for a coach who has not connected an account at all.
+   */
+  const downloadPdf = useCallback(async () => {
+    setPdfBusy(true);
+    setPdfError(null);
+    try {
+      const node = reportCaptureRef.current;
+      if (!node) throw new Error('Report not ready to capture');
+      const { downloadReportPdf } = await import('@/lib/matchAnalysis/downloadReportPdf');
+      const label = `${playerName.trim() || 'Player'} vs ${opponentName.trim() || 'Opponent'}`;
+      await downloadReportPdf(node, label);
+    } catch (err) {
+      console.error('[ManualMatchRecorder] PDF download failed:', err);
+      setPdfError(err instanceof Error ? err.message : 'Could not build the PDF.');
+    } finally {
+      setPdfBusy(false);
+    }
+  }, [playerName, opponentName]);
+
   const openSaveModal = useCallback(async () => {
     setPreparingSave(true);
     setSaveImageWarning(null);
@@ -450,6 +481,7 @@ export default function ManualMatchRecorder() {
   }, []);
 
   const resetMenus = useCallback(() => {
+    setPendingReturnErrorStroke(false);
     setPickWinner(null);
     setCat(null);
     setPendingOutcome(null);
@@ -968,10 +1000,24 @@ export default function ManualMatchRecorder() {
           >
             {preparingSave ? 'Capturing report…' : 'Save & Export to Google Doc'}
           </button>
+          <button
+            type="button"
+            disabled={pdfBusy}
+            onClick={downloadPdf}
+            style={{ ...btnLight, background: 'var(--cl-bg-panel)' }}
+          >
+            {pdfBusy ? 'Building PDF…' : 'Download PDF'}
+          </button>
           <button type="button" onClick={() => setPhase('setup')} style={{ ...btnLight, background: 'var(--cl-bg-panel)' }}>
             New match
           </button>
         </div>
+
+        {pdfError ? (
+          <p role="alert" style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--cl-destructive-text)', lineHeight: 1.45 }}>
+            PDF download failed: {pdfError}
+          </p>
+        ) : null}
 
         {/* Honest partial/total image-upload failure — see openSaveModal. The
             entry itself still saves either way; this only ever describes what
@@ -1564,6 +1610,38 @@ export default function ManualMatchRecorder() {
                matrix. An ace that loses the point, or a double fault that wins
                it, can no longer be logged because they can no longer be
                tapped. */
+            pendingReturnErrorStroke ? (
+            /* Return error — which stroke missed the return. Same STROKES list
+               the winners and both error kinds use, so the breakdown reads the
+               same way everywhere. */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--cl-text-primary)' }}>
+                Return error — which stroke missed it?
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {STROKES.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    style={{ ...btnLight, minHeight: 48, flex: '1 1 45%' }}
+                    onClick={() => {
+                      setPendingReturnErrorStroke(false);
+                      beginOutcome({ kind: 'serve', detail: 'return_error', stroke: s });
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingReturnErrorStroke(false)}
+                style={{ border: 'none', background: 'transparent', color: 'var(--cl-text-secondary)', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Back
+              </button>
+            </div>
+            ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--cl-text-primary)' }}>
                 {servingNow === 'player' ? playerName.trim() || 'Player' : opponentName.trim() || 'Opponent'} served
@@ -1575,7 +1653,10 @@ export default function ManualMatchRecorder() {
                     key={o.detail}
                     type="button"
                     style={{ ...btnLight }}
-                    onClick={() => beginOutcome({ kind: 'serve', detail: o.detail })}
+                    onClick={() => {
+                      if (o.detail === 'return_error') { setPendingReturnErrorStroke(true); return; }
+                      beginOutcome({ kind: 'serve', detail: o.detail });
+                    }}
                   >
                     {o.label}
                   </button>
@@ -1592,6 +1673,7 @@ export default function ManualMatchRecorder() {
                 Back
               </button>
             </div>
+            )
           ) : (
             /* FEATURE D — the same stroke list serves winners and both error kinds. */
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

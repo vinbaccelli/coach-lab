@@ -242,7 +242,7 @@ export default function CoachProfileEditor() {
           <textarea
             style={{ ...inputStyle, minHeight: 80, resize: 'vertical', fontFamily: 'inherit' }}
             value={bio} onChange={e => setBio(e.target.value)}
-            placeholder="Write about yourself, your coaching philosophy…"
+            placeholder="Write about yourself, your coaching philosophy…&#10;&#10;Blank line = new paragraph. **bold**, *italic*, - bullet, and links (https://… or [text](url)) all work."
           />
         </div>
 

@@ -89,9 +89,33 @@ const PRECISION_HOLD_SLOP_PX = 10;
  * something else entirely, and precision has no meaning there.
  */
 const PRECISION_HOLD_TOOLS: ReadonlySet<string> = new Set([
-  'pen', 'line', 'arrow', 'arrowAngle', 'circle', 'rect', 'triangle',
-  'bodyCircle', 'text', 'angle', 'manualSwing', 'swingPath', 'jointChain', 'ruler',
+  'line', 'arrow', 'arrowAngle', 'circle', 'rect', 'triangle',
+  'bodyCircle', 'text', 'angle', 'jointChain',
 ]);
+
+/**
+ * WHY 'ruler' IS ABSENT: RulerOverlay renders its own SVG at inset:0 / zIndex:50
+ * with pointerEvents:'auto' ON TOP of this canvas, so a ruler touch never
+ * reaches this handler — an entry here could never fire. Ruler precision lives
+ * in that component, behind ENABLE_RULER_PRECISION (lib/featureFlags.ts).
+ *
+ * WHY 'pen', 'manualSwing' AND 'swingPath' ARE DELIBERATELY ABSENT ABOVE.
+ *
+ * They are CONTINUOUS FREEHAND tools: the coach presses, often dwells while
+ * lining the stroke up, then traces. A stationary press is the BEGINNING OF A
+ * STROKE for them, not a request to change mode — so arming the hold there made
+ * a careful pen stroke silently turn into a mode switch after two seconds. The
+ * timer discarded the in-progress stroke and latched precision on, and because
+ * precision is sticky and consumes every single-finger touch as an anchor, the
+ * pen then drew nothing at all until the coach found the toolbar toggle again.
+ *
+ * The placement tools above are press→drag→release or discrete taps, where a
+ * two-second stationary press means nothing else and the slop check cancels the
+ * hold the instant a real drag starts.
+ *
+ * Precision is still available for the pen — via the toolbar toggle, which is
+ * unchanged and is the deliberate, explicit way in.
+ */
 
 const OUTLINE_ERASER_TOOLS: ReadonlySet<string> = new Set([
   'select', 'line', 'arrow', 'arrowAngle', 'pen',

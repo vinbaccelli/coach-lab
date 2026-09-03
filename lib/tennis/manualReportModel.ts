@@ -429,6 +429,22 @@ function sectionServe(input: ManualReportInput, st: ManualStats): ReportSection 
     ],
   });
   const any = a.aces + a.doubleFaults + a.returnErrorsWon + b.aces + b.doubleFaults + b.returnErrorsWon > 0;
+
+  // Missed returns broken down by stroke. Only rendered for strokes that were
+  // actually recorded, so a match logged before this question existed — or one
+  // where the coach skipped it — shows nothing rather than a row of zeroes.
+  const reStrokes = Array.from(new Set([
+    ...Object.keys(st.returnErrorsByStroke.player),
+    ...Object.keys(st.returnErrorsByStroke.opponent),
+  ])).sort();
+  const strokeRows = reStrokes.map((stroke) =>
+    row(`Missed returns — ${stroke}`, String(st.returnErrorsByStroke.player[stroke] ?? 0),
+      'Returns this player missed with that stroke.', {
+        opponent: String(st.returnErrorsByStroke.opponent[stroke] ?? 0),
+        tier: 'complex',
+      }),
+  );
+
   return {
     id: 'serve-return',
     number: 7,
@@ -444,6 +460,10 @@ function sectionServe(input: ManualReportInput, st: ManualStats): ReportSection 
         opponent: String(b.returnErrorsWon),
         tier: 'intermediate',
       }),
+      // Which stroke missed the return. Attributed to the side that MISSED, the
+      // same convention as every other per-stroke breakdown, so "player" here is
+      // the player's own missed returns rather than the ones they won.
+      ...strokeRows,
     ],
     charts: any ? [chart] : [],
     notes: [

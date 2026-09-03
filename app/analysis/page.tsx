@@ -7017,6 +7017,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       setRulerCalibration(cal ? { ...cal, videoKey: videoSrc } : null)}
                     unitSystem={rulerUnitSystem}
                     onUnitSystemChange={setRulerUnitSystem}
+                    compact={isMobile}
                     onMeasurement={(value, unit) => {
                       if (dataColumnActive) {
                         setPendingMeasurement({ type: 'ruler', value, unit });

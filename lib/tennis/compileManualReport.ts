@@ -163,7 +163,12 @@ export function rallyLengthLabel(n: RallyLength): string {
  * opponent was forced into. Splitting them makes both numbers mean what they say.
  */
 export type ManualOutcome =
-  | { kind: 'serve'; detail: ServeDetail }
+  /**
+   * `stroke` is set ONLY for `return_error`, and names the stroke the RETURNER
+   * missed with. Optional because aces and double faults have no returner
+   * stroke, and because points logged before this field existed have none.
+   */
+  | { kind: 'serve'; detail: ServeDetail; stroke?: string }
   | { kind: 'ue'; stroke: string; errorCause?: ErrorCause }
   | { kind: 'forced'; stroke: string; errorCause?: ErrorCause }
   | { kind: 'winner'; stroke: string };
@@ -264,6 +269,11 @@ export type ManualStats = {
   ueByStroke: Record<Side, Tally>;
   ueByErrorCause: Record<Side, ErrorCauseTallies>;
   forcedByStroke: Record<Side, Tally>;
+  /**
+   * Missed returns by the stroke that missed them, attributed to the RETURNER
+   * (the side that made the error) — the same convention as ueByStroke.
+   */
+  returnErrorsByStroke: Record<Side, Tally>;
   forcedByErrorCause: Record<Side, ErrorCauseTallies>;
   servePointsBySide: Record<Side, ServeSideStats>;
   /**
@@ -336,6 +346,7 @@ export function aggregateManualStats(points: LoggedPoint[]): ManualStats {
     ueByStroke: emptySideTallies(),
     ueByErrorCause: emptySideCauseTallies(),
     forcedByStroke: emptySideTallies(),
+    returnErrorsByStroke: emptySideTallies(),
     forcedByErrorCause: emptySideCauseTallies(),
     servePointsBySide: {
       player: { aces: 0, doubleFaults: 0, returnErrorsWon: 0 },
@@ -401,6 +412,8 @@ export function aggregateManualStats(points: LoggedPoint[]): ManualStats {
       } else {
         s.returnErrors += 1;
         s.servePointsBySide[server].returnErrorsWon += 1;
+        // The RETURNER made the error, so it belongs to the other side.
+        if (o.stroke) bump(s.returnErrorsByStroke[server === 'player' ? 'opponent' : 'player'], o.stroke);
       }
     }
 
@@ -579,6 +592,13 @@ export function compileManualReport(
     lines.push(...tallyLines(st.forcedByStroke[side]));
     lines.push(nameOf(side) + ' — forced errors by the ball that caused them:');
     lines.push(...causeLines(st.forcedByErrorCause[side]));
+  }
+  lines.push('');
+
+  lines.push('RETURN ERROR ANALYSIS');
+  for (const side of SIDES) {
+    lines.push(nameOf(side) + ' — missed returns by stroke:');
+    lines.push(...tallyLines(st.returnErrorsByStroke[side]));
   }
   lines.push('');
 

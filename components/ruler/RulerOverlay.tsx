@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useCallback, useRef } from 'react';
+import { usePrecisionTouch } from '@/hooks/usePrecisionTouch';
+import { ENABLE_RULER_PRECISION } from '@/lib/featureFlags';
 import {
   Ruler,
   RefreshCw,
@@ -54,6 +56,13 @@ interface Props {
   onCalibrationChange: (cal: RulerCalibration | null) => void;
   unitSystem: UnitSystem;
   onUnitSystemChange: (system: UnitSystem) => void;
+  /**
+   * Phone layout. The panel is a fixed 280px wide, which is 75% of a 375px
+   * screen — it covered most of the video it is meant to measure. Compact
+   * narrows it, tightens the padding, and caps its height so it can never run
+   * off a short screen. Desktop is untouched.
+   */
+  compact?: boolean;
 }
 
 type CalibStep = 'pick-preset' | 'place-points' | 'done';
@@ -69,6 +78,7 @@ export default function RulerOverlay({
   onCalibrationChange,
   unitSystem,
   onUnitSystemChange,
+  compact = false,
 }: Props) {
   const [mode, setMode] = useState<RulerMode>(calibration ? 'measure' : 'calibrate');
   const [calibStep, setCalibStep] = useState<CalibStep>(calibration ? 'done' : 'pick-preset');
@@ -105,9 +115,11 @@ export default function RulerOverlay({
   // updater must be a pure function of prev state (React may invoke it more
   // than once), so firing onCalibrationChange / setCalibError from inside one
   // risks duplicate parent updates and dropped error messages.
-  const handleCalibClick = useCallback((e: React.PointerEvent) => {
+  const handleCalibClick = useCallback((e: React.PointerEvent | null, override?: Point2D) => {
     if (!selectedPreset) return;
-    const pt = getSvgPoint(e);
+    // `override` is the precision crosshair's point. Same body either way, so
+    // calibration can never drift between the two input paths.
+    const pt = override ?? getSvgPoint(e!);
     const next = [...calibPoints, pt];
 
     if (next.length < selectedPreset.pointCount) {
@@ -188,9 +200,9 @@ export default function RulerOverlay({
     setDrawCurrent(getSvgPoint(e));
   }, [drawStart, getSvgPoint]);
 
-  const handleMeasureUp = useCallback((e: React.PointerEvent) => {
+  const handleMeasureUp = useCallback((e: React.PointerEvent | null, override?: Point2D) => {
     if (!drawStart || !calibration) return;
-    const end = getSvgPoint(e);
+    const end = override ?? getSvgPoint(e!);
     if (dist2D(drawStart, end) < 5) { setDrawStart(null); setDrawCurrent(null); return; }
 
     let distM: number;
@@ -243,6 +255,46 @@ export default function RulerOverlay({
   const isCalibrating = mode === 'calibrate' && calibStep === 'place-points' && !awaitingCustomLength;
   const isMeasuring = mode === 'measure';
 
+  // ── PRECISION TOUCH (ruler) ──────────────────────────────────────────────
+  // Additive layer over the ruler's own SVG pointer pipeline. Entirely inert
+  // when ENABLE_RULER_PRECISION is false — see lib/featureFlags.
+  const [precisionOn, setPrecisionOn] = useState(false);
+  const precision = usePrecisionTouch<Point2D>({
+    enabled: ENABLE_RULER_PRECISION,
+    active: precisionOn,
+    // The hook measures its offset from this element's height, and the ruler's
+    // SVG is exactly the measuring surface — so the 12% offset is relative to
+    // the same box the coach is aiming inside.
+    canvasRef: svgRef as unknown as React.RefObject<HTMLCanvasElement | null>,
+    // getSvgPoint's own maths, minus the event: client → SVG-local.
+    clientToLocal: (clientX, clientY) => {
+      const rect = svgRef.current?.getBoundingClientRect();
+      return rect ? { x: clientX - rect.left, y: clientY - rect.top } : { x: clientX, y: clientY };
+    },
+    // Only while there is a point to place — placing calibration points, or
+    // measuring. Idle ruler UI never arms a hold.
+    isHoldEligible: () => isCalibrating || isMeasuring,
+    onActivate: () => setPrecisionOn(true),
+    // Second finger commits at the crosshair, routed to whichever step is live.
+    // Measuring is two taps: the first sets the start, the second finishes the
+    // measurement through the very same handler a drag would have used.
+    onCommit: (pt) => {
+      if (isCalibrating) { handleCalibClick(null, pt); return; }
+      if (!isMeasuring) return;
+      if (!drawStart) { setDrawStart(pt); setDrawCurrent(pt); return; }
+      handleMeasureUp(null, pt);
+    },
+    onChange: () => setCrosshairTick((n) => n + 1),
+  });
+  // Precision only means something while a point is being placed. Leaving both
+  // modes exits it rather than stranding the coach in an anchored state.
+  React.useEffect(() => {
+    if (precisionOn && !isCalibrating && !isMeasuring) setPrecisionOn(false);
+  }, [precisionOn, isCalibrating, isMeasuring]);
+
+  /** Bumped on every crosshair move so the SVG re-renders it. */
+  const [, setCrosshairTick] = useState(0);
+
   const nextPointLabel = selectedPreset && isCalibrating
     ? selectedPreset.pointLabels[calibPoints.length] ?? ''
     : '';
@@ -274,10 +326,58 @@ export default function RulerOverlay({
         width={containerWidth}
         height={containerHeight}
         style={{ position: 'absolute', inset: 0, overflow: 'visible' }}
-        onPointerDown={isCalibrating ? handleCalibClick : isMeasuring ? handleMeasureDown : undefined}
-        onPointerMove={isMeasuring ? handleMeasureMove : undefined}
-        onPointerUp={isMeasuring ? handleMeasureUp : undefined}
+        onPointerDown={(e) => {
+          if (precision.onPointerDown(e)) return;
+          if (isCalibrating) handleCalibClick(e);
+          else if (isMeasuring) handleMeasureDown(e);
+        }}
+        onPointerMove={(e) => {
+          if (precision.onPointerMove(e)) return;
+          if (isMeasuring) handleMeasureMove(e);
+        }}
+        onPointerUp={(e) => {
+          if (precision.onPointerUp(e)) return;
+          if (isMeasuring) handleMeasureUp(e);
+        }}
+        onPointerCancel={(e) => { precision.onPointerCancel(e); }}
       >
+        {/* Precision crosshair — same SVG space as every ruler mark, so what the
+            coach sees and what gets committed are one number. */}
+        {ENABLE_RULER_PRECISION && precisionOn && precision.crosshairRef.current ? (
+          <g pointerEvents="none">
+            <circle
+              cx={precision.crosshairRef.current.x}
+              cy={precision.crosshairRef.current.y}
+              r={13}
+              fill="none"
+              stroke="rgba(0,0,0,0.8)"
+              strokeWidth={4}
+            />
+            <circle
+              cx={precision.crosshairRef.current.x}
+              cy={precision.crosshairRef.current.y}
+              r={13}
+              fill="none"
+              stroke="#007AFF"
+              strokeWidth={2}
+            />
+            {[[-22, 0, -7, 0], [7, 0, 22, 0], [0, -22, 0, -7], [0, 7, 0, 22]].map(([dx1, dy1, dx2, dy2], i) => (
+              <g key={i}>
+                <line
+                  x1={precision.crosshairRef.current!.x + dx1} y1={precision.crosshairRef.current!.y + dy1}
+                  x2={precision.crosshairRef.current!.x + dx2} y2={precision.crosshairRef.current!.y + dy2}
+                  stroke="rgba(0,0,0,0.8)" strokeWidth={4} strokeLinecap="round"
+                />
+                <line
+                  x1={precision.crosshairRef.current!.x + dx1} y1={precision.crosshairRef.current!.y + dy1}
+                  x2={precision.crosshairRef.current!.x + dx2} y2={precision.crosshairRef.current!.y + dy2}
+                  stroke="#007AFF" strokeWidth={2} strokeLinecap="round"
+                />
+              </g>
+            ))}
+          </g>
+        ) : null}
+
         {/* Calibration point markers */}
         {calibPoints.map((pt, i) => (
           <g key={i}>
@@ -351,24 +451,46 @@ export default function RulerOverlay({
         onPointerUp={e => e.stopPropagation()}
         style={{
         position: 'absolute',
-        top: 12,
-        right: 12,
-        width: 280,
+        top: compact ? 8 : 12,
+        right: compact ? 8 : 12,
+        width: compact ? 'min(236px, calc(100% - 16px))' : 280,
+        maxHeight: compact ? 'calc(100% - 16px)' : undefined,
+        overflowY: compact ? 'auto' : undefined,
+        WebkitOverflowScrolling: 'touch',
         background: 'rgba(15,15,20,0.95)',
         borderRadius: 12,
         border: '1px solid rgba(255,255,255,0.12)',
         color: 'var(--cl-text-on-fill)',
-        fontSize: 13,
+        fontSize: compact ? 12 : 13,
         boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
         overflow: 'hidden',
       }}>
         {/* Header */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
+          display: 'flex', alignItems: 'center', gap: compact ? 6 : 8, padding: compact ? '7px 10px' : '10px 14px',
           borderBottom: '1px solid rgba(255,255,255,0.1)',
         }}>
           <Ruler size={15} color="#F59E0B" />
-          <span style={{ fontWeight: 700, fontSize: 13, flex: 1 }}>Measurement Ruler</span>
+          <span style={{ fontWeight: 700, fontSize: compact ? 12 : 13, flex: 1 }}>Measurement Ruler</span>
+          {ENABLE_RULER_PRECISION && (isCalibrating || isMeasuring) ? (
+            <button
+              type="button"
+              onClick={() => setPrecisionOn((v) => !v)}
+              title="Precision — crosshair sits above your finger; tap with a second finger to place the point there. Or hold still for 2 seconds."
+              style={{
+                padding: compact ? '3px 6px' : '3px 8px',
+                borderRadius: 6,
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: compact ? 10 : 11,
+                fontWeight: 700,
+                background: precisionOn ? 'var(--cl-accent)' : 'rgba(255,255,255,0.12)',
+                color: 'var(--cl-text-on-fill)',
+              }}
+            >
+              Precision
+            </button>
+          ) : null}
           {calibration && (
             <div style={{ display: 'flex', gap: 4 }}>
               <button
@@ -393,7 +515,7 @@ export default function RulerOverlay({
           never invalidates the scale.
         */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px',
+          display: 'flex', alignItems: 'center', gap: 6, padding: compact ? '5px 10px' : '7px 14px',
           borderBottom: '1px solid rgba(255,255,255,0.08)',
         }}>
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', flex: 1 }}>Units</span>
@@ -420,7 +542,7 @@ export default function RulerOverlay({
         </div>
 
         {/* Body */}
-        <div style={{ padding: '10px 14px' }}>
+        <div style={{ padding: compact ? '8px 10px' : '10px 14px' }}>
           {/* STEP 1: Pick preset */}
           {calibStep === 'pick-preset' && (
             <>

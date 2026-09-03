@@ -70,3 +70,23 @@ export const GOOGLE_EXPORT_SCOPES =
  * To disable: set to false. That is the whole revert.
  */
 export const ENABLE_MOTION_LAYER_PRECISION = true;
+
+/**
+ * ENABLE_RULER_PRECISION — precision touch mode inside the measurement ruler
+ * (components/ruler/RulerOverlay.tsx) ONLY.
+ *
+ * The ruler renders its own SVG overlay above the analysis canvas and handles
+ * its own pointer events, so it needs its own integration of
+ * hooks/usePrecisionTouch — exactly as the Motion Layer frame editor did.
+ *
+ * Turning this OFF makes the hook inert inside the ruler: no listeners, no
+ * timers, no crosshair, every handler returns false, and calibration and
+ * measurement behave exactly as they did before precision was added.
+ *
+ * Independent of ENABLE_MOTION_LAYER_PRECISION and of the main analysis canvas
+ * (components/Canvas.tsx), whose precision mode is proven, permanently on, and
+ * has no flag. Flipping this changes nothing outside the ruler.
+ *
+ * To disable: set to false. That is the whole revert.
+ */
+export const ENABLE_RULER_PRECISION = true;

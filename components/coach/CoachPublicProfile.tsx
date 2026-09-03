@@ -2,12 +2,14 @@
 
 import React from 'react';
 import Link from 'next/link';
+import { CoachRichText } from '@/lib/coach/richText';
 import {
   Instagram,
   Youtube,
   Globe,
   Mail,
   ExternalLink,
+  Users,
   MessageCircle,
   Star,
 } from 'lucide-react';
@@ -161,13 +163,21 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
         <Link href="/" style={{ fontSize: 14, fontWeight: 800, color: 'var(--cl-text-on-fill)', textDecoration: 'none', letterSpacing: -0.3 }}>
           Angle<span style={{ color: accentColor }}>Motion</span>
         </Link>
-        <Link href="/analysis" style={{
-          fontSize: 12, fontWeight: 600, color: 'var(--cl-text-on-fill)', textDecoration: 'none',
-          padding: '6px 14px', borderRadius: 20,
-          background: accentColor, opacity: 0.9,
-        }}>
-          Try Free →
-        </Link>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Link href="/coaches" style={{
+            fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.75)', textDecoration: 'none',
+            padding: '6px 10px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.18)',
+          }}>
+            Coaches
+          </Link>
+          <Link href="/analysis" style={{
+            fontSize: 12, fontWeight: 600, color: 'var(--cl-text-on-fill)', textDecoration: 'none',
+            padding: '6px 14px', borderRadius: 20,
+            background: accentColor, opacity: 0.9,
+          }}>
+            Try Free →
+          </Link>
+        </div>
       </div>
 
       <div style={{ maxWidth: 560, margin: '0 auto', padding: '40px 20px 80px' }}>
@@ -186,9 +196,13 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
           </div>
           <h1 style={{ margin: '0 0 6px', fontSize: 26, fontWeight: 900, letterSpacing: -0.5 }}>{profile.name}</h1>
           <p style={{ margin: '0 0 12px', fontSize: 14, color: 'rgba(255,255,255,0.6)', lineHeight: 1.4 }}>{profile.tagline}</p>
-          <p style={{ margin: 0, fontSize: 14, color: 'rgba(255,255,255,0.8)', lineHeight: 1.6, maxWidth: 420, marginLeft: 'auto', marginRight: 'auto' }}>
-            {profile.bio}
-          </p>
+          {/* Safe formatted bio — paragraphs, line breaks, bold/italic, lists and
+              http(s) links, rendered as React elements. No innerHTML, so nothing
+              a coach types can become markup. See lib/coach/richText.tsx. */}
+          <CoachRichText
+            text={profile.bio}
+            style={{ margin: 0, fontSize: 14, color: 'rgba(255,255,255,0.8)', lineHeight: 1.6, maxWidth: 420, marginLeft: 'auto', marginRight: 'auto' }}
+          />
 
           {/* Social icons */}
           <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginTop: 16 }}>
@@ -308,8 +322,33 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
           </div>
         </div>
 
+        {/* Discovery — this page is also a way IN, not only a way to book this
+            coach. Visitors can reach the full directory, and non-coaches (players,
+            parents) can reach the product itself rather than dead-ending here. */}
+        <div style={{
+          marginTop: 32, paddingTop: 24, borderTop: '1px solid rgba(255,255,255,0.07)',
+          display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'stretch',
+        }}>
+          <Link href="/coaches" style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            minHeight: 44, padding: '10px 16px', borderRadius: 10,
+            border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(255,255,255,0.04)',
+            color: 'var(--cl-text-on-fill)', textDecoration: 'none', fontSize: 13, fontWeight: 600,
+          }}>
+            <Users size={15} /> Browse other coaches
+          </Link>
+          <Link href="/" style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            minHeight: 44, padding: '10px 16px', borderRadius: 10,
+            border: '1px solid rgba(255,255,255,0.12)', background: 'transparent',
+            color: 'rgba(255,255,255,0.7)', textDecoration: 'none', fontSize: 13, fontWeight: 600,
+          }}>
+            What is AngleMotion?
+          </Link>
+        </div>
+
         {/* AngleMotion footer attribution */}
-        <div style={{ textAlign: 'center', marginTop: 32 }}>
+        <div style={{ textAlign: 'center', marginTop: 24 }}>
           <Link href="/" style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)', textDecoration: 'none' }}>
             Powered by AngleMotion
           </Link>
