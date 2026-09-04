@@ -41,10 +41,34 @@ an afterthought to it.
 
 ## Proof and content
 
-The only proof this page may use is what exists. **No testimonials, named
-customers, club or federation logos, user counts, accuracy benchmarks, press, or
-case studies exist anywhere in this project.** They are not to be invented or
-implied through placeholder social proof.
+The only proof this page may use is what exists.
+
+**Real, and now on the page:** seven reviews of **Vin Baccelli's coaching
+analysis** — three from Google, four from Trustpilot — supplied by the founder.
+They are reviews of the coaching service, never of the product, and the section
+states that plainly because the app itself is new and has no reviews. Nothing
+may join them without that same provenance.
+
+**Two Trustpilot profiles, never conflated.** Both verified in a browser on
+2026-09-04:
+
+- `it.trustpilot.com/review/vinbaccelli.com` — "Anglemotion by Coach
+  Vinbaccelli", claimed June 2025, Milano. **6 reviews, every one of them 5 stars** (the
+  profile's headline 4.2 TrustScore is Trustpilot's recency weighting, not the
+  star average, so the page states the star record instead). This is where the page's Trustpilot quotes live, so it is the only
+  profile whose review record this page states, and it is labelled as being for Vin's
+  coaching rather than the app.
+- `trustpilot.com/review/anglemotion.com` — the app's own claimed profile,
+  **0 reviews / 0.0**. It gets a plain invitation to review, placed with the app
+  CTAs, and **no rating may be stated for it** until it has one.
+
+Keeping these apart is a content rule, not a layout preference: they measure
+different things, and merging them would credit the product with a score the
+founder's coaching earned.
+
+**Still absent — must not be fabricated:** no club or federation logos, user
+counts, accuracy benchmarks, press coverage, or case studies exist. Do not
+invent them or imply them with placeholder social proof.
 
 Real and usable: the logo/icon set, `public/demo.mp4` / `demo.MOV`,
 `public/court/`, the three real pricing tiers and the 1-hour trial in
@@ -108,6 +132,13 @@ upload/analyse/produce/timeline pipeline every analysis SaaS ships. And, for
 - `/login`'s auth behavior is not redesigned — only its presentation. Google
   OAuth, the `redirect` query param, and the error state keep working exactly as
   they do now.
+
+## Relationship to the Control Panel
+
+All persuasion lives here. The authenticated Control Panel
+(`components/ControlPanelHome.tsx`) carries no testimonials, no competitor
+comparison and no plan pitch: a signed-in coach came to work. The comparison
+table sits at the END of this page, after the FAQ.
 
 ## Unresolved
 

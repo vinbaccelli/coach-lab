@@ -9,8 +9,17 @@
  * anglemotion-landing-1) and the contract emitted in app/layout.tsx.
  *
  * Content rules this file is held to:
- *  - No testimonials, customer names, club logos, user counts, benchmarks or
- *    press exist for this product. None are invented or implied here.
+ *  - The reviews in FOUNDER_REVIEWS are real, supplied by the founder, and are
+ *    reviews of VIN'S COACHING, not of this app — the app is new and has none.
+ *    The page says so in as many words. Nothing here may be added without that
+ *    same provenance. No club logos, user counts, benchmarks or press exist for
+ *    this product; none are invented or implied.
+ *  - TWO Trustpilot profiles, never to be conflated. The founder's coaching
+ *    profile (vinbaccelli.com, "Anglemotion by Coach Vinbaccelli") carries the
+ *    reviews, all of them 5 stars; the app's own profile (anglemotion.com) has
+ *    none. The star record is stated ONLY next to the coaching link, and
+ *    labelled as being for Vin's coaching rather than the app. The app's
+ *    profile gets a plain invitation with no rating until it earns one.
  *  - The competitor table carries ONLY verified data; unknowns stay '?'.
  *  - The example player's dates and readings are illustrative and are labelled
  *    as such on the page, not passed off as a real customer.
@@ -260,6 +269,72 @@ const TUTORIAL_STEPS = [
   { t: 'Send the report', b: 'Publish to YouTube, drop everything into the player’s document, and share the link.' },
 ];
 
+/**
+ * Real reviews of Vin Baccelli's coaching analysis, supplied by the founder.
+ * These are reviews of the COACHING SERVICE, not of AngleMotion the product —
+ * the section header and intro say so plainly, because implying they were app
+ * reviews would be false.
+ *
+ * `source` is displayed per review. It is deliberately not aggregated into a
+ * star rating: see the provenance note at the top of this file.
+ */
+type Review = { name: string; where?: string; source: 'Google' | 'Trustpilot'; quote: string };
+
+const FOUNDER_REVIEWS: Review[] = [
+  {
+    name: 'Lalito Ayob', source: 'Google',
+    quote: 'Vin is truly an expert in biomechanics. He did an incredible job analyzing my son’s forehand, providing insights and analysis at a level I’ve never encountered before.',
+  },
+  {
+    name: 'Gerardo Serna', source: 'Google',
+    quote: 'Vin gave me an amazing review about my swing… he saw areas of improvement my coach has never detected before… he really cares that I improve my game.',
+  },
+  {
+    name: 'Nathan Matthews', source: 'Google',
+    quote: 'I’ve recently come across Vin’s content and I’ve been really impressed so far. Communication has been great and he has taken the time to answer all my questions.',
+  },
+  {
+    name: 'Philipp Irsara', where: 'IT', source: 'Trustpilot',
+    quote: 'Thank you Vin, your feedback was so, so useful — very professional, technical, and precise… your analysis is worth far more than the price… none went into this level of detail.',
+  },
+  {
+    name: 'Angelica Ayoub', where: 'US', source: 'Trustpilot',
+    quote: 'Vin’s expertise in biomechanics is remarkable. His thorough analysis of my son’s forehand revealed insights at a depth I’ve never experienced.',
+  },
+  {
+    name: 'Robert', where: 'SE', source: 'Trustpilot',
+    quote: 'Outstanding tennis video analysis — clear, detailed and highly professional. A clear, structured breakdown of his stroke mechanics.',
+  },
+  {
+    name: 'Luca', where: 'IT', source: 'Trustpilot',
+    quote: 'Great experience — great analysis, highly recommended.',
+  },
+];
+
+/**
+ * TWO DIFFERENT Trustpilot profiles. They must never be conflated on the page:
+ * one carries the founder's coaching reviews, the other is the app's own empty
+ * profile, and mixing them would attribute a rating to a product that has not
+ * earned one.
+ *
+ * Both verified in a browser on 2026-09-04.
+ */
+
+/** "Anglemotion by Coach Vinbaccelli" — the founder's COACHING profile, claimed
+ *  June 2025, Milano. 6 reviews, TrustScore 4.2, "Molto buono" (Very Good).
+ *  This is where the Trustpilot quotes in FOUNDER_REVIEWS actually live, so it
+ *  is the only profile whose rating this page may state. */
+const TRUSTPILOT_COACH_URL = 'https://it.trustpilot.com/review/vinbaccelli.com';
+/** Every review on that profile is 5 stars (star breakdown reads 5★ 100%).
+ *  The profile's headline TrustScore is 4.2 because Trustpilot weights by
+ *  recency and volume rather than averaging stars — so the page states the
+ *  star record, which is what the reviewers actually left. */
+const TRUSTPILOT_COACH_COUNT = 6;
+
+/** AngleMotion's own claimed profile. 0 reviews / 0.0 — a plain invitation
+ *  only. No rating may be stated for this one until it has one. */
+const TRUSTPILOT_APP_URL = 'https://www.trustpilot.com/review/anglemotion.com';
+
 /* Verified competitor comparison. y = yes, n = no, q = unknown. Pro tier vs
    Pro tier: CoachNow PRO $499.99/yr (coachnow.com/pricing); Dartfish 360 S
    ≈ €40/mo (dartfish.com/plans) — their ~$5/mo Express tier is mobile-only and
@@ -464,6 +539,42 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── FOUNDER ─────────────────────────────────────────────────────
+          Real reviews of Vin's coaching, framed as exactly that. The app is
+          new and has no reviews of its own; saying so is the reason these can
+          be shown at all. No aggregate rating — see the note at the top of
+          this file. ──────────────────────────────────────────────────────── */}
+      <section id="founder" className="am-section">
+        <h2 className="am-h2">About Vin Baccelli, founder &amp; coach.</h2>
+        <p className="am-sub">
+          AngleMotion was built by a working tennis coach to do the job he was already doing by hand.
+          The reviews below are of Vin’s own coaching analysis — the practice the tool came out of.
+          AngleMotion itself is new and hasn’t been reviewed yet.
+        </p>
+
+        <ul className="am-reviews">
+          {FOUNDER_REVIEWS.map((r) => (
+            <li key={r.name} className="am-review">
+              <blockquote className="am-quote">{r.quote}</blockquote>
+              <footer className="am-review-by">
+                <cite className="am-review-name">{r.name}{r.where ? `, ${r.where}` : ''}</cite>
+                <span className="am-review-src">{r.source}</span>
+              </footer>
+            </li>
+          ))}
+        </ul>
+
+        <div className="am-review-cta">
+          <a href={TRUSTPILOT_COACH_URL} target="_blank" rel="noopener noreferrer" className="am-btn am-btn-quiet">
+            Read all reviews of Vin’s coaching <ArrowUpRight size={16} aria-hidden="true" />
+          </a>
+          <p className="am-note">
+            All {TRUSTPILOT_COACH_COUNT} reviews on Trustpilot are 5 stars — for Vin’s coaching
+            analysis, not for the app.
+          </p>
+        </div>
+      </section>
+
       {/* ── PRICING ─────────────────────────────────────────────────────── */}
       <section id="pricing" className="am-section">
         <h2 className="am-h2">Pricing that fits how you coach.</h2>
@@ -502,6 +613,30 @@ export default function LandingPage() {
         </p>
       </section>
 
+      {/* ── FAQ ─────────────────────────────────────────────────────────── */}
+      <section className="am-section am-faq-section">
+        <h2 className="am-h2">Questions, answered.</h2>
+        <div className="am-faqs">
+          {FAQS.map((f, i) => {
+            const open = openFaq === i;
+            return (
+              <div key={f.q} className="am-faq">
+                <button
+                  type="button"
+                  className="am-faq-q"
+                  aria-expanded={open}
+                  onClick={() => setOpenFaq(open ? null : i)}
+                >
+                  <span>{f.q}</span>
+                  <ChevronDown size={18} className={`am-chev ${open ? 'is-open' : ''}`} aria-hidden="true" />
+                </button>
+                {open && <p className="am-faq-a">{f.a}</p>}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
       {/* ── COMPARE ─────────────────────────────────────────────────────── */}
       <section id="compare" className="am-section">
         <h2 className="am-h2">How it compares.</h2>
@@ -534,30 +669,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── FAQ ─────────────────────────────────────────────────────────── */}
-      <section className="am-section am-faq-section">
-        <h2 className="am-h2">Questions, answered.</h2>
-        <div className="am-faqs">
-          {FAQS.map((f, i) => {
-            const open = openFaq === i;
-            return (
-              <div key={f.q} className="am-faq">
-                <button
-                  type="button"
-                  className="am-faq-q"
-                  aria-expanded={open}
-                  onClick={() => setOpenFaq(open ? null : i)}
-                >
-                  <span>{f.q}</span>
-                  <ChevronDown size={18} className={`am-chev ${open ? 'is-open' : ''}`} aria-hidden="true" />
-                </button>
-                {open && <p className="am-faq-a">{f.a}</p>}
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
       {/* ── CLOSE ───────────────────────────────────────────────────────── */}
       <section className="am-close">
         <h2 className="am-display am-display-sm">Start your first file today.</h2>
@@ -568,6 +679,17 @@ export default function LandingPage() {
         <div className="am-cta-row am-center-row">
           <Link href={DEMO.url} className="am-btn am-btn-lg">{DEMO.label} <ArrowRight size={18} /></Link>
         </div>
+
+        {/* The APP's own Trustpilot profile — deliberately here, beside the app
+            CTAs, and never inside the founder section: the two profiles measure
+            different things and must not be read as one. It has no reviews yet,
+            so this is an invitation and states no rating. */}
+        <p className="am-note am-center am-app-review">
+          Already used it?{' '}
+          <a href={TRUSTPILOT_APP_URL} target="_blank" rel="noopener noreferrer" className="am-inline-link">
+            Review AngleMotion on Trustpilot <ArrowUpRight size={13} aria-hidden="true" />
+          </a>
+        </p>
       </section>
 
       <footer className="am-footer">
@@ -578,6 +700,7 @@ export default function LandingPage() {
         <nav className="am-footer-links">
           <a href="#season">How it works</a>
           <a href="#academy">Academy</a>
+          <a href="#founder">The founder</a>
           <a href="#pricing">Pricing</a>
           <Link href="/coaches">Coaches</Link>
           <Link href="/privacy">Privacy</Link>
@@ -751,6 +874,10 @@ const CSS = `
   .am-diagram { max-width: 240px; }
 }
 
+/* Anchor targets must clear the sticky nav, or every in-page link lands with
+   its heading tucked under the bar. */
+.am-root [id] { scroll-margin-top: 76px; }
+
 /* SECTIONS */
 .am-section { max-width: var(--am-max); margin: 0 auto; padding: clamp(56px, 9vw, 112px) var(--am-gutter); border-top: 1px solid var(--cl-border-subtle); }
 
@@ -766,6 +893,34 @@ const CSS = `
 
 /* ACADEMY */
 .am-academy { }
+
+/* FOUNDER REVIEWS
+   Ruled cells rather than floating cards: the spine's own language, and it
+   keeps a long quote and a two-word quote sitting on the same baseline grid. */
+.am-reviews {
+  list-style: none; margin: 0 0 40px; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(288px, 1fr));
+  gap: 0 clamp(24px, 4vw, 52px);
+  border-top: 1px solid var(--cl-border-subtle);
+}
+.am-review {
+  display: flex; flex-direction: column; justify-content: space-between; gap: 18px;
+  padding: 26px 0; border-bottom: 1px solid var(--cl-border-subtle);
+}
+.am-quote {
+  margin: 0; font-size: 17px; line-height: 1.55;
+  letter-spacing: -0.015em; color: var(--cl-text-primary); text-wrap: pretty;
+}
+.am-quote::before { content: '“'; }
+.am-quote::after { content: '”'; }
+.am-review-by { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.am-review-name { font-size: 15px; font-weight: 600; font-style: normal; color: var(--cl-text-primary); }
+.am-review-src {
+  font-size: 13px; font-weight: 500; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--cl-text-secondary);
+}
+.am-review-cta { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.am-review-cta .am-note { margin-top: 12px; }
 
 /* PRICING */
 .am-toggle {
@@ -821,6 +976,13 @@ const CSS = `
 .am-faq-a { margin: 0 0 22px; max-width: 68ch; font-size: 15px; line-height: 1.62; color: var(--cl-text-secondary); }
 
 /* CLOSE + FOOTER */
+.am-app-review { max-width: 46ch; }
+.am-inline-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--cl-accent); font-weight: 600; text-decoration: none;
+}
+.am-inline-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
 .am-close {
   max-width: var(--am-max); margin: 0 auto; text-align: center;
   padding: clamp(72px, 11vw, 140px) var(--am-gutter);

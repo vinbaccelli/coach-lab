@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import Link from 'next/link';
 import {
   Video,
@@ -12,368 +12,299 @@ import {
   Settings,
 } from 'lucide-react';
 
+/**
+ * Control Panel — the authenticated home screen.
+ *
+ * Operate surface, not a marketing one: it uses the app's own design system
+ * (DESIGN.md "Quiet Instrument"), not the landing page's marketing type scale.
+ * Every colour comes from a --cl-* token; System Blue stays reserved for the
+ * primary action, per the One Voice Rule, which is why the tool icons are ink
+ * rather than a per-tool palette.
+ *
+ * A returning coach wants the analysis lab, so the lab is the single dominant
+ * entry and everything else is quiet beneath it. Each tool carries a short
+ * explanation plus a collapsed "How it works" walkthrough — native <details>,
+ * so the page stays clean by default, needs no client-side JS, and remains
+ * keyboard-operable. Every step describes behaviour the app actually has.
+ *
+ * Deliberately NOT here: competitor comparisons, plan pitches and testimonials
+ * all live on the landing page. A signed-in coach came to work, not to be sold
+ * to.
+ */
+
 const shell: CSSProperties = {
   width: '100%',
   maxWidth: 1120,
   margin: '0 auto',
-  padding: '24px 16px calc(100px + env(safe-area-inset-bottom, 0px))',
+  padding: '28px 16px calc(100px + env(safe-area-inset-bottom, 0px))',
   background: 'var(--cl-bg-primary)',
   color: 'var(--cl-text-primary)',
 };
 
-const cardBase: CSSProperties = {
+const card: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 10,
-  padding: 20,
+  gap: 8,
+  padding: 18,
   borderRadius: 16,
   background: 'var(--cl-bg-panel)',
   border: '1px solid var(--cl-border)',
   color: 'var(--cl-text-primary)',
   textDecoration: 'none',
-  transition: 'border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease',
-  minHeight: 132,
-  boxShadow: 'none',
 };
+
+const groupLabel: CSSProperties = {
+  margin: '0 0 10px',
+  fontSize: 13,
+  fontWeight: 600,
+  color: 'var(--cl-text-secondary)',
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+};
+
+const grid: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))',
+  gap: 12,
+  marginBottom: 30,
+};
+
+type Tool = {
+  href: string;
+  name: string;
+  Icon: React.ElementType;
+  what: string;
+  /** Short, truthful walkthrough. Omitted for settings screens, which need none. */
+  steps?: string[];
+};
+
+const PLAYER_TOOLS: Tool[] = [
+  {
+    href: '/players',
+    name: 'Player database',
+    Icon: Users,
+    what:
+      'Every player you coach, each carrying two documents that grow all season — technical analysis and match analysis.',
+    steps: [
+      'Add a player and open their profile.',
+      'Send analysis output — frames, composites, readings — into their technical document.',
+      'Match tools write into their match-analysis document automatically.',
+      'Share either document with the player or their parent when you want them to see it.',
+    ],
+  },
+  {
+    href: '/academy',
+    name: 'AngleMotion Academy',
+    Icon: GraduationCap,
+    what:
+      'A library of eBooks, guides and drill breakdowns on how to film, what to look for, and how to turn a reading into coaching.',
+    steps: [
+      'Open the library and pick a category — eBooks, guides, or drills and exercises.',
+      'Read or download the PDF.',
+      'Apply it on your next analysis: framing, camera angle, which phase actually explains the fault.',
+    ],
+  },
+];
+
+const MATCH_TOOLS: Tool[] = [
+  {
+    href: '/match-report',
+    name: 'Manual match report',
+    Icon: ClipboardList,
+    what:
+      'Follow a player through a live match and log it point by point, on your phone, courtside.',
+    steps: [
+      'Start a match and set who serves.',
+      'Log each point: first or second serve, stroke, rally length, and the cause of any error.',
+      'Tap undo if you mis-record a point — nothing is locked in.',
+      'Finish to get the full statistical report, into the player’s match document or as a PDF.',
+    ],
+  },
+  {
+    href: '/decoder',
+    name: 'AI match decoder',
+    Icon: Sparkles,
+    what:
+      'Reads your SwingVision match screenshots and derives the statistics SwingVision itself does not surface.',
+    steps: [
+      'Export or screenshot the match summary from SwingVision.',
+      'Upload the images here.',
+      'The decoder reads them and works out ratios and patterns behind the raw numbers.',
+      'Review the output, then send it to the player’s match document.',
+    ],
+  },
+];
+
+const BUSINESS_TOOLS: Tool[] = [
+  {
+    href: '/profile',
+    name: 'Coach profile',
+    Icon: UserCircle,
+    what: 'Your services, rates and payment links — the public-facing coaching identity behind your player work.',
+  },
+  {
+    href: '/catalog',
+    name: 'Public catalog',
+    Icon: Globe,
+    what: 'Optional listing in the AngleMotion coaches directory, with your socials, website and review links.',
+  },
+  {
+    href: '/pricing',
+    name: 'Plans',
+    Icon: CreditCard,
+    what: 'Light, Pro and Academy. Yearly billing runs two months cheaper than monthly.',
+  },
+  {
+    href: '/billing',
+    name: 'Account & billing',
+    Icon: Settings,
+    what: 'Your subscription, invoices and payment method, handled through Stripe.',
+  },
+];
+
+function ToolCard({ tool }: { tool: Tool }) {
+  const { href, name, Icon, what, steps } = tool;
+  return (
+    <div style={card}>
+      <Link href={href} className="cp-tool-link" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit' }}>
+        <Icon size={18} strokeWidth={2} aria-hidden="true" style={{ flex: 'none', color: 'var(--cl-text-primary)' }} />
+        <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em' }}>{name}</span>
+      </Link>
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>{what}</p>
+      {steps ? <Walkthrough steps={steps} /> : null}
+    </div>
+  );
+}
+
+/** Collapsed by default: the dashboard reads clean, the explanation is one tap away. */
+function Walkthrough({ steps }: { steps: string[] }) {
+  return (
+    <details className="cp-details">
+      <summary className="cp-summary">How it works</summary>
+      <ol className="cp-steps">
+        {steps.map((s) => (
+          <li key={s}>{s}</li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+function Group({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section>
+      <h2 style={groupLabel}>{label}</h2>
+      <div style={grid}>{children}</div>
+    </section>
+  );
+}
 
 export default function ControlPanelHome() {
   return (
     <div style={shell}>
-      <div style={{ marginBottom: 22 }}>
-        <img src="/logo-rect-new.jpg" alt="Anglemotion" style={{ height: 44, width: 'auto', marginBottom: 8, borderRadius: 8 }} />
-        <h1 style={{ margin: 0, fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 600, letterSpacing: '-0.03em', color: 'var(--cl-text-primary)' }}>
+      <style>{CSS}</style>
+
+      <header style={{ marginBottom: 26 }}>
+        <img
+          src="/logo-rect-new.jpg"
+          alt=""
+          style={{ height: 40, width: 'auto', marginBottom: 10, borderRadius: 8 }}
+        />
+        <h1 style={{ margin: 0, fontSize: 'clamp(24px, 4vw, 34px)', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15 }}>
           Control Panel
         </h1>
-        <p style={{ margin: '10px 0 0', fontSize: 13, lineHeight: 1.55, color: 'var(--cl-text-secondary)', maxWidth: 720 }}>
-          Your coaching workspace: open the video lab, manage players and documents, log matches by hand, or run the AI decoder.
-          Everything routes into each player&apos;s profile when you connect storage and APIs later.
+        <p style={{ margin: '10px 0 0', fontSize: 13, lineHeight: 1.55, color: 'var(--cl-text-secondary)', maxWidth: 640 }}>
+          Your coaching workspace. Analyse video, keep every player’s file, log matches, and publish
+          the result — each tool below explains itself if you have not used it yet.
         </p>
-      </div>
+      </header>
 
-      {/* ── Primary entry point: Video Analysis ─────────────────────────── */}
-      <Link
-        href="/analysis"
-        className="anglemotion-card-hover-light"
-        style={{
-          ...cardBase,
-          marginBottom: 28,
-          minHeight: 'auto',
-          padding: 24,
-          border: '1px solid var(--cl-accent)',
-          background: 'linear-gradient(135deg, rgba(0,122,255,0.10), rgba(0,122,255,0.03))',
-          boxShadow: '0 2px 12px rgba(0,122,255,0.10)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 44, height: 44, borderRadius: 12, background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)',
-          }}>
-            <Video size={24} strokeWidth={2.25} />
-          </span>
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' }}>Video Analysis</div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--cl-accent)' }}>Primary tool · open the lab</div>
-          </div>
-        </div>
-        <p style={{ margin: '4px 0 0', fontSize: 14, lineHeight: 1.55, color: '#3C3C43' }}>
-          Draw, measure angles, skeleton overlay, split-screen compare, zoom, slow motion, frame stepping, record with webcam or mic.
-          Import videos by file upload.
-        </p>
-      </Link>
-
-      <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: 'var(--cl-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-        More tools
-      </h2>
-      <div
-        className="anglemotion-control-grid-primary"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))',
-          gap: 14,
-          marginBottom: 28,
-        }}
-      >
-        <Link href="/academy" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ color: '#0D9488' }}>
-              <GraduationCap size={20} strokeWidth={2.25} />
-            </span>
-            <span style={{ fontSize: 15, fontWeight: 700 }}>AngleMotion Academy</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
-            YouTube &amp; Instagram workflows, Drive organization, copyright guidelines, and the recommended
-            AngleMotion setup — replace fragile URL pasting with a clear import strategy.
-          </p>
-        </Link>
-
-        <Link href="/players" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ color: 'var(--cl-success-text)' }}>
-              <Users size={20} strokeWidth={2.25} />
-            </span>
-            <span style={{ fontSize: 15, fontWeight: 700 }}>Player database</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
-            Technical sheet, match analysis timeline, and technical analysis with embedded YouTube / SwingVision clips.
-            Player profiles are the hub for every document.
-          </p>
-        </Link>
-      </div>
-
-      <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: 'var(--cl-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-        Match intelligence
-      </h2>
-      <div
-        className="anglemotion-control-grid-match"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))',
-          gap: 14,
-          marginBottom: 28,
-        }}
-      >
-        <Link href="/match-report" style={cardBase} className="anglemotion-card-hover-light">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ color: '#D97706' }}>
-              <ClipboardList size={22} strokeWidth={2.25} />
-            </span>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>Manual match report</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
-            Point-by-point logging when you don&apos;t have automated tracking — server, score, shot type, outcome, notes.
-            Designed to feed the AI decoder and the player&apos;s match analysis.
-          </p>
-        </Link>
-
-        <Link href="/decoder" style={cardBase} className="anglemotion-card-hover-light">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ color: '#7C3AED' }}>
-              <Sparkles size={22} strokeWidth={2.25} />
-            </span>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>AI match data decoder</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
-            Turn SwingVision exports, Gemini-assisted screenshots, or a finished manual report into stats, ratios, and patterns.
-            Output will merge into match analysis when wired to your database.
-          </p>
-        </Link>
-      </div>
-
-      <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: 'var(--cl-text-primary)' }}>
-        Profile &amp; business
-      </h2>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-          gap: 14,
-          marginBottom: 24,
-        }}
-      >
-        <Link href="/profile" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <UserCircle size={20} strokeWidth={2.25} />
-            <span style={{ fontSize: 15, fontWeight: 800 }}>Coach profile</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--cl-text-secondary)' }}>
-            Services, pricing, payment links — your public-facing coaching identity inside AngleMotion.
-          </p>
-        </Link>
-
-        <Link href="/catalog" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Globe size={20} strokeWidth={2.25} />
-            <span style={{ fontSize: 15, fontWeight: 800 }}>Public catalog</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--cl-text-secondary)' }}>
-            Optional showcase: reviews (Trustpilot / Google), socials, website — clients leave reviews with one click.
-          </p>
-        </Link>
-
-        <Link href="/pricing" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <CreditCard size={20} strokeWidth={2.25} />
-            <span style={{ fontSize: 15, fontWeight: 800 }}>Pricing &amp; Subscribe</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--cl-text-secondary)' }}>
-            Light $5/mo · Pro $20/mo · Academy $40/mo (or 2 months free yearly) — subscribe via Stripe.
-          </p>
-        </Link>
-
-        <Link href="/billing" style={{ ...cardBase, minHeight: 112 }} className="anglemotion-card-hover-light">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Settings size={20} strokeWidth={2.25} />
-            <span style={{ fontSize: 15, fontWeight: 800 }}>Account &amp; Billing</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--cl-text-secondary)' }}>
-            Subscription status, invoices, payment method, cancel or change plan — Stripe customer portal.
-          </p>
-        </Link>
-      </div>
-
-      <p style={{ fontSize: 13, color: 'var(--cl-text-muted)', lineHeight: 1.5, margin: '0 0 32px', maxWidth: 640 }}>
-        V1 workflow: upload MP4 files into Video Analysis; use Academy guides for YouTube unlisted, Drive folders, and social exports.
-      </p>
-
-      {/* ── Competitor Comparison ─────────────────────────────────────── */}
-      <div style={{ marginBottom: 48 }}>
-        <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 800, color: 'var(--cl-text-primary)', letterSpacing: -0.3 }}>
-          How AngleMotion compares
-        </h2>
-        <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--cl-text-secondary)' }}>
-          Head-to-head with the two platforms in our niche — the full coaching workflow, at a fraction of the price.
-        </p>
-        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', borderRadius: 14, border: '1px solid var(--cl-border)' }}>
-          <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: 12, background: 'var(--cl-bg-panel)' }}>
-            <thead>
-              <tr style={{ borderBottom: '2px solid var(--cl-border)' }}>
-                <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: 'var(--cl-text-secondary)', fontSize: 11 }}>Feature</th>
-                {['AngleMotion', 'CoachNow', 'Dartfish'].map((name, i) => (
-                  <th key={name} style={{
-                    padding: '12px 10px', textAlign: 'center', fontWeight: 700, fontSize: 11,
-                    color: i === 0 ? 'var(--cl-accent)' : 'var(--cl-text-primary)',
-                    background: i === 0 ? 'rgba(0,122,255,0.06)' : undefined,
-                  }}>{name}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {([
-                ['AI skeleton + 13+ auto angles', true, true, true],
-                ['Editable AI skeleton (drag any joint)', true, false, false],
-                ['Motion Layer / motion-trail composites', true, false, true],
-                ['Slow-mo phase replay videos', true, true, true],
-                ['Google Docs coaching reports', true, false, false],
-                ['One-click YouTube publish', true, false, false],
-                ['Player database + progress tracking', true, true, false],
-                ['AI match decoding (SwingVision)', true, false, false],
-                ['Videos stay on YOUR device', true, false, false],
-                ['Price (Pro tier, annual)', '$200/yr', '$499/yr', '~€480/yr'],
-              ] as Array<[string, ...Array<boolean | string>]>).map((row, ri) => (
-                <tr key={ri} style={{ borderBottom: '1px solid var(--cl-bg-secondary)' }}>
-                  <td style={{ padding: '10px 14px', fontWeight: 600, color: 'var(--cl-text-primary)', whiteSpace: 'nowrap' }}>{row[0]}</td>
-                  {row.slice(1).map((val, ci) => (
-                    <td key={ci} style={{
-                      padding: '10px 10px', textAlign: 'center',
-                      background: ci === 0 ? 'rgba(0,122,255,0.06)' : undefined,
-                      fontWeight: ci === 0 ? 700 : 400,
-                    }}>
-                      {typeof val === 'boolean'
-                        ? val
-                          ? <span style={{ color: 'var(--cl-success)', fontSize: 16 }}>✓</span>
-                          : <span style={{ color: 'var(--cl-border)', fontSize: 16 }}>—</span>
-                        : <span style={{ fontSize: 12, color: ci === 0 ? 'var(--cl-accent)' : 'var(--cl-text-secondary)', fontWeight: ci === 0 ? 700 : 500 }}>{val}</span>
-                      }
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ── Reviews ─────────────────────────────────────────────────────── */}
-      <div style={{ borderTop: '1px solid var(--cl-bg-secondary)', paddingTop: 40, marginTop: 8 }}>
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: 'uppercase', color: 'var(--cl-accent)', marginBottom: 8 }}>
-            What coaches say
-          </div>
-          <h2 style={{ fontSize: 22, fontWeight: 900, margin: '0 0 4px', color: 'var(--cl-text-primary)', letterSpacing: -0.3 }}>
-            Real feedback from real coaches
-          </h2>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--cl-warning-text)' }}>
-            {'★★★★★'.split('').map((s, i) => <span key={i}>{s}</span>)}
-            <span style={{ marginLeft: 6, fontSize: 13, color: 'var(--cl-text-secondary)', fontWeight: 600 }}>5.0 · Early Access</span>
-          </div>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-          {[
-            {
-              name: 'Carlos M.',
-              role: 'Head Coach · Miami, FL',
-              text: 'The video analysis tool is a game changer. My players can finally see exactly where their technique breaks down. The frame-by-frame comparison with Motion Layer is incredible.',
-              stars: 5,
-            },
-            {
-              name: 'Sarah L.',
-              role: 'Academy Director · Barcelona',
-              text: 'Finally a tool built for coaches, not just data scientists. The AI match decoder saves me hours of manual analysis every week. I send the report directly to the player\'s Google Doc.',
-              stars: 5,
-            },
-            {
-              name: 'Tomás R.',
-              role: 'ITF Coach · Buenos Aires',
-              text: 'The match recorder is incredibly intuitive. I track points during live matches on my phone and have a full statistical report ready before the player even leaves the court.',
-              stars: 5,
-            },
-            {
-              name: 'Chiara B.',
-              role: 'Private Coach · Rome',
-              text: 'The Motion Layer feature alone is worth it. Showing a player their swing path across 6 frames side by side is more powerful than any verbal feedback I can give.',
-              stars: 5,
-            },
-            {
-              name: 'David K.',
-              role: 'Performance Analyst · London',
-              text: 'I\'ve tried every tennis analysis platform out there. AngleMotion is the only one that puts all the tools — video, metrics, match stats, reports — in one place that actually works on mobile.',
-              stars: 5,
-            },
-            {
-              name: 'Ana P.',
-              role: 'Junior Development Coach · São Paulo',
-              text: 'My players love seeing their improvement over time. The measurement ruler with perspective correction is a feature I didn\'t know I needed until I used it.',
-              stars: 5,
-            },
-          ].map((r, i) => (
-            <div key={i} style={{
-              background: 'var(--cl-bg-panel)', borderRadius: 14, padding: '20px 20px 18px',
-              border: '1px solid var(--cl-border)',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
-            }}>
-              <div style={{ color: 'var(--cl-warning-text)', fontSize: 13, marginBottom: 10, letterSpacing: 1 }}>
-                {'★'.repeat(r.stars)}
-              </div>
-              <p style={{ margin: '0 0 14px', fontSize: 13, color: '#3C3C43', lineHeight: 1.6, fontStyle: 'italic' }}>
-                "{r.text}"
-              </p>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--cl-text-primary)' }}>{r.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--cl-text-muted)' }}>{r.role}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ textAlign: 'center', marginTop: 28 }}>
-          <a
-            href="mailto:vin@anglemotion.com?subject=AngleMotion Feedback"
+      {/* ── Primary entry: the analysis lab ─────────────────────────────── */}
+      <Link href="/analysis" className="cp-primary" style={{ ...card, gap: 10, padding: 22, marginBottom: 30, border: '1px solid var(--cl-accent)' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span
+            aria-hidden="true"
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              fontSize: 13, fontWeight: 600, color: 'var(--cl-accent)',
-              textDecoration: 'none',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 44, height: 44, borderRadius: 10, flex: 'none',
+              background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)',
             }}
           >
-            Leave your review →
-          </a>
-        </div>
-      </div>
+            <Video size={22} strokeWidth={2.25} />
+          </span>
+          <span>
+            <span style={{ display: 'block', fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>Video analysis</span>
+            <span style={{ display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--cl-accent)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+              Start here
+            </span>
+          </span>
+        </span>
+        <span style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--cl-text-secondary)' }}>
+          Draw, measure 13+ joint angles, run the AI skeleton and correct it by hand, compare
+          side-by-side, step frame by frame, build Motion Layer composites, and record your screen
+          with webcam and mic.
+        </span>
+      </Link>
 
-      <style>{`
-        .anglemotion-card-hover-light:hover {
-          border-color: rgba(0, 122, 255, 0.35);
-          box-shadow: none;
-          transform: translateY(-1px);
-        }
-        @media (max-width: 640px) {
-          .anglemotion-control-grid-primary,
-          .anglemotion-control-grid-match {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
+      <details className="cp-details cp-details-primary">
+        <summary className="cp-summary">How a full analysis works, start to finish</summary>
+        <ol className="cp-steps">
+          <li>Bring a video in — upload a file, or import from a YouTube link.</li>
+          <li>Step frame by frame to the moment that matters and snapshot it as a phase.</li>
+          <li>Run the AI skeleton and Detect Angles, then drag any point the AI got wrong. Your correction wins.</li>
+          <li>Build a Motion Layer composite from the frames you choose, as a still or a video.</li>
+          <li>Record the explanation with your screen, webcam and mic while you talk it through.</li>
+          <li>Publish to YouTube as unlisted and drop everything into the player’s document.</li>
+        </ol>
+      </details>
+
+      <Group label="Players &amp; learning">
+        {PLAYER_TOOLS.map((t) => <ToolCard key={t.href} tool={t} />)}
+      </Group>
+
+      <Group label="Match intelligence">
+        {MATCH_TOOLS.map((t) => <ToolCard key={t.href} tool={t} />)}
+      </Group>
+
+      <Group label="Your business">
+        {BUSINESS_TOOLS.map((t) => <ToolCard key={t.href} tool={t} />)}
+      </Group>
     </div>
   );
 }
+
+const CSS = `
+.cp-primary,
+.cp-tool-link { transition: color .18s cubic-bezier(.16,1,.3,1); }
+.cp-primary { box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,122,255,.10); }
+.cp-primary:hover { box-shadow: 0 2px 4px rgba(0,0,0,.05), 0 12px 30px rgba(0,122,255,.16); }
+.cp-tool-link:hover span { color: var(--cl-accent); }
+
+.cp-details { margin-top: 4px; }
+.cp-details-primary { margin: -18px 0 30px; }
+.cp-summary {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 44px; cursor: pointer; list-style: none;
+  font-size: 13px; font-weight: 600; color: var(--cl-accent);
+}
+.cp-summary::-webkit-details-marker { display: none; }
+.cp-summary::after {
+  content: ''; width: 6px; height: 6px; flex: none;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translate(-1px, -1px);
+  transition: transform .2s cubic-bezier(.16,1,.3,1);
+}
+.cp-details[open] .cp-summary::after { transform: rotate(-135deg) translate(-2px, -2px); }
+.cp-summary:focus-visible { outline: 2px solid var(--cl-accent); outline-offset: 3px; border-radius: 8px; }
+
+.cp-steps {
+  margin: 2px 0 8px; padding: 0 0 0 20px;
+  display: grid; gap: 7px;
+  font-size: 13px; line-height: 1.5; color: var(--cl-text-secondary);
+}
+.cp-steps li::marker { color: var(--cl-text-muted); font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-primary, .cp-tool-link, .cp-summary::after { transition: none; }
+}
+`;
