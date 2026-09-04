@@ -55,6 +55,72 @@ typography:
     fontWeight: 600
     lineHeight: 1.35
     letterSpacing: "normal"
+  marketing-display:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "clamp(46px, 10.5vw, 116px)"
+    fontWeight: 800
+    lineHeight: 0.94
+    letterSpacing: "-0.045em"
+  marketing-display-sm:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "clamp(34px, 6.4vw, 68px)"
+    fontWeight: 800
+    lineHeight: 1.02
+    letterSpacing: "-0.042em"
+  marketing-auth-display:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "clamp(34px, 6vw, 60px)"
+    fontWeight: 800
+    lineHeight: 1.02
+    letterSpacing: "-0.042em"
+  marketing-headline:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "clamp(28px, 4.4vw, 52px)"
+    fontWeight: 700
+    lineHeight: 1.04
+    letterSpacing: "-0.035em"
+  marketing-subhead:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "clamp(22px, 2.8vw, 34px)"
+    fontWeight: 700
+    lineHeight: 1.1
+    letterSpacing: "-0.03em"
+  marketing-lede:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "clamp(17px, 2vw, 21px)"
+    fontWeight: 400
+    lineHeight: 1.5
+    letterSpacing: "normal"
+  marketing-figure:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "42px"
+    fontWeight: 800
+    lineHeight: 1
+    letterSpacing: "-0.04em"
+  marketing-title:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "21px"
+    fontWeight: 700
+    lineHeight: 1.25
+    letterSpacing: "-0.02em"
+  marketing-body:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "17px"
+    fontWeight: 400
+    lineHeight: 1.6
+    letterSpacing: "normal"
+  marketing-secondary:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "15px"
+    fontWeight: 500
+    lineHeight: 1.55
+    letterSpacing: "normal"
+  marketing-caption:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif"
+    fontSize: "13px"
+    fontWeight: 500
+    lineHeight: 1.5
+    letterSpacing: "normal"
 rounded:
   sm: "8px"
   md: "10px"
@@ -261,9 +327,40 @@ slight negative tracking keeps big text from feeling loose.
 - **Label** (600, 11px, 1.35): sub-labels beneath a control, captions, helper and error text.
 - **Micro** (600, 10px): reserved for the icon-only rail and dense on-canvas chrome, where nothing smaller is legible on a phone.
 
+### Marketing scale — landing surface only
+
+The landing page and the sign-in page are a **Persuade** surface: their job is to
+make a stranger decide, not to let a coach work. They therefore carry a second,
+much louder type scale, documented here so the tiers stay deliberately separate
+rather than bleeding into one another. Sizes below appear **only** in
+`components/LandingPage.tsx` and `app/login/LoginClient.tsx`.
+
+- **Marketing Display** (800, `clamp(46px, 10.5vw, 116px)`, 0.94, -0.045em): the landing hero, once per page.
+- **Marketing Display SM** (800, `clamp(34px, 6.4vw, 68px)`, 1.02): the closing call to action.
+- **Marketing Auth Display** (800, `clamp(34px, 6vw, 60px)`, 1.02): the sign-in page heading.
+- **Marketing Headline** (700, `clamp(28px, 4.4vw, 52px)`, 1.04): section heads.
+- **Marketing Subhead** (700, `clamp(22px, 2.8vw, 34px)`, 1.1): timeline entry titles.
+- **Marketing Lede** (400, `clamp(17px, 2vw, 21px)`, 1.5): the sentence under a display or headline.
+- **Marketing Figure** (800, 42px, 1): a price. The only fixed large step.
+- **Marketing Title** (700, 21px, 1.25): plan names, step titles.
+- **Marketing Body** (400, 17px, 1.6) · **Marketing Secondary** (500, 15px, 1.55) · **Marketing Caption** (500, 13px, 1.5).
+
+**The Two-Tier Rule.** These two scales never mix. The app ramp
+(Title/Body/Label at 16/13/11) never appears on the marketing surface, and no
+Marketing step ever appears inside the app — a 116px hero in the analysis
+workspace would be as wrong as 13px body copy on the landing page. The app's
+older `display` and `headline` roles remain the ramp for any *other* marketing
+surface; the landing surface supersedes them with the Marketing steps above.
+
+Marketing body copy sits at 15–17px, not the app's 13px: a visitor reads this
+page once, at arm's length, having never seen the product — the opposite of a
+coach scanning a tool rail they already know. The Two-Size Rule below governs
+the app only, and says so.
+
 ### Named Rules
 
-**The Two-Size Rule.** Inside the app, body copy is 13px and its supporting label
+**The Two-Size Rule** (app surfaces only — see the Marketing scale above).
+Inside the app, body copy is 13px and its supporting label
 is 11px. Reaching for a third in-between size is how a scale rots — 12px, 14px
 and 15px exist in the codebase today and are drift to be resolved toward 13/11,
 not precedent to follow.

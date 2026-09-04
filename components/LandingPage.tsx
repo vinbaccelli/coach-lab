@@ -1,71 +1,271 @@
 'use client';
 
 /**
- * Public marketing landing page (CoachNow-style) shown to logged-out visitors.
- * Copy + verified competitor table from research (anglemotion-landing-research).
- * The comparison table uses ONLY verified data; unknowns are '?'.
+ * Public marketing landing page shown to logged-out visitors.
+ *
+ * Direction: "The Timeline Spine" — the page is one player's development read
+ * forward in time, and each dated entry opens to the capability that produced
+ * it. See .impeccable/surfaces/components-landingpage-tsx.md (seed key
+ * anglemotion-landing-1) and the contract emitted in app/layout.tsx.
+ *
+ * Content rules this file is held to:
+ *  - No testimonials, customer names, club logos, user counts, benchmarks or
+ *    press exist for this product. None are invented or implied here.
+ *  - The competitor table carries ONLY verified data; unknowns stay '?'.
+ *  - The example player's dates and readings are illustrative and are labelled
+ *    as such on the page, not passed off as a real customer.
  */
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Check, X, Minus, ChevronDown, Sparkles, Ruler, Film, Layers, Users, Share2 } from 'lucide-react';
+import { Check, X, Minus, ChevronDown, ArrowRight, ArrowUpRight } from 'lucide-react';
 import { PLANS, DEMO, planPrice, yearlyPerMonth } from '@/lib/plans';
 
-// Accent matches the app's design system (styles/tokens.css --cl-accent) for a
-// consistent white/Apple look — no more off-brand red.
-const ACCENT = '#007AFF';
+/* ────────────────────────────────────────────────────────────────────────────
+   Authored linework diagrams.
+
+   These are geometry, not pictures and not screenshots: each one states what
+   the entry does in the product's own visual language — thin charcoal rules,
+   a single blue accent for the measured thing. Real product screenshots land
+   in the tutorial section in a later pass.
+   ──────────────────────────────────────────────────────────────────────────── */
+
 const INK = 'var(--cl-text-primary)';
 const MUTED = 'var(--cl-text-secondary)';
+const ACCENT = 'var(--cl-accent)';
+const LINE = 'var(--cl-border)';
 
-const features = [
+type DiagramProps = { className?: string };
+
+const svgBase: React.SVGProps<SVGSVGElement> = {
+  viewBox: '0 0 240 180',
+  fill: 'none',
+  xmlns: 'http://www.w3.org/2000/svg',
+  role: 'img',
+  focusable: 'false',
+};
+
+/** Joint angles read off the frame. */
+function AngleDiagram({ className }: DiagramProps) {
+  return (
+    <svg {...svgBase} className={className} aria-label="A joint angle measured between two limb segments">
+      <path d="M60 150 L108 84 L188 96" stroke={INK} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M108 84 m -34 26 a 42 42 0 0 0 42 20" stroke={ACCENT} strokeWidth="2" strokeLinecap="round" />
+      <circle cx="108" cy="84" r="5" fill={ACCENT} />
+      <circle cx="60" cy="150" r="4" fill="var(--cl-bg-panel)" stroke={INK} strokeWidth="2" />
+      <circle cx="188" cy="96" r="4" fill="var(--cl-bg-panel)" stroke={INK} strokeWidth="2" />
+      <line x1="24" y1="30" x2="216" y2="30" stroke={LINE} strokeWidth="1" strokeDasharray="3 5" />
+      <text x="24" y="22" fill={MUTED} fontSize="11" fontFamily="var(--cl-font)" letterSpacing="0.08em">ELBOW</text>
+    </svg>
+  );
+}
+
+/** AI proposes the skeleton; the coach moves any point. */
+function SkeletonDiagram({ className }: DiagramProps) {
+  const edges = [
+    [120, 34, 120, 92], [120, 92, 84, 140], [120, 92, 156, 140],
+    [120, 52, 78, 78], [120, 52, 176, 66],
+  ];
+  return (
+    <svg {...svgBase} className={className} aria-label="A detected skeleton with one keypoint being corrected by hand">
+      {edges.map(([x1, y1, x2, y2], i) => (
+        <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={INK} strokeWidth="2" strokeLinecap="round" />
+      ))}
+      {[[120, 34], [120, 52], [120, 92], [78, 78], [84, 140], [156, 140]].map(([cx, cy], i) => (
+        <circle key={i} cx={cx} cy={cy} r="4.5" fill="var(--cl-bg-panel)" stroke={INK} strokeWidth="2" />
+      ))}
+      {/* the point under the coach's hand */}
+      <line x1="176" y1="66" x2="196" y2="44" stroke={ACCENT} strokeWidth="1.5" strokeDasharray="3 4" />
+      <circle cx="176" cy="66" r="6" fill={ACCENT} />
+      <circle cx="196" cy="44" r="10" fill="none" stroke={ACCENT} strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+/** The whole stroke, frozen across space. */
+function MotionLayerDiagram({ className }: DiagramProps) {
+  return (
+    <svg {...svgBase} className={className} aria-label="A stroke composited as several overlapping positions">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <g key={i} transform={`translate(${i * 38} 0)`} opacity={0.18 + i * 0.205}>
+          <path
+            d="M46 148 L58 104 L46 66"
+            stroke={i === 4 ? ACCENT : INK}
+            strokeWidth={i === 4 ? 2.5 : 2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <circle cx="58" cy="58" r="7" stroke={i === 4 ? ACCENT : INK} strokeWidth={i === 4 ? 2.5 : 2} />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+/** Phases replayed frame by frame. */
+function PhaseDiagram({ className }: DiagramProps) {
+  return (
+    <svg {...svgBase} className={className} aria-label="A stroke split into phases and replayed frame by frame">
+      {[0, 1, 2, 3].map((i) => (
+        <rect
+          key={i}
+          x={20 + i * 52} y={52} width={44} height={62} rx={6}
+          stroke={i === 1 ? ACCENT : LINE}
+          strokeWidth={i === 1 ? 2 : 1.5}
+          fill="none"
+        />
+      ))}
+      {[0, 1, 2, 3].map((i) => (
+        <path
+          key={i}
+          d={`M${34 + i * 52} 100 L${42 + i * 52} ${80 - i * 4} L${50 + i * 52} 92`}
+          stroke={i === 1 ? ACCENT : INK}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity={i === 1 ? 1 : 0.45}
+        />
+      ))}
+      <line x1="20" y1="132" x2="220" y2="132" stroke={LINE} strokeWidth="1" />
+      <circle cx="94" cy="132" r="4" fill={ACCENT} />
+    </svg>
+  );
+}
+
+/** Match data logged point by point. */
+function MatchDiagram({ className }: DiagramProps) {
+  return (
+    <svg {...svgBase} className={className} aria-label="Match statistics charted beside a court diagram">
+      <rect x="20" y="40" width="76" height="104" rx="3" stroke={INK} strokeWidth="2" fill="none" />
+      <line x1="20" y1="92" x2="96" y2="92" stroke={INK} strokeWidth="2" />
+      <line x1="58" y1="40" x2="58" y2="144" stroke={LINE} strokeWidth="1.5" />
+      <circle cx="76" cy="66" r="4" fill={ACCENT} />
+      {[46, 30, 62, 22].map((h, i) => (
+        <rect
+          key={i}
+          x={124 + i * 26} y={144 - h} width={16} height={h} rx={3}
+          fill={i === 2 ? ACCENT : 'var(--cl-fill-inactive)'}
+        />
+      ))}
+      <line x1="124" y1="144" x2="220" y2="144" stroke={LINE} strokeWidth="1" />
+    </svg>
+  );
+}
+
+/** Two documents per player, growing all season. */
+function DocsDiagram({ className }: DiagramProps) {
+  return (
+    <svg {...svgBase} className={className} aria-label="Two documents per player: technical and match analysis">
+      <rect x="30" y="34" width="94" height="118" rx="8" stroke={LINE} strokeWidth="1.5" fill="var(--cl-bg-panel)" />
+      <rect x="112" y="46" width="94" height="118" rx="8" stroke={INK} strokeWidth="2" fill="var(--cl-bg-panel)" />
+      {[70, 86, 102, 118, 134].map((y, i) => (
+        <line key={i} x1="128" y1={y} x2={i === 4 ? 166 : 190} y2={y} stroke={i === 0 ? ACCENT : LINE} strokeWidth={i === 0 ? 3 : 2} strokeLinecap="round" />
+      ))}
+    </svg>
+  );
+}
+
+/** Published to YouTube, kept forever, handed over. */
+function PublishDiagram({ className }: DiagramProps) {
+  return (
+    <svg {...svgBase} className={className} aria-label="A finished video published and shared with the player">
+      <rect x="34" y="46" width="130" height="88" rx="10" stroke={INK} strokeWidth="2" fill="none" />
+      <path d="M92 74 L120 90 L92 106 Z" fill={ACCENT} />
+      <path d="M176 66 L206 66 L206 96" stroke={ACCENT} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M206 66 L172 100" stroke={ACCENT} strokeWidth="2" strokeLinecap="round" />
+      <line x1="34" y1="150" x2="164" y2="150" stroke={LINE} strokeWidth="1" strokeDasharray="3 5" />
+    </svg>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   The spine.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+type Entry = {
+  date: string;
+  title: string;
+  body: string;
+  micro?: string;
+  Diagram: React.ComponentType<DiagramProps>;
+};
+
+/**
+ * One example player's season. The chain runs exactly as the product does:
+ * measure → correct → composite → phase → match data → the two files →
+ * published and handed over.
+ */
+const ENTRIES: Entry[] = [
   {
-    h: 'The AI does the work. You keep the final say.',
-    b: 'AngleMotion auto-detects 13+ real joint angles and every skeleton keypoint on your player’s stroke — then hands you the pen. Drag any point, correct any angle, trust the read. AI-fast for the 90%, coach-accurate for the 10% that matters. No black box you can’t touch.',
+    date: 'MAR 04',
+    title: 'The stroke, measured.',
+    body:
+      'Shoulder, hip, knee, elbow — AngleMotion reads 13+ joint angles automatically and shows the numbers right on the frame. Compare a serve to a model, prove why a stroke breaks down, and back every note with a real measurement instead of a guess.',
+    Diagram: AngleDiagram,
+  },
+  {
+    date: 'MAR 18',
+    title: 'The AI drafts. You decide.',
+    body:
+      'Every skeleton keypoint and every angle the AI detects is yours to move. Drag any point, correct any angle, trust the read. AI-fast for the 90%, coach-accurate for the 10% that matters — no black box you can’t touch.',
     micro: 'Trust the AI for speed. Trust yourself for the truth.',
+    Diagram: SkeletonDiagram,
   },
   {
-    h: 'Measure the stroke, not just watch it.',
-    b: 'Shoulder, hip, knee, elbow — AngleMotion reads 13+ joint angles automatically and shows the numbers right on the frame. Compare a serve to a model, prove why a stroke breaks down, and back every note with a real measurement instead of a guess.',
-  },
-  {
-    h: 'See what the eye can’t — with Motion Layer.',
-    b: 'Turn any swing into a multi-position motion-trail composite — as a still and as video. The whole stroke, frozen across space, so a student instantly sees the path their body took. The demo that sells your coaching and the shareable that markets it.',
+    date: 'APR 09',
+    title: 'The whole stroke, at once.',
+    body:
+      'Motion Layer turns a swing into a multi-position composite — as a still and as video. You choose the frames and the layers, so the trail shows the path you want the player to see. The demo that sells your coaching and the shareable that markets it.',
     micro: 'Plus — it looks incredible.',
+    Diagram: MotionLayerDiagram,
   },
   {
-    h: 'Break the stroke into phases — in slow motion.',
-    b: 'Snapshot every phase of the stroke and replay it frame-by-frame in slow motion, side-by-side, with angle overlays. Then screen-record it with your webcam and mic to deliver a same-day coaching video your player can rewatch until it clicks.',
+    date: 'APR 27',
+    title: 'Phase by phase, in slow motion.',
+    body:
+      'Snapshot every phase of the stroke and replay it frame-by-frame in slow motion, side-by-side, with angle overlays. Then screen-record it with your webcam and mic to deliver a same-day coaching video your player can rewatch until it clicks.',
+    Diagram: PhaseDiagram,
   },
   {
-    h: 'One platform for every player you coach.',
-    b: 'A player database, two Google Docs per student (technical + match analysis), a technical sheet, and progress tracking across the whole season. Rivals hand you a clip and stop — AngleMotion is the client file, the deliverable, and the storefront in one place.',
+    date: 'MAY 16',
+    title: 'The match, in numbers.',
+    body:
+      'Follow a player through a live match and log every point by hand, or let the Match Decoder read your SwingVision screenshots and derive the stats SwingVision doesn’t surface. Either way the match ends as data, not an impression.',
+    Diagram: MatchDiagram,
+  },
+  {
+    date: 'JUN 02',
+    title: 'Two files that outlive the session.',
+    body:
+      'Every player carries two documents — technical analysis and match analysis — plus a player database and progress tracking across the whole season. Rivals hand you a clip and stop. This is the client file, the deliverable, and the storefront in one place.',
     micro: 'Every student’s technical story in one file — from first lesson to nationals.',
+    Diagram: DocsDiagram,
   },
   {
-    h: 'Record, report, and publish without leaving the app.',
-    b: 'Capture your screen, webcam, and mic in one hub, drop it into a Google Docs coaching report, and push it to YouTube in a click. The Match Decoder even reads SwingVision screenshots and folds match stats into the player’s file. Kill the five-tool, duct-taped workflow.',
+    date: 'JUN 21',
+    title: 'Published, permanent, handed over.',
+    body:
+      'Push the finished video straight to YouTube as unlisted and drop it into the player’s report. Nothing to store, nothing to pay for, no archive to run out of — an unlimited record your students keep and can rewatch years later.',
+    Diagram: PublishDiagram,
   },
 ];
 
-// Representative concept visuals for each feature row (NOT app screenshots).
-// Swap in real photos by dropping /public/marketing/feature-{0..5}.jpg — the
-// tile falls back to this branded icon+caption when a photo is absent.
-const FEATURE_VISUALS: Array<{ Icon: React.ElementType; caption: string; tint: string }> = [
-  { Icon: Sparkles, caption: 'AI reads every joint — you keep the pen', tint: '#EAF3FF' },
-  { Icon: Ruler, caption: '13+ live angles, right on the frame', tint: '#EAF7EE' },
-  { Icon: Film, caption: 'The whole stroke, frozen across space', tint: '#F0EEFF' },
-  { Icon: Layers, caption: 'Phase-by-phase, in slow motion', tint: '#FFF3E8' },
-  { Icon: Users, caption: "Every player's story in one file", tint: '#EAF3FF' },
-  { Icon: Share2, caption: 'Record → report → publish', tint: '#EAF7EE' },
+/** Steps for the tutorial section. Real screenshots land here in a later pass. */
+const TUTORIAL_STEPS = [
+  { t: 'Bring the video in', b: 'Upload from your camera roll, pull from Google Drive, or paste a YouTube link. Nothing to install.' },
+  { t: 'Find the frame', b: 'Step frame-by-frame to the moment that matters and snapshot it as a phase.' },
+  { t: 'Let the AI read it', b: 'Run pose detection and AI Detect Angles, then correct any point the AI got wrong.' },
+  { t: 'Build the composite', b: 'Pick your frames and layers and generate the Motion Layer still or video.' },
+  { t: 'Record the explanation', b: 'Capture screen, webcam and mic in one hub while you talk the player through it.' },
+  { t: 'Send the report', b: 'Publish to YouTube, drop everything into the player’s document, and share the link.' },
 ];
 
-// Comparison vs the two platforms in our niche only (CoachNow, Dartfish).
-// y=yes, n=no, q='?'.
+/* Verified competitor comparison. y = yes, n = no, q = unknown. Pro tier vs
+   Pro tier: CoachNow PRO $499.99/yr (coachnow.com/pricing); Dartfish 360 S
+   ≈ €40/mo (dartfish.com/plans) — their ~$5/mo Express tier is mobile-only and
+   not comparable. Unknowns stay '?'; nothing here is estimated. */
 const COMPARE_COLS = ['AngleMotion', 'CoachNow', 'Dartfish'];
 const COMPARE_ROWS: Array<{ label: string; cells: Array<'y' | 'n' | 'q' | string> }> = [
-  // Pro-tier vs Pro-tier comparison (CoachNow PRO $499.99/yr per coachnow.com/pricing;
-  // Dartfish 360 S ≈ €40/mo per dartfish.com/plans — their cheap ~$5/mo Express tier
-  // is mobile-only and not comparable).
   { label: 'Price (Pro tier, annual)', cells: ['$200/yr', '$499/yr', '~€480/yr'] },
   { label: 'AI pose / skeleton overlay', cells: ['y', 'y', 'y'] },
   { label: 'Angle measurement (auto)', cells: ['y', 'y', 'y'] },
@@ -81,243 +281,562 @@ const COMPARE_ROWS: Array<{ label: string; cells: Array<'y' | 'n' | 'q' | string
   { label: 'SwingVision stat import (Match Decoder)', cells: ['y', 'n', 'n'] },
 ];
 
-const faqs = [
+const FAQS = [
   { q: 'What is AngleMotion?', a: 'A browser-based tennis video-analysis platform: AI skeleton + angle detection you can edit by hand, Motion Layer composites, slow-motion phase replays, a recording hub, and per-player Google Docs coaching reports — all in one place.' },
   { q: 'Does the AI replace my judgment?', a: 'No. Every skeleton point and angle the AI detects is editable — drag it, correct it, trust it. AI does the fast 90%; you own the 10% that matters.' },
   { q: 'Do my videos get uploaded to a cloud?', a: 'No. Your footage is processed locally in your browser and stays on your device. Only the reports and clips you explicitly export go to your own Google Drive / YouTube.' },
   { q: 'What do I need to run it?', a: 'Just a browser — nothing to install. A laptop or desktop with graphics acceleration on gives the smoothest AI skeleton.' },
+  { q: 'Is this only for coaches?', a: 'No. Plenty of players and parents run their own analysis and build their own record over time. The Academy exists so you can learn what to film and what to look for.' },
   { q: 'How does the yearly plan and free eBook work?', a: 'Go yearly ($200/yr — 2 months free vs monthly) and we include our tennis biomechanics eBook, the coach’s guide to reading every stroke.' },
   { q: 'Can I use my SwingVision data?', a: 'Yes — the Match Decoder reads SwingVision screenshots and folds match stats into the player’s file.' },
 ];
 
 function Cell({ v }: { v: string }) {
-  if (v === 'y') return <Check size={18} style={{ color: '#30A46C' }} aria-label="yes" />;
-  if (v === 'n') return <X size={16} style={{ color: '#C4C4C6' }} aria-label="no" />;
-  if (v === 'q') return <Minus size={16} style={{ color: '#C4C4C6' }} aria-label="unknown" />;
-  return <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{v}</span>;
+  if (v === 'y') return <Check size={18} style={{ color: 'var(--cl-success-text)' }} aria-label="yes" />;
+  if (v === 'n') return <X size={16} style={{ color: 'var(--cl-text-secondary)' }} aria-label="no" />;
+  if (v === 'q') return <Minus size={16} style={{ color: 'var(--cl-text-secondary)' }} aria-label="unknown" />;
+  return <span className="am-tabular" style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>{v}</span>;
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Page
+   ──────────────────────────────────────────────────────────────────────────── */
 
 export default function LandingPage() {
   const [annual, setAnnual] = useState(true);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const spineRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * The travelling band: the one authored motion on this page. It reports how
+   * far the reader has moved through the player's season, written to a CSS
+   * custom property so the paint stays off the React render path.
+   */
+  const onScroll = useCallback(() => {
+    const el = spineRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const total = rect.height - vh * 0.5;
+    const progress = total <= 0 ? 0 : Math.min(1, Math.max(0, (vh * 0.5 - rect.top) / total));
+    el.style.setProperty('--am-progress', String(progress));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      spineRef.current?.style.setProperty('--am-progress', '1');
+      return;
+    }
+    // `.am-root` is the scroll container (100dvh + overflow-y:auto, kept from
+    // the previous page because the document-level alternative loses the last
+    // control under iOS Safari's collapsing toolbar). The window therefore
+    // never scrolls — listen on the container instead, or the band sits dead
+    // at zero. The rect math is viewport-relative and stays correct either way.
+    const scroller = rootRef.current;
+    if (!scroller) return;
+    let frame = 0;
+    const handler = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; onScroll(); });
+    };
+    onScroll();
+    scroller.addEventListener('scroll', handler, { passive: true });
+    window.addEventListener('resize', handler);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      scroller.removeEventListener('scroll', handler);
+      window.removeEventListener('resize', handler);
+    };
+  }, [onScroll]);
 
   return (
-    <div style={{ height: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch', background: 'var(--cl-bg-panel)', color: INK, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
-      {/* NAV */}
-      <nav style={{ position: 'sticky', top: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(12px)', borderBottom: '1px solid #EEE' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 28, height: 28, borderRadius: 6 }} />
-          <span style={{ fontSize: 16, fontWeight: 900, letterSpacing: -0.3 }}>Angle<span style={{ color: ACCENT }}>Motion</span></span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <a href="#features" style={navLink}>Features</a>
-          <a href="#pricing" style={navLink}>Pricing</a>
-          <a href="#compare" style={navLink}>Compare</a>
-          <Link href="/login" style={{ ...navLink, fontWeight: 600 }}>Sign In</Link>
-          <Link href="/login" style={ctaBtn}>Start Free</Link>
+    <div className="am-root" ref={rootRef}>
+      <style>{CSS}</style>
+
+      {/* ── NAV ─────────────────────────────────────────────────────────── */}
+      <nav className="am-nav">
+        <Link href="/" className="am-wordmark" aria-label="AngleMotion home">
+          <img src="/logo-square-new.jpg" alt="" width={26} height={26} />
+          <span>Angle<span style={{ color: ACCENT }}>Motion</span></span>
+        </Link>
+        <div className="am-nav-links">
+          <a href="#season" className="am-navlink">How it works</a>
+          <a href="#academy" className="am-navlink">Academy</a>
+          <a href="#pricing" className="am-navlink">Pricing</a>
+          <a href="#compare" className="am-navlink">Compare</a>
+          <Link href="/login" className="am-navlink am-navlink-strong">Sign in</Link>
+          <Link href="/login" className="am-btn am-btn-sm">Start free</Link>
         </div>
       </nav>
 
-      {/* HERO */}
-      <header style={{ maxWidth: 960, margin: '0 auto', padding: '72px 20px 40px', textAlign: 'center' }}>
-        <h1 style={{ fontSize: 'clamp(32px, 6vw, 56px)', fontWeight: 900, letterSpacing: -1.5, lineHeight: 1.05, margin: '0 0 18px' }}>
-          AI that sees every angle.<br /><span style={{ color: ACCENT }}>Coaching that stays yours.</span>
+      {/* ── HERO ────────────────────────────────────────────────────────── */}
+      <header className="am-hero">
+        <h1 className="am-display">
+          Video in.<br />
+          <span style={{ color: ACCENT }}>Report out.</span>
         </h1>
-        <p style={{ fontSize: 'clamp(15px, 2.4vw, 19px)', color: MUTED, lineHeight: 1.55, maxWidth: 680, margin: '0 auto 28px' }}>
-          Auto-detect 13+ joint angles and every skeleton point — then edit anything by hand. Build slow-mo phase replays, Motion Layer trails, and a branded coaching report your students actually keep. Runs in your browser; your footage stays yours.
+        <p className="am-lede">
+          AngleMotion turns the footage you already have into a permanent, shareable record of a
+          player’s development — measured, corrected by you, and kept for as long as they play.
         </p>
-        <div style={{ display: 'flex', gap: 14, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
-          <Link href="/login" style={{ ...ctaBtn, fontSize: 16, padding: '14px 30px' }}>Start Free</Link>
-          <a href="#how" style={{ ...navLink, fontWeight: 600, color: ACCENT }}>See how it works {'→'}</a>
+        <div className="am-cta-row">
+          <Link href={DEMO.url} className="am-btn am-btn-lg">
+            {DEMO.label} <ArrowRight size={18} />
+          </Link>
+          <a href="#season" className="am-ghost">Follow one player’s season</a>
         </div>
-        <p style={{ fontSize: 13, color: MUTED, marginTop: 18 }}>
-          Go yearly and get our free tennis biomechanics eBook — the coach’s guide to reading every stroke.
-        </p>
+        <p className="am-note">{DEMO.note}</p>
+        <ul className="am-facts">
+          <li>Runs in your browser — nothing to install</li>
+          <li>Your videos stay local — no cloud lock-in</li>
+          <li>Works with Google Docs, YouTube and SwingVision</li>
+        </ul>
       </header>
 
-      {/* TRUST STRIP */}
-      <section style={{ background: '#FAFAFA', borderTop: '1px solid #EEE', borderBottom: '1px solid #EEE', padding: '20px' }}>
-        <div style={{ maxWidth: 960, margin: '0 auto', display: 'flex', gap: 20, justifyContent: 'center', flexWrap: 'wrap' }}>
-          {['Runs in your browser — nothing to install', 'Your videos stay local — no cloud lock-in', 'Works with Google Docs, YouTube & SwingVision'].map((t) => (
-            <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: INK }}>
-              <Check size={16} style={{ color: '#30A46C', flexShrink: 0 }} /> {t}
+      {/* ── THE SEASON (the spine) ──────────────────────────────────────── */}
+      <section id="season" className="am-season" ref={spineRef}>
+        <div className="am-season-head">
+          <h2 className="am-h2">One player. One season. One file that keeps growing.</h2>
+          <p className="am-sub">
+            Every tool below exists because something in this timeline needed it. Scroll the season.
+          </p>
+          <p className="am-synthetic">
+            An illustrative timeline. The dates and readings are examples, not a real client’s record.
+          </p>
+        </div>
+
+        <div className="am-rail" aria-hidden="true">
+          <span className="am-rail-band" />
+        </div>
+
+        <ol className="am-entries">
+          {ENTRIES.map(({ date, title, body, micro, Diagram }) => (
+            <li key={date} className="am-entry">
+              <div className="am-entry-date am-tabular">{date}</div>
+              <div className="am-entry-body">
+                <h3 className="am-h3">{title}</h3>
+                <p className="am-p">{body}</p>
+                {micro && <p className="am-micro">{micro}</p>}
+              </div>
+              <div className="am-entry-figure">
+                <Diagram className="am-diagram" />
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* ── TUTORIAL ────────────────────────────────────────────────────
+          Structure only for now. Real product screenshots are supplied in a
+          later pass and drop into .am-step-shot — the step list reads
+          correctly without them, so nothing here is a placeholder pretending
+          to be content. ─────────────────────────────────────────────────── */}
+      <section id="how" className="am-section am-tutorial">
+        <h2 className="am-h2">From footage to a finished report, in six steps.</h2>
+        <p className="am-sub">The whole loop, start to finish. No step needs a second app.</p>
+        <ol className="am-steps">
+          {TUTORIAL_STEPS.map((s, i) => (
+            <li key={s.t} className="am-step">
+              <span className="am-step-n am-tabular">{String(i + 1).padStart(2, '0')}</span>
+              <div>
+                <h3 className="am-step-t">{s.t}</h3>
+                <p className="am-p">{s.b}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* ── ACADEMY ─────────────────────────────────────────────────────── */}
+      <section id="academy" className="am-section am-academy">
+        <div>
+          <h2 className="am-h2">Learn what to film, and what to look for.</h2>
+          <p className="am-p am-p-wide">
+            AngleMotion Academy is a growing library of eBooks, guides and drill breakdowns that
+            teach the craft behind the tool — how to set up a shot, which phase of a stroke actually
+            explains a fault, and how to turn a reading into something a player can act on. Coaches
+            use it to sharpen their eye. Players and parents use it to analyse themselves properly
+            instead of guessing.
+          </p>
+          <p className="am-note">Included with the Pro plan.</p>
+        </div>
+      </section>
+
+      {/* ── PRICING ─────────────────────────────────────────────────────── */}
+      <section id="pricing" className="am-section">
+        <h2 className="am-h2">Pricing that fits how you coach.</h2>
+        <div className="am-toggle" role="group" aria-label="Billing period">
+          <button type="button" onClick={() => setAnnual(false)} className={`am-toggle-b ${!annual ? 'is-on' : ''}`} aria-pressed={!annual}>Monthly</button>
+          <button type="button" onClick={() => setAnnual(true)} className={`am-toggle-b ${annual ? 'is-on' : ''}`} aria-pressed={annual}>Yearly · 2 months free</button>
+        </div>
+
+        <div className="am-plans">
+          {PLANS.map((plan) => (
+            <div key={plan.id} className={`am-plan ${plan.featured ? 'is-featured' : ''}`}>
+              <h3 className="am-plan-name">{plan.name}</h3>
+              <p className="am-plan-tag">{plan.tagline}</p>
+              <p className="am-plan-price am-tabular">
+                ${annual ? yearlyPerMonth(plan) : planPrice(plan, 'monthly')}
+                <span className="am-plan-per">/mo</span>
+              </p>
+              <p className="am-plan-billed am-tabular">
+                {annual ? `$${planPrice(plan, 'yearly')} billed yearly` : 'billed monthly'}
+                {plan.seats > 1 ? ` · ${plan.seats} coach seats` : ''}
+              </p>
+              <ul className="am-plan-features">
+                {plan.features.map((f) => (
+                  <li key={f}><Check size={15} aria-hidden="true" /> <span>{f}</span></li>
+                ))}
+              </ul>
+              <Link href="/pricing" className={`am-btn ${plan.featured ? '' : 'am-btn-quiet'} am-btn-block`}>
+                Choose {plan.name}
+              </Link>
             </div>
           ))}
         </div>
+
+        <p className="am-note am-center">
+          Go yearly and get our tennis biomechanics eBook — the coach’s guide to reading every stroke.
+        </p>
       </section>
 
-      {/* FEATURES */}
-      <section id="features" style={{ maxWidth: 900, margin: '0 auto', padding: '64px 20px 20px' }}>
-        {features.map((f, i) => (
-          <div key={i} style={{ display: 'flex', gap: 24, alignItems: 'center', flexDirection: i % 2 ? 'row-reverse' : 'row', flexWrap: 'wrap', marginBottom: 44 }}>
-            <div style={{ flex: '1 1 320px', minWidth: 280 }}>
-              <h3 style={{ fontSize: 'clamp(22px, 3.4vw, 30px)', fontWeight: 800, letterSpacing: -0.5, margin: '0 0 12px', lineHeight: 1.15 }}>{f.h}</h3>
-              <p style={{ fontSize: 15.5, color: MUTED, lineHeight: 1.6, margin: 0 }}>{f.b}</p>
-              {f.micro && <p style={{ fontSize: 14, fontWeight: 700, color: ACCENT, margin: '10px 0 0' }}>{f.micro}</p>}
-            </div>
-            {(() => {
-              const v = FEATURE_VISUALS[i % FEATURE_VISUALS.length];
-              const Icon = v.Icon;
-              return (
-                <div style={{ flex: '1 1 280px', minWidth: 240, height: 200, borderRadius: 16, background: `linear-gradient(135deg, ${v.tint}, #FFFFFF)`, border: '1px solid #E9E9EE', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 20, textAlign: 'center' }}>
-                  <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'var(--cl-bg-panel)', boxShadow: '0 4px 16px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Icon size={26} color={ACCENT} />
-                  </div>
-                  <span style={{ fontSize: 13.5, fontWeight: 700, color: INK, maxWidth: 240 }}>{v.caption}</span>
-                </div>
-              );
-            })()}
-          </div>
-        ))}
-      </section>
-
-      {/* HOW IT WORKS */}
-      <section id="how" style={{ background: '#FAFAFA', borderTop: '1px solid #EEE', borderBottom: '1px solid #EEE', padding: '56px 20px' }}>
-        <div style={{ maxWidth: 900, margin: '0 auto' }}>
-          <h2 style={{ textAlign: 'center', fontSize: 'clamp(24px, 4vw, 34px)', fontWeight: 900, letterSpacing: -0.5, margin: '0 0 32px' }}>From video to student-ready report in three steps.</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 18 }}>
-            {[
-              ['1', 'Record', 'Drop in any tennis video, or capture live in your browser.'],
-              ['2', 'Analyze', 'AI maps the skeleton and angles; you edit and add Motion Layer + slow-mo.'],
-              ['3', 'Share', 'Export a branded Google Docs report or push to YouTube in one click.'],
-            ].map(([n, t, d]) => (
-              <div key={n} style={{ background: 'var(--cl-bg-panel)', border: '1px solid #EEE', borderRadius: 14, padding: 20 }}>
-                <div style={{ width: 32, height: 32, borderRadius: '50%', background: ACCENT, color: 'var(--cl-text-on-fill)', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>{n}</div>
-                <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 6 }}>{t}</div>
-                <div style={{ fontSize: 14, color: MUTED, lineHeight: 1.5 }}>{d}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* COMPARISON */}
-      <section id="compare" style={{ maxWidth: 1000, margin: '0 auto', padding: '64px 20px' }}>
-        <h2 style={{ textAlign: 'center', fontSize: 'clamp(22px, 3.6vw, 32px)', fontWeight: 900, letterSpacing: -0.5, margin: '0 0 8px', lineHeight: 1.15 }}>
-          Editable AI biomechanics, a coaching-business workflow, and local video — in one tool.
-        </h2>
-        <p style={{ textAlign: 'center', fontSize: 15, color: MUTED, margin: '0 0 28px' }}>Every rival makes you pick two of the three. Here’s the honest breakdown.</p>
-        <div style={{ overflowX: 'auto', borderRadius: 14, border: '1px solid var(--cl-border)', WebkitOverflowScrolling: 'touch' }}>
-          <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 13, background: 'var(--cl-bg-panel)' }}>
+      {/* ── COMPARE ─────────────────────────────────────────────────────── */}
+      <section id="compare" className="am-section">
+        <h2 className="am-h2">How it compares.</h2>
+        <p className="am-sub">
+          Verified data only. Where a competitor doesn’t publish an answer we leave it unknown rather
+          than guess.
+        </p>
+        <div className="am-table-wrap">
+          <table className="am-table">
+            <caption className="am-visually-hidden">Feature comparison against CoachNow and Dartfish</caption>
             <thead>
-              <tr style={{ borderBottom: '2px solid var(--cl-border)' }}>
-                <th style={{ padding: '12px 14px', textAlign: 'left', fontSize: 11, color: MUTED, fontWeight: 600 }}>Feature</th>
+              <tr>
+                <th scope="col">&nbsp;</th>
                 {COMPARE_COLS.map((c, i) => (
-                  <th key={c} style={{ padding: '12px 8px', textAlign: 'center', fontSize: 12, fontWeight: 800, color: i === 0 ? ACCENT : INK, background: i === 0 ? 'rgba(0,122,255,0.06)' : undefined }}>{c}</th>
+                  <th key={c} scope="col" className={i === 0 ? 'is-us' : ''}>{c}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {COMPARE_ROWS.map((r, ri) => (
-                <tr key={r.label} style={{ borderBottom: '1px solid #F0F0F0' }}>
-                  <td style={{ padding: '10px 14px', color: INK, fontWeight: 500 }}>{r.label}</td>
-                  {r.cells.map((v, ci) => (
-                    <td key={ci} style={{ padding: '10px 8px', textAlign: 'center', background: ci === 0 ? 'rgba(0,122,255,0.04)' : undefined }}>
-                      <Cell v={v} />
-                    </td>
+              {COMPARE_ROWS.map((row) => (
+                <tr key={row.label}>
+                  <th scope="row">{row.label}</th>
+                  {row.cells.map((cell, i) => (
+                    <td key={i} className={i === 0 ? 'is-us' : ''}><Cell v={cell} /></td>
                   ))}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p style={{ fontSize: 11, color: MUTED, marginTop: 10 }}>Verified data; “–” means uncertain/undocumented, not a claim of absence. Prices approximate; check each vendor for current pricing.</p>
       </section>
 
-      {/* PRICING — three tiers + demo */}
-      <section id="pricing" style={{ background: '#FAFAFA', borderTop: '1px solid #EEE', padding: '64px 20px' }}>
-        <div style={{ maxWidth: 1080, margin: '0 auto', textAlign: 'center' }}>
-          <h2 style={{ fontSize: 'clamp(24px, 4vw, 34px)', fontWeight: 900, letterSpacing: -0.5, margin: '0 0 8px' }}>Pricing that fits how you coach.</h2>
-          <p style={{ fontSize: 15, color: MUTED, margin: '0 0 24px' }}>Start light, go Pro for the full platform + Academy, or run your whole team on one plan.</p>
-          <div style={{ display: 'inline-flex', background: 'var(--cl-fill-inactive)', borderRadius: 999, padding: 4, marginBottom: 32 }}>
-            <button type="button" onClick={() => setAnnual(true)} style={toggleBtn(annual)}>Annual <span style={{ fontSize: 10, fontWeight: 800, color: annual ? 'var(--cl-text-on-fill)' : ACCENT }}>· 2 mo free</span></button>
-            <button type="button" onClick={() => setAnnual(false)} style={toggleBtn(!annual)}>Monthly</button>
-          </div>
-          <div style={{ display: 'flex', gap: 18, justifyContent: 'center', flexWrap: 'wrap', alignItems: 'stretch' }}>
-            {PLANS.map((plan) => {
-              const price = annual ? plan.priceYearly : plan.priceMonthly;
-              return (
-                <div key={plan.id} style={{
-                  flex: '1 1 300px', maxWidth: 350, background: 'var(--cl-bg-panel)', textAlign: 'left',
-                  border: plan.featured ? `2px solid ${ACCENT}` : '1px solid var(--cl-border)',
-                  borderRadius: 18, padding: 26,
-                  boxShadow: plan.featured ? '0 12px 40px rgba(0,122,255,0.12)' : '0 1px 3px rgba(0,0,0,0.04)',
-                  display: 'flex', flexDirection: 'column',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 17, fontWeight: 800 }}>{plan.name}</span>
-                    {plan.featured && <span style={{ fontSize: 10, fontWeight: 800, background: ACCENT, color: 'var(--cl-text-on-fill)', padding: '2px 8px', borderRadius: 999 }}>MOST POPULAR</span>}
-                    {plan.seats > 1 && <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>up to {plan.seats} coaches</span>}
-                  </div>
-                  <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px' }}>{plan.tagline}</p>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontSize: 38, fontWeight: 900, letterSpacing: -1 }}>${price}</span>
-                    <span style={{ fontSize: 15, color: MUTED }}>{annual ? '/yr' : '/mo'}</span>
-                  </div>
-                  <p style={{ fontSize: 12, color: MUTED, margin: '4px 0 14px', minHeight: 16 }}>{annual ? `$${yearlyPerMonth(plan)}/mo · 2 months free` : 'Billed monthly · cancel anytime'}</p>
-                  <Link href="/pricing" style={{ ...ctaBtn, display: 'block', textAlign: 'center', padding: '11px', fontSize: 15, background: plan.featured ? ACCENT : INK }}>Choose {plan.name}</Link>
-                  <ul style={{ listStyle: 'none', padding: 0, margin: '16px 0 0', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {plan.features.map((li) => (
-                      <li key={li} style={{ display: 'flex', gap: 8, fontSize: 13, color: INK }}><Check size={15} style={{ color: '#30A46C', flexShrink: 0, marginTop: 1 }} /> {li}</li>
-                    ))}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ marginTop: 22, display: 'inline-flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', justifyContent: 'center', fontSize: 14, color: MUTED }}>
-            <span>{DEMO.note}</span>
-            <a href={DEMO.url} target={DEMO.url.startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ ...ctaBtn, background: 'transparent', color: ACCENT, border: `1.5px solid ${ACCENT}` }}>{DEMO.label}</a>
-          </div>
+      {/* ── FAQ ─────────────────────────────────────────────────────────── */}
+      <section className="am-section am-faq-section">
+        <h2 className="am-h2">Questions, answered.</h2>
+        <div className="am-faqs">
+          {FAQS.map((f, i) => {
+            const open = openFaq === i;
+            return (
+              <div key={f.q} className="am-faq">
+                <button
+                  type="button"
+                  className="am-faq-q"
+                  aria-expanded={open}
+                  onClick={() => setOpenFaq(open ? null : i)}
+                >
+                  <span>{f.q}</span>
+                  <ChevronDown size={18} className={`am-chev ${open ? 'is-open' : ''}`} aria-hidden="true" />
+                </button>
+                {open && <p className="am-faq-a">{f.a}</p>}
+              </div>
+            );
+          })}
         </div>
       </section>
 
-      {/* FAQ */}
-      <section style={{ maxWidth: 760, margin: '0 auto', padding: '56px 20px' }}>
-        <h2 style={{ textAlign: 'center', fontSize: 'clamp(22px, 3.6vw, 30px)', fontWeight: 900, letterSpacing: -0.5, margin: '0 0 24px' }}>Questions, answered.</h2>
-        {faqs.map((f, i) => (
-          <div key={i} style={{ borderBottom: '1px solid #EEE' }}>
-            <button type="button" onClick={() => setOpenFaq(openFaq === i ? null : i)} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 0', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: 16, fontWeight: 700, color: INK }}>
-              {f.q}
-              <ChevronDown size={18} style={{ flexShrink: 0, transform: openFaq === i ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', color: MUTED }} />
-            </button>
-            {openFaq === i && <p style={{ margin: '0 0 16px', fontSize: 14.5, color: MUTED, lineHeight: 1.6 }}>{f.a}</p>}
-          </div>
-        ))}
-      </section>
-
-      {/* FINAL CTA — light, Apple-toned */}
-      <section style={{ background: 'linear-gradient(160deg, #EAF3FF 0%, #FFFFFF 100%)', color: INK, padding: '64px 20px', textAlign: 'center', borderTop: '1px solid #EEE' }}>
-        <h2 style={{ fontSize: 'clamp(26px, 4.4vw, 40px)', fontWeight: 900, letterSpacing: -1, margin: '0 0 12px' }}>Ready to raise your game?</h2>
-        <p style={{ fontSize: 16, color: MUTED, maxWidth: 560, margin: '0 auto 26px', lineHeight: 1.55 }}>
-          Analyze faster, teach clearer, and grow your coaching business — for less than one lesson a month. Go yearly and get the free tennis biomechanics eBook.
+      {/* ── CLOSE ───────────────────────────────────────────────────────── */}
+      <section className="am-close">
+        <h2 className="am-display am-display-sm">Start your first file today.</h2>
+        <p className="am-lede am-center">
+          One hour of every tool, free. Bring a video you already have and see what comes out the
+          other side.
         </p>
-        <Link href="/login" style={{ ...ctaBtn, fontSize: 16, padding: '14px 32px' }}>Start Free</Link>
-        <p style={{ fontSize: 13, color: MUTED, marginTop: 16 }}>Annual is 2 months free — and the eBook’s on us.</p>
+        <div className="am-cta-row am-center-row">
+          <Link href={DEMO.url} className="am-btn am-btn-lg">{DEMO.label} <ArrowRight size={18} /></Link>
+        </div>
       </section>
 
-      {/* FOOTER — light */}
-      <footer style={{ background: 'var(--cl-bg-panel)', color: MUTED, padding: '32px 20px', textAlign: 'center', borderTop: '1px solid #EEE' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', marginBottom: 14 }}>
-          <img src="/logo-square-new.jpg" alt="AngleMotion" style={{ width: 24, height: 24, borderRadius: 5 }} />
-          <span style={{ fontSize: 15, fontWeight: 800, color: INK }}>AngleMotion</span>
-        </div>
-        <div style={{ display: 'flex', gap: 18, justifyContent: 'center', flexWrap: 'wrap', fontSize: 13, marginBottom: 12 }}>
-          <a href="#features" style={footLink}>Features</a>
-          <a href="#pricing" style={footLink}>Pricing</a>
-          <Link href="/privacy" style={footLink}>Privacy</Link>
-          <Link href="/terms" style={footLink}>Terms</Link>
-          <Link href="/login" style={footLink}>Sign In</Link>
-        </div>
-        <p style={{ fontSize: 12, color: '#B0B0B5', margin: 0 }}>{'©'} 2026 AngleMotion. Built by tennis coaches.</p>
+      <footer className="am-footer">
+        <Link href="/" className="am-wordmark" aria-label="AngleMotion home">
+          <img src="/logo-square-new.jpg" alt="" width={22} height={22} />
+          <span>Angle<span style={{ color: ACCENT }}>Motion</span></span>
+        </Link>
+        <nav className="am-footer-links">
+          <a href="#season">How it works</a>
+          <a href="#academy">Academy</a>
+          <a href="#pricing">Pricing</a>
+          <Link href="/coaches">Coaches</Link>
+          <Link href="/privacy">Privacy</Link>
+          <Link href="/terms">Terms</Link>
+          <Link href="/login">Sign in <ArrowUpRight size={13} aria-hidden="true" /></Link>
+        </nav>
+        <p className="am-footer-note">© {new Date().getFullYear()} AngleMotion · Coaching intelligence platform</p>
       </footer>
     </div>
   );
 }
 
-const navLink: React.CSSProperties = { fontSize: 14, color: INK, textDecoration: 'none', fontWeight: 500 };
-const footLink: React.CSSProperties = { color: MUTED, textDecoration: 'none' };
-const ctaBtn: React.CSSProperties = { display: 'inline-block', background: ACCENT, color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 14, padding: '9px 20px', borderRadius: 999, textDecoration: 'none', border: 'none', cursor: 'pointer' };
-function toggleBtn(active: boolean): React.CSSProperties {
-  return { padding: '8px 18px', borderRadius: 999, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700, background: active ? ACCENT : 'transparent', color: active ? 'var(--cl-text-on-fill)' : INK };
+/* ────────────────────────────────────────────────────────────────────────────
+   Styles. Scoped under .am-root so nothing here reaches the app chrome.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+const CSS = `
+.am-root {
+  --am-gutter: clamp(20px, 5vw, 72px);
+  --am-max: 1180px;
+  --am-rail-x: clamp(20px, 5vw, 72px);
+  height: 100dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--cl-bg-panel);
+  color: var(--cl-text-primary);
+  font-family: var(--cl-font);
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
 }
+@media (prefers-reduced-motion: reduce) { .am-root { scroll-behavior: auto; } }
+
+/* Browser surfaces belong to the design system too. */
+.am-root ::selection { background: var(--cl-accent); color: var(--cl-text-on-fill); }
+.am-root :focus-visible { outline: 2px solid var(--cl-accent); outline-offset: 3px; border-radius: 8px; }
+.am-root a:not([class]) { color: inherit; }
+.am-tabular { font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.am-visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* NAV */
+.am-nav {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 14px var(--am-gutter);
+  background: rgba(255,255,255,0.88);
+  backdrop-filter: saturate(1.6) blur(14px);
+  border-bottom: 1px solid var(--cl-border-subtle);
+}
+.am-wordmark {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-size: 17px; font-weight: 800; letter-spacing: -0.03em; text-decoration: none;
+}
+.am-wordmark img { border-radius: var(--cl-radius-sm); display: block; }
+.am-nav-links { display: flex; align-items: center; gap: 22px; }
+.am-navlink {
+  font-size: 15px; font-weight: 500; color: var(--cl-text-secondary);
+  text-decoration: none; transition: color .18s cubic-bezier(.16,1,.3,1);
+}
+.am-navlink:hover { color: var(--cl-text-primary); }
+.am-navlink-strong { font-weight: 600; color: var(--cl-text-primary); }
+@media (max-width: 860px) {
+  .am-nav-links .am-navlink:not(.am-navlink-strong) { display: none; }
+}
+
+/* BUTTONS */
+.am-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 0 22px; border-radius: 999px;
+  background: var(--cl-accent); color: var(--cl-text-on-fill);
+  font-size: 15px; font-weight: 600; text-decoration: none; border: none; cursor: pointer;
+  transition: transform .2s cubic-bezier(.16,1,.3,1), box-shadow .2s cubic-bezier(.16,1,.3,1);
+  box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 22px rgba(0,122,255,.18);
+}
+.am-btn:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,.07), 0 14px 30px rgba(0,122,255,.24); }
+.am-btn-sm { min-height: 38px; padding: 0 16px; font-size: 15px; }
+.am-btn-lg { min-height: 52px; padding: 0 28px; font-size: 17px; }
+.am-btn-block { display: flex; width: 100%; }
+.am-btn-quiet {
+  background: var(--cl-bg-panel); color: var(--cl-text-primary);
+  border: 1px solid var(--cl-border); box-shadow: none;
+}
+.am-btn-quiet:hover { box-shadow: 0 6px 18px rgba(0,0,0,.06); }
+.am-ghost {
+  display: inline-flex; align-items: center; min-height: 44px;
+  font-size: 15px; font-weight: 600; color: var(--cl-accent); text-decoration: none;
+}
+.am-ghost:hover { text-decoration: underline; text-underline-offset: 4px; }
+
+/* TYPE */
+.am-display {
+  margin: 0 0 22px;
+  font-size: clamp(46px, 10.5vw, 116px);
+  line-height: 0.94;
+  letter-spacing: -0.045em;
+  font-weight: 800;
+  text-wrap: balance;
+}
+.am-display-sm { font-size: clamp(34px, 6.4vw, 68px); }
+.am-h2 {
+  margin: 0 0 14px;
+  font-size: clamp(28px, 4.4vw, 52px);
+  line-height: 1.04; letter-spacing: -0.035em; font-weight: 700;
+  text-wrap: balance; max-width: 20ch;
+}
+.am-h3 {
+  margin: 0 0 12px;
+  font-size: clamp(22px, 2.8vw, 34px);
+  line-height: 1.1; letter-spacing: -0.03em; font-weight: 700; text-wrap: balance;
+}
+.am-lede {
+  margin: 0 0 30px; max-width: 62ch;
+  font-size: clamp(17px, 2vw, 21px); line-height: 1.5; color: var(--cl-text-secondary);
+}
+.am-p { margin: 0; max-width: 68ch; font-size: 17px; line-height: 1.62; color: var(--cl-text-secondary); }
+.am-p-wide { max-width: 72ch; font-size: 17px; }
+.am-sub { margin: 0 0 34px; max-width: 60ch; font-size: 17px; line-height: 1.55; color: var(--cl-text-secondary); }
+.am-micro { margin: 14px 0 0; font-size: 15px; font-weight: 600; color: var(--cl-text-primary); }
+.am-note { margin: 16px 0 0; font-size: 13px; line-height: 1.5; color: var(--cl-text-secondary); }
+.am-synthetic {
+  margin: 18px 0 0; padding-left: 12px; border-left: 1px solid var(--cl-border);
+  font-size: 13px; line-height: 1.5; color: var(--cl-text-secondary); max-width: 52ch;
+}
+.am-center { text-align: center; margin-left: auto; margin-right: auto; }
+.am-center-row { justify-content: center; }
+
+/* HERO */
+.am-hero { padding: clamp(64px, 11vw, 132px) var(--am-gutter) clamp(44px, 7vw, 84px); max-width: var(--am-max); margin: 0 auto; }
+.am-cta-row { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.am-facts {
+  display: flex; flex-wrap: wrap; gap: 10px 28px;
+  margin: 44px 0 0; padding: 26px 0 0; list-style: none;
+  border-top: 1px solid var(--cl-border-subtle);
+  font-size: 15px; color: var(--cl-text-secondary);
+}
+
+/* THE SPINE */
+.am-season { position: relative; padding: clamp(48px, 8vw, 96px) 0 clamp(56px, 9vw, 110px); }
+.am-season-head { max-width: var(--am-max); margin: 0 auto clamp(40px, 6vw, 76px); padding: 0 var(--am-gutter); }
+.am-rail {
+  position: absolute; top: 0; bottom: 0; left: var(--am-rail-x); width: 1px;
+  background: var(--cl-border); pointer-events: none;
+}
+.am-rail-band {
+  position: absolute; left: -1px; top: 0; width: 3px;
+  height: calc(var(--am-progress, 0) * 100%);
+  background: var(--cl-accent); border-radius: 999px;
+}
+.am-entries { list-style: none; margin: 0; padding: 0; max-width: var(--am-max); margin-inline: auto; }
+.am-entry {
+  position: relative;
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) minmax(0, 300px);
+  gap: clamp(20px, 4vw, 56px);
+  align-items: start;
+  padding: clamp(34px, 5vw, 62px) var(--am-gutter);
+}
+.am-entry + .am-entry { border-top: 1px solid var(--cl-border-subtle); }
+.am-entry-date {
+  font-size: 13px; font-weight: 700; letter-spacing: 0.11em;
+  color: var(--cl-text-secondary); padding-top: 6px; white-space: nowrap;
+}
+.am-entry-figure { display: flex; justify-content: flex-end; }
+.am-diagram { width: 100%; max-width: 300px; height: auto; }
+@media (max-width: 900px) {
+  .am-entry { grid-template-columns: 1fr; gap: 18px; padding-left: calc(var(--am-rail-x) + 22px); }
+  .am-entry-date { padding-top: 0; }
+  .am-entry-figure { justify-content: flex-start; }
+  .am-diagram { max-width: 240px; }
+}
+
+/* SECTIONS */
+.am-section { max-width: var(--am-max); margin: 0 auto; padding: clamp(56px, 9vw, 112px) var(--am-gutter); border-top: 1px solid var(--cl-border-subtle); }
+
+/* TUTORIAL */
+.am-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.am-step {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 20px; align-items: start;
+  padding: 26px 0; border-top: 1px solid var(--cl-border-subtle);
+}
+.am-step:first-child { border-top: none; }
+.am-step-n { font-size: 13px; font-weight: 700; color: var(--cl-accent); letter-spacing: 0.08em; padding-top: 4px; }
+.am-step-t { margin: 0 0 8px; font-size: 21px; font-weight: 650; letter-spacing: -0.02em; }
+
+/* ACADEMY */
+.am-academy { }
+
+/* PRICING */
+.am-toggle {
+  display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 34px;
+  background: var(--cl-bg-secondary); border-radius: 999px;
+}
+.am-toggle-b {
+  min-height: 40px; padding: 0 18px; border: none; border-radius: 999px; cursor: pointer;
+  background: transparent; color: var(--cl-text-secondary);
+  font-family: inherit; font-size: 15px; font-weight: 600;
+  transition: background .2s cubic-bezier(.16,1,.3,1), color .2s cubic-bezier(.16,1,.3,1);
+}
+.am-toggle-b.is-on { background: var(--cl-bg-panel); color: var(--cl-text-primary); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.am-plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); gap: 18px; }
+.am-plan {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 28px 24px; border-radius: var(--cl-radius-lg);
+  border: 1px solid var(--cl-border);
+}
+.am-plan.is-featured { border-color: var(--cl-accent); }
+.am-plan-name { margin: 0; font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+.am-plan-tag { margin: 0 0 12px; font-size: 15px; color: var(--cl-text-secondary); }
+.am-plan-price { margin: 0; font-size: 42px; font-weight: 800; letter-spacing: -0.04em; line-height: 1; }
+.am-plan-per { font-size: 15px; font-weight: 600; color: var(--cl-text-secondary); letter-spacing: 0; }
+.am-plan-billed { margin: 8px 0 18px; font-size: 13px; color: var(--cl-text-secondary); }
+.am-plan-features { list-style: none; margin: 0 0 24px; padding: 0; display: grid; gap: 10px; flex: 1; }
+.am-plan-features li { display: grid; grid-template-columns: 18px 1fr; gap: 9px; font-size: 15px; line-height: 1.45; color: var(--cl-text-secondary); }
+.am-plan-features svg { color: var(--cl-accent); margin-top: 3px; }
+
+/* COMPARE */
+.am-table-wrap { overflow-x: auto; border: 1px solid var(--cl-border); border-radius: var(--cl-radius-lg); }
+.am-table { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 560px; }
+.am-table th, .am-table td { padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--cl-border-subtle); }
+.am-table thead th { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cl-text-secondary); font-weight: 700; }
+.am-table thead th.is-us { color: var(--cl-accent); }
+.am-table tbody th { font-weight: 500; color: var(--cl-text-secondary); }
+.am-table td { text-align: center; width: 132px; }
+.am-table td.is-us { background: var(--cl-accent-soft); }
+.am-table tr:last-child th, .am-table tr:last-child td { border-bottom: none; }
+
+/* FAQ */
+.am-faqs { display: grid; gap: 0; max-width: 820px; }
+.am-faq { border-top: 1px solid var(--cl-border-subtle); }
+.am-faq:last-child { border-bottom: 1px solid var(--cl-border-subtle); }
+.am-faq-q {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  width: 100%; min-height: 62px; padding: 16px 0; background: none; border: none; cursor: pointer;
+  font-family: inherit; font-size: 17px; font-weight: 600; letter-spacing: -0.015em;
+  color: var(--cl-text-primary); text-align: left;
+}
+.am-chev { color: var(--cl-text-secondary); flex: none; transition: transform .24s cubic-bezier(.16,1,.3,1); }
+.am-chev.is-open { transform: rotate(180deg); color: var(--cl-accent); }
+.am-faq-a { margin: 0 0 22px; max-width: 68ch; font-size: 15px; line-height: 1.62; color: var(--cl-text-secondary); }
+
+/* CLOSE + FOOTER */
+.am-close {
+  max-width: var(--am-max); margin: 0 auto; text-align: center;
+  padding: clamp(72px, 11vw, 140px) var(--am-gutter);
+  border-top: 1px solid var(--cl-border-subtle);
+}
+.am-footer {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px;
+  max-width: var(--am-max); margin: 0 auto;
+  padding: 32px var(--am-gutter) 56px;
+  border-top: 1px solid var(--cl-border-subtle);
+}
+.am-footer-links { display: flex; flex-wrap: wrap; gap: 8px 22px; flex: 1; }
+.am-footer-links a {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 15px; color: var(--cl-text-secondary); text-decoration: none;
+}
+.am-footer-links a:hover { color: var(--cl-text-primary); }
+.am-footer-note { width: 100%; margin: 0; font-size: 13px; color: var(--cl-text-secondary); }
+`;
