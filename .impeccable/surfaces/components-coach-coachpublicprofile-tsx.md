@@ -30,12 +30,35 @@ leaving.
 
 ## Structure — fixed by the coach
 
-Section order is Vin's own and is deliberate: he sells first and proves last.
-1 intro · 2 video analysis · 3 ebook · 4 Coach Life · 5 online coaching ·
-6 NCAA consulting (+ the parent testimonial) · 7 €10 review bonus · 8 about ·
-9 testimonials · 10 platform reviews.
+**Top of page, in this order and no other:** circular photo (176px) → name →
+bio lines → social icons → a single dark "Message Me" contact button → the
+button menu.
 
-**Do not reorder without asking him.** The order is data (`blocks[]`), not layout.
+The role is NOT in the heading: the first bio line already establishes it. The
+contact button is the only dark button above the fold — the social row is where
+to find him, that button is how to reach him, and the dark fill keeps it
+distinct from the white menu buttons directly beneath.
+
+Brand marks (WhatsApp, X, TikTok) are authored SVG in this file: lucide 0.263
+ships no brand icons, and a generic chat bubble sitting beside real logos reads
+as a placeholder.
+
+**The button menu is a table of contents, not navigation.** Seven buttons, each
+an in-page anchor (`<a href="#id">`) that smooth-scrolls to its section further
+down the same page. Deliberately no button for the testimonials or the review
+grid. Labels are Vin's, verbatim, emoji included.
+
+**Sections below, in Vin's order:** 1 video analysis · 2 ebook · 3 Coach Life ·
+4 online coaching · 5 NCAA consulting (+ the parent testimonial) · 6 €10 review
+bonus · 7 about · 8 testimonials · 9 platform reviews.
+
+He sells first and proves last. **Do not reorder without asking him.** The order
+is data (`blocks[]` and `menu[]`), not layout.
+
+Smooth scrolling is native: `scroll-behavior: smooth` on the `.cp-root` scroll
+container plus `scroll-margin-top: 76px` on every section, so a heading clears
+the sticky nav. No JavaScript, so it works before hydration. Reduced-motion
+callers get `scroll-behavior: auto`.
 
 ## Chosen direction
 
@@ -82,6 +105,20 @@ video-analysis tiers — "I build these breakdowns in AngleMotion — my own ana
 platform. You can open the same tool yourself." It is deliberately not a card and
 not a banner (a card reads as another offer, a banner as an ad), and it sits
 where the visitor has just finished reading what they would receive.
+
+## Bio lines are editable; nothing else is yet
+
+The bio is an ordered `string[]`, edited in CoachProfileEditor (add / edit /
+remove / reorder) and persisted in the EXISTING `bio` column, newline separated.
+There is no `bio_lines` column and none is needed — see `lib/coach/bioLines.ts`.
+Saved lines win at render time; the curated defaults are the fallback.
+
+A stored bio is only accepted as bio lines when it reads like one (≤12 short,
+markup-free lines). That guard exists because the production row holds a pasted
+HTML document; without it the page would render hundreds of junk lines.
+
+Services, pricing tiers and every other curated block remain code-only. That is
+deliberate scope, not an oversight.
 
 ## Data model and Phase 2
 

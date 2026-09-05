@@ -38,8 +38,25 @@ export const vinbaccelli: CuratedCoachProfile = {
   slug: 'vinbaccelli',
   name: 'Vin Baccelli',
   role: 'Tennis Coach',
-  credentialLine: 'PTR Coach (Milan) · Former NCAA',
   accentColor: '#007AFF',
+
+  /** Direct contact. Same WhatsApp as the social icon, given its own CTA. */
+  contact: { label: 'Message Me', url: WHATSAPP },
+
+  /**
+   * Vin's real bio copy, supplied verbatim. Four lines, this order, reproduced
+   * exactly — including the flag and chart emoji and the `|` separators. Do not
+   * reword, retitle, or "clean up" these strings.
+   *
+   * These are DEFAULTS. If Vin saves bio lines through CoachProfileEditor, those
+   * take precedence at render time and these are never shown.
+   */
+  bioLines: [
+    '🇮🇹 PTR Coach (Milan) | Former NCAA 🇺🇸',
+    'Technique Fundamentals & Style Variations',
+    'Technique Specialist & Video Analyst',
+    'Sharing knowledge to elevate your game 📈',
+  ],
 
   socials: [
     { id: 'whatsapp', label: 'WhatsApp', url: WHATSAPP, icon: 'whatsapp' },
@@ -50,23 +67,32 @@ export const vinbaccelli: CuratedCoachProfile = {
     { id: 'linkedin', label: 'LinkedIn', url: 'https://www.linkedin.com/in/vinbaccelli/', icon: 'linkedin' },
   ],
 
-  blocks: [
-    // ── 1. Intro ────────────────────────────────────────────────────────────
+  /**
+   * The seven menu buttons, in Vin's order. Each `targetId` is a block `id`
+   * further down this same file, so every button is an in-page anchor.
+   * Labels are verbatim, emoji included. There is deliberately NO button for
+   * the testimonials or the review grid.
+   */
+  menu: [
+    { id: 'm-video', label: 'Video Analysis', targetId: 'video-analysis' },
+    { id: 'm-ebook', label: 'Ebook', targetId: 'ebook' },
     {
-      kind: 'intro',
-      id: 'intro',
-      valueProps: [
-        'Technique fundamentals & style variations',
-        'Technique specialist & video analyst',
-        'Sharing knowledge to elevate your game',
-      ],
-      freebie: {
-        label: 'Free Spin Mechanics ebook',
-        note: '€30 value',
-      },
+      id: 'm-coachlife',
+      label: '🎁 Join Coach Life through my link and get eBook for free 👉',
+      targetId: 'coach-life',
     },
+    { id: 'm-online', label: 'Online Coaching', targetId: 'online-coaching' },
+    { id: 'm-ncaa', label: 'NCAA Consulting', targetId: 'ncaa-consulting' },
+    {
+      id: 'm-bonus',
+      label: 'Get €10 Bonus to use on my services or eBook',
+      targetId: 'review-bonus',
+    },
+    { id: 'm-about', label: 'About Me', targetId: 'about' },
+  ],
 
-    // ── 2. Video analysis ───────────────────────────────────────────────────
+  blocks: [
+    // ── 1. Video analysis ───────────────────────────────────────────────────
     {
       kind: 'tieredAnalysis',
       id: 'video-analysis',
@@ -130,7 +156,7 @@ export const vinbaccelli: CuratedCoachProfile = {
       },
     },
 
-    // ── 3. Ebook ────────────────────────────────────────────────────────────
+    // ── 2. Ebook ────────────────────────────────────────────────────────────
     {
       kind: 'offer',
       id: 'ebook',
@@ -141,7 +167,7 @@ export const vinbaccelli: CuratedCoachProfile = {
       ctaUrl: 'https://buy.stripe.com/14A00jgsN4j2cnu7o27kc02',
     },
 
-    // ── 4. Coach Life subscription ──────────────────────────────────────────
+    // ── 3. Coach Life subscription ──────────────────────────────────────────
     {
       kind: 'offer',
       id: 'coach-life',
@@ -153,7 +179,7 @@ export const vinbaccelli: CuratedCoachProfile = {
       note: 'Includes the Spin Mechanics ebook (€30 value)',
     },
 
-    // ── 5. Online coaching ──────────────────────────────────────────────────
+    // ── 4. Online coaching ──────────────────────────────────────────────────
     {
       kind: 'priceList',
       id: 'online-coaching',
@@ -173,7 +199,7 @@ export const vinbaccelli: CuratedCoachProfile = {
       ],
     },
 
-    // ── 6. NCAA consulting ──────────────────────────────────────────────────
+    // ── 5. NCAA consulting ──────────────────────────────────────────────────
     {
       kind: 'priceList',
       id: 'ncaa-consulting',
@@ -202,7 +228,7 @@ export const vinbaccelli: CuratedCoachProfile = {
       ],
     },
 
-    // ── 7. €10 review bonus ─────────────────────────────────────────────────
+    // ── 6. €10 review bonus ─────────────────────────────────────────────────
     {
       kind: 'reviewBonus',
       id: 'review-bonus',
@@ -220,7 +246,7 @@ export const vinbaccelli: CuratedCoachProfile = {
       ],
     },
 
-    // ── 8. About ────────────────────────────────────────────────────────────
+    // ── 7. About ────────────────────────────────────────────────────────────
     {
       kind: 'about',
       id: 'about',
@@ -233,7 +259,7 @@ export const vinbaccelli: CuratedCoachProfile = {
       credentials: ['PTR Certified', 'Former NCAA Scholarship Player', '1,000+ Clients Coached'],
     },
 
-    // ── 9. Testimonials ─────────────────────────────────────────────────────
+    // ── 8. Testimonials ─────────────────────────────────────────────────────
     {
       kind: 'testimonials',
       id: 'testimonials',
@@ -257,7 +283,7 @@ export const vinbaccelli: CuratedCoachProfile = {
       ],
     },
 
-    // ── 10. Platform reviews ────────────────────────────────────────────────
+    // ── 9. Platform reviews ────────────────────────────────────────────────
     // Carried verbatim from components/LandingPage.tsx (FOUNDER_REVIEWS).
     {
       kind: 'reviewGrid',

@@ -4,8 +4,10 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Plus, Trash2, ExternalLink, Save, Eye, Upload, GripVertical,
   Instagram, Youtube, Globe, Mail, MessageCircle, Star,
+  ChevronUp, ChevronDown, AlertTriangle,
 } from 'lucide-react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import { MAX_BIO_LINES, MAX_BIO_LINE_LENGTH, parseBioLines, serializeBioLines } from '@/lib/coach/bioLines';
 
 interface ServiceItem {
   id: string;
@@ -46,6 +48,14 @@ const labelStyle: React.CSSProperties = {
   fontSize: 12, fontWeight: 700, color: 'var(--cl-text-secondary)', marginBottom: 4, display: 'block',
 };
 
+const iconButtonStyle: React.CSSProperties = {
+  width: 44, height: 44, flexShrink: 0,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  borderRadius: 10, border: '1px solid var(--cl-border)',
+  background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)',
+  cursor: 'pointer', padding: 0,
+};
+
 const sectionStyle: React.CSSProperties = {
   marginBottom: 24, padding: 16, borderRadius: 14,
   background: 'var(--cl-bg-panel)', border: '1px solid var(--cl-border)',
@@ -65,7 +75,13 @@ export default function CoachProfileEditor() {
   const [slug, setSlug] = useState('');
   const [name, setName] = useState('');
   const [tagline, setTagline] = useState('');
-  const [bio, setBio] = useState('');
+  /* Bio lines are stored in the existing `bio` column, newline separated — see
+     lib/coach/bioLines.ts for why there is no `bio_lines` column. */
+  const [bioLines, setBioLines] = useState<string[]>([]);
+  /* A previously saved bio that does NOT read like bio lines (the production
+     row currently holds a pasted HTML document). Kept only so the coach is
+     warned before saving replaces it, never silently discarded. */
+  const [legacyBio, setLegacyBio] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState('');
   const [accentColor, setAccentColor] = useState('#007AFF');
   const [services, setServices] = useState<ServiceItem[]>([]);
@@ -80,7 +96,13 @@ export default function CoachProfileEditor() {
           setSlug(d.profile.slug ?? '');
           setName(d.profile.name ?? '');
           setTagline(d.profile.tagline ?? '');
-          setBio(d.profile.bio ?? '');
+          const parsedBio = parseBioLines(d.profile.bio);
+          if (parsedBio) {
+            setBioLines(parsedBio);
+          } else if ((d.profile.bio ?? '').trim()) {
+            setBioLines([]);
+            setLegacyBio(d.profile.bio);
+          }
           setAvatarUrl(d.profile.avatar_url ?? '');
           setAccentColor(d.profile.accent_color ?? '#007AFF');
           setServices((d.services ?? []).map((s: any) => ({
@@ -131,7 +153,7 @@ export default function CoachProfileEditor() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          profile: { slug, name, tagline, bio, avatar_url: avatarUrl || null, accent_color: accentColor },
+          profile: { slug, name, tagline, bio: serializeBioLines(bioLines), avatar_url: avatarUrl || null, accent_color: accentColor },
           services: services.map((s, i) => ({ ...s, sort_order: i })),
           links: links.map((l, i) => ({ ...l, sort_order: i })),
         }),
@@ -140,7 +162,20 @@ export default function CoachProfileEditor() {
     } finally {
       setSaving(false);
     }
-  }, [slug, name, tagline, bio, avatarUrl, accentColor, services, links]);
+  }, [slug, name, tagline, bioLines, avatarUrl, accentColor, services, links]);
+
+  const addBioLine = () => setBioLines(prev => (prev.length >= MAX_BIO_LINES ? prev : [...prev, '']));
+  const removeBioLine = (index: number) => setBioLines(prev => prev.filter((_, i) => i !== index));
+  const updateBioLine = (index: number, value: string) =>
+    setBioLines(prev => prev.map((l, i) => (i === index ? value : l)));
+  const moveBioLine = (index: number, delta: number) =>
+    setBioLines(prev => {
+      const next = [...prev];
+      const target = index + delta;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
 
   const addService = () => setServices(prev => [...prev, { id: uid(), title: '', description: '', price: '', cta_label: '', cta_url: '' }]);
   const removeService = (id: string) => setServices(prev => prev.filter(s => s.id !== id));
@@ -237,13 +272,90 @@ export default function CoachProfileEditor() {
           <input style={inputStyle} value={tagline} onChange={e => setTagline(e.target.value)} placeholder="Tennis Coach · City · Specialty" />
         </div>
 
+        {/* Bio lines. This replaced a single textarea labelled "Bio (HTML
+            supported)" — a label that was simply untrue (lib/coach/richText.tsx
+            renders a small markdown subset, never HTML) and that is the likely
+            reason a full HTML document ended up saved in this field. */}
         <div style={{ marginBottom: 12 }}>
-          <label style={labelStyle}>Bio (HTML supported)</label>
-          <textarea
-            style={{ ...inputStyle, minHeight: 80, resize: 'vertical', fontFamily: 'inherit' }}
-            value={bio} onChange={e => setBio(e.target.value)}
-            placeholder="Write about yourself, your coaching philosophy…&#10;&#10;Blank line = new paragraph. **bold**, *italic*, - bullet, and links (https://… or [text](url)) all work."
-          />
+          <label style={labelStyle}>Bio lines</label>
+          <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
+            One short line each, shown under your name in this order. Emoji are fine.
+          </p>
+
+          {legacyBio && (
+            <div
+              style={{
+                display: 'flex', gap: 8, alignItems: 'flex-start',
+                padding: '10px 12px', marginBottom: 8, borderRadius: 10,
+                background: '#FFF7ED', border: '1px solid #FCA5A5', color: '#9A3412',
+                fontSize: 12, lineHeight: 1.5,
+              }}
+            >
+              <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} aria-hidden="true" />
+              <span>
+                Your saved bio isn’t a set of short lines — it’s {legacyBio.trim().length.toLocaleString()} characters
+                of text or markup, so it isn’t shown on your profile. Add your lines below; saving replaces the old bio.
+              </span>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {bioLines.map((line, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  style={{ ...inputStyle, flex: 1 }}
+                  value={line}
+                  maxLength={MAX_BIO_LINE_LENGTH}
+                  onChange={e => updateBioLine(i, e.target.value)}
+                  placeholder={`Line ${i + 1}`}
+                  aria-label={`Bio line ${i + 1}`}
+                />
+                <button
+                  type="button" onClick={() => moveBioLine(i, -1)} disabled={i === 0}
+                  aria-label={`Move line ${i + 1} up`} title="Move up"
+                  style={{ ...iconButtonStyle, opacity: i === 0 ? 0.4 : 1, cursor: i === 0 ? 'not-allowed' : 'pointer' }}
+                >
+                  <ChevronUp size={15} />
+                </button>
+                <button
+                  type="button" onClick={() => moveBioLine(i, 1)} disabled={i === bioLines.length - 1}
+                  aria-label={`Move line ${i + 1} down`} title="Move down"
+                  style={{ ...iconButtonStyle, opacity: i === bioLines.length - 1 ? 0.4 : 1, cursor: i === bioLines.length - 1 ? 'not-allowed' : 'pointer' }}
+                >
+                  <ChevronDown size={15} />
+                </button>
+                <button
+                  type="button" onClick={() => removeBioLine(i)}
+                  aria-label={`Remove line ${i + 1}`} title="Remove"
+                  style={{ ...iconButtonStyle, color: 'var(--cl-destructive-text)' }}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={addBioLine}
+            disabled={bioLines.length >= MAX_BIO_LINES}
+            style={{
+              marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6,
+              minHeight: 44, padding: '0 14px', borderRadius: 10,
+              border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)',
+              color: 'var(--cl-text-primary)', fontSize: 13, fontWeight: 600,
+              fontFamily: 'inherit',
+              cursor: bioLines.length >= MAX_BIO_LINES ? 'not-allowed' : 'pointer',
+              opacity: bioLines.length >= MAX_BIO_LINES ? 0.5 : 1,
+            }}
+          >
+            <Plus size={15} /> Add line
+          </button>
+          {bioLines.length >= MAX_BIO_LINES && (
+            <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--cl-text-secondary)' }}>
+              Maximum {MAX_BIO_LINES} lines.
+            </span>
+          )}
         </div>
 
         <div>

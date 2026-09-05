@@ -85,17 +85,25 @@ website mockup pasted into a textarea. `lib/coach/richText.tsx` renders it as
 escaped text, which is safe (structurally XSS-immune, by design) but reads as
 source code.
 
-**Fault assessment.** Data entry, not code. The renderer behaved correctly; there
-is simply no validation on bio length or content shape in
-`app/api/coach-profile/route.ts`.
+**Fault assessment.** Not data entry alone — **the editor invited it.** The field
+was labelled **"Bio (HTML supported)"**, which was simply false:
+`lib/coach/richText.tsx` renders a small markdown subset and deliberately never
+renders HTML. A coach told the field accepts HTML will paste HTML. The renderer
+behaved correctly throughout; the label was the defect, and there was no
+validation on bio length or shape in `app/api/coach-profile/route.ts`.
 
-**Proposed fix.** Clear or rewrite the `bio` column for that row. Separately,
-consider a length cap and a "this looks like markup" warning in the editor.
+**Fixed.** The mislabelled textarea is gone. `CoachProfileEditor.tsx` now edits
+the bio as a list of short lines (add / edit / remove / reorder), capped at 12
+lines of 160 characters, saved through the existing mechanism. When a stored bio
+does not parse as bio lines, the editor shows an inline warning naming the
+character count and stating that saving will replace it — so the old value is
+never discarded silently.
 
-**Worked around.** Curated content now takes precedence for this slug, so the row
-is no longer displayed. The bad data is still in the database.
+**Still outstanding.** The bad row is still in the database. It is no longer
+rendered (curated content takes precedence, and `parseBioLines` rejects it
+anyway), and it will be overwritten the first time Vin saves his profile.
 
-**Severity:** low now (not rendered), was high before this change.
+**Severity:** low now (not rendered, and the cause is removed); was high.
 
 ---
 

@@ -71,12 +71,14 @@ export interface DiscoveryNote {
   href: string;
 }
 
-export interface IntroBlock {
-  kind: 'intro';
+/**
+ * One button in the top-of-page menu. `targetId` is the `id` of a block further
+ * down the same page; the button is an anchor link that smooth-scrolls to it.
+ */
+export interface MenuItem {
   id: string;
-  /** Short value-prop lines shown as a ruled list under the name. */
-  valueProps: string[];
-  freebie?: { label: string; note: string };
+  label: string;
+  targetId: string;
 }
 
 export interface TieredAnalysisBlock {
@@ -172,7 +174,6 @@ export interface ReviewGridBlock {
 }
 
 export type CoachBlock =
-  | IntroBlock
   | TieredAnalysisBlock
   | OfferBlock
   | PriceListBlock
@@ -184,10 +185,24 @@ export type CoachBlock =
 export interface CuratedCoachProfile {
   slug: string;
   name: string;
-  /** The role line under the name, e.g. "Tennis Coach". */
+  /**
+   * The coach's role. Profile metadata — NOT rendered on this surface: the
+   * first bio line already establishes it, so the heading carries the name
+   * alone. Kept because it is real profile data a directory or card view would
+   * want; delete it if nothing claims it.
+   */
   role: string;
-  /** Credentials in one line, e.g. "PTR Coach (Milan) · Former NCAA". */
-  credentialLine: string;
+  /**
+   * Primary contact call to action in the hero — the direct, prominent way to
+   * reach this coach, distinct from the small social icon of the same service.
+   */
+  contact?: { label: string; url: string };
+  /**
+   * The bio, one short line per entry, rendered in order directly under the
+   * name. Editable: a coach who saves bio lines through CoachProfileEditor
+   * overrides these defaults (see `resolveBioLines` in CoachPublicProfile.tsx).
+   */
+  bioLines: string[];
   /**
    * Per-coach identity colour. Stays a hex literal, never a token: it is stored
    * user state, not a presentation value (DESIGN.md — The Presentation-Only Rule).
@@ -196,6 +211,11 @@ export interface CuratedCoachProfile {
   /** Fallback only. A photo uploaded through the profile editor wins over this. */
   avatarUrl?: string;
   socials: SocialLink[];
+  /**
+   * The top-of-page button menu. Each entry anchors to a block below it on the
+   * same page, so this is a table of contents, not navigation.
+   */
+  menu: MenuItem[];
   /** ORDERED. Phase 2 reorders this array; nothing else needs to change. */
   blocks: CoachBlock[];
 }

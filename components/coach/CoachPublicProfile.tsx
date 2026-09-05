@@ -44,15 +44,17 @@
  * that produced the deliverable.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import { CoachRichText } from '@/lib/coach/richText';
 import { getCuratedProfile } from '@/lib/coach/curated';
+import { parseBioLines } from '@/lib/coach/bioLines';
 import type {
   AnalysisTier,
   CoachBlock,
   CuratedCoachProfile,
   DiscoveryNote,
+  MenuItem,
   SocialIcon,
   TieredAnalysisBlock,
 } from '@/lib/coach/curated/types';
@@ -64,12 +66,11 @@ import {
   Mail,
   ExternalLink,
   Users,
-  MessageCircle,
   Star,
   Check,
-  Gift,
   ArrowUpRight,
   ChevronRight,
+  ChevronDown,
   BadgeCheck,
 } from 'lucide-react';
 
@@ -145,7 +146,7 @@ const HAIRLINE = '1px solid var(--cl-border-subtle)';
 
 /** Browser surfaces the design system would otherwise leave to the browser. */
 const PAGE_CSS = `
-.cp-root { scrollbar-width: thin; scrollbar-color: var(--cl-border) transparent; }
+.cp-root { scrollbar-width: thin; scrollbar-color: var(--cl-border) transparent; scroll-behavior: smooth; }
 .cp-root ::selection { background: var(--cl-accent-soft); color: var(--cl-text-primary); }
 .cp-root a:focus-visible,
 .cp-root button:focus-visible {
@@ -157,20 +158,38 @@ const PAGE_CSS = `
 .cp-root .cp-press { transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease; }
 .cp-root .cp-press:active { transform: scale(0.985); }
 @media (prefers-reduced-motion: reduce) {
+  .cp-root { scroll-behavior: auto; }
   .cp-root .cp-press { transition: none; }
   .cp-root .cp-press:active { transform: none; }
 }
 `;
 
 /* ────────────────────────────────────────────────────────────────────────────
-   Icons. lucide covers everything except the X and TikTok brand marks, which
-   are authored here on the same 24×24 box so the row reads as one set.
+   Icons. lucide 0.263 ships no brand icons at all, so the WhatsApp, X and
+   TikTok marks are authored here on the same 24×24 box as the lucide set, so
+   the social row reads as one family rather than a generic stand-in beside
+   real logos.
    ──────────────────────────────────────────────────────────────────────────── */
 
 function XMark({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
       <path d="M17.53 3h3.06l-6.69 7.64L21.75 21h-6.16l-4.83-6.3L5.24 21H2.18l7.15-8.17L2.25 3h6.32l4.36 5.77L17.53 3Zm-1.07 16.2h1.7L7.62 4.71H5.8L16.46 19.2Z" />
+    </svg>
+  );
+}
+
+/**
+ * WhatsApp's brand glyph. lucide 0.263 ships no brand icons and no icon library
+ * in this project has one, so the path is inlined here on the same 24×24 box as
+ * the other marks. Path from Simple Icons (the icon set is CC0); the WhatsApp
+ * name and mark remain trademarks of their owner and are used here only to
+ * label a link to Vin's own WhatsApp account.
+ */
+function WhatsAppMark({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z" />
     </svg>
   );
 }
@@ -187,7 +206,7 @@ function SocialGlyph({ icon }: { icon: SocialIcon }) {
   if (icon === 'instagram') return <Instagram size={18} />;
   if (icon === 'youtube') return <Youtube size={18} />;
   if (icon === 'linkedin') return <Linkedin size={18} />;
-  if (icon === 'whatsapp') return <MessageCircle size={18} />;
+  if (icon === 'whatsapp') return <WhatsAppMark />;
   if (icon === 'x') return <XMark />;
   return <TikTokMark />;
 }
@@ -198,7 +217,7 @@ function LinkIcon({ type }: { type?: string }) {
   if (type === 'youtube') return <Youtube size={size} />;
   if (type === 'globe') return <Globe size={size} />;
   if (type === 'mail') return <Mail size={size} />;
-  if (type === 'whatsapp') return <MessageCircle size={size} />;
+  if (type === 'whatsapp') return <WhatsAppMark size={size} />;
   if (type === 'trustpilot' || type === 'google') return <Star size={size} />;
   return <ExternalLink size={size} />;
 }
@@ -287,9 +306,14 @@ function SectionHeading({ title, description }: { title: string; description?: s
   );
 }
 
-function Section({ children }: { children: React.ReactNode }) {
-  // More space above a heading than below it.
-  return <section style={{ marginTop: 44 }}>{children}</section>;
+function Section({ id, children }: { id?: string; children: React.ReactNode }) {
+  // More space above a heading than below it. `scrollMarginTop` keeps the
+  // sticky nav from covering a heading when a menu button anchors to it.
+  return (
+    <section id={id} style={{ marginTop: 44, scrollMarginTop: 76 }}>
+      {children}
+    </section>
+  );
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -436,7 +460,7 @@ function DiscoveryCallout({ note }: { note: DiscoveryNote }) {
 
 function TieredAnalysisSection({ block }: { block: TieredAnalysisBlock }) {
   return (
-    <Section>
+    <Section id={block.id}>
       <SectionHeading title={block.title} description={block.description} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {block.tiers.map(tier => (
@@ -454,15 +478,12 @@ function TieredAnalysisSection({ block }: { block: TieredAnalysisBlock }) {
 
 function BlockRenderer({ block }: { block: CoachBlock }) {
   switch (block.kind) {
-    case 'intro':
-      return null; // Rendered inside the hero, above the block list.
-
     case 'tieredAnalysis':
       return <TieredAnalysisSection block={block} />;
 
     case 'offer':
       return (
-        <Section>
+        <Section id={block.id}>
           <SectionHeading title={block.title} />
           <div style={{ ...CARD, padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--cl-text-secondary)' }}>
@@ -498,7 +519,7 @@ function BlockRenderer({ block }: { block: CoachBlock }) {
       const shared = urls.size === 1 ? block.options[0] : null;
 
       return (
-        <Section>
+        <Section id={block.id}>
           <SectionHeading title={block.title} description={block.description} />
           <div style={{ ...CARD, padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
             {block.bullets && (
@@ -571,7 +592,7 @@ function BlockRenderer({ block }: { block: CoachBlock }) {
     case 'reviewBonus': {
       const actions = block.actions.filter(a => a.url);
       return (
-        <Section>
+        <Section id={block.id}>
           <SectionHeading title={block.title} />
           <div style={{ ...CARD, padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--cl-text-secondary)' }}>
@@ -625,7 +646,7 @@ function BlockRenderer({ block }: { block: CoachBlock }) {
 
     case 'about':
       return (
-        <Section>
+        <Section id={block.id}>
           <SectionHeading title={block.title} />
           <div style={{ ...CARD, padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -662,7 +683,7 @@ function BlockRenderer({ block }: { block: CoachBlock }) {
 
     case 'testimonials':
       return (
-        <Section>
+        <Section id={block.id}>
           {block.title && <SectionHeading title={block.title} />}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {block.items.map(t => (
@@ -682,7 +703,7 @@ function BlockRenderer({ block }: { block: CoachBlock }) {
 
     case 'reviewGrid':
       return (
-        <Section>
+        <Section id={block.id}>
           <SectionHeading title={block.title} description={block.note} />
           <div
             style={{
@@ -915,20 +936,30 @@ function DiscoveryFooter() {
   );
 }
 
-function Avatar({ name, avatarUrl, accentColor }: { name: string; avatarUrl?: string; accentColor: string }) {
+function Avatar({
+  name,
+  avatarUrl,
+  accentColor,
+  size = 88,
+}: {
+  name: string;
+  avatarUrl?: string;
+  accentColor: string;
+  size?: number;
+}) {
   return (
     <div
       style={{
-        width: 88,
-        height: 88,
+        width: size,
+        height: size,
         borderRadius: '50%',
-        margin: '0 auto 14px',
+        margin: '0 auto 16px',
         overflow: 'hidden',
         background: 'var(--cl-accent-soft)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        fontSize: 32,
+        fontSize: Math.round(size * 0.36),
         fontWeight: 800,
         // Per-coach identity colour is stored user state, so it stays a literal.
         color: accentColor,
@@ -947,80 +978,80 @@ function Avatar({ name, avatarUrl, accentColor }: { name: string; avatarUrl?: st
    Curated rendering path
    ──────────────────────────────────────────────────────────────────────────── */
 
-function CuratedProfile({ profile, avatarUrl }: { profile: CuratedCoachProfile; avatarUrl?: string }) {
-  const intro = useMemo(
-    () => profile.blocks.find(b => b.kind === 'intro') as Extract<CoachBlock, { kind: 'intro' }> | undefined,
-    [profile.blocks],
+/**
+ * The top-of-page button menu. Every entry is an in-page anchor to a section
+ * further down, so this is a table of contents rather than navigation — which
+ * is why it uses plain `<a href="#id">` and not next/link: the browser's own
+ * anchor scrolling, smoothed by `scroll-behavior` on the scroll container, is
+ * what makes it work without any JavaScript.
+ */
+function MenuButtons({ items, label }: { items: MenuItem[]; label: string }) {
+  if (items.length === 0) return null;
+  return (
+    <nav aria-label={label} style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {items.map(item => (
+        <a
+          key={item.id}
+          className="cp-press"
+          href={`#${item.targetId}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            minHeight: 44,
+            padding: '11px 14px',
+            borderRadius: 10,
+            border: HAIRLINE,
+            background: 'var(--cl-bg-panel)',
+            color: 'var(--cl-text-primary)',
+            textDecoration: 'none',
+            fontSize: 13,
+            fontWeight: 600,
+            textAlign: 'center',
+          }}
+        >
+          {/* Balances the chevron so the label stays optically centred. */}
+          <span aria-hidden="true" style={{ width: 16, flexShrink: 0 }} />
+          <span style={{ flex: 1, lineHeight: 1.4 }}>{item.label}</span>
+          <ChevronDown size={16} style={{ color: 'var(--cl-text-secondary)', flexShrink: 0 }} aria-hidden="true" />
+        </a>
+      ))}
+    </nav>
   );
+}
 
+function CuratedProfile({
+  profile,
+  avatarUrl,
+  bioLines,
+}: {
+  profile: CuratedCoachProfile;
+  avatarUrl?: string;
+  bioLines: string[];
+}) {
   return (
     <div style={{ maxWidth: COLUMN, margin: '0 auto', padding: '32px 20px 72px' }}>
-      {/* ── Hero ── */}
+      {/* ── Hero: photo → name → bio → socials → menu ── */}
       <header style={{ textAlign: 'center' }}>
-        <Avatar name={profile.name} avatarUrl={avatarUrl} accentColor={profile.accentColor} />
+        <Avatar name={profile.name} avatarUrl={avatarUrl} accentColor={profile.accentColor} size={176} />
+
         <h1 style={{ margin: 0, fontSize: 'clamp(24px, 4vw, 34px)', fontWeight: 800, letterSpacing: '-0.025em' }}>
           {profile.name}
         </h1>
-        <p style={{ margin: '4px 0 0', fontSize: 13, fontWeight: 600, color: 'var(--cl-text-secondary)' }}>
-          {profile.role}
-        </p>
-        <p style={{ margin: '2px 0 0', fontSize: 13, color: 'var(--cl-text-secondary)' }}>{profile.credentialLine}</p>
 
-        {intro && (
-          <>
-            <ul
-              style={{
-                margin: '20px 0 0',
-                padding: 0,
-                listStyle: 'none',
-                textAlign: 'left',
-                ...CARD,
-              }}
+        {/* Bio — one line per entry, in the coach's own order and wording. */}
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {bioLines.map((line, i) => (
+            <p
+              key={`${i}-${line}`}
+              style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}
             >
-              {intro.valueProps.map((v, i) => (
-                <li
-                  key={v}
-                  style={{
-                    display: 'flex',
-                    gap: 10,
-                    alignItems: 'center',
-                    padding: '12px 16px',
-                    borderTop: i === 0 ? 'none' : HAIRLINE,
-                    fontSize: 13,
-                    fontWeight: 500,
-                  }}
-                >
-                  <Check size={15} style={{ color: 'var(--cl-accent)', flexShrink: 0 }} aria-hidden="true" />
-                  {v}
-                </li>
-              ))}
-            </ul>
+              {line}
+            </p>
+          ))}
+        </div>
 
-            {intro.freebie && (
-              <div
-                style={{
-                  marginTop: 10,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '12px 16px',
-                  borderRadius: 10,
-                  background: 'var(--cl-accent-soft)',
-                  textAlign: 'left',
-                }}
-              >
-                <Gift size={16} style={{ color: 'var(--cl-accent)', flexShrink: 0 }} aria-hidden="true" />
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{intro.freebie.label}</span>
-                {/* Ink: secondary grey over the soft accent wash measures 4.0:1. */}
-                <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: 'var(--cl-text-primary)' }}>
-                  {intro.freebie.note}
-                </span>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Socials */}
+        {/* Socials, directly after the bio. */}
         <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
           {profile.socials.map(s => (
             <a
@@ -1047,6 +1078,21 @@ function CuratedProfile({ profile, avatarUrl }: { profile: CuratedCoachProfile; 
             </a>
           ))}
         </div>
+
+        {/* Direct contact. Deliberately the page's one dark button above the
+            fold: the social row is a list of places to find him, this is the
+            way to reach him. Its dark fill also keeps it distinct from the
+            white menu buttons directly beneath it. */}
+        {profile.contact && (
+          <div style={{ marginTop: 14 }}>
+            <CommitButton href={profile.contact.url}>
+              <WhatsAppMark size={16} />
+              {profile.contact.label}
+            </CommitButton>
+          </div>
+        )}
+
+        <MenuButtons items={profile.menu} label={`${profile.name} — jump to a section`} />
       </header>
 
       {/* ── Blocks, in the coach's own order ── */}
@@ -1215,9 +1261,15 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
       <style>{PAGE_CSS}</style>
       <NavBar />
       {curated ? (
-        // A photo uploaded through the profile editor still wins, so the existing
-        // upload flow keeps working for curated coaches.
-        <CuratedProfile profile={curated} avatarUrl={dbProfile?.avatarUrl ?? curated.avatarUrl} />
+        // Two things still come from the database even on a curated profile, so
+        // the coach can actually edit them: the uploaded photo, and the bio
+        // lines saved through CoachProfileEditor. Saved bio lines win; the
+        // curated defaults are the fallback until the coach edits them.
+        <CuratedProfile
+          profile={curated}
+          avatarUrl={dbProfile?.avatarUrl ?? curated.avatarUrl}
+          bioLines={parseBioLines(dbProfile?.bio) ?? curated.bioLines}
+        />
       ) : (
         <GenericProfile profile={generic as CoachProfileData} />
       )}
