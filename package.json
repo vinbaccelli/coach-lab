@@ -32,6 +32,7 @@
     "next": "15.5.24",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-easy-crop": "^6.2.3",
     "server-only": "^0.0.1",
     "stripe": "^22.2.2",
     "tesseract.js": "^5.1.1",

@@ -8,6 +8,19 @@ import {
 } from 'lucide-react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { MAX_BIO_LINES, MAX_BIO_LINE_LENGTH, parseBioLines, serializeBioLines } from '@/lib/coach/bioLines';
+import AvatarCropModal from './AvatarCropModal';
+
+/**
+ * Largest image we will try to decode in the browser before cropping.
+ *
+ * This is NOT the upload size: the crop step re-encodes whatever is chosen to a
+ * ~512px square JPEG, so what actually reaches storage is well under 200 kB no
+ * matter what the coach picks. This limit exists because decoding a very large
+ * photo can exhaust memory on a phone, and failing there is what produced an
+ * unexplained error with nothing on screen.
+ */
+const MAX_AVATAR_BYTES = 15 * 1024 * 1024;
+const MAX_AVATAR_MB = MAX_AVATAR_BYTES / 1024 / 1024;
 
 interface ServiceItem {
   id: string;
@@ -87,6 +100,10 @@ export default function CoachProfileEditor() {
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [links, setLinks] = useState<LinkItem[]>([]);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  /* The file chosen but not yet cropped. Non-null while the crop modal is open. */
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
 
   useEffect(() => {
     fetch('/api/coach-profile')
@@ -118,28 +135,52 @@ export default function CoachProfileEditor() {
       .catch(() => setLoading(false));
   }, []);
 
-  const handleAvatarUpload = useCallback(async (file: File) => {
-    if (!supabase) return;
+  /**
+   * Upload the cropped avatar.
+   *
+   * The object path MUST start with the uploader's own user id: every storage
+   * policy in this project is written as
+   * `(storage.foldername(name))[1] = auth.uid()::text`, so a path that does not
+   * begin with the uid is rejected by RLS no matter which bucket it targets.
+   * The previous version wrote to `avatars/<timestamp>.<ext>` and then, on
+   * failure, retried against `analysis-screenshots` under `coach-avatars/...` —
+   * neither path can ever satisfy that rule, and the only report of the failure
+   * was a `console.error`, so the button appeared to do nothing. See
+   * docs/KNOWN_ISSUES.md 006.
+   */
+  const handleAvatarUpload = useCallback(async (blob: Blob) => {
+    if (!supabase) { setAvatarError('Storage is not configured in this environment.'); return; }
     setUploadingAvatar(true);
+    setAvatarError(null);
     try {
-      const ext = file.name.split('.').pop() || 'jpg';
-      const filename = `avatars/${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage
-        .from('coach-avatars')
-        .upload(filename, file, { contentType: file.type, upsert: true });
-      if (upErr) {
-        const { error: upErr2 } = await supabase.storage
-          .from('analysis-screenshots')
-          .upload(`coach-avatars/${filename}`, file, { contentType: file.type, upsert: true });
-        if (upErr2) { console.error('Avatar upload failed:', upErr2); return; }
-        const { data: signed } = await supabase.storage
-          .from('analysis-screenshots')
-          .createSignedUrl(`coach-avatars/${filename}`, 60 * 60 * 24 * 365);
-        if (signed?.signedUrl) setAvatarUrl(signed.signedUrl);
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      const userId = userData?.user?.id;
+      if (userErr || !userId) {
+        setAvatarError('You appear to be signed out. Refresh the page and try again.');
         return;
       }
-      const { data } = supabase.storage.from('coach-avatars').getPublicUrl(filename);
-      if (data?.publicUrl) setAvatarUrl(data.publicUrl);
+
+      const path = `${userId}/${Date.now()}.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from('coach-avatars')
+        .upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+
+      if (upErr) {
+        const message = (upErr as { message?: string }).message ?? '';
+        setAvatarError(
+          /row-level security|Unauthorized|AccessDenied/i.test(message)
+            ? 'Upload was refused by storage permissions. The coach-avatars bucket needs an upload policy — see docs/KNOWN_ISSUES.md 006.'
+            : `Upload failed: ${message || 'unknown error'}`,
+        );
+        return;
+      }
+
+      const { data } = supabase.storage.from('coach-avatars').getPublicUrl(path);
+      if (data?.publicUrl) {
+        setAvatarUrl(data.publicUrl);
+      } else {
+        setAvatarError('Uploaded, but the public URL could not be resolved.');
+      }
     } finally {
       setUploadingAvatar(false);
     }
@@ -148,6 +189,7 @@ export default function CoachProfileEditor() {
   const handleSave = useCallback(async () => {
     setSaving(true);
     setSaved(false);
+    setSaveError(null);
     try {
       const res = await fetch('/api/coach-profile', {
         method: 'PUT',
@@ -158,7 +200,20 @@ export default function CoachProfileEditor() {
           links: links.map((l, i) => ({ ...l, sort_order: i })),
         }),
       });
-      if (res.ok) setSaved(true);
+      if (res.ok) {
+        setSaved(true);
+      } else {
+        /* Previously this branch did not exist: a failed save left the button
+           reading "Save" and told the coach nothing. */
+        let message = `Save failed (HTTP ${res.status}).`;
+        try {
+          const body = await res.json();
+          if (body?.error) message = body.error;
+        } catch { /* non-JSON error body — keep the status message */ }
+        setSaveError(message);
+      }
+    } catch {
+      setSaveError('Could not reach the server. Check your connection and try again.');
     } finally {
       setSaving(false);
     }
@@ -225,6 +280,21 @@ export default function CoachProfileEditor() {
         </div>
       </div>
 
+      {saveError && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex', gap: 8, alignItems: 'flex-start',
+            padding: '10px 12px', marginBottom: 16, borderRadius: 10,
+            background: '#FFF7ED', border: '1px solid #FCA5A5', color: '#9A3412',
+            fontSize: 13, lineHeight: 1.5,
+          }}
+        >
+          <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
+          <span>{saveError}</span>
+        </div>
+      )}
+
       {/* Basic info */}
       <div style={sectionStyle}>
         <h3 style={{ margin: '0 0 14px', fontSize: 14, fontWeight: 700 }}>Basic Information</h3>
@@ -251,10 +321,51 @@ export default function CoachProfileEditor() {
             <input
               type="file" accept="image/*" style={{ display: 'none' }}
               disabled={uploadingAvatar}
-              onChange={e => { const f = e.target.files?.[0]; if (f) handleAvatarUpload(f); }}
+              onChange={e => {
+                const f = e.target.files?.[0];
+                // Reset the input so picking the same file twice still fires.
+                e.target.value = '';
+                if (!f) return;
+                setAvatarError(null);
+                if (!f.type.startsWith('image/')) {
+                  setAvatarError('That file is not an image. Please choose a JPG, PNG, HEIC or WebP photo.');
+                  return;
+                }
+                if (f.size > MAX_AVATAR_BYTES) {
+                  setAvatarError(
+                    `Image must be under ${MAX_AVATAR_MB} MB — that one is ${(f.size / 1024 / 1024).toFixed(1)} MB. ` +
+                    'Please choose a smaller photo, or crop it on your device first.',
+                  );
+                  return;
+                }
+                setPendingAvatarFile(f);
+              }}
             />
           </label>
         </div>
+
+        {avatarError && (
+          <div
+            role="alert"
+            style={{
+              display: 'flex', gap: 8, alignItems: 'flex-start',
+              padding: '10px 12px', marginBottom: 16, borderRadius: 10,
+              background: '#FFF7ED', border: '1px solid #FCA5A5', color: '#9A3412',
+              fontSize: 12, lineHeight: 1.5,
+            }}
+          >
+            <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} aria-hidden="true" />
+            <span>{avatarError}</span>
+          </div>
+        )}
+
+        {pendingAvatarFile && (
+          <AvatarCropModal
+            file={pendingAvatarFile}
+            onCancel={() => setPendingAvatarFile(null)}
+            onConfirm={blob => { setPendingAvatarFile(null); void handleAvatarUpload(blob); }}
+          />
+        )}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
           <div>

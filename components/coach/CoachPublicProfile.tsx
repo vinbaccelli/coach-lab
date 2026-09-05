@@ -947,6 +947,12 @@ function Avatar({
   accentColor: string;
   size?: number;
 }) {
+  /* An avatar URL points at a storage object that can disappear (deleted,
+     bucket permissions changed, a stale row). Falling back to the monogram
+     keeps a broken-image box off a public page. */
+  const [failed, setFailed] = useState(false);
+  const showImage = Boolean(avatarUrl) && !failed;
+
   return (
     <div
       style={{
@@ -965,8 +971,14 @@ function Avatar({
         color: accentColor,
       }}
     >
-      {avatarUrl ? (
-        <img src={avatarUrl} alt={name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      {showImage ? (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img
+          src={avatarUrl}
+          alt={name}
+          onError={() => setFailed(true)}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        />
       ) : (
         name.charAt(0)
       )}
@@ -977,6 +989,22 @@ function Avatar({
 /* ────────────────────────────────────────────────────────────────────────────
    Curated rendering path
    ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Accept a stored `avatar_url` only if it is actually usable.
+ *
+ * Mirrors `parseBioLines`: the database value wins when it is real, and falls
+ * back to the curated placeholder when it is missing or junk. `??` alone is not
+ * enough — an empty string is not nullish, so a blank `avatar_url` would render
+ * an <img> with no source instead of the monogram.
+ */
+function resolveAvatarUrl(raw: string | null | undefined): string | null {
+  const url = (raw ?? '').trim();
+  if (!url) return null;
+  // Storage URLs and app-relative paths only; never a data: blob in a text column.
+  if (!/^https?:\/\//i.test(url) && !url.startsWith('/')) return null;
+  return url;
+}
 
 /**
  * The top-of-page button menu. Every entry is an in-page anchor to a section
@@ -1116,7 +1144,7 @@ function GenericProfile({ profile }: { profile: CoachProfileData }) {
   return (
     <div style={{ maxWidth: COLUMN, margin: '0 auto', padding: '32px 20px 72px' }}>
       <header style={{ textAlign: 'center', marginBottom: 32 }}>
-        <Avatar name={profile.name} avatarUrl={profile.avatarUrl} accentColor={accentColor} />
+        <Avatar name={profile.name} avatarUrl={resolveAvatarUrl(profile.avatarUrl) ?? undefined} accentColor={accentColor} />
         <h1 style={{ margin: 0, fontSize: 'clamp(24px, 4vw, 34px)', fontWeight: 800, letterSpacing: '-0.025em' }}>
           {profile.name}
         </h1>
@@ -1267,7 +1295,7 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
         // curated defaults are the fallback until the coach edits them.
         <CuratedProfile
           profile={curated}
-          avatarUrl={dbProfile?.avatarUrl ?? curated.avatarUrl}
+          avatarUrl={resolveAvatarUrl(dbProfile?.avatarUrl) ?? curated.avatarUrl}
           bioLines={parseBioLines(dbProfile?.bio) ?? curated.bioLines}
         />
       ) : (

@@ -432,10 +432,13 @@ export default function LandingPage() {
 
       {/* ── NAV ─────────────────────────────────────────────────────────── */}
       <nav className="am-nav">
-        <Link href="/" className="am-wordmark" aria-label="AngleMotion home">
-          <img src="/logo-square-new.jpg" alt="" width={26} height={26} />
-          <span>Angle<span style={{ color: ACCENT }}>Motion</span></span>
-        </Link>
+        <div className="am-brand">
+          <Link href="/" className="am-wordmark" aria-label="AngleMotion home">
+            <img src="/logo-square-new.jpg" alt="" width={26} height={26} />
+            <span>Angle<span style={{ color: ACCENT }}>Motion</span></span>
+          </Link>
+          <span className="am-slogan">Analyze Every Angle of Your Game</span>
+        </div>
         <div className="am-nav-links">
           <a href="#season" className="am-navlink">How it works</a>
           <a href="#academy" className="am-navlink">Academy</a>
@@ -757,6 +760,23 @@ const CSS = `
   font-size: 17px; font-weight: 800; letter-spacing: -0.03em; text-decoration: none;
 }
 .am-wordmark img { border-radius: var(--cl-radius-sm); display: block; }
+/* Tagline beside the wordmark. Deliberately quiet — Marketing Caption size at
+   secondary weight against the wordmark's 17px/800, separated by the same
+   hairline rule the rest of the page uses instead of a bullet or dash. It is
+   the first thing that goes when the nav runs out of room. */
+.am-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.am-slogan {
+  position: relative; padding-left: 13px;
+  font-size: 13px; font-weight: 500; letter-spacing: -0.01em;
+  color: var(--cl-text-secondary); white-space: nowrap;
+}
+.am-slogan::before {
+  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 1px; height: 15px; background: var(--cl-border);
+}
+/* Mobile only hides it: tablet and up have room, and below 860px the nav
+   links collapse anyway, which frees exactly the space the slogan needs. */
+@media (max-width: 767px) { .am-slogan { display: none; } }
 .am-nav-links { display: flex; align-items: center; gap: 22px; }
 .am-navlink {
   font-size: 15px; font-weight: 500; color: var(--cl-text-secondary);

@@ -132,3 +132,43 @@ create policy "Coaches manage reviews on own profile" on coach_reviews for all
 --   - frame-metrics-captures  (private)
 --   - analysis-screenshots    (private)
 --   - coach-avatars           (public)
+
+-- ── Storage RLS policies ─────────────────────────────────────────────────
+-- Buckets alone are not enough: `storage.objects` has RLS enabled, so an
+-- upload with no matching policy is rejected with
+-- "new row violates row-level security policy".
+--
+-- Verified against production on 2026-09-06: policies exist for
+-- frame-metrics-captures and analysis-screenshots, but NONE for coach-avatars,
+-- which is why coach profile photo uploads fail. See docs/KNOWN_ISSUES.md 006.
+--
+-- The convention throughout is that an object's FIRST path segment is the
+-- owner's user id, so a coach may only write inside their own folder.
+--
+-- NOT YET APPLIED TO PRODUCTION — run in the Supabase SQL editor.
+
+create policy "Coaches upload own avatar"
+  on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'coach-avatars'
+    and (storage.foldername(name))[1] = (auth.uid())::text
+  );
+
+-- Needed because the client uploads with `upsert: true`, which updates an
+-- existing object rather than inserting when the path already exists.
+create policy "Coaches replace own avatar"
+  on storage.objects for update to authenticated
+  using (
+    bucket_id = 'coach-avatars'
+    and (storage.foldername(name))[1] = (auth.uid())::text
+  );
+
+create policy "Coaches delete own avatar"
+  on storage.objects for delete to authenticated
+  using (
+    bucket_id = 'coach-avatars'
+    and (storage.foldername(name))[1] = (auth.uid())::text
+  );
+
+-- No SELECT policy is required: the coach-avatars bucket is public, so the
+-- rendered profile photo is readable by anonymous visitors without one.

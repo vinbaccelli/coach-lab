@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
 
+/** Generous, but small enough that an accidental paste of a document is caught. */
+const MAX_BIO_CHARS = 4000;
+const MAX_URL_CHARS = 2048;
+
 export async function GET() {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -58,7 +62,41 @@ export async function PUT(req: Request) {
   };
 
   if (!profileData.name?.trim() || !profileData.slug?.trim()) {
-    return NextResponse.json({ error: 'name and slug are required' }, { status: 400 });
+    return NextResponse.json({ error: 'Name and URL slug are both required.' }, { status: 400 });
+  }
+
+  /* Explicit limits with explicit messages. Without these, an oversized value
+     surfaces as an opaque 500 from Postgres and the editor shows nothing at
+     all — the failure mode reported for avatar uploads. */
+  if (profileData.name.length > 120) {
+    return NextResponse.json({ error: 'Display name must be under 120 characters.' }, { status: 400 });
+  }
+  if (profileData.slug.length > 80) {
+    return NextResponse.json({ error: 'URL slug must be under 80 characters.' }, { status: 400 });
+  }
+  if ((profileData.tagline ?? '').length > 200) {
+    return NextResponse.json({ error: 'Tagline must be under 200 characters.' }, { status: 400 });
+  }
+  if ((profileData.bio ?? '').length > MAX_BIO_CHARS) {
+    return NextResponse.json(
+      { error: `Bio is too long (${profileData.bio!.length.toLocaleString()} characters). Keep it under ${MAX_BIO_CHARS.toLocaleString()}.` },
+      { status: 400 },
+    );
+  }
+  if ((profileData.avatar_url ?? '').length > MAX_URL_CHARS) {
+    return NextResponse.json(
+      { error: 'Profile photo URL is too long to store. Re-upload the photo.' },
+      { status: 400 },
+    );
+  }
+  /* A data: URL here means a raw image is being pushed into a text column —
+     the classic cause of a silent oversized-payload 500. Uploads must go
+     through Supabase Storage and store a URL. */
+  if (/^data:/i.test(profileData.avatar_url ?? '')) {
+    return NextResponse.json(
+      { error: 'Profile photo must be uploaded, not embedded. Choose the photo again.' },
+      { status: 400 },
+    );
   }
 
   const { data: existing } = await session.supabase
@@ -102,7 +140,16 @@ export async function PUT(req: Request) {
     profileId = data.id;
   }
 
-  await session.supabase.from('coach_services').delete().eq('profile_id', profileId);
+  /* These deletes used to run unchecked, so a missing table or a denied policy
+     vanished and the request failed later with no usable message. See
+     docs/KNOWN_ISSUES.md 004. */
+  const { error: svcDelErr } = await session.supabase.from('coach_services').delete().eq('profile_id', profileId);
+  if (svcDelErr) {
+    return NextResponse.json(
+      { error: `Saved your profile, but services could not be updated: ${svcDelErr.message}` },
+      { status: 500 },
+    );
+  }
   if (services.length > 0) {
     const { error } = await session.supabase
       .from('coach_services')
@@ -118,7 +165,13 @@ export async function PUT(req: Request) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  await session.supabase.from('coach_links').delete().eq('profile_id', profileId);
+  const { error: linkDelErr } = await session.supabase.from('coach_links').delete().eq('profile_id', profileId);
+  if (linkDelErr) {
+    return NextResponse.json(
+      { error: `Saved your profile, but links could not be updated: ${linkDelErr.message}` },
+      { status: 500 },
+    );
+  }
   if (links.length > 0) {
     const { error } = await session.supabase
       .from('coach_links')

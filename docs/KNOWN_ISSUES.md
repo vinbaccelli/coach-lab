@@ -128,12 +128,17 @@ then inserts — so saving a profile that has any services should return a 500,
 while a profile with none appears to save fine. **This means the profile editor's
 save path is probably broken in production and nobody would have seen why.**
 
-**Proposed fix.** Apply the missing tables from `lib/supabase/schema.sql`, then
-add error checking on the delete calls in the `PUT` handler so a failure is
-reported instead of swallowed.
+**Partially fixed (2026-09-06).** The `PUT` handler no longer swallows the
+delete errors: a failure on `coach_services` or `coach_links` now returns a
+descriptive message instead of an opaque 500, and `CoachProfileEditor` renders
+it — previously `handleSave` had no `else` branch at all, so a failed save left
+the button reading "Save" and told the coach nothing. The handler also validates
+name, slug, tagline, bio and avatar URL lengths up front, and rejects a `data:`
+URL in `avatar_url` (a raw image pushed into a text column, the classic silent
+oversized-payload 500).
 
-**Not fixed.** Out of scope for a design refinement, and applying schema to
-production is Vin's call.
+**Still outstanding.** The tables themselves are still missing from production.
+Applying schema is Vin's call.
 
 **Severity:** high — a shipped editor feature likely does not work.
 
@@ -158,3 +163,71 @@ was one deleted row away from sending a real buyer to a broken checkout.
 `lib/coach/curated/vinbaccelli.ts` with the real Stripe links.
 
 **Severity:** was medium, now resolved.
+
+---
+
+## 006 — Coach profile photo upload fails silently
+
+**Found and fixed (client side):** 2026-09-06, reported by Vin: "can't upload my
+profile picture".
+
+**Symptom.** Choosing a photo in the profile editor appears to do nothing. The
+button flickers to "Uploading…" and back to "Upload photo"; no photo appears and
+no error is shown anywhere in the UI.
+
+**Verified root cause — two independent faults, both required to reproduce.**
+
+*1. No storage policy for the bucket (server side).* `storage.objects` has RLS
+enabled and, verified against production, carries exactly four policies — two
+for `frame-metrics-captures` and two for `analysis-screenshots`. **None mentions
+`coach-avatars`.** With RLS on and no matching policy, every insert is denied.
+Reproduced directly against the production endpoint:
+
+```
+POST /storage/v1/object/coach-avatars/... →
+{"statusCode":"403","error":"Unauthorized",
+ "message":"new row violates row-level security policy"}
+```
+
+The bucket itself is fine — it exists and is public. Only the write policy is
+missing, so this failed for every coach, every time, since the feature shipped.
+
+*2. Both upload paths were unsatisfiable anyway (client side).* The uploader
+wrote to `avatars/<timestamp>.<ext>`, then on failure retried against the
+`analysis-screenshots` bucket at `coach-avatars/avatars/<timestamp>.<ext>`. Every
+storage policy in this project requires the object's **first path segment to be
+the uploader's user id** (`(storage.foldername(name))[1] = auth.uid()::text`).
+Neither path starts with a user id, so even once a `coach-avatars` policy exists
+the original code would still have been rejected — and the fallback could never
+have succeeded under any policy.
+
+*Why it was silent.* The only report of failure was
+`console.error('Avatar upload failed:', upErr2)` followed by a bare `return`. No
+state, no message, nothing rendered. A user watching the screen sees a no-op.
+
+**Not a curated-profile regression.** Checked explicitly, since curated content
+takes precedence for `vinbaccelli`. The avatar exception is intact and working:
+`app/coach/[slug]/page.tsx` maps `avatar_url` → `avatarUrl`, and
+`CoachPublicProfile` passes `dbProfile?.avatarUrl ?? curated.avatarUrl`, so a
+database photo still wins for a curated coach. Curated precedence never touched
+the upload path and is not implicated — the upload has been broken since before
+that system existed.
+
+**Fixed (client).** Uploads now go to `<user-id>/<timestamp>.jpg`, matching the
+project's storage convention. The unsatisfiable fallback is deleted. Every
+failure now renders an inline error naming the cause, and an RLS rejection says
+so explicitly and points here.
+
+A mandatory crop step (`components/coach/AvatarCropModal.tsx`, built on
+`react-easy-crop`) now sits in front of every avatar upload for every coach, so
+a raw file never reaches storage: whatever is chosen leaves as a 512×512 JPEG.
+That also removes file size as a variable — the upload is well under 200 kB
+regardless of the source photo. Non-images and files over 15 MB are refused at
+the picker with a plain-language message rather than failing later.
+
+**Outstanding — needs a production migration, Vin's call.** The three policies
+are written out at the end of `lib/supabase/schema.sql` under "Storage RLS
+policies" and are **not applied**. Until they run, uploads still fail — but now
+with a clear on-screen explanation instead of silence.
+
+**Severity:** high — a shipped user-facing feature has never worked.
