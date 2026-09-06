@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { MAX_BIO_LINES, MAX_BIO_LINE_LENGTH, parseBioLines, serializeBioLines } from '@/lib/coach/bioLines';
+import { MAX_DIRECTORY_BLURB, MIN_DIRECTORY_BLURB } from '@/lib/coach/directoryBlurb';
 import AvatarCropModal from './AvatarCropModal';
 
 /**
@@ -378,9 +379,34 @@ export default function CoachProfileEditor() {
           </div>
         </div>
 
+        {/* Stored in `coach_profiles.tagline` — the column already existed and is
+            already what /coaches renders, so this needs no migration. */}
         <div style={{ marginBottom: 12 }}>
-          <label style={labelStyle}>Tagline</label>
-          <input style={inputStyle} value={tagline} onChange={e => setTagline(e.target.value)} placeholder="Tennis Coach · City · Specialty" />
+          <label style={labelStyle} htmlFor="directory-blurb">Directory blurb</label>
+          <p style={{ margin: '0 0 6px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
+            Shown on your card in the coaches directory — about three lines. This is what a stranger
+            reads while scanning a list of coaches, so make it stand on its own.
+          </p>
+          <textarea
+            id="directory-blurb"
+            style={{ ...inputStyle, minHeight: 68, resize: 'vertical', fontFamily: 'inherit' }}
+            value={tagline}
+            maxLength={MAX_DIRECTORY_BLURB}
+            onChange={e => setTagline(e.target.value)}
+            placeholder="PTR-certified coach specialising in technique and video analysis. 10 years courtside, online worldwide."
+          />
+          <div
+            style={{
+              marginTop: 4, fontSize: 11, textAlign: 'right',
+              color: tagline.trim().length > 0 && tagline.trim().length < MIN_DIRECTORY_BLURB
+                ? 'var(--cl-warning-text)'
+                : 'var(--cl-text-secondary)',
+            }}
+          >
+            {tagline.trim().length > 0 && tagline.trim().length < MIN_DIRECTORY_BLURB
+              ? `Too short to show — write at least ${MIN_DIRECTORY_BLURB} characters (${tagline.length}/${MAX_DIRECTORY_BLURB})`
+              : `${tagline.length} / ${MAX_DIRECTORY_BLURB}`}
+          </div>
         </div>
 
         {/* Bio lines. This replaced a single textarea labelled "Bio (HTML

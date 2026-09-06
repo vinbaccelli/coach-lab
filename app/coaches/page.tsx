@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { getCuratedProfile } from '@/lib/coach/curated';
+import { parseDirectoryBlurb } from '@/lib/coach/directoryBlurb';
 
 export const dynamic = 'force-dynamic';
 
@@ -84,7 +86,7 @@ export default async function CoachesPage() {
             </Link>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
             {coaches.map(coach => (
               <Link
                 key={coach.id}
@@ -110,11 +112,31 @@ export default async function CoachesPage() {
                 </div>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: 16, fontWeight: 700 }}>{coach.name}</div>
-                  {coach.tagline && (
-                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 4, lineHeight: 1.4 }}>
-                      {coach.tagline}
-                    </div>
-                  )}
+                  {/* A blurb the coach saved wins; curated content is the
+                      fallback. Same precedence as bio lines and the avatar. */}
+                  {(() => {
+                    const blurb =
+                      parseDirectoryBlurb(coach.tagline) ??
+                      getCuratedProfile(coach.slug)?.directoryBlurb ??
+                      null;
+                    if (!blurb) return null;
+                    return (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: 'rgba(255,255,255,0.62)',
+                          marginTop: 6,
+                          lineHeight: 1.45,
+                          display: '-webkit-box',
+                          WebkitLineClamp: 4,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {blurb}
+                      </div>
+                    );
+                  })()}
                 </div>
               </Link>
             ))}

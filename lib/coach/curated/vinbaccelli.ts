@@ -44,6 +44,16 @@ export const vinbaccelli: CuratedCoachProfile = {
   contact: { label: 'Message Me', url: WHATSAPP },
 
   /**
+   * Directory card blurb — 113 characters, ~3 lines at card width.
+   * Deliberately shorter than the 200-char ceiling: on a directory card, 200
+   * characters is six lines and gets clamped, so the ceiling is headroom, not
+   * a target. Carries all four facts: PTR, 7+ years of video analysis, founder,
+   * 1,000+ coached. Fallback only — a blurb saved in the editor wins.
+   */
+  directoryBlurb:
+    'PTR-certified coach and founder of AngleMotion. 7+ years of frame-by-frame video analysis; 1,000+ players coached.',
+
+  /**
    * Vin's real bio copy, supplied verbatim. Four lines, this order, reproduced
    * exactly — including the flag and chart emoji and the `|` separators. Do not
    * reword, retitle, or "clean up" these strings.
@@ -251,12 +261,21 @@ export const vinbaccelli: CuratedCoachProfile = {
       kind: 'about',
       id: 'about',
       title: 'About me',
+      // Vin's approved final copy. Verbatim — do not reword or condense.
       paragraphs: [
-        'I have spent over a decade coaching tennis. I competed myself until 17, then earned a scholarship to Lindenwood University, where I played NCAA Division I.',
-        'I am PTR-certified, and my coaching combines on-court work with frame-by-frame video analysis — the same method behind every breakdown on this page.',
-        'I have worked with more than 1,000 clients.',
+        "I'm Vin Baccelli — tennis coach, video analyst, and founder of AngleMotion.",
+        "Tennis has been my life since childhood. I competed at a high level through age 17, when I earned a scholarship to play NCAA Division I tennis at Lindenwood University. Those years sharpened not just my game, but my understanding of what actually separates players who improve fast from players who plateau: technique that's clearly defined, not guessed at.",
+        "That question is what led me into video analysis over 7 years ago — and it's what led me to build AngleMotion, the platform I now use every day to break down strokes frame by frame, measure angles precisely, and give players feedback most coaches simply don't have the tools to give.",
+        "I'm PTR-certified and have coached 1,000+ players, in person and online, from complete beginners to competitive juniors chasing NCAA scholarships of their own. Whatever your level, I'll show you exactly what's happening in your technique, why it matters, and what to change — step by step, backed by the same video tools built into AngleMotion.",
+        "Let's take your tennis to the next level, one swing at a time.",
       ],
-      credentials: ['PTR Certified', 'Former NCAA Scholarship Player', '1,000+ Clients Coached'],
+      credentials: [
+        'PTR Certified',
+        'Founder of AngleMotion',
+        'Former NCAA Division I Scholarship Player',
+        '1,000+ Clients Coached',
+        '7+ Years in Video Analysis',
+      ],
     },
 
     // ── 8. Testimonials ─────────────────────────────────────────────────────
@@ -289,6 +308,11 @@ export const vinbaccelli: CuratedCoachProfile = {
       kind: 'reviewGrid',
       id: 'reviews',
       title: 'Reviews',
+      // Scoped deliberately. Only the Trustpilot profile has a verified star
+      // record (6 reviews, 5-star breakdown 100%, checked in a browser
+      // 2026-09-04). The Google reviews have no recorded star value anywhere,
+      // so no rating is claimed for them and their cards draw no stars.
+      badge: 'Trustpilot: 100% 5-star',
       note: 'Public reviews of my coaching, on Trustpilot and Google.',
       columns: [
         {
@@ -296,6 +320,7 @@ export const vinbaccelli: CuratedCoachProfile = {
           source: 'Trustpilot',
           profileUrl: TRUSTPILOT_COACH_URL,
           starNote: 'All 6 reviews are 5 stars',
+          allFiveStar: true,
           reviews: [
             {
               id: 'philipp',
@@ -330,6 +355,8 @@ export const vinbaccelli: CuratedCoachProfile = {
           id: 'google',
           source: 'Google',
           profileUrl: GOOGLE_REVIEWS_URL,
+          // No allFiveStar: Google star values are not recorded anywhere, so
+          // these cards show the quote and no rating.
           reviews: [
             {
               id: 'lalito',

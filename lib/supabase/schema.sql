@@ -17,6 +17,8 @@ create table if not exists coach_profiles (
   updated_at   timestamptz default now()
 );
 
+-- NOTE: for an existing project, use the re-runnable MIGRATION block at the
+-- end of this file instead — it adds NOT NULL, indexes and idempotent policies.
 create table if not exists coach_services (
   id           uuid primary key default gen_random_uuid(),
   profile_id   uuid references coach_profiles(id) on delete cascade,
@@ -156,9 +158,17 @@ create policy "Coaches upload own avatar"
 
 -- Needed because the client uploads with `upsert: true`, which updates an
 -- existing object rather than inserting when the path already exists.
+-- USING gates which existing rows may be updated; WITH CHECK gates what they
+-- may be updated INTO, so a coach cannot move an object into someone else's
+-- folder. Postgres would default WITH CHECK to USING here; it is spelled out
+-- because relying on that default is how these policies drift.
 create policy "Coaches replace own avatar"
   on storage.objects for update to authenticated
   using (
+    bucket_id = 'coach-avatars'
+    and (storage.foldername(name))[1] = (auth.uid())::text
+  )
+  with check (
     bucket_id = 'coach-avatars'
     and (storage.foldername(name))[1] = (auth.uid())::text
   );
@@ -170,5 +180,131 @@ create policy "Coaches delete own avatar"
     and (storage.foldername(name))[1] = (auth.uid())::text
   );
 
--- No SELECT policy is required: the coach-avatars bucket is public, so the
--- rendered profile photo is readable by anonymous visitors without one.
+-- A public read policy. The bucket being public already lets a browser fetch an
+-- avatar by its public URL, so this is NOT what makes the photo render. What it
+-- adds is client-side SELECT on storage.objects: `list()` and metadata reads go
+-- through RLS even for a public bucket, and without this they return empty.
+create policy "Public can read avatars"
+  on storage.objects for select to public
+  using (bucket_id = 'coach-avatars');
+
+-- Verify (expect 4 rows: INSERT, UPDATE, DELETE, SELECT):
+--   select policyname, cmd, roles::text
+--   from pg_policies
+--   where schemaname = 'storage' and tablename = 'objects'
+--     and (qual like '%coach-avatars%' or with_check like '%coach-avatars%');
+
+-- ── MIGRATION: coach_services + coach_links ──────────────────────────────
+-- For an EXISTING project whose schema was never fully applied. Verified live
+-- against production on 2026-09-06: `coach_profiles` exists, `coach_services`
+-- and `coach_links` do NOT. See docs/KNOWN_ISSUES.md 004.
+--
+-- SCOPE — these two tables are the COACH'S OWN PUBLIC PROFILE:
+--   the services a coach sells and the social/payment links shown on
+--   /coach/[slug]. They hang off coach_profiles and are public content.
+--
+-- They are NOT the per-player feature. Private coaching records live in
+-- `player_entries` and `player_sessions`, which are keyed on (coach_id,
+-- player_id), are reached only through /api/players/..., and are never public.
+-- `player_sessions.external_links` is the per-player link store; it is a jsonb
+-- column on a session row, not a table, and nothing here touches it.
+--
+-- Two different ownership expressions, both resolving to auth.uid():
+--   players.coach_id            = auth.uid()   (per-player data, already live)
+--   coach_profiles.user_id      = auth.uid()   (profile content, below)
+--
+-- Ownership is written INLINE rather than behind a helper function so the full
+-- expression is visible in pg_policies for auditing.
+--
+-- Idempotent — safe to re-run. NOT YET APPLIED TO PRODUCTION.
+
+-- ── Tables ───────────────────────────────────────────────────────────────
+
+create table if not exists coach_services (
+  id           uuid primary key default gen_random_uuid(),
+  profile_id   uuid not null references coach_profiles(id) on delete cascade,
+  title        text not null,
+  description  text,
+  price        text,        -- FREE TEXT, not numeric: "€20", "$249 / month"
+  cta_label    text default 'Book Now',
+  cta_url      text,        -- Stripe, WhatsApp, coachlife.com — any destination
+  sort_order   int default 0,
+  created_at   timestamptz default now()
+);
+
+create table if not exists coach_links (
+  id           uuid primary key default gen_random_uuid(),
+  profile_id   uuid not null references coach_profiles(id) on delete cascade,
+  label        text not null,
+  url          text not null,
+  icon         text,        -- 'instagram' | 'youtube' | 'globe' | 'mail' | 'whatsapp' | 'trustpilot' | 'google' | 'external'
+  sort_order   int default 0,
+  created_at   timestamptz default now()
+);
+
+-- Every query filters by profile_id and orders by sort_order.
+create index if not exists coach_services_profile_sort_idx on coach_services (profile_id, sort_order);
+create index if not exists coach_links_profile_sort_idx    on coach_links    (profile_id, sort_order);
+
+-- ── Row level security ───────────────────────────────────────────────────
+
+alter table coach_services enable row level security;
+alter table coach_links    enable row level security;
+
+drop policy if exists "Services are public"         on coach_services;
+drop policy if exists "Coaches manage own services" on coach_services;
+drop policy if exists "Coaches insert own services" on coach_services;
+drop policy if exists "Coaches update own services" on coach_services;
+drop policy if exists "Coaches delete own services" on coach_services;
+drop policy if exists "Links are public"            on coach_links;
+drop policy if exists "Coaches manage own links"    on coach_links;
+drop policy if exists "Coaches insert own links"    on coach_links;
+drop policy if exists "Coaches update own links"    on coach_links;
+drop policy if exists "Coaches delete own links"    on coach_links;
+
+-- Removes the helper from an earlier draft of this migration, if it was run.
+-- Must come after the policy drops, since policies could reference it.
+drop function if exists public.coach_owns_profile(uuid);
+
+-- PUBLIC READ — required, not optional. /coach/[slug] is in the middleware's
+-- public allowlist and is rendered for anonymous visitors, so the anon role
+-- must be able to read a coach's services and links. Without this the profile
+-- page silently shows no services and no links.
+create policy "Services are public"
+  on coach_services for select
+  using (true);
+
+create policy "Links are public"
+  on coach_links for select
+  using (true);
+
+-- WRITES — a coach may only touch rows on a profile they own. The API writes
+-- with the caller's own cookie-bound client (lib/auth/routeSession.ts), never a
+-- service-role key, so RLS is the only thing enforcing ownership here.
+-- Split per command, and written inline, so each rule is legible in pg_policies.
+
+create policy "Coaches insert own services"
+  on coach_services for insert
+  with check (profile_id in (select id from coach_profiles where user_id = auth.uid()));
+
+create policy "Coaches update own services"
+  on coach_services for update
+  using      (profile_id in (select id from coach_profiles where user_id = auth.uid()))
+  with check (profile_id in (select id from coach_profiles where user_id = auth.uid()));
+
+create policy "Coaches delete own services"
+  on coach_services for delete
+  using (profile_id in (select id from coach_profiles where user_id = auth.uid()));
+
+create policy "Coaches insert own links"
+  on coach_links for insert
+  with check (profile_id in (select id from coach_profiles where user_id = auth.uid()));
+
+create policy "Coaches update own links"
+  on coach_links for update
+  using      (profile_id in (select id from coach_profiles where user_id = auth.uid()))
+  with check (profile_id in (select id from coach_profiles where user_id = auth.uid()));
+
+create policy "Coaches delete own links"
+  on coach_links for delete
+  using (profile_id in (select id from coach_profiles where user_id = auth.uid()));

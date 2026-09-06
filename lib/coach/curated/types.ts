@@ -158,17 +158,33 @@ export interface TestimonialsBlock {
  * verbatim from components/LandingPage.tsx where its provenance is documented.
  * `starNote` may state a review record only for a profile that actually has
  * one, and only for the profile the quotes came from.
+ *
+ * RATING RULE: `allFiveStar` is what licenses a star rating to be DRAWN on a
+ * review card, and it is set per source, never globally. A source whose star
+ * values are not recorded anywhere renders no stars at all rather than an
+ * assumed five — showing five stars for an unrecorded rating would be inventing
+ * the very thing the reviews are meant to evidence.
  */
 export interface ReviewGridBlock {
   kind: 'reviewGrid';
   id: string;
   title: string;
   note?: string;
+  /**
+   * Short claim about the review record, shown as a pill beside the heading.
+   * Only ever a statement that is true of every review actually listed below.
+   */
+  badge?: string;
   columns: Array<{
     id: string;
     source: 'Trustpilot' | 'Google';
     profileUrl: string | null;
     starNote?: string;
+    /**
+     * Set ONLY when every review on that source profile is a recorded 5-star
+     * rating, verified at the source. Drives whether star icons are drawn.
+     */
+    allFiveStar?: boolean;
     reviews: Array<{ id: string; name: string; where?: string; quote: string }>;
   }>;
 }
@@ -210,6 +226,17 @@ export interface CuratedCoachProfile {
   accentColor: string;
   /** Fallback only. A photo uploaded through the profile editor wins over this. */
   avatarUrl?: string;
+  /**
+   * Short blurb for the coach's card in the /coaches directory — roughly three
+   * lines. NOT the bio: this is the one thing a stranger reads while scanning a
+   * list of coaches, so it has to stand alone.
+   *
+   * Persisted in the EXISTING `coach_profiles.tagline` column (no migration —
+   * the column exists, is already editable, and is already what /coaches
+   * renders). A value saved through CoachProfileEditor wins; this is the
+   * fallback, same precedence as bio lines and the avatar.
+   */
+  directoryBlurb?: string;
   socials: SocialLink[];
   /**
    * The top-of-page button menu. Each entry anchors to a block below it on the

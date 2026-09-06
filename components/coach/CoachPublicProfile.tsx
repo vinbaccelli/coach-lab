@@ -155,6 +155,20 @@ const PAGE_CSS = `
   border-radius: var(--cl-radius-sm);
 }
 .cp-root .cp-num { font-variant-numeric: tabular-nums; }
+.cp-root .cp-scroller {
+  display: flex; gap: 10px;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin; scrollbar-color: var(--cl-border) transparent;
+  padding-bottom: 6px;
+}
+/* Cards stop short of full width so the next one peeks — the affordance that
+   says "this scrolls" without adding arrows or dots. */
+.cp-root .cp-review {
+  flex: 0 0 78%; max-width: 300px;
+  scroll-snap-align: start;
+}
+@media (min-width: 560px) { .cp-root .cp-review { flex-basis: 46%; } }
 .cp-root .cp-press { transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease; }
 .cp-root .cp-press:active { transform: scale(0.985); }
 @media (prefers-reduced-motion: reduce) {
@@ -701,66 +715,115 @@ function BlockRenderer({ block }: { block: CoachBlock }) {
         </Section>
       );
 
-    case 'reviewGrid':
+    case 'reviewGrid': {
+      /* Every review, in one horizontally scrollable track rather than two tall
+         stacked columns. The page is already long, and a grid of seven quotes
+         buried at the bottom is read by nobody; a peeking carousel shows there
+         is more and costs one viewport. Sources are interleaved so both
+         platforms are visible without scrolling. */
+      const flat = block.columns.flatMap(col =>
+        col.reviews.map(r => ({ ...r, source: col.source, stars: col.allFiveStar === true, key: `${col.id}-${r.id}` })),
+      );
+      const interleaved: typeof flat = [];
+      const perSource = block.columns.map(col =>
+        col.reviews.map(r => ({ ...r, source: col.source, stars: col.allFiveStar === true, key: `${col.id}-${r.id}` })),
+      );
+      for (let i = 0; perSource.some(list => i < list.length); i++) {
+        for (const list of perSource) if (i < list.length) interleaved.push(list[i]);
+      }
+      const reviews = interleaved.length === flat.length ? interleaved : flat;
+
       return (
         <Section id={block.id}>
-          <SectionHeading title={block.title} description={block.note} />
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, letterSpacing: '-0.01em' }}>
+                {block.title}
+              </h2>
+              {block.badge && (
+                <span
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '4px 10px', borderRadius: 999,
+                    background: 'var(--cl-accent-soft)',
+                    fontSize: 11, fontWeight: 700, color: 'var(--cl-text-primary)',
+                  }}
+                >
+                  <Star size={11} fill="currentColor" strokeWidth={0} aria-hidden="true" />
+                  {block.badge}
+                </span>
+              )}
+            </div>
+            {block.note && (
+              <p style={{ margin: '6px 0 0', fontSize: 13, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
+                {block.note} <span style={{ whiteSpace: 'nowrap' }}>({reviews.length} total)</span>
+              </p>
+            )}
+          </div>
+
+          {/* Focusable so the track is reachable and scrollable by keyboard. */}
           <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-              gap: 10,
-              alignItems: 'start',
-            }}
+            className="cp-scroller"
+            role="region"
+            aria-label={`${block.title} — scroll for more`}
+            tabIndex={0}
           >
-            {block.columns.map(col => (
-              <div key={col.id} style={{ ...CARD, padding: 18 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700 }}>{col.source}</span>
-                  {col.starNote && (
-                    <span style={{ fontSize: 11, color: 'var(--cl-text-secondary)' }}>{col.starNote}</span>
+            {reviews.map(r => (
+              <figure key={r.key} className="cp-review" style={{ ...CARD, margin: 0, padding: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--cl-text-secondary)' }}>{r.source}</span>
+                  {/* Stars are drawn ONLY where the source has a recorded star
+                      record. A source without one shows the quote and nothing
+                      else — never an assumed five. */}
+                  {r.stars && (
+                    <span
+                      style={{ display: 'inline-flex', gap: 1, color: 'var(--cl-text-primary)' }}
+                      aria-label="5 out of 5 stars"
+                    >
+                      {[0, 1, 2, 3, 4].map(i => (
+                        <Star key={i} size={11} fill="currentColor" strokeWidth={0} aria-hidden="true" />
+                      ))}
+                    </span>
                   )}
                 </div>
-
-                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column' }}>
-                  {col.reviews.map((r, i) => (
-                    <div key={r.id} style={{ paddingTop: i === 0 ? 0 : 12, marginTop: i === 0 ? 0 : 12, borderTop: i === 0 ? 'none' : HAIRLINE }}>
-                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--cl-text-primary)' }}>
-                        “{r.quote}”
-                      </p>
-                      <div style={{ marginTop: 6, fontSize: 11, fontWeight: 600, color: 'var(--cl-text-secondary)' }}>
-                        {r.name}
-                        {r.where ? ` · ${r.where}` : ''}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {col.profileUrl && (
-                  <a
-                    href={col.profileUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      marginTop: 14,
-                      minHeight: 44,
-                      fontSize: 11,
-                      fontWeight: 600,
-                      color: 'var(--cl-accent)',
-                      textDecoration: 'none',
-                    }}
-                  >
-                    Read on {col.source} <ArrowUpRight size={12} aria-hidden="true" />
-                  </a>
-                )}
-              </div>
+                <blockquote style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--cl-text-primary)' }}>
+                  “{r.quote}”
+                </blockquote>
+                <figcaption style={{ marginTop: 10, fontSize: 11, fontWeight: 600, color: 'var(--cl-text-secondary)' }}>
+                  {r.name}
+                  {r.where ? ` · ${r.where}` : ''}
+                </figcaption>
+              </figure>
             ))}
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12 }}>
+            {block.columns.map(col =>
+              col.profileUrl ? (
+                <a
+                  key={col.id}
+                  href={col.profileUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    minHeight: 44, fontSize: 11, fontWeight: 600,
+                    color: 'var(--cl-accent)', textDecoration: 'none',
+                  }}
+                >
+                  Read on {col.source} <ArrowUpRight size={12} aria-hidden="true" />
+                  {col.starNote && (
+                    <span style={{ fontWeight: 500, color: 'var(--cl-text-secondary)' }}>
+                      · {col.starNote}
+                    </span>
+                  )}
+                </a>
+              ) : null,
+            )}
           </div>
         </Section>
       );
+    }
 
     default:
       return null;
