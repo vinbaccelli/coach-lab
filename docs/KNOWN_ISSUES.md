@@ -34,9 +34,15 @@ keeping `--cl-accent` for fills, borders, icons and selected states. This touche
 `styles/tokens.css` and DESIGN.md, so it needs a deliberate design-system pass
 rather than a drive-by edit.
 
-**Not fixed here.** Tokens were explicitly out of scope for the coach-profile
-work. Three links on `components/coach/CoachPublicProfile.tsx` still carry the
-accent as text ("See how it works", "Read on Trustpilot", "Read on Google"), left
+**Not fixed here.** Tokens were explicitly out of scope. Three links on
+`components/coach/CoachPublicProfile.tsx` still carry the accent as text ("See
+how it works", "Read on Trustpilot", "Read on Google"), and `app/pricing/page.tsx`
+has three more instances of the *fill* half of the same problem — white text on a
+System Blue fill is also 4.02:1 (the active billing toggle, its "2 months free"
+label, and the "Choose Pro" button). Those three are DESIGN.md's own documented
+`button-primary` (System Blue fill, Panel white text), so they are the system's
+specification rather than local drift, and they clear the moment the token does.
+The remaining accent uses on that page were changed to ink, left
 consistent with the rest of the app rather than fragmented with a one-off colour.
 The brand wordmark's blue "Motion" also measures 3.96:1, but a logotype is
 exempt under WCAG 1.4.3.
@@ -107,44 +113,45 @@ anyway), and it will be overwritten the first time Vin saves his profile.
 
 ---
 
-## 004 — `coach_services` and `coach_links` do not exist in the production database
+## 004 — `coach_services` and `coach_links` did not exist in production — RESOLVED
 
-**Found:** 2026-09-05, same query.
+**Found:** 2026-09-05. **Resolved:** 2026-09-09, verified live.
 
-**Symptom.** Every coach profile driven by the database renders with no services
-and no links, silently.
+**Was.** PostgREST returned `PGRST205 — Could not find the table
+'public.coach_services' in the schema cache` for both tables, so every
+database-driven profile rendered with no services and no links, silently.
 
-**Verified root cause.** PostgREST returns
-`PGRST205 — Could not find the table 'public.coach_services' in the schema cache`
-for both tables. `lib/supabase/schema.sql` defines them, but that schema was
-never fully applied to the production project. `app/coach/[slug]/page.tsx` reads
-`servicesRes.data ?? []`, so a missing table degrades to an empty list with no
-error surfaced anywhere.
+**Now.** Both tables exist, RLS is enabled on both, and each carries a public
+SELECT plus an owner-scoped `FOR ALL` policy with the ownership expression
+`profile_id IN (SELECT id FROM coach_profiles WHERE user_id = auth.uid())` on
+both USING and WITH CHECK. Verified against the live database on 2026-09-09:
 
-**Fault assessment.** Environment/provisioning gap, made invisible by defensive
-null-coalescing. The `PUT` handler in `app/api/coach-profile/route.ts` is also
-affected: it deletes from `coach_services` without checking the returned error,
-then inserts — so saving a profile that has any services should return a 500,
-while a profile with none appears to save fine. **This means the profile editor's
-save path is probably broken in production and nobody would have seen why.**
+```
+information_schema.tables → coach_links, coach_services
+pg_class.relrowsecurity   → true, true
+pg_policies               → "Public can view services" (SELECT),
+                            "Coaches manage own services" (ALL)
+                            "Public can view links"    (SELECT),
+                            "Coaches manage own links" (ALL)
+```
 
-**Partially fixed (2026-09-06).** The `PUT` handler no longer swallows the
-delete errors: a failure on `coach_services` or `coach_links` now returns a
-descriptive message instead of an opaque 500, and `CoachProfileEditor` renders
-it — previously `handleSave` had no `else` branch at all, so a failed save left
-the button reading "Save" and told the coach nothing. The handler also validates
-name, slug, tagline, bio and avatar URL lengths up front, and rejects a `data:`
-URL in `avatar_url` (a raw image pushed into a text column, the classic silent
-oversized-payload 500).
+The applied migration used different policy NAMES than the draft in
+`lib/supabase/schema.sql` ("Public can view services" vs "Services are public")
+and a single `FOR ALL` policy instead of split INSERT/UPDATE/DELETE. Both are
+functionally equivalent and correctly scoped — no action needed.
 
-**Still outstanding.** The tables themselves are still missing from production.
-Applying schema is Vin's call.
+**Also fixed along the way (2026-09-06).** The `PUT` handler no longer swallows
+the delete errors, and validates name, slug, tagline, bio and avatar URL lengths
+up front.
 
-**Severity:** high — a shipped editor feature likely does not work.
+**Superseded by 009.** The tables exist, but `coach_services` was created with
+different COLUMN names than the code reads and writes. See below.
+
+**Severity:** resolved as written; the remaining problem is tracked as 009.
 
 ---
 
-## 005 — The static `PROFILES` map shipped fabricated Stripe URLs
+## 005 — The static `PROFILES` map shipped fabricated Stripe URLs — RESOLVED
 
 **Found and fixed:** 2026-09-05.
 
@@ -166,7 +173,7 @@ was one deleted row away from sending a real buyer to a broken checkout.
 
 ---
 
-## 006 — Coach profile photo upload fails silently
+## 006 — Coach profile photo upload fails silently — RESOLVED
 
 **Found and fixed (client side):** 2026-09-06, reported by Vin: "can't upload my
 profile picture".
@@ -225,9 +232,162 @@ That also removes file size as a variable — the upload is well under 200 kB
 regardless of the source photo. Non-images and files over 15 MB are refused at
 the picker with a plain-language message rather than failing later.
 
-**Outstanding — needs a production migration, Vin's call.** The three policies
-are written out at the end of `lib/supabase/schema.sql` under "Storage RLS
-policies" and are **not applied**. Until they run, uploads still fail — but now
-with a clear on-screen explanation instead of silence.
+**RESOLVED 2026-09-09 — storage policies are applied.** Verified live against
+`pg_policies` for `storage.objects`, filtered to the bucket. All four exist and
+match the specification exactly:
 
-**Severity:** high — a shipped user-facing feature has never worked.
+```
+INSERT  "Coaches upload own avatar"   {authenticated}
+        WITH CHECK bucket_id='coach-avatars' AND foldername(name)[1]=auth.uid()
+UPDATE  "Coaches replace own avatar"  {authenticated}   (USING + WITH CHECK)
+DELETE  "Coaches delete own avatar"   {authenticated}
+SELECT  "Public can read avatars"     {public}  USING bucket_id='coach-avatars'
+```
+
+Both halves of this issue are now closed: the client writes to
+`<user-id>/<timestamp>.jpg` (matching the policy's folder rule) and the policies
+exist to permit it. Vin should confirm one real upload end-to-end through
+`/profile`, which is the only part that cannot be verified from here.
+
+**Severity:** resolved.
+
+---
+
+## 007 — Light advertises $10 but Stripe charges $5
+
+**Found:** 2026-09-08, building the founding-pricing page. **BLOCKS DEPLOY.**
+
+**Symptom (if shipped as-is).** `/pricing` advertises Light at $10/month and
+$100/year. Checkout would charge $5/month or $50/year.
+
+**Verified root cause.** The advertised price moved to founding pricing in
+`lib/plans.ts`; the Stripe prices behind it did not. Read live from the Stripe
+API on 2026-09-08 using the configured env vars:
+
+```
+STRIPE_PRICE_LIGHT_MONTHLY    → $5.00/month    active=true  livemode=true
+STRIPE_PRICE_LIGHT_YEARLY     → $50.00/year    active=true  livemode=true
+STRIPE_PRICE_MONTHLY   (Pro)  → $20.00/month   ✓ matches
+STRIPE_PRICE_YEARLY    (Pro)  → $200.00/year   ✓ matches
+STRIPE_PRICE_ACADEMY_MONTHLY  → $40.00/month   ✓ matches
+STRIPE_PRICE_ACADEMY_YEARLY   → $400.00/year   ✓ matches
+```
+
+`priceIdFor()` resolves the tier to whatever ID the env var holds and never
+compares it to the advertised number, so the mismatch is silent — the checkout
+route's only guard is "is a price ID configured at all".
+
+**Fault assessment.** Configuration, not code. Four of six prices are already
+correct; only Light moved. There is no automated guard against advertised-price
+drift, which is why this could only be caught by querying Stripe.
+
+**Fix — Vin's action, not applicable from code.** Create two new LIVE recurring
+prices in Stripe ($10/month and $100/year, USD), then repoint
+`STRIPE_PRICE_LIGHT_MONTHLY` and `STRIPE_PRICE_LIGHT_YEARLY` at the new IDs.
+Leave the old $5/$50 prices active so existing Light subscribers keep their
+grandfathered rate — which is exactly what the founding-pricing promise says.
+
+**Severity:** high until the env vars are repointed — advertised price would not
+match the amount charged.
+
+---
+
+## 008 — Light's feature list promised the Academy while middleware blocked it — RESOLVED
+
+**Found:** 2026-09-08, same pass.
+
+**Symptom.** The Light tier now lists `AngleMotion Academy` as an included
+feature. A Light subscriber who clicks through to `/academy` is redirected to
+`/pricing?required=1`.
+
+**Verified root cause.** `middleware.ts:86`:
+
+```js
+// Only 'light' is blocked from the academy; unknown/missing tier is
+// treated as allowed (fail open) so a missing column never locks anyone out.
+const academyOk = sub?.tier !== 'light';
+```
+
+The gate predates the founding-pricing feature list, where the Academy moved
+from Pro-only down to Light.
+
+**Fault assessment.** An entitlement decision, not a bug in the gate's
+implementation — the gate does exactly what it says. Which of the two is wrong
+is a pricing decision only Vin can make.
+
+**RESOLVED 2026-09-09 — entitlement widened, option (a), on Vin's decision.**
+The `academyOk` term is gone from `middleware.ts`; `/academy` now requires only
+an active subscription, the same condition as `/analysis`.
+
+Verified before changing that this was the ONLY Light exclusion: all four
+`/api/academy/*` routes carry no tier logic at all, `app/academy/page.tsx` does
+no gating, and `lib/stripe.ts:34` is the price→tier reverse map rather than a
+gate. `middleware.ts:86` was the single carve-out.
+
+Also caught in the same pass: `components/LandingPage.tsx` still read "Included
+with the Pro plan." under the Academy section, which the change made false. Now
+"Included with every plan."
+
+**Related, still true:** the Academy contains **zero** resources in production
+(`academy_resources` = 0 rows, verified 2026-09-08), so no tier receives content
+today. That is a content gap, not an entitlement bug, and it constrains how the
+Academy should be marketed.
+
+**Severity:** resolved.
+
+---
+
+## 009 — `coach_services` column names do not match the code
+
+**Found:** 2026-09-09, re-verifying 004 against the live database.
+
+**Symptom.** Saving a profile that has any services returns an error, and any
+service row that did exist would render with a blank title and a `#` link.
+`coach_links` is unaffected — its columns match the code exactly.
+
+**Verified root cause.** The applied migration created `coach_services` with a
+different column vocabulary than the application reads and writes. Live
+`information_schema.columns` vs. the code:
+
+| live column     | code expects | used at |
+|-----------------|--------------|---------|
+| `name`          | `title`      | route.ts:158, page.tsx:68, editor |
+| `price_label`   | `price`      | route.ts:161 |
+| `stripe_url`    | `cta_url`    | route.ts:162 |
+| *(absent)*      | `cta_label`  | route.ts:160 |
+
+Reproduced through PostgREST with the anon key:
+
+```
+GET /rest/v1/coach_services?select=title,price,cta_label,cta_url
+→ {"code":"42703","message":"column coach_services.title does not exist"}
+
+GET /rest/v1/coach_services?select=name,price_label,stripe_url
+→ []   (succeeds)
+```
+
+**Fault assessment.** Schema drift, not a code bug. `lib/supabase/schema.sql`
+defines `title` / `price` / `cta_label` / `cta_url`, and all three consumers
+(`app/api/coach-profile/route.ts`, `app/coach/[slug]/page.tsx`,
+`components/coach/CoachProfileEditor.tsx`) agree with it — so the file and the
+application are consistent with each other and only production differs.
+
+`cta_url` is also the more accurate name: that column holds WhatsApp and
+coachlife.com destinations as well as Stripe links, so `stripe_url` would be
+wrong even if the code were changed to match it.
+
+**Proposed fix — align production to the schema file. Both tables are EMPTY
+(0 rows, verified), so the rename is data-safe:**
+
+```sql
+alter table coach_services rename column name        to title;
+alter table coach_services rename column price_label to price;
+alter table coach_services rename column stripe_url  to cta_url;
+alter table coach_services add column if not exists cta_label text default 'Book Now';
+```
+
+**Not applied.** Schema changes to production are Vin's to run, consistent with
+every other migration this session.
+
+**Severity:** high — the coach services feature cannot work until the names
+agree, and the failure is a 500 on save.

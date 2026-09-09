@@ -69,9 +69,16 @@ export async function middleware(req: NextRequest) {
 
     // ── Subscription gate ───────────────────────────────────────────────────
     // /analysis  → any active tier (Light / Pro / Academy).
-    // /academy   → Pro or Academy only (Light is analysis-with-metrics).
+    // /academy   → any active tier as well, as of 2026-09-09.
+    //
+    // The Academy used to be Pro-and-above: `academyOk = sub?.tier !== 'light'`.
+    // Founding pricing moved AngleMotion Academy into Light's feature list
+    // (lib/plans.ts), so that exclusion would have made /pricing promise a
+    // feature the app denied — see docs/KNOWN_ISSUES.md 008. Entitlement was
+    // widened rather than the claim narrowed, on Vin's decision.
+    //
     // Admins bypass. Fails OPEN on query errors so an infra hiccup never locks
-    // paying coaches out. `tier` defaults to 'pro' for pre-tier rows.
+    // paying coaches out.
     const gated = pathname.startsWith('/analysis') || pathname.startsWith('/academy');
     if (gated && !isAdmin(user.email)) {
       try {
@@ -80,11 +87,11 @@ export async function middleware(req: NextRequest) {
           .select('status, tier')
           .eq('user_id', user.id)
           .maybeSingle<{ status: string; tier: string | null }>();
+        // Both gated routes now need the same thing: an active subscription.
+        // No per-tier carve-out remains, so there is nothing tier-specific to
+        // check here.
         const active = sub?.status === 'active' || sub?.status === 'trialing';
-        // Only 'light' is blocked from the academy; unknown/missing tier is
-        // treated as allowed (fail open) so a missing column never locks anyone out.
-        const academyOk = sub?.tier !== 'light';
-        let allowed = active && (!pathname.startsWith('/academy') || academyOk);
+        let allowed = active;
 
         // No active subscription → fall back to the free 1-hour trial (one per
         // account, full access to every tool). start_trial() stamps

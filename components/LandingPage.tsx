@@ -338,22 +338,31 @@ const TRUSTPILOT_APP_URL = 'https://www.trustpilot.com/review/anglemotion.com';
 /* Verified competitor comparison. y = yes, n = no, q = unknown. Pro tier vs
    Pro tier: CoachNow PRO $499.99/yr (coachnow.com/pricing); Dartfish 360 S
    ≈ €40/mo (dartfish.com/plans) — their ~$5/mo Express tier is mobile-only and
-   not comparable. Unknowns stay '?'; nothing here is estimated. */
-const COMPARE_COLS = ['AngleMotion', 'CoachNow', 'Dartfish'];
+   not comparable; OnForm Coach Pro $599.99/yr (onform.com/pricing) — their coach
+   ladder is Basic $199.99 / Standard $399.99 / Pro $599.99 per year and, in
+   their own words, "Coach prices multiply by Number of coaches", so five coaches
+   is five times that before their 11% 3+-seat discount. Read off the live
+   pricing page 2026-09-09.
+
+   Unknowns stay '?'; nothing here is estimated. OnForm's row is mostly '?' on
+   purpose: only drawing/telestration and the athlete database are stated
+   outright on their pricing page, and a feature nobody has verified is not
+   marked 'n' just to make the column look decisive. */
+const COMPARE_COLS = ['AngleMotion', 'CoachNow', 'Dartfish', 'OnForm'];
 const COMPARE_ROWS: Array<{ label: string; cells: Array<'y' | 'n' | 'q' | string> }> = [
-  { label: 'Price (Pro tier, annual)', cells: ['$200/yr', '$499/yr', '~€480/yr'] },
-  { label: 'AI pose / skeleton overlay', cells: ['y', 'y', 'y'] },
-  { label: 'Angle measurement (auto)', cells: ['y', 'y', 'y'] },
-  { label: 'Editable AI skeleton (override by hand)', cells: ['y', 'q', 'n'] },
-  { label: 'Slow-mo / frame-by-frame', cells: ['y', 'y', 'y'] },
-  { label: 'Drawing / telestration', cells: ['y', 'y', 'y'] },
-  { label: 'Side-by-side compare', cells: ['y', 'y', 'y'] },
-  { label: 'Motion Layer / motion-trail composite', cells: ['y', 'n', 'y'] },
-  { label: 'Coaching report (Google Docs)', cells: ['y', 'q', 'q'] },
-  { label: 'Player database / client file', cells: ['y', 'y', 'q'] },
-  { label: 'Videos stay local (no cloud lock-in)', cells: ['y', 'n', 'n'] },
-  { label: 'One-click YouTube publish', cells: ['y', 'q', 'q'] },
-  { label: 'SwingVision stat import (Match Decoder)', cells: ['y', 'n', 'n'] },
+  { label: 'Price (Pro tier, annual)', cells: ['$200/yr', '$499/yr', '~€480/yr', '$599/yr'] },
+  { label: 'AI pose / skeleton overlay', cells: ['y', 'y', 'y', 'q'] },
+  { label: 'Angle measurement (auto)', cells: ['y', 'y', 'y', 'q'] },
+  { label: 'Editable AI skeleton (override by hand)', cells: ['y', 'q', 'n', 'q'] },
+  { label: 'Slow-mo / frame-by-frame', cells: ['y', 'y', 'y', 'q'] },
+  { label: 'Drawing / telestration', cells: ['y', 'y', 'y', 'y'] },
+  { label: 'Side-by-side compare', cells: ['y', 'y', 'y', 'q'] },
+  { label: 'Motion Layer / motion-trail composite', cells: ['y', 'n', 'y', 'q'] },
+  { label: 'Coaching report (Google Docs)', cells: ['y', 'q', 'q', 'q'] },
+  { label: 'Player database / client file', cells: ['y', 'y', 'q', 'y'] },
+  { label: 'Videos stay local (no cloud lock-in)', cells: ['y', 'n', 'n', 'q'] },
+  { label: 'One-click YouTube publish', cells: ['y', 'q', 'q', 'q'] },
+  { label: 'SwingVision stat import (Match Decoder)', cells: ['y', 'n', 'n', 'q'] },
 ];
 
 const FAQS = [
@@ -538,7 +547,9 @@ export default function LandingPage() {
             use it to sharpen their eye. Players and parents use it to analyse themselves properly
             instead of guessing.
           </p>
-          <p className="am-note">Included with the Pro plan.</p>
+          {/* Every paid tier as of 2026-09-09 — the Academy moved down to
+              Light with founding pricing (lib/plans.ts, middleware.ts). */}
+          <p className="am-note">Included with every plan.</p>
         </div>
       </section>
 
@@ -972,12 +983,12 @@ const CSS = `
 
 /* COMPARE */
 .am-table-wrap { overflow-x: auto; border: 1px solid var(--cl-border); border-radius: var(--cl-radius-lg); }
-.am-table { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 560px; }
+.am-table { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 680px; }
 .am-table th, .am-table td { padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--cl-border-subtle); }
 .am-table thead th { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cl-text-secondary); font-weight: 700; }
 .am-table thead th.is-us { color: var(--cl-accent); }
 .am-table tbody th { font-weight: 500; color: var(--cl-text-secondary); }
-.am-table td { text-align: center; width: 132px; }
+.am-table td { text-align: center; width: 116px; }
 .am-table td.is-us { background: var(--cl-accent-soft); }
 .am-table tr:last-child th, .am-table tr:last-child td { border-bottom: none; }
 

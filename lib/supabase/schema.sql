@@ -216,7 +216,14 @@ create policy "Public can read avatars"
 -- Ownership is written INLINE rather than behind a helper function so the full
 -- expression is visible in pg_policies for auditing.
 --
--- Idempotent — safe to re-run. NOT YET APPLIED TO PRODUCTION.
+-- Idempotent — safe to re-run.
+--
+-- STATUS 2026-09-09: APPLIED. Both tables now exist in production with RLS and
+-- correct owner-scoped policies (verified live). The applied migration used
+-- different policy names and a single FOR ALL policy instead of the split
+-- INSERT/UPDATE/DELETE below — functionally equivalent, no action needed.
+-- It did, however, create coach_services with different COLUMN names; see the
+-- rename block at the end of this file.
 
 -- ── Tables ───────────────────────────────────────────────────────────────
 
@@ -308,3 +315,36 @@ create policy "Coaches update own links"
 create policy "Coaches delete own links"
   on coach_links for delete
   using (profile_id in (select id from coach_profiles where user_id = auth.uid()));
+
+-- ── MIGRATION: align coach_services column names with the application ────
+-- The applied migration created coach_services with a different column
+-- vocabulary than every consumer reads and writes. Verified live 2026-09-09:
+--
+--   live column    code expects   used at
+--   name        →  title          app/api/coach-profile/route.ts, app/coach/[slug]/page.tsx
+--   price_label →  price          app/api/coach-profile/route.ts
+--   stripe_url  →  cta_url        app/api/coach-profile/route.ts
+--   (absent)    →  cta_label      app/api/coach-profile/route.ts
+--
+-- Reproduced through PostgREST:
+--   select=title  → 42703 "column coach_services.title does not exist"
+--   select=name   → succeeds
+--
+-- `cta_url` rather than `stripe_url` is deliberate: that column also holds
+-- WhatsApp and coachlife.com destinations, so the Stripe-specific name would be
+-- wrong even if the code were changed to match it. coach_links already matches
+-- and is NOT touched here.
+--
+-- Both tables are EMPTY (0 rows, verified), so these renames are data-safe.
+--
+-- NOT YET APPLIED TO PRODUCTION — run in the Supabase SQL editor.
+
+alter table coach_services rename column name        to title;
+alter table coach_services rename column price_label to price;
+alter table coach_services rename column stripe_url  to cta_url;
+alter table coach_services add column if not exists cta_label text default 'Book Now';
+
+-- Verify (expect: title, price, cta_url, cta_label all present):
+--   select column_name from information_schema.columns
+--   where table_schema = 'public' and table_name = 'coach_services'
+--   order by ordinal_position;

@@ -11,7 +11,7 @@ import React, {
 import { createPortal, flushSync } from 'react-dom';
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Camera, Image as ImageIcon, Plus, Trash2, Upload } from 'lucide-react';
+import { Camera, Image as ImageIcon, PlayCircle, Plus, Trash2, Upload } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
@@ -644,6 +644,7 @@ function Home() {
   const [videoLoadErrorA, setVideoLoadErrorA] = useState<string | null>(null);
   /** Error loading the bundled strategy-board court asset (see loadBundledCourt) */
   const [courtLoadError, setCourtLoadError] = useState<string | null>(null);
+  const [demoLoadError, setDemoLoadError] = useState<string | null>(null);
   /** Drag-over state for the two video panels */
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
@@ -4098,6 +4099,28 @@ function Home() {
     }
   }, [handleVideoFile]);
 
+  /**
+   * Demo shortcut: loads the bundled demo clip into slot A through exactly the
+   * same File-based path as a real upload and as the court board above, so
+   * every tool behaves identically — no separate demo pipeline, no special
+   * casing anywhere downstream.
+   *
+   * This only loads the video. The tutorial walkthrough that will sit on top of
+   * it is deliberately not built yet.
+   */
+  const loadBundledDemo = useCallback(async () => {
+    setDemoLoadError(null);
+    try {
+      const res = await fetch('/Demodjokovic.mp4');
+      if (!res.ok) throw new Error(`missing asset (${res.status})`);
+      const blob = await res.blob();
+      const file = new File([blob], 'Demodjokovic.mp4', { type: blob.type || 'video/mp4' });
+      handleVideoFile(file, 'A');
+    } catch {
+      setDemoLoadError('Demo video is not set up yet. Ask your admin to add public/Demodjokovic.mp4.');
+    }
+  }, [handleVideoFile]);
+
   // ── Hub "Alternative — Screen Record" flow ────────────────────────────────
 
   /**
@@ -7229,6 +7252,34 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     {courtLoadError && (
                       <span style={{ fontSize: 12, color: '#CC3333', textAlign: 'center', maxWidth: 320 }}>
                         {courtLoadError}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={loadBundledDemo}
+                      style={{
+                        minHeight: 44,
+                        minWidth: 200,
+                        padding: '0 24px',
+                        borderRadius: 14,
+                        border: layoutMode === 'reels' ? '1px solid rgba(255,255,255,0.25)' : '1px solid #D1D1D6',
+                        background: 'transparent',
+                        color: layoutMode === 'reels' ? '#fff' : '#1D1D1F',
+                        fontSize: 14,
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        pointerEvents: 'auto',
+                      }}
+                    >
+                      <PlayCircle size={18} /> Demo (Tutorial)
+                    </button>
+                    {demoLoadError && (
+                      <span style={{ fontSize: 12, color: '#CC3333', textAlign: 'center', maxWidth: 320 }}>
+                        {demoLoadError}
                       </span>
                     )}
                     <span style={{ fontSize: 12, color: layoutMode === 'reels' ? 'rgba(255,255,255,0.45)' : '#8E8E93', textAlign: 'center', maxWidth: 320 }}>
