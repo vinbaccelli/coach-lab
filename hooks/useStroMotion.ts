@@ -29,6 +29,30 @@ import { useCallback, useRef, useState } from 'react';
 
 export type StroMotionHookStatus = 'idle' | 'configuring' | 'proposing' | 'generating' | 'ready';
 
+/**
+ * What the last Auto Detect pass actually achieved.
+ *
+ * Exists so the panel can show a real COMPLETION state. Before this the pass's
+ * only record was `console.log`, so when it finished the UI simply stopped saying
+ * "AI proposing mask…" and fell through to a generic hint — indistinguishable, to
+ * a coach, from a run that had silently died. `racketApplied` is the number that
+ * matters most: a pass can build every frame and still segment no implement.
+ */
+export interface StroAutoRunSummary {
+  /** Frames the pass was asked to build. */
+  framesAttempted: number;
+  /** Frames it actually committed. */
+  framesBuilt: number;
+  /** Was the auto-racket pass on for this object type at all? */
+  racketPassActive: boolean;
+  /** Frames where Phase A found a wrist-gated implement box. */
+  racketDetected: number;
+  /** Frames where Phase C segmented that box and unioned it into the mask. */
+  racketApplied: number;
+  elapsedMs: number;
+  finishedAt: number;
+}
+
 export interface StroMotionProgress {
   current: number;
   total: number;
@@ -124,6 +148,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
   const [activeFrameIndex, setActiveFrameIndex] = useState<number | null>(null);
   const [proposingFrameIndex, setProposingFrameIndex] = useState<number | null>(null);
   const [progress, setProgress] = useState<StroMotionProgress>({ current: 0, total: 0 });
+  const [lastAutoRun, setLastAutoRun] = useState<StroAutoRunSummary | null>(null);
   const draftRef = useRef<StroMotionDraft | null>(null);
   draftRef.current = draft;
   /** Consecutive syncDraft calls that changed nothing — see the no-op guard. */
@@ -166,6 +191,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     setActiveFrameIndex(null);
     setProposingFrameIndex(null);
     setProgress({ current: 0, total: 0 });
+    setLastAutoRun(null);
   }, [disposePlate]);
 
   const clearAll = useCallback(() => {
@@ -241,7 +267,31 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
           label: cur.label || f.label,
         };
       });
-      const merged = { ...next, frames: mergedFrames };
+      const merged = {
+        ...next,
+        frames: mergedFrames,
+        // BATCH BODY-SCALE REFERENCE — belt and braces over the initDraft carry.
+        //
+        // `ensureStroMotionDraft` captured `draftRef.current` as its `previous`
+        // BEFORE the await above, so a batch that stored the reference while that
+        // promise was in flight is visible in `current` but not in `next`. Taking
+        // `next`'s value first (it is the one built from this sync's inputs, and
+        // is null only when the footage genuinely changed) and falling back to
+        // `current` closes that window. The value can therefore go null→set or
+        // stay put, but a resync can never drop one that already exists.
+        //
+        // The fallback is itself gated on SAME FOOTAGE. The early returns above
+        // compare backgroundTimeSec and objectType but NOT the video dimensions,
+        // so a clip swapped for one of a different size can reach this merge —
+        // and an unguarded fallback would resurrect a reference measured on the
+        // old footage, re-scaling the wrist gate to the wrong athlete. A scale
+        // from different pixels is worse than no scale at all.
+        batchUnitFloorNorm:
+          next.batchUnitFloorNorm ??
+          (current.videoWidth === next.videoWidth && current.videoHeight === next.videoHeight
+            ? current.batchUnitFloorNorm ?? null
+            : null),
+      };
       // NO-OP GUARD — see draftsEquivalent. Keeping the existing reference when
       // nothing changed stops a re-firing caller from turning every sync into a
       // render into another sync ("Maximum update depth exceeded").
@@ -333,6 +383,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       });
       return { ...prev, frames, batchUnitFloorNorm: null };
     });
+    setLastAutoRun(null);
     invalidatePreview();
     console.log(`[StroMotion] cleared selections on ${cleared} frame(s) — Auto Detect will re-run the full batch`);
     return cleared;
@@ -528,6 +579,13 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     const current = draftRef.current;
     if (!video || !current || specs.length === 0) return 0;
 
+    // Auto Detect's OUTCOME, for the panel to report. Until now the only record
+    // that the pass had finished — and of how much of it actually worked — was the
+    // console, so the UI fell through to a generic "mark each frame Ready" hint and
+    // the coach could not tell a complete run from a stalled one.
+    const startedAt = Date.now();
+    let racketApplied = 0;
+    setLastAutoRun(null);
     setStatus('proposing');
 
     // NOTE: no SAM work happens in this pass, deliberately.
@@ -882,6 +940,17 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     if (built.length === 0) {
       setStatus('configuring');
       setProgress({ current: 0, total: 0 });
+      // A run that built nothing still FINISHED. Reporting it is the whole point:
+      // silence here is what made a failed pass look like a hung one.
+      setLastAutoRun({
+        framesAttempted: specs.length,
+        framesBuilt: 0,
+        racketPassActive,
+        racketDetected: racketBoxes.size,
+        racketApplied: 0,
+        elapsedMs: Date.now() - startedAt,
+        finishedAt: Date.now(),
+      });
       return 0;
     }
 
@@ -913,6 +982,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             hit,
           });
           if (r.applied) {
+            racketApplied += 1;
             b.aiSnapshot = r.mask;
             // The editor opens on `working`, so the coach sees the racket already
             // in the mask and can brush or re-click from there.
@@ -956,6 +1026,15 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     invalidatePreview();
     setStatus('configuring');
     setProgress({ current: 0, total: 0 });
+    setLastAutoRun({
+      framesAttempted: specs.length,
+      framesBuilt: built.length,
+      racketPassActive,
+      racketDetected: racketBoxes.size,
+      racketApplied,
+      elapsedMs: Date.now() - startedAt,
+      finishedAt: Date.now(),
+    });
     return built.length;
   }, [invalidatePreview, videoRef, getBackgroundPlate]);
 
@@ -1114,6 +1193,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     isGenerating: status === 'generating',
     isProcessing: status === 'proposing' || status === 'generating',
     progress,
+    lastAutoRun,
     syncDraft,
     updateFrameTime,
     updateFrameLabel,

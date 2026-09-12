@@ -27,7 +27,10 @@ import {
 import {
   applyBrushToMask,
   cloneAlphaMask,
-  floodRemoveInMask,
+  FLOOD_TOLERANCE_DEFAULT,
+  FLOOD_TOLERANCE_MAX,
+  FLOOD_TOLERANCE_MIN,
+  floodInMask,
   type AlphaMask,
   type BrushMode,
 } from '@/lib/stroMotionDraft';
@@ -141,6 +144,18 @@ export default function FrameMaskEditor({
   const containerRef = useRef<HTMLDivElement>(null);
   const [brushMode, setBrushMode] = useState<EditorTool>('add');
   const [brushSize, setBrushSize] = useState(18);
+  /**
+   * Flood colour tolerance, shared by both flood buttons.
+   *
+   * Surfaced because the one fixed value could not serve both jobs: a racket
+   * against sky wants a wide tolerance, the same racket against a busy crowd wants
+   * a narrow one, and with no control the coach's only recourse was to undo and
+   * reach for the brush. One slider for both directions — the direction is the
+   * button, the sensitivity is this.
+   */
+  const [floodTolerance, setFloodTolerance] = useState(FLOOD_TOLERANCE_DEFAULT);
+  /** Either flood tool — a single-shot click fill, not a drag brush. */
+  const isFlood = brushMode === 'flood-add' || brushMode === 'flood-remove';
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [showCompositePreview, setShowCompositePreview] = useState(false);
@@ -237,11 +252,51 @@ export default function FrameMaskEditor({
 
   // ── PRECISION TOUCH (Motion Layer) ───────────────────────────────────────
   // Additive layer over the existing brush/selection pipeline. Every part of it
-  // is inert when ENABLE_MOTION_LAYER_PRECISION is false — see lib/featureFlags.
+  // is inert unless `precisionAvailable` below is true — the ENABLE_MOTION_LAYER_
+  // PRECISION kill switch (see lib/featureFlags) AND real touch hardware.
   const [precisionOn, setPrecisionOn] = useState(false);
   const precisionCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  /**
+   * IS PRECISION TOUCH OFFERABLE ON THIS DEVICE?
+   *
+   * The flag alone is not the answer, and shipping it as if it were put a
+   * Precision button on DESKTOP — where it is not merely unwanted but INERT:
+   * `usePrecisionTouch` arms only on `e.pointerType === 'touch'` (both the anchor
+   * path and the hold-to-activate path), so a mouse user could switch the mode on
+   * and nothing would ever happen. The gesture itself — hold one finger, read the
+   * crosshair offset above it, commit with a second finger — has no meaning
+   * without a finger covering the target.
+   *
+   * REAL TOUCH HARDWARE, not just a narrow window. `isMobile` is a media query
+   * that also matches a half-snapped laptop window (≤768px), so it is paired with
+   * the same `(hover: none) and (pointer: coarse)` probe the analysis route uses
+   * for its orientation switch, for exactly that reason. Live-subscribed rather
+   * than read once: attaching a trackpad to a tablet changes the answer.
+   *
+   * Resolved in an effect so the server render and the first client render agree
+   * (no matchMedia during SSR, no hydration mismatch) — it starts false and the
+   * button appears only once touch hardware is confirmed.
+   */
+  const [coarsePointer, setCoarsePointer] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(hover: none) and (pointer: coarse)');
+    const apply = () => setCoarsePointer(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+  const precisionAvailable = ENABLE_MOTION_LAYER_PRECISION && isMobile && coarsePointer;
+
+  // Never leave the mode latched on a device that can no longer drive it (window
+  // widened, trackpad attached). Mirrors the main canvas's desktop reset.
+  useEffect(() => {
+    if (!precisionAvailable && precisionOn) setPrecisionOn(false);
+  }, [precisionAvailable, precisionOn]);
+
   const precision = usePrecisionTouch<{ x: number; y: number }>({
-    enabled: ENABLE_MOTION_LAYER_PRECISION,
+    enabled: precisionAvailable,
     active: precisionOn,
     canvasRef,
     // The hook hands points straight back in CLIENT space, because that is what
@@ -250,7 +305,7 @@ export default function FrameMaskEditor({
     // same rect maths the click uses.
     clientToLocal: (clientX, clientY) => ({ x: clientX, y: clientY }),
     // Brush and selection only. 'racket' is a click tool with its own reticle
-    // and 'flood-remove' is a single-shot fill; neither benefits from an anchor.
+    // and the flood tools are single-shot fills; neither benefits from an anchor.
     isHoldEligible: () => brushMode === 'add' || brushMode === 'remove',
     onActivate: () => setPrecisionOn(true),
     onCommit: (p) => applyAtPoint(p.x, p.y, true),
@@ -290,14 +345,14 @@ export default function FrameMaskEditor({
    * Repaint on mount, and whenever zoom/pan move the canvas under the crosshair.
    */
   useEffect(() => {
-    if (!ENABLE_MOTION_LAYER_PRECISION || !precisionOn) return;
+    if (!precisionAvailable || !precisionOn) return;
     drawPrecisionCrosshair();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [precisionOn, zoom, pan.x, pan.y]);
+  }, [precisionAvailable, precisionOn, zoom, pan.x, pan.y]);
 
   /**
    * Precision only means something for the paint brushes. Leaving them (to the
-   * racket click tool or flood-remove) exits cleanly rather than stranding the
+   * racket click tool or either flood tool) exits cleanly rather than stranding the
    * coach in a mode with no anchor.
    */
   useEffect(() => {
@@ -438,7 +493,22 @@ export default function FrameMaskEditor({
         console.warn('[samRacket] prepare failed:', e);
         if (live) {
           setRacketReady(false);
-          setRacketNote('Object select could not prepare this frame.');
+          // SAY WHAT ACTUALLY FAILED. This arm is the THROW path — distinct from
+          // the "returned nothing" arm above — and it swallowed the reason, so a
+          // coach (and anyone they reported it to) had one sentence that fitted a
+          // missing asset, a dead WebGPU adapter and a genuine bug equally well.
+          //
+          // The asset case is the likely one and the only one with a self-serve
+          // fix: SAM is self-hosted from /models/sam2/** and /ort/**, and
+          // public/ort/ is NOT committed — it is generated by
+          // scripts/copy-ort-wasm.mjs on postinstall/predev/prebuild. A checkout
+          // or deploy that skipped that step fails exactly here.
+          const msg = e instanceof Error ? e.message : String(e);
+          const looksLikeMissingAsset = /fetch|404|not found|failed to load|wasm|\.onnx|network/i.test(msg);
+          setRacketNote(
+            `Object select could not prepare this frame — ${msg}`
+            + (looksLikeMissingAsset ? ' (segmenter files missing — reinstall/rebuild to restage /ort and /models)' : ''),
+          );
         }
       } finally {
         if (live) setRacketPreparing(false);
@@ -792,9 +862,16 @@ export default function FrameMaskEditor({
       }
 
       let next: AlphaMask;
-      if (brushMode === 'flood-remove' && sourcePixelsRef.current) {
-        dbg('[TEMP-DEBUG-BAIL] mode branch: flood-remove -> proceeding');
-        next = floodRemoveInMask(maskRef.current, sourcePixelsRef.current, canvas.width, x, y);
+      if ((brushMode === 'flood-add' || brushMode === 'flood-remove') && sourcePixelsRef.current) {
+        dbg(`[TEMP-DEBUG-BAIL] mode branch: ${brushMode} -> proceeding`);
+        next = floodInMask(maskRef.current, sourcePixelsRef.current, canvas.width, x, y, {
+          mode: brushMode === 'flood-add' ? 'add' : 'remove',
+          tolerance: floodTolerance,
+          // BOUNDED BY THE COACH'S OWN BOX. Without this the fill can leave the
+          // selection through similarly-coloured pixels and clear parts of the
+          // athlete on the way back.
+          bounds: selectionBox,
+        });
       } else if (brushMode === 'add' || brushMode === 'remove') {
         dbg(`[TEMP-DEBUG-BAIL] mode branch: ${brushMode} -> proceeding to applyBrushToMask`);
         next = applyBrushToMask(maskRef.current, x, y, brushSize * scaleX, brushMode);
@@ -835,7 +912,7 @@ export default function FrameMaskEditor({
       onMaskChange(next);
       dbg('[TEMP-DEBUG-BAIL] onMaskChange(next) call returned (onMaskChange is synchronous dispatch)');
     },
-    [brushMode, brushSize, onMaskChange, pushUndo, zoom, autoMatteBusy, isRegenerating],
+    [brushMode, brushSize, floodTolerance, selectionBox, onMaskChange, pushUndo, zoom, autoMatteBusy, isRegenerating],
   );
 
   // Auto BG IS auto-detect, for this one frame: it re-runs the very same
@@ -1110,11 +1187,29 @@ export default function FrameMaskEditor({
           </button>
           <button
             type="button"
-            style={{ ...toolBtn, ...(brushMode === 'flood-remove' ? activeTool : {}) }}
-            onClick={() => setBrushMode('flood-remove')}
-            title="Flood cut — click a colour region to erase connected area"
+            style={{ ...toolBtn, ...(brushMode === 'flood-add' ? activeTool : {}), ...(selectionBox ? {} : { opacity: 0.4 }) }}
+            onClick={() => setBrushMode('flood-add')}
+            // NO BOX, NO FLOOD. The fill's only safeguard is the selection box it
+            // may not leave; without one it would walk the whole frame, which is
+            // the exact failure this tool was just fixed for. The brushes and the
+            // Object tool still work.
+            disabled={!selectionBox}
+            title={selectionBox
+              ? 'Flood ADD — click a colour region inside the box to add all of it to the selection. Only ever adds.'
+              : 'Flood needs a selection area first — use Select Area, then flood inside it.'}
           >
-            <Droplets size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Flood
+            <Droplets size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Flood +
+          </button>
+          <button
+            type="button"
+            style={{ ...toolBtn, ...(brushMode === 'flood-remove' ? activeTool : {}), ...(selectionBox ? {} : { opacity: 0.4 }) }}
+            onClick={() => setBrushMode('flood-remove')}
+            disabled={!selectionBox}
+            title={selectionBox
+              ? 'Flood REMOVE — click a colour region to cut all of it out of the selection. Only ever removes.'
+              : 'Flood needs a selection area first — use Select Area, then flood inside it.'}
+          >
+            <Droplets size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Flood −
           </button>
           {racketKey ? (
             <button
@@ -1126,7 +1221,7 @@ export default function FrameMaskEditor({
               <Target size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Object
             </button>
           ) : null}
-          {ENABLE_MOTION_LAYER_PRECISION && (brushMode === 'add' || brushMode === 'remove') ? (
+          {precisionAvailable && (brushMode === 'add' || brushMode === 'remove') ? (
             <button
               type="button"
               style={{ ...toolBtn, ...(precisionOn ? activeTool : {}) }}
@@ -1144,11 +1239,30 @@ export default function FrameMaskEditor({
               max={96}
               value={brushSize}
               onChange={(e) => setBrushSize(Number(e.target.value))}
-              disabled={brushMode === 'flood-remove'}
+              disabled={isFlood}
               style={{ width: 80 }}
             />
             <span style={{ minWidth: 22, textAlign: 'right' }}>{brushSize}</span>
           </label>
+          {/* Flood sensitivity — only meaningful while a flood tool is selected,
+              so it appears with them rather than sitting inert in the toolbar. */}
+          {isFlood ? (
+            <label
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+              title="Flood tolerance — how close in colour a pixel must be to the one you click. Lower = tighter."
+            >
+              <Droplets size={12} />
+              <input
+                type="range"
+                min={FLOOD_TOLERANCE_MIN}
+                max={FLOOD_TOLERANCE_MAX}
+                value={floodTolerance}
+                onChange={(e) => setFloodTolerance(Number(e.target.value))}
+                style={{ width: 80 }}
+              />
+              <span style={{ minWidth: 22, textAlign: 'right' }}>{floodTolerance}</span>
+            </label>
+          ) : null}
           <div style={{ width: 1, height: 22, background: 'rgba(255,255,255,0.15)', margin: '0 2px' }} />
           <button
             type="button"
@@ -1290,8 +1404,11 @@ export default function FrameMaskEditor({
                 ))}
               </span>
             ) : null}
+            {/* wordBreak: the note can now carry a raw error string, which has no
+                spaces to wrap at (URLs, wasm paths) and would otherwise push the
+                toolbar wider than the panel. */}
             {racketNote ? (
-              <span style={{ fontSize: 12, color: '#FFD08A', width: '100%' }}>{racketNote}</span>
+              <span style={{ fontSize: 12, color: '#FFD08A', width: '100%', wordBreak: 'break-word' }}>{racketNote}</span>
             ) : null}
           </div>
         ) : null}
@@ -1415,7 +1532,7 @@ export default function FrameMaskEditor({
               touchAction: 'none',
               // Matches the canvas above it. Racket included: the drawn reticle
               // is the only marker, so no native cursor anywhere in this box.
-              cursor: brushMode === 'flood-remove' ? 'cell' : 'none',
+              cursor: isFlood ? 'cell' : 'none',
               background: '#000',
               position: 'relative',
             }}
@@ -1482,7 +1599,7 @@ export default function FrameMaskEditor({
                 // cursor. Showing a native crosshair as well gave two markers,
                 // and since the drawn one trailed the native one, they visibly
                 // chased each other. Exactly one marker, drawn, mode-coloured.
-                cursor: brushMode === 'flood-remove' ? 'cell' : 'none',
+                cursor: isFlood ? 'cell' : 'none',
                 display: 'block',
               }}
               onPointerDown={(e) => {
@@ -1547,7 +1664,7 @@ export default function FrameMaskEditor({
                   }
                   return;
                 }
-                if (!paintingRef.current || brushMode === 'flood-remove') {
+                if (!paintingRef.current || isFlood) {
                   dbg(
                     `[TEMP-DEBUG-BAIL] onPointerMove guard: paintingRef=${paintingRef.current} brushMode=${brushMode} -> BAILING`,
                   );
@@ -1601,8 +1718,8 @@ export default function FrameMaskEditor({
             {/* Precision crosshair overlay. Same intrinsic size and CSS
                 transform as the edit canvas, so it shares one coordinate system
                 and zoom/pan move them together. Mounted only while precision is
-                actually on, and never at all when the feature flag is off. */}
-            {ENABLE_MOTION_LAYER_PRECISION && precisionOn ? (
+                actually on, and never at all when the feature is unavailable. */}
+            {precisionAvailable && precisionOn ? (
               <canvas
                 ref={precisionCanvasRef}
                 width={sourceFrame.width}
@@ -1621,7 +1738,7 @@ export default function FrameMaskEditor({
               />
             ) : null}
             {/* Brush circle cursor */}
-            {cursorPos && brushMode !== 'flood-remove' && brushMode !== 'racket' ? (
+            {cursorPos && !isFlood && brushMode !== 'racket' ? (
               <div
                 style={{
                   position: 'absolute',

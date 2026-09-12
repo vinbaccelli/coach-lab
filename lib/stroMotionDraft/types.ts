@@ -65,7 +65,15 @@ export interface StroMotionDraft {
   batchUnitFloorNorm?: number | null;
 }
 
-export type BrushMode = 'add' | 'remove' | 'flood-remove';
+/**
+ * Editor paint modes.
+ *
+ * The two flood modes are DELIBERATELY SEPARATE rather than one button with a
+ * modifier: a single flood that guessed the direction was the source of the
+ * "it adds what it shouldn't and removes what it shouldn't" confusion. One
+ * button adds, one removes, and neither can do the other.
+ */
+export type BrushMode = 'add' | 'remove' | 'flood-add' | 'flood-remove';
 
 /** Which frame is used as the still background plate for the composite. */
 export type StroMotionBackground = 'start' | 'end';
