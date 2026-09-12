@@ -832,6 +832,7 @@ function Home() {
     isGenerating: stroGenerating,
     isProcessing: stroMotionProcessing,
     progress: stroMotionProgress,
+    lastAutoRun: stroLastAutoRun,
     syncDraft: syncStroDraft,
     updateFrameTime: updateStroFrameTime,
     selectAreaForFrame: selectStroAreaForFrame,
@@ -2967,6 +2968,7 @@ function Home() {
       onGenerate={() => void handleStroGenerate()}
       onClear={softClearStroMotion}
       onAutoSelectAll={() => { void handleStroAutoSelectAll(); }}
+      lastAutoRun={stroLastAutoRun}
       previewPngUrl={stroPreviewPngUrl}
       previewVideoUrl={stroPreviewVideoUrl}
       isBuildingVideoPreview={stroIsBuildingVideoPreview}

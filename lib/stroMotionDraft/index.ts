@@ -26,7 +26,8 @@ export {
 } from '@/lib/stroMotionDraft/captureSource';
 export type { CaptureSource, CaptureSourceOptions } from '@/lib/stroMotionDraft/captureSource';
 export { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
-export { applyBrushStrokeToMask, applyBrushToMask, cloneAlphaMask, embedRegionMask, extractAlphaMaskFromBitmap, fillBoxMask, floodRemoveInMask, intersectMaskWithBox, mergeMasksPreferForeground, resampleAlphaMask } from '@/lib/stroMotionDraft/maskUtils';
+export { applyBrushStrokeToMask, applyBrushToMask, cloneAlphaMask, embedRegionMask, extractAlphaMaskFromBitmap, fillBoxMask, FLOOD_TOLERANCE_DEFAULT, FLOOD_TOLERANCE_MAX, FLOOD_TOLERANCE_MIN, floodInMask, intersectMaskWithBox, mergeMasksPreferForeground, resampleAlphaMask } from '@/lib/stroMotionDraft/maskUtils';
+export type { FloodMode, FloodOptions } from '@/lib/stroMotionDraft/maskUtils';
 export { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
 export type {
   AlphaMask,

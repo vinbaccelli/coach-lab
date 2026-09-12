@@ -112,21 +112,82 @@ export function applyBrushStrokeToMask(
   return next;
 }
 
-/** Click-to-remove: flood-fill similar pixels (from source frame) and clear mask alpha. */
-export function floodRemoveInMask(
+/** Which direction a flood click moves the mask. */
+export type FloodMode = 'add' | 'remove';
+
+/** Colour distance from the seed pixel that still counts as "the same region". */
+export const FLOOD_TOLERANCE_DEFAULT = 38;
+export const FLOOD_TOLERANCE_MIN = 4;
+export const FLOOD_TOLERANCE_MAX = 120;
+
+export interface FloodOptions {
+  mode: FloodMode;
+  /** Defaults to FLOOD_TOLERANCE_DEFAULT. */
+  tolerance?: number;
+  /**
+   * NORMALIZED box the fill may not leave — pass the frame's selection box.
+   * Null/omitted floods the whole frame, which is almost never what a coach wants.
+   */
+  bounds?: { x: number; y: number; width: number; height: number } | null;
+}
+
+/**
+ * Click-to-flood: walk the pixels that look like the one clicked, and set the
+ * mask across them — ADD (255) or REMOVE (0).
+ *
+ * ── WHY THIS IS BOUNDED ───────────────────────────────────────────────────────
+ * The previous version walked purely on source-image colour similarity and never
+ * consulted the mask or any boundary. Neighbours were enqueued regardless of where
+ * they were, so a click on the court could leave the selection, cross the frame
+ * through similar pixels, and clear parts of the athlete on the way back — the
+ * "it removes parts that should stay" report. Colour similarity alone is not a
+ * region: a tennis court is the same colour on both sides of the player.
+ *
+ * The fix is a HARD WALK BOUNDARY rather than a cleverer colour test. Pixels
+ * outside `bounds` are never visited, so the fill physically cannot escape the box
+ * the coach drew. Inside it, connectivity still does the work it is good at.
+ *
+ * ── WHY SEED-RELATIVE COLOUR, NOT NEIGHBOUR-RELATIVE ──────────────────────────
+ * Every pixel is compared to the SEED, not to the pixel it came from. Neighbour-
+ * relative matching creeps: each small step is within tolerance, so a gradient
+ * walks the fill arbitrarily far from the colour actually clicked. Seed-relative
+ * under-fills a gradient instead, which is recoverable with the brush — the whole
+ * point of flood doing the bulk and the brush doing the fine-tuning.
+ *
+ * Squared distance, no `Math.hypot`, and no per-pixel neighbour array: this runs
+ * once per in-bounds pixel on a 1080p frame.
+ */
+export function floodInMask(
   mask: AlphaMask,
   sourcePixels: Uint8ClampedArray,
   sourceWidth: number,
   x: number,
   y: number,
-  tolerance = 38,
+  opts: FloodOptions,
 ): AlphaMask {
   const next = cloneAlphaMask(mask);
   const { width, height, data } = next;
   if (sourceWidth !== width) return next;
+
+  const value = opts.mode === 'add' ? 255 : 0;
+  const tolerance = opts.tolerance ?? FLOOD_TOLERANCE_DEFAULT;
+  const tol2 = tolerance * tolerance;
+
+  // Walk boundary, in frame px and inclusive. `padding: 0` so it is exactly the
+  // box the coach drew and the editor outlines in yellow.
+  const rect = opts.bounds
+    ? boxToMaskRect(width, height, opts.bounds, 0)
+    : { px: 0, py: 0, x2: width, y2: height };
+  const minX = Math.max(0, rect.px);
+  const minY = Math.max(0, rect.py);
+  const maxX = Math.min(width - 1, rect.x2 - 1);
+  const maxY = Math.min(height - 1, rect.y2 - 1);
+  if (minX > maxX || minY > maxY) return next;
+
   const cx = Math.round(x);
   const cy = Math.round(y);
-  if (cx < 0 || cy < 0 || cx >= width || cy >= height) return next;
+  // A click outside the box is a no-op rather than an unbounded fill.
+  if (cx < minX || cy < minY || cx > maxX || cy > maxY) return next;
 
   const startIdx = cy * width + cx;
   const si = startIdx * 4;
@@ -135,35 +196,29 @@ export function floodRemoveInMask(
   const sb = sourcePixels[si + 2];
 
   const visited = new Uint8Array(width * height);
-  const queue = new Int32Array(width * height);
+  // Visited is set BEFORE enqueueing, so each in-bounds pixel is queued at most
+  // once and the bounded area is an exact capacity.
+  const queue = new Int32Array((maxX - minX + 1) * (maxY - minY + 1));
   let head = 0;
   let tail = 0;
   queue[tail++] = startIdx;
   visited[startIdx] = 1;
 
-  const matches = (idx: number) => {
-    const i = idx * 4;
-    return Math.hypot(sourcePixels[i] - sr, sourcePixels[i + 1] - sg, sourcePixels[i + 2] - sb) <= tolerance;
-  };
-
   while (head < tail) {
     const idx = queue[head++];
-    if (!matches(idx)) continue;
-    data[idx] = 0;
+    const i = idx * 4;
+    const dr = sourcePixels[i] - sr;
+    const dg = sourcePixels[i + 1] - sg;
+    const db = sourcePixels[i + 2] - sb;
+    if (dr * dr + dg * dg + db * db > tol2) continue;
+    data[idx] = value;
 
     const px = idx % width;
     const py = (idx / width) | 0;
-    const neighbors = [
-      px > 0 ? idx - 1 : -1,
-      px < width - 1 ? idx + 1 : -1,
-      py > 0 ? idx - width : -1,
-      py < height - 1 ? idx + width : -1,
-    ];
-    for (const nIdx of neighbors) {
-      if (nIdx < 0 || visited[nIdx]) continue;
-      visited[nIdx] = 1;
-      queue[tail++] = nIdx;
-    }
+    if (px > minX && !visited[idx - 1]) { visited[idx - 1] = 1; queue[tail++] = idx - 1; }
+    if (px < maxX && !visited[idx + 1]) { visited[idx + 1] = 1; queue[tail++] = idx + 1; }
+    if (py > minY && !visited[idx - width]) { visited[idx - width] = 1; queue[tail++] = idx - width; }
+    if (py < maxY && !visited[idx + width]) { visited[idx + width] = 1; queue[tail++] = idx + width; }
   }
 
   return next;
