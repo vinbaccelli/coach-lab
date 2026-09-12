@@ -11,6 +11,9 @@ import {
 } from '@/lib/stroMotionDraft/types';
 import type { StroMotionBackground, StroMotionVideoOrder } from '@/lib/stroMotionDraft/types';
 import type { StroMotionSubjectBox } from '@/lib/stroMotion';
+// `import type` only — erased at compile time, so the panel gains no runtime
+// dependency on the hook; the summary shape keeps a single definition.
+import type { StroAutoRunSummary } from '@/hooks/useStroMotion';
 
 function formatTimeShort(seconds: number): string {
   if (!Number.isFinite(seconds)) return '0:00';
@@ -95,6 +98,11 @@ export interface StroMotionPanelProps {
   onVideoOrderChange?: (order: StroMotionVideoOrder) => void;
   /** Auto-detect selection areas for all frames using skeleton keypoints */
   onAutoSelectAll?: () => void;
+  /**
+   * Outcome of the last Auto Detect pass, or null when none has run since the
+   * draft was built/cleared. Drives the completion state in the status line.
+   */
+  lastAutoRun?: StroAutoRunSummary | null;
   /** When true, renders a compact icon-only vertical strip for the collapsed toolbar rail */
   compact?: boolean;
   /** Show text labels beside icons (expanded toolbar) */
@@ -271,6 +279,7 @@ export default function StroMotionPanel({
   videoOrder = 'forward',
   onVideoOrderChange,
   onAutoSelectAll,
+  lastAutoRun = null,
   compact = false,
   showLabels = false,
 }: StroMotionPanelProps) {
@@ -542,6 +551,10 @@ export default function StroMotionPanel({
               const active = frame.index === activeFrameIndex;
               const selecting = isSelectingArea && selectingFrameIndex === frame.index;
               const proposing = isProposingFrame && proposingFrameIndex === frame.index;
+              /** Auto-detect (or a manual selection) has produced something to edit. */
+              const hasWork = frame.hasMask || frame.hasSelection;
+              /** A select/propose is running on THIS frame — its own status outranks layout. */
+              const busy = selecting || proposing;
               return (
                 <div
                   key={frame.index}
@@ -575,18 +588,50 @@ export default function StroMotionPanel({
                   <div style={{ fontSize: 10, color: 'var(--cl-text-muted)', fontFamily: 'ui-monospace, monospace', marginBottom: 6 }}>
                     {formatTimeShort(frame.timeSec)}
                   </div>
+                  {/*
+                    ACTION ORDER FOLLOWS THE FLOW, NOT THE HISTORY.
+                    Once auto-detect has produced a mask, the next step is almost
+                    always to fine-tune it with the brush — so "Edit mask" leads and
+                    is the only filled button. "Re-select area" is a START OVER: it
+                    throws the detected mask away, and is needed only when the
+                    pipeline missed completely, so it sits last and muted.
+                    Before any work exists the order inverts — "Select Area" is then
+                    the only thing to do, and leads as an accented outline.
+                    While a select/propose is RUNNING on this frame, "Edit mask" drops
+                    to a plain button and the running one carries the accent, so the
+                    live "Draw area…" / "Proposing…" state is what stands out.
+                  */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {hasWork ? (
+                      <button
+                        type="button"
+                        style={busy ? miniBtn : primaryMini}
+                        onClick={() => onEditFrame(frame.index)}
+                        title="Fine-tune this mask with the brush — the usual next step after auto-detect"
+                      >
+                        Edit mask
+                      </button>
+                    ) : null}
+                    {hasWork && frame.status !== 'ready' ? (
+                      <button type="button" style={{ ...miniBtn, color: 'var(--cl-success)' }} onClick={() => onMarkReady(frame.index)}>
+                        <Check size={10} style={{ marginRight: 2, verticalAlign: -1 }} />
+                        Ready
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       style={{
-                        ...miniBtn,
+                        ...(hasWork && !busy ? secondaryMini : miniBtn),
                         ...(selecting ? activeMini : {}),
-                        ...(!frame.hasSelection && !selecting && !proposing
+                        ...(!hasWork && !busy
                           ? { border: '1px solid var(--cl-accent, #007AFF)', color: 'var(--cl-accent, #007AFF)' }
                           : {}),
                       }}
                       disabled={disabled || isGenerating || isProposingFrame}
                       onClick={() => onSelectArea(frame.index)}
+                      title={hasWork
+                        ? 'Start this frame over — discards the current mask. Only needed if detection missed completely.'
+                        : 'Draw a box around the object on this frame'}
                     >
                       <BoxSelect size={10} style={{ marginRight: 4, verticalAlign: -1 }} />
                       {selecting
@@ -597,19 +642,6 @@ export default function StroMotionPanel({
                             ? 'Re-select area'
                             : 'Select Area'}
                     </button>
-                    {frame.hasMask || frame.hasSelection ? (
-                      <>
-                        <button type="button" style={miniBtn} onClick={() => onEditFrame(frame.index)}>
-                          Edit mask
-                        </button>
-                        {frame.status !== 'ready' ? (
-                          <button type="button" style={{ ...miniBtn, color: 'var(--cl-success)' }} onClick={() => onMarkReady(frame.index)}>
-                            <Check size={10} style={{ marginRight: 2, verticalAlign: -1 }} />
-                            Ready
-                          </button>
-                        ) : null}
-                      </>
-                    ) : null}
                   </div>
                 </div>
               );
@@ -633,6 +665,37 @@ export default function StroMotionPanel({
       ) : isPreviewReady ? (
         <div style={{ fontSize: 12, marginTop: 8, fontWeight: 600, color: 'var(--cl-success)' }}>
           Motion Layer ready — {frameCount} layers
+        </div>
+      ) : lastAutoRun ? (
+        /*
+          AUTO-DETECT COMPLETION. Shown ahead of the generic hints because "did
+          that finish, and did it work?" is the question the coach actually has
+          when the progress line disappears. Reports the racket count explicitly:
+          a pass can build every frame and still segment no implement, and the
+          coach needs to know which of those happened before deciding whether to
+          brush or to re-select.
+        */
+        <div style={{ fontSize: 12, marginTop: 8, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ fontWeight: 700, color: lastAutoRun.framesBuilt > 0 ? 'var(--cl-success)' : 'var(--cl-destructive-text, #c00)' }}>
+            {lastAutoRun.framesBuilt > 0 ? (
+              <>
+                <Check size={12} style={{ marginRight: 4, verticalAlign: -2 }} />
+                Auto-detect done — {lastAutoRun.framesBuilt}/{lastAutoRun.framesAttempted} frame
+                {lastAutoRun.framesAttempted === 1 ? '' : 's'} in {(lastAutoRun.elapsedMs / 1000).toFixed(1)}s
+              </>
+            ) : (
+              <>Auto-detect finished without building any frame — try Re-select area.</>
+            )}
+          </div>
+          {lastAutoRun.racketPassActive ? (
+            <div style={{ fontSize: 11, color: 'var(--cl-text-muted)' }}>
+              {lastAutoRun.racketApplied > 0
+                ? `Racket found on ${lastAutoRun.racketApplied}/${lastAutoRun.framesBuilt} — check it, then Edit mask to fine-tune.`
+                : lastAutoRun.racketDetected > 0
+                  ? `Racket detected on ${lastAutoRun.racketDetected} frame(s) but none could be segmented — use Edit mask and the Object tool.`
+                  : 'No racket detected — use Edit mask to paint it in, or the Object tool to click it.'}
+            </div>
+          ) : null}
         </div>
       ) : allReady ? (
         <div style={{ fontSize: 11, marginTop: 8, color: 'var(--cl-text-muted)' }}>
@@ -791,6 +854,29 @@ const miniBtn: React.CSSProperties = {
 const activeMini: React.CSSProperties = {
   border: '1px solid var(--cl-accent, #007AFF)',
   background: 'rgba(0,122,255,0.1)',
+};
+
+/**
+ * PRIMARY mini action — the one thing the coach should press next.
+ *
+ * FILLED, deliberately, because `activeMini`'s accent OUTLINE already means
+ * something else in this panel: "this tool is currently running". A filled
+ * action-primary reads as "do this next" without colliding with that.
+ */
+const primaryMini: React.CSSProperties = {
+  ...miniBtn,
+  border: '1px solid var(--cl-action-primary, #007AFF)',
+  background: 'var(--cl-action-primary, #007AFF)',
+  color: 'var(--cl-text-on-fill, #fff)',
+  fontWeight: 700,
+};
+
+/** SECONDARY mini action — reachable, visibly subordinate. */
+const secondaryMini: React.CSSProperties = {
+  ...miniBtn,
+  color: 'var(--cl-text-muted)',
+  fontSize: 9,
+  opacity: 0.8,
 };
 
 const countStepBtn: React.CSSProperties = {

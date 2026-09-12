@@ -57,6 +57,36 @@ export async function ensureStroMotionDraft(
     !params.previous || params.previous.objectType === params.objectType;
   const preserveFrameMasks = backgroundUnchanged && objectTypeUnchanged;
 
+  /**
+   * CARRY THE BATCH BODY-SCALE REFERENCE ACROSS A RESYNC.
+   *
+   * This function rebuilds the draft from scratch, so every field it forgets to
+   * name is DROPPED — and `batchUnitFloorNorm` used to be one of them. That made
+   * auto-racket silently degrade after any re-spacing: `syncDraft` re-fires on
+   * every start/end/frame-count change, so nudging one frame marker erased the
+   * reference, `poseScaleUnit` then re-derived `unit` from a single frame and
+   * collapsed it (measured: batch 46px vs re-run 5px), and the wrist gate
+   * (`unit * WRIST_GATE_UNITS`) shrank to ~15px — below the 34–119px at which
+   * real detections sit, so every true racket was gated out. Same thin-selection
+   * collapse hits the zone, the segmenter crop and the head oval.
+   *
+   * Keyed on SAME FOOTAGE only: the value is normalised (unit/videoWidth), so it
+   * survives a background-time or objectType change untouched — the athlete does
+   * not change size because the coach picked a different plate. A genuinely
+   * different video gets null and the next batch measures its own.
+   *
+   * Deliberate resets stay deliberate: `clearAllSelections` nulls it so the next
+   * batch recomputes from re-detected poses, and that null propagates here as a
+   * null `previous` value rather than being overwritten.
+   */
+  const sameFootage =
+    !!params.previous &&
+    params.previous.videoWidth === vw &&
+    params.previous.videoHeight === vh;
+  const batchUnitFloorNorm = sameFootage
+    ? params.previous!.batchUnitFloorNorm ?? null
+    : null;
+
   const frames: StroMotionFrameDraft[] = params.sampleTimes.map((timeSec, index) => {
     const prev = prevByIndex.get(index);
     if (
@@ -80,5 +110,6 @@ export async function ensureStroMotionDraft(
     sampleTimes: [...params.sampleTimes],
     videoWidth: vw,
     videoHeight: vh,
+    batchUnitFloorNorm,
   };
 }
