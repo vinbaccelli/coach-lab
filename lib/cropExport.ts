@@ -1,20 +1,41 @@
 /**
- * Post-recording crop export (Phase 3, Section 6).
+ * Post-recording crop / trim export (Phase 3, Section 6).
  *
- * Cropping happens ONLY at export time and is canvas-based — there is no live
+ * Editing happens ONLY at export time and is canvas-based — there is no live
  * cropping during capture and no browser-coordinate dependency:
  *   1. Load the recorded blob into a hidden <video>
- *   2. Draw the cropped region of each frame into a canvas
- *   3. canvas.captureStream() -> MediaRecorder -> final blob
- *   4. (best-effort) convert WebM -> MP4 for download
+ *   2. (trim) seek to the in-point
+ *   3. Draw the cropped region of each frame into a canvas
+ *   4. canvas.captureStream() -> MediaRecorder -> final blob
+ *      (trim) stop at the out-point
+ *   5. (best-effort) convert WebM -> MP4 for download
  *
- * `region` is in the recorded video's intrinsic pixel space.
+ * `region` is in the recorded video's intrinsic pixel space; `trim` is in
+ * seconds on the source timeline.
+ *
+ * CROP AND TRIM ARE ONE PASS. Running two passes would re-encode the recording
+ * twice — double the wait and a second generation of compression loss — so both
+ * edits are applied in this single render.
  */
 
 import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 
 export type ExportRegion = { x: number; y: number; w: number; h: number };
+/** In/out points in seconds on the SOURCE timeline. */
+export type TrimRange = { start: number; end: number };
+
+export interface EditExportOptions {
+  /** Omit (or null) to keep the full frame. */
+  region?: ExportRegion | null;
+  /** Omit (or null) to keep the whole clip. */
+  trim?: TrimRange | null;
+  onProgress?: (msg: string) => void;
+}
+
+export type EditExportResult =
+  | { ok: true; blob: Blob; ext: string }
+  | { ok: false; error: string };
 
 function even(n: number): number {
   const v = Math.max(0, Math.round(n));
@@ -36,20 +57,17 @@ function pickMime(): string {
   return 'video/webm';
 }
 
-export async function exportCroppedVideo(
+/**
+ * Renders `srcBlob` with an optional crop region and/or trim range applied.
+ * Both are optional: with neither, this is a straight re-encode.
+ */
+export async function exportEditedVideo(
   srcBlob: Blob,
-  region: ExportRegion,
-  onProgress?: (msg: string) => void,
-): Promise<{ ok: true; blob: Blob; ext: string } | { ok: false; error: string }> {
+  { region = null, trim = null, onProgress }: EditExportOptions = {},
+): Promise<EditExportResult> {
   if (typeof MediaRecorder === 'undefined') {
     return { ok: false, error: 'Recording is not supported in this browser.' };
   }
-
-  const cw = even(region.w);
-  const ch = even(region.h);
-  const cx = even(region.x);
-  const cy = even(region.y);
-  if (cw < 2 || ch < 2) return { ok: false, error: 'Crop region is too small.' };
 
   const url = URL.createObjectURL(srcBlob);
   const video = document.createElement('video');
@@ -60,8 +78,34 @@ export async function exportCroppedVideo(
   try {
     await new Promise<void>((resolve, reject) => {
       video.onloadedmetadata = () => resolve();
-      video.onerror = () => reject(new Error('Could not load the recording for cropping.'));
+      video.onerror = () => reject(new Error('Could not load the recording for export.'));
     });
+
+    // Region defaults to the full frame, so a trim-only export needs no crop box.
+    const src = region ?? { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
+    const cw = even(src.w);
+    const ch = even(src.h);
+    const cx = even(src.x);
+    const cy = even(src.y);
+    if (cw < 2 || ch < 2) {
+      URL.revokeObjectURL(url);
+      return { ok: false, error: region ? 'Crop region is too small.' : 'The recording has no video frames.' };
+    }
+
+    // Clamp the trim to the real clip. A MediaRecorder file can report a
+    // non-finite duration, in which case only the in-point is trusted and the
+    // render simply runs to the natural end.
+    let inPoint = 0;
+    let outPoint = Number.POSITIVE_INFINITY;
+    if (trim) {
+      const dur = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
+      inPoint = Math.max(0, Math.min(trim.start, Number.isFinite(dur) ? dur : trim.start));
+      outPoint = Math.max(inPoint + 0.1, Math.min(trim.end, dur));
+      if (Number.isFinite(dur) && outPoint - inPoint < 0.1) {
+        URL.revokeObjectURL(url);
+        return { ok: false, error: 'Trimmed clip is too short.' };
+      }
+    }
 
     const canvas = document.createElement('canvas');
     canvas.width = cw;
@@ -70,6 +114,21 @@ export async function exportCroppedVideo(
     if (!ctx) {
       URL.revokeObjectURL(url);
       return { ok: false, error: 'Canvas not available.' };
+    }
+
+    // Seek to the in-point BEFORE the recorder starts, so the trimmed head is
+    // never encoded. Seeking a just-loaded element can resolve instantly or not
+    // at all on a malformed file — time out rather than hang the export.
+    if (inPoint > 0) {
+      onProgress?.('Seeking…');
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const done = () => { if (!settled) { settled = true; resolve(); } };
+        video.onseeked = done;
+        setTimeout(done, 4000);
+        try { video.currentTime = inPoint; } catch { done(); }
+      });
+      video.onseeked = null;
     }
 
     const canvasStream = (canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(30);
@@ -102,25 +161,38 @@ export async function exportCroppedVideo(
     recorder.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data); };
 
     let raf = 0;
+    let reachedOutPoint: (() => void) | null = null;
     const draw = () => {
       if (video.readyState >= 2) ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+      // Out-point is checked on the paint loop (not `timeupdate`, which fires
+      // only ~4x/second and would overshoot the cut by up to a quarter second).
+      if (video.currentTime >= outPoint) {
+        reachedOutPoint?.();
+        return;
+      }
       raf = requestAnimationFrame(draw);
     };
 
-    onProgress?.('Rendering crop…');
+    onProgress?.(trim ? 'Rendering edit…' : 'Rendering crop…');
     const startedAt = Date.now();
     recorder.start(250);
     draw();
     await video.play().catch(() => {});
 
     await new Promise<void>((resolve) => {
-      video.onended = () => resolve();
-      // Failsafe: stop if the video stalls past its duration.
-      const guardMs = (Number.isFinite(video.duration) ? video.duration * 1000 : 0) + 5000;
-      if (guardMs > 5000) setTimeout(resolve, guardMs);
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; resolve(); } };
+      reachedOutPoint = done;
+      video.onended = done;
+      // Failsafe: stop if the video stalls past the length we expect to render.
+      const dur = Number.isFinite(video.duration) ? video.duration : 0;
+      const spanS = Number.isFinite(outPoint) ? outPoint - inPoint : Math.max(0, dur - inPoint);
+      const guardMs = spanS * 1000 + 5000;
+      if (guardMs > 5000) setTimeout(done, guardMs);
     });
 
     cancelAnimationFrame(raf);
+    try { video.pause(); } catch { /* noop */ }
 
     const duration = Date.now() - startedAt;
     await new Promise<void>((resolve) => {
@@ -133,7 +205,7 @@ export async function exportCroppedVideo(
     URL.revokeObjectURL(url);
 
     let out = new Blob(chunks, { type: mime || 'video/webm' });
-    if (out.size === 0) return { ok: false, error: 'Crop produced an empty file.' };
+    if (out.size === 0) return { ok: false, error: 'Export produced an empty file.' };
     try {
       out = await webmFixDuration(out, duration, mime || 'video/webm');
     } catch { /* noop */ }
@@ -143,9 +215,22 @@ export async function exportCroppedVideo(
     onProgress?.('Converting to MP4…');
     const conv = await convertWebmToMp4ForScreenRecord(out);
     if (conv.ok) return { ok: true, blob: conv.blob, ext: 'mp4' };
-    return { ok: false, error: 'Could not convert cropped recording to MP4.' };
+    return { ok: false, error: 'Could not convert the edited recording to MP4.' };
   } catch (e) {
     try { URL.revokeObjectURL(url); } catch { /* noop */ }
-    return { ok: false, error: e instanceof Error ? e.message : 'Crop export failed.' };
+    return { ok: false, error: e instanceof Error ? e.message : 'Export failed.' };
   }
+}
+
+/**
+ * Crop-only export. Unchanged signature and behaviour — kept so existing
+ * callers (app/analysis/page.tsx) are untouched; it now delegates to the
+ * crop+trim renderer rather than carrying its own copy of the pipeline.
+ */
+export async function exportCroppedVideo(
+  srcBlob: Blob,
+  region: ExportRegion,
+  onProgress?: (msg: string) => void,
+): Promise<EditExportResult> {
+  return exportEditedVideo(srcBlob, { region, onProgress });
 }

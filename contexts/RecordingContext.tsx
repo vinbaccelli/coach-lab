@@ -29,7 +29,12 @@ import React, {
 import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 import { stopAllTracks } from '@/lib/tabCaptureRecording';
-import { createPipRecorderSurface } from '@/lib/pipRecorderSurface';
+import {
+  createPipRecorderSurface,
+  PIP_SIZE_CONTROLS_ONLY,
+  PIP_SIZE_WITH_CAMERA,
+  type PipRecorderSurface,
+} from '@/lib/pipRecorderSurface';
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 
@@ -165,7 +170,10 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
   // window's OWN rAF id-space — never cancel it with the opener's
   // cancelAnimationFrame (and vice versa).
   const pipRafRef = useRef<number | null>(null);
-  const pipSurfaceTeardownRef = useRef<null | (() => void)>(null);
+  // The live PiP surface controller (camera attach/detach + teardown). Holding
+  // the controller rather than a bare teardown fn is what lets the webcam be
+  // switched on mid-recording and appear in the floating window immediately.
+  const pipSurfaceRef = useRef<PipRecorderSurface | null>(null);
   // Latest pause/stop actions for the PiP controls — kept in refs so
   // startRecording (declared above pauseRecording/stopRecording) can wire them
   // without a TDZ in its dependency array.
@@ -187,15 +195,30 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
   const registerWebcamVideo = useCallback((_el: HTMLVideoElement | null) => {}, []);
 
   /**
-   * Pushes a fresh webcam stream into an already-running recording's Source B
-   * region (null to stop drawing it) — e.g. the Hub's webcam toggle re-enabling
-   * the camera after a PiP-close turned it off. paintOnce reads
-   * webcamVideoElRef.current live, so the very next frame picks this up.
+   * Pushes a fresh webcam stream into an already-running recording (null to stop
+   * drawing it) — e.g. the Hub's webcam toggle switching the camera on partway
+   * through. Two independent consumers, and BOTH must be updated:
+   *
+   *   1. the ENCODE composite — webcamVideoElRef, read live by paintOnce, so the
+   *      very next painted frame carries (or drops) the Source B stamp;
+   *   2. the DISPLAY — the floating PiP window's camera view.
+   *
+   * (2) used to be missing: this only ever rebuilt the composite element, while
+   * the PiP surface took its stream once at construction and had no setter. So
+   * turning the webcam on mid-recording recorded the camera correctly but left
+   * the floating window black until the recording ended. The surface controller
+   * now attaches/detaches the camera live (and resizes the window to match).
+   *
    * Does not touch captureStream / MediaRecorder / the display stream.
    */
   const updateWebcamStream = useCallback((stream: MediaStream | null) => {
     const prev = webcamVideoElRef.current;
     if (prev) { try { prev.srcObject = null; } catch { /* noop */ } }
+    // Display first — it is independent of the composite element and must update
+    // even if the composite path bails out below.
+    try { pipSurfaceRef.current?.setCameraStream(stream); } catch (err) {
+      console.warn('[RecordingProvider] PiP camera update failed:', err);
+    }
     if (!stream) { webcamVideoElRef.current = null; return; }
     const v = document.createElement('video');
     v.muted = true;
@@ -221,16 +244,19 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     if (!recorderRef.current || recorderRef.current.state === 'inactive') return false;
     const docPip = (window as Window & { documentPictureInPicture?: { requestWindow: (opts?: { width?: number; height?: number }) => Promise<Window> } }).documentPictureInPicture;
     if (!docPip?.requestWindow) return false;
+    // Size for what the window will actually show: a camera view, or controls
+    // only. A camera-sized window with no camera in it is the black box.
+    const camAtReopen = sourcesRef.current?.getWebcamStream() ?? null;
     let pw: Window;
     try {
-      pw = await docPip.requestWindow({ width: 480, height: 320 });
+      pw = await docPip.requestWindow(camAtReopen ? PIP_SIZE_WITH_CAMERA : PIP_SIZE_CONTROLS_ONLY);
     } catch (err) {
       // Most likely cause is lost transient activation (see reopen notes in the
       // Hub toggle). Surface it, but never disturb the running recording.
       console.warn('[RecordingProvider] reopenPipWindow: requestWindow rejected:', err);
       return false;
     }
-    attach(pw, sourcesRef.current?.getWebcamStream() ?? null);
+    attach(pw, camAtReopen);
     return true;
   }, []);
 
@@ -246,8 +272,8 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       try { docPipWindowRef.current?.cancelAnimationFrame(pipRafRef.current); } catch { /* window may be gone */ }
       pipRafRef.current = null;
     }
-    try { pipSurfaceTeardownRef.current?.(); } catch { /* noop */ }
-    pipSurfaceTeardownRef.current = null;
+    try { pipSurfaceRef.current?.teardown(); } catch { /* noop */ }
+    pipSurfaceRef.current = null;
     if (rafPaintRef.current != null) { cancelAnimationFrame(rafPaintRef.current); rafPaintRef.current = null; }
     if (paintBackupRef.current) { clearInterval(paintBackupRef.current); paintBackupRef.current = null; }
     if (displayVideoRef.current) { displayVideoRef.current.srcObject = null; displayVideoRef.current = null; }
@@ -344,9 +370,15 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     // it throws, pipWin stays null → the opener-timer fallback path.
     const docPip = (window as Window & { documentPictureInPicture?: { requestWindow: (opts?: { width?: number; height?: number }) => Promise<Window> } }).documentPictureInPicture;
     let pipWin: Window | null = null;
+    // Size the window for what it will actually SHOW. Recording with the webcam
+    // still off used to open the full 480x320 camera window and fill it with an
+    // empty black <video>; with no camera the window is the control panel, so
+    // ask for the control-panel size. It grows on its own (setCameraStream) if
+    // the coach switches the webcam on later.
+    const hasCameraAtStart = !!sourcesRef.current?.getWebcamStream();
     if (docPip?.requestWindow) {
       try {
-        pipWin = await docPip.requestWindow({ width: 480, height: 320 });
+        pipWin = await docPip.requestWindow(hasCameraAtStart ? PIP_SIZE_WITH_CAMERA : PIP_SIZE_CONTROLS_ONLY);
         docPipWindowRef.current = pipWin;
         // Lightweight placeholder during the user-paced getDisplayMedia picker gap,
         // so the window is not blank. Removed by createPipRecorderSurface's
@@ -489,8 +521,8 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       const loop = () => { paintOnce(); pipRafRef.current = pw.requestAnimationFrame(loop); };
       pipRafRef.current = pw.requestAnimationFrame(loop);
       // Camera + controls + live timer inside the PiP window, wired to the existing API.
-      try { pipSurfaceTeardownRef.current?.(); } catch { /* noop */ }
-      pipSurfaceTeardownRef.current = createPipRecorderSurface(pw, camStream, {
+      try { pipSurfaceRef.current?.teardown(); } catch { /* noop */ }
+      pipSurfaceRef.current = createPipRecorderSurface(pw, camStream, {
         onPause: () => pauseRecordingRef.current(),
         onStop: () => { void stopRecordingRef.current(); },
         getDurationMs: () => activeDurationMs(),
@@ -506,8 +538,8 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         webcamVideoElRef.current = null; // stop drawing Source B — camera off
         pipRafRef.current = null; // PiP rAF is dead with the window
         if (!paintBackupRef.current) paintBackupRef.current = setInterval(paintOnce, 33);
-        try { pipSurfaceTeardownRef.current?.(); } catch { /* noop */ }
-        pipSurfaceTeardownRef.current = null;
+        try { pipSurfaceRef.current?.teardown(); } catch { /* noop */ }
+        pipSurfaceRef.current = null;
         docPipWindowRef.current = null;
         // Tell the page the camera went off so the Hub toggle stops showing
         // "Webcam on". Display-state only — recording is untouched.
