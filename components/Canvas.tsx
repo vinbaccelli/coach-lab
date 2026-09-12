@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
-import { calcAngleDeg } from '@/lib/drawingTools';
+import { calcAngleDeg, arrowBearingDeg } from '@/lib/drawingTools';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
@@ -54,6 +54,24 @@ const RACKET_TRAIL_CIRCLE_RADIUS = 8;
 const RACKET_TRAIL_MAX_ALPHA = 0.65;
 /** Radians per animFrame for spinning shapes */
 const SHAPE_SPIN_SPEED = 0.025;
+/**
+ * Live auto-focus crop (MoveNet worker) — how the focus window is sized.
+ *
+ * The crop used to be a fixed 0.6 of the frame centred on the TORSO centroid
+ * (shoulders + hips). On a full-body shot that centroid sits near 0.375H, so the
+ * window covered y in [0.075H, 0.675H] and the ANKLES (~0.95H) fell outside it.
+ * MoveNet never saw them, their score stayed under the 0.2 draw gate, and the
+ * knee->ankle bones stopped drawing: the calf lines had no data, not a drawing
+ * bug. Sizing the window from the FULL joint bounding box keeps the whole
+ * athlete inside it while still cropping in on them.
+ */
+/** Minimum score for a joint to count toward the auto-focus bounding box. */
+const AUTO_FOCUS_MIN_SCORE = 0.3;
+/** Never crop tighter than this fraction of the frame (keeps model pixels high). */
+const AUTO_FOCUS_MIN_RATIO = 0.6;
+/** Head-room around the joint bbox, as a fraction of its larger span, so a foot
+ *  leaving the ground or an arm extending does not immediately fall outside. */
+const AUTO_FOCUS_MARGIN = 0.25;
 /**
  * Vertical offset from finger to precision crosshair, as a FRACTION of canvas
  * height — not a fixed pixel count.
@@ -119,6 +137,15 @@ const PRECISION_HOLD_TOOLS: ReadonlySet<string> = new Set([
 
 const OUTLINE_ERASER_TOOLS: ReadonlySet<string> = new Set([
   'select', 'line', 'arrow', 'arrowAngle', 'pen',
+  'circle', 'bodyCircle', 'rect', 'triangle',
+]);
+/**
+ * Stroke KINDS the outline eraser can cut. Distinct from OUTLINE_ERASER_TOOLS
+ * above, which is the set of ACTIVE TOOLS under which the eraser may act:
+ * 'select' is a tool you can erase under but never a stroke you can erase.
+ */
+const OUTLINE_ERASER_STROKES: ReadonlySet<string> = new Set([
+  'line', 'arrow', 'arrowAngle', 'pen',
   'circle', 'bodyCircle', 'rect', 'triangle',
 ]);
 /** Fade-out duration when anchor finger lifts (ms) */
@@ -947,6 +974,34 @@ function labelPill(ctx: CanvasRenderingContext2D, text: string, x: number, y: nu
   ctx.restore();
 }
 
+/** The one dash pattern a "dashed" mark is drawn with. */
+const DASHED_PATTERN: number[] = [8, 6];
+
+/**
+ * Apply a mark's dash + pulse to the context.
+ *
+ * `dashed` OWNS the pattern; `spinning` (Highlight pulse) only ANIMATES it, and
+ * supplies a pattern of its own solely when the mark is otherwise solid.
+ *
+ * Every one of these sites used to read `if (spinning) … else if (dashed) …`,
+ * which made pulse silently swallow dash: a pulsing mark could not be shown
+ * dashed, so toggling Solid/Dashed on it changed the stored stroke and nothing
+ * on screen. That is the whole of the "solid/dashed does nothing after drawing"
+ * bug — the style plumbing was writing the value correctly all along.
+ */
+function applyMarkDash(
+  ctx: CanvasRenderingContext2D,
+  dashed: boolean | undefined,
+  spinning: boolean | undefined,
+  pulsePattern: number[],
+  pulseSpeedDivisor: number,
+): void {
+  if (dashed) ctx.setLineDash(DASHED_PATTERN);
+  else if (spinning) ctx.setLineDash(pulsePattern);
+  else ctx.setLineDash([]);
+  if (spinning) ctx.lineDashOffset = -((Date.now() / pulseSpeedDivisor) % 1000);
+}
+
 function drawSmoothPath(
   ctx: CanvasRenderingContext2D,
   points: Pt[],
@@ -965,10 +1020,7 @@ function drawSmoothPath(
   ctx.lineWidth = width;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  if (spinning) {
-    ctx.setLineDash([3, 10]);
-    ctx.lineDashOffset = -((Date.now() / 20) % 1000);
-  } else if (dashed) ctx.setLineDash([8, 6]);
+  applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
 
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
@@ -1018,14 +1070,7 @@ function drawJointChainStroke(
     ctx.lineWidth = lw;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'miter';
-    if (spinning) {
-      ctx.setLineDash([3, 10]);
-      ctx.lineDashOffset = -((Date.now() / 20) % 1000);
-    } else if (dashed) {
-      ctx.setLineDash([8, 6]);
-    } else {
-      ctx.setLineDash([]);
-    }
+    applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
     ctx.beginPath();
     ctx.moveTo(nodes[0].x, nodes[0].y);
     for (let i = 1; i < nodes.length; i++) {
@@ -1250,12 +1295,7 @@ function drawCircleStroke(
   ctx.globalAlpha = strokeOpacity(s);
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
-  if (s.spinning) {
-    ctx.setLineDash([2, 8]);
-    ctx.lineDashOffset = -((Date.now() / 20) % 1000);
-  } else if (s.dashed) {
-    ctx.setLineDash([8, 6]);
-  }
+  applyMarkDash(ctx, s.dashed, s.spinning, [2, 8], 20);
 
   const rx = Math.max(1, s.rx);
   const ry = Math.max(1, s.ry);
@@ -1348,12 +1388,7 @@ function drawRectStroke(
   ctx.globalAlpha = strokeOpacity(s);
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
-  if (s.spinning) {
-    ctx.setLineDash([2, 10]);
-    ctx.lineDashOffset = -((Date.now() / 18) % 1000);
-  } else if (s.dashed) {
-    ctx.setLineDash([8, 6]);
-  }
+  applyMarkDash(ctx, s.dashed, s.spinning, [2, 10], 18);
 
   const drawRectAt = (cx: number, cy: number) => {
     ctx.strokeRect(cx - s.rx, cy - s.ry, s.rx * 2, s.ry * 2);
@@ -1391,12 +1426,7 @@ function drawTriangleStroke(
   ctx.globalAlpha = strokeOpacity(s);
   ctx.strokeStyle = s.color;
   ctx.lineWidth = s.lw;
-  if (s.spinning) {
-    ctx.setLineDash([2, 10]);
-    ctx.lineDashOffset = -((Date.now() / 18) % 1000);
-  } else if (s.dashed) {
-    ctx.setLineDash([8, 6]);
-  }
+  applyMarkDash(ctx, s.dashed, s.spinning, [2, 10], 18);
 
   ctx.translate(s.cx, s.cy);
   const drawTri = (ox: number, oy: number) => {
@@ -1453,12 +1483,28 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
     } else {
       ctx.strokeStyle = color;
       ctx.lineWidth = lw;
-      if (spinning) {
-        ctx.setLineDash([3, 10]);
-        ctx.lineDashOffset = -((Date.now() / 20) % 1000);
-      } else if (dashed) ctx.setLineDash([8, 6]);
-      for (let i = 0; i < pts.length - 1; i++) {
-        drawThickSegmentWithEraser(ctx, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, eraserStrokes);
+      applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
+      if (eraserStrokes?.length) {
+        // Erased: the stroke is deliberately broken into pieces, so it has to be
+        // drawn piece by piece.
+        for (let i = 0; i < pts.length - 1; i++) {
+          drawThickSegmentWithEraser(ctx, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, eraserStrokes);
+        }
+      } else {
+        // ONE sub-path for the whole freehand stroke.
+        //
+        // Drawing it as N separate beginPath()/stroke() segments restarted the
+        // DASH PHASE at every segment, and a freehand stroke's segments are only
+        // a few px long (one per pointermove). With an 8-on/6-off pattern every
+        // segment under 8px is therefore drawn entirely within the first "on"
+        // dash — i.e. solid. Slow, curvy parts of a stroke came out solid and
+        // only the fast, long-segment parts looked dashed, which is the partly
+        // dashed pen stroke. A single sub-path lets the phase run continuously
+        // along the whole stroke.
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.stroke();
       }
       ctx.setLineDash([]);
     }
@@ -1468,10 +1514,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
     const { p1, p2, color, lw, dashed, spinning, eraserStrokes } = sl;
     ctx.strokeStyle = color;
     ctx.lineWidth = lw;
-    if (spinning) {
-      ctx.setLineDash([3, 10]);
-      ctx.lineDashOffset = -((Date.now() / 20) % 1000);
-    } else if (dashed) ctx.setLineDash([8, 6]);
+    applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
     drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
     ctx.setLineDash([]);
 
@@ -1491,18 +1534,15 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
     const { p1, p2, color, lw, dashed, spinning, eraserStrokes } = sa;
     ctx.strokeStyle = color;
     ctx.lineWidth = lw;
-    if (spinning) {
-      ctx.setLineDash([3, 10]);
-      ctx.lineDashOffset = -((Date.now() / 20) % 1000);
-    } else if (dashed) ctx.setLineDash([8, 6]);
+    applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
     drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
     ctx.setLineDash([]);
     ctx.fillStyle = color;
     drawArrowHead(ctx, p1, p2);
     if (s.tool === 'arrowAngle') {
-      const dx = p2.x - p1.x;
-      const dy = p2.y - p1.y;
-      const deg = Math.round(Math.abs(Math.atan2(dy, dx) * 180 / Math.PI));
+      // Same helper the data-column value uses, so the pill and the column can
+      // never disagree about the same arrow again.
+      const deg = arrowBearingDeg(p1, p2);
       labelPill(ctx, `${deg}°`, (p1.x + p2.x) / 2, (p1.y + p2.y) / 2 - 12);
     }
 
@@ -1541,12 +1581,7 @@ function drawAngleMeas(ctx: CanvasRenderingContext2D, m: AngleMeas): void {
   ctx.save();
   ctx.strokeStyle = color;
   ctx.lineWidth = lw;
-  if (m.spinning) {
-    ctx.setLineDash([3, 10]);
-    ctx.lineDashOffset = -((Date.now() / 20) % 1000);
-  } else if (m.dashed) {
-    ctx.setLineDash([8, 6]);
-  }
+  applyMarkDash(ctx, m.dashed, m.spinning, [3, 10], 20);
   ctx.beginPath();
   ctx.moveTo(v.x, v.y);
   ctx.arc(v.x, v.y, 30, a1, a2, false);
@@ -2327,7 +2362,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const pendingFocusRef = useRef<{ x: number; y: number } | null>(null);
     // Continuous auto-focus crop target (torso centroid, normalized). Distinct
     // from pendingFocusRef, which is the coach's explicit skeleton-lock click.
-    const autoFocusRef = useRef<{ x: number; y: number } | null>(null);
+    const autoFocusRef = useRef<{ x: number; y: number; ratio: number } | null>(null);
     const renderDirtyRef = useRef(true);
     const renderWaitersRef = useRef<Array<() => void>>([]);
     const lastRenderVideoTimeRef = useRef(-1);
@@ -3771,12 +3806,34 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               .map((i) => keypoints[i])
               .filter((k) => k && k.score >= 0.3);
             if (core.length >= 3) {
-              const cx = core.reduce((s, k) => s + k.x, 0) / core.length / v.videoWidth;
-              const cy = core.reduce((s, k) => s + k.y, 0) / core.length / v.videoHeight;
+              // The torso is only the ANCHOR (it is what confirms we are looking
+              // at a person); the WINDOW is sized from every confident joint, so
+              // ankles and wrists stay inside it. See AUTO_FOCUS_* above for why.
+              const seen = keypoints.filter((k) => k && k.score >= AUTO_FOCUS_MIN_SCORE);
+              const xs = seen.map((k) => k.x / v.videoWidth);
+              const ys = seen.map((k) => k.y / v.videoHeight);
+              const minX = Math.min(...xs), maxX = Math.max(...xs);
+              const minY = Math.min(...ys), maxY = Math.max(...ys);
+              const cx = (minX + maxX) / 2;
+              const cy = (minY + maxY) / 2;
+              // ONE ratio drives both axes in the worker, so cover the larger span.
+              const ratio = Math.min(
+                1,
+                Math.max(
+                  AUTO_FOCUS_MIN_RATIO,
+                  Math.max(maxX - minX, maxY - minY) * (1 + AUTO_FOCUS_MARGIN),
+                ),
+              );
               const prev = autoFocusRef.current;
-              if (!prev || Math.hypot(cx - prev.x, cy - prev.y) > 0.05) {
-                autoFocusRef.current = { x: cx, y: cy };
-                poseBridgeRef.current?.setFocusPoint(autoFocusRef.current);
+              // Hysteresis on BOTH the centre and the size: re-sending on every
+              // frame would re-crop continuously as limbs move.
+              if (
+                !prev ||
+                Math.hypot(cx - prev.x, cy - prev.y) > 0.05 ||
+                Math.abs(ratio - prev.ratio) > 0.05
+              ) {
+                autoFocusRef.current = { x: cx, y: cy, ratio };
+                poseBridgeRef.current?.setFocusPoint({ x: cx, y: cy }, ratio);
               }
             } else if (autoFocusRef.current) {
               autoFocusRef.current = null;
@@ -6465,6 +6522,49 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     };
 
     /**
+     * Nearest stroke the OUTLINE ERASER may cut, or -1.
+     *
+     * Same distance-to-outline test the tool-specific eraser branches use, but
+     * over every eligible stroke rather than the ones matching the active tool,
+     * because in Style mode the active tool is whatever the coach last drew with
+     * (usually Select) and says nothing about what they are pointing at.
+     */
+    const pickOutlineEraserTarget = (pos: Pt): number => {
+      let bestIdx = -1;
+      let bestD = Infinity;
+      strokesRef.current.forEach((s2, i) => {
+        if (!OUTLINE_ERASER_STROKES.has(s2.tool)) return;
+        const d = hitTestStroke(s2, pos);
+        const strokeLw = (s2 as { lw?: number }).lw ?? 2;
+        if (d < bestD && d < 36 + strokeLw * 0.75) {
+          bestD = d;
+          bestIdx = i;
+        }
+      });
+      return bestIdx;
+    };
+
+    /**
+     * Add one eraser dot to stroke `idx` and latch it as the stroke being erased.
+     * Returns false when the stroke cannot carry eraser dots.
+     */
+    const applyOutlineEraserDot = (idx: number, pos: Pt): boolean => {
+      const s2 = strokesRef.current[idx];
+      if (!s2 || !OUTLINE_ERASER_STROKES.has(s2.tool)) return false;
+      const dot: EraserDot = { x: pos.x, y: pos.y, radius: outlineEraserSizeRef.current };
+      const prev = (s2 as { eraserStrokes?: EraserDot[] }).eraserStrokes ?? [];
+      strokesRef.current = [
+        ...strokesRef.current.slice(0, idx),
+        { ...s2, eraserStrokes: [...prev, dot] } as Stroke,
+        ...strokesRef.current.slice(idx + 1),
+      ];
+      outlineErasingIdxRef.current = idx;
+      outlineEraserPosRef.current = pos;
+      renderDirtyRef.current = true;
+      return true;
+    };
+
+    /**
      * Bounding box of a style-selected mark, in logical px.
      *
      * Drives the static selection indicator only — WHICH mark the toolbar's
@@ -6903,18 +7003,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (toolName === 'arrowAngle' || toolName === 'arrow' || toolName === 'ruler' || toolName === 'line') {
         const s = active as any;
         if ((toolName === 'arrowAngle' || toolName === 'arrow') && s.p1 && s.p2) {
-          const dx = s.p2.x - s.p1.x;
-          const dy = s.p2.y - s.p1.y;
-          const deg = Math.round(((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360);
-          onMeasurementCommitRef.current?.({ type: 'arrowAngle', value: deg, unit: '°' });
+          onMeasurementCommitRef.current?.({
+            type: 'arrowAngle', value: arrowBearingDeg(s.p1, s.p2), unit: '°',
+          });
         } else if (toolName === 'ruler' && s.p1 && s.p2) {
           const dist = Math.round(Math.hypot(s.p2.x - s.p1.x, s.p2.y - s.p1.y));
           onMeasurementCommitRef.current?.({ type: 'ruler', value: dist, unit: 'px' });
         } else if (toolName === 'line' && s.p1 && s.p2) {
-          const dx = s.p2.x - s.p1.x;
-          const dy = s.p2.y - s.p1.y;
-          const deg = Math.round(((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360);
-          onMeasurementCommitRef.current?.({ type: 'angle', value: deg, unit: '°' });
+          onMeasurementCommitRef.current?.({
+            type: 'angle', value: arrowBearingDeg(s.p1, s.p2), unit: '°',
+          });
         }
       }
     }, [pushHistory, notifyDrawCommitted]);
@@ -7150,6 +7248,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // fell straight through to beginDrawToolAt. Owning the pointer up front,
       // in a mode of its own, is what removes that whole class of conflict.
       if (styleModeRef.current) {
+        // EXCEPTION: an ARMED outline eraser owns the press.
+        //
+        // Style mode owning every pointer event is what made "select a mark,
+        // style it, then erase part of it" impossible: this early return sat
+        // above every outline-eraser branch below, the pointer-move twin sat
+        // above the eraser's cursor tracking, and cursorFor already hides the
+        // CSS cursor whenever the eraser is armed — so the coach got no cursor
+        // at all and no erasing, on the very mark they had just styled.
+        //
+        // Only the POINTER GATING is released here. styleModeRef, the panel and
+        // contextualTargetRef are deliberately left untouched, so the style
+        // panel stays open on the same mark throughout.
+        if (outlineEraserSizeRef.current > 0 && OUTLINE_ERASER_TOOLS.has(tool)) {
+          const eraserIdx = pickOutlineEraserTarget(pos);
+          if (eraserIdx >= 0 && applyOutlineEraserDot(eraserIdx, pos)) {
+            isDraggingRef.current = true;
+            e.preventDefault();
+            return;
+          }
+        }
         const hit = pickStyleTarget(pos);
         if (hit) {
           openContextualStyle(hit);
@@ -7861,10 +7979,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
-      // ── Style mode: no drag consumers exist, so a move does nothing ──────
+      // ── Style mode: the only drag consumer is the outline eraser ────────
       // Placed after the pinch and precision consumers above so two-finger
       // zoom still works while styling.
-      if (styleModeRef.current) return;
+      if (styleModeRef.current) {
+        if (outlineEraserSizeRef.current > 0) {
+          if (outlineErasingIdxRef.current >= 0 && isDraggingRef.current) {
+            applyOutlineEraserDot(outlineErasingIdxRef.current, pos);
+          } else if (OUTLINE_ERASER_TOOLS.has(tool)) {
+            // Without this the eraser ring drawn on the canvas never moved,
+            // while cursorFor had already hidden the real cursor.
+            outlineEraserPosRef.current = pos;
+            renderDirtyRef.current = true;
+          }
+        }
+        return;
+      }
 
       // ── Pan drag ────────────────────────────────────────────────────────
       if (isPanningRef.current && panStartRef.current) {
@@ -8098,6 +8228,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // selectionRef left over from an earlier Select-tool gesture from
       // pushing a no-op undo entry on every click.
       if (styleModeRef.current) {
+        // An eraser drag started under Style mode still has to be finalised;
+        // otherwise outlineErasingIdxRef stays latched and the next press
+        // resumes cutting a stroke the coach is no longer pointing at.
+        if (outlineErasingIdxRef.current >= 0) {
+          outlineErasingIdxRef.current = -1;
+          outlineEraserPosRef.current = null;
+          pushHistory();
+        }
         isDraggingRef.current = false;
         try {
           (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
