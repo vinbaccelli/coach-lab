@@ -4,7 +4,20 @@
 // service worker. v1 ran from launch with an auth-dependent document in its
 // precache list (see PRECACHE_ASSETS), so those entries are immortal until this
 // name changes.
-const CACHE_NAME = 'angle-motion-v2';
+//
+// v3 (2026-09-09): the catch-all at the bottom used to be
+// stale-while-revalidate for EVERY same-origin request that fell through,
+// which silently included unhashed files served straight out of public/ — most
+// damagingly the bundled demo and court videos. `return cached || networkFetch`
+// hands back the stale copy and only refreshes the cache for NEXT time, so
+// re-encoding a video at the same URL left every browser that had already
+// fetched it serving the old bytes indefinitely.
+//
+// Build output under /_next/static/ was never at risk: those filenames carry a
+// content hash, so a new build is a new URL that cannot collide with a cached
+// entry. Verified by rebuild — changing emitted code moved the analysis chunk
+// from page-20a0462fb88eef0c.js to page-97c9b85e228d079a.js.
+const CACHE_NAME = 'angle-motion-v3';
 const OFFLINE_URL = '/offline.html';
 
 // Static shell assets only — every visitor gets byte-identical responses for
@@ -127,17 +140,55 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Stale-while-revalidate for JS/CSS bundles
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      const networkFetch = fetch(request)
-        .then((response) => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+  // Media: never cached, always straight to the network.
+  //
+  // Three independent reasons. These files live in public/ with STABLE,
+  // unhashed URLs, so a cached copy survives re-encoding the file in place and
+  // there is no new URL to break the tie. Playback issues Range requests, whose
+  // 206 responses the Cache API refuses to store at all. And they are large —
+  // one 26 MB video would dominate the origin's storage quota and could evict
+  // the shell assets that make offline work.
+  if (
+    request.destination === 'video' ||
+    request.destination === 'audio' ||
+    request.headers.has('range') ||
+    /\.(mp4|mov|webm|m4v|mp3|wav|ogg)$/i.test(url.pathname)
+  ) {
+    return; // no respondWith → the browser performs its normal fetch
+  }
+
+  // Content-hashed build output: safe cache-first, and safe to keep forever.
+  // A new build emits a new filename, so a stale entry can never shadow current
+  // code — it simply becomes unreferenced and is evicted with the cache version.
+  if (url.origin === self.location.origin && url.pathname.startsWith('/_next/static/')) {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request).then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone)).catch(() => {});
+          }
           return response;
-        })
-        .catch(() => undefined);
-      return cached || networkFetch;
-    })
+        });
+      })
+    );
+    return;
+  }
+
+  // Everything else — unhashed same-origin files and cross-origin requests:
+  // NETWORK-FIRST. The cache is an offline fallback, never the first answer, so
+  // a deploy that changes a file in place is picked up on the very next request
+  // rather than the one after it.
+  event.respondWith(
+    fetch(request)
+      .then((response) => {
+        if (response.ok && response.status !== 206) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone)).catch(() => {});
+        }
+        return response;
+      })
+      .catch(() => caches.match(request))
   );
 });

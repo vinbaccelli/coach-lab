@@ -82,3 +82,51 @@ generated the reference, so it reads as unrelated to the work in hand.
 
 When removing anything temporary, ask what read it while it existed and what
 that reader wrote down.
+
+---
+
+## 002 — A service worker's catch-all decides what goes stale, and it is easy to under-notice
+
+**Symptom.** "Clicking Demo (Tutorial) loads the tennis court video." Reported
+twice in one day as a wiring bug; both times the wiring was correct.
+
+**Verified root cause.** `public/sw.js` ended with a blanket
+stale-while-revalidate for every same-origin request that fell through the
+earlier branches:
+
+```js
+return cached || networkFetch;   // hands back the OLD copy, refreshes for next time
+```
+
+A plain `fetch('/x.mp4')` has `request.destination === ''`, so it missed the
+image/font branch and landed in that catch-all. Files served from `public/` have
+**stable, unhashed URLs**, so re-encoding a video in place left every browser
+that had already fetched it serving the old bytes indefinitely — there is no new
+URL to break the tie.
+
+**The distinction that matters.** Build output was never at risk. Next emits
+content-hashed filenames, so a new build is a NEW URL and a cached entry cannot
+shadow it. Verified by rebuilding: changing emitted code moved the analysis
+chunk from `page-20a0462fb88eef0c.js` to `page-97c9b85e228d079a.js`, and
+reverting restored the original hash. **Hashing is what makes caching safe; the
+absence of hashing is what makes it dangerous.** The two must not share one
+strategy.
+
+**Fix.** Three routes instead of one catch-all: media never cached (unhashed,
+large, and Range/206 responses cannot be stored at all); `/_next/static/`
+cache-first (content-hashed, so staleness is impossible); everything else
+network-first with the cache as an offline fallback only. `CACHE_NAME` bumped to
+`angle-motion-v3` so `activate` evicts the entries the old rules wrote.
+
+**Class of mistake.** *Applying one cache strategy across URLs with different
+freshness guarantees.* The safety of a cache-first or SWR strategy comes entirely
+from whether the URL changes when the content changes. `app/ServiceWorkerRegistration.tsx`
+already carried a long comment about this exact hazard in DEV (where Next's chunk
+names are stable) and tears the worker down there — the same reasoning was never
+applied to unhashed production assets in `public/`.
+
+**Second-order lesson.** Both times, the reported symptom pointed at
+application code that turned out to be correct. When served bytes and source
+agree but behaviour does not, suspect the layer between them — service worker,
+CDN, or HTTP cache — before editing the source.
+
