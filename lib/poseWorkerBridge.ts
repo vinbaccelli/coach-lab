@@ -6,6 +6,9 @@
 
 import { OneEuroKeypointSmoother } from '@/lib/keypointSmooth';
 
+/** Crop fraction used when the caller gives no explicit focus ratio. */
+const DEFAULT_FOCUS_RATIO = 0.6;
+
 export type PoseKeypoint = { x: number; y: number; score: number; name: string };
 type ResultCb = (keypoints: PoseKeypoint[] | null) => void;
 
@@ -60,6 +63,12 @@ export class PoseWorkerBridge {
   private fallbackDetector: any = null;
   private idleId: number | null = null;
   private _focusPoint: { x: number; y: number } | null = null;
+  /**
+   * Crop size as a fraction of the frame, both axes. Sized by the caller from
+   * the athlete's joint bounding box; the 0.6 default is the historical fixed
+   * value and is what an omitted ratio resets to.
+   */
+  private _focusRatio = DEFAULT_FOCUS_RATIO;
   /** Video-px per bitmap-px of the frame currently in flight (downscaled send). */
   private lastSentScale = 1;
   /** One retry with a fresh wasm-only worker before the main-thread fallback. */
@@ -143,8 +152,13 @@ export class PoseWorkerBridge {
     }
   }
 
-  setFocusPoint(pt: { x: number; y: number } | null) {
+  setFocusPoint(pt: { x: number; y: number } | null, ratio?: number) {
     this._focusPoint = pt;
+    // An omitted ratio means "no opinion" — reset rather than keep a stale one
+    // from a previous subject, which would crop the next one to the wrong size.
+    this._focusRatio = ratio === undefined
+      ? DEFAULT_FOCUS_RATIO
+      : Math.min(1, Math.max(0.2, ratio));
   }
 
 
@@ -318,7 +332,7 @@ export class PoseWorkerBridge {
             return;
           }
           this.lastSentScale = bmp.width > 0 && vw > 0 ? vw / bmp.width : 1;
-          this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId: this.frameCount, focusPoint: this._focusPoint }, [bmp]);
+          this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId: this.frameCount, focusPoint: this._focusPoint, focusRatio: this._focusRatio }, [bmp]);
         })
         .catch(() => {
           this.inFlight = false;

@@ -14,6 +14,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Camera, Image as ImageIcon, PlayCircle, Plus, Trash2, Upload } from 'lucide-react';
 import type { CanvasHandle } from '@/components/Canvas';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
+import { angleDifferenceDeg } from '@/lib/drawingTools';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
@@ -880,6 +881,20 @@ function Home() {
   const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
   const [skeletonLocked, setSkeletonLocked] = useState(false);
   const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
+  /**
+   * ANGLE DIFFERENTIAL — the two-arrow measuring flow.
+   *
+   * null = not armed. Armed, it captures the next two committed angle arrows and
+   * writes both plus their difference into the data column, with no naming modal
+   * in between. `first` is the opening arrow's bearing once drawn.
+   *
+   * Before this the toolbar row only did `setTool('arrowAngle')`: there was no
+   * instruction, no capture, and the differential existed solely as a button
+   * buried in the naming modal that the coach had to notice and press. With the
+   * data column hidden, onMeasurementCommit dropped the arrow entirely and the
+   * tool did nothing at all.
+   */
+  const [angleDiffState, setAngleDiffState] = useState<{ first: number | null } | null>(null);
   const [pendingMeasurementName, setPendingMeasurementName] = useState('');
   const [dataColumnActive, setDataColumnActive] = useState(false);
   const [columnDeleteMode, setColumnDeleteMode] = useState(false);
@@ -1578,6 +1593,9 @@ function Home() {
       setStyleMode(false);
       setStyleSelection(null);
     }
+    // Picking any other tool abandons a half-finished angle differential —
+    // otherwise the next arrow drawn minutes later would silently complete it.
+    if (t !== 'arrowAngle') setAngleDiffState(null);
     setActiveTool(t);
     setDrawContextActive(DRAW_CONTEXT_TOOLS.includes(t));
     if (t === 'objectMultiplier') {
@@ -4853,6 +4871,19 @@ function Home() {
     setCircleSpinning(spinning);
   }, [styleSelection, markupTarget]);
 
+  /** Angle differential: arm the two-arrow flow and tell the coach what to do. */
+  const handleAngleDifferentialStart = useCallback(() => {
+    handleToolChange('arrowAngle');
+    // The result lands in the data column, and onMeasurementCommit drops every
+    // measurement while the column is hidden — so arming the tool has to open it
+    // or the whole flow is silently inert.
+    setDataColumnActive(true);
+    setAngleDiffState({ first: null });
+  }, [handleToolChange]);
+
+  /** Abandon the two-arrow flow (tool change, or the coach cancelling). */
+  const cancelAngleDifferential = useCallback(() => setAngleDiffState(null), []);
+
   /** Style button: enter/leave style mode. Leaving always drops the selection. */
   const handleStyleModeToggle = useCallback(() => {
     setStyleMode((on) => {
@@ -6185,6 +6216,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onOutlineEraserSizeChange:       setOutlineEraserSize,
     styleMode,
     onStyleModeToggle:               handleStyleModeToggle,
+    onAngleDifferentialStart:        handleAngleDifferentialStart,
     styleSelection,
     skeletonShowAngles,
     onSkeletonShowAnglesChange:      setSkeletonShowAngles,
@@ -6982,6 +7014,27 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   }}
                   onMeasurementRemoveLast={() => setMeasurementColumn(prev => prev.slice(0, -1))}
                   onMeasurementCommit={(m) => {
+                    // ANGLE DIFFERENTIAL owns the next two angle arrows: capture
+                    // them straight into the column, no naming modal, and emit
+                    // the difference automatically once the second one lands.
+                    if (angleDiffState && m.type === 'arrowAngle') {
+                      if (angleDiffState.first === null) {
+                        setMeasurementColumn(prev => [...prev, {
+                          id: `ad-${Date.now()}-1`, label: 'Angle 1',
+                          value: m.value, unit: '°', type: 'arrowAngle',
+                        }]);
+                        setAngleDiffState({ first: m.value });
+                      } else {
+                        const diff = angleDifferenceDeg(angleDiffState.first, m.value);
+                        setMeasurementColumn(prev => [
+                          ...prev,
+                          { id: `ad-${Date.now()}-2`, label: 'Angle 2', value: m.value, unit: '°', type: 'arrowAngle' },
+                          { id: `ad-${Date.now()}-d`, label: 'Angle differential', value: diff, unit: '°', type: 'differential' },
+                        ]);
+                        setAngleDiffState(null);
+                      }
+                      return;
+                    }
                     if (dataColumnVisible) {
                       setPendingMeasurement(m);
                       setPendingMeasurementName(m.type === 'angle' ? 'Angle' : m.type === 'arrowAngle' ? 'Arrow angle' : 'Distance');
@@ -8721,7 +8774,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           {pendingMeasurement.type === 'arrowAngle' && measurementColumn.some(m => m.type === 'arrowAngle') && (() => {
             const lastAngle = [...measurementColumn].reverse().find(m => m.type === 'arrowAngle');
             if (!lastAngle) return null;
-            const diff = Math.abs(pendingMeasurement.value - lastAngle.value);
+            // Bearings are 0..360 now, so a raw subtraction wraps (350 vs 10
+            // would read 340, not 20). Same helper the automatic flow uses.
+            const diff = angleDifferenceDeg(pendingMeasurement.value, lastAngle.value);
             return (
               <button type="button" onClick={() => {
                 setMeasurementColumn(prev => [
@@ -8952,7 +9007,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           (RecordingProvider + FloatingRecordingIndicator in app/layout.tsx) —
           they survive navigation to any page, so nothing to mount here. */}
 
-      {(processingStatus || stroMotionProcessing) && (
+      {(processingStatus || stroMotionProcessing || angleDiffState) && (
         <div
           role="status"
           aria-live="polite"
@@ -8972,7 +9027,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             fontWeight: 600,
             lineHeight: 1.45,
             boxShadow: '0 12px 36px rgba(0,0,0,0.12)',
-            pointerEvents: stroSelectingObject ? 'auto' : 'none',
+            pointerEvents: stroSelectingObject || angleDiffState ? 'auto' : 'none',
             textAlign: 'center',
             display: 'flex',
             alignItems: 'center',
@@ -8980,14 +9035,37 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           }}
         >
           <span style={{ flex: 1 }}>
-            {stroMotionProcessing
-              ? stroProposingFrame
-                ? `Motion Layer: proposing mask… ${stroMotionProgress.current} / ${stroMotionProgress.total}`
-                : stroGenerating
-                  ? 'Motion Layer: generating composite…'
-                  : processingStatus
-              : processingStatus}
+            {angleDiffState
+              ? angleDiffState.first === null
+                ? 'Draw two angle arrows to measure the angle differential between them'
+                : `First angle captured (${angleDiffState.first}°) — now draw the second angle arrow`
+              : stroMotionProcessing
+                ? stroProposingFrame
+                  ? `Motion Layer: proposing mask… ${stroMotionProgress.current} / ${stroMotionProgress.total}`
+                  : stroGenerating
+                    ? 'Motion Layer: generating composite…'
+                    : processingStatus
+                : processingStatus}
           </span>
+          {angleDiffState ? (
+            <button
+              type="button"
+              onClick={cancelAngleDifferential}
+              style={{
+                flexShrink: 0,
+                padding: '4px 10px',
+                borderRadius: 7,
+                border: '1px solid #D1D1D6',
+                background: 'transparent',
+                color: '#1D1D1F',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+          ) : null}
           {stroSelectingObject ? (
             <button
               type="button"

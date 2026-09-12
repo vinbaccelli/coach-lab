@@ -50,6 +50,12 @@ interface ToolPaletteProps {
   drawingOptions: DrawingOptions;
   onOptionsChange: (opts: Partial<DrawingOptions>) => void;
   /**
+   * Angle differential: arms the two-arrow measuring flow (instruction banner,
+   * then an automatic differential row in the data column). Falls back to
+   * plainly selecting the arrowAngle tool when the host does not provide it.
+   */
+  onAngleDifferentialStart?: () => void;
+  /**
    * Style mode: canvas clicks select an existing mark instead of drawing, and
    * this panel's colour / thickness / dash controls edit that mark.
    */
@@ -1001,6 +1007,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onToolChange,
     drawingOptions,
     onOptionsChange,
+    onAngleDifferentialStart,
     styleMode = false,
     onStyleModeToggle,
     styleSelection = null,
@@ -1483,7 +1490,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row chrome={chrome} k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} tooltip="Connect joint points to measure body alignment" label="Joint chain" onPress={() => setTool('jointChain')} />
           <Row chrome={chrome} k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
           <Row chrome={chrome} k="ruler" active={activeTool === 'ruler'} icon={<Ruler size={18} />} tooltip="Measure real-world distances (calibrate first)" label="Ruler" onPress={() => setTool('ruler')} />
-          <Row chrome={chrome} k="anglediff" icon={<Activity size={18} />} tooltip="Draw two angle arrows (e.g. hips then shoulders) — the angle difference is auto-calculated" label="Angle differential" onPress={() => setTool('arrowAngle')} />
+          <Row chrome={chrome} k="anglediff" icon={<Activity size={18} />} tooltip="Draw two angle arrows (e.g. hips then shoulders) — the angle difference is auto-calculated" label="Angle differential" onPress={() => (onAngleDifferentialStart ? onAngleDifferentialStart() : setTool('arrowAngle'))} />
           {onPrecisionDrawToggle && (
             <Row chrome={chrome}
               k="precision"

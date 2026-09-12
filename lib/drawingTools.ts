@@ -35,6 +35,39 @@ export interface DrawingOptions {
   arrowAtEnd?: boolean;
 }
 
+/**
+ * Bearing of the arrow p1->p2, in degrees, 0..360, clockwise from +x.
+ *
+ * ONE convention for every consumer. The on-canvas pill used
+ * `Math.abs(atan2(dy,dx))` (0..180, direction-blind) while the value committed
+ * to the data column used `(atan2(dy,dx)+360)%360` (0..360), so the SAME arrow
+ * showed two different numbers — an arrow drawn up-and-right read 30 on the
+ * video and 330 in the column. 0..360 is the one that keeps direction, which is
+ * what an arrow means, so that is the one both now use.
+ *
+ * Canvas Y grows DOWNWARD, so a positive bearing tilts down-right: 0 = left to
+ * right, 90 = straight down, 180 = right to left.
+ */
+export function arrowBearingDeg(
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+): number {
+  const deg = (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI;
+  return Math.round((deg + 360) % 360);
+}
+
+/**
+ * Smallest angle between two bearings, 0..180.
+ *
+ * A plain `Math.abs(a - b)` on 0..360 bearings wraps: two arrows 20 apart that
+ * straddle 0 (350 and 10) differ by 340 that way. The differential a coach
+ * wants is always the short way round.
+ */
+export function angleDifferenceDeg(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return Math.round(d > 180 ? 360 - d : d);
+}
+
 /** Calculate the angle (in degrees) between three points: vertex at b */
 export function calcAngleDeg(
   a: { x: number; y: number },

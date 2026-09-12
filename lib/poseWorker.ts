@@ -295,7 +295,11 @@ self.onmessage = async (e: MessageEvent) => {
       const useCrop = !!focus;
 
       if (focus) {
-        const ratio = 0.6;
+        // Sized by the caller from the athlete's joint bounding box. A fixed 0.6
+        // here cropped the ankles out of a full-body shot, which is what stopped
+        // the calf lines drawing (see AUTO_FOCUS_* in components/Canvas.tsx).
+        const requested = typeof data.focusRatio === 'number' ? data.focusRatio : 0.6;
+        const ratio = Math.min(1, Math.max(0.2, requested));
         cropW = Math.round(fullW * ratio);
         cropH = Math.round(fullH * ratio);
         cropX = Math.round(Math.max(0, Math.min(fullW - cropW, focus.x * fullW - cropW / 2)));
