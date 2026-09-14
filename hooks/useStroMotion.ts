@@ -49,6 +49,16 @@ export interface StroAutoRunSummary {
   racketDetected: number;
   /** Frames where Phase C segmented that box and unioned it into the mask. */
   racketApplied: number;
+  /**
+   * The batch body-scale reference in PIXELS, or null when none was measured.
+   *
+   * Surfaced because it is the number that decides whether auto-racket can work
+   * at all: the wrist gate is `unit * 3`, and real detections sit 34-119px from a
+   * wrist, so a collapsed unit (single digits) silently rejects every true
+   * racket. When detection finds nothing, this says whether the cause was the
+   * scale or the detector.
+   */
+  unitFloorPx: number | null;
   elapsedMs: number;
   finishedAt: number;
 }
@@ -948,6 +958,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         racketPassActive,
         racketDetected: racketBoxes.size,
         racketApplied: 0,
+        unitFloorPx: unitFloorNorm != null ? unitFloorNorm * video.videoWidth : null,
         elapsedMs: Date.now() - startedAt,
         finishedAt: Date.now(),
       });
@@ -1032,6 +1043,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       racketPassActive,
       racketDetected: racketBoxes.size,
       racketApplied,
+      unitFloorPx: unitFloorNorm != null ? unitFloorNorm * video.videoWidth : null,
       elapsedMs: Date.now() - startedAt,
       finishedAt: Date.now(),
     });

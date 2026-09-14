@@ -541,13 +541,28 @@ export default function PreciseTimeline({
   // ("move one side, the other moves too"). The user wants stable, precise
   // handles; they can re-fit manually via zoomToTrim.
   const didZoomToTrimRef = useRef(false);
+  /**
+   * Span the view was last fitted to, so a BIG change can re-fit while a drag
+   * cannot. The one-shot guard below exists to stop the handles jumping while
+   * one of them is being dragged — but it also meant a section set
+   * PROGRAMMATICALLY (the panel's "Use full video") left the view zoomed on the
+   * old window, with the new trim and its markers off-screen. A drag moves the
+   * span by a few percent per frame; setting the section to a whole clip
+   * multiplies it. Re-fit only on the latter.
+   */
+  const fittedSpanRef = useRef(0);
   useEffect(() => {
     if (!defaultZoomToTrim || !trimRange || d <= 0) {
-      if (!defaultZoomToTrim) { setViewWindow(null); didZoomToTrimRef.current = false; }
+      if (!defaultZoomToTrim) { setViewWindow(null); didZoomToTrimRef.current = false; fittedSpanRef.current = 0; }
       return;
     }
-    if (didZoomToTrimRef.current) return;
+    const newSpan = trimRange.end - trimRange.start;
+    const grewALot =
+      fittedSpanRef.current > 0 &&
+      Math.abs(newSpan - fittedSpanRef.current) / fittedSpanRef.current > 0.5;
+    if (didZoomToTrimRef.current && !grewALot) return;
     didZoomToTrimRef.current = true;
+    fittedSpanRef.current = newSpan;
     const span = trimRange.end - trimRange.start;
     const pad = Math.max(0.08, span * 0.12);
     setViewWindow({

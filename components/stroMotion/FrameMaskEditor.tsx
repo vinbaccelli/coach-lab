@@ -31,6 +31,8 @@ import {
   FLOOD_TOLERANCE_MAX,
   FLOOD_TOLERANCE_MIN,
   floodInMask,
+  countMaskLit,
+  maskBoundsNormalized,
   type AlphaMask,
   type BrushMode,
 } from '@/lib/stroMotionDraft';
@@ -154,6 +156,21 @@ export default function FrameMaskEditor({
    * button, the sensitivity is this.
    */
   const [floodTolerance, setFloodTolerance] = useState(FLOOD_TOLERANCE_DEFAULT);
+  /**
+   * What the last flood click actually did.
+   *
+   * THE WHOLE REPORTED BUG. Both flood tools were reported "completely
+   * non-functional"; measured in a real browser they were not — they ran, and
+   * changed nothing, because the pixels under the click were ALREADY in the state
+   * the tool sets. That is the normal case after auto-detect: the coach clicks the
+   * background they want gone (already excluded) or the subject they want kept
+   * (already selected), and a correct no-op is indistinguishable from a dead
+   * button. Measured on the real editor: flood-remove on already-excluded
+   * background moved 96 px of 29,568 — invisible.
+   *
+   * So every flood click now says what it did, and a no-op says WHY.
+   */
+  const [floodNote, setFloodNote] = useState<string | null>(null);
   /** Either flood tool — a single-shot click fill, not a drag brush. */
   const isFlood = brushMode === 'flood-add' || brushMode === 'flood-remove';
   const [zoom, setZoom] = useState(1);
@@ -814,6 +831,9 @@ export default function FrameMaskEditor({
   // Track whether we've already pushed an undo snapshot for the current stroke
   const strokeUndoPushedRef = useRef(false);
 
+  // A note describes ONE click; leaving the tool or changing frame retires it.
+  useEffect(() => { setFloodNote(null); }, [brushMode, sourceFrame]);
+
   const applyAtPoint = useCallback(
     (clientX: number, clientY: number, isFirstInStroke = false) => {
       dbg(
@@ -864,14 +884,39 @@ export default function FrameMaskEditor({
       let next: AlphaMask;
       if ((brushMode === 'flood-add' || brushMode === 'flood-remove') && sourcePixelsRef.current) {
         dbg(`[TEMP-DEBUG-BAIL] mode branch: ${brushMode} -> proceeding`);
+        const adding = brushMode === 'flood-add';
+        // BOUNDED, ALWAYS. The fill's one safeguard is a boundary it may not
+        // leave; without it a fill escapes the selection through similarly
+        // coloured pixels and clears parts of the athlete on the way back.
+        // The coach's box when there is one, otherwise the mask's own extent —
+        // padded when ADDING, since adding means reaching just outside it.
+        const bounds =
+          selectionBox ?? maskBoundsNormalized(maskRef.current, adding ? 0.15 : 0);
+        const litBefore = countMaskLit(maskRef.current);
         next = floodInMask(maskRef.current, sourcePixelsRef.current, canvas.width, x, y, {
-          mode: brushMode === 'flood-add' ? 'add' : 'remove',
+          mode: adding ? 'add' : 'remove',
           tolerance: floodTolerance,
-          // BOUNDED BY THE COACH'S OWN BOX. Without this the fill can leave the
-          // selection through similarly-coloured pixels and clear parts of the
-          // athlete on the way back.
-          bounds: selectionBox,
+          bounds,
         });
+        // SAY WHAT HAPPENED. A correct no-op and a dead button look identical
+        // otherwise — which is exactly how this tool came to be reported broken.
+        const delta = countMaskLit(next) - litBefore;
+        const inBox = !bounds
+          || (x >= bounds.x * canvas.width && x <= (bounds.x + bounds.width) * canvas.width
+            && y >= bounds.y * canvas.height && y <= (bounds.y + bounds.height) * canvas.height);
+        if (delta !== 0) {
+          setFloodNote(`${adding ? 'Added' : 'Removed'} ${Math.abs(delta).toLocaleString()} px.`);
+        } else if (!bounds) {
+          setFloodNote('Nothing to flood — this frame has no selection area and an empty mask.');
+        } else if (!inBox) {
+          setFloodNote('That click is outside the selection area — flood only works inside it.');
+        } else {
+          setFloodNote(
+            adding
+              ? 'No change — everything matching that colour here is already selected. Click a part that is NOT highlighted, or raise tolerance.'
+              : 'No change — that area is already excluded. Click a part that IS highlighted, or raise tolerance.',
+          );
+        }
       } else if (brushMode === 'add' || brushMode === 'remove') {
         dbg(`[TEMP-DEBUG-BAIL] mode branch: ${brushMode} -> proceeding to applyBrushToMask`);
         next = applyBrushToMask(maskRef.current, x, y, brushSize * scaleX, brushMode);
@@ -1187,27 +1232,20 @@ export default function FrameMaskEditor({
           </button>
           <button
             type="button"
-            style={{ ...toolBtn, ...(brushMode === 'flood-add' ? activeTool : {}), ...(selectionBox ? {} : { opacity: 0.4 }) }}
+            style={{ ...toolBtn, ...(brushMode === 'flood-add' ? activeTool : {}) }}
             onClick={() => setBrushMode('flood-add')}
-            // NO BOX, NO FLOOD. The fill's only safeguard is the selection box it
-            // may not leave; without one it would walk the whole frame, which is
-            // the exact failure this tool was just fixed for. The brushes and the
-            // Object tool still work.
-            disabled={!selectionBox}
-            title={selectionBox
-              ? 'Flood ADD — click a colour region inside the box to add all of it to the selection. Only ever adds.'
-              : 'Flood needs a selection area first — use Select Area, then flood inside it.'}
+            // NOT disabled when there is no selection box. It was, and that made
+            // both flood buttons silently inert — the fill falls back to the
+            // mask's own extent as its boundary instead (see applyAtPoint).
+            title="Flood ADD — click a region that is NOT already highlighted to add all of it. Only ever adds."
           >
             <Droplets size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Flood +
           </button>
           <button
             type="button"
-            style={{ ...toolBtn, ...(brushMode === 'flood-remove' ? activeTool : {}), ...(selectionBox ? {} : { opacity: 0.4 }) }}
+            style={{ ...toolBtn, ...(brushMode === 'flood-remove' ? activeTool : {}) }}
             onClick={() => setBrushMode('flood-remove')}
-            disabled={!selectionBox}
-            title={selectionBox
-              ? 'Flood REMOVE — click a colour region to cut all of it out of the selection. Only ever removes.'
-              : 'Flood needs a selection area first — use Select Area, then flood inside it.'}
+            title="Flood REMOVE — click a region that IS highlighted to cut all of it out. Only ever removes."
           >
             <Droplets size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Flood −
           </button>
@@ -1262,6 +1300,19 @@ export default function FrameMaskEditor({
               />
               <span style={{ minWidth: 22, textAlign: 'right' }}>{floodTolerance}</span>
             </label>
+          ) : null}
+          {isFlood && floodNote ? (
+            <span
+              style={{
+                fontSize: 11,
+                width: '100%',
+                color: floodNote.startsWith('Added') || floodNote.startsWith('Removed')
+                  ? 'var(--cl-success)'
+                  : '#FFD08A',
+              }}
+            >
+              {floodNote}
+            </span>
           ) : null}
           <div style={{ width: 1, height: 22, background: 'rgba(255,255,255,0.15)', margin: '0 2px' }} />
           <button

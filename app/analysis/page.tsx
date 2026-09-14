@@ -2972,6 +2972,17 @@ function Home() {
       onClear={softClearStroMotion}
       onAutoSelectAll={() => { void handleStroAutoSelectAll(); }}
       lastAutoRun={stroLastAutoRun}
+      videoDuration={stroVideoDuration}
+      // ESCAPE FROM THE ZOOMED SECTION. "Set End Frame" reads the playhead, and
+      // the playhead cannot leave the zoomed trim window, so the end could only
+      // creep out by the view's padding each time (3.0 -> 3.36 -> 3.76s) and
+      // never reach the end of a 15s clip. This sets the section outright.
+      onUseFullVideo={() => {
+        if (!(stroVideoDuration > 0)) return;
+        setStroStartFrame(0);
+        setStroEndFrame(stroVideoDuration);
+        setStroSampleTimesOverride(null);
+      }}
       previewPngUrl={stroPreviewPngUrl}
       previewVideoUrl={stroPreviewVideoUrl}
       isBuildingVideoPreview={stroIsBuildingVideoPreview}
