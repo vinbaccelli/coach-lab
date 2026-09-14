@@ -38,6 +38,56 @@ import {
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 
+/**
+ * Audio capture constraints for RECORDING — deliberately not the browser defaults.
+ *
+ * A bare `{ audio: true }` opts into Chrome's voice-COMMUNICATION chain, which is
+ * tuned for a phone call, not a recording: automatic gain control rides the level
+ * up and down (audible pumping, and room noise swelling in every pause) and noise
+ * suppression chews holes in anything that is not close-mic'd speech. That is why
+ * the same microphone that sounds fine in a video call sounded bad here — the app
+ * was asking for call processing and getting exactly that.
+ *
+ * echoCancellation is deliberately LEFT ON (browser default). A coach narrating
+ * over a video playing through the laptop speakers would otherwise have that
+ * playback bleed back in and double. If you ever want the rawest possible capture
+ * (headphones, no speaker playback), set echoCancellation: false here as well —
+ * that single line is the whole change, and it disengages the last stage of the
+ * processing chain.
+ *
+ * Values are plain (not `exact`), i.e. advisory: a device that cannot do 48 kHz
+ * mono negotiates its own nearest match rather than the capture failing outright.
+ */
+export const RECORDING_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  autoGainControl: false,
+  noiseSuppression: false,
+  sampleRate: 48_000,
+  channelCount: 1,
+};
+
+/**
+ * Explicit audio bitrate. Only videoBitsPerSecond used to be set, which leaves the
+ * audio allocation entirely to the UA — a number that is neither documented nor
+ * stable across Chrome versions. 128 kbps matches the AAC bitrate the MP4
+ * conversion already targets (lib/ffmpegWebmToMp4.ts), so the capture is no longer
+ * the weakest link in the chain.
+ */
+export const RECORDING_AUDIO_BPS = 128_000;
+
+/**
+ * Best-effort upgrade of an ALREADY-OPEN track (the Hub mic, or the webcam's mic)
+ * to the constraints above. The track was opened by someone else with defaults, and
+ * applyConstraints is the only way to re-negotiate it in place. Failure is
+ * non-fatal: worst case the track keeps the settings it already had.
+ */
+async function applyRecordingAudioConstraints(track: MediaStreamTrack, label: string) {
+  try {
+    await track.applyConstraints(RECORDING_AUDIO_CONSTRAINTS);
+  } catch (err) {
+    console.warn(`[RecordingProvider] could not apply audio constraints to ${label}:`, err);
+  }
+}
+
 export interface RecordingSources {
   getWebcamStream: () => MediaStream | null;
   getMicStream: () => MediaStream | null;
@@ -570,11 +620,19 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     // Resolution is unconditional and ordered, so it cannot depend on whether
     // the webcam happens to be on or whether a track is currently muted:
     //   1. the Hub's mic toggle, if the coach turned it on (explicit intent)
-    //   2. the webcam's own audio — startWebcam requests {video:true,audio:true}
-    //      (app/analysis/page.tsx), so in the screen+webcam flow this already
-    //      exists and needs no second device grant
-    //   3. a dedicated mic capture — covers screen-only recording, no webcam
+    //   2. a dedicated capture of the SYSTEM DEFAULT input, opened with the
+    //      recording constraints above
+    //   3. the webcam's own audio, as a last resort
     // Exactly one track is pushed, so duplicate/echoing audio is impossible.
+    //
+    // 2 AND 3 USED TO BE THE OTHER WAY ROUND, and that was a real quality bug: the
+    // webcam is opened as {video:true,audio:true} (app/analysis/page.tsx), so
+    // merely switching the camera on silently handed the recording the WEBCAM'S
+    // microphone — typically a far-field array built into the camera housing —
+    // even though the coach's good built-in mic was sitting right there as the
+    // system default. Nothing in the UI said which mic was live. The webcam track
+    // is still the fallback, because a recording with distant audio beats a
+    // recording with none, but it is no longer the silent default.
     const tracks: MediaStreamTrack[] = [...streamRef.current.getTracks()];
     let audioTrack: MediaStreamTrack | null = null;
     let audioFrom = 'none';
@@ -583,19 +641,17 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     if (hubMicTrack) {
       audioTrack = hubMicTrack;
       audioFrom = 'hub-mic';
-    }
-
-    if (!audioTrack) {
-      const webcamAudioTrack = webcamStream?.getAudioTracks()[0] ?? null;
-      if (webcamAudioTrack) {
-        audioTrack = webcamAudioTrack;
-        audioFrom = 'webcam-mic';
-      }
+      await applyRecordingAudioConstraints(hubMicTrack, 'hub mic');
     }
 
     if (!audioTrack) {
       try {
-        const dedicated = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // The system default input — the mic the coach already uses everywhere
+        // else. Permission is normally granted by this point (the webcam or Hub
+        // mic asked for it), so this rarely prompts.
+        const dedicated = await navigator.mediaDevices.getUserMedia({
+          audio: RECORDING_AUDIO_CONSTRAINTS,
+        });
         autoMicStreamRef.current = dedicated;
         audioTrack = dedicated.getAudioTracks()[0] ?? null;
         audioFrom = 'dedicated-mic';
@@ -605,14 +661,29 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         // NotAllowedError = denied/dismissed, NotFoundError = no input device,
         // NotReadableError = device held by another app.
         const err = e as { name?: string; message?: string };
-        console.error(
-          `[RecordingProvider] mic getUserMedia FAILED — recording will be silent. ${err?.name ?? 'Error'}: ${err?.message ?? String(e)}`,
-        );
-        setError(
-          err?.name === 'NotAllowedError'
-            ? 'Microphone blocked — allow mic access for this site, then record again (the video will have no sound without it).'
-            : `Microphone unavailable (${err?.name ?? 'error'}) — recording will have no sound.`,
-        );
+        // Last resort: the webcam's own mic. Distant audio beats no audio.
+        const webcamAudioTrack = webcamStream?.getAudioTracks()[0] ?? null;
+        if (webcamAudioTrack) {
+          audioTrack = webcamAudioTrack;
+          audioFrom = 'webcam-mic';
+          await applyRecordingAudioConstraints(webcamAudioTrack, 'webcam mic');
+          console.warn(
+            `[RecordingProvider] system mic unavailable (${err?.name ?? 'error'}); falling back to the webcam's microphone — audio may sound distant.`,
+          );
+        } else {
+          // A denied/blocked mic is the likeliest reason a recording is silent, and
+          // swallowing the reason cost several rounds. NotAllowedError =
+          // denied/dismissed, NotFoundError = no input device, NotReadableError =
+          // device held by another app.
+          console.error(
+            `[RecordingProvider] mic getUserMedia FAILED — recording will be silent. ${err?.name ?? 'Error'}: ${err?.message ?? String(e)}`,
+          );
+          setError(
+            err?.name === 'NotAllowedError'
+              ? 'Microphone blocked — allow mic access for this site, then record again (the video will have no sound without it).'
+              : `Microphone unavailable (${err?.name ?? 'error'}) — recording will have no sound.`,
+          );
+        }
       }
     }
 
@@ -626,11 +697,25 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     const audioTrackCount = combined.getAudioTracks().length;
     const mimeType = getBestMimeType(audioTrackCount > 0);
     mimeTypeRef.current = mimeType;
+    // settings are what the DEVICE actually negotiated, which is the only honest
+    // answer to "what does this recording sound like" — the constraints above are
+    // advisory and a device is free to ignore any of them.
+    const audioSettings = audioTrack?.getSettings?.() as
+      | (MediaTrackSettings & { autoGainControl?: boolean; noiseSuppression?: boolean; echoCancellation?: boolean })
+      | undefined;
     console.info(
       `[RecordingProvider] audio tracks=${audioTrackCount} (source=${audioFrom}` +
       `, enabled=${audioTrack?.enabled ?? 'n/a'}, label="${audioTrack?.label ?? ''}")` +
       ` video tracks=${combined.getVideoTracks().length} mimeType=${mimeType}`,
     );
+    if (audioSettings) {
+      console.info(
+        `[RecordingProvider] audio settings negotiated: sampleRate=${audioSettings.sampleRate ?? '?'}` +
+        ` channels=${audioSettings.channelCount ?? '?'} AGC=${audioSettings.autoGainControl ?? '?'}` +
+        ` NS=${audioSettings.noiseSuppression ?? '?'} EC=${audioSettings.echoCancellation ?? '?'}` +
+        ` audioBitsPerSecond=${RECORDING_AUDIO_BPS}`,
+      );
+    }
     if (audioTrackCount === 0) {
       console.warn('[RecordingProvider] no audio track — recording will be silent.');
     }
@@ -640,6 +725,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       recorder = new MediaRecorder(combined, {
         mimeType: mimeType || undefined,
         videoBitsPerSecond: 5_000_000,
+        audioBitsPerSecond: RECORDING_AUDIO_BPS,
       });
     } catch {
       cleanupAux();
