@@ -1977,6 +1977,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // another — each pass adds a track (replacing any overlapping one). While
     // any track exists, the skeleton shows ONLY inside tracked sections.
     const bakedTracksRef = useRef<BakedTrack[]>([]);
+    /** [PROBE-B] TEMPORARY — last logged reason, so only TRANSITIONS print. */
+    const probeBLastRef = useRef<string | null>(null);
 
     const findBakedTrack = (t: number): BakedTrack | null => {
       for (const b of bakedTracksRef.current) {
@@ -5101,6 +5103,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ? lookupBakedPose(video.currentTime)
             : null;
 
+        // [PROBE-B] TEMPORARY — mid-section skeleton flicker. Logs only when the
+        // reason CHANGES, so one line marks each disappear/reappear edge.
+        if (bakedTracksRef.current.length > 0 && video) {
+          const t = video.currentTime;
+          const reason =
+            exactPoseLockRef.current ? 'exactPoseLock'
+              : poseModeRef.current !== 'live' ? `poseMode=${poseModeRef.current}`
+                : bakingRef.current ? 'baking'
+                  : bakedPose ? null
+                    : findBakedTrack(t) ? 'trackFound-but-noSample' : 'outsideTrack';
+          const suppressed = skeletonSuppressedRef.current ? ' suppressed' : '';
+          const key = `${reason ?? 'ok'}${suppressed}`;
+          if (key !== probeBLastRef.current) {
+            probeBLastRef.current = key;
+            console.warn(
+              `[PROBE-B] t=${t.toFixed(3)} bakedPose=${bakedPose ? 'yes' : 'NO'} reason=${reason ?? 'ok'}` +
+              `${suppressed} tracks=${bakedTracksRef.current.length} live=${latestKeypointsRef.current?.length ?? 0}`,
+            );
+          }
+        }
+
         // A BAKED POSE OUTRANKS SUPPRESSION.
         //
         // `skeletonSuppressedRef` is a transient "blank it for now" flag set by
@@ -6706,6 +6729,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const beginDrawToolAt = useCallback((pos: Pt, lw: number) => {
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
+      // [PROBE-C] TEMPORARY — text tool never shows its textarea. This fires only
+      // if the pointer actually REACHED the draw dispatch; silence here means
+      // something above returned first.
+      if (tool === 'text') {
+        console.warn(`[PROBE-C] beginDrawToolAt reached, tool=text fontSize=${opts.fontSize} zoom=${zoomRef.current}`);
+      }
       switch (tool) {
         case 'pen':
           activeStrokeRef.current = {
@@ -6885,6 +6914,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const { clientX, clientY } = logicalPtToClient(pos);
           const rect = canvas.getBoundingClientRect();
           const scaledFontSize = opts.fontSize * zoomRef.current * (rect.height / cssH(canvas));
+          // [PROBE-C] TEMPORARY — a NaN/0 fontSize renders a zero-size textarea,
+          // which looks exactly like "no textarea appeared".
+          console.warn(
+            `[PROBE-C] setNewTextDraft left=${clientX - rect.left} top=${clientY - rect.top} ` +
+            `fontSize=${scaledFontSize} rectH=${rect.height} cssH=${cssH(canvas)}`,
+          );
           setNewTextDraft({
             pos,
             left: clientX - rect.left,
@@ -7173,6 +7208,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const lw   = pressureWidth(e);
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
+      // [PROBE-C] TEMPORARY — pairs with the probe in beginDrawToolAt. If this
+      // logs and that one does not, a branch in between returned first, and the
+      // flags printed here say which one.
+      if (tool === 'text') {
+        console.warn(
+          `[PROBE-C] pointerdown tool=text styleMode=${styleModeRef.current} panMode=${panModeEnabledRef.current} ` +
+          `zoom=${zoomRef.current} space=${spaceHeldRef.current} button=${e.button} ptr=${e.pointerType} ` +
+          `eraserSize=${outlineEraserSizeRef.current} mcItems=${measurementColumnRef.current?.length ?? 'null'}`,
+        );
+      }
 
       if (
         !styleModeRef.current &&

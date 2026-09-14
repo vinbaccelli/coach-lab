@@ -1356,9 +1356,12 @@ function Home() {
         return 0;
       }
       const kept = canvasRef.current?.finishBakeCapture?.({ start, end }) ?? 0;
-      if (kept >= 2 && process.env.NODE_ENV !== 'production') {
+      if (kept >= 2) {
         const passMs = performance.now() - passT0;
-        console.log(`[PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);
+        // [PROBE-A] TEMPORARY — the NODE_ENV gate that used to wrap this meant the
+        // engine line could never print on a Vercel build, which is the only place
+        // the coach can test. Restore the gate once the engine question is settled.
+        console.warn(`[PROBE-A] [PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);
       }
       return kept;
     } finally {
