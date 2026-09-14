@@ -240,6 +240,54 @@ export function mergeMasksPreferForeground(base: AlphaMask, overlay: AlphaMask):
  * dimensions before `embedRegionMask` pastes it into the frame. No-ops when the
  * size already matches.
  */
+/** Lit pixels in a mask. Used to tell a real flood from one that changed nothing. */
+export function countMaskLit(mask: AlphaMask): number {
+  let n = 0;
+  for (let i = 0; i < mask.data.length; i++) if (mask.data[i] > 127) n++;
+  return n;
+}
+
+/**
+ * NORMALIZED bounding box of a mask's lit pixels, or null when it is empty.
+ *
+ * The flood tools need a boundary they may not cross, and the coach's selection
+ * box is the natural one — but it is optional, and a hard "no box, no flood"
+ * made both buttons inert with no explanation. The mask's own extent is the
+ * honest fallback: it is the region the coach is demonstrably working in, it
+ * always exists once there is anything to edit, and it still stops a fill from
+ * escaping across the whole frame.
+ *
+ * `pad` widens it as a fraction of the box's own size, so flood-ADD can reach
+ * the pixels just outside the current mask — which is the entire point of adding.
+ */
+export function maskBoundsNormalized(
+  mask: AlphaMask,
+  pad = 0,
+): { x: number; y: number; width: number; height: number } | null {
+  const { width, height, data } = mask;
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    for (let x = 0; x < width; x++) {
+      if (data[row + x] <= 127) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return null;
+  const bw = maxX - minX + 1;
+  const bh = maxY - minY + 1;
+  const px = bw * pad;
+  const py = bh * pad;
+  const x0 = Math.max(0, minX - px);
+  const y0 = Math.max(0, minY - py);
+  const x1 = Math.min(width, maxX + 1 + px);
+  const y1 = Math.min(height, maxY + 1 + py);
+  return { x: x0 / width, y: y0 / height, width: (x1 - x0) / width, height: (y1 - y0) / height };
+}
+
 export function resampleAlphaMask(mask: AlphaMask, dw: number, dh: number): AlphaMask {
   if (mask.width === dw && mask.height === dh) return mask;
   const data = new Uint8ClampedArray(dw * dh);

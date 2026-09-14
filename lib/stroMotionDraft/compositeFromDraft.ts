@@ -146,17 +146,36 @@ export function renderStroMotionDraftComposite(
 
   const scratch = document.createElement('canvas');
   const startIdx = Math.max(0, Math.min(visibleStart, count));
-  for (let i = startIdx; i < count; i++) {
-    const frame = orderedFrames[i];
+
+  /**
+   * STACKING IS A PROGRESSION, AND IS NOT THE ANIMATION ORDER.
+   *
+   * These were the same thing, and conflating them is why the layers read
+   * backwards: `videoOrder` reverses the array to decide which frame is the
+   * "current" one, and because the paint loop walked that same reversed array,
+   * it also flipped WHICH FRAME ENDS UP ON TOP — leaving frame 1 painted last,
+   * over frames 2, 3, …
+   *
+   * They answer different questions, so they are now computed separately:
+   *   - `slice` (animation order) decides which frames are visible and which one
+   *     is "current" — the fully opaque one.
+   *   - `painted` (always ascending by frame index) decides Z-ORDER, so a later
+   *     frame always lies over an earlier one and the stack reads as motion
+   *     through time, whichever direction the animation runs.
+   */
+  const slice = orderedFrames.slice(startIdx, count);
+  const currentFrame = slice.length ? slice[slice.length - 1] : null;
+  const painted = [...slice].sort((a, b) => a.index - b.index);
+
+  for (const frame of painted) {
     const mask = pickMask(frame);
     if (!frame.sourceFrame || !mask) continue;
 
-    const isLast = i === count - 1;
-    // In reverse mode, the "current" frame (last painted) is the earliest time
-    const ghostAlpha = isLast
+    const isCurrent = frame === currentFrame;
+    const ghostAlpha = isCurrent
       ? 1.0
       : fadeMode === 'temporal'
-        ? temporalGhostOpacity(i, total)
+        ? temporalGhostOpacity(frame.index, total)
         : opacity;
 
     renderMaskedFrame(ctx, frame.sourceFrame, mask, dest, ghostAlpha, scratch);
