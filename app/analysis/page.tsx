@@ -18,7 +18,7 @@ import { angleDifferenceDeg } from '@/lib/drawingTools';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
-import { useRecording } from '@/contexts/RecordingContext';
+import { useRecording, RECORDING_AUDIO_CONSTRAINTS } from '@/contexts/RecordingContext';
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
 import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModal';
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
@@ -4510,7 +4510,10 @@ function Home() {
 
   const startWebcam = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: RECORDING_AUDIO_CONSTRAINTS,
+      });
       webcamStreamRef.current = stream;
       if (webcamVideoRef.current) {
         webcamVideoRef.current.srcObject = stream;
@@ -4554,7 +4557,9 @@ function Home() {
 
   const startMic = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Recording constraints, not the browser's call-tuned defaults — this is the
+      // track startRecording prefers above every other source.
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: RECORDING_AUDIO_CONSTRAINTS });
       micStreamRef.current = stream;
       setMicActive(true);
       setMicMuted(false);
@@ -5838,25 +5843,28 @@ function Home() {
 
     setCaptureYoutubeBusy(true);
     try {
-      const ext = captureDownloadStatus === 'ready_mp4' ? 'mp4' : 'webm';
-      const mime = blob.type || (ext === 'mp4' ? 'video/mp4' : 'video/webm');
-      const fd = new FormData();
-      fd.append('video', new File([blob], `angle-motion-capture.${ext}`, { type: mime }));
-      fd.append('title', `AngleMotion analysis ${localDateTimeForFolder()}`);
-      const res = await fetch('/api/youtube/upload', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!res.ok) {
+      // Was a direct multipart POST to /api/youtube/upload — the same 4.5 MB
+      // Vercel body limit that broke the recording upload, and worse here:
+      // `await res.json()` ran BEFORE the res.ok check, so Vercel's HTML 413
+      // threw a parse error and the coach saw that instead of anything useful.
+      // Shares the resumable path now.
+      const result = await uploadVideoToYouTube(
+        blob,
+        `AngleMotion analysis ${localDateTimeForFolder()}`,
+        (f) => setProcessingStatus(`Uploading to YouTube… ${Math.round(f * 100)}%`),
+      );
+      if (!result.ok) {
         // The grant is missing or was revoked — recoverable in two clicks, so
         // re-read the connection state and let the toast offer Connect rather
         // than reporting a failure the coach cannot act on.
-        if (data?.needsConnect) {
+        if (result.needsConnect) {
           await youtubeConn.refresh();
           setProcessingStatus('Connect YouTube first, then upload.');
           return;
         }
-        throw new Error(data.error ?? 'Upload failed');
+        throw new Error(result.error ?? 'Upload failed');
       }
-      setCaptureYoutubeUrl(typeof data.url === 'string' ? data.url : null);
+      setCaptureYoutubeUrl(result.url ?? null);
       setShowCaptureSaveToast(false);
       setCaptureSaveModalOpen(true);
     } catch (e: unknown) {

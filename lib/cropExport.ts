@@ -151,7 +151,14 @@ export async function exportEditedVideo(
 
     let recorder: MediaRecorder;
     try {
-      recorder = new MediaRecorder(combined, { mimeType: mime || undefined, videoBitsPerSecond: 5_000_000 });
+      // Explicit audio bitrate: every crop/trim is a full re-encode of the audio
+      // as well as the video, so leaving the allocation to the UA here quietly
+      // added a second generation of loss on top of the capture.
+      recorder = new MediaRecorder(combined, {
+        mimeType: mime || undefined,
+        videoBitsPerSecond: 5_000_000,
+        audioBitsPerSecond: 128_000,
+      });
     } catch {
       URL.revokeObjectURL(url);
       return { ok: false, error: 'MediaRecorder could not be created.' };
