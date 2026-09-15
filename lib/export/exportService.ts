@@ -12,6 +12,7 @@
 import { uploadDataUrl } from '@/lib/supabase/storage';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
+import { uploadToResumableSession } from '@/lib/export/youtubeResumableUpload';
 
 export interface ReportSectionInput {
   heading: string;
@@ -63,32 +64,54 @@ export interface ExportPipelineResult {
 
 const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 365;
 
-/** Upload one video blob to the signed-in coach's YouTube channel (Unlisted). */
+/**
+ * Upload one video blob to the signed-in coach's YouTube channel (Unlisted).
+ *
+ * Two steps, and the big one does not involve our servers: ask
+ * /api/youtube/upload-session for a resumable session URL (that route holds the
+ * YouTube credential), then PUT the bytes straight to Google in chunks.
+ *
+ * The old path POSTed the whole blob to /api/youtube/upload, which Vercel
+ * rejected with 413 for anything over 4.5 MB — i.e. every recording longer than
+ * a few seconds. Nothing large crosses a lambda now, so there is no size
+ * ceiling to hit and no 300s function timeout to race.
+ */
 export async function uploadVideoToYouTube(
   blob: Blob,
   title: string,
+  onProgress?: (fraction: number) => void,
 ): Promise<{ ok: boolean; url?: string; error?: string; needsConnect?: boolean }> {
-  const form = new FormData();
-  const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
-  form.append('video', new File([blob], `anglemotion-${Date.now()}.${ext}`, { type: blob.type || 'video/mp4' }));
-  form.append('title', title);
-  const res = await fetch('/api/youtube/upload', { method: 'POST', body: form });
-  // `needsConnect` is set by /api/youtube/upload when there is no stored YouTube
-  // grant. It was being dropped here, which left the UI unable to tell a missing
-  // connection apart from a failed upload.
-  const body = (await res.json().catch(() => ({}))) as {
-    url?: string;
+  const mimeType = blob.type || 'video/mp4';
+
+  const sessionRes = await fetch('/api/youtube/upload-session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, sizeBytes: blob.size, mimeType }),
+  });
+
+  // Never assume JSON: an infrastructure-level rejection (413, 502, a proxy
+  // error page) has an HTML body, and calling res.json() on it throws — which
+  // is how the 413 previously surfaced as an unrelated parse error instead of
+  // something the coach could read.
+  const sessionBody = (await sessionRes.json().catch(() => ({}))) as {
+    uploadUrl?: string;
     error?: string;
     needsConnect?: boolean;
   };
-  if (!res.ok || !body.url) {
+
+  if (!sessionRes.ok || !sessionBody.uploadUrl) {
     return {
       ok: false,
-      error: body.error ?? `YouTube upload failed (${res.status})`,
-      needsConnect: body.needsConnect === true,
+      error: sessionBody.error ?? `Could not start the YouTube upload (${sessionRes.status}).`,
+      needsConnect: sessionBody.needsConnect === true,
     };
   }
-  return { ok: true, url: body.url };
+
+  const result = await uploadToResumableSession(sessionBody.uploadUrl, blob, onProgress);
+  if (!result.ok || !result.url) {
+    return { ok: false, error: result.error ?? 'YouTube upload failed.' };
+  }
+  return { ok: true, url: result.url };
 }
 
 /**
@@ -158,16 +181,37 @@ export async function runExportPipeline(input: ExportPipelineInput): Promise<Exp
   const progress = input.onProgress ?? (() => {});
   let youtubeUrl: string | undefined;
 
+  let youtubeError: string | undefined;
+  let youtubeNeedsConnect = false;
+
   if (input.videoBlob) {
     progress('Uploading video to YouTube (Unlisted)…');
-    const yt = await uploadVideoToYouTube(input.videoBlob, input.title);
-    // Stops before the Docs step either way — but carries WHY up, so a missing
-    // grant becomes a reconnect prompt rather than a dead-end error.
-    if (!yt.ok) return { ok: false, error: yt.error, needsConnect: yt.needsConnect };
-    youtubeUrl = yt.url;
+    const yt = await uploadVideoToYouTube(input.videoBlob, input.title, (f) =>
+      progress(`Uploading video to YouTube (Unlisted)… ${Math.round(f * 100)}%`),
+    );
+    if (yt.ok) {
+      youtubeUrl = yt.url;
+    } else {
+      // A FAILED VIDEO UPLOAD NO LONGER KILLS THE REPORT.
+      //
+      // This used to `return` here, so one failing YouTube upload silently took
+      // the Google Docs export down with it — the coach lost the whole written
+      // report because of an unrelated video problem, and the error they saw
+      // talked only about YouTube. The report is the more valuable half and it
+      // does not depend on the video: carry the failure forward and still write
+      // the Doc, just without a video link in it.
+      youtubeError = yt.error;
+      youtubeNeedsConnect = yt.needsConnect === true;
+      progress('Video upload failed — continuing with the report…');
+    }
   }
 
-  if (input.skipDoc) return { ok: true, youtubeUrl };
+  // Video-only export: there is no report to fall back on, so the upload
+  // failure IS the result.
+  if (input.skipDoc) {
+    if (youtubeError) return { ok: false, error: youtubeError, needsConnect: youtubeNeedsConnect };
+    return { ok: true, youtubeUrl };
+  }
 
   progress('Preparing report images…');
   const sections: Array<{ heading: string; imageUrl?: string; lines?: string[]; notes?: string }> = [];
@@ -190,8 +234,22 @@ export async function runExportPipeline(input: ExportPipelineInput): Promise<Exp
     sections,
     measurements: input.measurements,
   });
-  if (!doc.ok) return { ok: false, youtubeUrl, error: doc.error };
+  if (!doc.ok) {
+    // Both halves failed — lead with the Doc error (the report is what the
+    // coach came for) but do not hide the video failure behind it.
+    const error = youtubeError ? `${doc.error} (the video upload also failed: ${youtubeError})` : doc.error;
+    return { ok: false, youtubeUrl, error, needsConnect: youtubeNeedsConnect };
+  }
 
   progress('Done');
-  return { ok: true, youtubeUrl, docUrl: doc.url };
+  // ok:true with an `error` set is deliberate — the Doc exists and the coach
+  // should be given its link, but they must still be told the video is missing
+  // from it rather than discovering that later.
+  return {
+    ok: true,
+    youtubeUrl,
+    docUrl: doc.url,
+    error: youtubeError ? `Report created, but the video upload failed: ${youtubeError}` : undefined,
+    needsConnect: youtubeNeedsConnect || undefined,
+  };
 }
