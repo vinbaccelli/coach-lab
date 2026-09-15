@@ -83,7 +83,30 @@ export async function ensureStroMotionDraft(
     !!params.previous &&
     params.previous.videoWidth === vw &&
     params.previous.videoHeight === vh;
-  const batchUnitFloorNorm = sameFootage
+
+  /**
+   * SAME FRAMES, not merely the same clip — and this is a correction to the
+   * first version of this carry-forward, which required only `sameFootage`.
+   *
+   * The floor is a MINIMUM: `poseScaleUnit` raises any frame whose own unit
+   * falls below `unitFloorNorm * width * 0.90`. That is exactly right for the
+   * collapse it was built to catch, and wrong the moment the frames change,
+   * because the reference was measured on a different part of the clip. Carry a
+   * floor measured where the athlete was near the camera onto frames where they
+   * are genuinely further away, and every one of those frames gets its unit
+   * forced UP — inflating the zone, the segmenter crop and the head oval, which
+   * reads as a mask that finds the general area of the player but no longer
+   * tracks their edges.
+   *
+   * So the reference survives only while it still describes THESE frames.
+   * Re-space the section and it is dropped, and the next batch measures its own.
+   */
+  const prevTimes = params.previous?.sampleTimes ?? [];
+  const sameFrameSet =
+    sameFootage &&
+    prevTimes.length === params.sampleTimes.length &&
+    prevTimes.every((t, i) => Math.abs(t - params.sampleTimes[i]) < 0.001);
+  const batchUnitFloorNorm = sameFrameSet
     ? params.previous!.batchUnitFloorNorm ?? null
     : null;
 

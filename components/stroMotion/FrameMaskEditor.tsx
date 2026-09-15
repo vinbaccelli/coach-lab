@@ -173,6 +173,25 @@ export default function FrameMaskEditor({
   const [floodNote, setFloodNote] = useState<string | null>(null);
   /** Either flood tool — a single-shot click fill, not a drag brush. */
   const isFlood = brushMode === 'flood-add' || brushMode === 'flood-remove';
+
+  /**
+   * How far a flood-ADD may spread from the click, as a fraction of the frame's
+   * SHORTER side. Generous enough to swallow a whole limb or racket head the
+   * segmenter missed, far too small to swallow the frame. Squared off rather
+   * than circular because the flood walker takes a rectangular bound.
+   */
+  const FLOOD_ADD_REACH = 0.25;
+  const floodAddReachBounds = useCallback(
+    (cx: number, cy: number, w: number, h: number) => {
+      const reach = Math.min(w, h) * FLOOD_ADD_REACH;
+      const x0 = Math.max(0, cx - reach);
+      const y0 = Math.max(0, cy - reach);
+      const x1 = Math.min(w, cx + reach);
+      const y1 = Math.min(h, cy + reach);
+      return { x: x0 / w, y: y0 / h, width: (x1 - x0) / w, height: (y1 - y0) / h };
+    },
+    [],
+  );
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [showCompositePreview, setShowCompositePreview] = useState(false);
@@ -885,13 +904,29 @@ export default function FrameMaskEditor({
       if ((brushMode === 'flood-add' || brushMode === 'flood-remove') && sourcePixelsRef.current) {
         dbg(`[TEMP-DEBUG-BAIL] mode branch: ${brushMode} -> proceeding`);
         const adding = brushMode === 'flood-add';
-        // BOUNDED, ALWAYS. The fill's one safeguard is a boundary it may not
-        // leave; without it a fill escapes the selection through similarly
-        // coloured pixels and clears parts of the athlete on the way back.
-        // The coach's box when there is one, otherwise the mask's own extent —
-        // padded when ADDING, since adding means reaching just outside it.
-        const bounds =
-          selectionBox ?? maskBoundsNormalized(maskRef.current, adding ? 0.15 : 0);
+        /**
+         * THE TWO DIRECTIONS NEED DIFFERENT BOUNDARIES. They did not have them,
+         * and that is what made Flood + useless: both modes were bounded by the
+         * coach's selection box, so a click outside it — which is the ONLY place
+         * new area can come from — was refused outright with "that click is
+         * outside the selection area". Adding is by definition an act of
+         * reaching OUT; constraining it to what is already selected is a
+         * contradiction.
+         *
+         * REMOVE keeps the tight bound. It cuts away from what is selected, so
+         * the selection box (or the mask's own extent) is the right fence, and
+         * it is the fence that stopped the original escape bug — a fill leaving
+         * the selection through similar pixels and clearing the athlete on the
+         * way back.
+         *
+         * ADD is bounded by REACH instead of by the selection: a box centred on
+         * the click, sized from the frame. The coach can click anywhere,
+         * including well outside the box, and the fill still cannot run away
+         * across the whole frame. Reach, not confinement.
+         */
+        const bounds = adding
+          ? floodAddReachBounds(x, y, canvas.width, canvas.height)
+          : selectionBox ?? maskBoundsNormalized(maskRef.current, 0);
         const litBefore = countMaskLit(maskRef.current);
         next = floodInMask(maskRef.current, sourcePixelsRef.current, canvas.width, x, y, {
           mode: adding ? 'add' : 'remove',
@@ -909,7 +944,9 @@ export default function FrameMaskEditor({
         } else if (!bounds) {
           setFloodNote('Nothing to flood — this frame has no selection area and an empty mask.');
         } else if (!inBox) {
-          setFloodNote('That click is outside the selection area — flood only works inside it.');
+          // Only reachable for REMOVE now; ADD is bounded by reach, not by the
+          // selection, so it never refuses a click for being outside the box.
+          setFloodNote('Nothing to remove there — that click is outside the selected area.');
         } else {
           setFloodNote(
             adding
@@ -1216,22 +1253,6 @@ export default function FrameMaskEditor({
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
           <button
             type="button"
-            style={{ ...toolBtn, ...(brushMode === 'add' ? activeTool : {}) }}
-            onClick={() => setBrushMode('add')}
-            title="Add brush — paint to keep pixels"
-          >
-            <Brush size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Add
-          </button>
-          <button
-            type="button"
-            style={{ ...toolBtn, ...(brushMode === 'remove' ? activeTool : {}) }}
-            onClick={() => setBrushMode('remove')}
-            title="Remove brush — paint to erase pixels"
-          >
-            <Eraser size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Remove
-          </button>
-          <button
-            type="button"
             style={{ ...toolBtn, ...(brushMode === 'flood-add' ? activeTool : {}) }}
             onClick={() => setBrushMode('flood-add')}
             // NOT disabled when there is no selection box. It was, and that made
@@ -1248,6 +1269,22 @@ export default function FrameMaskEditor({
             title="Flood REMOVE — click a region that IS highlighted to cut all of it out. Only ever removes."
           >
             <Droplets size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Flood −
+          </button>
+          <button
+            type="button"
+            style={{ ...toolBtn, ...(brushMode === 'add' ? activeTool : {}) }}
+            onClick={() => setBrushMode('add')}
+            title="Add brush — paint to keep pixels"
+          >
+            <Brush size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Add
+          </button>
+          <button
+            type="button"
+            style={{ ...toolBtn, ...(brushMode === 'remove' ? activeTool : {}) }}
+            onClick={() => setBrushMode('remove')}
+            title="Remove brush — paint to erase pixels"
+          >
+            <Eraser size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Remove
           </button>
           {racketKey ? (
             <button

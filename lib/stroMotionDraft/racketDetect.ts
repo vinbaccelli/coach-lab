@@ -285,6 +285,31 @@ export async function detectRacketBox(args: {
   const tjs: Tjs = await import('@huggingface/transformers');
   const { RawImage } = tjs as any;
 
+  /**
+   * REFUSE A DEGENERATE FRAME BEFORE IT REACHES ORT.
+   *
+   * A zero-sized source produces a zero-sized canvas, `RawImage.fromCanvas`
+   * yields an empty image, the processor returns no tensors, and ORT dies deep
+   * inside the graph with a dimension of 4294967295 — which is (uint32)(-1), an
+   * empty-shape sentinel, reported alongside "Inputs given to model: {}". That
+   * error names a tensor shape and says nothing about the real cause, so it cost
+   * real time to read. A frame with no pixels is simply not detectable: skip it,
+   * say so, and let the rest of the batch proceed.
+   *
+   * A CLOSED ImageBitmap is the way this happens in practice — measured in
+   * Chromium, `close()` leaves width and height at 0 while the object stays
+   * truthy, so nothing upstream looks wrong.
+   */
+  const srcW = frame instanceof HTMLCanvasElement ? frame.width : frame.width;
+  const srcH = frame instanceof HTMLCanvasElement ? frame.height : frame.height;
+  if (!(srcW > 0) || !(srcH > 0)) {
+    console.warn(
+      `[autoRacket] ${tag} skipped — frame has no pixels (${srcW}x${srcH}). ` +
+      'An ImageBitmap reports 0x0 once closed; something released this frame before detection ran.',
+    );
+    return null;
+  }
+
   // RawImage wants a canvas; an ImageBitmap is drawn once into one.
   let canvas: HTMLCanvasElement;
   if (frame instanceof HTMLCanvasElement) {
@@ -293,7 +318,14 @@ export async function detectRacketBox(args: {
     canvas = document.createElement('canvas');
     canvas.width = frame.width;
     canvas.height = frame.height;
-    canvas.getContext('2d')!.drawImage(frame, 0, 0);
+    try {
+      canvas.getContext('2d')!.drawImage(frame, 0, 0);
+    } catch (e) {
+      // "The image source is detached" — the bitmap was closed between the size
+      // check above and here. Same non-detectable frame, same treatment.
+      console.warn(`[autoRacket] ${tag} skipped — frame could not be drawn:`, e);
+      return null;
+    }
   }
 
   const t0 = performance.now();

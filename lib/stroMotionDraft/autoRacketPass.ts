@@ -105,6 +105,16 @@ export async function detectRacketBoxesForBatch(
     for (const input of inputs) {
       // A single frame's detection failure must not abort the phase — the other
       // frames' boxes are still worth having.
+      // Never hand a released frame to the detector. `detectRacketBox` guards
+      // this too, but catching it here keeps the reason attached to the frame
+      // index, which is what makes the log actionable.
+      if (!(input.frame.width > 0) || !(input.frame.height > 0)) {
+        console.warn(
+          `[autoRacket] frame ${input.frameIndex} has no pixels ` +
+          `(${input.frame.width}x${input.frame.height}) — skipping detection for it`,
+        );
+        continue;
+      }
       try {
         const hit = await mod.detectRacketBox({
           frame: input.frame,

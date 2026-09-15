@@ -328,6 +328,87 @@ export default function StroMotionPanel({
             {showLabels ? 'Upload a video file first.' : 'Upload\nvideo\nfirst'}
           </div>
         )}
+        {/*
+          SECTION CONTROLS + AUTO-DETECT RESULT — IN THE COMPACT RAIL.
+          They existed only in the full body below, and the full body is never
+          rendered: page.tsx mounts this panel with `compact`, and `if (compact)`
+          returns above. So "Set Start", "Set End Frame", the "Use full video"
+          control and the auto-detect banner were all unreachable in the shipping
+          UI — which is why the section appeared stuck at ~3s with no way out,
+          and why the completion message was never seen. Placing a fix in an
+          unrendered branch is not a fix.
+        */}
+        {lastAutoRun ? (
+          <div
+            role="status"
+            style={{
+              padding: showLabels ? '8px 10px' : '6px 4px',
+              borderRadius: 8,
+              fontSize: showLabels ? 12 : 10,
+              lineHeight: 1.35,
+              textAlign: showLabels ? 'left' : 'center',
+              border: `1px solid ${lastAutoRun.framesBuilt === 0
+                ? 'var(--cl-destructive-text, #c00)'
+                : lastAutoRun.racketPassActive && lastAutoRun.racketApplied === 0
+                  ? 'var(--cl-warning, #E8A33D)'
+                  : 'var(--cl-success, #2E9E5B)'}`,
+              background: lastAutoRun.framesBuilt === 0
+                ? 'rgba(204,0,0,0.10)'
+                : lastAutoRun.racketPassActive && lastAutoRun.racketApplied === 0
+                  ? 'rgba(232,163,61,0.14)'
+                  : 'rgba(46,158,91,0.14)',
+            }}
+          >
+            <div style={{ fontWeight: 800 }}>
+              {lastAutoRun.framesBuilt > 0
+                ? `Auto-detect done — ${lastAutoRun.framesBuilt}/${lastAutoRun.framesAttempted} in ${(lastAutoRun.elapsedMs / 1000).toFixed(1)}s`
+                : 'Auto-detect built no frames'}
+            </div>
+            {lastAutoRun.racketPassActive ? (
+              <div style={{ marginTop: 2 }}>
+                {lastAutoRun.racketApplied > 0
+                  ? `Racket on ${lastAutoRun.racketApplied}/${lastAutoRun.framesBuilt}`
+                  : lastAutoRun.racketDetected > 0
+                    ? `Seen on ${lastAutoRun.racketDetected}, none cut out`
+                    : `No racket${lastAutoRun.unitFloorPx != null ? ` (scale ${Math.round(lastAutoRun.unitFloorPx)}px)` : ''}`}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Section: the whole clip in one click, then fine-tune with start/end. */}
+        {onUseFullVideo && videoDuration && videoDuration > 0 ? (
+          <button
+            type="button"
+            onClick={onUseFullVideo}
+            disabled={disabled || isGenerating || isProposingFrame || isExportingVideo}
+            style={{ ...ib(), borderColor: 'var(--cl-accent, #007AFF)', color: 'var(--cl-accent, #007AFF)' }}
+            title={`Set the section to the whole video (0:00 - ${formatTimeShort(videoDuration)})`}
+          >
+            {showLabels ? `Use full video (${formatTimeShort(videoDuration)})` : 'Full'}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={onSetStartFrame}
+          disabled={disabled || isGenerating || isProposingFrame || isExportingVideo}
+          style={ib()}
+          title={`Set section START to the playhead. Currently ${formatTimeShort(startFrame)}.`}
+        >
+          {showLabels ? `Set start @ ${formatTimeShort(currentTime)}` : 'Start'}
+        </button>
+        <button
+          type="button"
+          onClick={onSetEndFrame}
+          disabled={disabled || isGenerating || isProposingFrame || isExportingVideo}
+          style={ib()}
+          title={`Set section END to the playhead. Currently ${formatTimeShort(endFrame)}.`}
+        >
+          {showLabels ? `Set end @ ${formatTimeShort(currentTime)}` : 'End'}
+        </button>
+
+        <div style={{ height: 1, background: 'var(--cl-border)', width: showLabels ? '100%' : 32, margin: '4px auto' }} />
+
         {/* Frame count */}
         {showLabels ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
