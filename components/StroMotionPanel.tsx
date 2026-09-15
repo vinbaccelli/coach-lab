@@ -103,6 +103,10 @@ export interface StroMotionPanelProps {
    * draft was built/cleared. Drives the completion state in the status line.
    */
   lastAutoRun?: StroAutoRunSummary | null;
+  /** Full duration of the loaded video, for the "Use full video" control. */
+  videoDuration?: number;
+  /** Set the Motion Layer section to the entire video (start 0 -> end duration). */
+  onUseFullVideo?: () => void;
   /** When true, renders a compact icon-only vertical strip for the collapsed toolbar rail */
   compact?: boolean;
   /** Show text labels beside icons (expanded toolbar) */
@@ -280,6 +284,8 @@ export default function StroMotionPanel({
   onVideoOrderChange,
   onAutoSelectAll,
   lastAutoRun = null,
+  videoDuration,
+  onUseFullVideo,
   compact = false,
   showLabels = false,
 }: StroMotionPanelProps) {
@@ -501,9 +507,80 @@ export default function StroMotionPanel({
         ))}
       </div>
 
+      {/*
+        AUTO-DETECT RESULT — a BANNER, at the top, not a line of 12px text below a
+        scrolling frame list. The information already existed and was reported as
+        "no visible completion indicator noticed", which is a placement failure
+        rather than a missing feature: it rendered under a 320px-tall scroll
+        region, so the coach never saw it. It answers the two questions asked at
+        that moment — did it finish, and did it find the racket.
+      */}
+      {lastAutoRun ? (
+        <div
+          role="status"
+          style={{
+            margin: '2px 0 10px',
+            padding: '10px 12px',
+            borderRadius: 10,
+            border: `1px solid ${lastAutoRun.framesBuilt === 0
+              ? 'var(--cl-destructive-text, #c00)'
+              : lastAutoRun.racketPassActive && lastAutoRun.racketApplied === 0
+                ? 'var(--cl-warning, #E8A33D)'
+                : 'var(--cl-success, #2E9E5B)'}`,
+            background: lastAutoRun.framesBuilt === 0
+              ? 'rgba(204,0,0,0.08)'
+              : lastAutoRun.racketPassActive && lastAutoRun.racketApplied === 0
+                ? 'rgba(232,163,61,0.12)'
+                : 'rgba(46,158,91,0.12)',
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 6 }}>
+            {lastAutoRun.framesBuilt > 0 ? (
+              <>
+                <Check size={14} />
+                Auto-detect finished — {lastAutoRun.framesBuilt}/{lastAutoRun.framesAttempted} frame
+                {lastAutoRun.framesAttempted === 1 ? '' : 's'} in {(lastAutoRun.elapsedMs / 1000).toFixed(1)}s
+              </>
+            ) : (
+              <>Auto-detect finished, but built no frames</>
+            )}
+          </div>
+          {lastAutoRun.racketPassActive ? (
+            <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.35 }}>
+              {lastAutoRun.racketApplied > 0
+                ? `Racket found on ${lastAutoRun.racketApplied} of ${lastAutoRun.framesBuilt} frames. Check it, then Edit mask to fine-tune.`
+                : lastAutoRun.racketDetected > 0
+                  ? `Racket spotted on ${lastAutoRun.racketDetected} frame(s) but none could be cut out. Use Edit mask, then the Object tool.`
+                  : `No racket detected${lastAutoRun.unitFloorPx != null
+                      ? ` (body-scale reference ${Math.round(lastAutoRun.unitFloorPx)}px — under ~20px means the scale collapsed, not the detector)`
+                      : ''}. Use Edit mask to paint it in, or the Object tool to click it.`}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <button type="button" onClick={onSetStartFrame} disabled={disabled || isGenerating || isProposingFrame || isExportingVideo} style={chipBtnStyle}>
         Set Start (background plate) @ {formatTimeShort(currentTime)}
       </button>
+      {/*
+        USE FULL VIDEO. "Set End Frame" alone could not reach the end of a long
+        clip: the timeline zooms to the trim range, so the playhead cannot be
+        scrubbed beyond it, so the end can only ever be pushed out by the ~12%
+        view padding per attempt — 3.0s -> 3.36s -> 3.76s, never 15s. This sets
+        the section to the whole clip in one click.
+      */}
+      {onUseFullVideo && videoDuration && videoDuration > 0 ? (
+        <button
+          type="button"
+          onClick={onUseFullVideo}
+          disabled={disabled || isGenerating || isProposingFrame || isExportingVideo}
+          style={{ ...chipBtnStyle, borderColor: 'var(--cl-accent, #007AFF)', color: 'var(--cl-accent, #007AFF)' }}
+          title="Set the section to the entire video"
+        >
+          Use full video (0:00 – {formatTimeShort(videoDuration)})
+        </button>
+      ) : null}
+
       <div style={{ fontSize: 11, color: 'var(--cl-text-muted)', paddingLeft: 4 }}>
         Background: <strong style={{ fontFamily: 'ui-monospace, monospace' }}>{formatTimeShort(startFrame)}</strong>
         <span style={{ marginLeft: 4, opacity: 0.7 }}>— clean frame before stroke begins</span>
@@ -665,37 +742,6 @@ export default function StroMotionPanel({
       ) : isPreviewReady ? (
         <div style={{ fontSize: 12, marginTop: 8, fontWeight: 600, color: 'var(--cl-success)' }}>
           Motion Layer ready — {frameCount} layers
-        </div>
-      ) : lastAutoRun ? (
-        /*
-          AUTO-DETECT COMPLETION. Shown ahead of the generic hints because "did
-          that finish, and did it work?" is the question the coach actually has
-          when the progress line disappears. Reports the racket count explicitly:
-          a pass can build every frame and still segment no implement, and the
-          coach needs to know which of those happened before deciding whether to
-          brush or to re-select.
-        */
-        <div style={{ fontSize: 12, marginTop: 8, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <div style={{ fontWeight: 700, color: lastAutoRun.framesBuilt > 0 ? 'var(--cl-success)' : 'var(--cl-destructive-text, #c00)' }}>
-            {lastAutoRun.framesBuilt > 0 ? (
-              <>
-                <Check size={12} style={{ marginRight: 4, verticalAlign: -2 }} />
-                Auto-detect done — {lastAutoRun.framesBuilt}/{lastAutoRun.framesAttempted} frame
-                {lastAutoRun.framesAttempted === 1 ? '' : 's'} in {(lastAutoRun.elapsedMs / 1000).toFixed(1)}s
-              </>
-            ) : (
-              <>Auto-detect finished without building any frame — try Re-select area.</>
-            )}
-          </div>
-          {lastAutoRun.racketPassActive ? (
-            <div style={{ fontSize: 11, color: 'var(--cl-text-muted)' }}>
-              {lastAutoRun.racketApplied > 0
-                ? `Racket found on ${lastAutoRun.racketApplied}/${lastAutoRun.framesBuilt} — check it, then Edit mask to fine-tune.`
-                : lastAutoRun.racketDetected > 0
-                  ? `Racket detected on ${lastAutoRun.racketDetected} frame(s) but none could be segmented — use Edit mask and the Object tool.`
-                  : 'No racket detected — use Edit mask to paint it in, or the Object tool to click it.'}
-            </div>
-          ) : null}
         </div>
       ) : allReady ? (
         <div style={{ fontSize: 11, marginTop: 8, color: 'var(--cl-text-muted)' }}>

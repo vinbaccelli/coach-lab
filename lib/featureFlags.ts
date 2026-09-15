@@ -28,7 +28,7 @@
  * So GOOGLE_EXPORT_SCOPES below requests `documents drive.file` only, and
  * YouTube runs an entirely separate consent: app/api/youtube/connect →
  * /connect/callback stores its own refresh token, encrypted, in
- * public.youtube_connections, and /api/youtube/upload mints an access token
+ * public.youtube_connections, and /api/youtube/upload-session mints an access token
  * from that (lib/youtube/connection.ts). Nothing about YouTube touches sign-in
  * any more — THIS FLAG NO LONGER AFFECTS THE SIGN-IN SCOPES AT ALL, which is
  * what makes it safe to toggle.
