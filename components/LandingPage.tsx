@@ -10,16 +10,17 @@
  *
  * Content rules this file is held to:
  *  - The reviews in FOUNDER_REVIEWS are real, supplied by the founder, and are
- *    reviews of VIN'S COACHING, not of this app — the app is new and has none.
- *    The page says so in as many words. Nothing here may be added without that
- *    same provenance. No club logos, user counts, benchmarks or press exist for
- *    this product; none are invented or implied.
- *  - TWO Trustpilot profiles, never to be conflated. The founder's coaching
- *    profile (vinbaccelli.com, "Anglemotion by Coach Vinbaccelli") carries the
- *    reviews, all of them 5 stars; the app's own profile (anglemotion.com) has
- *    none. The star record is stated ONLY next to the coaching link, and
- *    labelled as being for Vin's coaching rather than the app. The app's
- *    profile gets a plain invitation with no rating until it earns one.
+ *    reviews of VIN'S COACHING, not of this app. The page says so in as many
+ *    words. Nothing here may be added without that same provenance. No club
+ *    logos, user counts, benchmarks or press exist for this product; none are
+ *    invented or implied.
+ *  - ONE Trustpilot profile now: the founder's coaching profile
+ *    (it.trustpilot.com/review/vinbaccelli.com) was merged into the app's own
+ *    profile (trustpilot.com/review/anglemotion.com); both links on this page
+ *    now point at the merged profile. The star record next to the coaching
+ *    link is still labelled as being for Vin's coaching, since that's what
+ *    the quoted reviews are — not for the app itself, until app-specific
+ *    reviews accumulate on the same shared profile.
  *  - The competitor table carries ONLY verified data; unknowns stay '?'.
  *  - The example player's dates and readings are illustrative and are labelled
  *    as such on the page, not passed off as a real customer.
@@ -312,27 +313,21 @@ const FOUNDER_REVIEWS: Review[] = [
 ];
 
 /**
- * TWO DIFFERENT Trustpilot profiles. They must never be conflated on the page:
- * one carries the founder's coaching reviews, the other is the app's own empty
- * profile, and mixing them would attribute a rating to a product that has not
- * earned one.
- *
- * Both verified in a browser on 2026-09-04.
+ * ONE Trustpilot profile now. The founder's coaching profile
+ * (it.trustpilot.com/review/vinbaccelli.com) was merged into AngleMotion's own
+ * profile (trustpilot.com/review/anglemotion.com) — both links on this page
+ * point at the merged profile. The reviews quoted in FOUNDER_REVIEWS are still
+ * reviews of Vin's coaching, not of the app, until app-specific reviews
+ * accumulate on the same shared profile.
  */
 
-/** "Anglemotion by Coach Vinbaccelli" — the founder's COACHING profile, claimed
- *  June 2025, Milano. 6 reviews, TrustScore 4.2, "Molto buono" (Very Good).
- *  This is where the Trustpilot quotes in FOUNDER_REVIEWS actually live, so it
- *  is the only profile whose rating this page may state. */
-const TRUSTPILOT_COACH_URL = 'https://it.trustpilot.com/review/vinbaccelli.com';
-/** Every review on that profile is 5 stars (star breakdown reads 5★ 100%).
- *  The profile's headline TrustScore is 4.2 because Trustpilot weights by
- *  recency and volume rather than averaging stars — so the page states the
- *  star record, which is what the reviewers actually left. */
+/** The merged Trustpilot profile — carries Vin's coaching reviews (the
+ *  quotes in FOUNDER_REVIEWS actually live here). */
+const TRUSTPILOT_COACH_URL = 'https://www.trustpilot.com/review/anglemotion.com';
+/** Star count for the coaching reviews on the merged profile. */
 const TRUSTPILOT_COACH_COUNT = 6;
 
-/** AngleMotion's own claimed profile. 0 reviews / 0.0 — a plain invitation
- *  only. No rating may be stated for this one until it has one. */
+/** Same merged profile — used for the app's own review-invitation CTA. */
 const TRUSTPILOT_APP_URL = 'https://www.trustpilot.com/review/anglemotion.com';
 
 /* Verified competitor comparison. y = yes, n = no, q = unknown. Pro tier vs
@@ -554,16 +549,16 @@ export default function LandingPage() {
       </section>
 
       {/* ── FOUNDER ─────────────────────────────────────────────────────
-          Real reviews of Vin's coaching, framed as exactly that. The app is
-          new and has no reviews of its own; saying so is the reason these can
-          be shown at all. No aggregate rating — see the note at the top of
-          this file. ──────────────────────────────────────────────────────── */}
+          Real reviews of Vin's coaching, framed as exactly that. They live on
+          AngleMotion's own (merged) Trustpilot profile, but they are reviews
+          of the coaching, not the app — saying so is the reason these can be
+          shown at all. ──────────────────────────────────────────────────────── */}
       <section id="founder" className="am-section">
         <h2 className="am-h2">About Vin Baccelli, founder &amp; coach.</h2>
         <p className="am-sub">
           AngleMotion was built by a working tennis coach to do the job he was already doing by hand.
           The reviews below are of Vin’s own coaching analysis — the practice the tool came out of.
-          AngleMotion itself is new and hasn’t been reviewed yet.
+          AngleMotion itself is new and doesn’t have reviews of its own yet.
         </p>
 
         <ul className="am-reviews">
@@ -583,8 +578,8 @@ export default function LandingPage() {
             Read all reviews of Vin’s coaching <ArrowUpRight size={16} aria-hidden="true" />
           </a>
           <p className="am-note">
-            All {TRUSTPILOT_COACH_COUNT} reviews on Trustpilot are 5 stars — for Vin’s coaching
-            analysis, not for the app.
+            All {TRUSTPILOT_COACH_COUNT} reviews on Trustpilot are 5 stars — of Vin’s coaching
+            analysis, not the app itself.
           </p>
         </div>
       </section>
@@ -694,10 +689,11 @@ export default function LandingPage() {
           <Link href={DEMO.url} className="am-btn am-btn-lg">{DEMO.label} <ArrowRight size={18} /></Link>
         </div>
 
-        {/* The APP's own Trustpilot profile — deliberately here, beside the app
-            CTAs, and never inside the founder section: the two profiles measure
-            different things and must not be read as one. It has no reviews yet,
-            so this is an invitation and states no rating. */}
+        {/* AngleMotion's own Trustpilot profile (now merged with Vin's coaching
+            profile) — deliberately here, beside the app CTAs, and never inside
+            the founder section. This is a plain invitation to review the app;
+            it states no rating, since the existing reviews on the shared
+            profile are of the coaching, not the app itself. */}
         <p className="am-note am-center am-app-review">
           Already used it?{' '}
           <a href={TRUSTPILOT_APP_URL} target="_blank" rel="noopener noreferrer" className="am-inline-link">
