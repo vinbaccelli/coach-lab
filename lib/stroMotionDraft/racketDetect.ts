@@ -148,17 +148,60 @@ async function getSession(): Promise<DetectSession | null> {
       env.localModelPath = '/models/';
       if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = '/ort/';
 
-      // WebGPU needs shader-f16 for these weights, checked UP FRONT — an adapter
-      // can expose WebGPU and still fail session creation on fp16 shaders
-      // (measured on Intel gen-9). Identical reasoning to samRacket.getSession.
+      // ── THE WASM EP IS NOT A FALLBACK HERE. IT IS THE ONLY CORRECT ONE. ────
+      //
+      // ORT's WebGPU EP CANNOT RUN THIS MODEL. It accepts the whole graph,
+      // creates the session happily, and then throws on the FIRST run():
+      //
+      //   failed to call OrtRun(). ERROR_CODE: 1, ERROR_MESSAGE:
+      //   .../tensor_shape.cc:67 dimension <= num_dims was false. Invalid
+      //   dimension of 4294967295 for SizeToDimension. Tensor has 1 dimensions.
+      //
+      // 4294967295 is (size_t)(-1) on wasm32: a negative axis reaching an
+      // unsigned dimension check. That is microsoft/onnxruntime#32438 — filed
+      // against THIS EXACT MODEL (onnx-community/dfine_n_coco-ONNX, which is
+      // what /models/dfine-n is), reproduced on onnxruntime-web 1.27 and 1.29,
+      // OPEN and UNFIXED. The issue records that the wasm EP runs the same graph
+      // correctly at every input size, and that neither
+      // `graphOptimizationLevel: 'disabled'` nor `freeDimensionOverrides` helps.
+      // The wasm EP is the only confirmed remedy.
+      //
+      // WHY THE OLD shader-f16 PROBE DID NOT CATCH IT, and why replacing it with
+      // a better probe would not either: the probe asked whether the adapter can
+      // COMPILE fp16 shaders. On an adapter without shader-f16 the answer is no,
+      // we fall to wasm, and everything works — which is why this was invisible
+      // in testing here (SwiftShader has no shader-f16) and fatal on a real GPU.
+      // An adapter WITH shader-f16 passes the probe, loads, and then fails every
+      // frame. The capability is genuinely present; the EP is simply wrong for
+      // this graph. No capability check can express that, so the model is pinned
+      // to wasm instead of probed.
+      //
+      // COST, measured: ~580ms/frame on wasm against ~200-400ms on WebGPU, over
+      // the 1-15 frames of a batch. At most ~5s slower on a full batch, against
+      // a feature that currently returns ZERO detections on any machine with a
+      // WebGPU adapter that supports fp16.
+      //
+      // WHEN #32438 IS FIXED, re-enable without a code change to confirm it:
+      //     window.__autoRacketWebGPU = true    // then re-run Auto Detect
+      // and watch for the OrtRun error above. Delete this escape hatch and the
+      // pin together once a fixed onnxruntime-web is pinned in package.json.
       let device: 'webgpu' | 'wasm' = 'wasm';
-      if (typeof navigator !== 'undefined' && (navigator as any).gpu) {
+      const forceWebGPU = typeof window !== 'undefined'
+        && (window as unknown as Record<string, unknown>).__autoRacketWebGPU === true;
+      if (forceWebGPU && typeof navigator !== 'undefined' && (navigator as any).gpu) {
         try {
           const adapter = await (navigator as any).gpu.requestAdapter();
-          if (adapter?.features?.has('shader-f16')) device = 'webgpu';
-          else console.warn('[autoRacket] WebGPU adapter lacks shader-f16 — using wasm EP (~580ms/frame vs ~200-400ms)');
+          if (adapter?.features?.has('shader-f16')) {
+            device = 'webgpu';
+            console.warn(
+              '[autoRacket] WebGPU forced via window.__autoRacketWebGPU — expect ' +
+              'OrtRun/SizeToDimension failures until onnxruntime#32438 is fixed',
+            );
+          } else {
+            console.warn('[autoRacket] WebGPU forced but adapter lacks shader-f16 — staying on wasm');
+          }
         } catch (e) {
-          console.warn('[autoRacket] WebGPU adapter probe failed — using wasm EP:', e);
+          console.warn('[autoRacket] WebGPU adapter probe failed — staying on wasm:', e);
         }
       }
 
