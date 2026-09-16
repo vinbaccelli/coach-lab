@@ -41,11 +41,6 @@ export interface StroMotionFrameRow {
 export interface StroMotionPanelProps {
   objectType: StroMotionObjectType;
   onObjectTypeChange: (type: StroMotionObjectType) => void;
-  currentTime: number;
-  startFrame: number;
-  endFrame: number;
-  onSetStartFrame: () => void;
-  onSetEndFrame: () => void;
   frameCount: StroMotionFrameCount;
   onFrameCountChange: (n: StroMotionFrameCount) => void;
   frames: StroMotionFrameRow[];
@@ -90,10 +85,6 @@ export interface StroMotionPanelProps {
    * draft was built/cleared. Drives the completion state in the status line.
    */
   lastAutoRun?: StroAutoRunSummary | null;
-  /** Full duration of the loaded video, for the "Use full video" control. */
-  videoDuration?: number;
-  /** Set the Motion Layer section to the entire video (start 0 -> end duration). */
-  onUseFullVideo?: () => void;
   /** When true, renders a compact icon-only vertical strip for the collapsed toolbar rail */
   compact?: boolean;
   /** Show text labels beside icons (expanded toolbar) */
@@ -227,11 +218,6 @@ function StroFrameCompactIcon({
 export default function StroMotionPanel({
   objectType,
   onObjectTypeChange,
-  currentTime,
-  startFrame,
-  endFrame,
-  onSetStartFrame,
-  onSetEndFrame,
   frameCount,
   onFrameCountChange,
   frames,
@@ -271,8 +257,6 @@ export default function StroMotionPanel({
   onVideoOrderChange,
   onAutoSelectAll,
   lastAutoRun = null,
-  videoDuration,
-  onUseFullVideo,
   compact = false,
   showLabels = false,
 }: StroMotionPanelProps) {
@@ -351,48 +335,40 @@ export default function StroMotionPanel({
                 ? `Auto-detect done — ${lastAutoRun.framesBuilt}/${lastAutoRun.framesAttempted} in ${(lastAutoRun.elapsedMs / 1000).toFixed(1)}s`
                 : 'Auto-detect built no frames'}
             </div>
-            {lastAutoRun.racketPassActive ? (
-              <div style={{ marginTop: 2 }}>
-                {lastAutoRun.racketApplied > 0
+            {/* WHY THE OFF STATE IS RENDERED RATHER THAN OMITTED.
+                This line used to be dropped entirely when the auto-racket pass
+                was inactive, so "the pass never ran" and "the pass ran and
+                found nothing" produced the same chip — a banner with no racket
+                row. The pass is only active for objectType 'racket'/'custom'
+                (autoRacketFlags.ts), and the Object button in this very rail
+                CYCLES the type on each tap, so one stray tap silently disables
+                racket detection with nothing on screen to say so. Naming the
+                active type makes that self-diagnosing. */}
+            <div style={{ marginTop: 2 }}>
+              {!lastAutoRun.racketPassActive
+                ? `Racket detect off (Object: ${objectType})`
+                : lastAutoRun.racketApplied > 0
                   ? `Racket on ${lastAutoRun.racketApplied}/${lastAutoRun.framesBuilt}`
                   : lastAutoRun.racketDetected > 0
                     ? `Seen on ${lastAutoRun.racketDetected}, none cut out`
                     : `No racket${lastAutoRun.unitFloorPx != null ? ` (scale ${Math.round(lastAutoRun.unitFloorPx)}px)` : ''}`}
-              </div>
-            ) : null}
+            </div>
           </div>
         ) : null}
 
-        {/* Section: the whole clip in one click, then fine-tune with start/end. */}
-        {onUseFullVideo && videoDuration && videoDuration > 0 ? (
-          <button
-            type="button"
-            onClick={onUseFullVideo}
-            disabled={disabled || isGenerating || isProposingFrame || isExportingVideo}
-            style={{ ...ib(), borderColor: 'var(--cl-accent, #007AFF)', color: 'var(--cl-accent, #007AFF)' }}
-            title={`Set the section to the whole video (0:00 - ${formatTimeShort(videoDuration)})`}
-          >
-            {showLabels ? `Use full video (${formatTimeShort(videoDuration)})` : 'Full'}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          onClick={onSetStartFrame}
-          disabled={disabled || isGenerating || isProposingFrame || isExportingVideo}
-          style={ib()}
-          title={`Set section START to the playhead. Currently ${formatTimeShort(startFrame)}.`}
-        >
-          {showLabels ? `Set start @ ${formatTimeShort(currentTime)}` : 'Start'}
-        </button>
-        <button
-          type="button"
-          onClick={onSetEndFrame}
-          disabled={disabled || isGenerating || isProposingFrame || isExportingVideo}
-          style={ib()}
-          title={`Set section END to the playhead. Currently ${formatTimeShort(endFrame)}.`}
-        >
-          {showLabels ? `Set end @ ${formatTimeShort(currentTime)}` : 'End'}
-        </button>
+        {/* THE SECTION IS THE TIMELINE'S JOB NOW.
+            "Use full video", "Set start" and "Set end" used to live here. All
+            three existed to work around a section that defaulted to a hardcoded
+            0-3s (page.tsx `useState(3)`) — "Use full video" undid that default,
+            and the other two moved a boundary to the playhead. The playhead is
+            itself trapped inside the zoomed trim window, which is why "Set end"
+            could only creep the end out by the view's padding (3.0 -> 3.36 ->
+            3.76s) and never reach the end of a 15s clip.
+            The default is now the whole clip, so there is nothing to undo, and
+            the timeline's trim handles — already wired straight to
+            setStroStartFrame/setStroEndFrame (page.tsx, `onTrimChange`) — are
+            the one way to define a section. Three buttons and a workaround out,
+            no capability lost. */}
 
         <div style={{ height: 1, background: 'var(--cl-border)', width: showLabels ? '100%' : 32, margin: '4px auto' }} />
 

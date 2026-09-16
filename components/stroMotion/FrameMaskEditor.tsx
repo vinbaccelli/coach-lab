@@ -905,28 +905,49 @@ export default function FrameMaskEditor({
         dbg(`[TEMP-DEBUG-BAIL] mode branch: ${brushMode} -> proceeding`);
         const adding = brushMode === 'flood-add';
         /**
-         * THE TWO DIRECTIONS NEED DIFFERENT BOUNDARIES. They did not have them,
-         * and that is what made Flood + useless: both modes were bounded by the
-         * coach's selection box, so a click outside it — which is the ONLY place
-         * new area can come from — was refused outright with "that click is
-         * outside the selection area". Adding is by definition an act of
-         * reaching OUT; constraining it to what is already selected is a
-         * contradiction.
+         * WHERE A FLOOD MAY REACH — ONE RULE, BOTH DIRECTIONS.
          *
-         * REMOVE keeps the tight bound. It cuts away from what is selected, so
-         * the selection box (or the mask's own extent) is the right fence, and
-         * it is the fence that stopped the original escape bug — a fill leaving
-         * the selection through similar pixels and clearing the athlete on the
-         * way back.
+         * Originally both directions were fenced by the coach's selection box,
+         * which made Flood + useless: a click outside the box — the ONLY place
+         * new area can come from — was refused outright. Adding is by definition
+         * an act of reaching OUT, so round 3 gave ADD a REACH box instead: a box
+         * centred on the click, a quarter of the frame's shorter side. Click
+         * anywhere; the fill still cannot run away across the frame.
          *
-         * ADD is bounded by REACH instead of by the selection: a box centred on
-         * the click, sized from the frame. The coach can click anywhere,
-         * including well outside the box, and the fill still cannot run away
-         * across the whole frame. Reach, not confinement.
+         * Round 3 left REMOVE fenced by the selection box alone, and that
+         * asymmetry was reachable in a single gesture (measured in Chromium
+         * against this component — selection x 190-330 of a 640px frame, target
+         * drawn at x 380-460):
+         *
+         *   Flood + on the target, outside the box -> "Added 3,200 px."
+         *   Flood - on THE SAME PIXELS             -> refused, mask unchanged
+         *
+         * So one flood button could put pixels somewhere the other could not
+         * take them back from, and the refusal named a fence the coach cannot
+         * see and that the other button does not respect. That is the reported
+         * confusion; the boundary CHECK itself was correct.
+         *
+         * The rule now:
+         *   REMOVE, click INSIDE the fence -> the fence, exactly as before. Not
+         *     symmetry for its own sake: the selection box (or the mask's own
+         *     extent) is what stopped the original escape bug, a fill leaving
+         *     the selection through similar pixels and clearing the athlete on
+         *     the way back. Verified still holding — a same-colour arm crossing
+         *     the fence keeps its 3,400 px outside while everything inside goes.
+         *   REMOVE, click OUTSIDE it, and ADD always -> the reach box. A click
+         *     out there can only be aimed at something ADD put there, and reach
+         *     bounds it exactly as tightly as it bounds ADD.
          */
-        const bounds = adding
-          ? floodAddReachBounds(x, y, canvas.width, canvas.height)
-          : selectionBox ?? maskBoundsNormalized(maskRef.current, 0);
+        const removeFence = selectionBox ?? maskBoundsNormalized(maskRef.current, 0);
+        const withinFence = (b: typeof removeFence): b is NonNullable<typeof removeFence> =>
+          !!b
+          && x >= b.x * canvas.width && x <= (b.x + b.width) * canvas.width
+          && y >= b.y * canvas.height && y <= (b.y + b.height) * canvas.height;
+        // Non-null by construction now — every click gets a boundary, which is
+        // why the two "no boundary at all" arms below are gone.
+        const bounds = !adding && withinFence(removeFence)
+          ? removeFence
+          : floodAddReachBounds(x, y, canvas.width, canvas.height);
         const litBefore = countMaskLit(maskRef.current);
         next = floodInMask(maskRef.current, sourcePixelsRef.current, canvas.width, x, y, {
           mode: adding ? 'add' : 'remove',
@@ -935,18 +956,14 @@ export default function FrameMaskEditor({
         });
         // SAY WHAT HAPPENED. A correct no-op and a dead button look identical
         // otherwise — which is exactly how this tool came to be reported broken.
+        // The click is inside `bounds` in every case now: the fence branch is
+        // taken only when the click is inside the fence, and the reach box is
+        // centred on the click. So "outside the selected area" and "no selection
+        // area at all" are both unreachable, and both messages are deleted
+        // rather than left to be read by someone who can no longer trigger them.
         const delta = countMaskLit(next) - litBefore;
-        const inBox = !bounds
-          || (x >= bounds.x * canvas.width && x <= (bounds.x + bounds.width) * canvas.width
-            && y >= bounds.y * canvas.height && y <= (bounds.y + bounds.height) * canvas.height);
         if (delta !== 0) {
           setFloodNote(`${adding ? 'Added' : 'Removed'} ${Math.abs(delta).toLocaleString()} px.`);
-        } else if (!bounds) {
-          setFloodNote('Nothing to flood — this frame has no selection area and an empty mask.');
-        } else if (!inBox) {
-          // Only reachable for REMOVE now; ADD is bounded by reach, not by the
-          // selection, so it never refuses a click for being outside the box.
-          setFloodNote('Nothing to remove there — that click is outside the selected area.');
         } else {
           setFloodNote(
             adding
