@@ -674,7 +674,32 @@ function Home() {
   // StroMotion state (Dartfish-style subject box workflow)
   const [stroMotionActive, setStroMotionActive] = useState(false);
   const [stroStartFrame, setStroStartFrame] = useState(0);
-  const [stroEndFrame, setStroEndFrame] = useState(3);
+  /**
+   * 0 means NOT YET KNOWN, not "a zero-length section".
+   *
+   * This used to be a hardcoded `3`, i.e. the Motion Layer section silently
+   * defaulted to the first three seconds of every clip however long it was, and
+   * nothing widened it (the metadata sync below only ever pulled the end IN).
+   * That default is the "still capped at ~3s" report, and it is the only reason
+   * "Use full video" / "Set start" / "Set end" existed in the rail.
+   *
+   * The real default is the whole clip, but the duration is not knowable at
+   * first render — so the section is filled in on the first metadata read for
+   * each video (see `stroSectionDefaultedForRef`). Until then start === end, the
+   * draft effect's `stroEndFrame <= stroStartFrame` guard holds, and no draft is
+   * built from a section that does not exist yet.
+   */
+  const [stroEndFrame, setStroEndFrame] = useState(0);
+  /**
+   * Which `videoSrc` the section has already been defaulted for.
+   *
+   * The metadata sync runs on `timeupdate` as well as `loadedmetadata`, i.e.
+   * several times a second during playback. Defaulting there unguarded would
+   * reset the section to the whole clip continuously and make the timeline's
+   * trim handles — now the ONLY way to define a section — impossible to use.
+   * Once per video, keyed on the source.
+   */
+  const stroSectionDefaultedForRef = useRef<string | null>(null);
   const [stroFrameCount, setStroFrameCount] = useState<StroMotionFrameCount>(STRO_MOTION_DEFAULT_FRAME_COUNT);
   const [stroSelectingObject, setStroSelectingObject] = useState(false);
   const [stroSelectingFrameIndex, setStroSelectingFrameIndex] = useState<number | null>(null);
@@ -2506,7 +2531,19 @@ function Home() {
     const draft = stroMotionDraft;
     if (!draft || stroAutoSelectBusyRef.current) return;
     const pending = draft.frames.filter((f) => !f.selectionBox).map((f) => ({ index: f.index, timeSec: f.timeSec }));
-    if (pending.length === 0) { setProcessingStatus('All frames already have a selection.'); return; }
+    if (pending.length === 0) {
+      // SAY WHAT TO DO ABOUT IT. Auto Detect only ever processes frames with no
+      // selectionBox, and the object-mode pass ALWAYS commits a box (detection →
+      // interpolated neighbour → athlete bbox → centered default), so after one
+      // run there are never pending frames again and every later press is a
+      // guaranteed no-op. Stating the fact without the remedy is why this read
+      // as "Auto Detect stopped working": nothing on screen said the button had
+      // more to do once the selections were cleared.
+      // (`window.__stroClearSelections()` is the surgical version — it drops the
+      // boxes but keeps the section and frame times. See TEMP-DEBUG-REDETECT.)
+      setProcessingStatus('All frames already have a selection — press Clear to re-run auto-detect.');
+      return;
+    }
     stroAutoSelectBusyRef.current = true;
     // ── SLOW, SETTLED, EXACT — for the mask AND for what the coach sees ──────
     //
@@ -2765,7 +2802,18 @@ function Home() {
       const dur = v.duration;
       if (Number.isFinite(dur) && dur > 0) {
         setStroVideoDuration(dur);
-        setStroEndFrame((prev) => (prev <= stroStartFrame || prev > dur ? Math.min(Math.max(stroStartFrame + 1, 3), dur) : prev));
+        if (stroSectionDefaultedForRef.current !== videoSrc) {
+          // FIRST SIGHT OF THIS CLIP — the section IS the clip.
+          stroSectionDefaultedForRef.current = videoSrc;
+          setStroStartFrame(0);
+          setStroEndFrame(dur);
+        } else {
+          // Repair only. A section that inverted or outran the media (a clip
+          // swapped for a shorter one) snaps back to the whole clip rather than
+          // to the old `max(start + 1, 3)`, which was the 3-second cap's second
+          // home. A coach-set section is never touched.
+          setStroEndFrame((prev) => (prev <= stroStartFrame || prev > dur ? dur : prev));
+        }
       }
       setStroVideoTime(v.currentTime || 0);
     };
@@ -2941,11 +2989,6 @@ function Home() {
       showLabels={panelShowLabels}
       objectType={stroObjectType}
       onObjectTypeChange={handleStroObjectTypeChange}
-      currentTime={stroVideoTime}
-      startFrame={stroStartFrame}
-      endFrame={stroEndFrame}
-      onSetStartFrame={() => setStroStartFrame(Math.max(0, stroVideoTime))}
-      onSetEndFrame={() => setStroEndFrame(Math.min(stroVideoDuration || stroVideoTime, Math.max(stroVideoTime, stroStartFrame + 0.04)))}
       frameCount={stroFrameCount}
       onFrameCountChange={handleStroFrameCountChange}
       frames={stroFrameRows}
@@ -2969,17 +3012,6 @@ function Home() {
       onClear={softClearStroMotion}
       onAutoSelectAll={() => { void handleStroAutoSelectAll(); }}
       lastAutoRun={stroLastAutoRun}
-      videoDuration={stroVideoDuration}
-      // ESCAPE FROM THE ZOOMED SECTION. "Set End Frame" reads the playhead, and
-      // the playhead cannot leave the zoomed trim window, so the end could only
-      // creep out by the view's padding each time (3.0 -> 3.36 -> 3.76s) and
-      // never reach the end of a 15s clip. This sets the section outright.
-      onUseFullVideo={() => {
-        if (!(stroVideoDuration > 0)) return;
-        setStroStartFrame(0);
-        setStroEndFrame(stroVideoDuration);
-        setStroSampleTimesOverride(null);
-      }}
       previewPngUrl={stroPreviewPngUrl}
       previewVideoUrl={stroPreviewVideoUrl}
       isBuildingVideoPreview={stroIsBuildingVideoPreview}

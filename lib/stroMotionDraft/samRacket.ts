@@ -134,6 +134,25 @@ interface SamSession {
 
 let sessionPromise: Promise<SamSession | null> | null = null;
 
+/**
+ * Has a WebGPU session already proved, BY RUNNING, that it cannot run this
+ * model? Once true, webgpu is never chosen again for the life of the tab.
+ *
+ * This exists because `shader-f16` — the only thing getSession could check
+ * before — answers the wrong question. It asks whether the adapter can COMPILE
+ * fp16 shaders. It cannot tell you whether ORT's WebGPU EP will actually
+ * EXECUTE this graph, and those come apart: a session can be created happily
+ * and then throw on its first run. That is exactly what
+ * microsoft/onnxruntime#32438 does to the D-FINE detector (see racketDetect.ts,
+ * which is pinned to wasm for it), and the same class of failure was reported
+ * here with a byte-identical OrtRun error.
+ *
+ * So the EP is verified by EXECUTION rather than by advertisement: keep WebGPU
+ * where it genuinely works — it is ~4s per frame encode against ~9s on wasm —
+ * and downgrade the moment it proves it does not.
+ */
+let epDowngradedToWasm = false;
+
 async function getSession(): Promise<SamSession | null> {
   if (sessionPromise) return sessionPromise;
   sessionPromise = (async () => {
@@ -165,7 +184,9 @@ async function getSession(): Promise<SamSession | null> {
       // unavailable. Hence the capability is checked UP FRONT and webgpu is never
       // attempted on a device that cannot run these weights.
       let device: 'webgpu' | 'wasm' = 'wasm';
-      if (typeof navigator !== 'undefined' && (navigator as any).gpu) {
+      if (epDowngradedToWasm) {
+        console.warn('[samRacket] WebGPU already failed to RUN in this tab — loading on wasm');
+      } else if (typeof navigator !== 'undefined' && (navigator as any).gpu) {
         try {
           const adapter = await (navigator as any).gpu.requestAdapter();
           if (adapter?.features?.has('shader-f16')) {
@@ -308,9 +329,6 @@ export async function encodeFrameForRacket(
     return { ms: 0, bytes: existing.bytes };
   }
 
-  const { model, processor, tjs } = session;
-  const { RawImage } = tjs as any;
-
   // RawImage wants a canvas; an ImageBitmap is drawn once into one.
   let canvas: HTMLCanvasElement;
   let width: number;
@@ -328,10 +346,65 @@ export async function encodeFrameForRacket(
     canvas.getContext('2d')!.drawImage(frame, 0, 0);
   }
 
+  /**
+   * One encode attempt against one session. Kept as a closure because a WebGPU
+   * downgrade replaces the session, and the processor belongs to it — re-running
+   * the model against a new session while reusing the old session's processor
+   * output would mix two runtimes' tensors.
+   */
+  const encodeOn = async (s: SamSession) => {
+    const { model, processor, tjs } = s;
+    const { RawImage } = tjs as any;
+    const image = RawImage.fromCanvas(canvas).rgb();
+    const proc = await processor(image);
+    const emb = await model.get_image_embeddings({ pixel_values: proc.pixel_values });
+    return { proc, emb };
+  };
+
   const t0 = performance.now();
-  const image = RawImage.fromCanvas(canvas).rgb();
-  const proc = await processor(image);
-  const emb = await model.get_image_embeddings({ pixel_values: proc.pixel_values });
+  let proc: any;
+  let emb: Record<string, any>;
+  try {
+    ({ proc, emb } = await encodeOn(session));
+  } catch (e) {
+    /**
+     * THE EP IS VERIFIED BY EXECUTION, AND THIS IS WHERE IT GETS VERIFIED.
+     *
+     * A WebGPU session that creates successfully can still fail on its first
+     * real run — see `epDowngradedToWasm`. There is no capability flag that
+     * predicts it, so the only honest test is to run the model and watch. This
+     * is the first model call the racket tool ever makes, so it is the cheapest
+     * place to find out.
+     *
+     * The retry is genuinely a different runtime, not a second roll of the same
+     * dice: the failed session is released, the flag pins the rebuild to wasm,
+     * and the encode re-runs from the canvas through the NEW session's own
+     * processor. It happens at most once per tab.
+     *
+     * The embedding cache is dropped with the session. Its tensors were produced
+     * by the runtime being released, and handing them to a decode running on a
+     * different EP is exactly the kind of cross-runtime mixing that produces the
+     * next inexplicable bug report.
+     */
+    if (session.device !== 'webgpu' || epDowngradedToWasm) throw e;
+    console.warn(
+      '[samRacket] WebGPU session created but could not RUN — releasing it and ' +
+      'rebuilding on the wasm EP (slower, but it works). Cause:', e,
+    );
+    epDowngradedToWasm = true;
+    clearRacketEncodings();
+    const dead = sessionPromise;
+    sessionPromise = null;
+    try {
+      const old = await dead;
+      await old?.model?.dispose?.();
+    } catch { /* the session is being abandoned either way */ }
+
+    const rebuilt = await getSession();
+    if (!rebuilt) return null;
+    loadedDevice = rebuilt.device;
+    ({ proc, emb } = await encodeOn(rebuilt));
+  }
   const ms = performance.now() - t0;
 
   let bytes = 0;

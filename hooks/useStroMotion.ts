@@ -290,15 +290,19 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         // `current` closes that window. The value can therefore go null→set or
         // stay put, but a resync can never drop one that already exists.
         //
-        // The fallback is itself gated on SAME FOOTAGE. The early returns above
-        // compare backgroundTimeSec and objectType but NOT the video dimensions,
-        // so a clip swapped for one of a different size can reach this merge —
-        // and an unguarded fallback would resurrect a reference measured on the
-        // old footage, re-scaling the wrist gate to the wrong athlete. A scale
-        // from different pixels is worse than no scale at all.
+        // The fallback is itself gated on SAME FOOTAGE *AND SAME FRAMES*, to
+        // match `ensureStroMotionDraft`. The early returns above compare
+        // backgroundTimeSec and objectType but NOT the video dimensions, so a
+        // clip swapped for one of a different size can reach this merge; and a
+        // fallback gated only on dimensions would resurrect the very reference
+        // initDraft just dropped for being measured on different frames. Either
+        // way a scale taken from other pixels is worse than no scale at all.
         batchUnitFloorNorm:
           next.batchUnitFloorNorm ??
-          (current.videoWidth === next.videoWidth && current.videoHeight === next.videoHeight
+          (current.videoWidth === next.videoWidth
+            && current.videoHeight === next.videoHeight
+            && current.sampleTimes.length === next.sampleTimes.length
+            && current.sampleTimes.every((t, i) => Math.abs(t - next.sampleTimes[i]) < 0.001)
             ? current.batchUnitFloorNorm ?? null
             : null),
       };
