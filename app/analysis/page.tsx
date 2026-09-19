@@ -2683,20 +2683,33 @@ function Home() {
     invalidateStroPreview();
     setStroPreviewPngUrl(null);
     const frames = stroMotionDraft?.frames ?? [];
-    // ADVANCE IN FRAME ORDER. This used to be a plain `frames.find(...)` over the
-    // whole draft, so "Ready & Next" on frame 1 could jump BACKWARDS to an older
-    // unfinished frame — and, because the search also required frameHasMask(f),
-    // the common case (frame 2 selected but not yet masked) matched nothing and
-    // dumped the coach back to the main screen to reopen frame 2 by hand. Walk
-    // forward from the frame just finished, then wrap, and open whatever comes
-    // next: a frame with a mask opens the editor, a frame without one opens the
-    // editor's "Select Area" prompt for that same frame. Either way the coach
-    // stays in the per-frame flow. "Close" still exits to the main screen.
-    const pending = frames.filter((f) => f.index !== index && f.status !== 'ready');
-    const next =
-      pending.find((f) => f.index > index) ??
-      pending.find((f) => f.index < index) ??
-      null;
+    /**
+     * "NEXT" MEANS THE NEXT FRAME, NOT THE NEXT UNFINISHED ONE.
+     *
+     * This used to search `f.status !== 'ready'`, which made the button exit to
+     * the main screen in the DEFAULT flow. Auto Detect commits every frame it
+     * builds as 'ready' (useStroMotion, the atomic commit), so after a normal
+     * auto-detect run every OTHER frame is already ready, the filter matched
+     * nothing, and "Ready & Next" fell through to the close branch on the first
+     * press. The one frame that was not 'ready' was the one being edited — and
+     * the filter excluded it by index, so the search could never match anything
+     * at all. Measured in the real editor: with 5 auto-detected frames, one
+     * brush stroke on frame 1 and a press of "Ready & Next" closed the editor.
+     *
+     * The status filter also made a second promise it could not keep: walking
+     * BACKWARDS to an earlier unfinished frame. Both directions are gone. The
+     * button walks the sequence forward, one frame per press, which is what its
+     * label says and how the frames are actually worked — a straight pass from
+     * the first to the last.
+     *
+     * NO WRAP, deliberately. Wrapping would mean the button can never finish;
+     * the last frame is the end of the pass, and it closes there with the
+     * all-ready message. "Close" still exits from anywhere, at any time.
+     *
+     * A frame without a mask still opens the editor's "Select Area" prompt for
+     * that frame rather than being skipped, so no frame is stepped over.
+     */
+    const next = frames.find((f) => f.index > index) ?? null;
     if (next) {
       setStroEditingFrameIndex(next.index);
       setStroActiveFrameIndex(next.index);
