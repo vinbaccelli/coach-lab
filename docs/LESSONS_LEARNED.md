@@ -130,3 +130,109 @@ application code that turned out to be correct. When served bytes and source
 agree but behaviour does not, suspect the layer between them — service worker,
 CDN, or HTTP cache — before editing the source.
 
+
+---
+
+## 003 — A capability probe answered the wrong question, and hid an upstream EP bug for two rounds
+
+*2026-09-16 · branch `claude/zealous-faraday-ijq9nz`*
+
+### Symptom
+
+Auto-racket detection found nothing, on every frame, on the coach's machine.
+Object Select failed to prepare any frame. Both reported the identical error:
+
+```
+Error: failed to call OrtRun(). ERROR_CODE: 1, ERROR_MESSAGE:
+.../tensor_shape.cc:67 dimension <= num_dims was false. Invalid dimension of
+4294967295 for SizeToDimension. Tensor has 1 dimensions.
+```
+
+The same code, the same models and the same footage worked perfectly in every
+environment available for testing — 7/8 frames detected, rising to 8/8 with the
+batch scale floor. Two earlier rounds looked for the cause in the application:
+a released ImageBitmap, a collapsed body-scale unit, a degenerate capture. A
+zero-pixel guard was added and did not help, because there was nothing wrong
+with the input to guard against.
+
+### Verified root cause
+
+**ORT's WebGPU execution provider cannot run this model, and the machines used
+for testing could never reach that code path.**
+
+`4294967295` is `(size_t)(-1)` on wasm32: a negative axis arriving at an
+unsigned dimension check. It is
+[microsoft/onnxruntime#32438](https://github.com/microsoft/onnxruntime/issues/32438),
+filed against `onnx-community/dfine_n_coco-ONNX` — which is exactly what
+`public/models/dfine-n` is. The session is created successfully, the EP accepts
+the whole graph, and the **first** `run()` throws. The issue records that the
+wasm EP runs the same graph correctly at every input size, and that neither
+`graphOptimizationLevel: 'disabled'` nor `freeDimensionOverrides` helps. Open
+and unfixed at the time of writing.
+
+Both `racketDetect.ts` and `samRacket.ts` chose their execution provider with
+the same test:
+
+```ts
+if (adapter?.features?.has('shader-f16')) device = 'webgpu';
+```
+
+That asks whether the adapter can **compile** fp16 shaders. It cannot say
+whether the EP will **execute** a given graph, and the two come apart precisely
+here. An adapter with `shader-f16` passes, loads, and then fails every frame. An
+adapter without it falls to wasm and everything works.
+
+**Which is why this was invisible.** Every available test environment runs
+SwiftShader, which does not expose `shader-f16`, so the probe failed, wasm was
+chosen, and the pipeline passed end to end. The bug was unreachable in testing
+and unavoidable in production on any machine with a real fp16-capable GPU.
+Measured directly: forcing `device: 'webgpu'` on SwiftShader does not even
+create a session (`Program Transpose requires f16 but the device does not
+support it`), confirming the branch had never once been executed.
+
+The input was never implicated, and this was checkable rather than assumable.
+`RTDetrImageProcessor` resizes to a fixed 640×640 with `do_pad: false`, so
+`pixel_values` is `[1,3,640,640] float32` for every frame regardless of source
+size — logged directly off the real path. A constant, well-formed rank-4 input
+cannot explain a failure that varies by machine, and "Tensor has 1 dimensions"
+was never `pixel_values` but an internal tensor built mid-graph by the EP.
+
+### Fix
+
+Two different fixes, because the two models are in different situations.
+
+**D-FINE is pinned to wasm.** The bug is a property of the model and the EP, not
+of the device, so no capability check can express it and no probe should be
+attempted. The pin carries the issue number and an escape hatch
+(`window.__autoRacketWebGPU = true`) so the fix can be re-tested without a code
+change once upstream lands one. Cost: ~580ms/frame against ~200–400ms, over the
+1–15 frames of a batch, against a feature that previously returned zero
+detections on affected machines.
+
+**SAM verifies its EP by execution.** There is no evidence SAM-2 hits #32438, so
+WebGPU is still worth having where it works (~4s per encode against ~9s). But
+the first real run is now the test: if it throws while on WebGPU, the session is
+released, the embedding cache is dropped with it — those tensors belong to the
+runtime being abandoned — and the encode re-runs on a wasm session. Once per
+tab. Verified by fault injection: the downgrade fires, the cache clears, the
+rebuild lands on wasm, and Object Select arms normally.
+
+### Class of mistake
+
+***Probing for a capability when the question is whether the thing works.***
+A feature flag describes what hardware supports, not what a software stack does
+with it. Where the two can differ, the only honest test is to run the thing and
+watch — which is what "verified by execution" means and why the SAM fix is
+shaped the way it is.
+
+### Second-order lesson
+
+***A test environment that cannot reach a branch reports success for it.***
+Every environment available here lacked `shader-f16`, so every test run took the
+wasm path and passed, and three rounds of "measured, verified in a real browser"
+evidence were all measurements of the branch that was not broken. Local
+verification proves that the path *you executed* works. When a bug reproduces
+for the user and not for you, establish *which branch each of you actually ran*
+before investigating anything else — here, one line of the log
+(`ready in 2779ms (webgpu...)` against `(wasm...)`) named the entire difference
+and was present from the first report.

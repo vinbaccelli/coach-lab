@@ -173,6 +173,25 @@ export default function FrameMaskEditor({
   const [floodNote, setFloodNote] = useState<string | null>(null);
   /** Either flood tool — a single-shot click fill, not a drag brush. */
   const isFlood = brushMode === 'flood-add' || brushMode === 'flood-remove';
+
+  /**
+   * How far a flood-ADD may spread from the click, as a fraction of the frame's
+   * SHORTER side. Generous enough to swallow a whole limb or racket head the
+   * segmenter missed, far too small to swallow the frame. Squared off rather
+   * than circular because the flood walker takes a rectangular bound.
+   */
+  const FLOOD_ADD_REACH = 0.25;
+  const floodAddReachBounds = useCallback(
+    (cx: number, cy: number, w: number, h: number) => {
+      const reach = Math.min(w, h) * FLOOD_ADD_REACH;
+      const x0 = Math.max(0, cx - reach);
+      const y0 = Math.max(0, cy - reach);
+      const x1 = Math.min(w, cx + reach);
+      const y1 = Math.min(h, cy + reach);
+      return { x: x0 / w, y: y0 / h, width: (x1 - x0) / w, height: (y1 - y0) / h };
+    },
+    [],
+  );
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [showCompositePreview, setShowCompositePreview] = useState(false);
@@ -885,13 +904,50 @@ export default function FrameMaskEditor({
       if ((brushMode === 'flood-add' || brushMode === 'flood-remove') && sourcePixelsRef.current) {
         dbg(`[TEMP-DEBUG-BAIL] mode branch: ${brushMode} -> proceeding`);
         const adding = brushMode === 'flood-add';
-        // BOUNDED, ALWAYS. The fill's one safeguard is a boundary it may not
-        // leave; without it a fill escapes the selection through similarly
-        // coloured pixels and clears parts of the athlete on the way back.
-        // The coach's box when there is one, otherwise the mask's own extent —
-        // padded when ADDING, since adding means reaching just outside it.
-        const bounds =
-          selectionBox ?? maskBoundsNormalized(maskRef.current, adding ? 0.15 : 0);
+        /**
+         * WHERE A FLOOD MAY REACH — ONE RULE, BOTH DIRECTIONS.
+         *
+         * Originally both directions were fenced by the coach's selection box,
+         * which made Flood + useless: a click outside the box — the ONLY place
+         * new area can come from — was refused outright. Adding is by definition
+         * an act of reaching OUT, so round 3 gave ADD a REACH box instead: a box
+         * centred on the click, a quarter of the frame's shorter side. Click
+         * anywhere; the fill still cannot run away across the frame.
+         *
+         * Round 3 left REMOVE fenced by the selection box alone, and that
+         * asymmetry was reachable in a single gesture (measured in Chromium
+         * against this component — selection x 190-330 of a 640px frame, target
+         * drawn at x 380-460):
+         *
+         *   Flood + on the target, outside the box -> "Added 3,200 px."
+         *   Flood - on THE SAME PIXELS             -> refused, mask unchanged
+         *
+         * So one flood button could put pixels somewhere the other could not
+         * take them back from, and the refusal named a fence the coach cannot
+         * see and that the other button does not respect. That is the reported
+         * confusion; the boundary CHECK itself was correct.
+         *
+         * The rule now:
+         *   REMOVE, click INSIDE the fence -> the fence, exactly as before. Not
+         *     symmetry for its own sake: the selection box (or the mask's own
+         *     extent) is what stopped the original escape bug, a fill leaving
+         *     the selection through similar pixels and clearing the athlete on
+         *     the way back. Verified still holding — a same-colour arm crossing
+         *     the fence keeps its 3,400 px outside while everything inside goes.
+         *   REMOVE, click OUTSIDE it, and ADD always -> the reach box. A click
+         *     out there can only be aimed at something ADD put there, and reach
+         *     bounds it exactly as tightly as it bounds ADD.
+         */
+        const removeFence = selectionBox ?? maskBoundsNormalized(maskRef.current, 0);
+        const withinFence = (b: typeof removeFence): b is NonNullable<typeof removeFence> =>
+          !!b
+          && x >= b.x * canvas.width && x <= (b.x + b.width) * canvas.width
+          && y >= b.y * canvas.height && y <= (b.y + b.height) * canvas.height;
+        // Non-null by construction now — every click gets a boundary, which is
+        // why the two "no boundary at all" arms below are gone.
+        const bounds = !adding && withinFence(removeFence)
+          ? removeFence
+          : floodAddReachBounds(x, y, canvas.width, canvas.height);
         const litBefore = countMaskLit(maskRef.current);
         next = floodInMask(maskRef.current, sourcePixelsRef.current, canvas.width, x, y, {
           mode: adding ? 'add' : 'remove',
@@ -900,16 +956,14 @@ export default function FrameMaskEditor({
         });
         // SAY WHAT HAPPENED. A correct no-op and a dead button look identical
         // otherwise — which is exactly how this tool came to be reported broken.
+        // The click is inside `bounds` in every case now: the fence branch is
+        // taken only when the click is inside the fence, and the reach box is
+        // centred on the click. So "outside the selected area" and "no selection
+        // area at all" are both unreachable, and both messages are deleted
+        // rather than left to be read by someone who can no longer trigger them.
         const delta = countMaskLit(next) - litBefore;
-        const inBox = !bounds
-          || (x >= bounds.x * canvas.width && x <= (bounds.x + bounds.width) * canvas.width
-            && y >= bounds.y * canvas.height && y <= (bounds.y + bounds.height) * canvas.height);
         if (delta !== 0) {
           setFloodNote(`${adding ? 'Added' : 'Removed'} ${Math.abs(delta).toLocaleString()} px.`);
-        } else if (!bounds) {
-          setFloodNote('Nothing to flood — this frame has no selection area and an empty mask.');
-        } else if (!inBox) {
-          setFloodNote('That click is outside the selection area — flood only works inside it.');
         } else {
           setFloodNote(
             adding
@@ -1216,22 +1270,6 @@ export default function FrameMaskEditor({
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
           <button
             type="button"
-            style={{ ...toolBtn, ...(brushMode === 'add' ? activeTool : {}) }}
-            onClick={() => setBrushMode('add')}
-            title="Add brush — paint to keep pixels"
-          >
-            <Brush size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Add
-          </button>
-          <button
-            type="button"
-            style={{ ...toolBtn, ...(brushMode === 'remove' ? activeTool : {}) }}
-            onClick={() => setBrushMode('remove')}
-            title="Remove brush — paint to erase pixels"
-          >
-            <Eraser size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Remove
-          </button>
-          <button
-            type="button"
             style={{ ...toolBtn, ...(brushMode === 'flood-add' ? activeTool : {}) }}
             onClick={() => setBrushMode('flood-add')}
             // NOT disabled when there is no selection box. It was, and that made
@@ -1248,6 +1286,22 @@ export default function FrameMaskEditor({
             title="Flood REMOVE — click a region that IS highlighted to cut all of it out. Only ever removes."
           >
             <Droplets size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Flood −
+          </button>
+          <button
+            type="button"
+            style={{ ...toolBtn, ...(brushMode === 'add' ? activeTool : {}) }}
+            onClick={() => setBrushMode('add')}
+            title="Add brush — paint to keep pixels"
+          >
+            <Brush size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Add
+          </button>
+          <button
+            type="button"
+            style={{ ...toolBtn, ...(brushMode === 'remove' ? activeTool : {}) }}
+            onClick={() => setBrushMode('remove')}
+            title="Remove brush — paint to erase pixels"
+          >
+            <Eraser size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Remove
           </button>
           {racketKey ? (
             <button
