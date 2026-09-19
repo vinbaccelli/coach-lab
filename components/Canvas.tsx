@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg, arrowBearingDeg } from '@/lib/drawingTools';
+import { drawVideoWatermark } from '@/lib/videoWatermark';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
@@ -2057,8 +2058,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       return out;
     };
-    const watermarkRef = useRef<HTMLImageElement | null>(null);
-    const watermarkLoadedRef = useRef(false);
     const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
     const mcPosRef = useRef<{ x: number; y: number }>({ x: 0.85, y: 0.02 });
     const mcTitleRef = useRef<string>(measurementColumnTitle);
@@ -4616,14 +4615,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { mcTitleRef.current = measurementColumnTitle; renderDirtyRef.current = true; }, [measurementColumnTitle]);
     useEffect(() => { if (measurementColumnPos) mcPosRef.current = measurementColumnPos; }, [measurementColumnPos]);
 
-    // ── Watermark logo ───────────────────────────────────────────────────
-    useEffect(() => {
-      const img = new Image();
-      img.src = '/logo-square-new.jpg';
-      img.onload = () => { watermarkRef.current = img; watermarkLoadedRef.current = true; };
-      img.onerror = () => { watermarkLoadedRef.current = false; };
-    }, []);
-
     // ── Render loop ────────────────────────────────────────────────────────
 
     useEffect(() => {
@@ -5993,17 +5984,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           onMeasurementColumnRect(null);
         }
 
-        // ── Watermark logo (bottom-right corner) ──────────────────────────
-        if (watermarkLoadedRef.current && watermarkRef.current) {
-          const wm = watermarkRef.current;
-          const wmSize = Math.max(28, Math.min(44, Math.round(W / 28)));
-          const wmX = W - wmSize - 8;
-          const wmY = H - wmSize - 8;
-          ctx.save();
-          ctx.globalAlpha = 0.5;
-          ctx.drawImage(wm, wmX, wmY, wmSize, wmSize);
-          ctx.restore();
-        }
+        // ── Watermark (bottom-left, shared with every export surface) ─────
+        // Stays here, LAST and after the zoom/pan transform is undone, so it is
+        // pinned to the corner and sits above the skeleton, drawings, PiP and
+        // data column. Everything that captures THIS canvas — Generate's
+        // recordReplayToMp4, the Motion Layer export, snapshot screenshots —
+        // inherits the mark from this one call.
+        drawVideoWatermark(ctx, W, H);
 
         if (renderWaitersRef.current.length > 0) {
           const waiters = renderWaitersRef.current.splice(0);
