@@ -78,11 +78,49 @@ function ensureLogo(): void {
 }
 
 /**
- * Draw the watermark bottom-left of a W x H drawing surface.
+ * Where the mark should sit, when the caller knows more than the raw surface.
+ *
+ * WHY THIS EXISTS. The analysis canvas is NOT the video: it is the whole video
+ * pane, and a 16:9 clip letterboxed into it leaves black bars above and below.
+ * Anchoring to the canvas put the mark in the BOTTOM BAR — outside the picture,
+ * reading as app chrome rather than as a mark on the footage — and underneath
+ * the playback dock, which is absolutely positioned over that same bottom strip.
+ * Measured on a 1260x950 pane with a 960x540 clip: the video occupies
+ * y 121-829, the dock starts at y 800, and the canvas-anchored mark landed at
+ * y 884-931. Entirely in the letterbox, entirely behind the controls.
+ */
+export interface WatermarkArea {
+  /** The drawn VIDEO rect in the same space as W/H — Canvas's dx/dy/dw/dh. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /**
+   * A Y the mark's bottom edge must not cross — the top of the playback dock.
+   * Omitted or <= 0 means nothing is in the way.
+   *
+   * A CLAMP rather than a second anchor, deliberately: the dock overlaps only
+   * the last ~29px of the video on a desktop pane, so this nudges the mark just
+   * clear of the controls instead of floating it high up the frame. On a
+   * surface with no dock — every recording and export — the clamp never binds
+   * and the mark sits at the video's own bottom-left.
+   */
+  maxBottomY?: number;
+}
+
+/**
+ * Draw the watermark bottom-left.
+ *
+ * With no `area`, that is bottom-left of the W x H surface — which is what a
+ * recording canvas wants, since it composites a screen grab with no letterbox
+ * and no controls of its own.
+ *
+ * With an `area`, it is bottom-left of THAT rect (the drawn video), clamped
+ * clear of `maxBottomY`. Size follows the area's width, so the mark scales with
+ * the picture rather than with the pane around it.
  *
  * Call this LAST, in screen space — after any zoom/pan transform has been
- * undone — so the mark stays pinned to the corner and sits above everything
- * else on the frame.
+ * undone — so the mark stays pinned and sits above everything else.
  *
  * Silently does nothing until the image has loaded, so the first few frames of
  * a session simply have no watermark rather than throwing inside a render loop.
@@ -92,24 +130,36 @@ export function drawVideoWatermark(
   ctx: CanvasRenderingContext2D,
   W: number,
   H: number,
+  area?: WatermarkArea | null,
 ): void {
   ensureLogo();
   if (!ready || !logo || !(W > 0) || !(H > 0)) return;
 
-  const w = Math.round(Math.max(MIN_WIDTH_PX, Math.min(MAX_WIDTH_PX, W * WIDTH_FRACTION)));
+  // The box the mark is positioned inside. Falls back to the whole surface, so
+  // callers that pass nothing keep the original behaviour exactly.
+  const box = area && area.w > 0 && area.h > 0
+    ? area
+    : { x: 0, y: 0, w: W, h: H, maxBottomY: undefined as number | undefined };
+
+  const w = Math.round(Math.max(MIN_WIDTH_PX, Math.min(MAX_WIDTH_PX, box.w * WIDTH_FRACTION)));
   const h = Math.round(w / SRC_ASPECT);
-  const marginX = Math.round(Math.max(MIN_MARGIN_PX, W * MARGIN_FRACTION));
-  const marginY = Math.round(Math.max(MIN_MARGIN_PX, H * MARGIN_FRACTION));
+  const marginX = Math.round(Math.max(MIN_MARGIN_PX, box.w * MARGIN_FRACTION));
+  const marginY = Math.round(Math.max(MIN_MARGIN_PX, box.h * MARGIN_FRACTION));
+
+  const x = Math.round(box.x + marginX);
+  // Bottom edge: the box's own bottom, pulled up if the dock would cover it.
+  let bottom = box.y + box.h - marginY;
+  if (box.maxBottomY != null && box.maxBottomY > 0) {
+    bottom = Math.min(bottom, box.maxBottomY - marginY);
+  }
+  // Never let a clamp push the mark off the top of its own box.
+  const y = Math.round(Math.max(box.y, bottom - h));
 
   ctx.save();
   // Reset any inherited alpha/compositing from the caller's loop: the watermark
   // must look identical whatever was drawn immediately before it.
   ctx.globalAlpha = WATERMARK_ALPHA;
   ctx.globalCompositeOperation = 'source-over';
-  ctx.drawImage(
-    logo,
-    SRC.x, SRC.y, SRC.w, SRC.h,
-    marginX, H - h - marginY, w, h,
-  );
+  ctx.drawImage(logo, SRC.x, SRC.y, SRC.w, SRC.h, x, y, w, h);
   ctx.restore();
 }
