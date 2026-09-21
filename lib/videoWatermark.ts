@@ -15,32 +15,57 @@
  */
 
 /**
- * Icon + "AngleMotion" wordmark. NOT logo-square-new.jpg (icon only), and NOT
- * public/logo-watermark.svg — despite the name, that file is stale CoachLab.ai
- * branding, and app/layout.tsx records that the old SVG marks are retired.
+ * Icon + "AngleMotion" wordmark, WHITE, on genuine transparency.
+ *
+ * Replaces logo-rect-new.jpg, which was an opaque JPEG: it had no alpha channel
+ * at all, so its near-black background painted as a solid rectangle and the only
+ * way to stop that reading as a box stuck on the video was to hold the whole
+ * mark at 0.55 alpha. Nothing here compensates for a background any more.
+ *
+ * Still NOT logo-square-new.jpg (icon only, no wordmark), NOT logo-rect.png or
+ * logo-square.png (the old CoachLab-era marks), and NOT public/logo-watermark.svg
+ * — despite the name, that one is stale CoachLab.ai branding, and app/layout.tsx
+ * records that the old SVG marks are retired. All of those files stay in place;
+ * several are still used as page chrome. They are simply not the watermark.
  */
-const LOGO_SRC = '/logo-rect-new.jpg';
+const LOGO_SRC = '/logo-transparent-v2.png';
 
 /**
- * The logo's REAL content inside that file, measured pixel by pixel.
+ * The logo's REAL content inside that file, from its ALPHA channel.
  *
- * The asset is 980x551 but carries 139px of dead space along the bottom and
- * 28px at the right, so its content is 2.40:1 rather than the 1.78:1 the file
- * dimensions imply. Drawing the whole file would float the logo inside an
- * oversized, mostly-empty box. Cropping to these bounds is what makes the
- * drawn mark match its visual weight.
+ * The asset is 2123x741 with fully transparent margins — all four corners are
+ * a true (0,0,0,0), not merely near-zero — so the drawn mark has to be cropped
+ * to where the glyphs actually are or it would be positioned by its padding.
+ * Verified against the shipped bytes rather than taken on trust:
+ *
+ *   getbbox() on the alpha channel -> (47, 37, 2087, 713)  =>  2040 x 676
+ *   85.2% of that box is alpha 0, 13.8% is alpha >=224, ~1% is the
+ *   anti-aliased edge between them.
+ *
+ * The edge carries NO dark matte — semi-transparent pixels average RGB
+ * (249,248,248) against an opaque body of (253,253,253) — so the mark
+ * composites without the grey halo a black-matted export would leave.
  */
-const SRC = { x: 0, y: 16, w: 952, h: 396 } as const;
-const SRC_ASPECT = SRC.w / SRC.h; // 2.404
+const SRC = { x: 47, y: 37, w: 2040, h: 676 } as const;
+const SRC_ASPECT = SRC.w / SRC.h; // 3.018
 
-/** Target width as a fraction of frame width. */
-const WIDTH_FRACTION = 0.09;
+/**
+ * Target width as a fraction of frame width.
+ *
+ * Raised from 0.09 with the asset swap. The new lockup is 3.02:1 against the
+ * old 2.40:1, so at an unchanged width it renders 20% SHORTER — and it is now
+ * bare white glyphs rather than a filled plate, which reads lighter again at
+ * the same pixel size. 0.10 restores the old visual weight and stays inside the
+ * 8-10% the mark is meant to occupy.
+ */
+const WIDTH_FRACTION = 0.10;
 /**
  * Clamped so the mark stays legible on a phone-width canvas and does not grow
- * silly on a 4K export — 9% of 375px would be a 34px-wide wordmark nobody can
- * read, and 9% of 3840px would be a 345px banner.
+ * silly on a 4K export. The floor is 96 rather than 80 because this lockup is
+ * wider and therefore shorter: 80px wide is only a 26px-tall wordmark, which is
+ * past the point of reading as text on a phone.
  */
-const MIN_WIDTH_PX = 80;
+const MIN_WIDTH_PX = 96;
 const MAX_WIDTH_PX = 240;
 
 /** Inset from the left and bottom edges, as a fraction of each dimension. */
@@ -48,14 +73,18 @@ const MARGIN_FRACTION = 0.02;
 const MIN_MARGIN_PX = 8;
 
 /**
- * The source JPEG has NO alpha channel, so its near-black (#1D1D1F-ish)
- * background paints as a solid rectangle. Reduced alpha is what keeps that
- * reading as a subtle darkening rather than a box stuck on the video.
+ * Overall opacity of the mark.
  *
- * Once a transparent PNG replaces the JPEG this is the ONLY value to change —
- * raise it toward 1 and swap LOGO_SRC. Nothing else here assumes opacity.
+ * 0.55 existed only to stop the old JPEG's opaque near-black background reading
+ * as a box. There is no background now, so this went up: it governs the GLYPHS
+ * themselves, and holding white glyphs at 0.55 over bright footage left them
+ * barely legible.
+ *
+ * Not 1.0 either. A watermark that competes with the athlete is a distraction,
+ * and the mark sits over the lower-left of the picture where a foot or a
+ * baseline often is. 0.85 is present without being loud.
  */
-export const WATERMARK_ALPHA = 0.55;
+export const WATERMARK_ALPHA = 0.85;
 
 let logo: HTMLImageElement | null = null;
 let ready = false;
