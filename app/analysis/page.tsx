@@ -510,7 +510,13 @@ function Home() {
   const [toolbarBottomReservePx, setToolbarBottomReservePx] = useState(166);
   /** Selfie-segmentation cutout for webcam PiP */
   const [webcamCutout, setWebcamCutout]     = useState(false);
-  const [panModeEnabled, setPanModeEnabled] = useState(false);
+  /**
+   * Drag-to-pan, WITHIN the Pan/Zoom tool only — it has no effect under any
+   * other tool. Defaults on so picking Pan/Zoom immediately pans; the toggle
+   * exists so the coach can work the zoom buttons without the frame sliding
+   * under a stray drag.
+   */
+  const [panModeEnabled, setPanModeEnabled] = useState(true);
   const [youtubeVideoIdA, setYoutubeVideoIdA] = useState<string | null>(null);
   const [youtubeVideoIdB, setYoutubeVideoIdB] = useState<string | null>(null);
   const [genericEmbedSrcA, setGenericEmbedSrcA] = useState<string | null>(null);
@@ -646,6 +652,15 @@ function Home() {
   /** Error loading the bundled strategy-board court asset (see loadBundledCourt) */
   const [courtLoadError, setCourtLoadError] = useState<string | null>(null);
   const [demoLoadError, setDemoLoadError] = useState<string | null>(null);
+  /**
+   * Demo download feedback. The clip is ~26 MB and is never cached by the
+   * service worker, so on a phone the tap-to-playable gap is long enough that
+   * silence reads as "the button is broken" — which is exactly how it was
+   * reported. The ref guards against a second tap starting a second download.
+   */
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoProgress, setDemoProgress] = useState<number | null>(null);
+  const demoLoadingRef = useRef(false);
   /** Drag-over state for the two video panels */
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
@@ -4185,15 +4200,71 @@ function Home() {
    * it is deliberately not built yet.
    */
   const loadBundledDemo = useCallback(async () => {
+    if (demoLoadingRef.current) return;   // double-tap while downloading
+    demoLoadingRef.current = true;
     setDemoLoadError(null);
+    setDemoProgress(0);
+    setDemoLoading(true);
     try {
       const res = await fetch('/Demodjokovic.mp4');
-      if (!res.ok) throw new Error(`missing asset (${res.status})`);
-      const blob = await res.blob();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      /*
+       * Read the body as a STREAM rather than res.blob() so the button can show
+       * real progress. The clip is ~26 MB and the service worker deliberately
+       * does not cache video (public/sw.js), so every tap is a full cold
+       * download — on a phone that is many seconds during which the old code
+       * showed absolutely nothing and looked broken.
+       */
+      const total = Number(res.headers.get('content-length')) || 0;
+      let blob: Blob;
+      if (res.body) {
+        const reader = res.body.getReader();
+        const chunks: BlobPart[] = [];
+        let received = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value as unknown as BlobPart);
+            received += value.byteLength;
+            if (total > 0) setDemoProgress(Math.min(99, Math.round((received / total) * 100)));
+          }
+        }
+        blob = new Blob(chunks, { type: res.headers.get('content-type') || 'video/mp4' });
+      } else {
+        // No streaming body (very old WebView) — fall back to the original path.
+        blob = await res.blob();
+      }
+
+      setDemoProgress(100);
       const file = new File([blob], 'Demodjokovic.mp4', { type: blob.type || 'video/mp4' });
       handleVideoFile(file, 'A');
-    } catch {
-      setDemoLoadError('Demo video is not set up yet. Ask your admin to add public/Demodjokovic.mp4.');
+    } catch (err) {
+      /*
+       * SPECIFIC messages, not one blanket string.
+       *
+       * This used to report "Demo video is not set up yet. Ask your admin to
+       * add public/Demodjokovic.mp4." for EVERY failure — a network drop, a
+       * backgrounded-tab abort and an out-of-memory blob all produced that same
+       * sentence, which is wrong in all three cases and sent anyone debugging
+       * it to look for a missing file that is present (26 MB, committed).
+       *
+       * It also means a silent failure is now distinguishable from a slow one:
+       * if this button ever goes quiet again, the catch did NOT run.
+       */
+      const msg = err instanceof Error ? err.message : String(err);
+      setDemoLoadError(
+        msg.startsWith('HTTP 404')
+          ? 'Demo video is missing from this deployment (404).'
+          : msg.startsWith('HTTP')
+            ? `Demo video could not be loaded (${msg}).`
+            : `Demo video download failed — check your connection and try again. (${msg})`,
+      );
+    } finally {
+      demoLoadingRef.current = false;
+      setDemoLoading(false);
+      setDemoProgress(null);
     }
   }, [handleVideoFile]);
 
@@ -6259,6 +6330,14 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
   const toolPaletteBaseProps = {
     activeTool,
     onToolChange:                    handleToolChange,
+    // ── Pan / Zoom tool ────────────────────────────────────────────────────
+    // The pan screen owns every viewport control, so all four route through
+    // the same canvas handle the in-canvas zoom buttons already use.
+    onZoomIn:                        () => canvasRef.current?.zoomIn(),
+    onZoomOut:                       () => canvasRef.current?.zoomOut(),
+    onZoomReset:                     () => canvasRef.current?.resetZoomPan(),
+    panDragEnabled:                  panModeEnabled,
+    onPanDragToggle:                 () => setPanModeEnabled((p) => !p),
     compact:                         true as const,
     drawingOptions,
     onOptionsChange:                 handleOptionsChange,
@@ -7376,6 +7455,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     <button
                       type="button"
                       onClick={loadBundledDemo}
+                      disabled={demoLoading}
+                      aria-busy={demoLoading}
                       style={{
                         minHeight: 44,
                         minWidth: 200,
@@ -7386,7 +7467,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         color: layoutMode === 'reels' ? '#fff' : '#1D1D1F',
                         fontSize: 14,
                         fontWeight: 500,
-                        cursor: 'pointer',
+                        cursor: demoLoading ? 'progress' : 'pointer',
+                        opacity: demoLoading ? 0.65 : 1,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -7394,7 +7476,18 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         pointerEvents: 'auto',
                       }}
                     >
-                      <PlayCircle size={18} /> Demo (Tutorial)
+                      {demoLoading ? (
+                        <>
+                          <svg width="18" height="18" viewBox="0 0 40 40" style={{ animation: 'spin 1s linear infinite' }}>
+                            <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" strokeWidth="4" strokeDasharray="75" strokeDashoffset="20" strokeLinecap="round" />
+                          </svg>
+                          {demoProgress !== null && demoProgress > 0
+                            ? `Loading demo… ${demoProgress}%`
+                            : 'Loading demo…'}
+                        </>
+                      ) : (
+                        <><PlayCircle size={18} /> Demo (Tutorial)</>
+                      )}
                     </button>
                     {demoLoadError && (
                       <span style={{ fontSize: 12, color: '#CC3333', textAlign: 'center', maxWidth: 320 }}>

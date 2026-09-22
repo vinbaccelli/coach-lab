@@ -2556,6 +2556,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     useEffect(() => { drawingOptsRef.current      = drawingOptions; },  [drawingOptions]);
     useEffect(() => { activeToolRef.current        = activeTool; },      [activeTool]);
+    /**
+     * Drop the eraser's red cursor circle whenever the tool changes.
+     *
+     * The circle is drawn at outlineEraserPosRef under the guard
+     * `OUTLINE_ERASER_TOOLS.has(activeTool)` — but that set is nearly every
+     * drawing tool, so switching tools almost never falsified it and the circle
+     * stayed painted at the last place the eraser touched. Only "Clear all"
+     * cleared it, because that zeroes the SIZE ref (the guard's other half).
+     *
+     * The position is a live-pointer artefact, so the correct lifetime is the
+     * gesture, not the session: it is re-set on the next move under an
+     * eraser-capable tool, which is exactly when the circle should reappear.
+     */
+    useEffect(() => {
+      if (outlineEraserPosRef.current !== null) {
+        outlineEraserPosRef.current = null;
+        renderDirtyRef.current = true;
+      }
+    }, [activeTool]);
     useEffect(() => {
       if (activeTool !== 'angle') setAngleUiPhase(0);
     }, [activeTool]);
@@ -7346,14 +7365,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // ── Pan: activates immediately on pointer-down with no delay ────────
       // Triggers: middle-click, Space+drag, zoom tool while zoomed,
-      // select/skeleton tool while zoomed, touch while zoomed, or panMode
-      // enabled at ANY zoom level (no prior zoom-in required).
+      // Middle-click, held space, the zoom tool's own drag, or the Pan/Zoom
+      // tool with its drag toggle on. Being zoomed is no longer enough on its
+      // own — see the shouldPan comment below.
       const zoomed = zoomRef.current > 1;
-      const isDrawingTool =
-        tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' ||
-        tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle' ||
-        tool === 'angle' || tool === 'text' || tool === 'erase' || tool === 'ballShadow' ||
-        tool === 'swingPath' || tool === 'manualSwing' || tool === 'jointChain';
 
       // ── Measurement overlay endpoint drag (BEFORE pan/zoom/column) ──────
       // Must run before shouldPan: coaches zoom in precisely when they want to
@@ -7570,16 +7585,34 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         tool === 'select' &&
         webcamPipHitTest(getPosFromPointerEvent(e)) !== 'miss';
 
+      /*
+       * PANNING IS AN EXPLICIT MODE, NOT A CONSEQUENCE OF BEING ZOOMED.
+       *
+       * This used to also read:
+       *
+       *     (zoomed && !isDrawingTool) ||
+       *     (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current)
+       *
+       * which meant that the moment the coach zoomed in, every non-drawing
+       * gesture became a pan. The data column was the visible casualty: its
+       * header/resize hit-test runs just below this block and mis-compares a
+       * LOGICAL-space pointer (getPos inverts zoom/pan) against a SCREEN-space
+       * rect (the column is drawn after the transform is undone), so at any
+       * zoom != 1 the test missed and the drag fell through to here and panned
+       * instead. Removing the implicit clauses means a missed hit-test now does
+       * nothing rather than silently doing the wrong thing.
+       *
+       * What stays: middle-click and held-space are momentary, explicitly-held
+       * gestures rather than ambient state, and the zoom tool's own drag.
+       */
       const shouldPan =
         !pipVeto && (
           e.button === 1 ||
           spaceHeldRef.current ||
           (tool === 'zoom' && e.button === 0 && zoomed) ||
-          // Pan mode works at ANY zoom level — no prior zoom-in required.
-          panModeEnabledRef.current ||
-          (zoomed && !isDrawingTool) ||
-          // Touch one-finger drag while zoomed always pans (no activation needed).
-          (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current)
+          // The pan tool, with its drag toggle on. Works at ANY zoom level —
+          // no prior zoom-in required.
+          (tool === 'pan' && panModeEnabledRef.current)
         );
       if (shouldPan) {
         isPanningRef.current = true;
@@ -8619,7 +8652,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           : zoomRef.current > 1.0 ? 'zoom-out' : 'zoom-in',
       select: zoomRef.current > 1 ? (isPanningRef.current ? 'grabbing' : 'grab') : 'default',
     };
-    if (panModeEnabled) {
+    // Grab cursor only in the pan tool — panModeEnabled is the pan tool's own
+    // drag toggle now, not a global override that repaints every tool's cursor.
+    if (activeTool === 'pan' && panModeEnabled) {
       Object.keys(cursorFor).forEach((k) => {
         if (k === 'objectMultiplier') return;
         (cursorFor as Record<string, string>)[k] = isPanningRef.current ? 'grabbing' : 'grab';
@@ -8843,7 +8878,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             cursor:
               activeTool === 'objectMultiplier'
                 ? 'default'
-                : panModeEnabled
+                : (activeTool === 'pan' && panModeEnabled)
                   ? (isPanningRef.current ? 'grabbing' : 'grab')
                   : (cursorFor[activeTool] ?? 'default'),
           }}

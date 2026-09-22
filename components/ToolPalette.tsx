@@ -27,6 +27,7 @@ import {
   Video,
   Crosshair,
   Sparkles,
+  Hand,
   Home,
   GripHorizontal,
   BarChart3,
@@ -158,7 +159,15 @@ interface ToolPaletteProps {
   /** Stromotion panel content (full workflow UI). */
   stroMotionPanel?: React.ReactNode;
   /** Called when the user navigates to a toolbar screen. */
-  onNavigate?: (screen: 'home' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
+  onNavigate?: (screen: 'home' | 'pan' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
+  /**
+   * Pan/Hand tool controls. The pan screen owns ALL viewport navigation —
+   * zoom in, zoom out, the drag toggle and reset — so entering it is the one
+   * way to move the frame and leaving it hands every gesture back.
+   */
+  /** Drag-to-pan on/off WITHIN the pan tool. */
+  panDragEnabled?: boolean;
+  onPanDragToggle?: () => void;
   /** @deprecated Use stroMotionPanel — legacy toggle only */
   stroMotionEnabled?: boolean;
   onStroMotionToggle?: () => void;
@@ -206,6 +215,7 @@ const DRAW_SCREEN_TOOLS: ToolType[] = [
 
 type NavScreen =
   | 'home'
+  | 'pan'
   | 'recording'
   | 'style'
   | 'draw'
@@ -1102,6 +1112,8 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onZoomIn,
     onZoomOut,
     onZoomReset,
+    panDragEnabled = true,
+    onPanDragToggle,
   } = props;
 
   const iconOnlyMode = compactToolbarChrome
@@ -1646,6 +1658,59 @@ export default function ToolPalette(props: ToolPaletteProps) {
     );
   }
 
+  if (top === 'pan') {
+    return (
+      <div style={shellStyle}>
+        <CollapseControl chrome={chrome} />
+        <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
+          <ToolbarLead chrome={chrome} />
+          {/*
+            Back RESTORES SELECT. Leaving the pan tool has to hand gestures back
+            to something usable — dropping out of pan into pan would be the same
+            implicit-state trap this tool exists to remove.
+          */}
+          <BackHeader chrome={chrome} title="Pan / Zoom" icon={<Hand size={18} />} onBack={() => setTool('select')} />
+          {/*
+            This screen owns ALL viewport navigation: drag, zoom in, zoom out
+            and reset. A pan tool that only panned would leave the coach hunting
+            for zoom somewhere else, which is how the implicit behaviour grew in
+            the first place.
+          */}
+          <Row chrome={chrome}
+            k="pan-drag"
+            active={activeTool === 'pan' && panDragEnabled}
+            icon={<Hand size={18} />}
+            tooltip="Drag the frame to move it. Turn off to use the zoom buttons without moving the frame."
+            label={panDragEnabled ? 'Drag: On' : 'Drag: Off'}
+            onPress={() => { setTool('pan'); onPanDragToggle?.(); }}
+          />
+          <Row chrome={chrome}
+            k="pan-zin"
+            icon={<ZoomIn size={18} />}
+            tooltip="Zoom in"
+            label="Zoom In"
+            onPress={() => { setTool('pan'); onZoomIn?.(); }}
+          />
+          <Row chrome={chrome}
+            k="pan-zout"
+            icon={<ZoomOut size={18} />}
+            tooltip="Zoom out"
+            label="Zoom Out"
+            onPress={() => { setTool('pan'); onZoomOut?.(); }}
+          />
+          <Row chrome={chrome}
+            k="pan-home"
+            icon={<Home size={18} />}
+            tooltip="Reset to 100% and re-centre the frame"
+            label="Reset View"
+            onPress={() => { setTool('pan'); onZoomReset?.(); }}
+          />
+        </ToolbarScrollArea>
+        <GlobalActionsFooter chrome={chrome} />
+      </div>
+    );
+  }
+
   if (top === 'stromotion') {
     return (
       <div style={shellStyle}>
@@ -1758,6 +1823,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
         <ToolbarLead chrome={chrome} />
         <Row chrome={chrome} k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} tooltip="Select and move drawn shapes" label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
+        <Row chrome={chrome}
+          k="pan-h"
+          active={activeTool === 'pan'}
+          icon={<Hand size={denseMobile ? 16 : 18} />}
+          tooltip="Pan and zoom the video frame"
+          label="Pan / Zoom"
+          onPress={() => { onExitDrawContext?.(); setTool('pan'); push('pan'); }}
+        />
         <Row chrome={chrome}
           k="met-h"
           active={activeTool === 'skeleton'}
