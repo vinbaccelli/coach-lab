@@ -654,6 +654,14 @@ interface ToolbarChrome {
   iconBox: number;
   textMuted: string;
   pressedKey: string | null;
+  /**
+   * Select is reachable from EVERY screen, not just home — see BackHeader.
+   * Carried on chrome rather than passed per screen because BackHeader is the
+   * one component every sub-screen already renders, so this is the single
+   * place that keeps the button consistent everywhere it appears.
+   */
+  activeTool: string;
+  onSelectTool: () => void;
   rb: (active: boolean, pressed: boolean, iconOnly?: boolean, dense?: boolean) => React.CSSProperties;
   fire: (key: string, action: () => void, e?: React.PointerEvent) => void;
   pop: () => void;
@@ -952,9 +960,18 @@ function BackHeader({
     onBack?: () => void;
     chrome: ToolbarChrome;
   }) {
-  const { rb, pressedKey, io, denseMobile, fire, pop } = chrome;
+  const { rb, pressedKey, io, denseMobile, fire, pop, activeTool, onSelectTool } = chrome;
+  const selectActive = activeTool === 'select';
   return (
     <>
+      {/*
+        Back and Select share a row so Select is reachable from EVERY sub-screen
+        without first navigating home. Every sub-screen renders this header, so
+        putting the button here is what makes it universal — and it sits beside
+        Back rather than in the screen body so its position never shifts between
+        screens with different content.
+      */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       <button
         type="button"
         aria-label="Back"
@@ -963,6 +980,7 @@ function BackHeader({
           ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0, justifyContent: 'center' } : null),
           fontWeight: 600,
           fontSize: io ? undefined : 16,
+          flex: io ? undefined : 1,
         }}
         onPointerDown={(e) => {
           if (e.pointerType !== 'touch') e.preventDefault();
@@ -979,6 +997,31 @@ function BackHeader({
           </>
         )}
       </button>
+      <button
+        type="button"
+        aria-label="Select"
+        title="Select and move drawn shapes"
+        aria-pressed={selectActive}
+        style={{
+          ...rb(selectActive, pressedKey === `sel-${title}`, io, denseMobile),
+          ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0, justifyContent: 'center' } : null),
+          fontWeight: 600,
+          fontSize: io ? undefined : 16,
+          flex: io ? undefined : 1,
+        }}
+        onPointerDown={(e) => {
+          if (e.pointerType !== 'touch') e.preventDefault();
+          fire(`sel-${title}`, () => { onSelectTool(); }, e);
+        }}
+      >
+        {io ? <MousePointer2 size={18} strokeWidth={2} /> : (
+          <>
+            <MousePointer2 size={18} strokeWidth={2} />
+            Select
+          </>
+        )}
+      </button>
+      </div>
       {!io ? (
       <div
         style={{
@@ -1176,12 +1219,17 @@ export default function ToolPalette(props: ToolPaletteProps) {
     io, denseMobile, mobileChrome, phoneLayout, compactToolbarChrome, collapsed,
     showCollapseControl, toolbarLabelsExpanded, screenshotSaving, iconBox,
     textMuted, pressedKey, rb, fire, pop,
+    activeTool,
+    // Same action the home screen's Select row fires: leaving draw context
+    // first matters, or Select would activate underneath a still-open context.
+    onSelectTool: () => { onExitDrawContext?.(); setTool('select'); },
     onUndo, onRedo, onClear, onCleanSession, onScreenshotSave,
     onToggleCollapsed, onToggleToolbarLabels, authContent,
   }), [
     io, denseMobile, mobileChrome, phoneLayout, compactToolbarChrome, collapsed,
     showCollapseControl, toolbarLabelsExpanded, screenshotSaving, iconBox,
     pressedKey, rb, fire, pop,
+    activeTool, onExitDrawContext, setTool,
     onUndo, onRedo, onClear, onCleanSession, onScreenshotSave,
     onToggleCollapsed, onToggleToolbarLabels, authContent,
   ]);
