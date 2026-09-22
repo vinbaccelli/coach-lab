@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg, arrowBearingDeg } from '@/lib/drawingTools';
+import { drawVideoWatermark } from '@/lib/videoWatermark';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
@@ -2057,8 +2058,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       return out;
     };
-    const watermarkRef = useRef<HTMLImageElement | null>(null);
-    const watermarkLoadedRef = useRef(false);
+    /**
+     * Top edge of the playback dock, in CSS pixels relative to this canvas —
+     * i.e. the same space as the render loop's W/H (`canvas.width / dpr`).
+     *
+     * The watermark has to clear the play/pause/scrubber controls, and those are
+     * a DOM overlay (`data-tour-id="playback-dock"`, absolutely positioned over
+     * the canvas's bottom strip) that this component does not own and is not
+     * told about. Measured rather than assumed: its height is content-driven,
+     * with a min of 120px on desktop and 108px on mobile, and it measures ~150px
+     * in practice.
+     *
+     * MEASURED ON RESIZE, NOT PER FRAME. getBoundingClientRect forces layout;
+     * doing that inside a render loop that already composites video, skeleton,
+     * strokes and the data column would be a per-frame layout read for a value
+     * that only changes when something resizes. 0 means "not measured / no dock",
+     * which the watermark treats as nothing in the way.
+     */
+    const dockTopRef = useRef(0);
+
     const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
     const mcPosRef = useRef<{ x: number; y: number }>({ x: 0.85, y: 0.02 });
     const mcTitleRef = useRef<string>(measurementColumnTitle);
@@ -4535,6 +4553,56 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       renderDirtyRef.current = true;
     }, [containerWidth, containerHeight]);
 
+    /**
+     * Keep `dockTopRef` in step with the playback dock.
+     *
+     * The dock is a sibling overlay owned by the analysis page, not a prop, so
+     * it is found by its stable tour hook rather than by class name. It is
+     * absolutely positioned at `bottom: 0` over this canvas, so its top edge is
+     * what the watermark must stay above.
+     *
+     * Observed rather than polled, and never read inside the render loop: a
+     * getBoundingClientRect per frame would force layout on every composite for
+     * a number that only moves when the window, the dock's contents or this
+     * canvas change size. Both elements are observed because either resizing
+     * moves the boundary between them.
+     *
+     * Degrades to 0 — "nothing in the way" — when the dock is absent (it is not
+     * rendered on every surface) or when ResizeObserver is unavailable, which
+     * puts the mark at the video's own bottom-left. That is the correct result
+     * for a surface with no controls, not a fallback.
+     */
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas || typeof window === 'undefined') return;
+      const dock = document.querySelector('[data-tour-id="playback-dock"]');
+      if (!dock) { dockTopRef.current = 0; return; }
+
+      const measure = () => {
+        const c = canvasRef.current;
+        if (!c) return;
+        const cRect = c.getBoundingClientRect();
+        const dRect = dock.getBoundingClientRect();
+        // CSS pixels relative to the canvas — the render loop's W/H are
+        // `canvas.width / dpr`, i.e. the same space, so no dpr conversion.
+        const top = dRect.top - cRect.top;
+        // Ignore a dock that is off the canvas entirely or covers all of it.
+        dockTopRef.current = top > 0 && top < cRect.height ? top : 0;
+        renderDirtyRef.current = true;
+      };
+      measure();
+
+      if (typeof ResizeObserver === 'undefined') return;
+      const ro = new ResizeObserver(measure);
+      ro.observe(dock);
+      ro.observe(canvas);
+      window.addEventListener('resize', measure);
+      return () => {
+        ro.disconnect();
+        window.removeEventListener('resize', measure);
+      };
+    }, [containerWidth, containerHeight]);
+
     // ── Video source lifecycle — redraw when a new file loads or presents frames ──
     useEffect(() => {
       const v = videoRef.current;
@@ -4615,14 +4683,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { measurementColumnRef.current = measurementColumnItems ?? null; renderDirtyRef.current = true; }, [measurementColumnItems]);
     useEffect(() => { mcTitleRef.current = measurementColumnTitle; renderDirtyRef.current = true; }, [measurementColumnTitle]);
     useEffect(() => { if (measurementColumnPos) mcPosRef.current = measurementColumnPos; }, [measurementColumnPos]);
-
-    // ── Watermark logo ───────────────────────────────────────────────────
-    useEffect(() => {
-      const img = new Image();
-      img.src = '/logo-square-new.jpg';
-      img.onload = () => { watermarkRef.current = img; watermarkLoadedRef.current = true; };
-      img.onerror = () => { watermarkLoadedRef.current = false; };
-    }, []);
 
     // ── Render loop ────────────────────────────────────────────────────────
 
@@ -5993,17 +6053,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           onMeasurementColumnRect(null);
         }
 
-        // ── Watermark logo (bottom-right corner) ──────────────────────────
-        if (watermarkLoadedRef.current && watermarkRef.current) {
-          const wm = watermarkRef.current;
-          const wmSize = Math.max(28, Math.min(44, Math.round(W / 28)));
-          const wmX = W - wmSize - 8;
-          const wmY = H - wmSize - 8;
-          ctx.save();
-          ctx.globalAlpha = 0.5;
-          ctx.drawImage(wm, wmX, wmY, wmSize, wmSize);
-          ctx.restore();
-        }
+        // ── Watermark (bottom-left of the VIDEO, clear of the dock) ───────
+        // Stays here, LAST and after the zoom/pan transform is undone, so it is
+        // pinned and sits above the skeleton, drawings, PiP and data column.
+        // Everything that captures THIS canvas — Generate's recordReplayToMp4,
+        // the Motion Layer export, snapshot screenshots — inherits this call.
+        //
+        // Anchored to dx/dy/dw/dh, the LETTERBOXED VIDEO RECT, not to the canvas.
+        // The canvas is the whole video pane; a 16:9 clip in it leaves black bars,
+        // and anchoring to the pane put the mark down in the bottom bar — outside
+        // the picture, and underneath the playback dock that covers that strip.
+        // `maxBottomY` then nudges it clear of the controls; on a surface with no
+        // dock the clamp never binds.
+        drawVideoWatermark(ctx, W, H, {
+          x: dx, y: dy, w: dw, h: dh,
+          maxBottomY: dockTopRef.current,
+        });
 
         if (renderWaitersRef.current.length > 0) {
           const waiters = renderWaitersRef.current.splice(0);

@@ -28,6 +28,7 @@ import React, {
 } from 'react';
 import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
+import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { stopAllTracks } from '@/lib/tabCaptureRecording';
 import {
   createPipRecorderSurface,
@@ -549,6 +550,12 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
           ctx.fillRect(px - 4, py - 4, pipW + 8, pipH + 8);
           ctx.drawImage(webcamVideo, px, py, pipW, pipH);
         }
+        // Watermark LAST so it sits above the screen grab and the webcam stamp.
+        // Bottom-LEFT: the PiP above owns the bottom-right corner here, which is
+        // why every surface uses the left corner rather than special-casing this
+        // one. Inside the same try — a watermark is never worth killing the
+        // painter over, and the recording continues unmarked if it throws.
+        drawVideoWatermark(ctx, outW, outH);
       } catch { /* bad frame — skip it, keep the painter alive */ }
     };
     paintOnce();
