@@ -2373,9 +2373,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const mpLiveSamplesRef = useRef<number[]>([]);
     /** Warmup detections still to discard before the guard starts judging. */
     const mpLiveWarmupLeftRef = useRef(0);
-    /** Latched true when this device cannot sustain live MediaPipe → MoveNet again. */
+    /** Consecutive over-budget verdict windows (reset by any in-budget window). */
+    const mpLiveOverBudgetWindowsRef = useRef(0);
+    /** Playing detections still to discard after a seek (cold ROI — see the guard). */
+    const mpLivePostSeekSkipRef = useRef(0);
+    /**
+     * Latched true when this device cannot sustain live MediaPipe → MoveNet again.
+     * Cleared by a fresh foot-line opt-in, which is what "re-arms the capability
+     * check" means (the page has always claimed that; now it is true).
+     */
     const mpLiveDisabledRef = useRef(false);
-    /** So the unsupported notice fires once per session, not once per frame. */
+    /** So the unsupported notice fires once per opt-in, not once per frame. */
     const mpLiveNotifiedRef = useRef(false);
     const pendingFocusRef = useRef<{ x: number; y: number } | null>(null);
     // Continuous auto-focus crop target (torso centroid, normalized). Distinct
@@ -2644,7 +2652,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       mpLiveWarmupLeftRef.current = 3; // must match MP_LIVE_WARMUP_SKIP
       mpLiveNextAtRef.current = 0;
       mpLiveBusyRef.current = false;
+      mpLiveOverBudgetWindowsRef.current = 0;
+      mpLivePostSeekSkipRef.current = 0;
       if (skeletonShowFootLine) {
+        // RE-ARM. This effect reset the sample state but left `mpLiveDisabledRef`
+        // and `mpLiveNotifiedRef` latched, so once the model had been reverted —
+        // including by the not-ready bug above — toggling foot lines off and on
+        // could never bring it back; only a page reload could. page.tsx has always
+        // documented this toggle as "a fresh opt-in re-arms the capability check",
+        // and the notice it clears promises the same. Make it so.
+        mpLiveDisabledRef.current = false;
+        mpLiveNotifiedRef.current = false;
         // Warm it now so the first playing frame is not the one paying init.
         void import('@/lib/mediapipePose').then((m) => m.preloadLiveLandmarker()).catch(() => {});
       } else {
@@ -3914,9 +3932,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // ── LIVE MEDIAPIPE ────────────────────────────────────────────────────
       /** Detection rate when MediaPipe drives the live pose. */
       const MP_LIVE_HZ = 15;
-      /** Same budget poseWorker uses to decide THUNDER is too slow (SWAP_THRESHOLD_MS). */
+      /**
+       * Steady-state median above which MediaPipe is not live-viable here.
+       *
+       * This is MediaPipe FULL's own budget, NOT poseWorker's SWAP_THRESHOLD_MS
+       * (55 ms, for MoveNet THUNDER→LIGHTNING). A comment here used to claim they
+       * were the same number; they are two different models with two different
+       * budgets and must not be "reconciled".
+       */
       const MP_LIVE_BUDGET_MS = 70;
+      /** Samples per verdict window. The window RESETS after each verdict. */
       const MP_LIVE_GUARD_SAMPLES = 6;
+      /**
+       * Over-budget windows required before reverting. One window is not evidence:
+       * a single slow stretch (a background tab waking, another tab hogging the
+       * GPU, a compositor hiccup) must not cost the coach the feature for the rest
+       * of the session.
+       */
+      const MP_LIVE_OVER_BUDGET_WINDOWS = 2;
       /**
        * Detections to THROW AWAY before judging speed. The first detectForVideo
        * on a fresh graph measured 1568 ms on a perfectly capable GPU (shader
@@ -3924,6 +3957,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
        * devices this feature is for. Warmup is not the steady state.
        */
       const MP_LIVE_WARMUP_SKIP = 3;
+      /**
+       * Playing detections to discard after a seek. MediaPipe VIDEO mode is
+       * stateful — it reuses the previous frame's region of interest and only
+       * re-runs the person detector when that fails. A seek invalidates the ROI, so
+       * the first detections after one pay for the full detector and are several
+       * times the steady-state cost. They are not what "can this device keep up
+       * with playback" means.
+       */
+      const MP_LIVE_POST_SEEK_SKIP = 3;
 
       /** MediaPipe owns the live pose while foot lines are on and it is coping. */
       const useMediaPipeLive = () =>
@@ -3958,19 +4000,52 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const mp = await import('@/lib/mediapipePose');
           const res = await mp.detectPoseLive(v);
           if (!res) { revertMediaPipeLive('init-failed'); return; }
+          // The video had no decodable frame this instant (mid-seek, buffering, a
+          // source swap, a just-unthrottled tab). Skip the tick — this is not a
+          // capability failure and must never revert the model.
+          if (res.notReady) return;
           if (res.delegate === 'CPU') { revertMediaPipeLive('cpu-delegate'); return; }
 
-          // Latency guard, mirroring poseWorker's adaptive downgrade: discard
-          // warmup, then judge a handful of steady-state samples on the MEDIAN so
-          // one slow frame cannot latch the revert.
-          mpLiveWarmupLeftRef.current -= 1;
-          if (mpLiveWarmupLeftRef.current < 0) {
-            const s = mpLiveSamplesRef.current;
-            s.push(res.ms);
-            if (s.length === MP_LIVE_GUARD_SAMPLES) {
-              const med = [...s].sort((a, b) => a - b)[s.length >> 1];
-              console.log(`[Canvas] live MediaPipe steady-state median ${med.toFixed(0)}ms (budget ${MP_LIVE_BUDGET_MS}ms)`);
-              if (med > MP_LIVE_BUDGET_MS) { revertMediaPipeLive('too-slow'); return; }
+          // ── Latency guard ────────────────────────────────────────────────
+          // Discard warmup, then judge the MEDIAN of a window of samples so one
+          // slow frame cannot latch the revert. Three rules make the verdict mean
+          // what it says:
+          //
+          //  1. PLAYING SAMPLES ONLY. Paused detections are event-driven
+          //     (pause/seeked) and each one re-runs the person detector on a cold
+          //     ROI, so a coach stepping through phases fed the guard nothing but
+          //     worst-case samples — the reported "this device can't keep up" was
+          //     measured on work playback never does.
+          //  2. POST-SEEK SAMPLES DISCARDED, for the same ROI reason.
+          //  3. THE WINDOW ROLLS. It used to be `s.length === GUARD_SAMPLES`, i.e.
+          //     one verdict ever, on the first 6 post-warmup detections, whenever
+          //     they happened to arrive; afterwards the array grew forever and was
+          //     never read again. Now each full window is judged and cleared (as
+          //     poseWorker does with inferSamples), and it takes
+          //     MP_LIVE_OVER_BUDGET_WINDOWS consecutive over-budget windows to
+          //     revert — so a real sustained overload is still caught, repeatedly,
+          //     while a transient one is not fatal.
+          const sampleThisDetection = !v.paused && mpLivePostSeekSkipRef.current === 0;
+          if (!v.paused && mpLivePostSeekSkipRef.current > 0) mpLivePostSeekSkipRef.current -= 1;
+          if (sampleThisDetection) {
+            mpLiveWarmupLeftRef.current -= 1;
+            if (mpLiveWarmupLeftRef.current < 0) {
+              const s = mpLiveSamplesRef.current;
+              s.push(res.ms);
+              if (s.length >= MP_LIVE_GUARD_SAMPLES) {
+                const med = [...s].sort((a, b) => a - b)[s.length >> 1];
+                mpLiveSamplesRef.current = [];
+                const over = med > MP_LIVE_BUDGET_MS;
+                mpLiveOverBudgetWindowsRef.current = over ? mpLiveOverBudgetWindowsRef.current + 1 : 0;
+                console.log(
+                  `[Canvas] live MediaPipe playing median ${med.toFixed(0)}ms (budget ${MP_LIVE_BUDGET_MS}ms)`
+                  + `${over ? ` — over-budget window ${mpLiveOverBudgetWindowsRef.current}/${MP_LIVE_OVER_BUDGET_WINDOWS}` : ''}`,
+                );
+                if (mpLiveOverBudgetWindowsRef.current >= MP_LIVE_OVER_BUDGET_WINDOWS) {
+                  revertMediaPipeLive('too-slow');
+                  return;
+                }
+              }
             }
           }
 
@@ -4092,7 +4167,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
 
       const onPause = () => detectStaticFrame();
-      const onSeeked = () => { if (videoRef.current?.paused) detectStaticFrame(); };
+      const onSeeked = () => {
+        // A seek invalidates MediaPipe VIDEO mode's region of interest, so the next
+        // few PLAYING detections pay for the full person detector. Exclude them
+        // from the latency verdict (see MP_LIVE_POST_SEEK_SKIP) — they are not the
+        // steady state the budget is about.
+        mpLivePostSeekSkipRef.current = MP_LIVE_POST_SEEK_SKIP;
+        if (videoRef.current?.paused) detectStaticFrame();
+      };
       // Resume-from-pause: snap the filter to the live frame instead of letting
       // a stale velocity estimate produce a jitter/lag burst on the first frames.
       const onPlay = () => { poseBridgeRef.current?.resetSmoothing(); cancelScheduled(); scheduleNext(); };

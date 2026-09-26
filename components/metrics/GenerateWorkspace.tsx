@@ -17,6 +17,7 @@ import { runExportPipeline } from '@/lib/export/exportService';
 import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
 import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
 import { YouTubeUploadOption } from '@/components/shared/YouTubeUploadOption';
+import { videoFileExtForBlob } from '@/lib/recordingUtils';
 
 const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1] as const;
 
@@ -172,11 +173,14 @@ export default function GenerateWorkspace({
     if (!videoUrl) return;
     const a = document.createElement('a');
     a.href = videoUrl;
-    a.download = `anglemotion-replay-${Date.now()}.mp4`;
+    // Extension from the blob, not from intent: when the MP4 conversion fails the
+    // export delivers the recorded WebM, and calling that `.mp4` is what made the
+    // downloaded file unplayable ("not supported") in every OS player.
+    a.download = `anglemotion-replay-${Date.now()}.${videoFileExtForBlob(videoBlob)}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
-  }, [videoUrl]);
+  }, [videoUrl, videoBlob]);
 
   const sectionsForReport = useCallback(() => includedSnaps.map((s, i) => ({
     heading: `${i + 1}. ${s.label} — ${s.timeSec.toFixed(2)}s`,

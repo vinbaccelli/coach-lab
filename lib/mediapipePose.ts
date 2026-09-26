@@ -448,13 +448,31 @@ export function disposeLiveLandmarker(): void {
  * One live detection on the CURRENT video frame, VIDEO running mode.
  *
  * Returns the COCO-17 + named-feet array and the wall-clock cost of the
- * inference, so the caller can enforce its own latency budget (the app treats
- * >55 ms as not-live-viable, matching poseWorker's THUNDER→LIGHTNING threshold).
+ * inference, so the caller can enforce its own latency budget (Canvas treats a
+ * >70 ms steady-state median as not-live-viable; poseWorker's own
+ * THUNDER→LIGHTNING threshold is 55 ms — they are deliberately different models
+ * with different budgets, so do not "reconcile" these two numbers).
+ *
+ * A returned `notReady` means the video had no decodable frame at this instant —
+ * skip the tick. `null` means the landmarker itself is unavailable.
  */
 export async function detectPoseLive(
   video: HTMLVideoElement,
-): Promise<{ kps: PoseKeypoint[] | null; ms: number; delegate: 'GPU' | 'CPU' | null } | null> {
-  if (!video || video.videoWidth < 16 || video.readyState < 2) return null;
+): Promise<{ kps: PoseKeypoint[] | null; ms: number; delegate: 'GPU' | 'CPU' | null; notReady?: true } | null> {
+  // NOT-READY IS NOT A FAILURE.
+  //
+  // This used to return `null` here, exactly as it does when the landmarker fails
+  // to initialise — and the caller could only read `null` as "this device cannot
+  // run the model", which latches the live model off for the session and tells the
+  // coach their hardware is too slow. But `readyState < 2` is an ordinary,
+  // transient state: it happens on every seek, on a buffering stall, on a source
+  // swap and when returning to a throttled tab, and the live loop detects on
+  // exactly those events. One scrub mid-session was enough to permanently disable
+  // a perfectly capable device. A distinct `notReady` marker lets the caller skip
+  // the tick, which is all this condition ever warranted.
+  if (!video || video.videoWidth < 16 || video.readyState < 2) {
+    return { kps: null, ms: 0, delegate: liveDelegateUsed, notReady: true };
+  }
   const lm = await getLiveLandmarker();
   if (!lm) return null;
   // Strictly increasing, and never behind the clock.
