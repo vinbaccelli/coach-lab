@@ -30,6 +30,7 @@ import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { stopAllTracks } from '@/lib/tabCaptureRecording';
+import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import {
   createPipRecorderSurface,
   PIP_SIZE_CONTROLS_ONLY,
@@ -93,6 +94,15 @@ export interface RecordingSources {
   getWebcamStream: () => MediaStream | null;
   getMicStream: () => MediaStream | null;
   /**
+   * The canvas-owned PiP presentation (background-removal cutout, shape, rect,
+   * opacity), when a canvas with a live webcam is mounted. The encode composite
+   * PREFERS this over the raw webcam stream, which is what carries background
+   * removal and the coach's PiP shape/geometry into the recorded file. Read
+   * fresh every painted frame, so toggles mid-recording apply immediately.
+   * Optional — with no presentation the composite falls back to the raw stream.
+   */
+  getWebcamPipPresentation?: () => WebcamPipPresentation | null;
+  /**
    * Fired when the coach closes the floating PiP window mid-recording, which
    * turns Source B off. Lets the page flip its own webcamActive/UI state so the
    * Hub toggle stops claiming "Webcam on". Optional — existing callers that
@@ -126,6 +136,16 @@ interface RecordingContextValue {
   updateWebcamStream: (stream: MediaStream | null) => void;
   /** True while a Document PiP window is open for the active recording. */
   isPipOpen: () => boolean;
+  /**
+   * True while the ACTIVE recording is capturing the whole screen
+   * ('monitor' share). In that mode the screen grab already contains the app's
+   * own canvas, so the canvas keeps drawing its webcam PiP (the only renderer
+   * that honors background removal and the PiP shape), the engine skips its own
+   * webcam stamp, and the Document PiP window runs controls-only so the coach's
+   * camera is never doubled. Reactive state, not a getter: the analysis page
+   * feeds it straight into Canvas as a prop.
+   */
+  isMonitorShare: boolean;
   /**
    * Re-opens a Document PiP window for an ALREADY-RUNNING recording whose PiP
    * was closed. MUST be called from a fresh user gesture. Resolves true if a
@@ -190,6 +210,12 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [completedRecording, setCompletedRecording] = useState<CompletedRecording | null>(null);
+  /**
+   * Whole-screen share for the ACTIVE recording. State (consumed as a Canvas
+   * prop) plus a ref, because paintOnce / the PiP wiring read it outside React.
+   */
+  const [isMonitorShare, setIsMonitorShare] = useState(false);
+  const isMonitorShareRef = useRef(false);
 
   const sourcesRef = useRef<RecordingSources | null>(null);
 
@@ -266,9 +292,13 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     const prev = webcamVideoElRef.current;
     if (prev) { try { prev.srcObject = null; } catch { /* noop */ } }
     // Display first — it is independent of the composite element and must update
-    // even if the composite path bails out below.
-    try { pipSurfaceRef.current?.setCameraStream(stream); } catch (err) {
-      console.warn('[RecordingProvider] PiP camera update failed:', err);
+    // even if the composite path bails out below. EXCEPT in a monitor share,
+    // where the window is deliberately controls-only: the screen grab captures
+    // that window, so a camera in it would double the coach's own canvas PiP.
+    if (!isMonitorShareRef.current) {
+      try { pipSurfaceRef.current?.setCameraStream(stream); } catch (err) {
+        console.warn('[RecordingProvider] PiP camera update failed:', err);
+      }
     }
     if (!stream) { webcamVideoElRef.current = null; return; }
     const v = document.createElement('video');
@@ -297,7 +327,10 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     if (!docPip?.requestWindow) return false;
     // Size for what the window will actually show: a camera view, or controls
     // only. A camera-sized window with no camera in it is the black box.
-    const camAtReopen = sourcesRef.current?.getWebcamStream() ?? null;
+    // Monitor share keeps the window controls-only (see isMonitorShare).
+    const camAtReopen = isMonitorShareRef.current
+      ? null
+      : (sourcesRef.current?.getWebcamStream() ?? null);
     let pw: Window;
     try {
       pw = await docPip.requestWindow(camAtReopen ? PIP_SIZE_WITH_CAMERA : PIP_SIZE_CONTROLS_ONLY);
@@ -340,6 +373,8 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     try { autoMicStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
     autoMicStreamRef.current = null;
     recCanvasRef.current = null;
+    isMonitorShareRef.current = false;
+    setIsMonitorShare(false);
   }, []);
 
   const deliverRecording = useCallback(async (rawBlob: Blob, durationMs: number) => {
@@ -474,6 +509,11 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       | (MediaTrackSettings & { displaySurface?: string })
       | undefined;
     const isMonitor = displaySettings?.displaySurface === 'monitor';
+    // Publish it before the first paint: the analysis page turns this into
+    // Canvas's suppressWebcamPipWhileRecording, and in a monitor share the
+    // canvas PiP must stay visible from the very first recorded frame.
+    isMonitorShareRef.current = isMonitor;
+    setIsMonitorShare(isMonitor);
 
     const displayVideo = document.createElement('video');
     displayVideo.muted = true;
@@ -529,26 +569,114 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         if (displayVideo.readyState >= 2 && displayVideo.videoWidth > 0 && displayVideo.videoHeight > 0) {
           ctx.drawImage(displayVideo, 0, 0, outW, outH);
         }
-        // Source B stamp — skipped in monitor mode (the screen grab already shows the
-        // floating camera window there; stamping again would double the webcam).
+        // ── Source B stamp: the webcam, AS THE COACH SEES IT ────────────────
+        //
+        // Skipped entirely in monitor mode: there the screen grab already
+        // contains the app's own canvas PiP (which the canvas keeps drawing in
+        // that mode precisely so background removal and the PiP shape survive
+        // into the recording), and the floating window is controls-only, so a
+        // stamp here would be the second webcam in the frame.
+        //
+        // Otherwise (tab/window share) this stamp IS the webcam in the file,
+        // and it must reproduce the canvas PiP rather than the raw stream:
+        //   • the background-removal CUTOUT canvas when one is live — this is
+        //     what makes background removal carry into a recording, and what
+        //     makes toggling it mid-recording work (read fresh every frame);
+        //   • the coach's SHAPE (circle / rounded rect), RECT and OPACITY.
+        // Drawing the raw stream into a fixed 16:9 bottom-right box is exactly
+        // what made background removal and the PiP shape "stop working" the
+        // moment recording started.
+        const presentation = sourcesRef.current?.getWebcamPipPresentation?.() ?? null;
+        const cutoutCanvas = presentation?.getCutoutCanvas() ?? null;
+        const pipMode = presentation?.getPipMode() ?? 'rectangle';
         // readyState AND non-zero dimensions: a freshly created <video> (e.g. from
         // updateWebcamStream) can be briefly undecodable, and drawImage on a
         // zero-dimension source throws InvalidStateError.
-        if (
-          !isMonitor &&
-          webcamVideo &&
+        const rawUsable =
+          !!webcamVideo &&
           webcamVideo.readyState >= 2 &&
           webcamVideo.videoWidth > 0 &&
-          webcamVideo.videoHeight > 0
-        ) {
-          const pipW = Math.round(outW * 0.22);
-          const pipH = Math.round(pipW * (9 / 16));
-          const margin = Math.round(outW * 0.02);
-          const px = outW - pipW - margin;
-          const py = outH - pipH - margin;
-          ctx.fillStyle = 'rgba(0,0,0,0.35)';
-          ctx.fillRect(px - 4, py - 4, pipW + 8, pipH + 8);
-          ctx.drawImage(webcamVideo, px, py, pipW, pipH);
+          webcamVideo.videoHeight > 0;
+        // A cutout still warming up must never blank the webcam out of the file.
+        // webcamVideo is ALSO the camera-on signal: the PiP close handler nulls
+        // it to turn Source B off, and that must win immediately even if the
+        // cutout canvas still holds its last masked frame.
+        const source: HTMLCanvasElement | HTMLVideoElement | null =
+          webcamVideo ? (cutoutCanvas ?? (rawUsable ? webcamVideo : null)) : null;
+        const useCutout = source != null && source === cutoutCanvas;
+        if (!isMonitor && source && pipMode !== 'hidden') {
+          // Geometry from the canvas PiP, scaled into this composite. The
+          // fallback (no canvas mounted — e.g. recording from another route)
+          // keeps the historic corner placement but at the canvas PiP's 11/9
+          // aspect, so the webcam is never stretched differently than on screen.
+          const rect = presentation?.getNormalizedRect() ?? null;
+          let pipW: number;
+          let pipH: number;
+          let px: number;
+          let py: number;
+          if (rect) {
+            pipW = Math.max(1, Math.round(rect.w * outW));
+            // Height from the PUBLISHED ASPECT, never from rect.h * outH: the
+            // canvas and this composite are different shapes, so scaling w and
+            // h independently would squash a circular PiP into an ellipse.
+            const aspect = presentation?.getAspect() ?? 11 / 9;
+            pipH = Math.max(1, Math.round(pipW / (aspect > 0 ? aspect : 11 / 9)));
+            // Keep it inside the frame — the aspect-derived height can differ
+            // from the space the normalized rect left at the bottom.
+            px = Math.min(Math.max(0, Math.round(rect.x * outW)), Math.max(0, outW - pipW));
+            py = Math.min(Math.max(0, Math.round(rect.y * outH)), Math.max(0, outH - pipH));
+          } else {
+            pipW = Math.round(outW * 0.22);
+            pipH = Math.round(pipW * (9 / 11));
+            const margin = Math.round(outW * 0.02);
+            px = outW - pipW - margin;
+            py = outH - pipH - margin;
+          }
+          ctx.save();
+          ctx.globalAlpha = presentation?.getOpacity() ?? 1;
+          // Mirrored ONLY for the cutout, matching the canvas (the cutout is the
+          // coach's selfie view; the raw stream is drawn unmirrored there too).
+          const drawSource = () => {
+            if (useCutout) {
+              ctx.save();
+              ctx.translate(px + pipW, py);
+              ctx.scale(-1, 1);
+              ctx.drawImage(source, 0, 0, pipW, pipH);
+              ctx.restore();
+            } else {
+              ctx.drawImage(source, px, py, pipW, pipH);
+            }
+          };
+          if (useCutout) {
+            // A cutout is its own silhouette: no clip, no frame, and no backing
+            // plate (that dark plate would box the transparent background in).
+            drawSource();
+          } else if (pipMode === 'circle') {
+            const r = Math.min(pipW, pipH) / 2;
+            ctx.beginPath();
+            ctx.arc(px + pipW / 2, py + pipH / 2, r, 0, Math.PI * 2);
+            ctx.clip();
+            drawSource();
+          } else {
+            // Same 10px corner radius and hairline frame the canvas PiP uses —
+            // both surfaces are ~1280px wide, so the radius reads identically.
+            const roundPip = () => {
+              ctx.beginPath();
+              if (ctx.roundRect) ctx.roundRect(px, py, pipW, pipH, 10);
+              else ctx.rect(px, py, pipW, pipH);
+            };
+            ctx.save();
+            roundPip();
+            ctx.clip();
+            drawSource();
+            ctx.restore();
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+            ctx.lineWidth = 2;
+            roundPip();
+            ctx.stroke();
+          }
+          ctx.restore();
         }
         // Watermark LAST so it sits above the screen grab and the webcam stamp.
         // Bottom-LEFT: the PiP above owns the bottom-right corner here, which is
@@ -579,7 +707,11 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       pipRafRef.current = pw.requestAnimationFrame(loop);
       // Camera + controls + live timer inside the PiP window, wired to the existing API.
       try { pipSurfaceRef.current?.teardown(); } catch { /* noop */ }
-      pipSurfaceRef.current = createPipRecorderSurface(pw, camStream, {
+      // Monitor share: controls-only, NO camera. The screen grab captures this
+      // window, and the coach's webcam is already in the frame via the canvas
+      // PiP (which is the renderer that honors background removal and shape) —
+      // a camera here would be the second, raw copy.
+      pipSurfaceRef.current = createPipRecorderSurface(pw, isMonitor ? null : camStream, {
         onPause: () => pauseRecordingRef.current(),
         onStop: () => { void stopRecordingRef.current(); },
         getDurationMs: () => activeDurationMs(),
@@ -862,6 +994,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         registerWebcamVideo,
         updateWebcamStream,
         isPipOpen,
+        isMonitorShare,
         reopenPipWindow,
       }}
     >

@@ -236,3 +236,50 @@ for the user and not for you, establish *which branch each of you actually ran*
 before investigating anything else — here, one line of the log
 (`ready in 2779ms (webgpu...)` against `(wasm...)`) named the entire difference
 and was present from the first report.
+
+---
+
+## 004 — A feature "stopped working when recording started" because a second renderer took over
+
+*2026-09-26 · branch `claude/dreamy-lamport-urns2o`*
+
+### Symptom
+
+Webcam background removal worked in the Recording Hub preview and appeared to
+stop the instant recording began; the PiP shape/geometry was wrong in the
+recorded file too. Reported as two bugs (background removal, PiP rendering), and
+an earlier round had proposed a fix for the first one alone.
+
+### Verified root cause
+
+One line: `components/Canvas.tsx` gated the canvas-drawn webcam PiP on
+`!isRecordingRef.current`. That PiP was the *only* renderer that knew about
+background removal (`webcamMaskRef`), the circle/rect shape, the coach's dragged
+rect and the opacity. Suppressing it handed the webcam to two renderers that had
+never heard of any of those settings: the encode composite's Source B stamp in
+`contexts/RecordingContext.tsx` (raw stream, hard-coded 16:9 bottom-right box)
+and the Document PiP window's raw `<video>` in `lib/pipRecorderSurface.ts`.
+
+The MediaPipe segmenter itself never stopped — its effect depends only on
+`[webcamCutout, webcamActive]`, so fresh masked frames were being produced the
+whole time with nobody consuming them. Nothing was broken; the consumer had been
+switched off.
+
+### Fix
+
+Canvas publishes its live PiP presentation (cutout canvas, shape, normalized
+rect, aspect, opacity) through `lib/webcamPipPresentation.ts`; the composite
+reads it once per painted frame and reproduces it. Whole-screen shares keep the
+canvas PiP visible instead (the screen grab already contains it) and run the
+floating window controls-only, so exactly one webcam reaches the file in every
+share mode.
+
+### Class of mistake
+
+**Two renderers for one feature, and only one of them knows the settings.** The
+tell was the phrasing: "works in preview, stops when recording starts" is almost
+never a feature breaking — it is a *different code path taking over*, with its
+own, poorer idea of what to draw. Find the handover before debugging the
+feature. The corollary: when a display path is suppressed "to avoid doubling",
+whatever replaces it inherits every setting the suppressed path owned, and
+nothing enforces that — the settings simply disappear, silently, with no error.

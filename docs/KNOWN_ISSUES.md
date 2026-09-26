@@ -391,3 +391,65 @@ every other migration this session.
 
 **Severity:** high — the coach services feature cannot work until the names
 agree, and the failure is a 500 on save.
+
+---
+
+## 010 — Recorded PiP position is proportional, not pixel-exact, in tab/window share
+
+**Found:** 2026-09-26, while fixing background removal during recording (items D/E).
+
+**Symptom.** In a tab or window screen share, the webcam PiP in the recorded file
+sits at roughly — not exactly — the spot the coach dragged it to on the canvas.
+Size and shape are correct; the corner offset can be off by the height of the
+app's own chrome.
+
+**Verified root cause.** The composite stamps the PiP using a rect normalized
+against the *drawing canvas* (`getNormalizedRect`, `lib/webcamPipPresentation.ts`),
+then scales it onto the whole captured frame. The canvas is only part of that
+frame (toolbar rail, header), and the browser exposes the shared surface's *type*
+(`displaySurface`) but never its identity or the app's offset inside it, so the
+true mapping is not computable. Aspect is preserved via `getAspect`, so the shape
+is right; only the origin is approximate.
+
+**Fault assessment.** Inherent to compositing a webcam into a screen grab whose
+geometry the page cannot know. Not a regression — the previous behavior was a
+hard-coded bottom-right box, which was further off. Whole-screen ('monitor')
+share is exact, because there the coach's own canvas PiP is what gets recorded.
+
+**Proposed fix.** None worth making. If pixel-exactness is ever wanted for tab
+share, it needs the canvas's rect within the captured surface, which would mean
+measuring the canvas against the viewport and assuming the shared surface *is*
+this tab — an assumption the browser will not confirm.
+
+**Severity:** low — cosmetic, sub-chrome offset; shape, size and opacity are correct.
+
+---
+
+## 011 — Closing the floating window still turns the webcam off in a whole-screen recording
+
+**Found:** 2026-09-26, while implementing E2(a) (monitor-share PiP handling).
+
+**Symptom.** During a whole-screen recording the floating window is deliberately
+controls-only (Pause/Stop/timer, no camera). Closing it nevertheless turns the
+webcam off, which now also removes the coach's PiP from the canvas — and so from
+the recording.
+
+**Verified root cause.** The `pagehide` handler in `contexts/RecordingContext.tsx`
+implements the documented CORE RULE "closing the PiP window turns the webcam
+region off (but never stops the recording)": it nulls the Source B element and
+fires `onWebcamClosedByPip`, which the analysis page wires to `stopWebcam`. That
+contract was written when the window always showed the camera, so closing it read
+as "turn my camera off". With a controls-only window the gesture no longer
+carries that meaning.
+
+**Fault assessment.** Pre-existing contract, newly visible in monitor share. Left
+alone deliberately: changing what closing the window means is a behavior decision
+for Vin, not a drive-by edit inside a bug fix.
+
+**Proposed fix.** In monitor share, treat closing the window as "hide the
+controls" only — skip the `onWebcamClosedByPip` call and leave the webcam on
+(the recording already continues either way). Needs a decision on how the coach
+then stops the recording, since the floating Stop button goes with the window.
+
+**Severity:** low-moderate — recoverable (re-toggle the webcam), but it silently
+drops the coach from the rest of the recording.

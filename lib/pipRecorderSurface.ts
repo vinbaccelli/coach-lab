@@ -212,6 +212,12 @@ export function createPipRecorderSurface(
 
   applyLayout();
   setCameraStream(webcamStream);
+  // Built with no camera: make sure the window is the control-bar size. The
+  // caller normally asks for that size up front, but it cannot always know —
+  // a monitor share is only identified AFTER the window is opened (the share
+  // picker runs later), and that window must not stay camera-sized around a
+  // controls-only layout.
+  if (!cam) resizeWindow(PIP_SIZE_CONTROLS_ONLY);
 
   const tick = () => {
     timer.textContent = formatTime(Math.floor(cb.getDurationMs() / 1000));
