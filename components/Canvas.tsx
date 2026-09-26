@@ -1323,7 +1323,7 @@ function letterboxRect(W: number, H: number, vW: number, vH: number) {
  *
  * This is the minimal fix. The structural one is to store annotation
  * coordinates video-normalized so no re-projection is ever needed — see
- * docs/KNOWN_ISSUES.md #004, which also covers the case this does NOT fix
+ * docs/KNOWN_ISSUES.md #010, which also covers the case this does NOT fix
  * (snapshots persisted via exportStrokes hold canvas pixels too).
  */
 interface LetterboxRemap { odx: number; ody: number; ndx: number; ndy: number; s: number }
