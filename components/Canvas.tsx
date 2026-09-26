@@ -1287,6 +1287,85 @@ function applyZoomPanAt(
   panYRef.current = c.y;
 }
 
+/**
+ * The video's letterbox rect inside a W×H logical canvas — the SAME rule the
+ * render loop applies before it draws the frame. Kept as one function so the
+ * stroke re-projection below can never drift from what is actually painted.
+ */
+function letterboxRect(W: number, H: number, vW: number, vH: number) {
+  const scale = Math.min(W / vW, H / vH);
+  const dw = vW * scale;
+  const dh = vH * scale;
+  return { dx: (W - dw) / 2, dy: (H - dh) / 2, dw, dh };
+}
+
+/**
+ * Re-projection of canvas-space annotation geometry from one letterbox rect to
+ * another.
+ *
+ * WHY THIS EXISTS. Strokes and angle measurements store ABSOLUTE logical-canvas
+ * coordinates (see StrokeLine / AngleMeas above) while the video is re-fitted to
+ * the canvas on every resize. So the moment the analysis panel changes width —
+ * expanding the toolbar labels, collapsing the rail, a window resize, a phone
+ * rotation, adding the B panel — the frame moves underneath marks that do not,
+ * and every annotation desyncs from the thing it was drawn on. Measured at 240px
+ * → 60px of toolbar: the marks stayed at identical canvas pixels while the video
+ * rect went 1260→1440 wide, drifting the marks ~5.5% of frame width.
+ *
+ * The scale is UNIFORM by construction: both rects have the video's aspect
+ * ratio, so dw/dw' equals dh/dh'. That is what makes it safe to remap an
+ * AngleMeas without recomputing `deg` — a uniform similarity transform
+ * preserves angles exactly.
+ *
+ * NOT re-projected: `lw` and `fontSize`, which are style rather than geometry.
+ * Eraser-dot radii ARE scaled, because an unscaled radius would resize the hole
+ * relative to the mark it was cut from and re-expose erased pixels.
+ *
+ * This is the minimal fix. The structural one is to store annotation
+ * coordinates video-normalized so no re-projection is ever needed — see
+ * docs/KNOWN_ISSUES.md #004, which also covers the case this does NOT fix
+ * (snapshots persisted via exportStrokes hold canvas pixels too).
+ */
+interface LetterboxRemap { odx: number; ody: number; ndx: number; ndy: number; s: number }
+
+function remapPt(p: Pt, m: LetterboxRemap): Pt {
+  return { x: m.ndx + (p.x - m.odx) * m.s, y: m.ndy + (p.y - m.ody) * m.s };
+}
+
+function remapEraserDots(dots: EraserDot[] | undefined, m: LetterboxRemap): EraserDot[] | undefined {
+  if (!dots) return dots;
+  return dots.map((d) => ({ x: m.ndx + (d.x - m.odx) * m.s, y: m.ndy + (d.y - m.ody) * m.s, radius: d.radius * m.s }));
+}
+
+function remapStroke(st: Stroke, m: LetterboxRemap): Stroke {
+  switch (st.tool) {
+    case 'pen':
+      return { ...st, pts: st.pts.map((p) => remapPt(p, m)), eraserStrokes: remapEraserDots(st.eraserStrokes, m) };
+    case 'swingPath':
+    case 'manualSwing':
+      return { ...st, pts: st.pts.map((p) => remapPt(p, m)) };
+    case 'jointChain':
+      return { ...st, nodes: st.nodes.map((p) => remapPt(p, m)) };
+    case 'line':
+    case 'arrow':
+    case 'arrowAngle':
+      return { ...st, p1: remapPt(st.p1, m), p2: remapPt(st.p2, m), eraserStrokes: remapEraserDots(st.eraserStrokes, m) };
+    case 'circle':
+    case 'bodyCircle':
+    case 'rect':
+    case 'triangle': {
+      const c = remapPt({ x: st.cx, y: st.cy }, m);
+      return { ...st, cx: c.x, cy: c.y, rx: st.rx * m.s, ry: st.ry * m.s, eraserStrokes: remapEraserDots(st.eraserStrokes, m) };
+    }
+    case 'text':
+      return { ...st, pos: remapPt(st.pos, m) };
+  }
+}
+
+function remapAngle(a: AngleMeas, m: LetterboxRemap): AngleMeas {
+  return { ...a, v: remapPt(a.v, m), p1: remapPt(a.p1, m), p2: remapPt(a.p2, m) };
+}
+
 function drawCircleStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeEllipse,
@@ -2158,6 +2237,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const historyIdxRef   = useRef<number>(0);
     const activeStrokeRef = useRef<Stroke | null>(null);
     const angleMeasRef    = useRef<AngleMeas[]>([]);
+    /**
+     * Canvas logical size + video dimensions that the coordinates currently in
+     * `strokesRef` / `angleMeasRef` / `historyRef` are valid for. Written only
+     * by the canvas-size effect, which compares it against the new size to
+     * re-project annotations onto the frame's new position. null whenever no
+     * video frame is being painted, since there is then no frame to anchor to.
+     */
+    const strokeAnchorRef = useRef<{ w: number; h: number; vW: number; vH: number } | null>(null);
     const liveAngleRef    = useRef<LiveAngle | null>(null);
     const anglePhaseRef   = useRef<0 | 1 | 2>(0);
     const angleVRef       = useRef<Pt | null>(null);
@@ -4570,7 +4657,96 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       canvas.width = Math.round(containerWidth * dpr);
       canvas.height = Math.round(containerHeight * dpr);
       renderDirtyRef.current = true;
-    }, [containerWidth, containerHeight]);
+
+      // ── Keep annotations glued to the video frame across a resize ─────────
+      // Strokes and angles hold absolute canvas coordinates, and the line above
+      // just changed what those coordinates mean: the video re-fits to the new
+      // canvas, so without this every mark slides relative to the frame it was
+      // drawn on. Re-project them through old-rect → new-rect.
+      //
+      // THE OLD SIZE COMES FROM THIS EFFECT'S OWN PREVIOUS RUN, deliberately —
+      // NOT from videoBoundsRef. This is a passive useEffect, so the browser
+      // can paint between React's commit and this callback, and the rAF render
+      // loop then rewrites videoBoundsRef to the POST-resize rect. Reading it
+      // here measured a zero-width change and silently did nothing (verified:
+      // the marks did not move). The size recorded below is immune to that,
+      // because nothing else writes it.
+      const vid = videoRef.current;
+      const nowW = cssW(canvas);
+      const nowH = cssH(canvas);
+      const vW = vid?.videoWidth ?? 0;
+      const vH = vid?.videoHeight ?? 0;
+      // BOTH painting modes count. A plain HTML5 upload is shown as a NATIVE
+      // <video> UNDERLAY, not painted onto the canvas, so `renderVideo` is
+      // false for it (app/analysis/page.tsx:6716 paintVideoOnCanvasA) — gating
+      // on renderVideo alone made this whole block a no-op for the most common
+      // case, which is exactly the case reported. The two modes letterbox with
+      // the identical formula (components/Canvas.tsx:4981 and :5160), so one
+      // rect calculation serves both.
+      const hasVideo = !!(
+        vid && vW > 0 && vH > 0 &&
+        ((renderVideoRef.current && vid.readyState >= 1) || nativeVideoUnderlayRef.current)
+      );
+      const prevAnchor = strokeAnchorRef.current;
+      strokeAnchorRef.current = hasVideo ? { w: nowW, h: nowH, vW, vH } : null;
+      // Same video on both sides, or there is no shared frame to anchor to —
+      // a clip swap is not a resize, and the no-video fallback rect is not
+      // aspect-preserving, so a remap across it would skew angles.
+      if (
+        hasVideo && prevAnchor &&
+        prevAnchor.vW === vW && prevAnchor.vH === vH &&
+        prevAnchor.w > 0 && prevAnchor.h > 0 &&
+        (Math.abs(nowW - prevAnchor.w) > 0.5 || Math.abs(nowH - prevAnchor.h) > 0.5)
+      ) {
+        const prevRect = letterboxRect(prevAnchor.w, prevAnchor.h, vW, vH);
+        const nextRect = letterboxRect(nowW, nowH, vW, vH);
+        const m: LetterboxRemap = {
+          odx: prevRect.dx, ody: prevRect.dy,
+          ndx: nextRect.dx, ndy: nextRect.dy,
+          s: nextRect.dw / prevRect.dw,
+        };
+        strokesRef.current = strokesRef.current.map((st) => remapStroke(st, m));
+        angleMeasRef.current = angleMeasRef.current.map((a) => remapAngle(a, m));
+        // Undo/redo snapshots hold the same absolute coordinates, so an undo
+        // after a resize would otherwise restore the pre-resize misalignment.
+        historyRef.current = historyRef.current.map((h) => ({
+          strokes: h.strokes.map((st) => remapStroke(st, m)),
+          angles: h.angles.map((a) => remapAngle(a, m)),
+        }));
+        renderDirtyRef.current = true;
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [containerWidth, containerHeight, videoRef]);
+
+    /**
+     * Seed the re-projection anchor the moment a clip's dimensions are known.
+     *
+     * The effect above only writes the anchor when the panel RESIZES, so on a
+     * fresh load it stayed null until the first resize — and that first resize
+     * is precisely the one that then could not be corrected. Measured: with the
+     * toolbar animating 1260→1300→…→1440, the 1260→1300 step was lost and left
+     * a 1300/1260 = 3.2% residual drift (predicted u0 0.4293, measured 0.4292).
+     * Seeding on metadata closes it.
+     */
+    useEffect(() => {
+      const v = videoRef.current;
+      if (!v) return;
+      const seed = () => {
+        const canvas = canvasRef.current;
+        if (!canvas || v.videoWidth <= 0 || v.videoHeight <= 0) return;
+        strokeAnchorRef.current = {
+          w: cssW(canvas), h: cssH(canvas), vW: v.videoWidth, vH: v.videoHeight,
+        };
+      };
+      seed();
+      v.addEventListener('loadedmetadata', seed);
+      v.addEventListener('loadeddata', seed);
+      return () => {
+        v.removeEventListener('loadedmetadata', seed);
+        v.removeEventListener('loadeddata', seed);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [videoRef]);
 
     /**
      * Keep `dockTopRef` in step with the playback dock.

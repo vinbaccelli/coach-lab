@@ -236,3 +236,51 @@ for the user and not for you, establish *which branch each of you actually ran*
 before investigating anything else — here, one line of the log
 (`ready in 2779ms (webgpu...)` against `(wasm...)`) named the entire difference
 and was present from the first report.
+
+---
+
+## 004 — A fix that type-checks, reads correctly, and does nothing
+
+**Date:** 2026-09-26. Found while fixing the toolbar-resize annotation desync
+(KNOWN_ISSUES #010).
+
+**Symptom.** Two consecutive attempts at the re-projection fix compiled clean
+(`tsc` exit 0), read correctly on the page, and changed the measured outcome by
+exactly zero. The marks drifted the same 0.0554 of frame width before and after
+each attempt — byte-identical numbers, three runs apart.
+
+**Verified root cause — two different silent no-ops, stacked.**
+
+1. The first version read the pre-resize letterbox from `videoBoundsRef`. That
+   ref is rewritten by the rAF render loop, and the resize handler is a PASSIVE
+   `useEffect`, so the browser painted between React's commit and the callback.
+   By the time the code ran, `videoBoundsRef` already held the POST-resize rect,
+   the old-vs-new delta measured zero, and the guard skipped the remap.
+
+2. The second version gated on `renderVideoRef.current`. For a plain HTML5
+   upload — the most common case, and the reported one — that flag is FALSE:
+   the clip is shown as a native `<video>` underlay rather than painted onto
+   the canvas (`paintVideoOnCanvasA`, app/analysis/page.tsx:6716). The whole
+   block was dead for exactly the scenario it was written for.
+
+Neither could be seen from the diff. Both were found in one shot by a
+five-line `console.log` inside the effect, printing what it actually measured:
+`hasVideo:false, prevAnchor:null` is unambiguous where a code read is not.
+
+**Class of mistake.** *Treating "it compiles and the logic reads right" as
+evidence that it runs.* Same family as #003 (a capability probe answering the
+wrong question) — the check performed was not the check needed. A guard that
+is never true and a guard that is always true both produce a clean build and a
+silent no-op.
+
+**What to do instead.** For any fix whose effect is a runtime state change,
+measure the SAME NUMBER before and after in a real browser. If the number is
+unchanged, the fix did not run — do not reason about why it should have.
+Instrument the branch and read what it decided. Here that also caught a third,
+smaller defect the numbers exposed: the corrected version still left a 3.2%
+residual, which the log traced to the very first resize step happening before
+the anchor was seeded (predicted 0.4293, measured 0.4292 — an exact match that
+confirmed the cause before the fix was written).
+
+**Final state:** drift 0.0554 → 0.0005 of frame width, the residual being
+red-pixel bounding-box quantisation at the new scale rather than real error.

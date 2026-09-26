@@ -1467,7 +1467,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
-          <BackHeader chrome={chrome} title="Draw" icon={<Pen size={18} />} onBack={() => { onExitDrawContext?.(); setTool('select'); }} />
+          {/*
+            Back LEAVES THE TOOL ALONE. It used to setTool('select'), which
+            silently disarmed the tool the coach had just picked: step out of
+            Draw for any reason and the next drag on the canvas did nothing at
+            all. The draw CONTEXT still exits (that is the style-panel state);
+            only the tool survives.
+          */}
+          <BackHeader chrome={chrome} title="Draw" icon={<Pen size={18} />} onBack={() => { onExitDrawContext?.(); }} />
           {/* V1 spec: Style sits at the TOP of the Draw list (set the look first). */}
           {/*
             Opening Style also ENTERS style mode, so the coach can click a mark
@@ -1659,51 +1666,75 @@ export default function ToolPalette(props: ToolPaletteProps) {
   }
 
   if (top === 'pan') {
+    /**
+     * The pan tool is armed only when it is the ACTIVE TOOL and its drag
+     * preference is on. Nothing else on this screen sets the tool, so this is
+     * the whole of "pan is claiming the canvas".
+     */
+    const panDragArmed = activeTool === 'pan' && panDragEnabled;
     return (
       <div style={shellStyle}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
           {/*
-            Back RESTORES SELECT. Leaving the pan tool has to hand gestures back
-            to something usable — dropping out of pan into pan would be the same
-            implicit-state trap this tool exists to remove.
+            Back restores SELECT only when pan actually owns the canvas.
+            Leaving the armed pan tool has to hand gestures back to something
+            usable — but an unconditional reset was the bug: a coach who came
+            here purely to zoom left with their drawing tool silently replaced.
           */}
-          <BackHeader chrome={chrome} title="Pan / Zoom" icon={<Hand size={18} />} onBack={() => setTool('select')} />
+          <BackHeader chrome={chrome} title="Pan / Zoom" icon={<Hand size={18} />} onBack={() => { if (activeTool === 'pan') setTool('select'); }} />
           {/*
             This screen owns ALL viewport navigation: drag, zoom in, zoom out
             and reset. A pan tool that only panned would leave the coach hunting
             for zoom somewhere else, which is how the implicit behaviour grew in
-            the first place.
+            the first place. Zooming is a VIEWPORT action though — the three
+            zoom rows deliberately do not touch the active tool.
+          */}
+          {/*
+            ARMED = the pan tool is active AND its drag preference is on. That
+            pair is the single thing this row toggles, and it is the ONLY place
+            in this screen that touches the tool — see the Zoom rows below.
+            Label and highlight both read the armed state rather than the bare
+            preference, so "Drag: On" can never be shown while a drag would in
+            fact draw.
           */}
           <Row chrome={chrome}
             k="pan-drag"
-            active={activeTool === 'pan' && panDragEnabled}
+            active={panDragArmed}
             icon={<Hand size={18} />}
             tooltip="Drag the frame to move it. Turn off to use the zoom buttons without moving the frame."
-            label={panDragEnabled ? 'Drag: On' : 'Drag: Off'}
-            onPress={() => { setTool('pan'); onPanDragToggle?.(); }}
+            label={panDragArmed ? 'Drag: On' : 'Drag: Off'}
+            onPress={() => {
+              if (panDragArmed) {
+                if (panDragEnabled) onPanDragToggle?.();
+                setTool('select');
+              } else {
+                if (!panDragEnabled) onPanDragToggle?.();
+                setTool('pan');
+              }
+            }}
           />
           <Row chrome={chrome}
             k="pan-zin"
             icon={<ZoomIn size={18} />}
             tooltip="Zoom in"
             label="Zoom In"
-            onPress={() => { setTool('pan'); onZoomIn?.(); }}
+            onPress={() => onZoomIn?.()}
           />
           <Row chrome={chrome}
             k="pan-zout"
             icon={<ZoomOut size={18} />}
             tooltip="Zoom out"
             label="Zoom Out"
-            onPress={() => { setTool('pan'); onZoomOut?.(); }}
+            onPress={() => onZoomOut?.()}
           />
           <Row chrome={chrome}
             k="pan-home"
             icon={<Home size={18} />}
             tooltip="Reset to 100% and re-centre the frame"
             label="Reset View"
-            onPress={() => { setTool('pan'); onZoomReset?.(); }}
+            onPress={() => onZoomReset?.()}
           />
         </ToolbarScrollArea>
         <GlobalActionsFooter chrome={chrome} />
@@ -1771,7 +1802,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           )}
 
           {/* Draw tools (all available inside Metrics) */}
-          <Row chrome={chrome} k="m-draw" icon={<Pen size={metricIcon} />} tooltip="All drawing and measurement tools (pen, angle, ruler, etc.)" label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('pen'); push('draw'); }} />
+          <Row chrome={chrome} k="m-draw" icon={<Pen size={metricIcon} />} tooltip="All drawing and measurement tools (pen, angle, ruler, etc.)" label="Draw" onPress={() => { if (!DRAW_SCREEN_TOOLS.includes(activeTool)) setTool('line'); push('draw'); }} />
 
           {/* Activate Data Column */}
           {onDataColumnToggle && (
@@ -1823,13 +1854,20 @@ export default function ToolPalette(props: ToolPaletteProps) {
       <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
         <ToolbarLead chrome={chrome} />
         <Row chrome={chrome} k="sel-h" active={activeTool === 'select'} icon={<MousePointer2 size={denseMobile ? 16 : 18} />} tooltip="Select and move drawn shapes" label="Select" onPress={() => { onExitDrawContext?.(); setTool('select'); }} />
+        {/*
+          Opening the screen is NAVIGATION, not a tool change. It used to
+          setTool('pan') here, so merely visiting Pan/Zoom to press Zoom In
+          threw away whatever drawing tool the coach had armed — and the next
+          drag on the canvas then did nothing at all. Only the drag toggle
+          inside the screen claims the tool now.
+        */}
         <Row chrome={chrome}
           k="pan-h"
           active={activeTool === 'pan'}
           icon={<Hand size={denseMobile ? 16 : 18} />}
           tooltip="Pan and zoom the video frame"
           label="Pan / Zoom"
-          onPress={() => { onExitDrawContext?.(); setTool('pan'); push('pan'); }}
+          onPress={() => { onExitDrawContext?.(); push('pan'); }}
         />
         <Row chrome={chrome}
           k="met-h"
