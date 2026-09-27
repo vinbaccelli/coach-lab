@@ -11,7 +11,7 @@ function formatTime(seconds: number): string {
 }
 
 export default function FloatingRecordingIndicator() {
-  const { recState, elapsed, stopRecording, pauseRecording } = useRecording();
+  const { recState, elapsed, stopRecording, pauseRecording, inlineRecordingControlsPresent } = useRecording();
   const [stopping, setStopping] = useState(false);
 
   const handleStop = useCallback(async () => {
@@ -21,6 +21,12 @@ export default function FloatingRecordingIndicator() {
   }, [stopRecording]);
 
   if (recState !== 'recording' && recState !== 'paused') return null;
+  // A page-level control bar (components/RecordingControlBar.tsx on the
+  // analysis page) is on screen and owns Pause/Resume/Stop. Two competing Stop
+  // buttons is worse than one, and that bar sits in page chrome instead of
+  // floating over the workspace, so this widget stands down. It comes straight
+  // back on any route that has no such bar.
+  if (inlineRecordingControlsPresent) return null;
 
   const isRecording = recState === 'recording';
 

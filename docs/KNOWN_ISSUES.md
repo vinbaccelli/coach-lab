@@ -425,7 +425,7 @@ this tab — an assumption the browser will not confirm.
 
 ---
 
-## 011 — Closing the floating window still turns the webcam off in a whole-screen recording
+## 011 — Closing the floating window still turns the webcam off in a whole-screen recording — RESOLVED
 
 **Found:** 2026-09-26, while implementing E2(a) (monitor-share PiP handling).
 
@@ -442,14 +442,21 @@ contract was written when the window always showed the camera, so closing it rea
 as "turn my camera off". With a controls-only window the gesture no longer
 carries that meaning.
 
-**Fault assessment.** Pre-existing contract, newly visible in monitor share. Left
-alone deliberately: changing what closing the window means is a behavior decision
-for Vin, not a drive-by edit inside a bug fix.
-
-**Proposed fix.** In monitor share, treat closing the window as "hide the
-controls" only — skip the `onWebcamClosedByPip` call and leave the webcam on
-(the recording already continues either way). Needs a decision on how the coach
-then stops the recording, since the floating Stop button goes with the window.
+**Fault assessment.** Pre-existing contract, newly visible in monitor share.
 
 **Severity:** low-moderate — recoverable (re-toggle the webcam), but it silently
-drops the coach from the rest of the recording.
+dropped the coach from the rest of the recording.
+
+**RESOLVED** (2026-09-27). The `pagehide` handler now branches on share mode.
+Tab/window share is unchanged — the window IS the camera view there, so closing
+it still reads as "turn my camera off". In monitor share the window is
+controls-only, so closing it is treated as "hide these controls": the Source B
+element is left alone and `onWebcamClosedByPip` is not fired, so the webcam —
+and with it the canvas PiP that a whole-screen recording actually captures —
+survives.
+
+The open question this depended on ("how does the coach stop the recording once
+the window is gone?") is answered by `components/RecordingControlBar.tsx`:
+Pause / Resume / Stop now live in the analysis page's own top chrome for the
+duration of any recording, reachable from every tool and panel, so closing the
+floating window never removes the only way to stop.

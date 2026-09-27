@@ -20,6 +20,7 @@ import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
 import { useRecording, RECORDING_AUDIO_CONSTRAINTS } from '@/contexts/RecordingContext';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
+import RecordingControlBar from '@/components/RecordingControlBar';
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
 import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModal';
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
@@ -6859,6 +6860,15 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         muted
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
       />
+
+      {/*
+        Recording controls — page chrome ABOVE the workspace, present only while
+        a recording is active. In normal flow (flex: 0 0 auto), so the row below
+        shrinks by its height and the video/canvas is never covered. Reachable
+        from every tool/panel because it lives on the page root, not inside the
+        Recording Hub. Buttons stack vertically — see RecordingControlBar.
+      */}
+      <RecordingControlBar />
 
       {/* ── Main layout: toolbar rail + canvas (no overlay) ── */}
       <div

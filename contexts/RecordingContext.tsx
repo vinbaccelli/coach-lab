@@ -137,6 +137,15 @@ interface RecordingContextValue {
   /** True while a Document PiP window is open for the active recording. */
   isPipOpen: () => boolean;
   /**
+   * Called by a page-level (in-flow, non-floating) recording control bar while
+   * it is on screen; returns its own unregister. Ref-counted, so the floating
+   * indicator stands down for exactly as long as a page owns the controls and
+   * the coach is never shown two competing Stop buttons.
+   */
+  registerInlineRecordingControls: () => () => void;
+  /** True while such a page-level control bar is mounted and visible. */
+  inlineRecordingControlsPresent: boolean;
+  /**
    * True while the ACTIVE recording is capturing the whole screen
    * ('monitor' share). In that mode the screen grab already contains the app's
    * own canvas, so the canvas keeps drawing its webcam PiP (the only renderer
@@ -216,6 +225,12 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
    */
   const [isMonitorShare, setIsMonitorShare] = useState(false);
   const isMonitorShareRef = useRef(false);
+  /**
+   * How many page-level control bars are currently on screen. Ref-counted
+   * rather than a boolean so a remount cannot leave the floating indicator
+   * permanently hidden.
+   */
+  const [inlineControlsCount, setInlineControlsCount] = useState(0);
 
   const sourcesRef = useRef<RecordingSources | null>(null);
 
@@ -267,6 +282,11 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const clearCompletedRecording = useCallback(() => setCompletedRecording(null), []);
+
+  const registerInlineRecordingControls = useCallback(() => {
+    setInlineControlsCount((n) => n + 1);
+    return () => setInlineControlsCount((n) => Math.max(0, n - 1));
+  }, []);
 
   /** Legacy no-op kept so PersistentWebcamOverlay compiles/behaves (it hides itself when webcamStream is null). */
   const registerWebcamVideo = useCallback((_el: HTMLVideoElement | null) => {}, []);
@@ -724,15 +744,30 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       // to ~1fps while hidden and recovers when the AM tab is foregrounded — accepted
       // degradation).
       pw.addEventListener('pagehide', () => {
-        webcamVideoElRef.current = null; // stop drawing Source B — camera off
+        // WHAT CLOSING THE WINDOW MEANS DEPENDS ON WHAT IT WAS SHOWING.
+        //
+        // Tab/window share: the window IS the camera view, so closing it reads
+        // as "turn my camera off" — the original contract, unchanged.
+        //
+        // Monitor share: the window is deliberately controls-only (the webcam
+        // is the canvas PiP, which is what the screen grab records), so closing
+        // it can only mean "hide these controls". Turning the camera off there
+        // silently dropped the coach out of the rest of the recording. The
+        // in-page RecordingControlBar is always available, so Pause/Resume/Stop
+        // survive the window closing and nothing is lost by keeping the camera.
+        const monitorShare = isMonitorShareRef.current;
+        if (!monitorShare) webcamVideoElRef.current = null; // stop drawing Source B — camera off
         pipRafRef.current = null; // PiP rAF is dead with the window
         if (!paintBackupRef.current) paintBackupRef.current = setInterval(paintOnce, 33);
         try { pipSurfaceRef.current?.teardown(); } catch { /* noop */ }
         pipSurfaceRef.current = null;
         docPipWindowRef.current = null;
         // Tell the page the camera went off so the Hub toggle stops showing
-        // "Webcam on". Display-state only — recording is untouched.
-        try { sourcesRef.current?.onWebcamClosedByPip?.(); } catch { /* noop */ }
+        // "Webcam on". Display-state only — recording is untouched. Skipped in
+        // monitor share, where the camera deliberately stays on.
+        if (!monitorShare) {
+          try { sourcesRef.current?.onWebcamClosedByPip?.(); } catch { /* noop */ }
+        }
         // Deliberately does NOT call stopRecording / stop the MediaRecorder /
         // tear down the display stream — recording continues.
       }, { once: true });
@@ -994,6 +1029,8 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         registerWebcamVideo,
         updateWebcamStream,
         isPipOpen,
+        registerInlineRecordingControls,
+        inlineRecordingControlsPresent: inlineControlsCount > 0,
         isMonitorShare,
         reopenPipWindow,
       }}
