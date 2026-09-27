@@ -22,7 +22,8 @@
  * It exists ONLY during an active recording: null while idle/stopped, so the
  * workspace gets its full height back the moment the recording ends.
  *
- * LAYOUT CONTRACT — VERTICAL ONLY. Every BUTTON is its own full-width row;
+ * LAYOUT CONTRACT — VERTICAL ONLY. Two buttons, two rows: a Pause/Resume
+ * toggle, then Stop. Every BUTTON is its own full-width row;
  * two buttons are never placed side by side. That is a deliberate constraint,
  * not an oversight: one column works unchanged from a phone at 320px CSS px up
  * to a desktop, so no separate mobile layout is needed. If you add a control
@@ -146,41 +147,29 @@ export default function RecordingControlBar() {
         </span>
       </div>
 
-      {/* Row 1 — Pause */}
+      {/*
+        Row 1 — Pause / Resume, ONE toggle row.
+        pauseRecording is already a toggle, so two rows (one of them always
+        disabled) only cost ~50px of canvas on a phone. aria-pressed + the
+        swapped label/icon carry the state to assistive tech.
+      */}
       <button
         type="button"
         onClick={pauseRecording}
-        disabled={!isRecording}
-        aria-label="Pause recording"
+        aria-label={isRecording ? 'Pause recording' : 'Resume recording'}
+        aria-pressed={!isRecording}
         style={rowButtonStyle({
           background: 'rgba(255,255,255,0.10)',
           border: '1px solid rgba(255,255,255,0.22)',
           color: '#fff',
-          disabled: !isRecording,
+          disabled: false,
         })}
       >
-        <Pause size={15} aria-hidden />
-        Pause
+        {isRecording ? <Pause size={15} aria-hidden /> : <Play size={15} aria-hidden />}
+        {isRecording ? 'Pause' : 'Resume'}
       </button>
 
-      {/* Row 2 — Play / Resume */}
-      <button
-        type="button"
-        onClick={pauseRecording}
-        disabled={isRecording}
-        aria-label="Resume recording"
-        style={rowButtonStyle({
-          background: 'rgba(255,255,255,0.10)',
-          border: '1px solid rgba(255,255,255,0.22)',
-          color: '#fff',
-          disabled: isRecording,
-        })}
-      >
-        <Play size={15} aria-hidden />
-        Resume
-      </button>
-
-      {/* Row 3 — Stop */}
+      {/* Row 2 — Stop */}
       <button
         type="button"
         onClick={handleStop}
