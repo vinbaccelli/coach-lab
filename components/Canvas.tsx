@@ -519,6 +519,20 @@ const WEBCAM_PIP_HANDLE = 16;
 /** Invisible hit target for corner resize (larger than visible handle). */
 const WEBCAM_PIP_HANDLE_HIT = 24;
 
+/**
+ * How far the selection box — and so the corner resize handles drawn on it —
+ * sits OUTSIDE a mark's bounding box.
+ *
+ * Shared by the drawing code and the hit test on purpose. They used to disagree:
+ * the handles were drawn at the corners inflated by this much while the hit test
+ * accepted clicks only within 8px of the UN-inflated corners, and hypot(6, 6) is
+ * 8.49, so clicking a handle dead centre missed its own target. Anything that
+ * draws a handle and anything that hits one must read the same number.
+ */
+const SEL_BOX_PAD = 6;
+/** Hit radius around a text resize handle. Sized for a fingertip, not a mouse. */
+const TEXT_HANDLE_HIT_R = 10;
+
 function clampWebcamPip(
   p: { x: number; y: number; w: number; h: number },
   cw: number,
@@ -5714,9 +5728,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 x0 = sh.cx - sh.rx; y0 = sh.cy - sh.ry;
                 x1 = sh.cx + sh.rx; y1 = sh.cy + sh.ry;
               } else if (s.tool === 'text') {
-                const tx = s as StrokeText;
-                x0 = tx.pos.x - 20; y0 = tx.pos.y - 24;
-                x1 = tx.pos.x + 140; y1 = tx.pos.y + 10;
+                // MEASURED, not guessed. This branch used to hardcode a fixed
+                // 160x34 box (pos.x-20, pos.y-24 .. pos.x+140, pos.y+10) that
+                // had nothing to do with the actual text, while the resize hit
+                // test read the measured getTextBBox — so the handles were drawn
+                // tens of pixels from where a click on them was accepted, and a
+                // text box could not be resized at all. This is now identical to
+                // the 'textResize' branch below, which also stops the box
+                // jumping the moment a drag starts.
+                const bb = getTextBBox(s as StrokeText);
+                x0 = bb.x0; y0 = bb.y0;
+                x1 = bb.x1; y1 = bb.y1;
               }
             }
           } else if (sel.kind === 'angle') {
@@ -5758,7 +5780,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.strokeStyle = 'rgba(255,215,0,0.95)';
             ctx.lineWidth = 2;
             ctx.setLineDash([6, 4]);
-            ctx.strokeRect(x0 - 6, y0 - 6, (x1 - x0) + 12, (y1 - y0) + 12);
+            ctx.strokeRect(
+              x0 - SEL_BOX_PAD, y0 - SEL_BOX_PAD,
+              (x1 - x0) + SEL_BOX_PAD * 2, (y1 - y0) + SEL_BOX_PAD * 2,
+            );
             ctx.setLineDash([]);
             // Draw corner resize handles for text strokes
             const isTextSel = (sel.kind === 'stroke' || sel.kind === 'textResize') &&
@@ -5768,9 +5793,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               ctx.fillStyle = '#FFD700';
               ctx.strokeStyle = '#000';
               ctx.lineWidth = 1;
+              // Must match textResizeHandleHit's corners exactly — same box, same
+              // padding. See SEL_BOX_PAD.
               const corners = [
-                [x0 - 6, y0 - 6], [x1 + 6, y0 - 6],
-                [x0 - 6, y1 + 6], [x1 + 6, y1 + 6],
+                [x0 - SEL_BOX_PAD, y0 - SEL_BOX_PAD], [x1 + SEL_BOX_PAD, y0 - SEL_BOX_PAD],
+                [x0 - SEL_BOX_PAD, y1 + SEL_BOX_PAD], [x1 + SEL_BOX_PAD, y1 + SEL_BOX_PAD],
               ];
               for (const [hx, hy] of corners) {
                 ctx.fillRect(hx - HANDLE_SZ / 2, hy - HANDLE_SZ / 2, HANDLE_SZ, HANDLE_SZ);
@@ -6501,15 +6528,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const textResizeHandleHit = (tx: StrokeText, pos: Pt): 'tl' | 'tr' | 'bl' | 'br' | null => {
       const bb = getTextBBox(tx);
-      const HANDLE_R = 8;
+      // INFLATED BY SEL_BOX_PAD, because that is where the handles are actually
+      // drawn. Testing the bare bbox corners put every target SEL_BOX_PAD*sqrt(2)
+      // = 8.49px from the handle the coach can see, just outside the old 8px
+      // radius, so all four corners were unhittable even once the box itself was
+      // right.
       const corners: Array<{ id: 'tl' | 'tr' | 'bl' | 'br'; x: number; y: number }> = [
-        { id: 'tl', x: bb.x0, y: bb.y0 },
-        { id: 'tr', x: bb.x1, y: bb.y0 },
-        { id: 'bl', x: bb.x0, y: bb.y1 },
-        { id: 'br', x: bb.x1, y: bb.y1 },
+        { id: 'tl', x: bb.x0 - SEL_BOX_PAD, y: bb.y0 - SEL_BOX_PAD },
+        { id: 'tr', x: bb.x1 + SEL_BOX_PAD, y: bb.y0 - SEL_BOX_PAD },
+        { id: 'bl', x: bb.x0 - SEL_BOX_PAD, y: bb.y1 + SEL_BOX_PAD },
+        { id: 'br', x: bb.x1 + SEL_BOX_PAD, y: bb.y1 + SEL_BOX_PAD },
       ];
       for (const c of corners) {
-        if (Math.hypot(pos.x - c.x, pos.y - c.y) <= HANDLE_R) return c.id;
+        if (Math.hypot(pos.x - c.x, pos.y - c.y) <= TEXT_HANDLE_HIT_R) return c.id;
       }
       return null;
     };
@@ -8555,6 +8586,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const draft = newTextDraft;
       if (!draft) return;
       const val = (newTextInputRef.current?.value ?? '').trim();
+      // EMPTY THE TEXTAREA, because the next draft may well be this very same
+      // DOM node. The draft textarea is uncontrolled — it has no `value`,
+      // `defaultValue` or `key`, so its text lives only in the node and React
+      // never resets it. When the coach clicks elsewhere on the canvas with the
+      // Text tool, beginDrawToolAt commits this draft and opens the next one in
+      // the SAME React event (see the 'text' case in the pointer-down path), so
+      // both setNewTextDraft calls batch: the state goes draft A -> draft B with
+      // no null render in between, `{newTextDraft && ...}` never goes false, and
+      // the element is reused rather than remounted. The new box then opened
+      // carrying a copy of the text just committed. Clearing here is deliberately
+      // preferred over keying the element: unmounting a FOCUSED textarea risks a
+      // stray onBlur committing against the draft that replaced it.
+      if (newTextInputRef.current) newTextInputRef.current.value = '';
       if (val) {
         strokesRef.current = [
           ...strokesRef.current,
