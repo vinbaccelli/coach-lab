@@ -295,6 +295,64 @@ export default function RulerOverlay({
   /** Bumped on every crosshair move so the SVG re-renders it. */
   const [, setCrosshairTick] = useState(0);
 
+  /**
+   * Control-panel position, in container px from the top-left.
+   *
+   * null means "not moved yet" — the panel stays anchored to the top-right the
+   * way it always was, so nothing about the default layout changes. The first
+   * drag resolves that anchor into concrete left/top coordinates (see
+   * onPanelDragStart) and from then on the panel is positioned absolutely,
+   * which is what lets it move off the right edge at all.
+   *
+   * Dragged by the HEADER only: the body is full of buttons and inputs, and a
+   * whole-panel drag would swallow their taps.
+   */
+  const [panelPos, setPanelPos] = useState<Point2D | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelDragRef = useRef<{ dx: number; dy: number } | null>(null);
+
+  const onPanelDragStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // Never start a drag from a control inside the header (the precision
+    // toggle, the close button) — those need their own clicks.
+    if ((e.target as HTMLElement).closest('button')) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const host = panel.offsetParent as HTMLElement | null;
+    if (!host) return;
+    const pr = panel.getBoundingClientRect();
+    const hr = host.getBoundingClientRect();
+    // Resolve the current on-screen position, whether it came from the default
+    // right-anchor or from a previous drag, so the panel never jumps on grab.
+    panelDragRef.current = { dx: e.clientX - pr.left, dy: e.clientY - pr.top };
+    setPanelPos({ x: pr.left - hr.left, y: pr.top - hr.top });
+    panel.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }, []);
+
+  const onPanelDragMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = panelDragRef.current;
+    const panel = panelRef.current;
+    if (!d || !panel) return;
+    const host = panel.offsetParent as HTMLElement | null;
+    if (!host) return;
+    const hr = host.getBoundingClientRect();
+    const pr = panel.getBoundingClientRect();
+    // Clamp so the panel can always be grabbed again — never fully off-frame.
+    const maxX = Math.max(0, hr.width - pr.width);
+    const maxY = Math.max(0, hr.height - pr.height);
+    setPanelPos({
+      x: Math.max(0, Math.min(maxX, e.clientX - hr.left - d.dx)),
+      y: Math.max(0, Math.min(maxY, e.clientY - hr.top - d.dy)),
+    });
+  }, []);
+
+  const onPanelDragEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    panelDragRef.current = null;
+    if (panelRef.current?.hasPointerCapture(e.pointerId)) {
+      panelRef.current.releasePointerCapture(e.pointerId);
+    }
+  }, []);
+
   const nextPointLabel = selectedPreset && isCalibrating
     ? selectedPreset.pointLabels[calibPoints.length] ?? ''
     : '';
@@ -447,12 +505,17 @@ export default function RulerOverlay({
 
       {/* Control panel */}
       <div
+        ref={panelRef}
         onPointerDown={e => e.stopPropagation()}
         onPointerUp={e => e.stopPropagation()}
+        onPointerMove={onPanelDragMove}
+        onLostPointerCapture={onPanelDragEnd}
         style={{
         position: 'absolute',
-        top: compact ? 8 : 12,
-        right: compact ? 8 : 12,
+        // Until the first drag this is the original top-right anchor, untouched.
+        ...(panelPos
+          ? { left: panelPos.x, top: panelPos.y, right: 'auto' as const }
+          : { top: compact ? 8 : 12, right: compact ? 8 : 12 }),
         width: compact ? 'min(236px, calc(100% - 16px))' : 280,
         maxHeight: compact ? 'calc(100% - 16px)' : undefined,
         overflowY: compact ? 'auto' : undefined,
@@ -465,10 +528,20 @@ export default function RulerOverlay({
         boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
         overflow: 'hidden',
       }}>
-        {/* Header */}
-        <div style={{
+        {/* Header — also the drag handle for the whole panel. */}
+        <div
+          onPointerDown={onPanelDragStart}
+          onPointerUp={onPanelDragEnd}
+          title="Drag to move this panel"
+          style={{
           display: 'flex', alignItems: 'center', gap: compact ? 6 : 8, padding: compact ? '7px 10px' : '10px 14px',
           borderBottom: '1px solid rgba(255,255,255,0.1)',
+          cursor: panelDragRef.current ? 'grabbing' : 'grab',
+          // The label must not select while dragging, or a drag turns into a
+          // text selection on desktop and a magnifier loupe on iOS.
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          touchAction: 'none',
         }}>
           <Ruler size={15} color="#F59E0B" />
           <span style={{ fontWeight: 700, fontSize: compact ? 12 : 13, flex: 1 }}>Measurement Ruler</span>
