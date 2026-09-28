@@ -1143,11 +1143,56 @@ function Home() {
     v.currentTime = t;
   }), []);
 
+  /**
+   * The span a Generate pass covers, or null when there is nothing to generate.
+   *
+   * ONE resolver for all three entry points. They previously each re-derived the
+   * section inline — `recordReplayToMp4` even carried a comment warning that its
+   * copy "must mirror handleReplaySnapshots" — which is precisely the kind of
+   * duplication that drifts.
+   *
+   * WITH SNAPSHOTS the expression is unchanged, so that path behaves exactly as
+   * before. WITHOUT them an AI-tracked section stands on its own: the coach's
+   * timeline selection if they made one, otherwise the baked track's own span.
+   */
+  const resolveGenerateSection = useCallback((
+    ordered: Snapshot[],
+  ): { start: number; end: number } | null => {
+    if (ordered.length > 0) {
+      const start = metricsSectionStart ?? Math.max(0, ordered[0].timeSec - 0.3);
+      const end = Math.max(start + 0.1, metricsSectionEnd ?? (ordered[ordered.length - 1].timeSec + 0.3));
+      return { start, end };
+    }
+    if (metricsSectionStart != null && metricsSectionEnd != null && metricsSectionEnd > metricsSectionStart) {
+      return { start: metricsSectionStart, end: metricsSectionEnd };
+    }
+    const baked = canvasRef.current?.getBakedTrackInfo?.();
+    if (baked && baked.end > baked.start) return { start: baked.start, end: baked.end };
+    return null;
+  }, [metricsSectionStart, metricsSectionEnd]);
+
+  /** A completed AI Track is, on its own, a sufficient basis for Generate. */
+  const hasBakedTrack = useCallback(() => !!canvasRef.current?.getBakedTrackInfo?.(), []);
+
   /** Generate: for each snapshot, seek + restore its drawings + capture a screenshot. */
   const handleGenerateSnapshots = useCallback(async () => {
     saveActiveSnapshot();
     const ordered = [...snapshots].sort((a, b) => a.timeSec - b.timeSec);
-    if (ordered.length === 0) { setProcessingStatus('Create a snapshot first (Create Snapshot or AI Detect)'); return; }
+    // An AI-tracked section is a sufficient basis on its own. Only refuse when
+    // there is NEITHER a snapshot nor a track — previously any number of tracked
+    // sections still got "Create a snapshot first", which is the reported bug.
+    if (ordered.length === 0) {
+      if (!hasBakedTrack()) {
+        setProcessingStatus('Nothing to generate yet — AI Track a section, or create a snapshot');
+        return;
+      }
+      // Track-only: no per-snapshot screenshots to capture, so go straight to
+      // the workspace, which drives the video export from the section.
+      setGenerateWorkspaceMounted(true);
+      setGenerateWorkspaceOpen(true);
+      setProcessingStatus('Tracked section ready — record the video below');
+      return;
+    }
     // Capture drives the playhead across snapshots — keep the mode autopilot
     // from clearing restored strokes between restore and capture.
     modeAutopilotSuppressedRef.current = true;
@@ -1172,7 +1217,7 @@ function Home() {
     setGenerateWorkspaceMounted(true);
     setGenerateWorkspaceOpen(true);
     setProcessingStatus(`Generated ${ordered.length} snapshot screenshots`);
-  }, [snapshots, saveActiveSnapshot, seekVideoTo]);
+  }, [snapshots, saveActiveSnapshot, seekVideoTo, hasBakedTrack]);
 
   const [generateVideoUrl, setGenerateVideoUrl] = useState<string | null>(null);
   const [generateVideoBlob, setGenerateVideoBlob] = useState<Blob | null>(null);
@@ -1206,14 +1251,16 @@ function Home() {
     const ordered = [...snapshots]
       .filter((s) => !inc || inc.includes(s.id))
       .sort((a, b) => a.timeSec - b.timeSec);
-    if (ordered.length === 0) return;
     const v = videoRef.current;
     if (!v) return;
 
-    // Section to travel: the coach's timeline selection, else the snapshot span
-    // (padded) so there is real motion before the first and after the last phase.
-    const secStart = metricsSectionStart ?? Math.max(0, ordered[0].timeSec - 0.3);
-    const secEnd = Math.max(secStart + 0.1, metricsSectionEnd ?? (ordered[ordered.length - 1].timeSec + 0.3));
+    // No early return on an empty snapshot list any more: with no stops the loop
+    // below simply does not run and the follow-through plays the whole section
+    // straight through, which IS the tracked-section-only behaviour.
+    const section = resolveGenerateSection(ordered);
+    if (!section) return;
+    const secStart = section.start;
+    const secEnd = section.end;
     const stops = ordered.filter((s) => s.timeSec >= secStart - 0.05 && s.timeSec <= secEnd + 0.05);
 
     const originalRate = v.playbackRate || 1;
@@ -1244,11 +1291,18 @@ function Home() {
     // workspace usually leaves a snapshot selected, whose frozen pose otherwise
     // owns the display until the first hold ("skeleton froze up to the first
     // snapshot").
-    releaseSnapshotOwnership();
-    setMeasurementColumn([]);
-    setShowMeasurementOverlays(false);
-    canvasRef.current?.importStrokes?.('[]');
-    canvasRef.current?.setOverlayAdjustments?.({});
+    // ONLY when there are stops. With snapshots, each hold owns its own drawings
+    // and data column, so the motion segments have to start clean. With NO
+    // snapshots there is nothing to restore and the coach's live drawings and
+    // data column ARE the content the export is meant to carry — clearing them
+    // here would bake an empty overlay over the tracked section.
+    if (stops.length > 0) {
+      releaseSnapshotOwnership();
+      setMeasurementColumn([]);
+      setShowMeasurementOverlays(false);
+      canvasRef.current?.importStrokes?.('[]');
+      canvasRef.current?.setOverlayAdjustments?.({});
+    }
     await seekVideoTo(secStart);
     v.pause();
 
@@ -1281,7 +1335,7 @@ function Home() {
     modeAutopilotSuppressedRef.current = false;
     setReplayActive(false);
     setReplayIndex(null);
-  }, [snapshots, seekVideoTo, selectSnapshot, releaseSnapshotOwnership, generateReplayRate, generateHoldSec, metricsSectionStart, metricsSectionEnd]);
+  }, [snapshots, seekVideoTo, selectSnapshot, releaseSnapshotOwnership, generateReplayRate, generateHoldSec, resolveGenerateSection]);
 
   // Default the metrics section to the snapshot span; preserve manual drags.
   // (The same section doubles as the Precision-AI-Track range when skeleton is
@@ -1381,9 +1435,12 @@ function Home() {
         return 0;
       }
       const kept = canvasRef.current?.finishBakeCapture?.({ start, end }) ?? 0;
-      if (kept >= 2 && process.env.NODE_ENV !== 'production') {
+      if (kept >= 2) {
         const passMs = performance.now() - passT0;
-        console.log(`[PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);
+        // [PROBE-A] TEMPORARY — the NODE_ENV gate that used to wrap this meant the
+        // engine line could never print on a Vercel build, which is the only place
+        // the coach can test. Restore the gate once the engine question is settled.
+        console.warn(`[PROBE-A] [PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);
       }
       return kept;
     } finally {
@@ -1481,7 +1538,13 @@ function Home() {
    * directly at the coach's chosen rate — the slow-master is fallback only.
    */
   const recordReplayToMp4 = useCallback(async (includedIds?: string[]) => {
-    if (!snapshots.length || generateRecording) return;
+    if (generateRecording) return;
+    // Was `!snapshots.length || generateRecording` — a SILENT return, so with a
+    // tracked section but no snapshot the button did nothing and said nothing.
+    if (!snapshots.length && !hasBakedTrack()) {
+      setProcessingStatus('Nothing to record yet — AI Track a section, or create a snapshot');
+      return;
+    }
     if (!canvasRef.current?.getCanvas?.()) { setProcessingStatus('Recording not supported on this device'); return; }
     // Honor the workspace's snapshot selection for the recorded video.
     generateIncludedIdsRef.current = includedIds && includedIds.length ? includedIds : null;
@@ -1495,8 +1558,13 @@ function Home() {
     // coach's target rate directly — no slow-master wait, no retime.
     const incNow = generateIncludedIdsRef.current;
     const orderedNow = [...snapshots].filter((s) => !incNow || incNow.includes(s.id)).sort((a, b) => a.timeSec - b.timeSec);
-    const secStart = metricsSectionStart ?? Math.max(0, (orderedNow[0]?.timeSec ?? 0) - 0.3);
-    const secEnd = Math.max(secStart + 0.1, metricsSectionEnd ?? ((orderedNow[orderedNow.length - 1]?.timeSec ?? secStart) + 0.3));
+    // Same resolver handleReplaySnapshots uses, so the recorded span and the
+    // replayed span cannot drift apart (the comment above used to ask a reader
+    // to keep two copies of this in sync by hand).
+    const section = resolveGenerateSection(orderedNow);
+    if (!section) { setGenerateRecording(false); setProcessingStatus('Nothing to record yet — AI Track a section, or create a snapshot'); return; }
+    const secStart = section.start;
+    const secEnd = section.end;
     let trackBacked = !skeletonEnabled || (canvasRef.current?.isRangeBaked?.(secStart, secEnd) ?? false);
     if (!trackBacked && skeletonEnabled) {
       setProcessingStatus('Preparing perfect skeleton for the recording…');
@@ -1571,7 +1639,7 @@ function Home() {
       setExportForceVideoPaint(false);
       setGenerateRecording(false);
     }
-  }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots, generateReplayRate, skeletonEnabled, metricsSectionStart, metricsSectionEnd, runPrecisionPass]);
+  }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots, generateReplayRate, skeletonEnabled, resolveGenerateSection, hasBakedTrack, runPrecisionPass]);
 
   /** Replay from the Generate workspace: workspace hides itself; show the strip HUD meanwhile. */
   const handleWorkspaceReplay = useCallback(async (includedIds: string[]) => {

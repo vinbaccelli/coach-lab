@@ -1978,6 +1978,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // another — each pass adds a track (replacing any overlapping one). While
     // any track exists, the skeleton shows ONLY inside tracked sections.
     const bakedTracksRef = useRef<BakedTrack[]>([]);
+    /**
+     * False from the moment a text draft is created until its focus has settled
+     * on the next animation frame. Any blur arriving before that is the browser
+     * stealing focus back to the canvas, NOT the coach clicking away — see the
+     * textarea's onBlur.
+     */
+    const newTextFocusReadyRef = useRef(false);
+    /** Reached from beginDrawToolAt, which is declared above commitNewTextDraft. */
+    const commitNewTextDraftRef = useRef<(() => void) | null>(null);
+    /** Mirror of newTextDraft readable from the ref-driven pointer path. */
+    const newTextDraftRef = useRef(false);
+
+    /** [PROBE-B] TEMPORARY — last logged reason, so only TRANSITIONS print. */
+    const probeBLastRef = useRef<string | null>(null);
 
     const findBakedTrack = (t: number): BakedTrack | null => {
       for (const b of bakedTracksRef.current) {
@@ -2559,10 +2573,34 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => {
       if (activeTool !== 'angle') setAngleUiPhase(0);
     }, [activeTool]);
+    useEffect(() => { newTextDraftRef.current = !!newTextDraft; }, [newTextDraft]);
     useEffect(() => {
-      if (newTextDraft && newTextInputRef.current) {
-        newTextInputRef.current.focus();
-      }
+      if (!newTextDraft) { newTextFocusReadyRef.current = false; return; }
+      const input = newTextInputRef.current;
+      if (!input) return;
+      // THE DRAFT IS CREATED ON POINTER-DOWN, which is the whole problem.
+      //
+      // Order of events for one click with the Text tool:
+      //   pointerdown -> React sets the draft -> textarea mounts and autoFocuses
+      //   -> the native MOUSEDOWN then fires, and ITS DEFAULT ACTION moves focus
+      //      back to the canvas
+      //   -> the textarea blurs -> onBlur committed an empty draft and unmounted
+      //      the textarea.
+      // So every click appeared to "reposition" the box and typing never landed:
+      // by the time the coach typed, the textarea was already gone. The text
+      // EDIT textarea never had this bug because it is created on pointer-UP,
+      // after that focus default has already run.
+      //
+      // A rAF callback runs after the mousedown default, so focusing again here
+      // takes focus back, and the flag tells onBlur that everything before this
+      // point was the steal rather than a real click-away.
+      newTextFocusReadyRef.current = false;
+      input.focus();
+      const id = requestAnimationFrame(() => {
+        if (newTextInputRef.current === input) input.focus();
+        newTextFocusReadyRef.current = true;
+      });
+      return () => cancelAnimationFrame(id);
     }, [newTextDraft]);
     useEffect(() => {
       if (activeTool !== 'jointChain' && jointChainActiveRef.current) {
@@ -5161,6 +5199,40 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ? lookupBakedPose(video.currentTime)
             : null;
 
+        // [PROBE-B] TEMPORARY — mid-section skeleton flicker. Logs only when the
+        // reason CHANGES, so one line marks each disappear/reappear edge.
+        if (bakedTracksRef.current.length > 0 && video) {
+          const t = video.currentTime;
+          // ORDER MATTERS: skeletonAuthorised and skeletonDimsOk gate bakedPose at
+          // its definition, so they must be tested BEFORE the lookup reasons.
+          // Without them a readyState dip reads as 'trackFound-but-noSample',
+          // which points at the track instead of at the video element.
+          const reason =
+            !skeletonAuthorised ? 'notAuthorised'
+              : !skeletonDimsOk ? 'dimsNotOk'
+                : exactPoseLockRef.current ? 'exactPoseLock'
+                  : poseModeRef.current !== 'live' ? `poseMode=${poseModeRef.current}`
+                    : bakingRef.current ? 'baking'
+                      : bakedPose ? null
+                        : findBakedTrack(t) ? 'trackFound-but-noSample' : 'outsideTrack';
+          const suppressed = skeletonSuppressedRef.current ? ' suppressed' : '';
+          const key = `${reason ?? 'ok'}${suppressed}`;
+          if (key !== probeBLastRef.current) {
+            probeBLastRef.current = key;
+            console.warn(
+              `[PROBE-B] t=${t.toFixed(3)} bakedPose=${bakedPose ? 'yes' : 'NO'} reason=${reason ?? 'ok'}` +
+              `${suppressed} tracks=${bakedTracksRef.current.length} live=${latestKeypointsRef.current?.length ?? 0}` +
+              // readyState/networkState/buffered are here because today's service
+              // worker change (f0fc431a) stopped serving media from the Cache API,
+              // and AI Track's frame-stepped seek storm fragments the buffer — so a
+              // re-buffer dipping readyState under 2 is a live suspect for the
+              // flicker, and it would otherwise be invisible.
+              ` readyState=${video.readyState} networkState=${video.networkState}` +
+              ` buffered=${video.buffered.length}`,
+            );
+          }
+        }
+
         // A BAKED POSE OUTRANKS SUPPRESSION.
         //
         // `skeletonSuppressedRef` is a transient "blank it for now" flag set by
@@ -6771,6 +6843,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const beginDrawToolAt = useCallback((pos: Pt, lw: number) => {
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
+      // [PROBE-C] TEMPORARY — text tool never shows its textarea. This fires only
+      // if the pointer actually REACHED the draw dispatch; silence here means
+      // something above returned first.
+      if (tool === 'text') {
+        console.warn(`[PROBE-C] beginDrawToolAt reached, tool=text fontSize=${opts.fontSize} zoom=${zoomRef.current}`);
+      }
       switch (tool) {
         case 'pen':
           activeStrokeRef.current = {
@@ -6947,9 +7025,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         case 'text': {
           const canvas = canvasRef.current;
           if (!canvas) break;
+          // A draft is already open and the coach clicked ELSEWHERE on the canvas
+          // (a click on the textarea itself never reaches here — it sits above
+          // this canvas as a sibling). Commit what they typed before starting a
+          // new one: React reuses the same textarea element when only its
+          // position props change, so without this the box would slide to the
+          // new spot still carrying the previous text.
+          if (newTextDraftRef.current) commitNewTextDraftRef.current?.();
           const { clientX, clientY } = logicalPtToClient(pos);
           const rect = canvas.getBoundingClientRect();
           const scaledFontSize = opts.fontSize * zoomRef.current * (rect.height / cssH(canvas));
+          // [PROBE-C] TEMPORARY — a NaN/0 fontSize renders a zero-size textarea,
+          // which looks exactly like "no textarea appeared".
+          console.warn(
+            `[PROBE-C] setNewTextDraft left=${clientX - rect.left} top=${clientY - rect.top} ` +
+            `fontSize=${scaledFontSize} rectH=${rect.height} cssH=${cssH(canvas)}`,
+          );
           setNewTextDraft({
             pos,
             left: clientX - rect.left,
@@ -7116,6 +7207,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvasEl = e.target as HTMLCanvasElement;
       const toolEarly = activeToolRef.current;
+      // [PROBE-C] TEMPORARY — the FIRST statement in the handler, so its absence
+      // is unambiguous: the canvas never received the event at all (an overlay
+      // above it, or pointer-events). The precision-commit and webcam-PiP
+      // branches below can return before the other probes are reached, so
+      // without this entry line their silence could not be told apart.
+      if (toolEarly === 'text') {
+        console.warn(`[PROBE-C] onPointerDown ENTRY tool=text ptr=${e.pointerType} button=${e.button}`);
+      }
 
       // ── Normalize: register this pointer in the single active-pointer map ──
       activePointersRef.current.set(e.pointerId, {
@@ -7238,6 +7337,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const lw   = pressureWidth(e);
       const tool = activeToolRef.current;
       const opts = drawingOptsRef.current;
+      // [PROBE-C] TEMPORARY — pairs with the probe in beginDrawToolAt. If this
+      // logs and that one does not, a branch in between returned first, and the
+      // flags printed here say which one.
+      if (tool === 'text') {
+        console.warn(
+          `[PROBE-C] pointerdown tool=text styleMode=${styleModeRef.current} panMode=${panModeEnabledRef.current} ` +
+          `zoom=${zoomRef.current} space=${spaceHeldRef.current} button=${e.button} ptr=${e.pointerType} ` +
+          `eraserSize=${outlineEraserSizeRef.current} mcItems=${measurementColumnRef.current?.length ?? 'null'}`,
+        );
+      }
 
       if (
         !styleModeRef.current &&
@@ -8528,6 +8637,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       setNewTextDraft(null);
     }, [newTextDraft, pushHistory]);
+    useEffect(() => { commitNewTextDraftRef.current = commitNewTextDraft; }, [commitNewTextDraft]);
 
     const coachToolHint = (() => {
       const t = activeTool;
@@ -9197,7 +9307,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 commitNewTextDraft();
               }
             }}
-            onBlur={commitNewTextDraft}
+            onBlur={() => {
+              // Reject the focus steal described in the effect above: take focus
+              // back instead of committing an empty draft and unmounting. Once
+              // focus has settled, a blur is the coach genuinely clicking away
+              // and commits exactly as before.
+              if (!newTextFocusReadyRef.current) {
+                newTextInputRef.current?.focus();
+                return;
+              }
+              commitNewTextDraft();
+            }}
           />
         )}
 
