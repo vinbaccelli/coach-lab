@@ -965,13 +965,18 @@ function BackHeader({
   return (
     <>
       {/*
-        Back and Select share a row so Select is reachable from EVERY sub-screen
+        Select sits DIRECTLY UNDER Back, so it is reachable from EVERY sub-screen
         without first navigating home. Every sub-screen renders this header, so
-        putting the button here is what makes it universal — and it sits beside
-        Back rather than in the screen body so its position never shifts between
+        putting the button here is what makes it universal — and it lives in the
+        header rather than the screen body so its position never shifts between
         screens with different content.
+
+        STACKED, not side by side. Both buttons are direct children of the
+        toolbar's column (ToolbarScrollArea), exactly like every Row, so the
+        compact rail shows one icon per row. They used to share a flex ROW, which
+        put two 44px icons side by side in the rail. Neither button takes
+        `flex: 1` — in a column parent that grows them vertically.
       */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       <button
         type="button"
         aria-label="Back"
@@ -980,7 +985,6 @@ function BackHeader({
           ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0, justifyContent: 'center' } : null),
           fontWeight: 600,
           fontSize: io ? undefined : 16,
-          flex: io ? undefined : 1,
         }}
         onPointerDown={(e) => {
           if (e.pointerType !== 'touch') e.preventDefault();
@@ -1007,7 +1011,6 @@ function BackHeader({
           ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0, justifyContent: 'center' } : null),
           fontWeight: 600,
           fontSize: io ? undefined : 16,
-          flex: io ? undefined : 1,
         }}
         onPointerDown={(e) => {
           if (e.pointerType !== 'touch') e.preventDefault();
@@ -1021,7 +1024,6 @@ function BackHeader({
           </>
         )}
       </button>
-      </div>
       {!io ? (
       <div
         style={{
