@@ -2725,6 +2725,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
     }, [activeTool]);
+
+    /**
+     * Drop a selection that is being KEPT on a stroke — which now includes a
+     * clicked text label, held after release so its resize handles stay
+     * reachable. Scoped to 'stroke' and 'textResize' only: joint-node and angle
+     * selections have their own lifecycles and are deliberately left alone.
+     *
+     * Needed wherever strokesRef is replaced wholesale (undo, redo, Clear all,
+     * snapshot import): the selection holds an INDEX, and after the array is
+     * swapped that index can name a different mark, or none.
+     */
+    const dropKeptStrokeSelection = () => {
+      const kind = selectionRef.current?.kind;
+      if (kind === 'stroke' || kind === 'textResize') {
+        selectionRef.current = null;
+        renderDirtyRef.current = true;
+      }
+    };
+    // Leaving the Select tool deselects. The selection highlight is drawn
+    // whenever selectionRef is set, whatever the tool, so a label kept selected
+    // would otherwise stay boxed while the coach draws with Pen.
+    useEffect(() => {
+      if (activeTool !== 'select') dropKeptStrokeSelection();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeTool]);
     useEffect(() => {
       if (webcamActive) renderDirtyRef.current = true;
     }, [webcamActive]);
@@ -3033,6 +3058,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     useImperativeHandle(ref, () => ({
       clearAll: () => {
+        dropKeptStrokeSelection();
         contextualTargetRef.current = null;
         contextualDirtyRef.current = false;
         onStyleSelectionChangeRef.current?.(null);
@@ -3147,6 +3173,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // here, so undoing a drawing made the skeleton vanish and it could not
         // be re-enabled. The skeleton is a live overlay, not an undo step.
         renderDirtyRef.current = true;
+        dropKeptStrokeSelection();
         if (historyIdxRef.current > 0) {
           historyIdxRef.current--;
           const snap = historyRef.current[historyIdxRef.current];
@@ -3161,6 +3188,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // pose paths ever clears it — so after an AI Track (where live inference
         // is off and the baked track owns the display) the skeleton never came
         // back until the coach toggled Skeleton off and on again.
+        dropKeptStrokeSelection();
         if (historyIdxRef.current < historyRef.current.length - 1) {
           historyIdxRef.current++;
           const snap = historyRef.current[historyIdxRef.current];
@@ -3643,6 +3671,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         try {
           const parsed = JSON.parse(json);
           if (Array.isArray(parsed)) {
+            dropKeptStrokeSelection();
             strokesRef.current = parsed;
             // Seed the baseline with the angles currently on screen, so the two
             // collections stay in step: restoring strokes must not leave undo
@@ -8409,6 +8438,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             s && s.tool === 'jointChain'
               ? { kind: 'jointNode', idx: finSel.idx, nodeIdx: finSel.nodeIdx, start: finSel.start, orig: s }
               : null;
+        } else if (finSel.kind === 'stroke' && strokesRef.current[finSel.idx]?.tool === 'text') {
+          // A clicked TEXT LABEL stays selected after release, showing its box
+          // and four resize handles. It used to fall through to the null below
+          // like every other stroke — and resize can only start from a press on
+          // a handle of an ALREADY-selected label (pointer-down, 'textResize'
+          // entry), so clearing it here made text resize unreachable: the
+          // handles existed only while the button that would grab them was
+          // still held on the label. `orig` is refreshed to the stroke as it now
+          // stands, so a following drag or resize starts from where the label
+          // actually is. Other stroke kinds keep today's clear-on-release; they
+          // have no handles to reach. Cleared again by a press on empty canvas,
+          // leaving the Select tool, undo/redo, Clear all and snapshot import.
+          const s = strokesRef.current[finSel.idx];
+          selectionRef.current = { kind: 'stroke', idx: finSel.idx, start: finSel.start, orig: s };
         } else {
           selectionRef.current = null;
         }
