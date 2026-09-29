@@ -519,6 +519,20 @@ const WEBCAM_PIP_HANDLE = 16;
 /** Invisible hit target for corner resize (larger than visible handle). */
 const WEBCAM_PIP_HANDLE_HIT = 24;
 
+/**
+ * How far the selection box — and so the corner resize handles drawn on it —
+ * sits OUTSIDE a mark's bounding box.
+ *
+ * Shared by the drawing code and the hit test on purpose. They used to disagree:
+ * the handles were drawn at the corners inflated by this much while the hit test
+ * accepted clicks only within 8px of the UN-inflated corners, and hypot(6, 6) is
+ * 8.49, so clicking a handle dead centre missed its own target. Anything that
+ * draws a handle and anything that hits one must read the same number.
+ */
+const SEL_BOX_PAD = 6;
+/** Hit radius around a text resize handle. Sized for a fingertip, not a mouse. */
+const TEXT_HANDLE_HIT_R = 10;
+
 function clampWebcamPip(
   p: { x: number; y: number; w: number; h: number },
   cw: number,
@@ -2057,6 +2071,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // another — each pass adds a track (replacing any overlapping one). While
     // any track exists, the skeleton shows ONLY inside tracked sections.
     const bakedTracksRef = useRef<BakedTrack[]>([]);
+    /**
+     * False from the moment a text draft is created until its focus has settled
+     * on the next animation frame. Any blur arriving before that is the browser
+     * stealing focus back to the canvas, NOT the coach clicking away — see the
+     * textarea's onBlur.
+     */
+    const newTextFocusReadyRef = useRef(false);
+    /** Reached from beginDrawToolAt, which is declared above commitNewTextDraft. */
+    const commitNewTextDraftRef = useRef<(() => void) | null>(null);
+    /** Mirror of newTextDraft readable from the ref-driven pointer path. */
+    const newTextDraftRef = useRef(false);
 
     const findBakedTrack = (t: number): BakedTrack | null => {
       for (const b of bakedTracksRef.current) {
@@ -2665,10 +2690,34 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => {
       if (activeTool !== 'angle') setAngleUiPhase(0);
     }, [activeTool]);
+    useEffect(() => { newTextDraftRef.current = !!newTextDraft; }, [newTextDraft]);
     useEffect(() => {
-      if (newTextDraft && newTextInputRef.current) {
-        newTextInputRef.current.focus();
-      }
+      if (!newTextDraft) { newTextFocusReadyRef.current = false; return; }
+      const input = newTextInputRef.current;
+      if (!input) return;
+      // THE DRAFT IS CREATED ON POINTER-DOWN, which is the whole problem.
+      //
+      // Order of events for one click with the Text tool:
+      //   pointerdown -> React sets the draft -> textarea mounts and autoFocuses
+      //   -> the native MOUSEDOWN then fires, and ITS DEFAULT ACTION moves focus
+      //      back to the canvas
+      //   -> the textarea blurs -> onBlur committed an empty draft and unmounted
+      //      the textarea.
+      // So every click appeared to "reposition" the box and typing never landed:
+      // by the time the coach typed, the textarea was already gone. The text
+      // EDIT textarea never had this bug because it is created on pointer-UP,
+      // after that focus default has already run.
+      //
+      // A rAF callback runs after the mousedown default, so focusing again here
+      // takes focus back, and the flag tells onBlur that everything before this
+      // point was the steal rather than a real click-away.
+      newTextFocusReadyRef.current = false;
+      input.focus();
+      const id = requestAnimationFrame(() => {
+        if (newTextInputRef.current === input) input.focus();
+        newTextFocusReadyRef.current = true;
+      });
+      return () => cancelAnimationFrame(id);
     }, [newTextDraft]);
     useEffect(() => {
       if (activeTool !== 'jointChain' && jointChainActiveRef.current) {
@@ -2781,6 +2830,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           renderDirtyRef.current = true;
         }
       }
+    }, [activeTool]);
+
+    /**
+     * Drop a selection that is being KEPT on a stroke — which now includes a
+     * clicked text label, held after release so its resize handles stay
+     * reachable. Scoped to 'stroke' and 'textResize' only: joint-node and angle
+     * selections have their own lifecycles and are deliberately left alone.
+     *
+     * Needed wherever strokesRef is replaced wholesale (undo, redo, Clear all,
+     * snapshot import): the selection holds an INDEX, and after the array is
+     * swapped that index can name a different mark, or none.
+     */
+    const dropKeptStrokeSelection = () => {
+      const kind = selectionRef.current?.kind;
+      if (kind === 'stroke' || kind === 'textResize') {
+        selectionRef.current = null;
+        renderDirtyRef.current = true;
+      }
+    };
+    // Leaving the Select tool deselects. The selection highlight is drawn
+    // whenever selectionRef is set, whatever the tool, so a label kept selected
+    // would otherwise stay boxed while the coach draws with Pen.
+    useEffect(() => {
+      if (activeTool !== 'select') dropKeptStrokeSelection();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTool]);
     useEffect(() => {
       if (webcamActive) renderDirtyRef.current = true;
@@ -3090,6 +3164,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     useImperativeHandle(ref, () => ({
       clearAll: () => {
+        dropKeptStrokeSelection();
         contextualTargetRef.current = null;
         contextualDirtyRef.current = false;
         onStyleSelectionChangeRef.current?.(null);
@@ -3204,6 +3279,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // here, so undoing a drawing made the skeleton vanish and it could not
         // be re-enabled. The skeleton is a live overlay, not an undo step.
         renderDirtyRef.current = true;
+        dropKeptStrokeSelection();
         if (historyIdxRef.current > 0) {
           historyIdxRef.current--;
           const snap = historyRef.current[historyIdxRef.current];
@@ -3218,6 +3294,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // pose paths ever clears it — so after an AI Track (where live inference
         // is off and the baked track owns the display) the skeleton never came
         // back until the coach toggled Skeleton off and on again.
+        dropKeptStrokeSelection();
         if (historyIdxRef.current < historyRef.current.length - 1) {
           historyIdxRef.current++;
           const snap = historyRef.current[historyIdxRef.current];
@@ -3700,6 +3777,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         try {
           const parsed = JSON.parse(json);
           if (Array.isArray(parsed)) {
+            dropKeptStrokeSelection();
             strokesRef.current = parsed;
             // Seed the baseline with the angles currently on screen, so the two
             // collections stay in step: restoring strokes must not leave undo
@@ -5874,9 +5952,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 x0 = sh.cx - sh.rx; y0 = sh.cy - sh.ry;
                 x1 = sh.cx + sh.rx; y1 = sh.cy + sh.ry;
               } else if (s.tool === 'text') {
-                const tx = s as StrokeText;
-                x0 = tx.pos.x - 20; y0 = tx.pos.y - 24;
-                x1 = tx.pos.x + 140; y1 = tx.pos.y + 10;
+                // MEASURED, not guessed. This branch used to hardcode a fixed
+                // 160x34 box (pos.x-20, pos.y-24 .. pos.x+140, pos.y+10) that
+                // had nothing to do with the actual text, while the resize hit
+                // test read the measured getTextBBox — so the handles were drawn
+                // tens of pixels from where a click on them was accepted, and a
+                // text box could not be resized at all. This is now identical to
+                // the 'textResize' branch below, which also stops the box
+                // jumping the moment a drag starts.
+                const bb = getTextBBox(s as StrokeText);
+                x0 = bb.x0; y0 = bb.y0;
+                x1 = bb.x1; y1 = bb.y1;
               }
             }
           } else if (sel.kind === 'angle') {
@@ -5918,7 +6004,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.strokeStyle = 'rgba(255,215,0,0.95)';
             ctx.lineWidth = 2;
             ctx.setLineDash([6, 4]);
-            ctx.strokeRect(x0 - 6, y0 - 6, (x1 - x0) + 12, (y1 - y0) + 12);
+            ctx.strokeRect(
+              x0 - SEL_BOX_PAD, y0 - SEL_BOX_PAD,
+              (x1 - x0) + SEL_BOX_PAD * 2, (y1 - y0) + SEL_BOX_PAD * 2,
+            );
             ctx.setLineDash([]);
             // Draw corner resize handles for text strokes
             const isTextSel = (sel.kind === 'stroke' || sel.kind === 'textResize') &&
@@ -5928,9 +6017,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               ctx.fillStyle = '#FFD700';
               ctx.strokeStyle = '#000';
               ctx.lineWidth = 1;
+              // Must match textResizeHandleHit's corners exactly — same box, same
+              // padding. See SEL_BOX_PAD.
               const corners = [
-                [x0 - 6, y0 - 6], [x1 + 6, y0 - 6],
-                [x0 - 6, y1 + 6], [x1 + 6, y1 + 6],
+                [x0 - SEL_BOX_PAD, y0 - SEL_BOX_PAD], [x1 + SEL_BOX_PAD, y0 - SEL_BOX_PAD],
+                [x0 - SEL_BOX_PAD, y1 + SEL_BOX_PAD], [x1 + SEL_BOX_PAD, y1 + SEL_BOX_PAD],
               ];
               for (const [hx, hy] of corners) {
                 ctx.fillRect(hx - HANDLE_SZ / 2, hy - HANDLE_SZ / 2, HANDLE_SZ, HANDLE_SZ);
@@ -6661,15 +6752,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const textResizeHandleHit = (tx: StrokeText, pos: Pt): 'tl' | 'tr' | 'bl' | 'br' | null => {
       const bb = getTextBBox(tx);
-      const HANDLE_R = 8;
+      // INFLATED BY SEL_BOX_PAD, because that is where the handles are actually
+      // drawn. Testing the bare bbox corners put every target SEL_BOX_PAD*sqrt(2)
+      // = 8.49px from the handle the coach can see, just outside the old 8px
+      // radius, so all four corners were unhittable even once the box itself was
+      // right.
       const corners: Array<{ id: 'tl' | 'tr' | 'bl' | 'br'; x: number; y: number }> = [
-        { id: 'tl', x: bb.x0, y: bb.y0 },
-        { id: 'tr', x: bb.x1, y: bb.y0 },
-        { id: 'bl', x: bb.x0, y: bb.y1 },
-        { id: 'br', x: bb.x1, y: bb.y1 },
+        { id: 'tl', x: bb.x0 - SEL_BOX_PAD, y: bb.y0 - SEL_BOX_PAD },
+        { id: 'tr', x: bb.x1 + SEL_BOX_PAD, y: bb.y0 - SEL_BOX_PAD },
+        { id: 'bl', x: bb.x0 - SEL_BOX_PAD, y: bb.y1 + SEL_BOX_PAD },
+        { id: 'br', x: bb.x1 + SEL_BOX_PAD, y: bb.y1 + SEL_BOX_PAD },
       ];
       for (const c of corners) {
-        if (Math.hypot(pos.x - c.x, pos.y - c.y) <= HANDLE_R) return c.id;
+        if (Math.hypot(pos.x - c.x, pos.y - c.y) <= TEXT_HANDLE_HIT_R) return c.id;
       }
       return null;
     };
@@ -7142,6 +7237,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         case 'text': {
           const canvas = canvasRef.current;
           if (!canvas) break;
+          // A draft is already open and the coach clicked ELSEWHERE on the canvas
+          // (a click on the textarea itself never reaches here — it sits above
+          // this canvas as a sibling). Commit what they typed before starting a
+          // new one: React reuses the same textarea element when only its
+          // position props change, so without this the box would slide to the
+          // new spot still carrying the previous text.
+          if (newTextDraftRef.current) commitNewTextDraftRef.current?.();
           const { clientX, clientY } = logicalPtToClient(pos);
           const rect = canvas.getBoundingClientRect();
           const scaledFontSize = opts.fontSize * zoomRef.current * (rect.height / cssH(canvas));
@@ -8545,6 +8647,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             s && s.tool === 'jointChain'
               ? { kind: 'jointNode', idx: finSel.idx, nodeIdx: finSel.nodeIdx, start: finSel.start, orig: s }
               : null;
+        } else if (finSel.kind === 'stroke' && strokesRef.current[finSel.idx]?.tool === 'text') {
+          // A clicked TEXT LABEL stays selected after release, showing its box
+          // and four resize handles. It used to fall through to the null below
+          // like every other stroke — and resize can only start from a press on
+          // a handle of an ALREADY-selected label (pointer-down, 'textResize'
+          // entry), so clearing it here made text resize unreachable: the
+          // handles existed only while the button that would grab them was
+          // still held on the label. `orig` is refreshed to the stroke as it now
+          // stands, so a following drag or resize starts from where the label
+          // actually is. Other stroke kinds keep today's clear-on-release; they
+          // have no handles to reach. Cleared again by a press on empty canvas,
+          // leaving the Select tool, undo/redo, Clear all and snapshot import.
+          const s = strokesRef.current[finSel.idx];
+          selectionRef.current = { kind: 'stroke', idx: finSel.idx, start: finSel.start, orig: s };
         } else {
           selectionRef.current = null;
         }
@@ -8722,6 +8838,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const draft = newTextDraft;
       if (!draft) return;
       const val = (newTextInputRef.current?.value ?? '').trim();
+      // EMPTY THE TEXTAREA, because the next draft may well be this very same
+      // DOM node. The draft textarea is uncontrolled — it has no `value`,
+      // `defaultValue` or `key`, so its text lives only in the node and React
+      // never resets it. When the coach clicks elsewhere on the canvas with the
+      // Text tool, beginDrawToolAt commits this draft and opens the next one in
+      // the SAME React event (see the 'text' case in the pointer-down path), so
+      // both setNewTextDraft calls batch: the state goes draft A -> draft B with
+      // no null render in between, `{newTextDraft && ...}` never goes false, and
+      // the element is reused rather than remounted. The new box then opened
+      // carrying a copy of the text just committed. Clearing here is deliberately
+      // preferred over keying the element: unmounting a FOCUSED textarea risks a
+      // stray onBlur committing against the draft that replaced it.
+      if (newTextInputRef.current) newTextInputRef.current.value = '';
       if (val) {
         strokesRef.current = [
           ...strokesRef.current,
@@ -8737,6 +8866,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       setNewTextDraft(null);
     }, [newTextDraft, pushHistory]);
+    useEffect(() => { commitNewTextDraftRef.current = commitNewTextDraft; }, [commitNewTextDraft]);
 
     const coachToolHint = (() => {
       const t = activeTool;
@@ -9408,7 +9538,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 commitNewTextDraft();
               }
             }}
-            onBlur={commitNewTextDraft}
+            onBlur={() => {
+              // Reject the focus steal described in the effect above: take focus
+              // back instead of committing an empty draft and unmounting. Once
+              // focus has settled, a blur is the coach genuinely clicking away
+              // and commits exactly as before.
+              if (!newTextFocusReadyRef.current) {
+                newTextInputRef.current?.focus();
+                return;
+              }
+              commitNewTextDraft();
+            }}
           />
         )}
 
