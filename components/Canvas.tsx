@@ -100,8 +100,29 @@ const PRECISION_CURSOR_OFFSET_RATIO = 0.12;
  */
 /** Still-hold duration (ms) that activates precision mode without the toolbar. */
 const PRECISION_HOLD_MS = 2000;
-/** Finger travel (px) that cancels the hold — past this it is a draw, not a hold. */
+/**
+ * Travel BETWEEN CONSECUTIVE MOVE SAMPLES that cancels the hold — past this the
+ * finger is stroking, not holding.
+ *
+ * This used to be measured from the press ORIGIN and never re-anchored, which
+ * is why the gesture failed on a real phone while passing every synthetic test:
+ * a finger settling on glass slides several millimetres before it comes to
+ * rest, and once it had drifted 10px from where it first landed the hold was
+ * dead even if it then sat perfectly still for the remaining 1.8 seconds.
+ * Measured in a phone-sized touch context: a 5px settle armed precision, while
+ * a 12px settle over 600ms, a 15px settle over 500ms and a 20px creep across
+ * the full 2.4s all silently failed — with the finger motionless afterwards in
+ * every one of those cases.
+ */
 const PRECISION_HOLD_SLOP_PX = 10;
+/**
+ * Total travel from the press origin that cancels the hold regardless of how
+ * slowly it accumulated. Without this, re-anchoring per sample would let an
+ * arbitrarily slow deliberate drag arm precision mid-stroke. 44px is the
+ * tap-target size used throughout this UI — about a fingertip, comfortably
+ * above any settle and far below a real mark.
+ */
+const PRECISION_HOLD_MAX_TRAVEL_PX = 44;
 /**
  * Tools where a 2-second still hold arms precision mode. Drawing tools only:
  * holding still over a pan, zoom, skeleton-focus or region-select gesture means
@@ -2342,9 +2363,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /** Live ref to the activation callback so the timer never closes over a stale prop. */
     const onPrecisionHoldActivateRef = useRef(onPrecisionHoldActivate);
     useEffect(() => { onPrecisionHoldActivateRef.current = onPrecisionHoldActivate; }, [onPrecisionHoldActivate]);
-    /** In-flight 2s hold: timer + the press origin used for the slop test. */
+    /**
+     * In-flight 2s hold. `clientX/clientY` is the press ORIGIN (for the total
+     * travel cap) and `lastX/lastY` is the most recent sample (for the per-move
+     * stillness test, re-anchored on every move).
+     */
     const precisionHoldRef = useRef<
-      { timer: ReturnType<typeof setTimeout>; pointerId: number; clientX: number; clientY: number } | null
+      {
+        timer: ReturnType<typeof setTimeout>;
+        pointerId: number;
+        clientX: number; clientY: number;
+        lastX: number; lastY: number;
+      } | null
     >(null);
 
     /** Drop any in-flight hold. Safe to call unconditionally. */
@@ -6114,10 +6144,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         // ── Outline eraser cursor preview ──────────────────────────────────
+        // ARMED IS NOT ENOUGH. The guard used to be size>0 + the tool being in
+        // OUTLINE_ERASER_TOOLS, and that set is nearly every tool — so after
+        // erasing once the red circle followed the coach into Select, Line and
+        // Pen and never left. Clearing the position on a tool change did not
+        // help: the hover tracker further down re-set it on the very next mouse
+        // move (measured: 824 red pixels back on screen one move after the
+        // switch, with sizeRef still 15).
+        //
+        // The state that actually means "the eraser owns this gesture" is
+        // STYLE MODE (where the Erase toggle lives and is visible) or an erase
+        // drag already in flight. Outside those the eraser is armed but out of
+        // sight, and a cursor for an invisible mode is just a stuck artefact.
         const eraserR = outlineEraserSizeRef.current;
         const eraserPos = outlineEraserPosRef.current;
         const eraserTool = activeToolRef.current;
-        if (eraserR > 0 && eraserPos && OUTLINE_ERASER_TOOLS.has(eraserTool)) {
+        const eraserOwnsGesture = styleModeRef.current || outlineErasingIdxRef.current >= 0;
+        if (eraserR > 0 && eraserPos && eraserOwnsGesture && OUTLINE_ERASER_TOOLS.has(eraserTool)) {
           ctx.save();
           ctx.globalAlpha = 0.35;
           ctx.fillStyle = 'rgba(255, 59, 48, 0.25)';
@@ -8119,6 +8162,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           pointerId: holdPointerId,
           clientX: holdClientX,
           clientY: holdClientY,
+          lastX: holdClientX,
+          lastY: holdClientY,
           timer: setTimeout(() => {
             precisionHoldRef.current = null;
             // The still hold was about to commit a dot — discard it.
@@ -8152,12 +8197,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // not holding, so drop the pending activation. Checked before anything
       // else so a fast stroke can never leave a stale timer armed.
       const hold = precisionHoldRef.current;
-      if (
-        hold &&
-        hold.pointerId === e.pointerId &&
-        Math.hypot(e.clientX - hold.clientX, e.clientY - hold.clientY) > PRECISION_HOLD_SLOP_PX
-      ) {
-        cancelPrecisionHold();
+      if (hold && hold.pointerId === e.pointerId) {
+        const step = Math.hypot(e.clientX - hold.lastX, e.clientY - hold.lastY);
+        const travel = Math.hypot(e.clientX - hold.clientX, e.clientY - hold.clientY);
+        if (step > PRECISION_HOLD_SLOP_PX || travel > PRECISION_HOLD_MAX_TRAVEL_PX) {
+          cancelPrecisionHold();
+        } else {
+          // Still holding — advance the reference so a slow settle does not
+          // accumulate into a false cancel.
+          hold.lastX = e.clientX;
+          hold.lastY = e.clientY;
+        }
       }
 
       // Keep the active-pointer map current (used for multi-touch reconstruction).
@@ -8423,8 +8473,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // Track cursor position for outline eraser preview (even when not dragging)
-      if (outlineEraserSizeRef.current > 0 && OUTLINE_ERASER_TOOLS.has(tool)) {
+      // Track cursor position for outline eraser preview (even when not
+      // dragging) — but ONLY while the eraser owns the gesture. This is the
+      // line that undid the tool-change clear and put the stuck circle back on
+      // the next mouse move; it is gated on the same condition the draw uses.
+      if (
+        outlineEraserSizeRef.current > 0 &&
+        (styleModeRef.current || outlineErasingIdxRef.current >= 0) &&
+        OUTLINE_ERASER_TOOLS.has(tool)
+      ) {
         outlineEraserPosRef.current = pos;
         renderDirtyRef.current = true;
       }

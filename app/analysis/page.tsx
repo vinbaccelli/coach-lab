@@ -3603,9 +3603,41 @@ function Home() {
   const [precisionDrawEnabled, setPrecisionDrawEnabled] = useState(false);
   const [precisionInstructionsOpen, setPrecisionInstructionsOpen] = useState(false);
 
+  /**
+   * IS PRECISION OFFERABLE ON THIS DEVICE?
+   *
+   * `isMobile` alone is NOT the answer, and shipping it as if it were put a
+   * Precision button on desktop — where it is not merely unwanted but INERT.
+   * Every precision entry point arms only on `pointerType === 'touch'`: the
+   * anchor acquisition, the 2-second hold, and the second-finger commit. A
+   * mouse user could switch the mode on and nothing would ever happen.
+   *
+   * REAL TOUCH HARDWARE, not just a narrow window: the isMobile media query
+   * also matches a half-snapped laptop window (<=768px), so it is paired with
+   * the same `(hover: none) and (pointer: coarse)` probe the orientation switch
+   * below uses. Live-subscribed rather than read once — attaching a trackpad to
+   * a tablet changes the answer. Same rule as the Motion Layer editor
+   * (components/stroMotion/FrameMaskEditor.tsx), which already gated this way.
+   *
+   * Resolved in an effect so the server render and the first client render
+   * agree: it starts false and the button appears only once touch is confirmed.
+   */
+  const [coarsePointer, setCoarsePointer] = useState(false);
   useEffect(() => {
-    if (!isMobile && precisionDrawEnabled) setPrecisionDrawEnabled(false);
-  }, [isMobile, precisionDrawEnabled]);
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(hover: none) and (pointer: coarse)');
+    const apply = () => setCoarsePointer(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+  const precisionAvailable = isMobile && coarsePointer;
+
+  // Never leave the mode latched on a device that can no longer drive it
+  // (window widened, trackpad attached).
+  useEffect(() => {
+    if (!precisionAvailable && precisionDrawEnabled) setPrecisionDrawEnabled(false);
+  }, [precisionAvailable, precisionDrawEnabled]);
 
   const handlePrecisionDrawToggle = useCallback(() => {
     setPrecisionDrawEnabled((prev) => {
@@ -6637,7 +6669,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     ...(isMobile
       ? {
           precisionDrawEnabled,
-          onPrecisionDrawToggle: handlePrecisionDrawToggle,
+          // Withholding the callback is what hides the toolbar's Precision row
+          // (ToolPalette renders it only when onPrecisionDrawToggle is present).
+          onPrecisionDrawToggle: precisionAvailable ? handlePrecisionDrawToggle : undefined,
           onShowPrecisionInstructions: showPrecisionInstructionsAgain,
         }
       : {}),
@@ -7217,8 +7251,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)
                   }
                   webcamCutout={webcamCutout}
-                  precisionTouchDraw={isMobile && precisionDrawEnabled}
-                  onPrecisionHoldActivate={isMobile ? handlePrecisionHoldActivate : undefined}
+                  precisionTouchDraw={precisionAvailable && precisionDrawEnabled}
+                  onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
                   webcamPipMobileChrome={isMobile}
                   webcamPipBottomInsetPx={toolbarBottomReservePx}
                   showTourHelpInZoomCluster
@@ -7239,6 +7273,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     unitSystem={rulerUnitSystem}
                     onUnitSystemChange={setRulerUnitSystem}
                     compact={isMobile}
+                    precisionAvailable={precisionAvailable}
                     onMeasurement={(value, unit) => {
                       if (dataColumnActive) {
                         setPendingMeasurement({ type: 'ruler', value, unit });
@@ -7994,8 +8029,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         embedLiveVideoB && (!!youtubeVideoIdB || !!genericEmbedSrcB)
                       }
                       webcamCutout={webcamCutout}
-                      precisionTouchDraw={isMobile && precisionDrawEnabled}
-                      onPrecisionHoldActivate={isMobile ? handlePrecisionHoldActivate : undefined}
+                      precisionTouchDraw={precisionAvailable && precisionDrawEnabled}
+                      onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
                       webcamPipMobileChrome={isMobile}
                       webcamPipBottomInsetPx={toolbarBottomReservePx}
                       poseFrameSkip={1}
