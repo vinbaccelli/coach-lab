@@ -100,8 +100,29 @@ const PRECISION_CURSOR_OFFSET_RATIO = 0.12;
  */
 /** Still-hold duration (ms) that activates precision mode without the toolbar. */
 const PRECISION_HOLD_MS = 2000;
-/** Finger travel (px) that cancels the hold — past this it is a draw, not a hold. */
+/**
+ * Travel BETWEEN CONSECUTIVE MOVE SAMPLES that cancels the hold — past this the
+ * finger is stroking, not holding.
+ *
+ * This used to be measured from the press ORIGIN and never re-anchored, which
+ * is why the gesture failed on a real phone while passing every synthetic test:
+ * a finger settling on glass slides several millimetres before it comes to
+ * rest, and once it had drifted 10px from where it first landed the hold was
+ * dead even if it then sat perfectly still for the remaining 1.8 seconds.
+ * Measured in a phone-sized touch context: a 5px settle armed precision, while
+ * a 12px settle over 600ms, a 15px settle over 500ms and a 20px creep across
+ * the full 2.4s all silently failed — with the finger motionless afterwards in
+ * every one of those cases.
+ */
 const PRECISION_HOLD_SLOP_PX = 10;
+/**
+ * Total travel from the press origin that cancels the hold regardless of how
+ * slowly it accumulated. Without this, re-anchoring per sample would let an
+ * arbitrarily slow deliberate drag arm precision mid-stroke. 44px is the
+ * tap-target size used throughout this UI — about a fingertip, comfortably
+ * above any settle and far below a real mark.
+ */
+const PRECISION_HOLD_MAX_TRAVEL_PX = 44;
 /**
  * Tools where a 2-second still hold arms precision mode. Drawing tools only:
  * holding still over a pan, zoom, skeleton-focus or region-select gesture means
@@ -518,6 +539,20 @@ const WEBCAM_PIP_ASPECT = 11 / 9;
 const WEBCAM_PIP_HANDLE = 16;
 /** Invisible hit target for corner resize (larger than visible handle). */
 const WEBCAM_PIP_HANDLE_HIT = 24;
+
+/**
+ * How far the selection box — and so the corner resize handles drawn on it —
+ * sits OUTSIDE a mark's bounding box.
+ *
+ * Shared by the drawing code and the hit test on purpose. They used to disagree:
+ * the handles were drawn at the corners inflated by this much while the hit test
+ * accepted clicks only within 8px of the UN-inflated corners, and hypot(6, 6) is
+ * 8.49, so clicking a handle dead centre missed its own target. Anything that
+ * draws a handle and anything that hits one must read the same number.
+ */
+const SEL_BOX_PAD = 6;
+/** Hit radius around a text resize handle. Sized for a fingertip, not a mouse. */
+const TEXT_HANDLE_HIT_R = 10;
 
 function clampWebcamPip(
   p: { x: number; y: number; w: number; h: number },
@@ -1287,6 +1322,85 @@ function applyZoomPanAt(
   panYRef.current = c.y;
 }
 
+/**
+ * The video's letterbox rect inside a W×H logical canvas — the SAME rule the
+ * render loop applies before it draws the frame. Kept as one function so the
+ * stroke re-projection below can never drift from what is actually painted.
+ */
+function letterboxRect(W: number, H: number, vW: number, vH: number) {
+  const scale = Math.min(W / vW, H / vH);
+  const dw = vW * scale;
+  const dh = vH * scale;
+  return { dx: (W - dw) / 2, dy: (H - dh) / 2, dw, dh };
+}
+
+/**
+ * Re-projection of canvas-space annotation geometry from one letterbox rect to
+ * another.
+ *
+ * WHY THIS EXISTS. Strokes and angle measurements store ABSOLUTE logical-canvas
+ * coordinates (see StrokeLine / AngleMeas above) while the video is re-fitted to
+ * the canvas on every resize. So the moment the analysis panel changes width —
+ * expanding the toolbar labels, collapsing the rail, a window resize, a phone
+ * rotation, adding the B panel — the frame moves underneath marks that do not,
+ * and every annotation desyncs from the thing it was drawn on. Measured at 240px
+ * → 60px of toolbar: the marks stayed at identical canvas pixels while the video
+ * rect went 1260→1440 wide, drifting the marks ~5.5% of frame width.
+ *
+ * The scale is UNIFORM by construction: both rects have the video's aspect
+ * ratio, so dw/dw' equals dh/dh'. That is what makes it safe to remap an
+ * AngleMeas without recomputing `deg` — a uniform similarity transform
+ * preserves angles exactly.
+ *
+ * NOT re-projected: `lw` and `fontSize`, which are style rather than geometry.
+ * Eraser-dot radii ARE scaled, because an unscaled radius would resize the hole
+ * relative to the mark it was cut from and re-expose erased pixels.
+ *
+ * This is the minimal fix. The structural one is to store annotation
+ * coordinates video-normalized so no re-projection is ever needed — see
+ * docs/KNOWN_ISSUES.md #010, which also covers the case this does NOT fix
+ * (snapshots persisted via exportStrokes hold canvas pixels too).
+ */
+interface LetterboxRemap { odx: number; ody: number; ndx: number; ndy: number; s: number }
+
+function remapPt(p: Pt, m: LetterboxRemap): Pt {
+  return { x: m.ndx + (p.x - m.odx) * m.s, y: m.ndy + (p.y - m.ody) * m.s };
+}
+
+function remapEraserDots(dots: EraserDot[] | undefined, m: LetterboxRemap): EraserDot[] | undefined {
+  if (!dots) return dots;
+  return dots.map((d) => ({ x: m.ndx + (d.x - m.odx) * m.s, y: m.ndy + (d.y - m.ody) * m.s, radius: d.radius * m.s }));
+}
+
+function remapStroke(st: Stroke, m: LetterboxRemap): Stroke {
+  switch (st.tool) {
+    case 'pen':
+      return { ...st, pts: st.pts.map((p) => remapPt(p, m)), eraserStrokes: remapEraserDots(st.eraserStrokes, m) };
+    case 'swingPath':
+    case 'manualSwing':
+      return { ...st, pts: st.pts.map((p) => remapPt(p, m)) };
+    case 'jointChain':
+      return { ...st, nodes: st.nodes.map((p) => remapPt(p, m)) };
+    case 'line':
+    case 'arrow':
+    case 'arrowAngle':
+      return { ...st, p1: remapPt(st.p1, m), p2: remapPt(st.p2, m), eraserStrokes: remapEraserDots(st.eraserStrokes, m) };
+    case 'circle':
+    case 'bodyCircle':
+    case 'rect':
+    case 'triangle': {
+      const c = remapPt({ x: st.cx, y: st.cy }, m);
+      return { ...st, cx: c.x, cy: c.y, rx: st.rx * m.s, ry: st.ry * m.s, eraserStrokes: remapEraserDots(st.eraserStrokes, m) };
+    }
+    case 'text':
+      return { ...st, pos: remapPt(st.pos, m) };
+  }
+}
+
+function remapAngle(a: AngleMeas, m: LetterboxRemap): AngleMeas {
+  return { ...a, v: remapPt(a.v, m), p1: remapPt(a.p1, m), p2: remapPt(a.p2, m) };
+}
+
 function drawCircleStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeEllipse,
@@ -1978,6 +2092,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // another — each pass adds a track (replacing any overlapping one). While
     // any track exists, the skeleton shows ONLY inside tracked sections.
     const bakedTracksRef = useRef<BakedTrack[]>([]);
+    /**
+     * False from the moment a text draft is created until its focus has settled
+     * on the next animation frame. Any blur arriving before that is the browser
+     * stealing focus back to the canvas, NOT the coach clicking away — see the
+     * textarea's onBlur.
+     */
+    const newTextFocusReadyRef = useRef(false);
+    /** Reached from beginDrawToolAt, which is declared above commitNewTextDraft. */
+    const commitNewTextDraftRef = useRef<(() => void) | null>(null);
+    /** Mirror of newTextDraft readable from the ref-driven pointer path. */
+    const newTextDraftRef = useRef(false);
 
     const findBakedTrack = (t: number): BakedTrack | null => {
       for (const b of bakedTracksRef.current) {
@@ -2158,6 +2283,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const historyIdxRef   = useRef<number>(0);
     const activeStrokeRef = useRef<Stroke | null>(null);
     const angleMeasRef    = useRef<AngleMeas[]>([]);
+    /**
+     * Canvas logical size + video dimensions that the coordinates currently in
+     * `strokesRef` / `angleMeasRef` / `historyRef` are valid for. Written only
+     * by the canvas-size effect, which compares it against the new size to
+     * re-project annotations onto the frame's new position. null whenever no
+     * video frame is being painted, since there is then no frame to anchor to.
+     */
+    const strokeAnchorRef = useRef<{ w: number; h: number; vW: number; vH: number } | null>(null);
     const liveAngleRef    = useRef<LiveAngle | null>(null);
     const anglePhaseRef   = useRef<0 | 1 | 2>(0);
     const angleVRef       = useRef<Pt | null>(null);
@@ -2255,9 +2388,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /** Live ref to the activation callback so the timer never closes over a stale prop. */
     const onPrecisionHoldActivateRef = useRef(onPrecisionHoldActivate);
     useEffect(() => { onPrecisionHoldActivateRef.current = onPrecisionHoldActivate; }, [onPrecisionHoldActivate]);
-    /** In-flight 2s hold: timer + the press origin used for the slop test. */
+    /**
+     * In-flight 2s hold. `clientX/clientY` is the press ORIGIN (for the total
+     * travel cap) and `lastX/lastY` is the most recent sample (for the per-move
+     * stillness test, re-anchored on every move).
+     */
     const precisionHoldRef = useRef<
-      { timer: ReturnType<typeof setTimeout>; pointerId: number; clientX: number; clientY: number } | null
+      {
+        timer: ReturnType<typeof setTimeout>;
+        pointerId: number;
+        clientX: number; clientY: number;
+        lastX: number; lastY: number;
+      } | null
     >(null);
 
     /** Drop any in-flight hold. Safe to call unconditionally. */
@@ -2556,13 +2698,56 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     useEffect(() => { drawingOptsRef.current      = drawingOptions; },  [drawingOptions]);
     useEffect(() => { activeToolRef.current        = activeTool; },      [activeTool]);
+    /**
+     * Drop the eraser's red cursor circle whenever the tool changes.
+     *
+     * The circle is drawn at outlineEraserPosRef under the guard
+     * `OUTLINE_ERASER_TOOLS.has(activeTool)` — but that set is nearly every
+     * drawing tool, so switching tools almost never falsified it and the circle
+     * stayed painted at the last place the eraser touched. Only "Clear all"
+     * cleared it, because that zeroes the SIZE ref (the guard's other half).
+     *
+     * The position is a live-pointer artefact, so the correct lifetime is the
+     * gesture, not the session: it is re-set on the next move under an
+     * eraser-capable tool, which is exactly when the circle should reappear.
+     */
+    useEffect(() => {
+      if (outlineEraserPosRef.current !== null) {
+        outlineEraserPosRef.current = null;
+        renderDirtyRef.current = true;
+      }
+    }, [activeTool]);
     useEffect(() => {
       if (activeTool !== 'angle') setAngleUiPhase(0);
     }, [activeTool]);
+    useEffect(() => { newTextDraftRef.current = !!newTextDraft; }, [newTextDraft]);
     useEffect(() => {
-      if (newTextDraft && newTextInputRef.current) {
-        newTextInputRef.current.focus();
-      }
+      if (!newTextDraft) { newTextFocusReadyRef.current = false; return; }
+      const input = newTextInputRef.current;
+      if (!input) return;
+      // THE DRAFT IS CREATED ON POINTER-DOWN, which is the whole problem.
+      //
+      // Order of events for one click with the Text tool:
+      //   pointerdown -> React sets the draft -> textarea mounts and autoFocuses
+      //   -> the native MOUSEDOWN then fires, and ITS DEFAULT ACTION moves focus
+      //      back to the canvas
+      //   -> the textarea blurs -> onBlur committed an empty draft and unmounted
+      //      the textarea.
+      // So every click appeared to "reposition" the box and typing never landed:
+      // by the time the coach typed, the textarea was already gone. The text
+      // EDIT textarea never had this bug because it is created on pointer-UP,
+      // after that focus default has already run.
+      //
+      // A rAF callback runs after the mousedown default, so focusing again here
+      // takes focus back, and the flag tells onBlur that everything before this
+      // point was the steal rather than a real click-away.
+      newTextFocusReadyRef.current = false;
+      input.focus();
+      const id = requestAnimationFrame(() => {
+        if (newTextInputRef.current === input) input.focus();
+        newTextFocusReadyRef.current = true;
+      });
+      return () => cancelAnimationFrame(id);
     }, [newTextDraft]);
     useEffect(() => {
       if (activeTool !== 'jointChain' && jointChainActiveRef.current) {
@@ -2675,6 +2860,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           renderDirtyRef.current = true;
         }
       }
+    }, [activeTool]);
+
+    /**
+     * Drop a selection that is being KEPT on a stroke — which now includes a
+     * clicked text label, held after release so its resize handles stay
+     * reachable. Scoped to 'stroke' and 'textResize' only: joint-node and angle
+     * selections have their own lifecycles and are deliberately left alone.
+     *
+     * Needed wherever strokesRef is replaced wholesale (undo, redo, Clear all,
+     * snapshot import): the selection holds an INDEX, and after the array is
+     * swapped that index can name a different mark, or none.
+     */
+    const dropKeptStrokeSelection = () => {
+      const kind = selectionRef.current?.kind;
+      if (kind === 'stroke' || kind === 'textResize') {
+        selectionRef.current = null;
+        renderDirtyRef.current = true;
+      }
+    };
+    // Leaving the Select tool deselects. The selection highlight is drawn
+    // whenever selectionRef is set, whatever the tool, so a label kept selected
+    // would otherwise stay boxed while the coach draws with Pen.
+    useEffect(() => {
+      if (activeTool !== 'select') dropKeptStrokeSelection();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTool]);
     useEffect(() => {
       if (webcamActive) renderDirtyRef.current = true;
@@ -2984,6 +3194,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     useImperativeHandle(ref, () => ({
       clearAll: () => {
+        dropKeptStrokeSelection();
         contextualTargetRef.current = null;
         contextualDirtyRef.current = false;
         onStyleSelectionChangeRef.current?.(null);
@@ -3098,6 +3309,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // here, so undoing a drawing made the skeleton vanish and it could not
         // be re-enabled. The skeleton is a live overlay, not an undo step.
         renderDirtyRef.current = true;
+        dropKeptStrokeSelection();
         if (historyIdxRef.current > 0) {
           historyIdxRef.current--;
           const snap = historyRef.current[historyIdxRef.current];
@@ -3112,6 +3324,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // pose paths ever clears it — so after an AI Track (where live inference
         // is off and the baked track owns the display) the skeleton never came
         // back until the coach toggled Skeleton off and on again.
+        dropKeptStrokeSelection();
         if (historyIdxRef.current < historyRef.current.length - 1) {
           historyIdxRef.current++;
           const snap = historyRef.current[historyIdxRef.current];
@@ -3594,6 +3807,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         try {
           const parsed = JSON.parse(json);
           if (Array.isArray(parsed)) {
+            dropKeptStrokeSelection();
             strokesRef.current = parsed;
             // Seed the baseline with the angles currently on screen, so the two
             // collections stay in step: restoring strokes must not leave undo
@@ -4551,7 +4765,96 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       canvas.width = Math.round(containerWidth * dpr);
       canvas.height = Math.round(containerHeight * dpr);
       renderDirtyRef.current = true;
-    }, [containerWidth, containerHeight]);
+
+      // ── Keep annotations glued to the video frame across a resize ─────────
+      // Strokes and angles hold absolute canvas coordinates, and the line above
+      // just changed what those coordinates mean: the video re-fits to the new
+      // canvas, so without this every mark slides relative to the frame it was
+      // drawn on. Re-project them through old-rect → new-rect.
+      //
+      // THE OLD SIZE COMES FROM THIS EFFECT'S OWN PREVIOUS RUN, deliberately —
+      // NOT from videoBoundsRef. This is a passive useEffect, so the browser
+      // can paint between React's commit and this callback, and the rAF render
+      // loop then rewrites videoBoundsRef to the POST-resize rect. Reading it
+      // here measured a zero-width change and silently did nothing (verified:
+      // the marks did not move). The size recorded below is immune to that,
+      // because nothing else writes it.
+      const vid = videoRef.current;
+      const nowW = cssW(canvas);
+      const nowH = cssH(canvas);
+      const vW = vid?.videoWidth ?? 0;
+      const vH = vid?.videoHeight ?? 0;
+      // BOTH painting modes count. A plain HTML5 upload is shown as a NATIVE
+      // <video> UNDERLAY, not painted onto the canvas, so `renderVideo` is
+      // false for it (app/analysis/page.tsx:6716 paintVideoOnCanvasA) — gating
+      // on renderVideo alone made this whole block a no-op for the most common
+      // case, which is exactly the case reported. The two modes letterbox with
+      // the identical formula (components/Canvas.tsx:4981 and :5160), so one
+      // rect calculation serves both.
+      const hasVideo = !!(
+        vid && vW > 0 && vH > 0 &&
+        ((renderVideoRef.current && vid.readyState >= 1) || nativeVideoUnderlayRef.current)
+      );
+      const prevAnchor = strokeAnchorRef.current;
+      strokeAnchorRef.current = hasVideo ? { w: nowW, h: nowH, vW, vH } : null;
+      // Same video on both sides, or there is no shared frame to anchor to —
+      // a clip swap is not a resize, and the no-video fallback rect is not
+      // aspect-preserving, so a remap across it would skew angles.
+      if (
+        hasVideo && prevAnchor &&
+        prevAnchor.vW === vW && prevAnchor.vH === vH &&
+        prevAnchor.w > 0 && prevAnchor.h > 0 &&
+        (Math.abs(nowW - prevAnchor.w) > 0.5 || Math.abs(nowH - prevAnchor.h) > 0.5)
+      ) {
+        const prevRect = letterboxRect(prevAnchor.w, prevAnchor.h, vW, vH);
+        const nextRect = letterboxRect(nowW, nowH, vW, vH);
+        const m: LetterboxRemap = {
+          odx: prevRect.dx, ody: prevRect.dy,
+          ndx: nextRect.dx, ndy: nextRect.dy,
+          s: nextRect.dw / prevRect.dw,
+        };
+        strokesRef.current = strokesRef.current.map((st) => remapStroke(st, m));
+        angleMeasRef.current = angleMeasRef.current.map((a) => remapAngle(a, m));
+        // Undo/redo snapshots hold the same absolute coordinates, so an undo
+        // after a resize would otherwise restore the pre-resize misalignment.
+        historyRef.current = historyRef.current.map((h) => ({
+          strokes: h.strokes.map((st) => remapStroke(st, m)),
+          angles: h.angles.map((a) => remapAngle(a, m)),
+        }));
+        renderDirtyRef.current = true;
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [containerWidth, containerHeight, videoRef]);
+
+    /**
+     * Seed the re-projection anchor the moment a clip's dimensions are known.
+     *
+     * The effect above only writes the anchor when the panel RESIZES, so on a
+     * fresh load it stayed null until the first resize — and that first resize
+     * is precisely the one that then could not be corrected. Measured: with the
+     * toolbar animating 1260→1300→…→1440, the 1260→1300 step was lost and left
+     * a 1300/1260 = 3.2% residual drift (predicted u0 0.4293, measured 0.4292).
+     * Seeding on metadata closes it.
+     */
+    useEffect(() => {
+      const v = videoRef.current;
+      if (!v) return;
+      const seed = () => {
+        const canvas = canvasRef.current;
+        if (!canvas || v.videoWidth <= 0 || v.videoHeight <= 0) return;
+        strokeAnchorRef.current = {
+          w: cssW(canvas), h: cssH(canvas), vW: v.videoWidth, vH: v.videoHeight,
+        };
+      };
+      seed();
+      v.addEventListener('loadedmetadata', seed);
+      v.addEventListener('loadeddata', seed);
+      return () => {
+        v.removeEventListener('loadedmetadata', seed);
+        v.removeEventListener('loadeddata', seed);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [videoRef]);
 
     /**
      * Keep `dockTopRef` in step with the playback dock.
@@ -5679,9 +5982,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 x0 = sh.cx - sh.rx; y0 = sh.cy - sh.ry;
                 x1 = sh.cx + sh.rx; y1 = sh.cy + sh.ry;
               } else if (s.tool === 'text') {
-                const tx = s as StrokeText;
-                x0 = tx.pos.x - 20; y0 = tx.pos.y - 24;
-                x1 = tx.pos.x + 140; y1 = tx.pos.y + 10;
+                // MEASURED, not guessed. This branch used to hardcode a fixed
+                // 160x34 box (pos.x-20, pos.y-24 .. pos.x+140, pos.y+10) that
+                // had nothing to do with the actual text, while the resize hit
+                // test read the measured getTextBBox — so the handles were drawn
+                // tens of pixels from where a click on them was accepted, and a
+                // text box could not be resized at all. This is now identical to
+                // the 'textResize' branch below, which also stops the box
+                // jumping the moment a drag starts.
+                const bb = getTextBBox(s as StrokeText);
+                x0 = bb.x0; y0 = bb.y0;
+                x1 = bb.x1; y1 = bb.y1;
               }
             }
           } else if (sel.kind === 'angle') {
@@ -5723,7 +6034,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.strokeStyle = 'rgba(255,215,0,0.95)';
             ctx.lineWidth = 2;
             ctx.setLineDash([6, 4]);
-            ctx.strokeRect(x0 - 6, y0 - 6, (x1 - x0) + 12, (y1 - y0) + 12);
+            ctx.strokeRect(
+              x0 - SEL_BOX_PAD, y0 - SEL_BOX_PAD,
+              (x1 - x0) + SEL_BOX_PAD * 2, (y1 - y0) + SEL_BOX_PAD * 2,
+            );
             ctx.setLineDash([]);
             // Draw corner resize handles for text strokes
             const isTextSel = (sel.kind === 'stroke' || sel.kind === 'textResize') &&
@@ -5733,9 +6047,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               ctx.fillStyle = '#FFD700';
               ctx.strokeStyle = '#000';
               ctx.lineWidth = 1;
+              // Must match textResizeHandleHit's corners exactly — same box, same
+              // padding. See SEL_BOX_PAD.
               const corners = [
-                [x0 - 6, y0 - 6], [x1 + 6, y0 - 6],
-                [x0 - 6, y1 + 6], [x1 + 6, y1 + 6],
+                [x0 - SEL_BOX_PAD, y0 - SEL_BOX_PAD], [x1 + SEL_BOX_PAD, y0 - SEL_BOX_PAD],
+                [x0 - SEL_BOX_PAD, y1 + SEL_BOX_PAD], [x1 + SEL_BOX_PAD, y1 + SEL_BOX_PAD],
               ];
               for (const [hx, hy] of corners) {
                 ctx.fillRect(hx - HANDLE_SZ / 2, hy - HANDLE_SZ / 2, HANDLE_SZ, HANDLE_SZ);
@@ -5919,10 +6235,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         // ── Outline eraser cursor preview ──────────────────────────────────
+        // ARMED IS NOT ENOUGH. The guard used to be size>0 + the tool being in
+        // OUTLINE_ERASER_TOOLS, and that set is nearly every tool — so after
+        // erasing once the red circle followed the coach into Select, Line and
+        // Pen and never left. Clearing the position on a tool change did not
+        // help: the hover tracker further down re-set it on the very next mouse
+        // move (measured: 824 red pixels back on screen one move after the
+        // switch, with sizeRef still 15).
+        //
+        // The state that actually means "the eraser owns this gesture" is
+        // STYLE MODE (where the Erase toggle lives and is visible) or an erase
+        // drag already in flight. Outside those the eraser is armed but out of
+        // sight, and a cursor for an invisible mode is just a stuck artefact.
         const eraserR = outlineEraserSizeRef.current;
         const eraserPos = outlineEraserPosRef.current;
         const eraserTool = activeToolRef.current;
-        if (eraserR > 0 && eraserPos && OUTLINE_ERASER_TOOLS.has(eraserTool)) {
+        const eraserOwnsGesture = styleModeRef.current || outlineErasingIdxRef.current >= 0;
+        if (eraserR > 0 && eraserPos && eraserOwnsGesture && OUTLINE_ERASER_TOOLS.has(eraserTool)) {
           ctx.save();
           ctx.globalAlpha = 0.35;
           ctx.fillStyle = 'rgba(255, 59, 48, 0.25)';
@@ -6466,15 +6795,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const textResizeHandleHit = (tx: StrokeText, pos: Pt): 'tl' | 'tr' | 'bl' | 'br' | null => {
       const bb = getTextBBox(tx);
-      const HANDLE_R = 8;
+      // INFLATED BY SEL_BOX_PAD, because that is where the handles are actually
+      // drawn. Testing the bare bbox corners put every target SEL_BOX_PAD*sqrt(2)
+      // = 8.49px from the handle the coach can see, just outside the old 8px
+      // radius, so all four corners were unhittable even once the box itself was
+      // right.
       const corners: Array<{ id: 'tl' | 'tr' | 'bl' | 'br'; x: number; y: number }> = [
-        { id: 'tl', x: bb.x0, y: bb.y0 },
-        { id: 'tr', x: bb.x1, y: bb.y0 },
-        { id: 'bl', x: bb.x0, y: bb.y1 },
-        { id: 'br', x: bb.x1, y: bb.y1 },
+        { id: 'tl', x: bb.x0 - SEL_BOX_PAD, y: bb.y0 - SEL_BOX_PAD },
+        { id: 'tr', x: bb.x1 + SEL_BOX_PAD, y: bb.y0 - SEL_BOX_PAD },
+        { id: 'bl', x: bb.x0 - SEL_BOX_PAD, y: bb.y1 + SEL_BOX_PAD },
+        { id: 'br', x: bb.x1 + SEL_BOX_PAD, y: bb.y1 + SEL_BOX_PAD },
       ];
       for (const c of corners) {
-        if (Math.hypot(pos.x - c.x, pos.y - c.y) <= HANDLE_R) return c.id;
+        if (Math.hypot(pos.x - c.x, pos.y - c.y) <= TEXT_HANDLE_HIT_R) return c.id;
       }
       return null;
     };
@@ -6947,6 +7280,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         case 'text': {
           const canvas = canvasRef.current;
           if (!canvas) break;
+          // A draft is already open and the coach clicked ELSEWHERE on the canvas
+          // (a click on the textarea itself never reaches here — it sits above
+          // this canvas as a sibling). Commit what they typed before starting a
+          // new one: React reuses the same textarea element when only its
+          // position props change, so without this the box would slide to the
+          // new spot still carrying the previous text.
+          if (newTextDraftRef.current) commitNewTextDraftRef.current?.();
           const { clientX, clientY } = logicalPtToClient(pos);
           const rect = canvas.getBoundingClientRect();
           const scaledFontSize = opts.fontSize * zoomRef.current * (rect.height / cssH(canvas));
@@ -7346,14 +7686,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // ── Pan: activates immediately on pointer-down with no delay ────────
       // Triggers: middle-click, Space+drag, zoom tool while zoomed,
-      // select/skeleton tool while zoomed, touch while zoomed, or panMode
-      // enabled at ANY zoom level (no prior zoom-in required).
+      // Middle-click, held space, the zoom tool's own drag, or the Pan/Zoom
+      // tool with its drag toggle on. Being zoomed is no longer enough on its
+      // own — see the shouldPan comment below.
       const zoomed = zoomRef.current > 1;
-      const isDrawingTool =
-        tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'arrowAngle' ||
-        tool === 'circle' || tool === 'bodyCircle' || tool === 'rect' || tool === 'triangle' ||
-        tool === 'angle' || tool === 'text' || tool === 'erase' || tool === 'ballShadow' ||
-        tool === 'swingPath' || tool === 'manualSwing' || tool === 'jointChain';
 
       // ── Measurement overlay endpoint drag (BEFORE pan/zoom/column) ──────
       // Must run before shouldPan: coaches zoom in precisely when they want to
@@ -7570,16 +7906,34 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         tool === 'select' &&
         webcamPipHitTest(getPosFromPointerEvent(e)) !== 'miss';
 
+      /*
+       * PANNING IS AN EXPLICIT MODE, NOT A CONSEQUENCE OF BEING ZOOMED.
+       *
+       * This used to also read:
+       *
+       *     (zoomed && !isDrawingTool) ||
+       *     (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current)
+       *
+       * which meant that the moment the coach zoomed in, every non-drawing
+       * gesture became a pan. The data column was the visible casualty: its
+       * header/resize hit-test runs just below this block and mis-compares a
+       * LOGICAL-space pointer (getPos inverts zoom/pan) against a SCREEN-space
+       * rect (the column is drawn after the transform is undone), so at any
+       * zoom != 1 the test missed and the drag fell through to here and panned
+       * instead. Removing the implicit clauses means a missed hit-test now does
+       * nothing rather than silently doing the wrong thing.
+       *
+       * What stays: middle-click and held-space are momentary, explicitly-held
+       * gestures rather than ambient state, and the zoom tool's own drag.
+       */
       const shouldPan =
         !pipVeto && (
           e.button === 1 ||
           spaceHeldRef.current ||
           (tool === 'zoom' && e.button === 0 && zoomed) ||
-          // Pan mode works at ANY zoom level — no prior zoom-in required.
-          panModeEnabledRef.current ||
-          (zoomed && !isDrawingTool) ||
-          // Touch one-finger drag while zoomed always pans (no activation needed).
-          (zoomed && e.pointerType === 'touch' && !precisionTouchDrawRef.current)
+          // The pan tool, with its drag toggle on. Works at ANY zoom level —
+          // no prior zoom-in required.
+          (tool === 'pan' && panModeEnabledRef.current)
         );
       if (shouldPan) {
         isPanningRef.current = true;
@@ -7910,6 +8264,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           pointerId: holdPointerId,
           clientX: holdClientX,
           clientY: holdClientY,
+          lastX: holdClientX,
+          lastY: holdClientY,
           timer: setTimeout(() => {
             precisionHoldRef.current = null;
             // The still hold was about to commit a dot — discard it.
@@ -7943,12 +8299,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // not holding, so drop the pending activation. Checked before anything
       // else so a fast stroke can never leave a stale timer armed.
       const hold = precisionHoldRef.current;
-      if (
-        hold &&
-        hold.pointerId === e.pointerId &&
-        Math.hypot(e.clientX - hold.clientX, e.clientY - hold.clientY) > PRECISION_HOLD_SLOP_PX
-      ) {
-        cancelPrecisionHold();
+      if (hold && hold.pointerId === e.pointerId) {
+        const step = Math.hypot(e.clientX - hold.lastX, e.clientY - hold.lastY);
+        const travel = Math.hypot(e.clientX - hold.clientX, e.clientY - hold.clientY);
+        if (step > PRECISION_HOLD_SLOP_PX || travel > PRECISION_HOLD_MAX_TRAVEL_PX) {
+          cancelPrecisionHold();
+        } else {
+          // Still holding — advance the reference so a slow settle does not
+          // accumulate into a false cancel.
+          hold.lastX = e.clientX;
+          hold.lastY = e.clientY;
+        }
       }
 
       // Keep the active-pointer map current (used for multi-touch reconstruction).
@@ -8214,8 +8575,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // Track cursor position for outline eraser preview (even when not dragging)
-      if (outlineEraserSizeRef.current > 0 && OUTLINE_ERASER_TOOLS.has(tool)) {
+      // Track cursor position for outline eraser preview (even when not
+      // dragging) — but ONLY while the eraser owns the gesture. This is the
+      // line that undid the tool-change clear and put the stuck circle back on
+      // the next mouse move; it is gated on the same condition the draw uses.
+      if (
+        outlineEraserSizeRef.current > 0 &&
+        (styleModeRef.current || outlineErasingIdxRef.current >= 0) &&
+        OUTLINE_ERASER_TOOLS.has(tool)
+      ) {
         outlineEraserPosRef.current = pos;
         renderDirtyRef.current = true;
       }
@@ -8336,6 +8704,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             s && s.tool === 'jointChain'
               ? { kind: 'jointNode', idx: finSel.idx, nodeIdx: finSel.nodeIdx, start: finSel.start, orig: s }
               : null;
+        } else if (finSel.kind === 'stroke' && strokesRef.current[finSel.idx]?.tool === 'text') {
+          // A clicked TEXT LABEL stays selected after release, showing its box
+          // and four resize handles. It used to fall through to the null below
+          // like every other stroke — and resize can only start from a press on
+          // a handle of an ALREADY-selected label (pointer-down, 'textResize'
+          // entry), so clearing it here made text resize unreachable: the
+          // handles existed only while the button that would grab them was
+          // still held on the label. `orig` is refreshed to the stroke as it now
+          // stands, so a following drag or resize starts from where the label
+          // actually is. Other stroke kinds keep today's clear-on-release; they
+          // have no handles to reach. Cleared again by a press on empty canvas,
+          // leaving the Select tool, undo/redo, Clear all and snapshot import.
+          const s = strokesRef.current[finSel.idx];
+          selectionRef.current = { kind: 'stroke', idx: finSel.idx, start: finSel.start, orig: s };
         } else {
           selectionRef.current = null;
         }
@@ -8513,6 +8895,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const draft = newTextDraft;
       if (!draft) return;
       const val = (newTextInputRef.current?.value ?? '').trim();
+      // EMPTY THE TEXTAREA, because the next draft may well be this very same
+      // DOM node. The draft textarea is uncontrolled — it has no `value`,
+      // `defaultValue` or `key`, so its text lives only in the node and React
+      // never resets it. When the coach clicks elsewhere on the canvas with the
+      // Text tool, beginDrawToolAt commits this draft and opens the next one in
+      // the SAME React event (see the 'text' case in the pointer-down path), so
+      // both setNewTextDraft calls batch: the state goes draft A -> draft B with
+      // no null render in between, `{newTextDraft && ...}` never goes false, and
+      // the element is reused rather than remounted. The new box then opened
+      // carrying a copy of the text just committed. Clearing here is deliberately
+      // preferred over keying the element: unmounting a FOCUSED textarea risks a
+      // stray onBlur committing against the draft that replaced it.
+      if (newTextInputRef.current) newTextInputRef.current.value = '';
       if (val) {
         strokesRef.current = [
           ...strokesRef.current,
@@ -8528,6 +8923,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
       setNewTextDraft(null);
     }, [newTextDraft, pushHistory]);
+    useEffect(() => { commitNewTextDraftRef.current = commitNewTextDraft; }, [commitNewTextDraft]);
 
     const coachToolHint = (() => {
       const t = activeTool;
@@ -8619,7 +9015,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           : zoomRef.current > 1.0 ? 'zoom-out' : 'zoom-in',
       select: zoomRef.current > 1 ? (isPanningRef.current ? 'grabbing' : 'grab') : 'default',
     };
-    if (panModeEnabled) {
+    // Grab cursor only in the pan tool — panModeEnabled is the pan tool's own
+    // drag toggle now, not a global override that repaints every tool's cursor.
+    if (activeTool === 'pan' && panModeEnabled) {
       Object.keys(cursorFor).forEach((k) => {
         if (k === 'objectMultiplier') return;
         (cursorFor as Record<string, string>)[k] = isPanningRef.current ? 'grabbing' : 'grab';
@@ -8843,7 +9241,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             cursor:
               activeTool === 'objectMultiplier'
                 ? 'default'
-                : panModeEnabled
+                : (activeTool === 'pan' && panModeEnabled)
                   ? (isPanningRef.current ? 'grabbing' : 'grab')
                   : (cursorFor[activeTool] ?? 'default'),
           }}
@@ -9197,7 +9595,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 commitNewTextDraft();
               }
             }}
-            onBlur={commitNewTextDraft}
+            onBlur={() => {
+              // Reject the focus steal described in the effect above: take focus
+              // back instead of committing an empty draft and unmounting. Once
+              // focus has settled, a blur is the coach genuinely clicking away
+              // and commits exactly as before.
+              if (!newTextFocusReadyRef.current) {
+                newTextInputRef.current?.focus();
+                return;
+              }
+              commitNewTextDraft();
+            }}
           />
         )}
 

@@ -236,3 +236,116 @@ for the user and not for you, establish *which branch each of you actually ran*
 before investigating anything else — here, one line of the log
 (`ready in 2779ms (webgpu...)` against `(wasm...)`) named the entire difference
 and was present from the first report.
+
+---
+
+## 004 — A fix that type-checks, reads correctly, and does nothing
+
+**Date:** 2026-09-26. Found while fixing the toolbar-resize annotation desync
+(KNOWN_ISSUES #010).
+
+**Symptom.** Two consecutive attempts at the re-projection fix compiled clean
+(`tsc` exit 0), read correctly on the page, and changed the measured outcome by
+exactly zero. The marks drifted the same 0.0554 of frame width before and after
+each attempt — byte-identical numbers, three runs apart.
+
+**Verified root cause — two different silent no-ops, stacked.**
+
+1. The first version read the pre-resize letterbox from `videoBoundsRef`. That
+   ref is rewritten by the rAF render loop, and the resize handler is a PASSIVE
+   `useEffect`, so the browser painted between React's commit and the callback.
+   By the time the code ran, `videoBoundsRef` already held the POST-resize rect,
+   the old-vs-new delta measured zero, and the guard skipped the remap.
+
+2. The second version gated on `renderVideoRef.current`. For a plain HTML5
+   upload — the most common case, and the reported one — that flag is FALSE:
+   the clip is shown as a native `<video>` underlay rather than painted onto
+   the canvas (`paintVideoOnCanvasA`, app/analysis/page.tsx:6716). The whole
+   block was dead for exactly the scenario it was written for.
+
+Neither could be seen from the diff. Both were found in one shot by a
+five-line `console.log` inside the effect, printing what it actually measured:
+`hasVideo:false, prevAnchor:null` is unambiguous where a code read is not.
+
+**Class of mistake.** *Treating "it compiles and the logic reads right" as
+evidence that it runs.* Same family as #003 (a capability probe answering the
+wrong question) — the check performed was not the check needed. A guard that
+is never true and a guard that is always true both produce a clean build and a
+silent no-op.
+
+**What to do instead.** For any fix whose effect is a runtime state change,
+measure the SAME NUMBER before and after in a real browser. If the number is
+unchanged, the fix did not run — do not reason about why it should have.
+Instrument the branch and read what it decided. Here that also caught a third,
+smaller defect the numbers exposed: the corrected version still left a 3.2%
+residual, which the log traced to the very first resize step happening before
+the anchor was seeded (predicted 0.4293, measured 0.4292 — an exact match that
+confirmed the cause before the fix was written).
+
+**Final state:** drift 0.0554 → 0.0005 of frame width, the residual being
+red-pixel bounding-box quantisation at the new scale rather than real error.
+
+---
+
+## 005 — A `null` set in the same event as its replacement never reaches the DOM
+
+*2026-09-27 · branch `claude/text-tool-fix`*
+
+### Symptom
+
+Typing a label, then clicking elsewhere on the canvas with the Text tool, left
+the old label correctly committed at its own spot — and opened the new box
+**already containing a copy of that same text**, instead of empty.
+
+The commit half had been verified the same day and was genuinely correct. Only
+the *new* box was wrong, which is why the earlier check passed: it confirmed the
+old text landed in the right place and never re-read the new box's contents.
+
+### Verified root cause
+
+**The draft `<textarea>` is uncontrolled, and React never unmounted it between
+the two drafts, so the browser kept the old text in the node.**
+
+The element has no `value`, no `defaultValue` and no `key` — the typed text lives
+only in the DOM node, and `commitNewTextDraft` reads it back through a ref. The
+pointer-down handler for the Text tool commits the open draft and opens the next
+one back to back:
+
+```
+if (newTextDraftRef.current) commitNewTextDraftRef.current?.();  // setNewTextDraft(null)
+setNewTextDraft({ pos, ... });                                    // the new draft
+```
+
+Both are `setState` calls inside one React synthetic event on React 18, so they
+**batch**. State went draft A → draft B with no `null` render in between, the
+`{newTextDraft && …}` test never went false, React reconciled the same
+`<textarea>` at the same position and reused the node — and with no value-ish
+prop, nothing existed that would have reset it.
+
+The code's own comment already named element reuse as the hazard and assumed
+that *calling commit* answered it. It did not: commit's `null` is precisely what
+batching coalesces away.
+
+### Fix
+
+Clear the node explicitly (`newTextInputRef.current.value = ''`) inside
+`commitNewTextDraft`, right after reading the value. Keying the element to force
+a remount was considered and rejected: unmounting a *focused* textarea risks a
+stray `onBlur` firing against the draft that replaced it, and that handler
+commits — it would close the box the coach had just opened. The clear leaves
+mount/unmount behaviour untouched, which matters because the focus-race fix this
+branch exists to deliver is built on that behaviour.
+
+### Class of mistake
+
+**Reasoning about a state transition as a sequence when the framework delivers it
+as a single step.** An intermediate state that is set and replaced within one
+batch does not exist as far as rendering is concerned: no effect sees it, no
+element unmounts on it, no conditional goes false on it. Any cleanup that relies
+on passing *through* that state — unmounting to reset an uncontrolled input,
+clearing a ref in a `!value` effect branch — silently does nothing.
+
+The related half: **verifying the assertion you wrote rather than the behaviour
+the user reported.** "The first text lands at its original spot" was true and was
+never the complaint. A two-part expectation needs both parts checked, and the
+part you did not write the code for is the one to check first.
