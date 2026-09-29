@@ -7,9 +7,13 @@
 - **No automated test runner is configured** (scripts: `dev`, `build`, `start`,
   `lint`). Until one exists, "tests" in the protocols below are **dormant**, and
   the verification step means: `npx tsc --noEmit -p tsconfig.json` (0 errors) +
-  the dev server recompiles the route clean + **manual runtime check** at
-  http://localhost:3000 (the app is Supabase-auth-gated → the assistant cannot
-  reach `/analysis`; runtime behavior is verified by the user).
+  the dev server recompiles the route clean + **runtime check** at
+  http://localhost:3000. With no Supabase env vars set (`NEXT_PUBLIC_SUPABASE_URL`
+  / `NEXT_PUBLIC_SUPABASE_ANON_KEY`), `middleware.ts` fails open, so `/analysis`
+  IS reachable on a local dev server and the assistant can verify runtime
+  behavior in a real browser (Playwright/Chromium). Playwright's Chromium cannot
+  decode H.264, so load a VP9/WebM clip through Upload rather than the bundled
+  Demo. The user still confirms on real devices.
 - **No documented CI / production-deploy / versioning pipeline.** §8 stays
   dormant until one is documented; do not invent deploy/version steps.
 - Architecture contract in force (Steps 1–3 landed): ONE analysis mode owns the

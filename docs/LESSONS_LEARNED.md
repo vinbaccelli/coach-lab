@@ -284,3 +284,68 @@ confirmed the cause before the fix was written).
 
 **Final state:** drift 0.0554 → 0.0005 of frame width, the residual being
 red-pixel bounding-box quantisation at the new scale rather than real error.
+
+---
+
+## 005 — A `null` set in the same event as its replacement never reaches the DOM
+
+*2026-09-27 · branch `claude/text-tool-fix`*
+
+### Symptom
+
+Typing a label, then clicking elsewhere on the canvas with the Text tool, left
+the old label correctly committed at its own spot — and opened the new box
+**already containing a copy of that same text**, instead of empty.
+
+The commit half had been verified the same day and was genuinely correct. Only
+the *new* box was wrong, which is why the earlier check passed: it confirmed the
+old text landed in the right place and never re-read the new box's contents.
+
+### Verified root cause
+
+**The draft `<textarea>` is uncontrolled, and React never unmounted it between
+the two drafts, so the browser kept the old text in the node.**
+
+The element has no `value`, no `defaultValue` and no `key` — the typed text lives
+only in the DOM node, and `commitNewTextDraft` reads it back through a ref. The
+pointer-down handler for the Text tool commits the open draft and opens the next
+one back to back:
+
+```
+if (newTextDraftRef.current) commitNewTextDraftRef.current?.();  // setNewTextDraft(null)
+setNewTextDraft({ pos, ... });                                    // the new draft
+```
+
+Both are `setState` calls inside one React synthetic event on React 18, so they
+**batch**. State went draft A → draft B with no `null` render in between, the
+`{newTextDraft && …}` test never went false, React reconciled the same
+`<textarea>` at the same position and reused the node — and with no value-ish
+prop, nothing existed that would have reset it.
+
+The code's own comment already named element reuse as the hazard and assumed
+that *calling commit* answered it. It did not: commit's `null` is precisely what
+batching coalesces away.
+
+### Fix
+
+Clear the node explicitly (`newTextInputRef.current.value = ''`) inside
+`commitNewTextDraft`, right after reading the value. Keying the element to force
+a remount was considered and rejected: unmounting a *focused* textarea risks a
+stray `onBlur` firing against the draft that replaced it, and that handler
+commits — it would close the box the coach had just opened. The clear leaves
+mount/unmount behaviour untouched, which matters because the focus-race fix this
+branch exists to deliver is built on that behaviour.
+
+### Class of mistake
+
+**Reasoning about a state transition as a sequence when the framework delivers it
+as a single step.** An intermediate state that is set and replaced within one
+batch does not exist as far as rendering is concerned: no effect sees it, no
+element unmounts on it, no conditional goes false on it. Any cleanup that relies
+on passing *through* that state — unmounting to reset an uncontrolled input,
+clearing a ref in a `!value` effect branch — silently does nothing.
+
+The related half: **verifying the assertion you wrote rather than the behaviour
+the user reported.** "The first text lands at its original spot" was true and was
+never the complaint. A two-part expectation needs both parts checked, and the
+part you did not write the code for is the one to check first.

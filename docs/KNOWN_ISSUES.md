@@ -445,3 +445,77 @@ own SVG and was not audited for the same class of bug.
 **Severity:** medium for the live symptom (now fixed); medium-high for the
 persisted case, because it silently corrupts saved work rather than merely
 looking wrong.
+
+---
+
+## 011 — A single joint-chain node can never be selected with the Select tool
+
+**Found:** 2026-09-28, browser-verifying the text-selection fix on `claude/text-tool-fix`.
+
+**Symptom.** With the Select tool, pressing on a node of a joint chain and dragging
+moves the WHOLE chain, never that one node. Measured in Chromium on this branch
+and on `snapshot-v1` alike: pressing node 1 of a three-node chain and dragging
+(+42, +18) moved all three nodes by exactly (+42, +18), and `selectionRef` held
+`{kind: 'stroke'}`, never `{kind: 'jointNode'}`.
+
+**Verified root cause.** The Select pointer-down runs a node pass and then a stroke
+pass over the same marks. The node pass records `'jointNode'` with
+`bestDist = d`, the distance to the node centre. The stroke pass then scores the
+same chain with `hitTestStroke`, whose node term is `d - JOINT_NODE_RADIUS`
+(`JOINT_NODE_RADIUS = 8`), which is always strictly smaller than `d`. So the
+stroke pass always wins and overwrites the node selection, anywhere on or near a
+node. The `'jointNode'` branch of the pointer-up finalize, and the node-drag code
+behind it, are unreachable.
+
+**Fault assessment.** Pre-existing: identical on `snapshot-v1 @ 1748ae8e`. The
+stroke pass took its current back-to-front, strict-`<` form in `c596f706`
+(Style mode, 2026-08-10); whether node selection ever worked before that has
+not been checked.
+
+**Proposed fix.** Give the node pass priority rather than competing on distance:
+if it found a node, skip the stroke pass for that chain (or skip the stroke pass
+entirely when a node hit exists). Needs its own browser check that dragging a
+chain by its segments still moves the whole chain.
+
+**Severity:** medium — per-node editing of a joint chain is impossible, but the
+chain is still movable and redrawable.
+
+---
+
+## 012 — A text label left selected keeps the canvas redrawing every frame
+
+**Found:** 2026-09-28, measuring the text-selection fix on `claude/text-tool-fix`
+before and after, per CLAUDE.md §7.
+
+**Symptom.** While a text label is selected and nothing else is happening, the
+overlay canvas repaints at the display rate instead of idling. Measured in
+Chromium, video paused, production build (`next start`):
+
+| state (at rest, 3 s window) | redraws/s | main-thread ms/s |
+|---|---|---|
+| nothing selected | 0 | ~20 |
+| a text label selected | 60 | ~126 |
+
+About 106 ms of main-thread work per second, for as long as the label stays
+selected. Returns to 0 redraws/s as soon as it is deselected (empty-canvas click,
+switching tool, undo/redo, Clear all).
+
+**Verified root cause.** The render loop treats any non-null `selectionRef` as an
+active interaction (`hasActiveInteraction` includes `!!selectionRef.current`) and
+repaints every frame while one exists. That was harmless while a text selection
+could only exist mid-drag; the fix that keeps a clicked label selected (so its
+resize handles are reachable) makes it a resting state. Joint-node selections had
+the same property already, but were unreachable — see 011.
+
+**Fault assessment.** A deliberate trade accepted with the fix, not an accident:
+the render-loop gating is a protected behaviour (CLAUDE.md §6) and was not
+changed without approval.
+
+**Proposed fix.** Count a selection as an active interaction only while it is
+being dragged (`isDraggingRef.current && !!selectionRef.current`), and set
+`renderDirtyRef` wherever a selection is created, changed or dropped, so a resting
+selection draws once and then idles. Needs approval before touching the render
+loop, and a before/after measurement.
+
+**Severity:** low-medium — no functional impact; continuous CPU and battery use
+while a label is selected, most noticeable on phones.

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { ENABLE_GOOGLE_EXPORTS, GOOGLE_EXPORT_SCOPES } from '@/lib/featureFlags';
-import { LayoutGrid, LogIn, LogOut } from 'lucide-react';
+import { LogIn, LogOut } from 'lucide-react';
 
 type Props = {
   children: React.ReactNode;
@@ -107,31 +107,25 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
       >
         <Link
           href="/"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontWeight: 600,
-            fontSize: 15,
-            color: 'var(--cl-text-primary)',
-            textDecoration: 'none',
-            letterSpacing: '-0.02em',
-          }}
+          aria-label="AngleMotion home"
+          style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}
         >
-          <span
+          {/* Same asset as the Control Panel header; cropped to the artwork
+              (the JPEG carries wide padding) so the wordmark stays legible at bar height. */}
+          <img
+            src="/logo-rect-new.jpg"
+            alt="AngleMotion"
+            width={114}
+            height={32}
             style={{
-              width: 32,
+              display: 'block',
+              width: 114,
               height: 32,
+              objectFit: 'cover',
+              objectPosition: '50% 45%',
               borderRadius: 8,
-              background: 'var(--cl-accent)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
             }}
-          >
-            <LayoutGrid size={18} color="#fff" />
-          </span>
-          AngleMotion
+          />
         </Link>
 
         {pageLabel ? (
