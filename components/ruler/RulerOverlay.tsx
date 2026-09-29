@@ -63,6 +63,14 @@ interface Props {
    * off a short screen. Desktop is untouched.
    */
   compact?: boolean;
+  /**
+   * Real touch hardware, resolved by the analysis page (isMobile && coarse
+   * pointer). The Precision button is INERT without it: usePrecisionTouch arms
+   * only on `pointerType === 'touch'`, so a mouse user could switch the mode on
+   * and nothing would ever happen. Defaults false so a caller that has not
+   * opted in never shows a dead control.
+   */
+  precisionAvailable?: boolean;
 }
 
 type CalibStep = 'pick-preset' | 'place-points' | 'done';
@@ -79,6 +87,7 @@ export default function RulerOverlay({
   unitSystem,
   onUnitSystemChange,
   compact = false,
+  precisionAvailable = false,
 }: Props) {
   const [mode, setMode] = useState<RulerMode>(calibration ? 'measure' : 'calibrate');
   const [calibStep, setCalibStep] = useState<CalibStep>(calibration ? 'done' : 'pick-preset');
@@ -291,6 +300,11 @@ export default function RulerOverlay({
   React.useEffect(() => {
     if (precisionOn && !isCalibrating && !isMeasuring) setPrecisionOn(false);
   }, [precisionOn, isCalibrating, isMeasuring]);
+  // ...and never on a device that can no longer drive it (trackpad attached,
+  // window widened). Mirrors the main canvas's desktop reset.
+  React.useEffect(() => {
+    if (precisionOn && !precisionAvailable) setPrecisionOn(false);
+  }, [precisionOn, precisionAvailable]);
 
   /** Bumped on every crosshair move so the SVG re-renders it. */
   const [, setCrosshairTick] = useState(0);
@@ -545,7 +559,7 @@ export default function RulerOverlay({
         }}>
           <Ruler size={15} color="#F59E0B" />
           <span style={{ fontWeight: 700, fontSize: compact ? 12 : 13, flex: 1 }}>Measurement Ruler</span>
-          {ENABLE_RULER_PRECISION && (isCalibrating || isMeasuring) ? (
+          {ENABLE_RULER_PRECISION && precisionAvailable && (isCalibrating || isMeasuring) ? (
             <button
               type="button"
               onClick={() => setPrecisionOn((v) => !v)}

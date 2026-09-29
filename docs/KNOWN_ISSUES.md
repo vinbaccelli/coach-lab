@@ -394,10 +394,61 @@ agree, and the failure is a 500 on save.
 
 ---
 
-## 011 — A single joint-chain node can never be selected with the Select tool
+## 010 — Annotation coordinates live in canvas pixels, not video space
 
-> Numbered 011, not 010, because branch `claude/pan-tool-eraser-demo` is carrying
-> an unmerged 010. Both append at the end of this file; keep both, in id order.
+**Found:** 2026-09-26, while root-causing the compact↔expanded toolbar desync.
+
+**Symptom.** Every drawing and manual measurement slides relative to the video
+frame whenever the analysis panel changes size — expanding or collapsing the
+toolbar, resizing the window, rotating a phone, adding the B panel, switching
+reels ↔ 16:9. The marks stay where they are on the canvas while the video
+re-fits underneath them.
+
+**Verified root cause.** Strokes and angle measurements store ABSOLUTE
+logical-canvas coordinates (`StrokeLine { p1: Pt; p2: Pt }`, `AngleMeas
+{ v; p1; p2 }`, components/Canvas.tsx:169-212). The canvas backing store is
+resized from the panel size (components/Canvas.tsx:4562) and the video's
+letterbox rect is recomputed from that size every frame
+(components/Canvas.tsx:4840-4846), so the frame moves and the coordinates do
+not. Measured at toolbar 240px → 60px: a line held identical canvas
+coordinates (558,328)-(761,401) while the video rect went 1260 → 1440 wide,
+drifting the mark from u0 0.4429 to u0 0.3875 — about 5.5% of frame width.
+
+The AI measurement overlays are NOT affected: their adjustments are stored
+video-normalized (components/Canvas.tsx:7468-7476), and the data column's
+position is normalized 0-1 (components/Canvas.tsx:388). That asymmetry is the
+confirmation — what is stored in video space survives a resize, what is stored
+in canvas space does not.
+
+**Fault assessment.** Design-level, pre-existing, not a regression. The canvas
+coordinate model was never given a video-relative anchor; the webcam PiP is the
+only thing that was ever taught to rescale on container resize
+(components/Canvas.tsx:2817-2837).
+
+**Partially fixed.** The live symptom is fixed: annotations are now
+re-projected old-rect → new-rect in the canvas-size effect
+(components/Canvas.tsx:4652+), covering `strokesRef`, `angleMeasRef` and the
+undo/redo history.
+
+**Still open — the structural fix.** Store annotation coordinates
+video-normalized (0..1 of the video rect) and convert at draw and hit-test
+time. That is the only thing that fixes the remaining case: `exportStrokes` /
+`importStrokes` (app/analysis/page.tsx:1016, :1043) persist the same canvas
+pixels, so a snapshot saved at one panel width still restores misaligned at
+another, and markup is not portable between a phone and a desktop. It also
+removes the small float drift the re-projection accumulates over many resizes.
+Needs a migration for snapshots already saved.
+
+Not attempted here: the ruler (components/ruler/RulerOverlay.tsx) renders its
+own SVG and was not audited for the same class of bug.
+
+**Severity:** medium for the live symptom (now fixed); medium-high for the
+persisted case, because it silently corrupts saved work rather than merely
+looking wrong.
+
+---
+
+## 011 — A single joint-chain node can never be selected with the Select tool
 
 **Found:** 2026-09-28, browser-verifying the text-selection fix on `claude/text-tool-fix`.
 
