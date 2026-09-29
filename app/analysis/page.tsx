@@ -504,6 +504,36 @@ function Home() {
   const styleSelectionRef = useRef<ContextualStyleSnapshot | null>(null);
   useEffect(() => { styleModeRef.current = styleMode; }, [styleMode]);
   useEffect(() => { styleSelectionRef.current = styleSelection; }, [styleSelection]);
+
+  /**
+   * LEAVING STYLE MODE DISARMS THE OUTLINE ERASER.
+   *
+   * `outlineEraserSize` is armed from the Style screen's "Erase part of line"
+   * toggle (components/ToolPalette.tsx) or the on-canvas style bar
+   * (components/ContextualStyleBar.tsx), and nothing used to put it back. It
+   * stayed armed for the rest of the session, while the control that turns it
+   * off is only reachable from inside style mode — so the coach could not see
+   * it was on, let alone switch it off.
+   *
+   * Measured consequence: with a line drawn and the eraser armed, leaving Style
+   * and dragging that line with the SELECT tool moved it from (410,435)-(850,485)
+   * to (450,600)-(890,650) AND punched an extra eraser dot into it (13 -> 14).
+   * The drag did both: it moved the mark and silently cut a hole at the grab
+   * point.
+   *
+   * STYLE MODE IS THE RIGHT BOUNDARY, not the active tool. The Style *screen* is
+   * only navigation; `styleMode` is the mode, and every exit funnels through it
+   * — pressing Style again toggles it off in place (ToolPalette), and
+   * handleToolChange below already clears it on ANY tool choice ("ANY tool
+   * choice leaves style mode"). So the coach cannot stay in style mode while the
+   * tool changes underneath, and one rule here covers the Back action, the
+   * toggle and every tool switch. Keying this on `activeTool` instead would
+   * disarm mid-session while the coach is still in style mode with the toggle
+   * visibly on.
+   */
+  useEffect(() => {
+    if (!styleMode && outlineEraserSize > 0) setOutlineEraserSize(0);
+  }, [styleMode, outlineEraserSize]);
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Distance from bottom of video stage to reserve for playback UI + 16px gap (px). */
