@@ -19,6 +19,8 @@ import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/component
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
 import { useRecording, RECORDING_AUDIO_CONSTRAINTS } from '@/contexts/RecordingContext';
+import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
+import RecordingControlBar from '@/components/RecordingControlBar';
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
 import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModal';
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
@@ -469,9 +471,17 @@ function Home() {
     clearCompletedRecording,
     updateWebcamStream,
     isPipOpen,
+    isMonitorShare,
     reopenPipWindow,
   } = useRecording();
   const isRecording = globalRecState === 'recording' || globalRecState === 'paused' || globalRecState === 'stopped';
+  // Hide the canvas webcam PiP during a recording EXCEPT in a whole-screen
+  // share. In a monitor share the screen grab already contains this canvas, so
+  // the canvas PiP is what records the webcam — and it is the only renderer
+  // that honors background removal and the coach's PiP shape. In a tab/window
+  // share the engine stamps the webcam into its own composite instead, so the
+  // canvas must stay quiet or a shared AM tab would show two webcams.
+  const suppressWebcamPipWhileRecording = !isMonitorShare;
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
@@ -4988,6 +4998,29 @@ function Home() {
   const getWebcamStream  = useCallback(() => webcamStreamRef.current, []);
   const getMicStream     = useCallback(() => micStreamRef.current, []);
 
+  // Canvas publishes its live PiP presentation (background-removal cutout,
+  // shape, rect, opacity) here; the recording engine reads it once per encoded
+  // frame. `owner` guards the handover: the A/B canvases each unregister on
+  // unmount, and without the identity check a stale cleanup could clear the
+  // registration the other one just made.
+  const webcamPipPresentationRef = useRef<WebcamPipPresentation | null>(null);
+  const webcamPipPresentationOwnerRef = useRef<object | null>(null);
+  const registerWebcamPipPresentation = useCallback(
+    (presentation: WebcamPipPresentation | null, owner: object) => {
+      if (presentation) {
+        webcamPipPresentationRef.current = presentation;
+        webcamPipPresentationOwnerRef.current = owner;
+        return;
+      }
+      if (webcamPipPresentationOwnerRef.current === owner) {
+        webcamPipPresentationRef.current = null;
+        webcamPipPresentationOwnerRef.current = null;
+      }
+    },
+    [],
+  );
+  const getWebcamPipPresentation = useCallback(() => webcamPipPresentationRef.current, []);
+
   // Register this page's webcam/mic sources with the global recorder. The
   // engine snapshots the actual tracks at start() time, so these getters going
   // stale after navigation is harmless.
@@ -4995,9 +5028,14 @@ function Home() {
     // onWebcamClosedByPip: the coach closed the floating PiP mid-recording, which
     // turns Source B off inside the engine. Run the SAME teardown the Hub's
     // toggle-off runs so the button state (and the camera itself) match reality.
-    registerRecordingSources({ getWebcamStream, getMicStream, onWebcamClosedByPip: stopWebcam });
+    registerRecordingSources({
+      getWebcamStream,
+      getMicStream,
+      getWebcamPipPresentation,
+      onWebcamClosedByPip: stopWebcam,
+    });
     return () => registerRecordingSources(null);
-  }, [registerRecordingSources, getWebcamStream, getMicStream, stopWebcam]);
+  }, [registerRecordingSources, getWebcamStream, getMicStream, getWebcamPipPresentation, stopWebcam]);
 
   // Consume finished recordings (also covers "stopped while on another page" —
   // the blob waits in the provider until this page mounts again).
@@ -7083,6 +7121,15 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
       />
 
+      {/*
+        Recording controls — page chrome ABOVE the workspace, present only while
+        a recording is active. In normal flow (flex: 0 0 auto), so the row below
+        shrinks by its height and the video/canvas is never covered. Reachable
+        from every tool/panel because it lives on the page root, not inside the
+        Recording Hub. Buttons stack vertically — see RecordingControlBar.
+      */}
+      <RecordingControlBar />
+
       {/* ── Main layout: toolbar rail + canvas (no overlay) ── */}
       <div
         style={{
@@ -7365,6 +7412,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     }
                   }}
                   isRecording={isRecording}
+                  suppressWebcamPipWhileRecording={suppressWebcamPipWhileRecording}
+                  registerWebcamPipPresentation={registerWebcamPipPresentation}
                   circleSpinning={circleSpinning}
                   outlineEraserSize={outlineEraserSize}
                   onOutlineEraserSizeChange={setOutlineEraserSize}
@@ -8159,6 +8208,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       onProcessingStatus={setProcessingStatus}
                       poseMode={analysisMode.kind}
                       isRecording={isRecording}
+                      suppressWebcamPipWhileRecording={suppressWebcamPipWhileRecording}
+                      registerWebcamPipPresentation={registerWebcamPipPresentation}
                       circleSpinning={circleSpinning}
                       outlineEraserSize={outlineEraserSize}
                       onOutlineEraserSizeChange={setOutlineEraserSize}

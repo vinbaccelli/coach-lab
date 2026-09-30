@@ -350,6 +350,7 @@ the user reported.** "The first text lands at its original spot" was true and wa
 never the complaint. A two-part expectation needs both parts checked, and the
 part you did not write the code for is the one to check first.
 
+
 ## 006 — Three Generate bugs that all came from reading state by position instead of by identity
 
 *2026-09-26 · branch `claude/trusting-allen-ik77qp` · found by Vin in hands-on testing after launch*
@@ -552,3 +553,50 @@ contain the broken transform. When a measurement is meant to stand in for the
 app, the toolchain is part of what must be reproduced — this time the probe was a
 real route in a real `next build`, and it reproduced Vin's error to the character
 on the first run.
+---
+
+## 006 — A feature "stopped working when recording started" because a second renderer took over
+
+*2026-09-26 · branch `claude/dreamy-lamport-urns2o`*
+
+### Symptom
+
+Webcam background removal worked in the Recording Hub preview and appeared to
+stop the instant recording began; the PiP shape/geometry was wrong in the
+recorded file too. Reported as two bugs (background removal, PiP rendering), and
+an earlier round had proposed a fix for the first one alone.
+
+### Verified root cause
+
+One line: `components/Canvas.tsx` gated the canvas-drawn webcam PiP on
+`!isRecordingRef.current`. That PiP was the *only* renderer that knew about
+background removal (`webcamMaskRef`), the circle/rect shape, the coach's dragged
+rect and the opacity. Suppressing it handed the webcam to two renderers that had
+never heard of any of those settings: the encode composite's Source B stamp in
+`contexts/RecordingContext.tsx` (raw stream, hard-coded 16:9 bottom-right box)
+and the Document PiP window's raw `<video>` in `lib/pipRecorderSurface.ts`.
+
+The MediaPipe segmenter itself never stopped — its effect depends only on
+`[webcamCutout, webcamActive]`, so fresh masked frames were being produced the
+whole time with nobody consuming them. Nothing was broken; the consumer had been
+switched off.
+
+### Fix
+
+Canvas publishes its live PiP presentation (cutout canvas, shape, normalized
+rect, aspect, opacity) through `lib/webcamPipPresentation.ts`; the composite
+reads it once per painted frame and reproduces it. Whole-screen shares keep the
+canvas PiP visible instead (the screen grab already contains it) and run the
+floating window controls-only, so exactly one webcam reaches the file in every
+share mode.
+
+### Class of mistake
+
+**Two renderers for one feature, and only one of them knows the settings.** The
+tell was the phrasing: "works in preview, stops when recording starts" is almost
+never a feature breaking — it is a *different code path taking over*, with its
+own, poorer idea of what to draw. Find the handover before debugging the
+feature. The corollary: when a display path is suppressed "to avoid doubling",
+whatever replaces it inherits every setting the suppressed path owned, and
+nothing enforces that — the settings simply disappear, silently, with no error.
+
