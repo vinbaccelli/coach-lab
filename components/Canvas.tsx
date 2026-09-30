@@ -23,6 +23,7 @@ import {
   type PoseKeypoint,
 } from '@/lib/youtubeThumbnailPose';
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
+import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { smoothBakedTrack } from '@/lib/trackSmoothing';
@@ -429,6 +430,29 @@ export interface CanvasProps {
    *  video re-aims the focus and the session stays open until explicit confirm. */
   skeletonWaitingForClick?: boolean;
   isRecording?: boolean;
+  /**
+   * Whether an active recording should HIDE this canvas-drawn webcam PiP.
+   *
+   * True (the default) for a tab/window screen share: the recording engine
+   * stamps the webcam into its own composite, so drawing it here as well would
+   * put TWO webcams in the file whenever the shared tab happens to be this one
+   * (the browser reports the surface TYPE, never its identity, so self-capture
+   * cannot be detected).
+   *
+   * False for an entire-screen ('monitor') share: there the screen grab already
+   * contains this canvas, so this PiP — the only renderer that honors
+   * background removal and the PiP shape — IS the webcam in the recording, and
+   * the engine skips its own stamp. Keeping it visible is what carries
+   * background removal into a full-screen recording.
+   */
+  suppressWebcamPipWhileRecording?: boolean;
+  /**
+   * Publishes this canvas's live PiP presentation (cutout canvas, shape, rect,
+   * opacity) so the recording engine can reproduce it in the encoded composite
+   * instead of stamping the raw webcam stream. `owner` identifies the caller so
+   * a second Canvas unmounting cannot clear the active one's registration.
+   */
+  registerWebcamPipPresentation?: (presentation: WebcamPipPresentation | null, owner: object) => void;
   circleSpinning?: boolean;
   outlineEraserSize?: number;
   onOutlineEraserSizeChange?: (size: number) => void;
@@ -2019,6 +2043,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       skeletonLocked = false,
       skeletonWaitingForClick = false,
       isRecording = false,
+      suppressWebcamPipWhileRecording = true,
+      registerWebcamPipPresentation,
       circleSpinning = false,
       outlineEraserSize = 0,
       onOutlineEraserSizeChange,
@@ -2555,6 +2581,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const ballTrailEnabledRef = useRef(ballTrailEnabled);
     const ballTrailModeRef    = useRef(ballTrailMode);
     const isRecordingRef      = useRef(isRecording);
+    const suppressPipWhileRecordingRef = useRef(suppressWebcamPipWhileRecording);
     const circleSpinningRef   = useRef(circleSpinning);
     const outlineEraserSizeRef = useRef(outlineEraserSize);
     const webcamPipModeRef    = useRef(webcamPipMode);
@@ -2615,6 +2642,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const panModeEnabledRef = useRef(panModeEnabled);
     /** Pixel rect on the backing canvas; (0,0,0,0) means “use default lower-right” */
     const webcamPipRectRef = useRef({ x: 0, y: 0, w: 0, h: 0 });
+    /** Stable identity for registerWebcamPipPresentation (see that prop). */
+    const pipPresentationOwnerRef = useRef({});
     type WebcamPipDrag =
       | { kind: 'move'; sx: number; sy: number; orig: { x: number; y: number; w: number; h: number } }
       | {
@@ -2763,6 +2792,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { ballTrailEnabledRef.current  = ballTrailEnabled; }, [ballTrailEnabled]);
     useEffect(() => { ballTrailModeRef.current     = ballTrailMode; },   [ballTrailMode]);
     useEffect(() => { isRecordingRef.current       = isRecording; },     [isRecording]);
+    // Flipping this must repaint: it is what makes the PiP appear/disappear when
+    // a monitor-share recording starts or stops.
+    useEffect(() => {
+      suppressPipWhileRecordingRef.current = suppressWebcamPipWhileRecording;
+      renderDirtyRef.current = true;
+    }, [suppressWebcamPipWhileRecording]);
     useEffect(() => { circleSpinningRef.current    = circleSpinning; },  [circleSpinning]);
     useEffect(() => { outlineEraserSizeRef.current  = outlineEraserSize; }, [outlineEraserSize]);
 
@@ -4459,6 +4494,48 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
     }, [webcamCutout, webcamActive, webcamVideoRef, onProcessingStatus]);
 
+    // ── Publish the PiP presentation to the recording engine (D1) ──────────
+    // Only the canvas whose webcam is actually live publishes, so the A/B pair
+    // can never fight over the registration. Every field is a getter read once
+    // per encoded frame, which is what makes toggling background removal (or
+    // the shape, or dragging the PiP) MID-RECORDING take effect immediately.
+    useEffect(() => {
+      if (!registerWebcamPipPresentation || !webcamActive) return;
+      const owner = pipPresentationOwnerRef.current;
+      const presentation: WebcamPipPresentation = {
+        getCutoutCanvas: () => {
+          const mask = webcamMaskRef.current;
+          if (!webcamCutoutRef.current || !mask || mask.width === 0 || mask.height === 0) return null;
+          return mask;
+        },
+        getPipMode: () => webcamPipModeRef.current,
+        // clampWebcamPip pins every PiP to WEBCAM_PIP_ASPECT, so this is a
+        // constant today; published rather than hard-coded in the consumer so
+        // the recorder cannot drift if the PiP ever becomes free-form.
+        getAspect: () => WEBCAM_PIP_ASPECT,
+        getNormalizedRect: () => {
+          const canvas = canvasRef.current;
+          if (!canvas) return null;
+          const dpr = dprRef.current || 1;
+          const W = canvas.width / dpr;
+          const H = canvas.height / dpr;
+          if (W <= 0 || H <= 0) return null;
+          const inset = webcamPipBottomInsetRef.current;
+          const stored = webcamPipRectRef.current;
+          // While the PiP is hidden by a tab/window-share recording the draw
+          // branch never runs, so the rect can still be uninitialized — resolve
+          // the same default the draw path would have used.
+          const pip = stored.w && stored.h
+            ? clampWebcamPip(stored, W, H, inset)
+            : defaultWebcamPipRect(W, H, inset);
+          return { x: pip.x / W, y: pip.y / H, w: pip.w / W, h: pip.h / H };
+        },
+        getOpacity: () => webcamOpacityRef.current,
+      };
+      registerWebcamPipPresentation(presentation, owner);
+      return () => registerWebcamPipPresentation(null, owner);
+    }, [registerWebcamPipPresentation, webcamActive]);
+
     // ── Webcam frame-change signal ─────────────────────────────────────────
     useEffect(() => {
       if (!webcamActive) return;
@@ -5782,7 +5859,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const webcam = webcamVideoRef?.current;
         const showWebcamPip =
           webcamActiveRef.current &&
-          !isRecordingRef.current &&
+          // Hidden during a tab/window-share recording only (the engine stamps
+          // the webcam itself there). In a monitor share this PiP is what the
+          // screen grab records, so it stays visible — see
+          // suppressWebcamPipWhileRecording.
+          !(isRecordingRef.current && suppressPipWhileRecordingRef.current) &&
           webcam &&
           webcam.videoWidth > 0 &&
           webcam.readyState >= 1 &&
