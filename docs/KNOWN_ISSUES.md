@@ -629,8 +629,17 @@ annoyance rather than a total outage.
 so all five call sites are fixed at once. Verified only through
 `convertWebmBlobToMp4` (the reported path).
 
-**Still owed:** a runtime pass over the screen-record, crop-export and
-tab-capture downloads to confirm each now produces a real MP4. They are the same
-loader and the same encoder ladder, so the fix should carry — but "should carry"
-is not "verified", and this repo has been burned by exactly that gap. Severity:
-medium — the defect is fixed; the confirmation is outstanding.
+**Verified for Generate, in the real app.** `/analysis` is reachable on a local
+dev server (middleware fails open with no Supabase env vars — see CLAUDE.md), so
+the whole flow was driven in Chromium: upload → two snapshots → Generate → Record
+video. With the core reachable it logs
+`[ffmpegWebmToMp4] converted with libx264+faststart (379410 bytes)`, the workspace
+says "Replay video ready" and the download button reads MP4. With the core
+blocked it reports the failure in the workspace and the button reads WEBM.
+
+**Still owed:** the same pass over the screen-record, crop-export and tab-capture
+downloads. They share the fixed loader and the same encoder ladder, so the fix
+should carry — but "should carry" is not "verified", and this repo has been burned
+by exactly that gap. Now that runtime checking is possible, this is a doable task
+rather than a standing unknown. Severity: medium — the defect is fixed for every
+caller; the confirmation covers one.
