@@ -23,6 +23,12 @@ export type ToolType =
   | 'jointChain'
   | 'erase'
   | 'zoom'
+  /**
+   * Explicit pan/hand mode. Panning used to be an implicit consequence of being
+   * zoomed in, which silently stole drags from anything that was not a drawing
+   * tool (most visibly the data column). It is a tool you enter and leave.
+   */
+  | 'pan'
   | 'objectMultiplier'
   | 'ruler';
 
