@@ -519,3 +519,127 @@ loop, and a before/after measurement.
 
 **Severity:** low-medium — no functional impact; continuous CPU and battery use
 while a label is selected, most noticeable on phones.
+
+## 013 — The foot-line notice blames the device for a model-load failure
+
+**Found:** 2026-09-26, while fixing the false "can't run foot lines smoothly"
+banner (lessons-learned 006, symptom 1).
+
+**Symptom.** The banner always reads *"This device can't run foot lines smoothly
+live — the live skeleton has switched back to the fast model."*
+
+**Verified root cause.** `revertMediaPipeLive` takes a reason —
+`'cpu-delegate' | 'too-slow' | 'init-failed'` (`components/Canvas.tsx`) — and
+`handleFootLineLiveUnsupported` stores it in `footLineUnsupported`
+(`app/analysis/page.tsx`), but the rendered notice never reads it. Two of the
+three reasons are about the device; `'init-failed'` means the MediaPipe
+landmarker could not be created at all, which on a capable machine usually means
+the model or the WASM fileset did not load — a network or hosting problem, not
+hardware.
+
+**Fault assessment.** Pre-existing, cosmetic but misleading: it sends a coach
+looking at their hardware when the fix may be a failed asset load. The reason is
+already plumbed to the component, so nothing structural is missing — the copy
+just ignores it.
+
+**Proposed fix.** Branch the notice body on the stored reason: keep the current
+wording for `'cpu-delegate'`/`'too-slow'`, and for `'init-failed'` say the
+precision model could not be loaded and to retry or check the connection.
+
+**Not fixed here.** The approved change list covered the false *trigger*, not the
+copy; changing user-facing wording is a product decision. Severity: low.
+
+---
+
+## 014 — `@ffmpeg/core` is loaded from a third-party CDN at runtime
+
+**Found:** 2026-09-26, while root-causing the unplayable Generate export
+(lessons-learned 006, symptom 3).
+
+> **CORRECTED 2026-09-30.** This entry originally called the CDN fetch "the
+> realistic failure" for MP4 conversion. It was not. The conversion was failing on
+> every webpack build for an unrelated reason — the bundler rewriting the worker's
+> dynamic import (lessons-learned 007) — and that reproduced with the core served
+> **same-origin at 200 OK**, so the CDN never entered into it. The reasoning below
+> is still valid as a *robustness* concern and the proposed fix still stands; it is
+> a latent risk, not a diagnosis of anything observed.
+
+**Symptom.** Every MP4 conversion in the app — Metrics/Generate, tab capture,
+screen recording, crop export — fails whenever `cdn.jsdelivr.net` is unreachable.
+Reproduced here: `toBlobURL` throws `TypeError: Failed to fetch`, `getFFmpeg()`
+rejects, and the conversion returns `ok: false`.
+
+**Verified root cause.** `lib/ffmpegWebmToMp4.ts` pins
+`CORE_BASE = https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm` and
+fetches `ffmpeg-core.js` + `ffmpeg-core.wasm` from it at call time.
+`package.json` depends on `@ffmpeg/ffmpeg` and `@ffmpeg/util` but **not** on
+`@ffmpeg/core`, so the WASM binary has no local copy to fall back to. An
+ad-blocker, a corporate proxy, an offline session or a jsdelivr outage takes out
+every video export.
+
+**Fault assessment.** Pre-existing, and the same class of dependency the project
+already eliminated elsewhere: `lib/poseWorker.ts` self-hosts the MoveNet weights
+precisely so that *"no third-party CDN a blocker or network policy could kill"*
+is in the loop, and `scripts/copy-ort-wasm.mjs` stages the ONNX runtime into
+`public/ort/` for the same reason. ffmpeg is the one runtime binary that never
+got the treatment. Measured: with the core reachable, the primary libx264 pass
+succeeds at 640×360 and 1280×720/≈20 s with and without the retime filter — so
+this load step, not the encoder, is the realistic failure.
+
+**Proposed fix.** Add `@ffmpeg/core` as a dependency and stage
+`ffmpeg-core.js` / `ffmpeg-core.wasm` into `public/ffmpeg/` from a postinstall
+script, exactly as `copy-ort-wasm.mjs` does for ONNX; point `CORE_BASE` at the
+local path. ~31 MB of WASM, so it wants a deliberate look at what that does to
+the deploy (and `next.config.js` already fights the 250 MB function limit) rather
+than a drive-by edit.
+
+**Not fixed here.** Out of the approved change list, and it touches the install
+and deploy footprint. The conversion failure is now at least honest and visible
+(the file keeps its real `.webm` extension and the UI reports the error), which
+is what made this diagnosable. Severity: medium — degrades every export path, but
+no longer silently.
+
+---
+
+## 015 — MP4 conversion was broken in EVERY caller, not only Generate
+
+**Found:** 2026-09-30, fixing the Generate export failure (lessons-learned 007).
+
+**Symptom.** `Cannot find module 'blob:http://localhost:3001/…'` from any code
+path that converts a recording to MP4.
+
+**Verified root cause.** All converters share one loader, `getFFmpeg()` in
+`lib/ffmpegWebmToMp4.ts`, and the failure was inside it — so it took out every
+caller equally, not just Metrics/Generate:
+
+- `convertWebmBlobToMp4` → Metrics/Generate export, embed/tab-capture download
+  (`app/analysis/page.tsx`)
+- `convertWebmToMp4ForScreenRecord` → `components/ScreenRecorder.tsx`,
+  `contexts/RecordingContext.tsx`, `lib/cropExport.ts`
+
+**Fault assessment.** Pre-existing and wide. The Generate path was simply where
+Vin happened to look, and the earlier session's claim that the H.264 combination
+"works elsewhere" was never verified against the running app — the screen-record
+path shares the same broken loader and will have been failing the same way. It
+degrades visibly there (ScreenRecorder refuses to deliver and shows "Could not
+convert recording to MP4"), which is probably why it read as an occasional
+annoyance rather than a total outage.
+
+**Fixed here** by the `classWorkerURL` change in `getFFmpeg()`, which is shared,
+so all five call sites are fixed at once. Verified only through
+`convertWebmBlobToMp4` (the reported path).
+
+**Verified for Generate, in the real app.** `/analysis` is reachable on a local
+dev server (middleware fails open with no Supabase env vars — see CLAUDE.md), so
+the whole flow was driven in Chromium: upload → two snapshots → Generate → Record
+video. With the core reachable it logs
+`[ffmpegWebmToMp4] converted with libx264+faststart (379410 bytes)`, the workspace
+says "Replay video ready" and the download button reads MP4. With the core
+blocked it reports the failure in the workspace and the button reads WEBM.
+
+**Still owed:** the same pass over the screen-record, crop-export and tab-capture
+downloads. They share the fixed loader and the same encoder ladder, so the fix
+should carry — but "should carry" is not "verified", and this repo has been burned
+by exactly that gap. Now that runtime checking is possible, this is a doable task
+rather than a standing unknown. Severity: medium — the defect is fixed for every
+caller; the confirmation covers one.

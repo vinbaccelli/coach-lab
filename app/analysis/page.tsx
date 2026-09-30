@@ -126,6 +126,38 @@ const RETIRED_COLUMN_LABELS = new Set(['L Shoulder', 'R Shoulder']);
 function scrubRetiredLabels<T extends { label: string }>(items: T[]): T[] {
   return items.filter((m) => !RETIRED_COLUMN_LABELS.has(m.label));
 }
+
+/**
+ * How far a cached live pose may sit from the requested video time and still be
+ * treated as "the pose on this frame". Same tolerance the canvas itself uses when
+ * it restores a cached pose while scrubbing (`syncFromCache`), so both readers of
+ * `skeletonFramesRef` agree on what "this frame" means.
+ */
+const POSE_CACHE_TOLERANCE_SEC = 0.12;
+
+/**
+ * Nearest cached live pose to `timeSec`, or undefined when the cache holds nothing
+ * for that moment.
+ *
+ * `skeletonFramesRef` is a TIME-indexed cache appended in detection order, so its
+ * last element is merely the most recent detection — not necessarily the one for
+ * the frame on screen. Anything that stores a pose as a fact about a frame (a
+ * snapshot's frozen skeleton, above all) has to match by time, or it records the
+ * player where they were a moment ago.
+ */
+function nearestCachedPose(
+  frames: Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>,
+  timeSec: number,
+): Array<{ x: number; y: number; score: number; name: string }> | undefined {
+  let best: (typeof frames)[number] | undefined;
+  let bestDist = Infinity;
+  for (const f of frames) {
+    const d = Math.abs(f.timeSeconds - timeSec);
+    if (d < bestDist) { best = f; bestDist = d; }
+  }
+  if (!best || bestDist > POSE_CACHE_TOLERANCE_SEC) return undefined;
+  return best.keypoints;
+}
 import { normalizeWebUrlInput, resolveEmbedTarget } from '@/lib/embedUrl';
 import {
   createHtml5VideoController,
@@ -143,6 +175,7 @@ import {
 } from '@/lib/embedCaptureSession';
 import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
+import { videoFileExtForBlob } from '@/lib/recordingUtils';
 const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportModal'));
 import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
@@ -970,6 +1003,23 @@ function Home() {
   const [columnDeleteMode, setColumnDeleteMode] = useState(false);
   const [showMeasurementOverlays, setShowMeasurementOverlays] = useState(false);
 
+  /**
+   * Ref mirrors of the snapshot-persistence inputs.
+   *
+   * `saveActiveSnapshot` is called from inside `handleReplaySnapshots`, which is
+   * ONE long-running async function: whatever it captured when the replay (or the
+   * Generate recording) started is what it keeps for the entire run. Reading these
+   * two from the closure meant every hold boundary persisted the canvas into
+   * whichever snapshot happened to be selected when Record was pressed — for the
+   * whole pass, snapshot after snapshot — overwriting that one snapshot's stored
+   * pose, column and drawings with mid-motion state. Refs make the save target the
+   * snapshot that is ACTUALLY active at the moment of the save.
+   */
+  const biomechSelectedPhaseIdRef = useRef(biomechSelectedPhaseId);
+  biomechSelectedPhaseIdRef.current = biomechSelectedPhaseId;
+  const showMeasurementOverlaysStateRef = useRef(showMeasurementOverlays);
+  showMeasurementOverlaysStateRef.current = showMeasurementOverlays;
+
   // Active snapshot (the phase whose data column is shown).
   const activeSnapshot = useMemo(
     () => snapshots.find(s => s.id === biomechSelectedPhaseId) ?? null,
@@ -1041,7 +1091,8 @@ function Home() {
   // ── Snapshot helpers ─────────────────────────────────────────────────────
   /** Persist the live canvas/column state into the currently-active snapshot. */
   const saveActiveSnapshot = useCallback(() => {
-    const id = biomechSelectedPhaseId;
+    // Refs, not closure values — see biomechSelectedPhaseIdRef above.
+    const id = biomechSelectedPhaseIdRef.current;
     if (!id) return;
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
@@ -1050,12 +1101,12 @@ function Home() {
     setSnapshots(prev => prev.map(s => s.id === id ? {
       ...s,
       column: col.filter(m => m.type !== 'skeleton-angle'),
-      overlaysOn: showMeasurementOverlays,
+      overlaysOn: showMeasurementOverlaysStateRef.current,
       overlayAdjustments,
       drawingsJson,
       ...(skeleton ? { skeleton } : {}),
     } : s));
-  }, [biomechSelectedPhaseId, showMeasurementOverlays]);
+  }, []);
 
   /** Switch to an existing snapshot: save current, restore target, seek video. */
   const selectSnapshot = useCallback((id: string) => {
@@ -1222,6 +1273,23 @@ function Home() {
   const [generateVideoUrl, setGenerateVideoUrl] = useState<string | null>(null);
   const [generateVideoBlob, setGenerateVideoBlob] = useState<Blob | null>(null);
   const [generateRecording, setGenerateRecording] = useState(false);
+  /**
+   * Why the export outcome needs its OWN state instead of the status banner.
+   *
+   * `setProcessingStatus` renders a `position: fixed` banner at the top of the
+   * screen with `zIndex: 240`. The Generate workspace is a full-viewport modal
+   * (`inset: 0`) at `zIndex: 10050` behind an `rgba(0,0,0,0.85)` scrim, and it is
+   * hidden only while `generateRecording` is true. So when a recording finished,
+   * `setGenerateRecording(false)` un-hid the modal in the SAME React commit that
+   * set the failure status — the message was correct, in state, and permanently
+   * behind an opaque overlay. From the coach's side Generate just finished, with a
+   * playable WebM preview and a download button: exactly the silence the H1 change
+   * was supposed to end.
+   *
+   * The notice therefore lives where the coach is actually looking — inside the
+   * workspace that owns the Record button.
+   */
+  const [generateConversionNotice, setGenerateConversionNotice] = useState<string | null>(null);
   // While true, the visible analysis canvas paints the video itself (instead of
   // the native <video> underlay) so the on-screen canvas stream carries video +
   // overlay. Single rendering path for Generate export; restored after recording.
@@ -1532,6 +1600,7 @@ function Home() {
     generateIncludedIdsRef.current = includedIds && includedIds.length ? includedIds : null;
 
     setGenerateRecording(true);
+    setGenerateConversionNotice(null); // a fresh attempt starts with no verdict
 
     // ── Track-backed recording ───────────────────────────────────────────
     // Resolve the section (must mirror handleReplaySnapshots) and make sure a
@@ -1600,15 +1669,31 @@ function Home() {
       const conv = await convertWebmBlobToMp4(webmBlob, { retimeFactor });
       if (conv.ok) {
         finalBlob = conv.blob;
-      } else if (retimeFactor < 1) {
-        // Conversion failed and the master is slow — deliver it honestly.
-        setProcessingStatus('MP4 conversion failed — video saved at recording speed');
+      } else {
+        // ALWAYS say so. This used to be reported only when `retimeFactor < 1`,
+        // but the track-backed path records at the coach's target rate, which
+        // makes retimeFactor exactly 1 — the common case. So the usual outcome of
+        // a failed conversion was a WebM handed over with no warning at all (and,
+        // before the download fix, named `.mp4`). A failed conversion is now
+        // always visible, and it also costs the retime when one was needed.
+        console.warn('[Generate] MP4 conversion failed:', conv.error);
+        const notice = retimeFactor < 1
+          ? `MP4 conversion failed — saved as WebM at the ${masterRate}× recording speed. (${conv.error})`
+          : `MP4 conversion failed — saved as WebM instead. It still plays in the browser, and the download keeps its real .webm name. (${conv.error})`;
+        // Both surfaces: the banner for the paths where it is visible (recording
+        // started from the snapshot strip, which is bottom-anchored), and the
+        // workspace notice for the path where the modal covers the banner.
+        setProcessingStatus(notice);
+        setGenerateConversionNotice(notice);
       }
       if (generateVideoUrl) URL.revokeObjectURL(generateVideoUrl);
       const url = URL.createObjectURL(finalBlob);
       setGenerateVideoUrl(url);
       setGenerateVideoBlob(finalBlob);
-      if (conv.ok) setProcessingStatus('Replay video ready — download below');
+      if (conv.ok) {
+        setProcessingStatus('Replay video ready — download below');
+        setGenerateConversionNotice(null);
+      }
     } finally {
       // Freeing the capture track matters: a live track keeps compositing costs
       // on every canvas paint.
@@ -6538,13 +6623,45 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onMetricsGenerate:               () => { void handleGenerateSnapshots(); },
     onAutoDetectMeasurements:        async () => {
       // Prefer the Precision-AI-Track pose at the CURRENT frame (video-time
-      // exact); fall back to the latest live detection.
-      const bakedKps = videoRef.current ? canvasRef.current?.getBakedPoseAt?.(videoRef.current.currentTime) ?? null : null;
+      // exact); fall back to the live cache — BY TIME, never by position.
+      const vDet = videoRef.current;
+      const bakedKps = vDet ? canvasRef.current?.getBakedPoseAt?.(vDet.currentTime) ?? null : null;
       const skFrames = canvasRef.current?.getSkeletonFrames?.() ?? [];
+      if (!vDet) { setProcessingStatus('Load a video first'); return; }
       if (!bakedKps && skFrames.length === 0) { setProcessingStatus('Enable Skeleton and play the video first'); return; }
-      const latest = skFrames[skFrames.length - 1];
-      let kps = bakedKps ?? latest?.keypoints;
-      if (!kps?.length) { setProcessingStatus('No skeleton detected — ensure tracking the player'); return; }
+      // This used to take `skFrames[skFrames.length - 1]` — the newest entry by
+      // ARRAY POSITION, with no check that it belongs to the frame on screen.
+      // Detection on a paused frame is asynchronous (the 'seeked' handler starts
+      // it; it lands 30-100 ms later), and this handler reads the cache
+      // synchronously on click. So a coach who scrubbed to the next phase and hit
+      // AI Detect straight away stored the PREVIOUS phase's pose into the new
+      // snapshot: invisible live (the live/baked pose is what's displayed), but it
+      // is the pose a Generate hold freezes — the misplaced skeleton from the
+      // second snapshot onward. The cache is time-indexed; use the time.
+      let kps = bakedKps ?? nearestCachedPose(skFrames, vDet.currentTime);
+      if (!kps?.length) {
+        // The detection for this frame may simply still be in flight — the 'seeked'
+        // handler starts it and it lands 30-100 ms later, which is the whole reason
+        // this bug existed. Give it one beat and re-check before detecting again:
+        // waiting is both cheaper and safer than a second detection, which in
+        // main-thread-fallback mode would contend for the same MoveNet instance
+        // (lib/sharedPoseDetector is a module singleton and TFJS detectors are not
+        // re-entrant). Same "give it one beat" the precision pass uses.
+        setProcessingStatus('Reading the pose on this frame…');
+        await new Promise((r) => setTimeout(r, 120));
+        kps = nearestCachedPose(canvasRef.current?.getSkeletonFrames?.() ?? [], vDet.currentTime);
+      }
+      if (!kps?.length) {
+        // Still nothing for THIS frame. Detect it on demand rather than storing a
+        // pose from another moment. Time-boxed like every other AI Detect step, so
+        // a cold model can never hang the button.
+        const exact = await Promise.race([
+          canvasRef.current?.detectPoseAtTime?.(vDet.currentTime) ?? Promise.resolve(null),
+          new Promise<null>((res) => setTimeout(() => res(null), 3000)),
+        ]);
+        kps = exact ?? undefined;
+      }
+      if (!kps?.length) { setProcessingStatus('No skeleton on this frame — let the skeleton track the player here, then AI Detect'); return; }
       // Enrich with REAL foot keypoints (MediaPipe heel + toe) when the pose has
       // none — one-shot on the current frame, time-boxed so AI Detect never hangs.
       if (skeletonShowFootLine && videoRef.current && !kps.some((k) => k?.name === 'left_foot_index' || k?.name === 'right_foot_index')) {
@@ -9344,7 +9461,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               if (!generateVideoUrl) return;
               const a = document.createElement('a');
               a.href = generateVideoUrl;
-              a.download = `anglemotion-replay-${Date.now()}.mp4`;
+              // Extension from the blob (see videoFileExtForBlob) — a failed MP4
+              // conversion delivers WebM, and naming it `.mp4` is unplayable.
+              a.download = `anglemotion-replay-${Date.now()}.${videoFileExtForBlob(generateVideoBlob)}`;
               a.click();
             }}
             onClose={() => { replayAbortRef.current = true; setSnapshotPanelOpen(false); }}
@@ -9361,6 +9480,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             snapshots={orderedSnapshots}
             videoUrl={generateVideoUrl}
             videoBlob={generateVideoBlob}
+            conversionNotice={generateConversionNotice}
             recording={generateRecording}
             replaying={replayActive}
             playbackRate={generateReplayRate}

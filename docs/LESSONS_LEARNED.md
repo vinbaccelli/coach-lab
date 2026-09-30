@@ -9,8 +9,8 @@ Record an entry when something cost real debugging time and the cause was not
 obvious from the error. Do not record ordinary bugs fixed in the course of the
 work they belong to.
 
-> The companion **known-issues** log that §10 also asks for does not exist yet.
-> When it is started, defects found while working on something else go there
+> The companion **known-issues** log §10 also asks for is
+> `docs/KNOWN_ISSUES.md`. Defects found while working on something else go there
 > (symptom, root cause, fault assessment, proposed fix, severity) — not here.
 
 ---
@@ -349,3 +349,206 @@ The related half: **verifying the assertion you wrote rather than the behaviour
 the user reported.** "The first text lands at its original spot" was true and was
 never the complaint. A two-part expectation needs both parts checked, and the
 part you did not write the code for is the one to check first.
+
+## 006 — Three Generate bugs that all came from reading state by position instead of by identity
+
+*2026-09-26 · branch `claude/trusting-allen-ik77qp` · found by Vin in hands-on testing after launch*
+
+Three separate defects in Metrics/Generate, diagnosed together. They look
+unrelated — a false hardware warning, a misplaced skeleton, an unplayable file —
+and they share one shape.
+
+### Symptom 1 — "This device can't run foot lines smoothly live", ~20 s in, on capable hardware
+
+**Verified root cause.** `detectPoseLive` returned bare `null` both when the
+landmarker failed to initialise *and* when the video simply had no decodable
+frame this instant (`lib/mediapipePose.ts` — `readyState < 2 || videoWidth < 16`).
+The caller could only read `null` as "this device cannot run the model", so it
+latched MediaPipe off for the session and blamed the hardware. `readyState`
+drops below 2 on every seek, every buffering stall and every return to a
+throttled tab — and the live loop detects on exactly those events
+(`detectStaticFrame` is wired to `pause`/`seeked`). One scrub was enough.
+
+Two more defects sat behind it. The "re-arm" the page documented on the foot-line
+toggle never existed — the toggle effect reset the sample counters but left
+`mpLiveDisabledRef`/`mpLiveNotifiedRef` latched, so only a reload could recover.
+And the latency guard that was supposed to be the real capability test ran
+**once per session**, on the first six post-warmup detections whenever they
+arrived, with `s.length === MP_LIVE_GUARD_SAMPLES` — after which the array grew
+forever and was never read again. Those six samples were frequently *paused*
+detections, which re-run MediaPipe's full person detector on a cold region of
+interest and cost several times what playback costs. The verdict was measured on
+work that playback never performs.
+
+**Fix.** A distinct `notReady` marker so a not-ready frame skips the tick; the
+toggle actually re-arms; and the guard now samples only while playing, discards
+the first detections after a seek, rolls its window (clearing it after each
+verdict, as `poseWorker` already did with `inferSamples`), and requires two
+consecutive over-budget windows before reverting.
+
+### Symptom 2 — in a generated video spanning several snapshots, the skeleton is misplaced from the second snapshot onward, but looks right live
+
+**Verified root cause.** AI Detect stored the snapshot's frozen pose as
+`skFrames[skFrames.length - 1]` — the newest entry in the live pose cache **by
+array position**, with no check that it belonged to the frame on screen.
+Detection on a paused frame is asynchronous (the `seeked` handler starts it; it
+lands 30-100 ms later) and the handler read the cache synchronously on click. A
+coach who scrubbed to the next phase and hit AI Detect straight away stored the
+*previous* phase's pose. The first snapshot escaped because the coach had usually
+been playing there and its detection had long since landed.
+
+It is invisible live — live shows the live or baked pose, which tracks the player
+— and only surfaces where the stored pose is the sole source: a Generate hold.
+The export was never at fault; it was the first honest look at the data.
+
+The same path had a second defect. `saveActiveSnapshot` read
+`biomechSelectedPhaseId` from its closure, and it is called from inside
+`handleReplaySnapshots` — one long-running async function. So for an entire
+replay or recording, every hold boundary persisted canvas state into whichever
+snapshot happened to be selected when Record was pressed, overwriting that one
+snapshot's pose, column and drawings with mid-motion state.
+
+**Fix.** Pick the cached pose by time (same 0.12 s tolerance the canvas's own
+`syncFromCache` uses) and detect on demand when nothing matches, rather than
+storing a pose from another moment; and read the save target from a ref.
+
+### Symptom 3 — the exported video will not play: "not supported"
+
+**Verified root cause.** The recording is WebM/VP9 and is converted to MP4 by
+ffmpeg.wasm. When that conversion failed the code kept the **WebM** and both
+download buttons named it `.mp4` — a Matroska stream in an MP4 filename, which
+every OS player rejects. Worse, the failure was usually silent: the "conversion
+failed" status was gated on `retimeFactor < 1`, but the track-backed path records
+at the coach's target rate, making `retimeFactor` exactly 1 — the common case.
+
+Measured, in a real Chromium with the app's own COOP/COEP headers and a
+canvas-`captureStream` WebM: the primary `libx264 -movflags +faststart` pass
+succeeds and yields a valid H.264 MP4 at 640×360 and at 1280×720/≈20 s, with and
+without the `setpts` retime. So the encoder is not the weak link — the **core
+load** is (`@ffmpeg/core` is fetched from jsdelivr at runtime and is not a
+dependency). With jsdelivr unreachable, `toBlobURL` throws `TypeError: Failed to
+fetch` and the whole conversion returns `ok: false`. That is the file the coach
+could not play, and its first four bytes are `1a 45 df a3` — EBML, i.e. WebM.
+
+**Fix.** Name the file from the blob, not from intent; report a failed conversion
+unconditionally; spend both of the first two ladder rungs on libx264 before
+reaching `mpeg4` (MPEG-4 Part 2 is a valid MP4 container that Safari, QuickTime
+and current Chrome refuse to decode, and it used to be attempt two); and validate
+the bytes at both ends, as the screen-record converter in the same file already
+did.
+
+### Class of mistake
+
+***Reading time-indexed state by position, and collapsing distinct failures into
+one signal.***
+
+Every one of these is a lookup that threw away the key. The pose cache is keyed
+by `timeSeconds` and was read with `.at(-1)`. The snapshot to persist is
+identified by an id that changes during the run and was read from a closure. The
+latency verdict is about playback and was fed whatever samples arrived. And
+`null` was made to carry both "not ready yet" and "cannot ever work", so the
+caller had to guess — and guessed the expensive way, permanently, out loud, to
+the user. Where a value has a key, match on the key; where two conditions have
+different remedies, give them different signals.
+
+### Second-order lesson
+
+***A pipeline that falls back must never also rename the output.*** The Generate
+export's fallback was defensible — ship the unconverted recording rather than
+nothing. Labelling it `.mp4` is what turned a graceful degradation into a broken
+deliverable, and doing it silently is what made it unreportable: the preview
+plays WebM happily in Chrome, so the app looked like it had succeeded. The
+working screen-record path in the same repo already tracked a real `outExt` and
+refused to deliver on failure. Two converters, one file apart, opposite
+honesty.
+
+---
+
+## 007 — A bundler ate the worker's dynamic import, and the error message was hidden behind a modal
+
+*2026-09-30 · branch `claude/trusting-allen-ik77qp` · found by Vin testing the 004 H1 fix*
+
+Two bugs stacked: MP4 conversion could never succeed, and the change meant to
+*report* that failure reported it somewhere the coach could not see.
+
+### Symptom
+
+`Generate → Record video` produced a WebM and, in the console,
+`[Generate] MP4 conversion failed: Error: Cannot find module
+'blob:http://localhost:3001/3ca4f49a-…'`. On screen: nothing at all. Generate
+appeared to finish (playable preview, download button) or to hang.
+
+### Verified root cause 1 — webpack compiled `import(url)` into a module lookup
+
+`@ffmpeg/ffmpeg`'s worker loads the core like this
+(`dist/esm/worker.js`):
+
+```js
+try { importScripts(_coreURL); }                                   // classic worker
+catch { self.createFFmpegCore = (await import(/* @vite-ignore */ _coreURL)).default; }
+```
+
+Two facts make that fatal under webpack:
+
+1. `classes.js` always constructs the worker with `{ type: "module" }`, and module
+   workers have no `importScripts` — so the try ALWAYS throws and the catch is the
+   only path ever taken.
+2. The pragma on that import is `@vite-ignore`. **Webpack has no equivalent**, so
+   webpack compiles the call into its own registry. Read out of the built chunk,
+   it becomes `t(30260)(s)` — `__webpack_require__` against a generated context
+   module, with the URL passed as a **module key**. No registry entry is keyed by a
+   runtime URL, so it throws `Cannot find module 'blob:…'`.
+
+This had nothing to do with where the core was fetched from: reproduced with the
+core served **same-origin, 200 OK**. It also hit every caller, since they share
+one `getFFmpeg()` (known issue 015).
+
+**Fix.** Serve `@ffmpeg/ffmpeg`'s worker as a static file from `public/ffmpeg/`
+(staged from node_modules by `scripts/copy-ffmpeg-worker.mjs`, same pattern as
+`copy-ort-wasm.mjs`) and pass it as `classWorkerURL`. Webpack never sees that
+file, so the `import()` inside stays native.
+
+The first attempt at that fix was wrong and measuring caught it: a root-relative
+`'/ffmpeg/worker.js'` is resolved against `import.meta.url`, which webpack inlines
+as the module's **filesystem** path, so the browser tried
+`file:///ffmpeg/worker.js` and refused it. The URL has to be absolute
+(`location.origin + path`) so the base cannot matter.
+
+### Verified root cause 2 — the failure notice was painted under an opaque modal
+
+The 004 change did call `setProcessingStatus(...)` on failure, correctly. But that
+status renders as a `position: fixed` banner at **`zIndex: 240`**, and the Generate
+workspace is a full-viewport modal (`inset: 0`) at **`zIndex: 10050`** behind
+`rgba(0,0,0,0.85)`, hidden only while `generateRecording` is true. So
+`setGenerateRecording(false)` in the `finally` un-hid the modal in the **same React
+commit** that set the failure text. The message was correct, in state, and
+permanently behind an opaque overlay — while the modal showed a playable WebM
+preview and a button labelled "MP4".
+
+**Fix.** Surface the verdict where the coach is looking: a `conversionNotice` prop
+rendered inside the workspace next to the preview, plus an honest download-button
+label derived from the blob. The banner is kept for the snapshot-strip path, which
+is bottom-anchored and does not cover it.
+
+### Class of mistake
+
+***"Reported" is a claim about what reached the user, not about what the code
+called.*** 004 was verified by reading the diff and by a console line. Both were
+correct, and the user still saw nothing, because a status write is only half of a
+status: the other half is stacking context. Any "now it tells the user" fix has to
+be checked at the pixel the user looks at — here, `elementFromPoint` at the
+notice's own centre, which is what finally proved it.
+
+### Second-order lesson
+
+***A repro that bypasses the build is not a repro of the app.*** 004's
+investigation measured the ffmpeg encoders in a standalone Chromium page that
+imported `@ffmpeg/ffmpeg` as raw ESM from `node_modules`. Every encoder passed —
+truthfully — and the conclusion drawn from it ("the encoder is not the weak link,
+the CDN is") was wrong, because the harness had no bundler and the bug *is* the
+bundler. The same trap as 003's second-order lesson, one layer out: there, the
+environment could not reach the broken branch; here, the environment did not
+contain the broken transform. When a measurement is meant to stand in for the
+app, the toolchain is part of what must be reproduced — this time the probe was a
+real route in a real `next build`, and it reproduced Vin's error to the character
+on the first run.

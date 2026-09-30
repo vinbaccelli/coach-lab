@@ -35,6 +35,13 @@ yarn-error.log*
 # under public/models/sam2 ARE committed; only this runtime is regenerated.
 /public/ort/
 
+# @ffmpeg/ffmpeg's ESM worker, staged by scripts/copy-ffmpeg-worker.mjs. It must
+# be served as a STATIC file rather than bundled: webpack compiles the dynamic
+# import inside it into its own module registry, which cannot resolve the runtime
+# core URL ("Cannot find module 'blob:…'"). Not committed, for the same reason as
+# public/ort — it ships in node_modules and must not rot out of step with it.
+/public/ffmpeg/
+
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts

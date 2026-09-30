@@ -10,6 +10,42 @@ import type { FFmpeg } from '@ffmpeg/ffmpeg';
 const CORE_VERSION = '0.12.10';
 const CORE_BASE = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/esm`;
 
+/**
+ * The worker, served as a STATIC FILE from our own origin rather than bundled.
+ *
+ * MANDATORY UNDER WEBPACK — this is not a hosting preference. `@ffmpeg/ffmpeg`
+ * always creates its worker with `{ type: "module" }`, which has no
+ * `importScripts`, so the worker always falls into its second branch:
+ * `await import(_coreURL)`. The pragma guarding that line is `@vite-ignore`, and
+ * webpack has no equivalent — so when webpack bundles the worker it rewrites the
+ * call into its own module registry (measured in the built chunk: `t(30260)(s)`,
+ * `__webpack_require__` against a generated context module) and hands it the core
+ * URL as a MODULE KEY. No registry entry matches a runtime URL, so every single
+ * conversion failed with `Cannot find module 'blob:http://localhost:3001/…'`.
+ *
+ * That was NOT the CDN failing: reproduced with the core served same-origin,
+ * 200 OK. Any URL fails, blob or not, because the lookup never gets as far as
+ * fetching anything.
+ *
+ * Passing `classWorkerURL` sends `classes.js` down its `new Worker(new
+ * URL(classWorkerURL, import.meta.url), …)` branch. That specifier is a runtime
+ * value, so webpack cannot statically analyse it and leaves it alone: the browser
+ * loads this file directly, the `import()` inside stays a NATIVE dynamic import,
+ * and it resolves the core URL as the library intended.
+ *
+ * IT MUST BE AN ABSOLUTE URL. A root-relative '/ffmpeg/worker.js' is resolved
+ * against `import.meta.url`, and webpack inlines that as the module's FILESYSTEM
+ * path — measured: the worker was then requested as
+ * `file:///ffmpeg/worker.js` and the browser refused it
+ * ("cannot be accessed from origin http://localhost:3001"). Building the URL from
+ * `location.origin` makes the base irrelevant, because `new URL(absolute, base)`
+ * ignores the base.
+ *
+ * Staged from node_modules into public/ffmpeg/ by scripts/copy-ffmpeg-worker.mjs
+ * on predev/prebuild/postinstall, so it tracks the installed version.
+ */
+const WORKER_PATH = '/ffmpeg/worker.js';
+
 let ffmpegSingleton: FFmpeg | null = null;
 
 /** Copy into a fresh Uint8Array so `Blob` accepts it under strict TS (no SharedArrayBuffer). */
@@ -41,7 +77,11 @@ async function getFFmpeg(): Promise<FFmpeg> {
   const ffmpeg = new FFmpeg();
   const coreURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, 'text/javascript');
   const wasmURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm');
-  await ffmpeg.load({ coreURL, wasmURL });
+  // classWorkerURL is what keeps the worker out of webpack's hands — see WORKER_PATH.
+  // Absolute, so `new URL(classWorkerURL, import.meta.url)` inside @ffmpeg/ffmpeg
+  // cannot resolve it against webpack's inlined file:// base.
+  const classWorkerURL = `${window.location.origin}${WORKER_PATH}`;
+  await ffmpeg.load({ coreURL, wasmURL, classWorkerURL });
 
   ffmpegSingleton = ffmpeg;
   return ffmpeg;
@@ -75,49 +115,93 @@ export async function convertWebmBlobToMp4(
     : [];
 
   try {
-    await ffmpeg.writeFile(inputName, new Uint8Array(await webmBlob.arrayBuffer()));
+    const inBytes = new Uint8Array(await webmBlob.arrayBuffer());
+    // Validate the INPUT (H3). A recording that produced no data at all cannot be
+    // converted, and feeding ffmpeg an empty file returns a non-zero code whose
+    // message blames the encoder for the recorder's failure.
+    if (inBytes.byteLength < 32) {
+      return { ok: false, error: 'Recording data was empty or incomplete.' };
+    }
+    await ffmpeg.writeFile(inputName, inBytes);
 
-    const primary = [
-      '-i',
-      inputName,
-      ...retimeArgs,
-      '-c:v',
-      'libx264',
-      '-preset',
-      'ultrafast',
-      '-crf',
-      '28',
-      '-pix_fmt',
-      'yuv420p',
-      '-movflags',
-      '+faststart',
-      '-an',
-      outputName,
+    // ── Codec ladder ────────────────────────────────────────────────────────
+    // H.264 is the only codec here that plays everywhere. The ladder therefore
+    // spends BOTH of its first two attempts on libx264 and reaches mpeg4 only as a
+    // genuine last resort:
+    //
+    //   1. libx264 + faststart — what the working screen-record path produces.
+    //   2. libx264, no faststart, veryfast — faststart rewrites the file to move
+    //      the moov atom to the front, and that second pass is its own failure
+    //      mode under WASM memory pressure. Dropping it still yields a normal,
+    //      universally playable MP4 (it just cannot start playing before it is
+    //      fully downloaded, which is irrelevant for a local blob).
+    //   3. mpeg4 — MPEG-4 Part 2, a valid .mp4 container that Safari, QuickTime
+    //      and current Chrome will NOT decode. It used to be attempt 2, so a
+    //      single libx264 hiccup shipped a file the coach could not play, reported
+    //      as "not supported" with nothing in the UI to explain it. Kept only
+    //      because some file beats no file, and loudly logged.
+    const attempts: Array<{ label: string; args: string[] }> = [
+      {
+        label: 'libx264+faststart',
+        args: [
+          '-i', inputName, ...retimeArgs,
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
+          '-movflags', '+faststart', '-an', outputName,
+        ],
+      },
+      {
+        label: 'libx264',
+        args: [
+          '-i', inputName, ...retimeArgs,
+          '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-pix_fmt', 'yuv420p',
+          '-an', outputName,
+        ],
+      },
+      {
+        label: 'mpeg4',
+        args: ['-i', inputName, ...retimeArgs, '-c:v', 'mpeg4', '-q:v', '8', '-an', outputName],
+      },
     ];
-    let code = await ffmpeg.exec(primary);
 
-    if (code !== 0) {
+    let code = -1;
+    let bytes: Uint8Array | null = null;
+    let usedLabel = '';
+    for (const attempt of attempts) {
+      code = await ffmpeg.exec(attempt.args);
+      if (code === 0) {
+        const data = await ffmpeg.readFile(outputName);
+        if (typeof data !== 'string') {
+          const candidate = new Uint8Array(data);
+          // Validate the OUTPUT (H3). A zero-exit ffmpeg run can still leave a
+          // truncated or empty file behind, and this function used to return
+          // `ok: true` for it — an unplayable "MP4" reported as success.
+          if (candidate.byteLength >= 64) {
+            bytes = candidate;
+            usedLabel = attempt.label;
+            break;
+          }
+        }
+        console.warn(`[ffmpegWebmToMp4] ${attempt.label} exited 0 but produced no usable file — trying the next encoder.`);
+      } else {
+        console.warn(`[ffmpegWebmToMp4] ${attempt.label} failed (code ${code}) — trying the next encoder.`);
+      }
       await ffmpeg.deleteFile(outputName).catch(() => {});
-      const fallback = ['-i', inputName, ...retimeArgs, '-c:v', 'mpeg4', '-q:v', '8', '-an', outputName];
-      code = await ffmpeg.exec(fallback);
     }
 
     await ffmpeg.deleteFile(inputName).catch(() => {});
-
-    if (code !== 0) {
-      await ffmpeg.deleteFile(outputName).catch(() => {});
-      return { ok: false, error: `ffmpeg exited with code ${code}` };
-    }
-
-    const data = await ffmpeg.readFile(outputName);
     await ffmpeg.deleteFile(outputName).catch(() => {});
 
-    if (typeof data === 'string') {
-      return { ok: false, error: 'Unexpected text output from ffmpeg' };
+    if (!bytes) {
+      return { ok: false, error: `ffmpeg produced no playable MP4 (last exit code ${code})` };
     }
-    const u8 = new Uint8Array(data);
-    const blob = mp4BlobFromBytes(u8);
-    return { ok: true, blob };
+    if (usedLabel === 'mpeg4') {
+      // Never silent: MPEG-4 Part 2 is the one output here that many players
+      // reject, so the console says which file the coach actually got.
+      console.warn('[ffmpegWebmToMp4] both H.264 passes failed — output is MPEG-4 Part 2, which Safari/QuickTime may refuse to play.');
+    } else if (process.env.NODE_ENV !== 'production') {
+      console.log(`[ffmpegWebmToMp4] converted with ${usedLabel} (${bytes.byteLength} bytes)`);
+    }
+    return { ok: true, blob: mp4BlobFromBytes(bytes) };
   } catch (e) {
     await ffmpeg.deleteFile(inputName).catch(() => {});
     await ffmpeg.deleteFile(outputName).catch(() => {});
