@@ -394,10 +394,136 @@ agree, and the failure is a 500 on save.
 
 ---
 
-## 010 — The foot-line notice blames the device for a model-load failure
+## 010 — Annotation coordinates live in canvas pixels, not video space
+
+**Found:** 2026-09-26, while root-causing the compact↔expanded toolbar desync.
+
+**Symptom.** Every drawing and manual measurement slides relative to the video
+frame whenever the analysis panel changes size — expanding or collapsing the
+toolbar, resizing the window, rotating a phone, adding the B panel, switching
+reels ↔ 16:9. The marks stay where they are on the canvas while the video
+re-fits underneath them.
+
+**Verified root cause.** Strokes and angle measurements store ABSOLUTE
+logical-canvas coordinates (`StrokeLine { p1: Pt; p2: Pt }`, `AngleMeas
+{ v; p1; p2 }`, components/Canvas.tsx:169-212). The canvas backing store is
+resized from the panel size (components/Canvas.tsx:4562) and the video's
+letterbox rect is recomputed from that size every frame
+(components/Canvas.tsx:4840-4846), so the frame moves and the coordinates do
+not. Measured at toolbar 240px → 60px: a line held identical canvas
+coordinates (558,328)-(761,401) while the video rect went 1260 → 1440 wide,
+drifting the mark from u0 0.4429 to u0 0.3875 — about 5.5% of frame width.
+
+The AI measurement overlays are NOT affected: their adjustments are stored
+video-normalized (components/Canvas.tsx:7468-7476), and the data column's
+position is normalized 0-1 (components/Canvas.tsx:388). That asymmetry is the
+confirmation — what is stored in video space survives a resize, what is stored
+in canvas space does not.
+
+**Fault assessment.** Design-level, pre-existing, not a regression. The canvas
+coordinate model was never given a video-relative anchor; the webcam PiP is the
+only thing that was ever taught to rescale on container resize
+(components/Canvas.tsx:2817-2837).
+
+**Partially fixed.** The live symptom is fixed: annotations are now
+re-projected old-rect → new-rect in the canvas-size effect
+(components/Canvas.tsx:4652+), covering `strokesRef`, `angleMeasRef` and the
+undo/redo history.
+
+**Still open — the structural fix.** Store annotation coordinates
+video-normalized (0..1 of the video rect) and convert at draw and hit-test
+time. That is the only thing that fixes the remaining case: `exportStrokes` /
+`importStrokes` (app/analysis/page.tsx:1016, :1043) persist the same canvas
+pixels, so a snapshot saved at one panel width still restores misaligned at
+another, and markup is not portable between a phone and a desktop. It also
+removes the small float drift the re-projection accumulates over many resizes.
+Needs a migration for snapshots already saved.
+
+Not attempted here: the ruler (components/ruler/RulerOverlay.tsx) renders its
+own SVG and was not audited for the same class of bug.
+
+**Severity:** medium for the live symptom (now fixed); medium-high for the
+persisted case, because it silently corrupts saved work rather than merely
+looking wrong.
+
+---
+
+## 011 — A single joint-chain node can never be selected with the Select tool
+
+**Found:** 2026-09-28, browser-verifying the text-selection fix on `claude/text-tool-fix`.
+
+**Symptom.** With the Select tool, pressing on a node of a joint chain and dragging
+moves the WHOLE chain, never that one node. Measured in Chromium on this branch
+and on `snapshot-v1` alike: pressing node 1 of a three-node chain and dragging
+(+42, +18) moved all three nodes by exactly (+42, +18), and `selectionRef` held
+`{kind: 'stroke'}`, never `{kind: 'jointNode'}`.
+
+**Verified root cause.** The Select pointer-down runs a node pass and then a stroke
+pass over the same marks. The node pass records `'jointNode'` with
+`bestDist = d`, the distance to the node centre. The stroke pass then scores the
+same chain with `hitTestStroke`, whose node term is `d - JOINT_NODE_RADIUS`
+(`JOINT_NODE_RADIUS = 8`), which is always strictly smaller than `d`. So the
+stroke pass always wins and overwrites the node selection, anywhere on or near a
+node. The `'jointNode'` branch of the pointer-up finalize, and the node-drag code
+behind it, are unreachable.
+
+**Fault assessment.** Pre-existing: identical on `snapshot-v1 @ 1748ae8e`. The
+stroke pass took its current back-to-front, strict-`<` form in `c596f706`
+(Style mode, 2026-08-10); whether node selection ever worked before that has
+not been checked.
+
+**Proposed fix.** Give the node pass priority rather than competing on distance:
+if it found a node, skip the stroke pass for that chain (or skip the stroke pass
+entirely when a node hit exists). Needs its own browser check that dragging a
+chain by its segments still moves the whole chain.
+
+**Severity:** medium — per-node editing of a joint chain is impossible, but the
+chain is still movable and redrawable.
+
+---
+
+## 012 — A text label left selected keeps the canvas redrawing every frame
+
+**Found:** 2026-09-28, measuring the text-selection fix on `claude/text-tool-fix`
+before and after, per CLAUDE.md §7.
+
+**Symptom.** While a text label is selected and nothing else is happening, the
+overlay canvas repaints at the display rate instead of idling. Measured in
+Chromium, video paused, production build (`next start`):
+
+| state (at rest, 3 s window) | redraws/s | main-thread ms/s |
+|---|---|---|
+| nothing selected | 0 | ~20 |
+| a text label selected | 60 | ~126 |
+
+About 106 ms of main-thread work per second, for as long as the label stays
+selected. Returns to 0 redraws/s as soon as it is deselected (empty-canvas click,
+switching tool, undo/redo, Clear all).
+
+**Verified root cause.** The render loop treats any non-null `selectionRef` as an
+active interaction (`hasActiveInteraction` includes `!!selectionRef.current`) and
+repaints every frame while one exists. That was harmless while a text selection
+could only exist mid-drag; the fix that keeps a clicked label selected (so its
+resize handles are reachable) makes it a resting state. Joint-node selections had
+the same property already, but were unreachable — see 011.
+
+**Fault assessment.** A deliberate trade accepted with the fix, not an accident:
+the render-loop gating is a protected behaviour (CLAUDE.md §6) and was not
+changed without approval.
+
+**Proposed fix.** Count a selection as an active interaction only while it is
+being dragged (`isDraggingRef.current && !!selectionRef.current`), and set
+`renderDirtyRef` wherever a selection is created, changed or dropped, so a resting
+selection draws once and then idles. Needs approval before touching the render
+loop, and a before/after measurement.
+
+**Severity:** low-medium — no functional impact; continuous CPU and battery use
+while a label is selected, most noticeable on phones.
+
+## 013 — The foot-line notice blames the device for a model-load failure
 
 **Found:** 2026-09-26, while fixing the false "can't run foot lines smoothly"
-banner (lessons-learned 004, symptom 1).
+banner (lessons-learned 006, symptom 1).
 
 **Symptom.** The banner always reads *"This device can't run foot lines smoothly
 live — the live skeleton has switched back to the fast model."*
@@ -425,15 +551,15 @@ copy; changing user-facing wording is a product decision. Severity: low.
 
 ---
 
-## 011 — `@ffmpeg/core` is loaded from a third-party CDN at runtime
+## 014 — `@ffmpeg/core` is loaded from a third-party CDN at runtime
 
 **Found:** 2026-09-26, while root-causing the unplayable Generate export
-(lessons-learned 004, symptom 3).
+(lessons-learned 006, symptom 3).
 
 > **CORRECTED 2026-09-30.** This entry originally called the CDN fetch "the
 > realistic failure" for MP4 conversion. It was not. The conversion was failing on
 > every webpack build for an unrelated reason — the bundler rewriting the worker's
-> dynamic import (lessons-learned 005) — and that reproduced with the core served
+> dynamic import (lessons-learned 007) — and that reproduced with the core served
 > **same-origin at 200 OK**, so the CDN never entered into it. The reasoning below
 > is still valid as a *robustness* concern and the proposed fix still stands; it is
 > a latent risk, not a diagnosis of anything observed.
@@ -475,9 +601,9 @@ no longer silently.
 
 ---
 
-## 012 — MP4 conversion was broken in EVERY caller, not only Generate
+## 015 — MP4 conversion was broken in EVERY caller, not only Generate
 
-**Found:** 2026-09-30, fixing the Generate export failure (lessons-learned 005).
+**Found:** 2026-09-30, fixing the Generate export failure (lessons-learned 007).
 
 **Symptom.** `Cannot find module 'blob:http://localhost:3001/…'` from any code
 path that converts a recording to MP4.
@@ -508,4 +634,3 @@ tab-capture downloads to confirm each now produces a real MP4. They are the same
 loader and the same encoder ladder, so the fix should carry — but "should carry"
 is not "verified", and this repo has been burned by exactly that gap. Severity:
 medium — the defect is fixed; the confirmation is outstanding.
-

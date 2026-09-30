@@ -537,13 +537,49 @@ function Home() {
   const styleSelectionRef = useRef<ContextualStyleSnapshot | null>(null);
   useEffect(() => { styleModeRef.current = styleMode; }, [styleMode]);
   useEffect(() => { styleSelectionRef.current = styleSelection; }, [styleSelection]);
+
+  /**
+   * LEAVING STYLE MODE DISARMS THE OUTLINE ERASER.
+   *
+   * `outlineEraserSize` is armed from the Style screen's "Erase part of line"
+   * toggle (components/ToolPalette.tsx) or the on-canvas style bar
+   * (components/ContextualStyleBar.tsx), and nothing used to put it back. It
+   * stayed armed for the rest of the session, while the control that turns it
+   * off is only reachable from inside style mode — so the coach could not see
+   * it was on, let alone switch it off.
+   *
+   * Measured consequence: with a line drawn and the eraser armed, leaving Style
+   * and dragging that line with the SELECT tool moved it from (410,435)-(850,485)
+   * to (450,600)-(890,650) AND punched an extra eraser dot into it (13 -> 14).
+   * The drag did both: it moved the mark and silently cut a hole at the grab
+   * point.
+   *
+   * STYLE MODE IS THE RIGHT BOUNDARY, not the active tool. The Style *screen* is
+   * only navigation; `styleMode` is the mode, and every exit funnels through it
+   * — pressing Style again toggles it off in place (ToolPalette), and
+   * handleToolChange below already clears it on ANY tool choice ("ANY tool
+   * choice leaves style mode"). So the coach cannot stay in style mode while the
+   * tool changes underneath, and one rule here covers the Back action, the
+   * toggle and every tool switch. Keying this on `activeTool` instead would
+   * disarm mid-session while the coach is still in style mode with the toggle
+   * visibly on.
+   */
+  useEffect(() => {
+    if (!styleMode && outlineEraserSize > 0) setOutlineEraserSize(0);
+  }, [styleMode, outlineEraserSize]);
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Distance from bottom of video stage to reserve for playback UI + 16px gap (px). */
   const [toolbarBottomReservePx, setToolbarBottomReservePx] = useState(166);
   /** Selfie-segmentation cutout for webcam PiP */
   const [webcamCutout, setWebcamCutout]     = useState(false);
-  const [panModeEnabled, setPanModeEnabled] = useState(false);
+  /**
+   * Drag-to-pan, WITHIN the Pan/Zoom tool only — it has no effect under any
+   * other tool. Defaults on so picking Pan/Zoom immediately pans; the toggle
+   * exists so the coach can work the zoom buttons without the frame sliding
+   * under a stray drag.
+   */
+  const [panModeEnabled, setPanModeEnabled] = useState(true);
   const [youtubeVideoIdA, setYoutubeVideoIdA] = useState<string | null>(null);
   const [youtubeVideoIdB, setYoutubeVideoIdB] = useState<string | null>(null);
   const [genericEmbedSrcA, setGenericEmbedSrcA] = useState<string | null>(null);
@@ -679,6 +715,15 @@ function Home() {
   /** Error loading the bundled strategy-board court asset (see loadBundledCourt) */
   const [courtLoadError, setCourtLoadError] = useState<string | null>(null);
   const [demoLoadError, setDemoLoadError] = useState<string | null>(null);
+  /**
+   * Demo download feedback. The clip is ~26 MB and is never cached by the
+   * service worker, so on a phone the tap-to-playable gap is long enough that
+   * silence reads as "the button is broken" — which is exactly how it was
+   * reported. The ref guards against a second tap starting a second download.
+   */
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoProgress, setDemoProgress] = useState<number | null>(null);
+  const demoLoadingRef = useRef(false);
   /** Drag-over state for the two video panels */
   const [isDragOverA, setIsDragOverA]       = useState(false);
   const [isDragOverB, setIsDragOverB]       = useState(false);
@@ -3673,9 +3718,41 @@ function Home() {
   const [precisionDrawEnabled, setPrecisionDrawEnabled] = useState(false);
   const [precisionInstructionsOpen, setPrecisionInstructionsOpen] = useState(false);
 
+  /**
+   * IS PRECISION OFFERABLE ON THIS DEVICE?
+   *
+   * `isMobile` alone is NOT the answer, and shipping it as if it were put a
+   * Precision button on desktop — where it is not merely unwanted but INERT.
+   * Every precision entry point arms only on `pointerType === 'touch'`: the
+   * anchor acquisition, the 2-second hold, and the second-finger commit. A
+   * mouse user could switch the mode on and nothing would ever happen.
+   *
+   * REAL TOUCH HARDWARE, not just a narrow window: the isMobile media query
+   * also matches a half-snapped laptop window (<=768px), so it is paired with
+   * the same `(hover: none) and (pointer: coarse)` probe the orientation switch
+   * below uses. Live-subscribed rather than read once — attaching a trackpad to
+   * a tablet changes the answer. Same rule as the Motion Layer editor
+   * (components/stroMotion/FrameMaskEditor.tsx), which already gated this way.
+   *
+   * Resolved in an effect so the server render and the first client render
+   * agree: it starts false and the button appears only once touch is confirmed.
+   */
+  const [coarsePointer, setCoarsePointer] = useState(false);
   useEffect(() => {
-    if (!isMobile && precisionDrawEnabled) setPrecisionDrawEnabled(false);
-  }, [isMobile, precisionDrawEnabled]);
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(hover: none) and (pointer: coarse)');
+    const apply = () => setCoarsePointer(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+  const precisionAvailable = isMobile && coarsePointer;
+
+  // Never leave the mode latched on a device that can no longer drive it
+  // (window widened, trackpad attached).
+  useEffect(() => {
+    if (!precisionAvailable && precisionDrawEnabled) setPrecisionDrawEnabled(false);
+  }, [precisionAvailable, precisionDrawEnabled]);
 
   const handlePrecisionDrawToggle = useCallback(() => {
     setPrecisionDrawEnabled((prev) => {
@@ -4270,15 +4347,71 @@ function Home() {
    * it is deliberately not built yet.
    */
   const loadBundledDemo = useCallback(async () => {
+    if (demoLoadingRef.current) return;   // double-tap while downloading
+    demoLoadingRef.current = true;
     setDemoLoadError(null);
+    setDemoProgress(0);
+    setDemoLoading(true);
     try {
       const res = await fetch('/Demodjokovic.mp4');
-      if (!res.ok) throw new Error(`missing asset (${res.status})`);
-      const blob = await res.blob();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      /*
+       * Read the body as a STREAM rather than res.blob() so the button can show
+       * real progress. The clip is ~26 MB and the service worker deliberately
+       * does not cache video (public/sw.js), so every tap is a full cold
+       * download — on a phone that is many seconds during which the old code
+       * showed absolutely nothing and looked broken.
+       */
+      const total = Number(res.headers.get('content-length')) || 0;
+      let blob: Blob;
+      if (res.body) {
+        const reader = res.body.getReader();
+        const chunks: BlobPart[] = [];
+        let received = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value as unknown as BlobPart);
+            received += value.byteLength;
+            if (total > 0) setDemoProgress(Math.min(99, Math.round((received / total) * 100)));
+          }
+        }
+        blob = new Blob(chunks, { type: res.headers.get('content-type') || 'video/mp4' });
+      } else {
+        // No streaming body (very old WebView) — fall back to the original path.
+        blob = await res.blob();
+      }
+
+      setDemoProgress(100);
       const file = new File([blob], 'Demodjokovic.mp4', { type: blob.type || 'video/mp4' });
       handleVideoFile(file, 'A');
-    } catch {
-      setDemoLoadError('Demo video is not set up yet. Ask your admin to add public/Demodjokovic.mp4.');
+    } catch (err) {
+      /*
+       * SPECIFIC messages, not one blanket string.
+       *
+       * This used to report "Demo video is not set up yet. Ask your admin to
+       * add public/Demodjokovic.mp4." for EVERY failure — a network drop, a
+       * backgrounded-tab abort and an out-of-memory blob all produced that same
+       * sentence, which is wrong in all three cases and sent anyone debugging
+       * it to look for a missing file that is present (26 MB, committed).
+       *
+       * It also means a silent failure is now distinguishable from a slow one:
+       * if this button ever goes quiet again, the catch did NOT run.
+       */
+      const msg = err instanceof Error ? err.message : String(err);
+      setDemoLoadError(
+        msg.startsWith('HTTP 404')
+          ? 'Demo video is missing from this deployment (404).'
+          : msg.startsWith('HTTP')
+            ? `Demo video could not be loaded (${msg}).`
+            : `Demo video download failed — check your connection and try again. (${msg})`,
+      );
+    } finally {
+      demoLoadingRef.current = false;
+      setDemoLoading(false);
+      setDemoProgress(null);
     }
   }, [handleVideoFile]);
 
@@ -6344,6 +6477,14 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
   const toolPaletteBaseProps = {
     activeTool,
     onToolChange:                    handleToolChange,
+    // ── Pan / Zoom tool ────────────────────────────────────────────────────
+    // The pan screen owns every viewport control, so all four route through
+    // the same canvas handle the in-canvas zoom buttons already use.
+    onZoomIn:                        () => canvasRef.current?.zoomIn(),
+    onZoomOut:                       () => canvasRef.current?.zoomOut(),
+    onZoomReset:                     () => canvasRef.current?.resetZoomPan(),
+    panDragEnabled:                  panModeEnabled,
+    onPanDragToggle:                 () => setPanModeEnabled((p) => !p),
     compact:                         true as const,
     drawingOptions,
     onOptionsChange:                 handleOptionsChange,
@@ -6675,7 +6816,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     ...(isMobile
       ? {
           precisionDrawEnabled,
-          onPrecisionDrawToggle: handlePrecisionDrawToggle,
+          // Withholding the callback is what hides the toolbar's Precision row
+          // (ToolPalette renders it only when onPrecisionDrawToggle is present).
+          onPrecisionDrawToggle: precisionAvailable ? handlePrecisionDrawToggle : undefined,
           onShowPrecisionInstructions: showPrecisionInstructionsAgain,
         }
       : {}),
@@ -7255,8 +7398,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     embedLiveVideoA && (!!youtubeVideoIdA || !!genericEmbedSrcA)
                   }
                   webcamCutout={webcamCutout}
-                  precisionTouchDraw={isMobile && precisionDrawEnabled}
-                  onPrecisionHoldActivate={isMobile ? handlePrecisionHoldActivate : undefined}
+                  precisionTouchDraw={precisionAvailable && precisionDrawEnabled}
+                  onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
                   webcamPipMobileChrome={isMobile}
                   webcamPipBottomInsetPx={toolbarBottomReservePx}
                   showTourHelpInZoomCluster
@@ -7277,6 +7420,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     unitSystem={rulerUnitSystem}
                     onUnitSystemChange={setRulerUnitSystem}
                     compact={isMobile}
+                    precisionAvailable={precisionAvailable}
                     onMeasurement={(value, unit) => {
                       if (dataColumnActive) {
                         setPendingMeasurement({ type: 'ruler', value, unit });
@@ -7493,6 +7637,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     <button
                       type="button"
                       onClick={loadBundledDemo}
+                      disabled={demoLoading}
+                      aria-busy={demoLoading}
                       style={{
                         minHeight: 44,
                         minWidth: 200,
@@ -7503,7 +7649,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         color: layoutMode === 'reels' ? '#fff' : '#1D1D1F',
                         fontSize: 14,
                         fontWeight: 500,
-                        cursor: 'pointer',
+                        cursor: demoLoading ? 'progress' : 'pointer',
+                        opacity: demoLoading ? 0.65 : 1,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -7511,7 +7658,18 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         pointerEvents: 'auto',
                       }}
                     >
-                      <PlayCircle size={18} /> Demo (Tutorial)
+                      {demoLoading ? (
+                        <>
+                          <svg width="18" height="18" viewBox="0 0 40 40" style={{ animation: 'spin 1s linear infinite' }}>
+                            <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" strokeWidth="4" strokeDasharray="75" strokeDashoffset="20" strokeLinecap="round" />
+                          </svg>
+                          {demoProgress !== null && demoProgress > 0
+                            ? `Loading demo… ${demoProgress}%`
+                            : 'Loading demo…'}
+                        </>
+                      ) : (
+                        <><PlayCircle size={18} /> Demo (Tutorial)</>
+                      )}
                     </button>
                     {demoLoadError && (
                       <span style={{ fontSize: 12, color: '#CC3333', textAlign: 'center', maxWidth: 320 }}>
@@ -8018,8 +8176,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         embedLiveVideoB && (!!youtubeVideoIdB || !!genericEmbedSrcB)
                       }
                       webcamCutout={webcamCutout}
-                      precisionTouchDraw={isMobile && precisionDrawEnabled}
-                      onPrecisionHoldActivate={isMobile ? handlePrecisionHoldActivate : undefined}
+                      precisionTouchDraw={precisionAvailable && precisionDrawEnabled}
+                      onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
                       webcamPipMobileChrome={isMobile}
                       webcamPipBottomInsetPx={toolbarBottomReservePx}
                       poseFrameSkip={1}
