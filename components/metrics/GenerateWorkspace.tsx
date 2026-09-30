@@ -31,6 +31,14 @@ export interface GenerateWorkspaceProps {
   /** Rendered replay video (object URL) + blob, when recorded. */
   videoUrl: string | null;
   videoBlob: Blob | null;
+  /**
+   * Verdict on the last export, when it did not produce an MP4. Rendered HERE and
+   * not via the page's status banner: this workspace is a full-viewport modal at
+   * zIndex 10050 behind an opaque scrim, and the banner sits at zIndex 240, so a
+   * failure reported through the banner was painted underneath this dialog and the
+   * coach saw nothing at all.
+   */
+  conversionNotice?: string | null;
   recording: boolean;
   replaying: boolean;
   playbackRate: number;
@@ -64,6 +72,7 @@ export default function GenerateWorkspace({
   snapshots,
   videoUrl,
   videoBlob,
+  conversionNotice = null,
   recording,
   replaying,
   playbackRate,
@@ -370,6 +379,23 @@ export default function GenerateWorkspace({
               )}
             </div>
 
+            {/* Export verdict — only when the MP4 conversion did not succeed. */}
+            {conversionNotice && (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  display: 'flex', gap: 10, alignItems: 'flex-start',
+                  padding: '10px 12px', borderRadius: 10,
+                  background: 'rgba(255,149,0,0.14)', border: '1px solid #FF9500',
+                  color: '#FFCF8A', fontSize: 12, fontWeight: 600, lineHeight: 1.45,
+                }}
+              >
+                <span aria-hidden style={{ flexShrink: 0, fontSize: 14 }}>⚠</span>
+                <span>{conversionNotice}</span>
+              </div>
+            )}
+
             {/* Preview actions */}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button type="button" onClick={() => onReplay(includedSnaps.map((s) => s.id))} disabled={replaying || recording} style={secondaryBtn}>
@@ -386,7 +412,9 @@ export default function GenerateWorkspace({
                 <Download size={14} /> All images
               </button>
               <button type="button" onClick={handleDownloadVideo} disabled={!videoUrl} style={secondaryBtn}>
-                <Download size={14} /> MP4
+                {/* MP4 is the intent, so that is the label until a real blob says
+                    otherwise; once one exists the label tells the truth about it. */}
+                <Download size={14} /> {videoBlob ? videoFileExtForBlob(videoBlob).toUpperCase() : 'MP4'}
               </button>
             </div>
           </div>

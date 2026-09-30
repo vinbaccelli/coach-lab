@@ -350,3 +350,95 @@ plays WebM happily in Chrome, so the app looked like it had succeeded. The
 working screen-record path in the same repo already tracked a real `outExt` and
 refused to deliver on failure. Two converters, one file apart, opposite
 honesty.
+
+---
+
+## 005 — A bundler ate the worker's dynamic import, and the error message was hidden behind a modal
+
+*2026-09-30 · branch `claude/trusting-allen-ik77qp` · found by Vin testing the 004 H1 fix*
+
+Two bugs stacked: MP4 conversion could never succeed, and the change meant to
+*report* that failure reported it somewhere the coach could not see.
+
+### Symptom
+
+`Generate → Record video` produced a WebM and, in the console,
+`[Generate] MP4 conversion failed: Error: Cannot find module
+'blob:http://localhost:3001/3ca4f49a-…'`. On screen: nothing at all. Generate
+appeared to finish (playable preview, download button) or to hang.
+
+### Verified root cause 1 — webpack compiled `import(url)` into a module lookup
+
+`@ffmpeg/ffmpeg`'s worker loads the core like this
+(`dist/esm/worker.js`):
+
+```js
+try { importScripts(_coreURL); }                                   // classic worker
+catch { self.createFFmpegCore = (await import(/* @vite-ignore */ _coreURL)).default; }
+```
+
+Two facts make that fatal under webpack:
+
+1. `classes.js` always constructs the worker with `{ type: "module" }`, and module
+   workers have no `importScripts` — so the try ALWAYS throws and the catch is the
+   only path ever taken.
+2. The pragma on that import is `@vite-ignore`. **Webpack has no equivalent**, so
+   webpack compiles the call into its own registry. Read out of the built chunk,
+   it becomes `t(30260)(s)` — `__webpack_require__` against a generated context
+   module, with the URL passed as a **module key**. No registry entry is keyed by a
+   runtime URL, so it throws `Cannot find module 'blob:…'`.
+
+This had nothing to do with where the core was fetched from: reproduced with the
+core served **same-origin, 200 OK**. It also hit every caller, since they share
+one `getFFmpeg()` (known issue 012).
+
+**Fix.** Serve `@ffmpeg/ffmpeg`'s worker as a static file from `public/ffmpeg/`
+(staged from node_modules by `scripts/copy-ffmpeg-worker.mjs`, same pattern as
+`copy-ort-wasm.mjs`) and pass it as `classWorkerURL`. Webpack never sees that
+file, so the `import()` inside stays native.
+
+The first attempt at that fix was wrong and measuring caught it: a root-relative
+`'/ffmpeg/worker.js'` is resolved against `import.meta.url`, which webpack inlines
+as the module's **filesystem** path, so the browser tried
+`file:///ffmpeg/worker.js` and refused it. The URL has to be absolute
+(`location.origin + path`) so the base cannot matter.
+
+### Verified root cause 2 — the failure notice was painted under an opaque modal
+
+The 004 change did call `setProcessingStatus(...)` on failure, correctly. But that
+status renders as a `position: fixed` banner at **`zIndex: 240`**, and the Generate
+workspace is a full-viewport modal (`inset: 0`) at **`zIndex: 10050`** behind
+`rgba(0,0,0,0.85)`, hidden only while `generateRecording` is true. So
+`setGenerateRecording(false)` in the `finally` un-hid the modal in the **same React
+commit** that set the failure text. The message was correct, in state, and
+permanently behind an opaque overlay — while the modal showed a playable WebM
+preview and a button labelled "MP4".
+
+**Fix.** Surface the verdict where the coach is looking: a `conversionNotice` prop
+rendered inside the workspace next to the preview, plus an honest download-button
+label derived from the blob. The banner is kept for the snapshot-strip path, which
+is bottom-anchored and does not cover it.
+
+### Class of mistake
+
+***"Reported" is a claim about what reached the user, not about what the code
+called.*** 004 was verified by reading the diff and by a console line. Both were
+correct, and the user still saw nothing, because a status write is only half of a
+status: the other half is stacking context. Any "now it tells the user" fix has to
+be checked at the pixel the user looks at — here, `elementFromPoint` at the
+notice's own centre, which is what finally proved it.
+
+### Second-order lesson
+
+***A repro that bypasses the build is not a repro of the app.*** 004's
+investigation measured the ffmpeg encoders in a standalone Chromium page that
+imported `@ffmpeg/ffmpeg` as raw ESM from `node_modules`. Every encoder passed —
+truthfully — and the conclusion drawn from it ("the encoder is not the weak link,
+the CDN is") was wrong, because the harness had no bundler and the bug *is* the
+bundler. The same trap as 003's second-order lesson, one layer out: there, the
+environment could not reach the broken branch; here, the environment did not
+contain the broken transform. When a measurement is meant to stand in for the
+app, the toolchain is part of what must be reproduced — this time the probe was a
+real route in a real `next build`, and it reproduced Vin's error to the character
+on the first run.
+

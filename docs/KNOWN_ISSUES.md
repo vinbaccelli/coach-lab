@@ -430,6 +430,14 @@ copy; changing user-facing wording is a product decision. Severity: low.
 **Found:** 2026-09-26, while root-causing the unplayable Generate export
 (lessons-learned 004, symptom 3).
 
+> **CORRECTED 2026-09-30.** This entry originally called the CDN fetch "the
+> realistic failure" for MP4 conversion. It was not. The conversion was failing on
+> every webpack build for an unrelated reason — the bundler rewriting the worker's
+> dynamic import (lessons-learned 005) — and that reproduced with the core served
+> **same-origin at 200 OK**, so the CDN never entered into it. The reasoning below
+> is still valid as a *robustness* concern and the proposed fix still stands; it is
+> a latent risk, not a diagnosis of anything observed.
+
 **Symptom.** Every MP4 conversion in the app — Metrics/Generate, tab capture,
 screen recording, crop export — fails whenever `cdn.jsdelivr.net` is unreachable.
 Reproduced here: `toBlobURL` throws `TypeError: Failed to fetch`, `getFFmpeg()`
@@ -464,4 +472,40 @@ and deploy footprint. The conversion failure is now at least honest and visible
 (the file keeps its real `.webm` extension and the UI reports the error), which
 is what made this diagnosable. Severity: medium — degrades every export path, but
 no longer silently.
+
+---
+
+## 012 — MP4 conversion was broken in EVERY caller, not only Generate
+
+**Found:** 2026-09-30, fixing the Generate export failure (lessons-learned 005).
+
+**Symptom.** `Cannot find module 'blob:http://localhost:3001/…'` from any code
+path that converts a recording to MP4.
+
+**Verified root cause.** All converters share one loader, `getFFmpeg()` in
+`lib/ffmpegWebmToMp4.ts`, and the failure was inside it — so it took out every
+caller equally, not just Metrics/Generate:
+
+- `convertWebmBlobToMp4` → Metrics/Generate export, embed/tab-capture download
+  (`app/analysis/page.tsx`)
+- `convertWebmToMp4ForScreenRecord` → `components/ScreenRecorder.tsx`,
+  `contexts/RecordingContext.tsx`, `lib/cropExport.ts`
+
+**Fault assessment.** Pre-existing and wide. The Generate path was simply where
+Vin happened to look, and the earlier session's claim that the H.264 combination
+"works elsewhere" was never verified against the running app — the screen-record
+path shares the same broken loader and will have been failing the same way. It
+degrades visibly there (ScreenRecorder refuses to deliver and shows "Could not
+convert recording to MP4"), which is probably why it read as an occasional
+annoyance rather than a total outage.
+
+**Fixed here** by the `classWorkerURL` change in `getFFmpeg()`, which is shared,
+so all five call sites are fixed at once. Verified only through
+`convertWebmBlobToMp4` (the reported path).
+
+**Still owed:** a runtime pass over the screen-record, crop-export and
+tab-capture downloads to confirm each now produces a real MP4. They are the same
+loader and the same encoder ladder, so the fix should carry — but "should carry"
+is not "verified", and this repo has been burned by exactly that gap. Severity:
+medium — the defect is fixed; the confirmation is outstanding.
 

@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "postinstall": "node scripts/copy-ort-wasm.mjs",
-    "predev": "node scripts/copy-ort-wasm.mjs",
+    "postinstall": "node scripts/copy-ort-wasm.mjs && node scripts/copy-ffmpeg-worker.mjs",
+    "predev": "node scripts/copy-ort-wasm.mjs && node scripts/copy-ffmpeg-worker.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/copy-ort-wasm.mjs",
+    "prebuild": "node scripts/copy-ort-wasm.mjs && node scripts/copy-ffmpeg-worker.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

@@ -10,6 +10,42 @@ import type { FFmpeg } from '@ffmpeg/ffmpeg';
 const CORE_VERSION = '0.12.10';
 const CORE_BASE = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/esm`;
 
+/**
+ * The worker, served as a STATIC FILE from our own origin rather than bundled.
+ *
+ * MANDATORY UNDER WEBPACK — this is not a hosting preference. `@ffmpeg/ffmpeg`
+ * always creates its worker with `{ type: "module" }`, which has no
+ * `importScripts`, so the worker always falls into its second branch:
+ * `await import(_coreURL)`. The pragma guarding that line is `@vite-ignore`, and
+ * webpack has no equivalent — so when webpack bundles the worker it rewrites the
+ * call into its own module registry (measured in the built chunk: `t(30260)(s)`,
+ * `__webpack_require__` against a generated context module) and hands it the core
+ * URL as a MODULE KEY. No registry entry matches a runtime URL, so every single
+ * conversion failed with `Cannot find module 'blob:http://localhost:3001/…'`.
+ *
+ * That was NOT the CDN failing: reproduced with the core served same-origin,
+ * 200 OK. Any URL fails, blob or not, because the lookup never gets as far as
+ * fetching anything.
+ *
+ * Passing `classWorkerURL` sends `classes.js` down its `new Worker(new
+ * URL(classWorkerURL, import.meta.url), …)` branch. That specifier is a runtime
+ * value, so webpack cannot statically analyse it and leaves it alone: the browser
+ * loads this file directly, the `import()` inside stays a NATIVE dynamic import,
+ * and it resolves the core URL as the library intended.
+ *
+ * IT MUST BE AN ABSOLUTE URL. A root-relative '/ffmpeg/worker.js' is resolved
+ * against `import.meta.url`, and webpack inlines that as the module's FILESYSTEM
+ * path — measured: the worker was then requested as
+ * `file:///ffmpeg/worker.js` and the browser refused it
+ * ("cannot be accessed from origin http://localhost:3001"). Building the URL from
+ * `location.origin` makes the base irrelevant, because `new URL(absolute, base)`
+ * ignores the base.
+ *
+ * Staged from node_modules into public/ffmpeg/ by scripts/copy-ffmpeg-worker.mjs
+ * on predev/prebuild/postinstall, so it tracks the installed version.
+ */
+const WORKER_PATH = '/ffmpeg/worker.js';
+
 let ffmpegSingleton: FFmpeg | null = null;
 
 /** Copy into a fresh Uint8Array so `Blob` accepts it under strict TS (no SharedArrayBuffer). */
@@ -41,7 +77,11 @@ async function getFFmpeg(): Promise<FFmpeg> {
   const ffmpeg = new FFmpeg();
   const coreURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, 'text/javascript');
   const wasmURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm');
-  await ffmpeg.load({ coreURL, wasmURL });
+  // classWorkerURL is what keeps the worker out of webpack's hands — see WORKER_PATH.
+  // Absolute, so `new URL(classWorkerURL, import.meta.url)` inside @ffmpeg/ffmpeg
+  // cannot resolve it against webpack's inlined file:// base.
+  const classWorkerURL = `${window.location.origin}${WORKER_PATH}`;
+  await ffmpeg.load({ coreURL, wasmURL, classWorkerURL });
 
   ffmpegSingleton = ffmpeg;
   return ffmpeg;

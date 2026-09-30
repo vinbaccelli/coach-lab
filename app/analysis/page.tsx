@@ -1228,6 +1228,23 @@ function Home() {
   const [generateVideoUrl, setGenerateVideoUrl] = useState<string | null>(null);
   const [generateVideoBlob, setGenerateVideoBlob] = useState<Blob | null>(null);
   const [generateRecording, setGenerateRecording] = useState(false);
+  /**
+   * Why the export outcome needs its OWN state instead of the status banner.
+   *
+   * `setProcessingStatus` renders a `position: fixed` banner at the top of the
+   * screen with `zIndex: 240`. The Generate workspace is a full-viewport modal
+   * (`inset: 0`) at `zIndex: 10050` behind an `rgba(0,0,0,0.85)` scrim, and it is
+   * hidden only while `generateRecording` is true. So when a recording finished,
+   * `setGenerateRecording(false)` un-hid the modal in the SAME React commit that
+   * set the failure status — the message was correct, in state, and permanently
+   * behind an opaque overlay. From the coach's side Generate just finished, with a
+   * playable WebM preview and a download button: exactly the silence the H1 change
+   * was supposed to end.
+   *
+   * The notice therefore lives where the coach is actually looking — inside the
+   * workspace that owns the Record button.
+   */
+  const [generateConversionNotice, setGenerateConversionNotice] = useState<string | null>(null);
   // While true, the visible analysis canvas paints the video itself (instead of
   // the native <video> underlay) so the on-screen canvas stream carries video +
   // overlay. Single rendering path for Generate export; restored after recording.
@@ -1538,6 +1555,7 @@ function Home() {
     generateIncludedIdsRef.current = includedIds && includedIds.length ? includedIds : null;
 
     setGenerateRecording(true);
+    setGenerateConversionNotice(null); // a fresh attempt starts with no verdict
 
     // ── Track-backed recording ───────────────────────────────────────────
     // Resolve the section (must mirror handleReplaySnapshots) and make sure a
@@ -1614,17 +1632,23 @@ function Home() {
         // before the download fix, named `.mp4`). A failed conversion is now
         // always visible, and it also costs the retime when one was needed.
         console.warn('[Generate] MP4 conversion failed:', conv.error);
-        setProcessingStatus(
-          retimeFactor < 1
-            ? `MP4 conversion failed (${conv.error}) — saved as WebM at the ${masterRate}× recording speed`
-            : `MP4 conversion failed (${conv.error}) — saved as WebM instead`,
-        );
+        const notice = retimeFactor < 1
+          ? `MP4 conversion failed — saved as WebM at the ${masterRate}× recording speed. (${conv.error})`
+          : `MP4 conversion failed — saved as WebM instead. It still plays in the browser, and the download keeps its real .webm name. (${conv.error})`;
+        // Both surfaces: the banner for the paths where it is visible (recording
+        // started from the snapshot strip, which is bottom-anchored), and the
+        // workspace notice for the path where the modal covers the banner.
+        setProcessingStatus(notice);
+        setGenerateConversionNotice(notice);
       }
       if (generateVideoUrl) URL.revokeObjectURL(generateVideoUrl);
       const url = URL.createObjectURL(finalBlob);
       setGenerateVideoUrl(url);
       setGenerateVideoBlob(finalBlob);
-      if (conv.ok) setProcessingStatus('Replay video ready — download below');
+      if (conv.ok) {
+        setProcessingStatus('Replay video ready — download below');
+        setGenerateConversionNotice(null);
+      }
     } finally {
       // Freeing the capture track matters: a live track keeps compositing costs
       // on every canvas paint.
@@ -9298,6 +9322,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             snapshots={orderedSnapshots}
             videoUrl={generateVideoUrl}
             videoBlob={generateVideoBlob}
+            conversionNotice={generateConversionNotice}
             recording={generateRecording}
             replaying={replayActive}
             playbackRate={generateReplayRate}
