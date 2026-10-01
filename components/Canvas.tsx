@@ -2918,8 +2918,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /**
      * Drop a selection that is being KEPT on a stroke — which now includes a
      * clicked text label, held after release so its resize handles stay
-     * reachable. Scoped to 'stroke' and 'textResize' only: joint-node and angle
-     * selections have their own lifecycles and are deliberately left alone.
+     * reachable — and a pressed joint-chain node, which its finalize also keeps
+     * (it was unreachable before KNOWN_ISSUES 011 was fixed, so it was never
+     * listed here). Angle selections clear on release and never reach this.
      *
      * Needed wherever strokesRef is replaced wholesale (undo, redo, Clear all,
      * snapshot import): the selection holds an INDEX, and after the array is
@@ -2927,7 +2928,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      */
     const dropKeptStrokeSelection = () => {
       const kind = selectionRef.current?.kind;
-      if (kind === 'stroke' || kind === 'textResize') {
+      if (kind === 'stroke' || kind === 'textResize' || kind === 'jointNode') {
         selectionRef.current = null;
         renderDirtyRef.current = true;
       }
@@ -8865,6 +8866,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // ── Finalize Select drag ───────────────────────────────────────────
       if (selectionRef.current) {
+        // Only a drag in progress is an edit. A text label or joint node stays
+        // selected after release, and the canvas wires onPointerLeave to this
+        // handler, so moving off the canvas (to reach Undo) used to land here
+        // with nothing dragged and push a duplicate history entry — the first
+        // Undo then stepped onto it and looked dead (KNOWN_ISSUES 016).
+        if (!isDraggingRef.current) return;
         const finSel = selectionRef.current;
         if (finSel.kind === 'textResize') {
           // Keep the text stroke selected so resize handles remain visible

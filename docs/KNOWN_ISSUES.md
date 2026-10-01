@@ -726,7 +726,7 @@ floating window never removes the only way to stop.
 
 ---
 
-## 016 — Undo after dragging a text label or a joint node needs two presses
+## 016 — Undo after dragging a text label or a joint node needs two presses — FIXED (awaiting device test)
 
 **Found:** 2026-09-30, browser-verifying the fix for 011.
 
@@ -762,6 +762,16 @@ approval; neither touches the render loop.
 **Severity:** medium — Undo looks broken after the most common Select edit, but
 nothing is lost (the second press works).
 
+**FIXED** (2026-10-01). The Select finalize returns early unless a drag is in
+progress (`isDraggingRef`), so a pointer-leave over a kept selection no longer
+pushes; and `dropKeptStrokeSelection` now also drops a `jointNode` selection, so
+Undo/Redo/tool switch clear the gold ring and its stale index. Browser-verified
+in Chromium: text label dragged 150 px → Undo ×1 reverts, Redo re-applies; joint
+node dragged → Undo ×1 reverts with no gold ring left, Redo re-applies; chain
+segment drag + Undo, and line draw → drag → Undo ×2 → Redo ×2, all unchanged.
+Not covered: a press-and-release with NO movement still pushes a no-op entry —
+see 018.
+
 ---
 
 ## 017 — The video-slot pills cover the ruler panel's header and close button
@@ -795,3 +805,30 @@ put more controls in that same row. Needs a decision.
 
 **Severity:** low-medium — the panel is still movable and closable via the tool
 rail, but the obvious close button is unreachable.
+
+---
+
+## 018 — Clicking a mark with the Select tool (no drag) adds a no-op Undo step
+
+**Found:** 2026-10-01, browser-verifying the fix for 016.
+
+**Symptom.** Click a text label (or any mark) with the Select tool without
+moving it, then press Undo: nothing visibly changes. The next Undo works. Measured
+in Chromium after the 016 fix: plain click on a label, Undo ×1 left the label in
+place; Undo ×2 removed it (undid its creation).
+
+**Verified root cause.** The Select pointer-down sets `isDraggingRef = true` on
+any hit, and the finalize on release calls `pushHistory()` unconditionally, so a
+press-and-release that moved nothing pushes a byte-identical entry.
+
+**Fault assessment.** Pre-existing for every mark kind (it is the same finalize
+path); more noticeable now that a clicked text label stays selected, since
+clicking a label to reach its resize handles is a normal step.
+
+**Proposed fix.** Push only when the drag changed something: compare the mark
+at `finSel.idx` against `finSel.orig` (identity is enough — every move replaces
+the object) and skip `pushHistory()` when unchanged. Careful with the outline
+eraser branch, which edits the stroke at pointer-down and stores the edited
+object as `orig`; it must still push. Needs approval.
+
+**Severity:** low-medium — one extra Undo press, nothing lost.
