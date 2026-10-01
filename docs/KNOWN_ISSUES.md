@@ -719,8 +719,10 @@ and with it the canvas PiP that a whole-screen recording actually captures —
 survives.
 
 The open question this depended on ("how does the coach stop the recording once
-the window is gone?") is answered by `components/RecordingControlBar.tsx`:
-Pause / Resume / Stop now live in the analysis page's own top chrome for the
+the window is gone?") is answered by in-page recording controls (originally
+`components/RecordingControlBar.tsx`, a full-width bar in the page's top chrome;
+since 2026-10-01 `components/RecordingControls.tsx`, compact, in panel A's
+top-right video-slot row). Pause / Resume / Stop live in the analysis page for the
 duration of any recording, reachable from every tool and panel, so closing the
 floating window never removes the only way to stop.
 
