@@ -8222,28 +8222,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
-        // Back-to-front so the TOPMOST (last-drawn) mark wins an overlap: the
-        // distances tie at 0 anywhere two filled shapes overlap, and a strict
-        // `<` keeps whichever was seen first — which, iterating forwards, was
-        // the one painted UNDERNEATH the mark the coach was pointing at.
-        for (let i = strokesRef.current.length - 1; i >= 0; i--) {
-          const d = hitTestStroke(strokesRef.current[i], pos);
-          if (d < bestDist) {
-            bestDist = d;
-            best = { kind: 'stroke', idx: i, start: pos, orig: strokesRef.current[i] };
+        // A press on a node is a HANDLE press: it grabs that one node, the way a
+        // text resize handle grabs its corner above. It must not compete with the
+        // mark bodies on distance: hitTestStroke scores a chain's nodes as
+        // `d - JOINT_NODE_RADIUS`, always below the node pass's `d`, so the whole
+        // chain used to win every node press and single-node editing was
+        // unreachable (KNOWN_ISSUES 011). A press on a segment away from any node
+        // misses the node pass and still selects (and moves) the whole chain.
+        if (!best) {
+          // Back-to-front so the TOPMOST (last-drawn) mark wins an overlap: the
+          // distances tie at 0 anywhere two filled shapes overlap, and a strict
+          // `<` keeps whichever was seen first — which, iterating forwards, was
+          // the one painted UNDERNEATH the mark the coach was pointing at.
+          for (let i = strokesRef.current.length - 1; i >= 0; i--) {
+            const d = hitTestStroke(strokesRef.current[i], pos);
+            if (d < bestDist) {
+              bestDist = d;
+              best = { kind: 'stroke', idx: i, start: pos, orig: strokesRef.current[i] };
+            }
           }
-        }
 
-        for (let i = angleMeasRef.current.length - 1; i >= 0; i--) {
-          const m = angleMeasRef.current[i];
-          const d = Math.min(
-            Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
-            distToSegment(pos, m.v, m.p1),
-            distToSegment(pos, m.v, m.p2),
-          );
-          if (d < bestDist) {
-            bestDist = d;
-            best = { kind: 'angle', idx: i, start: pos, orig: m };
+          for (let i = angleMeasRef.current.length - 1; i >= 0; i--) {
+            const m = angleMeasRef.current[i];
+            const d = Math.min(
+              Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
+              distToSegment(pos, m.v, m.p1),
+              distToSegment(pos, m.v, m.p2),
+            );
+            if (d < bestDist) {
+              bestDist = d;
+              best = { kind: 'angle', idx: i, start: pos, orig: m };
+            }
           }
         }
 

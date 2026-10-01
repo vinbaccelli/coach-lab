@@ -448,7 +448,7 @@ looking wrong.
 
 ---
 
-## 011 — A single joint-chain node can never be selected with the Select tool
+## 011 — A single joint-chain node can never be selected with the Select tool — FIXED (awaiting device test)
 
 **Found:** 2026-09-28, browser-verifying the text-selection fix on `claude/text-tool-fix`.
 
@@ -479,6 +479,17 @@ chain by its segments still moves the whole chain.
 
 **Severity:** medium — per-node editing of a joint chain is impossible, but the
 chain is still movable and redrawable.
+
+**FIXED** (2026-09-30, uncommitted pending Vin's device test). The Select
+pointer-down now skips the stroke and angle passes whenever the node pass found a
+node: a node is a handle, like a text resize corner, and takes priority instead of
+competing on distance. Browser-verified in Chromium on `cfbd0d0` + the fix, with a
+three-node chain: pressing node 3 and dragging (+42, +60) moves node 3 only (the
+other two stay, gold ring on the moved node); pressing mid-segment and dragging
+still moves the whole chain; Undo after the segment drag reverts it. Reproduced
+before the fix on unmodified `cfbd0d0` (a node press moved all three nodes). Undo
+after a single-node drag needs two presses — see 016, a separate pre-existing
+defect this fix makes reachable for nodes.
 
 ---
 
@@ -713,3 +724,74 @@ Pause / Resume / Stop now live in the analysis page's own top chrome for the
 duration of any recording, reachable from every tool and panel, so closing the
 floating window never removes the only way to stop.
 
+---
+
+## 016 — Undo after dragging a text label or a joint node needs two presses
+
+**Found:** 2026-09-30, browser-verifying the fix for 011.
+
+**Symptom.** Drag a text label (or, since 011 was fixed, a single joint-chain
+node) with the Select tool, then click Undo: nothing changes. A second Undo
+reverts the drag. Measured in Chromium: after a node drag, Undo ×1 left the node
+moved and Undo ×2 restored it; after a text-label drag of 120 px on unmodified
+`cfbd0d0`, Undo ×1 left the label where it was dropped and Undo ×2 restored it.
+
+**Verified root cause.** The canvas wires `onPointerLeave={onPointerUp}`
+(`components/Canvas.tsx`, the `<canvas>` element's props). The Select finalize in
+`onPointerUp` runs whenever `selectionRef.current` is set and always calls
+`pushHistory()`. Every other stroke kind clears `selectionRef` on release, so a
+later pointer-leave finds nothing to finalize. A text label (kept selected since
+the text-tool fix, so its resize handles are reachable) and a joint node (kept
+selected by its own finalize branch) are still selected at rest, so moving the
+mouse off the canvas — which reaching the Undo button always does — runs the
+finalize again and pushes a byte-identical second entry. The first Undo steps
+onto that duplicate.
+
+**Fault assessment.** Pre-existing for text labels since the kept-selection
+change; newly reachable for joint nodes with the 011 fix. Same class as the
+duplicate-history entry already fixed for Style mode (a push on a path that did
+not change anything).
+
+**Proposed fix.** Only finalize a Select drag while one is actually in progress:
+in the finalize branch, return early when `!isDraggingRef.current` (a kept
+selection at rest is not an edit). Separately, `dropKeptStrokeSelection` clears
+`stroke`/`textResize` on undo/redo/tool switch but not `jointNode`, so a stale gold
+node ring can survive an Undo — add `'jointNode'` to its kinds. Both need
+approval; neither touches the render loop.
+
+**Severity:** medium — Undo looks broken after the most common Select edit, but
+nothing is lost (the second press works).
+
+---
+
+## 017 — The video-slot pills cover the ruler panel's header and close button
+
+**Found:** 2026-09-30, spot-checking the ruler panel drag after the PR #58 merge.
+
+**Symptom.** With Video A loaded and the Ruler tool open on desktop (1400×900),
+the "Remove A / + Add B" pills sit on top of the ruler panel's header. Measured
+with `elementFromPoint` every 20 px along the header: the left 80 px is the
+header, everything from x≈1193 to the right edge is the slot-pill group,
+including the panel's close button (its centre hit-tests to the pill). A press on
+the covered part of the header lands on Remove A / Add B instead of starting a
+drag; the close button cannot be clicked until the panel is dragged clear.
+
+**Verified root cause.** Both are anchored to the same corner of the same
+panel: the slot pills at `top: 8, right: 8, zIndex: 110`
+(`renderVideoSlotPills`, `app/analysis/page.tsx`) and the ruler panel at
+`top: 12, right: 12` until its first drag (`components/ruler/RulerOverlay.tsx`,
+the control panel's style). The pills win the stacking order.
+
+**Fault assessment.** Pre-existing: the pills date from `5cef44a` (2026-08-11)
+and the ruler anchor predates `e7376cc` (which made the panel draggable and kept
+the anchor byte-for-byte). Not a regression from today's merges. Dragging the
+panel by the uncovered left part of its header works (verified: exactly
+−300/+150, and it stays put).
+
+**Proposed fix.** Either open the ruler panel below the pill row (e.g. `top`
+offset by the row's height when Video A is loaded), or hide the slot pills while
+the ruler panel is open. Relevant to the recording-control redesign, which would
+put more controls in that same row. Needs a decision.
+
+**Severity:** low-medium — the panel is still movable and closable via the tool
+rail, but the obvious close button is unreachable.
