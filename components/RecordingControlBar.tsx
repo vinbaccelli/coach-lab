@@ -30,7 +30,7 @@
  * here, add it as another row — never as a sibling in a horizontal group.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useState } from 'react';
 import { useRecording } from '@/contexts/RecordingContext';
 import { Pause, Play, Square } from 'lucide-react';
 
@@ -83,7 +83,11 @@ export default function RecordingControlBar() {
   // screen, so FloatingRecordingIndicator stands down and the coach is never
   // offered two competing Stop buttons. Registration is ref-counted and tied to
   // visibility, so the floating widget returns as soon as this bar goes away.
-  useEffect(() => {
+  // A LAYOUT effect, not a plain one: both read the same recState, so on the
+  // first recording commit the widget renders too, and a passive effect runs
+  // after the browser paints — the widget flashed for exactly one frame at
+  // every recording start. Registering before paint re-renders it away first.
+  useLayoutEffect(() => {
     if (!visible) return;
     return registerInlineRecordingControls();
   }, [visible, registerInlineRecordingControls]);
