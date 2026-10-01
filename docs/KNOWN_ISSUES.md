@@ -5,6 +5,11 @@ fixed, and whether or not they are pre-existing — undocumented ≠ doesn't exi
 
 Format: symptom → verified root cause → fault assessment → proposed fix → severity.
 
+Entry numbers are stable IDs (code and commits cite them), so they are never
+reused or shifted. 019 and 020 were numbered 013 and 014 until 2026-10-01, when
+two merges had each added their own 013/014; their "Found" dates are older
+than their numbers.
+
 ---
 
 ## 001 — `--cl-accent` fails WCAG AA when used as text
@@ -559,6 +564,7 @@ resize by corner handle works; the Style-mode eraser cursor follows the pointer;
 picking a tool ends Style mode and removes its box; the full Undo/Redo suite
 from 016 still passes.
 
+---
 
 ## 013 — The foot-line notice blames the device for a model-load failure
 
@@ -683,76 +689,6 @@ should carry — but "should carry" is not "verified", and this repo has been bu
 by exactly that gap. Now that runtime checking is possible, this is a doable task
 rather than a standing unknown. Severity: medium — the defect is fixed for every
 caller; the confirmation covers one.
----
-
-## 013 — Recorded PiP position is proportional, not pixel-exact, in tab/window share
-
-**Found:** 2026-09-26, while fixing background removal during recording (items D/E).
-
-**Symptom.** In a tab or window screen share, the webcam PiP in the recorded file
-sits at roughly — not exactly — the spot the coach dragged it to on the canvas.
-Size and shape are correct; the corner offset can be off by the height of the
-app's own chrome.
-
-**Verified root cause.** The composite stamps the PiP using a rect normalized
-against the *drawing canvas* (`getNormalizedRect`, `lib/webcamPipPresentation.ts`),
-then scales it onto the whole captured frame. The canvas is only part of that
-frame (toolbar rail, header), and the browser exposes the shared surface's *type*
-(`displaySurface`) but never its identity or the app's offset inside it, so the
-true mapping is not computable. Aspect is preserved via `getAspect`, so the shape
-is right; only the origin is approximate.
-
-**Fault assessment.** Inherent to compositing a webcam into a screen grab whose
-geometry the page cannot know. Not a regression — the previous behavior was a
-hard-coded bottom-right box, which was further off. Whole-screen ('monitor')
-share is exact, because there the coach's own canvas PiP is what gets recorded.
-
-**Proposed fix.** None worth making. If pixel-exactness is ever wanted for tab
-share, it needs the canvas's rect within the captured surface, which would mean
-measuring the canvas against the viewport and assuming the shared surface *is*
-this tab — an assumption the browser will not confirm.
-
-**Severity:** low — cosmetic, sub-chrome offset; shape, size and opacity are correct.
-
----
-
-## 014 — Closing the floating window still turns the webcam off in a whole-screen recording — RESOLVED
-
-**Found:** 2026-09-26, while implementing E2(a) (monitor-share PiP handling).
-
-**Symptom.** During a whole-screen recording the floating window is deliberately
-controls-only (Pause/Stop/timer, no camera). Closing it nevertheless turns the
-webcam off, which now also removes the coach's PiP from the canvas — and so from
-the recording.
-
-**Verified root cause.** The `pagehide` handler in `contexts/RecordingContext.tsx`
-implements the documented CORE RULE "closing the PiP window turns the webcam
-region off (but never stops the recording)": it nulls the Source B element and
-fires `onWebcamClosedByPip`, which the analysis page wires to `stopWebcam`. That
-contract was written when the window always showed the camera, so closing it read
-as "turn my camera off". With a controls-only window the gesture no longer
-carries that meaning.
-
-**Fault assessment.** Pre-existing contract, newly visible in monitor share.
-
-**Severity:** low-moderate — recoverable (re-toggle the webcam), but it silently
-dropped the coach from the rest of the recording.
-
-**RESOLVED** (2026-09-27). The `pagehide` handler now branches on share mode.
-Tab/window share is unchanged — the window IS the camera view there, so closing
-it still reads as "turn my camera off". In monitor share the window is
-controls-only, so closing it is treated as "hide these controls": the Source B
-element is left alone and `onWebcamClosedByPip` is not fired, so the webcam —
-and with it the canvas PiP that a whole-screen recording actually captures —
-survives.
-
-The open question this depended on ("how does the coach stop the recording once
-the window is gone?") is answered by in-page recording controls (originally
-`components/RecordingControlBar.tsx`, a full-width bar in the page's top chrome;
-since 2026-10-01 `components/RecordingControls.tsx`, compact, in panel A's
-top-right video-slot row). Pause / Resume / Stop live in the analysis page for the
-duration of any recording, reachable from every tool and panel, so closing the
-floating window never removes the only way to stop.
 
 ---
 
@@ -862,3 +798,74 @@ eraser branch, which edits the stroke at pointer-down and stores the edited
 object as `orig`; it must still push. Needs approval.
 
 **Severity:** low-medium — one extra Undo press, nothing lost.
+
+---
+
+## 019 — Recorded PiP position is proportional, not pixel-exact, in tab/window share
+
+**Found:** 2026-09-26, while fixing background removal during recording (items D/E).
+
+**Symptom.** In a tab or window screen share, the webcam PiP in the recorded file
+sits at roughly — not exactly — the spot the coach dragged it to on the canvas.
+Size and shape are correct; the corner offset can be off by the height of the
+app's own chrome.
+
+**Verified root cause.** The composite stamps the PiP using a rect normalized
+against the *drawing canvas* (`getNormalizedRect`, `lib/webcamPipPresentation.ts`),
+then scales it onto the whole captured frame. The canvas is only part of that
+frame (toolbar rail, header), and the browser exposes the shared surface's *type*
+(`displaySurface`) but never its identity or the app's offset inside it, so the
+true mapping is not computable. Aspect is preserved via `getAspect`, so the shape
+is right; only the origin is approximate.
+
+**Fault assessment.** Inherent to compositing a webcam into a screen grab whose
+geometry the page cannot know. Not a regression — the previous behavior was a
+hard-coded bottom-right box, which was further off. Whole-screen ('monitor')
+share is exact, because there the coach's own canvas PiP is what gets recorded.
+
+**Proposed fix.** None worth making. If pixel-exactness is ever wanted for tab
+share, it needs the canvas's rect within the captured surface, which would mean
+measuring the canvas against the viewport and assuming the shared surface *is*
+this tab — an assumption the browser will not confirm.
+
+**Severity:** low — cosmetic, sub-chrome offset; shape, size and opacity are correct.
+
+---
+
+## 020 — Closing the floating window still turns the webcam off in a whole-screen recording — RESOLVED
+
+**Found:** 2026-09-26, while implementing E2(a) (monitor-share PiP handling).
+
+**Symptom.** During a whole-screen recording the floating window is deliberately
+controls-only (Pause/Stop/timer, no camera). Closing it nevertheless turns the
+webcam off, which now also removes the coach's PiP from the canvas — and so from
+the recording.
+
+**Verified root cause.** The `pagehide` handler in `contexts/RecordingContext.tsx`
+implements the documented CORE RULE "closing the PiP window turns the webcam
+region off (but never stops the recording)": it nulls the Source B element and
+fires `onWebcamClosedByPip`, which the analysis page wires to `stopWebcam`. That
+contract was written when the window always showed the camera, so closing it read
+as "turn my camera off". With a controls-only window the gesture no longer
+carries that meaning.
+
+**Fault assessment.** Pre-existing contract, newly visible in monitor share.
+
+**Severity:** low-moderate — recoverable (re-toggle the webcam), but it silently
+dropped the coach from the rest of the recording.
+
+**RESOLVED** (2026-09-27). The `pagehide` handler now branches on share mode.
+Tab/window share is unchanged — the window IS the camera view there, so closing
+it still reads as "turn my camera off". In monitor share the window is
+controls-only, so closing it is treated as "hide these controls": the Source B
+element is left alone and `onWebcamClosedByPip` is not fired, so the webcam —
+and with it the canvas PiP that a whole-screen recording actually captures —
+survives.
+
+The open question this depended on ("how does the coach stop the recording once
+the window is gone?") is answered by in-page recording controls (originally
+`components/RecordingControlBar.tsx`, a full-width bar in the page's top chrome;
+since 2026-10-01 `components/RecordingControls.tsx`, compact, in panel A's
+top-right video-slot row). Pause / Resume / Stop live in the analysis page for the
+duration of any recording, reachable from every tool and panel, so closing the
+floating window never removes the only way to stop.
