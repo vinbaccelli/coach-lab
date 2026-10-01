@@ -48,7 +48,8 @@ const DIRECTION_CONTRACT = `<!--
     tool that made it. Refuses the four-viewport upload/analyse/export pipeline.
   OWN-WORLD: white ground, #1D1D1F ink, a single #007AFF accent; a 1px ruled
     spine with a travelling accent band and tabular date stamps; display type at
-    poster scale; authored linework diagrams, never stock feature cards.
+    poster scale; the founder's real product screenshots, never stock feature
+    cards or illustrations.
   STORY: a coach believes footage they already have becomes a permanent,
     shareable record of a player's development, and starts the free trial hour.
   FIRST VIEWPORT: poster-scale headline set against the spine's origin, one

@@ -72,9 +72,12 @@ invent them or imply them with placeholder social proof.
 
 Real and usable: the logo/icon set, `public/demo.mp4` / `demo.MOV`,
 `public/court/`, the three real pricing tiers and the 1-hour trial in
-`lib/plans.ts`, and shipped copy. Product screenshots for the tutorial section
-are promised by the user in a later pass — the structure reserves the slot; the
-content is not authored ahead of them.
+`lib/plans.ts`, and shipped copy. **Real product screenshots** (supplied
+2026-10-01; originals in `public/marketing/landing/`, web crops in
+`public/marketing/landing/web/`) now carry the hero, every season entry and
+every tutorial step, replacing the authored linework diagrams. The crops remove
+browser chrome, desktop notifications and other tabs; screens that name a real
+player are not used.
 
 Any illustrative player-development data the spine needs is authored at full
 fidelity and labelled synthetic wherever a visitor could mistake it for a real
@@ -146,7 +149,11 @@ table sits at the END of this page, after the FAQ.
   world, sending "Start Free" straight there is defensible; it was not before.
   Confirm during the build whether the hero CTA goes to `/login` or holds the
   visitor on the marketing surface first.
-- **The tutorial section's content** waits on real product screenshots.
+- **The hero now carries a large product screenshot** (user direction,
+  2026-10-01), so the first dated entry no longer breaks the fold as the
+  contract's FIRST VIEWPORT line describes. Recorded, not yet reconciled.
+- **The swing footage in the screenshots shows a recognisable professional
+  player.** Whether that footage may appear on a marketing page is open.
 - **Name collision, recorded not resolved:** the Academy *pricing tier* (5 coach
   seats) and AngleMotion Academy the *library* (ships inside Pro) share a name.
   The user has decided this does not need resolving.

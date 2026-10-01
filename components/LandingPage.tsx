@@ -27,165 +27,40 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Check, X, Minus, ChevronDown, ArrowRight, ArrowUpRight } from 'lucide-react';
 import { PLANS, DEMO, planPrice, yearlyPerMonth } from '@/lib/plans';
 
 /* ────────────────────────────────────────────────────────────────────────────
-   Authored linework diagrams.
+   Product screenshots.
 
-   These are geometry, not pictures and not screenshots: each one states what
-   the entry does in the product's own visual language — thin charcoal rules,
-   a single blue accent for the measured thing. Real product screenshots land
-   in the tutorial section in a later pass.
+   Real captures of the product, supplied by the founder. The originals sit in
+   public/marketing/landing/ exactly as taken; what the page loads are crops of
+   them in public/marketing/landing/web/, cut to the product itself — no browser
+   chrome, desktop notifications or other tabs. Width and height below are each
+   crop's real pixel size, so next/image reserves the right box before load.
    ──────────────────────────────────────────────────────────────────────────── */
 
-const INK = 'var(--cl-text-primary)';
-const MUTED = 'var(--cl-text-secondary)';
 const ACCENT = 'var(--cl-accent)';
-const LINE = 'var(--cl-border)';
 
-type DiagramProps = { className?: string };
+const SHOT_DIR = '/marketing/landing/web';
 
-const svgBase: React.SVGProps<SVGSVGElement> = {
-  viewBox: '0 0 240 180',
-  fill: 'none',
-  xmlns: 'http://www.w3.org/2000/svg',
-  role: 'img',
-  focusable: 'false',
+type Shot = { src: string; width: number; height: number; alt: string; caption?: string };
+
+const HERO_SHOT: Shot = {
+  src: `${SHOT_DIR}/hero-skeleton-overlay.webp`,
+  width: 1920,
+  height: 1274,
+  alt: 'A forehand mid-swing with the AI-detected skeleton drawn over the player and a panel of ten joint angles beside it — elbows, knees, feet, shoulder and hip lines.',
 };
 
-/** Joint angles read off the frame. */
-function AngleDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="A joint angle measured between two limb segments">
-      <path d="M60 150 L108 84 L188 96" stroke={INK} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M108 84 m -34 26 a 42 42 0 0 0 42 20" stroke={ACCENT} strokeWidth="2" strokeLinecap="round" />
-      <circle cx="108" cy="84" r="5" fill={ACCENT} />
-      <circle cx="60" cy="150" r="4" fill="var(--cl-bg-panel)" stroke={INK} strokeWidth="2" />
-      <circle cx="188" cy="96" r="4" fill="var(--cl-bg-panel)" stroke={INK} strokeWidth="2" />
-      <line x1="24" y1="30" x2="216" y2="30" stroke={LINE} strokeWidth="1" strokeDasharray="3 5" />
-      <text x="24" y="22" fill={MUTED} fontSize="11" fontFamily="var(--cl-font)" letterSpacing="0.08em">ELBOW</text>
-    </svg>
-  );
-}
-
-/** AI proposes the skeleton; the coach moves any point. */
-function SkeletonDiagram({ className }: DiagramProps) {
-  const edges = [
-    [120, 34, 120, 92], [120, 92, 84, 140], [120, 92, 156, 140],
-    [120, 52, 78, 78], [120, 52, 176, 66],
-  ];
-  return (
-    <svg {...svgBase} className={className} aria-label="A detected skeleton with one keypoint being corrected by hand">
-      {edges.map(([x1, y1, x2, y2], i) => (
-        <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={INK} strokeWidth="2" strokeLinecap="round" />
-      ))}
-      {[[120, 34], [120, 52], [120, 92], [78, 78], [84, 140], [156, 140]].map(([cx, cy], i) => (
-        <circle key={i} cx={cx} cy={cy} r="4.5" fill="var(--cl-bg-panel)" stroke={INK} strokeWidth="2" />
-      ))}
-      {/* the point under the coach's hand */}
-      <line x1="176" y1="66" x2="196" y2="44" stroke={ACCENT} strokeWidth="1.5" strokeDasharray="3 4" />
-      <circle cx="176" cy="66" r="6" fill={ACCENT} />
-      <circle cx="196" cy="44" r="10" fill="none" stroke={ACCENT} strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-/** The whole stroke, frozen across space. */
-function MotionLayerDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="A stroke composited as several overlapping positions">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <g key={i} transform={`translate(${i * 38} 0)`} opacity={0.18 + i * 0.205}>
-          <path
-            d="M46 148 L58 104 L46 66"
-            stroke={i === 4 ? ACCENT : INK}
-            strokeWidth={i === 4 ? 2.5 : 2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <circle cx="58" cy="58" r="7" stroke={i === 4 ? ACCENT : INK} strokeWidth={i === 4 ? 2.5 : 2} />
-        </g>
-      ))}
-    </svg>
-  );
-}
-
-/** Phases replayed frame by frame. */
-function PhaseDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="A stroke split into phases and replayed frame by frame">
-      {[0, 1, 2, 3].map((i) => (
-        <rect
-          key={i}
-          x={20 + i * 52} y={52} width={44} height={62} rx={6}
-          stroke={i === 1 ? ACCENT : LINE}
-          strokeWidth={i === 1 ? 2 : 1.5}
-          fill="none"
-        />
-      ))}
-      {[0, 1, 2, 3].map((i) => (
-        <path
-          key={i}
-          d={`M${34 + i * 52} 100 L${42 + i * 52} ${80 - i * 4} L${50 + i * 52} 92`}
-          stroke={i === 1 ? ACCENT : INK}
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          opacity={i === 1 ? 1 : 0.45}
-        />
-      ))}
-      <line x1="20" y1="132" x2="220" y2="132" stroke={LINE} strokeWidth="1" />
-      <circle cx="94" cy="132" r="4" fill={ACCENT} />
-    </svg>
-  );
-}
-
-/** Match data logged point by point. */
-function MatchDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="Match statistics charted beside a court diagram">
-      <rect x="20" y="40" width="76" height="104" rx="3" stroke={INK} strokeWidth="2" fill="none" />
-      <line x1="20" y1="92" x2="96" y2="92" stroke={INK} strokeWidth="2" />
-      <line x1="58" y1="40" x2="58" y2="144" stroke={LINE} strokeWidth="1.5" />
-      <circle cx="76" cy="66" r="4" fill={ACCENT} />
-      {[46, 30, 62, 22].map((h, i) => (
-        <rect
-          key={i}
-          x={124 + i * 26} y={144 - h} width={16} height={h} rx={3}
-          fill={i === 2 ? ACCENT : 'var(--cl-fill-inactive)'}
-        />
-      ))}
-      <line x1="124" y1="144" x2="220" y2="144" stroke={LINE} strokeWidth="1" />
-    </svg>
-  );
-}
-
-/** Two documents per player, growing all season. */
-function DocsDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="Two documents per player: technical and match analysis">
-      <rect x="30" y="34" width="94" height="118" rx="8" stroke={LINE} strokeWidth="1.5" fill="var(--cl-bg-panel)" />
-      <rect x="112" y="46" width="94" height="118" rx="8" stroke={INK} strokeWidth="2" fill="var(--cl-bg-panel)" />
-      {[70, 86, 102, 118, 134].map((y, i) => (
-        <line key={i} x1="128" y1={y} x2={i === 4 ? 166 : 190} y2={y} stroke={i === 0 ? ACCENT : LINE} strokeWidth={i === 0 ? 3 : 2} strokeLinecap="round" />
-      ))}
-    </svg>
-  );
-}
-
-/** Published to YouTube, kept forever, handed over. */
-function PublishDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="A finished video published and shared with the player">
-      <rect x="34" y="46" width="130" height="88" rx="10" stroke={INK} strokeWidth="2" fill="none" />
-      <path d="M92 74 L120 90 L92 106 Z" fill={ACCENT} />
-      <path d="M176 66 L206 66 L206 96" stroke={ACCENT} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M206 66 L172 100" stroke={ACCENT} strokeWidth="2" strokeLinecap="round" />
-      <line x1="34" y1="150" x2="164" y2="150" stroke={LINE} strokeWidth="1" strokeDasharray="3 5" />
-    </svg>
-  );
-}
+/** The Motion Layer composite, as the moving clip it exports. */
+const MOTION_LAYER_CLIP = {
+  src: '/marketing/landing/7d.mp4',
+  width: 464,
+  height: 832,
+  label: 'A Motion Layer composite playing: the whole swing laid over a single frame.',
+};
 
 /* ────────────────────────────────────────────────────────────────────────────
    The spine.
@@ -196,21 +71,53 @@ type Entry = {
   title: string;
   body: string;
   micro?: string;
-  Diagram: React.ComponentType<DiagramProps>;
+  /** One shot, or a short sequence read top to bottom (before → after). */
+  shots?: Shot[];
+  /** The Motion Layer entry shows the exported clip instead of a still. */
+  clip?: true;
 };
 
 /**
  * One example player's season. The chain runs exactly as the product does:
- * measure → correct → composite → phase → match data → the two files →
- * published and handed over.
+ * measure → calibrate → correct → composite → phase → match data → the two
+ * files → published and handed over.
  */
 const ENTRIES: Entry[] = [
   {
     date: 'MAR 04',
     title: 'The stroke, measured.',
     body:
-      'Shoulder, hip, knee, elbow — AngleMotion reads 13+ joint angles automatically and shows the numbers right on the frame. Compare a serve to a model, prove why a stroke breaks down, and back every note with a real measurement instead of a guess.',
-    Diagram: AngleDiagram,
+      'Elbows, knees, shoulder line, hip line — AngleMotion reads the joint angles off the frame and keeps every number in a data column beside the player. Draw your own angle arrows on top, compare two of them as a differential, and back every note with a real measurement instead of a guess.',
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-angles.webp`,
+        width: 1920,
+        height: 1082,
+        alt: 'Two angle arrows drawn on a player’s shoulder and hip lines, with a data column listing both angles, their differential, and the elbow and knee angles.',
+      },
+    ],
+  },
+  {
+    date: 'MAR 11',
+    title: 'Centimetres, not pixels.',
+    body:
+      'Calibrate once against something of known size — a racket, a net post, the service box — and the ruler measures real distance anywhere in the frame. Stance width, contact point, how far a knee travels: measured, not eyeballed.',
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-ruler-reference.webp`,
+        width: 1920,
+        height: 1185,
+        alt: 'The ruler panel asking for a calibration reference: racket, net post, net width, service box, singles court or a custom distance.',
+        caption: 'Pick a reference the clip already contains.',
+      },
+      {
+        src: `${SHOT_DIR}/season-ruler-measured.webp`,
+        width: 1920,
+        height: 1100,
+        alt: 'The ruler calibrated against the racket at 68.6 cm, measuring 39.7 cm between the player’s knees.',
+        caption: 'Calibrated on the racket: 39.7 cm, knee to knee.',
+      },
+    ],
   },
   {
     date: 'MAR 18',
@@ -218,7 +125,14 @@ const ENTRIES: Entry[] = [
     body:
       'Every skeleton keypoint and every angle the AI detects is yours to move. Drag any point, correct any angle, trust the read. AI-fast for the 90%, coach-accurate for the 10% that matters — no black box you can’t touch.',
     micro: 'Trust the AI for speed. Trust yourself for the truth.',
-    Diagram: SkeletonDiagram,
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-skeleton-track.webp`,
+        width: 1920,
+        height: 1427,
+        alt: 'An AI skeleton tracked over a forehand follow-through, with live elbow and knee angles in the data column.',
+      },
+    ],
   },
   {
     date: 'APR 09',
@@ -226,21 +140,35 @@ const ENTRIES: Entry[] = [
     body:
       'Motion Layer turns a swing into a multi-position composite — as a still and as video. You choose the frames and the layers, so the trail shows the path you want the player to see. The demo that sells your coaching and the shareable that markets it.',
     micro: 'Plus — it looks incredible.',
-    Diagram: MotionLayerDiagram,
+    clip: true,
   },
   {
     date: 'APR 27',
     title: 'Phase by phase, in slow motion.',
     body:
       'Snapshot every phase of the stroke and replay it frame-by-frame in slow motion, side-by-side, with angle overlays. Then screen-record it with your webcam and mic to deliver a same-day coaching video your player can rewatch until it clicks.',
-    Diagram: PhaseDiagram,
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-angle-differential.webp`,
+        width: 1920,
+        height: 1246,
+        alt: 'A paused contact point marked up by hand: a dashed ellipse at the hips and a 107° forearm-to-racket angle, logged in the data column.',
+      },
+    ],
   },
   {
     date: 'MAY 16',
     title: 'The match, in numbers.',
     body:
       'Follow a player through a live match and log every point by hand, or let the Match Decoder read your SwingVision screenshots and derive the stats SwingVision doesn’t surface. Either way the match ends as data, not an impression.',
-    Diagram: MatchDiagram,
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-match-decoder.webp`,
+        width: 1136,
+        height: 1344,
+        alt: 'A decoded match report: shot and spin distribution charts, then a coach’s summary where every line names the numbers it rests on.',
+      },
+    ],
   },
   {
     date: 'JUN 02',
@@ -248,25 +176,63 @@ const ENTRIES: Entry[] = [
     body:
       'Every player carries two documents — technical analysis and match analysis — plus a player database and progress tracking across the whole season. Rivals hand you a clip and stop. This is the client file, the deliverable, and the storefront in one place.',
     micro: 'Every student’s technical story in one file — from first lesson to nationals.',
-    Diagram: DocsDiagram,
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-player-reports.webp`,
+        width: 1320,
+        height: 1396,
+        alt: 'A player’s reports page: dated technique analyses, one with a YouTube link, and buttons that open the Technical Analysis Doc, the Match Analysis Doc and the Drive folder.',
+      },
+    ],
   },
   {
     date: 'JUN 21',
     title: 'Published, permanent, handed over.',
     body:
       'Push the finished video straight to YouTube as unlisted and drop it into the player’s report. Nothing to store, nothing to pay for, no archive to run out of — an unlimited record your students keep and can rewatch years later.',
-    Diagram: PublishDiagram,
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-recording-complete.webp`,
+        width: 1920,
+        height: 1134,
+        alt: 'A finished coaching recording — the analysed clip with the coach on camera — and the actions that follow it: Connect YouTube, Crop, Trim and Download MP4.',
+      },
+    ],
   },
 ];
 
-/** Steps for the tutorial section. Real screenshots land here in a later pass. */
-const TUTORIAL_STEPS = [
-  { t: 'Bring the video in', b: 'Upload from your camera roll, pull from Google Drive, or paste a YouTube link. Nothing to install.' },
-  { t: 'Find the frame', b: 'Step frame-by-frame to the moment that matters and snapshot it as a phase.' },
-  { t: 'Let the AI read it', b: 'Run pose detection and AI Detect Angles, then correct any point the AI got wrong.' },
-  { t: 'Build the composite', b: 'Pick your frames and layers and generate the Motion Layer still or video.' },
-  { t: 'Record the explanation', b: 'Capture screen, webcam and mic in one hub while you talk the player through it.' },
-  { t: 'Send the report', b: 'Publish to YouTube, drop everything into the player’s document, and share the link.' },
+/** Steps for the tutorial section, each with the screen it happens on. */
+const TUTORIAL_STEPS: Array<{ t: string; b: string; shot: Shot }> = [
+  {
+    t: 'Bring the video in',
+    b: 'Upload from your camera roll, pull from Google Drive, or paste a YouTube link. Nothing to install.',
+    shot: { src: `${SHOT_DIR}/step-upload.webp`, width: 1920, height: 1328, alt: 'The empty workspace with Upload Video, the tennis-court strategy board and the demo clip.' },
+  },
+  {
+    t: 'Find the frame',
+    b: 'Step frame-by-frame to the moment that matters and snapshot it as a phase.',
+    shot: { src: `${SHOT_DIR}/step-frames.webp`, width: 1920, height: 1040, alt: 'Five frames marked along the clip’s timeline, each listed with its timestamp.' },
+  },
+  {
+    t: 'Let the AI read it',
+    b: 'Run pose detection and AI Detect Angles, then correct any point the AI got wrong.',
+    shot: { src: `${SHOT_DIR}/step-ai-track.webp`, width: 1300, height: 1000, alt: 'The AI Track dialog offering three tracking speeds, from extremely precise to fastest.' },
+  },
+  {
+    t: 'Build the composite',
+    b: 'Pick your frames and layers and generate the Motion Layer still or video.',
+    shot: { src: `${SHOT_DIR}/step-mask-editor.webp`, width: 1880, height: 1340, alt: 'The Motion Layer mask editor with the player and racket detected automatically and highlighted, ready to cut from the background.' },
+  },
+  {
+    t: 'Record the explanation',
+    b: 'Capture screen, webcam and mic in one hub while you talk the player through it.',
+    shot: { src: `${SHOT_DIR}/step-record.webp`, width: 1920, height: 1079, alt: 'A recording in progress: the clip on screen, the coach in a floating camera window with a timer, Pause and Stop.' },
+  },
+  {
+    t: 'Send the report',
+    b: 'Publish to YouTube, drop everything into the player’s document, and share the link.',
+    shot: { src: `${SHOT_DIR}/step-coach-summary.webp`, width: 1136, height: 680, alt: 'A coach’s summary of six numbered observations above a Save to Google Docs button.' },
+  },
 ];
 
 /**
@@ -386,6 +352,36 @@ function Cell({ v }: { v: string }) {
    Page
    ──────────────────────────────────────────────────────────────────────────── */
 
+/**
+ * The Motion Layer clip. It plays on its own, muted and looping, like the
+ * still it replaces — unless the visitor asked for reduced motion, in which
+ * case it waits behind its controls.
+ */
+function MotionLayerClip() {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    setReduced(prefersReduced);
+    if (!prefersReduced) ref.current?.play().catch(() => { /* autoplay refused: controls stay off, clip shows its first frame */ });
+  }, []);
+  return (
+    <video
+      ref={ref}
+      className="am-clip"
+      src={MOTION_LAYER_CLIP.src}
+      width={MOTION_LAYER_CLIP.width}
+      height={MOTION_LAYER_CLIP.height}
+      muted
+      loop
+      playsInline
+      preload="metadata"
+      controls={reduced}
+      aria-label={MOTION_LAYER_CLIP.label}
+    />
+  );
+}
+
 export default function LandingPage() {
   const [annual, setAnnual] = useState(true);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
@@ -446,7 +442,6 @@ export default function LandingPage() {
             <img src="/logo-square-new.jpg" alt="" width={26} height={26} />
             <span>Angle<span style={{ color: ACCENT }}>Motion</span></span>
           </Link>
-          <span className="am-slogan">Analyze Every Angle of Your Game</span>
         </div>
         <div className="am-nav-links">
           <a href="#season" className="am-navlink">How it works</a>
@@ -460,13 +455,13 @@ export default function LandingPage() {
 
       {/* ── HERO ────────────────────────────────────────────────────────── */}
       <header className="am-hero">
-        <h1 className="am-display">
-          Video in.<br />
-          <span style={{ color: ACCENT }}>Report out.</span>
+        <h1 className="am-display am-display-hero">
+          Analyze every angle <span style={{ color: ACCENT }}>of your game.</span>
         </h1>
         <p className="am-lede">
-          AngleMotion turns the footage you already have into a permanent, shareable record of a
-          player’s development — measured, corrected by you, and kept for as long as they play.
+          Video in, report out. AngleMotion turns the footage you already have into a permanent,
+          shareable record of a player’s development — measured, corrected by you, and kept for as
+          long as they play.
         </p>
         <div className="am-cta-row">
           <Link href={DEMO.url} className="am-btn am-btn-lg">
@@ -475,6 +470,16 @@ export default function LandingPage() {
           <a href="#season" className="am-ghost">Follow one player’s season</a>
         </div>
         <p className="am-note">{DEMO.note}</p>
+        <figure className="am-hero-shot">
+          <Image
+            src={HERO_SHOT.src}
+            width={HERO_SHOT.width}
+            height={HERO_SHOT.height}
+            alt={HERO_SHOT.alt}
+            priority
+            sizes="(max-width: 1180px) 100vw, 1180px"
+          />
+        </figure>
         <ul className="am-facts">
           <li>Runs in your browser — nothing to install</li>
           <li>Your videos stay local — no cloud lock-in</li>
@@ -499,7 +504,7 @@ export default function LandingPage() {
         </div>
 
         <ol className="am-entries">
-          {ENTRIES.map(({ date, title, body, micro, Diagram }) => (
+          {ENTRIES.map(({ date, title, body, micro, shots, clip }) => (
             <li key={date} className="am-entry">
               <div className="am-entry-date am-tabular">{date}</div>
               <div className="am-entry-body">
@@ -507,8 +512,20 @@ export default function LandingPage() {
                 <p className="am-p">{body}</p>
                 {micro && <p className="am-micro">{micro}</p>}
               </div>
-              <div className="am-entry-figure">
-                <Diagram className="am-diagram" />
+              <div className={clip ? 'am-entry-figure am-entry-figure-clip' : 'am-entry-figure'}>
+                {clip && <MotionLayerClip />}
+                {shots?.map((shot) => (
+                  <figure key={shot.src} className="am-shot">
+                    <Image
+                      src={shot.src}
+                      width={shot.width}
+                      height={shot.height}
+                      alt={shot.alt}
+                      sizes="(max-width: 900px) 100vw, 560px"
+                    />
+                    {shot.caption && <figcaption className="am-shot-caption">{shot.caption}</figcaption>}
+                  </figure>
+                ))}
               </div>
             </li>
           ))}
@@ -516,10 +533,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── TUTORIAL ────────────────────────────────────────────────────
-          Structure only for now. Real product screenshots are supplied in a
-          later pass and drop into .am-step-shot — the step list reads
-          correctly without them, so nothing here is a placeholder pretending
-          to be content. ─────────────────────────────────────────────────── */}
+          The six steps, each beside the screen it happens on. ──────────── */}
       <section id="how" className="am-section am-tutorial">
         <h2 className="am-h2">From footage to a finished report, in six steps.</h2>
         <p className="am-sub">The whole loop, start to finish. No step needs a second app.</p>
@@ -531,6 +545,15 @@ export default function LandingPage() {
                 <h3 className="am-step-t">{s.t}</h3>
                 <p className="am-p">{s.b}</p>
               </div>
+              <figure className="am-shot am-step-shot">
+                <Image
+                  src={s.shot.src}
+                  width={s.shot.width}
+                  height={s.shot.height}
+                  alt={s.shot.alt}
+                  sizes="(max-width: 900px) 100vw, 520px"
+                />
+              </figure>
             </li>
           ))}
         </ol>
@@ -771,23 +794,7 @@ const CSS = `
   font-size: 17px; font-weight: 800; letter-spacing: -0.03em; text-decoration: none;
 }
 .am-wordmark img { border-radius: var(--cl-radius-sm); display: block; }
-/* Tagline beside the wordmark. Deliberately quiet — Marketing Caption size at
-   secondary weight against the wordmark's 17px/800, separated by the same
-   hairline rule the rest of the page uses instead of a bullet or dash. It is
-   the first thing that goes when the nav runs out of room. */
 .am-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.am-slogan {
-  position: relative; padding-left: 13px;
-  font-size: 13px; font-weight: 500; letter-spacing: -0.01em;
-  color: var(--cl-text-secondary); white-space: nowrap;
-}
-.am-slogan::before {
-  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
-  width: 1px; height: 15px; background: var(--cl-border);
-}
-/* Mobile only hides it: tablet and up have room, and below 860px the nav
-   links collapse anyway, which frees exactly the space the slogan needs. */
-@media (max-width: 767px) { .am-slogan { display: none; } }
 .am-nav-links { display: flex; align-items: center; gap: 22px; }
 .am-navlink {
   font-size: 15px; font-weight: 500; color: var(--cl-text-secondary);
@@ -833,6 +840,9 @@ const CSS = `
   text-wrap: balance;
 }
 .am-display-sm { font-size: clamp(34px, 6.4vw, 68px); }
+/* The hero headline stops short of the full display size so it sets in two
+   lines on a desktop and the product shot below it breaks the fold. */
+.am-display-hero { font-size: clamp(44px, 8.2vw, 94px); }
 .am-h2 {
   margin: 0 0 14px;
   font-size: clamp(28px, 4.4vw, 52px);
@@ -861,13 +871,31 @@ const CSS = `
 .am-center-row { justify-content: center; }
 
 /* HERO */
-.am-hero { padding: clamp(64px, 11vw, 132px) var(--am-gutter) clamp(44px, 7vw, 84px); max-width: var(--am-max); margin: 0 auto; }
+.am-hero { padding: clamp(48px, 7vw, 92px) var(--am-gutter) clamp(44px, 7vw, 84px); max-width: var(--am-max); margin: 0 auto; }
 .am-cta-row { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
 .am-facts {
   display: flex; flex-wrap: wrap; gap: 10px 28px;
   margin: 44px 0 0; padding: 26px 0 0; list-style: none;
   border-top: 1px solid var(--cl-border-subtle);
   font-size: 15px; color: var(--cl-text-secondary);
+}
+/* The product at work, at full measure under the promise it makes. */
+.am-hero-shot {
+  margin: clamp(36px, 6vw, 64px) 0 0;
+  border: 1px solid var(--cl-border); border-radius: 18px; overflow: hidden;
+  box-shadow: 0 30px 60px -36px rgba(0, 0, 0, 0.35);
+}
+.am-hero-shot img { display: block; width: 100%; height: auto; }
+
+/* SCREENSHOTS — framed like the hero, one step quieter. */
+.am-shot {
+  margin: 0; border: 1px solid var(--cl-border); border-radius: 12px; overflow: hidden;
+  background: #fff;
+}
+.am-shot img { display: block; width: 100%; height: auto; }
+.am-shot-caption {
+  padding: 10px 14px; border-top: 1px solid var(--cl-border-subtle);
+  font-size: 13px; line-height: 1.45; color: var(--cl-text-secondary);
 }
 
 /* THE SPINE */
@@ -886,7 +914,7 @@ const CSS = `
 .am-entry {
   position: relative;
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr) minmax(0, 300px);
+  grid-template-columns: 88px minmax(0, 1fr) minmax(0, 1.15fr);
   gap: clamp(20px, 4vw, 56px);
   align-items: start;
   padding: clamp(34px, 5vw, 62px) var(--am-gutter);
@@ -896,13 +924,19 @@ const CSS = `
   font-size: 13px; font-weight: 700; letter-spacing: 0.11em;
   color: var(--cl-text-secondary); padding-top: 6px; white-space: nowrap;
 }
-.am-entry-figure { display: flex; justify-content: flex-end; }
-.am-diagram { width: 100%; max-width: 300px; height: auto; }
+.am-entry-figure { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* The Motion Layer clip is portrait: centre it and cap its height rather than
+   letting a 9:16 frame run the full column width. */
+.am-entry-figure-clip { align-items: center; }
+.am-clip {
+  display: block; width: 100%; max-width: 300px; height: auto; aspect-ratio: 464 / 832;
+  border: 1px solid var(--cl-border); border-radius: 12px; background: #0b0b0c;
+}
 @media (max-width: 900px) {
   .am-entry { grid-template-columns: 1fr; gap: 18px; padding-left: calc(var(--am-rail-x) + 22px); }
   .am-entry-date { padding-top: 0; }
-  .am-entry-figure { justify-content: flex-start; }
-  .am-diagram { max-width: 240px; }
+  .am-entry-figure-clip { align-items: flex-start; }
+  .am-clip { max-width: 240px; }
 }
 
 /* Anchor targets must clear the sticky nav, or every in-page link lands with
@@ -915,8 +949,12 @@ const CSS = `
 /* TUTORIAL */
 .am-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .am-step {
-  display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 20px; align-items: start;
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1.1fr); gap: 20px clamp(20px, 3vw, 40px); align-items: start;
   padding: 26px 0; border-top: 1px solid var(--cl-border-subtle);
+}
+@media (max-width: 900px) {
+  .am-step { grid-template-columns: 44px minmax(0, 1fr); }
+  .am-step-shot { grid-column: 2 / -1; }
 }
 .am-step:first-child { border-top: none; }
 .am-step-n { font-size: 13px; font-weight: 700; color: var(--cl-accent); letter-spacing: 0.08em; padding-top: 4px; }
