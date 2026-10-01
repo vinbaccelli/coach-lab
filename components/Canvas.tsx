@@ -2562,6 +2562,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const lastRenderVideoTimeRef = useRef(-1);
     const lastRenderZoomRef = useRef(1);
     const lastRenderPanRef = useRef({ x: 0, y: 0 });
+    // Selection identity at the last render (see selectionChanged in the loop).
+    const lastRenderSelectionRef = useRef<Selection>(null);
+    const lastRenderContextualRef = useRef<ContextualTarget | null>(null);
     // Frame-accurate "a new video frame was presented" signal. currentTime
     // advances continuously while playing, so it cannot gate to the decoded
     // frame rate; requestVideoFrameCallback fires once per presented frame
@@ -5177,10 +5180,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         lastRenderZoomRef.current = zoomRef.current;
         lastRenderPanRef.current = { x: panXRef.current, y: panYRef.current };
 
+        // A selection's box, handles, node ring and the Style-mode box are all
+        // STATIC, so a selection at rest is drawn once — when it appears,
+        // changes or goes away — and then idles. Only a drag in progress
+        // repaints every frame (below). Counting any non-null selection as an
+        // interaction kept a selected text label / joint node / Style box
+        // repainting at the display rate for as long as it stayed selected
+        // (KNOWN_ISSUES 012). Every write to these refs replaces the object,
+        // so identity catches all of them — no per-call-site dirty flag needed.
+        const selectionChanged =
+          selectionRef.current !== lastRenderSelectionRef.current ||
+          contextualTargetRef.current !== lastRenderContextualRef.current;
+        lastRenderSelectionRef.current = selectionRef.current;
+        lastRenderContextualRef.current = contextualTargetRef.current;
+
         const hasActiveInteraction =
           !!activeStrokeRef.current ||
-          !!selectionRef.current ||
-          !!contextualTargetRef.current ||
+          (isDraggingRef.current && !!selectionRef.current) ||
           !!liveAngleRef.current ||
           isSelectingStroRegionRef.current ||
           precisionAnchorPointerIdRef.current !== null ||
@@ -5222,6 +5238,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const needsRender =
           videoFrameChanged ||
           zoomChanged ||
+          selectionChanged ||
           renderDirtyRef.current ||
           renderWaitersRef.current.length > 0 ||
           hasActiveInteraction ||

@@ -493,7 +493,7 @@ defect this fix makes reachable for nodes.
 
 ---
 
-## 012 — A text label left selected keeps the canvas redrawing every frame
+## 012 — A text label left selected keeps the canvas redrawing every frame — FIXED (awaiting device test)
 
 **Found:** 2026-09-28, measuring the text-selection fix on `claude/text-tool-fix`
 before and after, per CLAUDE.md §7.
@@ -530,6 +530,34 @@ loop, and a before/after measurement.
 
 **Severity:** low-medium — no functional impact; continuous CPU and battery use
 while a label is selected, most noticeable on phones.
+
+**FIXED** (2026-10-01, approved). In the render loop, a selection counts as an
+active interaction only while it is being dragged
+(`isDraggingRef.current && !!selectionRef.current`), and the Style-mode target
+(`contextualTargetRef`, the same static-box pattern) no longer counts at all.
+Instead of a dirty flag at each of the 13 `selectionRef` and 4
+`contextualTargetRef` write sites, the loop compares both refs' identity with
+the last rendered values (the same pattern it already uses for zoom/pan): every
+write replaces the object, so any create/change/drop repaints once. Edits that
+mutate the selected mark already set `renderDirtyRef` (Style changes, the
+pulse toggle, text-edit commit via `pushHistory`, eraser hover).
+
+Measured in Chromium, production build (`next start`), 1400×900, video paused,
+mouse parked off the canvas, 3 s windows, two runs each:
+
+| state (at rest) | redraws/s before | after | main-thread ms/s before | after |
+|---|---|---|---|---|
+| nothing selected | 0 | 0 | 23–28 | 23–24 |
+| text label selected | 60 | 0 | 224–237 | 23–26 |
+| joint node selected | 60 | 0 | 234–236 | 22–23 |
+| Style box selected | 60 | 0 | 213–233 | 22–25 |
+
+Behaviour verified unchanged in the browser: each selection's box / handles /
+node ring / Style box appears on select, persists at rest, and disappears on an
+empty-canvas click; a dragged label follows the pointer before release; text
+resize by corner handle works; the Style-mode eraser cursor follows the pointer;
+picking a tool ends Style mode and removes its box; the full Undo/Redo suite
+from 016 still passes.
 
 
 ## 013 — The foot-line notice blames the device for a model-load failure
