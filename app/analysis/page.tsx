@@ -6840,6 +6840,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         overlaysOn: true,
       } : s));
       setProcessingStatus(`AI detected ${items.length} measurements`);
+      emitTourSignal('ai-angles-detected');
     },
     onScreenshotSave:                () => { void handleScreenshotSave(); },
     screenshotSaving,

@@ -125,11 +125,16 @@ function resolveTooltipPos(
 
   if (!side) {
     // Nothing fits outside. A working area keeps its middle clear — the card
-    // tucks into its top-left corner; anything else gets centred.
+    // tucks into one of its corners (top-left unless the step names another);
+    // anything else gets centred.
     if (!step.area) return centred;
+    const corner = step.corner ?? 'top-left';
+    const right = corner.endsWith('right');
+    const bottom = corner.startsWith('bottom');
+    const vis = { x0: Math.max(0, target.x), y0: Math.max(0, target.y), x1: Math.min(vp.w, target.x + target.w), y1: Math.min(vp.h, target.y + target.h) };
     return {
-      x: Math.min(Math.max(MARGIN, target.x + MARGIN), vp.w - tip.w - MARGIN),
-      y: Math.min(Math.max(MARGIN, target.y + MARGIN), vp.h - tip.h - MARGIN),
+      x: Math.min(Math.max(MARGIN, right ? vis.x1 - tip.w - MARGIN : vis.x0 + MARGIN), vp.w - tip.w - MARGIN),
+      y: Math.min(Math.max(MARGIN, bottom ? vis.y1 - tip.h - MARGIN : vis.y0 + MARGIN), vp.h - tip.h - MARGIN),
     };
   }
 
@@ -351,6 +356,20 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
     return () => window.clearInterval(id);
   }, [step, next]);
 
+  // Finish condition: a click on the target itself. Capture phase, so the step
+  // sees the click even when the control stops propagation; the control's own
+  // handler still runs — nothing is prevented.
+  useEffect(() => {
+    if (!step?.target || step.advance.kind !== 'click') return;
+    const selector = byTourId(step.target);
+    const onClick = (e: MouseEvent) => {
+      const el = findVisible(selector);
+      if (el && e.target instanceof Node && el.contains(e.target)) next();
+    };
+    window.addEventListener('click', onClick, true);
+    return () => window.removeEventListener('click', onClick, true);
+  }, [step, next]);
+
   // Finish condition: an app signal.
   useEffect(() => {
     if (!step || step.advance.kind !== 'signal') return;
@@ -483,7 +502,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
             Welcome to AngleMotion
           </h2>
           <p style={{ margin: '0 0 20px', fontSize: 15, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
-            Learn it by doing it: a short guided tour of {welcomeTour.title.toLowerCase()}, on the real tools.
+            Learn it by doing it, on the real tools. {welcomeTour.summary}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <button type="button" onClick={() => startTour(welcomeTour.id)} style={{ ...primaryBtn, height: 44 }}>
