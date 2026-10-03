@@ -906,6 +906,7 @@ export default function PreciseTimeline({
         aria-valuemax={d || 0}
         aria-valuenow={displayT}
         aria-label="Scrub timeline"
+        data-tour-id="tour-scrub"
         aria-disabled={d <= 0}
         style={{
           width: '100%',
@@ -1353,11 +1354,11 @@ export default function PreciseTimeline({
         ) : null}
         <button type="button" onClick={zoomFull} style={{ ...btnStyle, minWidth: 40, fontSize: 11 }} title="Full timeline">All</button>
 
-        <button onClick={togglePlay} style={{ ...btnStyle, minWidth: phoneChrome ? 40 : 52, background: isPlaying ? accent : 'rgba(255,255,255,0.08)' }} title="Play/Pause (Space)">
+        <button data-tour-id="tour-play" onClick={togglePlay} style={{ ...btnStyle, minWidth: phoneChrome ? 40 : 52, background: isPlaying ? accent : 'rgba(255,255,255,0.08)' }} title="Play/Pause (Space)">
           {isPlaying ? '⏸' : '▶'}
         </button>
         <button onClick={() => stepFrame(-1)} style={btnStyle} title={`Back 1 frame (←) @ ${selectedFps}fps`}>◀</button>
-        <button onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
+        <button data-tour-id="tour-step-fwd" onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
 
         <div style={{ minWidth: 130, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
           <div style={{ lineHeight: 1.1 }}>{formatTime(displayT)}</div>

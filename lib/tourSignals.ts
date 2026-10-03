@@ -25,7 +25,9 @@ export type TourSignalName =
   /** Style mode: the picked mark's colour, thickness, dash or opacity changed. */
   | 'style-changed'
   /** Select tool: a mark was dragged to a new position. */
-  | 'mark-moved';
+  | 'mark-moved'
+  /** AI Detect Angles read the pose on this frame and filled the data column. */
+  | 'ai-angles-detected';
 
 export interface TourSignalDetail {
   name: TourSignalName;

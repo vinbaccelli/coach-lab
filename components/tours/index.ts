@@ -1,13 +1,11 @@
 import { DRAW_TOUR } from './drawTour';
+import { INTRO_TOUR } from './introTour';
 import type { TourDef } from './types';
 
-export type { TourDef, TourStep, TourAdvance, TourPlacement } from './types';
+export type { TourDef, TourStep, TourAdvance, TourPlacement, TourCorner } from './types';
 
-/**
- * Every tour the ? button offers, in the order it lists them. Tour A ("Getting
- * started") joins here next and becomes the welcome tour.
- */
-export const TOURS: ReadonlyArray<TourDef> = [DRAW_TOUR];
+/** Every tour the ? button offers, in the order it lists them. */
+export const TOURS: ReadonlyArray<TourDef> = [INTRO_TOUR, DRAW_TOUR];
 
 /** The tour the first-visit welcome card starts. */
-export const WELCOME_TOUR_ID = DRAW_TOUR.id;
+export const WELCOME_TOUR_ID = INTRO_TOUR.id;

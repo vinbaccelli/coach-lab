@@ -992,6 +992,7 @@ function BackHeader({
       <button
         type="button"
         aria-label="Back"
+        data-tour-id="toolbar-back"
         style={{
           ...rb(false, pressedKey === `back-${title}`, io, denseMobile),
           ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0, justifyContent: 'center' } : null),
