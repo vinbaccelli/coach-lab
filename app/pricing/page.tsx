@@ -17,15 +17,20 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Check, Lock } from 'lucide-react';
+import { Check } from 'lucide-react';
 import {
   PLANS,
   DEMO,
   PRICING_HEADLINE,
   PRICING_SUBHEAD,
   PRICING_FOOTNOTE,
+  PRICING_LABEL,
+  PRICE_TAX_NOTE,
+  formatPrice,
+  maxYearlySavingsPct,
   planPrice,
   yearlyPerMonth,
+  yearlySavingsLabel,
   type PlanId,
   type BillingCycle,
 } from '@/lib/plans';
@@ -35,8 +40,9 @@ const MUTED = 'var(--cl-text-secondary)';
 const ACCENT = 'var(--cl-accent)';
 
 export default function PricingPage() {
-  /* Annual is the default: it is the better deal on every tier and the only
-     cycle that carries the Pro ebook. Monthly stays one tap away. */
+  /* Yearly is the default: it is the better deal on every tier and the only
+     cycle that carries the Spin Mechanics ebook (Pro and Academy). Monthly
+     stays one tap away. */
   const [cycle, setCycle] = useState<BillingCycle>('yearly');
   const [loading, setLoading] = useState<PlanId | null>(null);
   // Set when the middleware subscription gate redirected here from /analysis.
@@ -129,7 +135,7 @@ export default function PricingPage() {
             <button type="button" onClick={() => setCycle('yearly')} aria-pressed={annual} style={toggleBtn(annual)}>
               Yearly
               <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 800, opacity: annual ? 0.9 : 1, color: annual ? 'var(--cl-text-on-fill)' : ACCENT }}>
-                2 months free
+                save up to {maxYearlySavingsPct()}%
               </span>
             </button>
             <button type="button" onClick={() => setCycle('monthly')} aria-pressed={!annual} style={toggleBtn(!annual)}>
@@ -178,17 +184,17 @@ export default function PricingPage() {
                 {/* Ink, not accent: System Blue at 11px is ~4.0:1 on white,
                     under the 4.5 floor (docs/KNOWN_ISSUES.md 001). */}
                 <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.04em', color: INK, marginBottom: 2 }}>
-                  FOUNDING PRICE
+                  {PRICING_LABEL.toUpperCase()}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                   <span className="pr-num" style={{ fontSize: 42, fontWeight: 800, letterSpacing: '-0.03em' }}>
-                    ${price}
+                    {formatPrice(price)}
                   </span>
                   <span style={{ fontSize: 15, color: MUTED }}>{annual ? '/year' : '/month'}</span>
                 </div>
                 <p className="pr-num" style={{ fontSize: 12, color: MUTED, margin: '4px 0 18px', minHeight: 16 }}>
                   {annual
-                    ? `$${yearlyPerMonth(plan)}/mo · two months free`
+                    ? `${formatPrice(yearlyPerMonth(plan))}/mo · ${yearlySavingsLabel(plan)}`
                     : 'Billed monthly · cancel anytime'}
                 </p>
 
@@ -236,6 +242,9 @@ export default function PricingPage() {
 
         <p style={{ margin: '30px auto 0', maxWidth: 560, fontSize: 14, fontWeight: 600, color: INK }}>
           {PRICING_FOOTNOTE}
+        </p>
+        <p style={{ margin: '8px auto 0', maxWidth: 560, fontSize: 13, color: MUTED }}>
+          {PRICE_TAX_NOTE}
         </p>
 
         {/* Demo CTA */}

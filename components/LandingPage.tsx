@@ -20,15 +20,22 @@
  *    none. The star record is stated ONLY next to the coaching link, and
  *    labelled as being for Vin's coaching rather than the app. The app's
  *    profile gets a plain invitation with no rating until it earns one.
- *  - The competitor table carries ONLY verified data; unknowns stay '?'.
+ *  - No competitor prices or competitor feature claims. The comparison table
+ *    was removed at launch pricing (2026-10-03): only two of its cells had a
+ *    recorded source. It may return only with a cited source per cell.
+ *  - Prices come from lib/plans.ts and render through formatPrice (EUR); the
+ *    tax line is PRICE_TAX_NOTE. Never hardcode a price or a currency sign.
  *  - The example player's dates and readings are illustrative and are labelled
  *    as such on the page, not passed off as a real customer.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Check, X, Minus, ChevronDown, ArrowRight, ArrowUpRight } from 'lucide-react';
-import { PLANS, DEMO, planPrice, yearlyPerMonth } from '@/lib/plans';
+import { Check, ChevronDown, ArrowRight, ArrowUpRight } from 'lucide-react';
+import {
+  PLANS, DEMO, EBOOK_TITLE, PRICE_TAX_NOTE, formatPrice, planPrice, yearlyPerMonth,
+  yearlySavingsLabel, maxYearlySavingsPct,
+} from '@/lib/plans';
 
 /* ────────────────────────────────────────────────────────────────────────────
    Authored linework diagrams.
@@ -209,7 +216,7 @@ const ENTRIES: Entry[] = [
     date: 'MAR 04',
     title: 'The stroke, measured.',
     body:
-      'Shoulder, hip, knee, elbow — AngleMotion reads 13+ joint angles automatically and shows the numbers right on the frame. Compare a serve to a model, prove why a stroke breaks down, and back every note with a real measurement instead of a guess.',
+      'Shoulder, hip, knee, elbow — AngleMotion reads the joint angles automatically and shows the numbers right on the frame. Compare a serve to a model, prove why a stroke breaks down, and back every note with a real measurement instead of a guess.',
     Diagram: AngleDiagram,
   },
   {
@@ -335,52 +342,15 @@ const TRUSTPILOT_COACH_COUNT = 6;
  *  only. No rating may be stated for this one until it has one. */
 const TRUSTPILOT_APP_URL = 'https://www.trustpilot.com/review/anglemotion.com';
 
-/* Verified competitor comparison. y = yes, n = no, q = unknown. Pro tier vs
-   Pro tier: CoachNow PRO $499.99/yr (coachnow.com/pricing); Dartfish 360 S
-   ≈ €40/mo (dartfish.com/plans) — their ~$5/mo Express tier is mobile-only and
-   not comparable; OnForm Coach Pro $599.99/yr (onform.com/pricing) — their coach
-   ladder is Basic $199.99 / Standard $399.99 / Pro $599.99 per year and, in
-   their own words, "Coach prices multiply by Number of coaches", so five coaches
-   is five times that before their 11% 3+-seat discount. Read off the live
-   pricing page 2026-09-09.
-
-   Unknowns stay '?'; nothing here is estimated. OnForm's row is mostly '?' on
-   purpose: only drawing/telestration and the athlete database are stated
-   outright on their pricing page, and a feature nobody has verified is not
-   marked 'n' just to make the column look decisive. */
-const COMPARE_COLS = ['AngleMotion', 'CoachNow', 'Dartfish', 'OnForm'];
-const COMPARE_ROWS: Array<{ label: string; cells: Array<'y' | 'n' | 'q' | string> }> = [
-  { label: 'Price (Pro tier, annual)', cells: ['$200/yr', '$499/yr', '~€480/yr', '$599/yr'] },
-  { label: 'AI pose / skeleton overlay', cells: ['y', 'y', 'y', 'q'] },
-  { label: 'Angle measurement (auto)', cells: ['y', 'y', 'y', 'q'] },
-  { label: 'Editable AI skeleton (override by hand)', cells: ['y', 'q', 'n', 'q'] },
-  { label: 'Slow-mo / frame-by-frame', cells: ['y', 'y', 'y', 'q'] },
-  { label: 'Drawing / telestration', cells: ['y', 'y', 'y', 'y'] },
-  { label: 'Side-by-side compare', cells: ['y', 'y', 'y', 'q'] },
-  { label: 'Motion Layer / motion-trail composite', cells: ['y', 'n', 'y', 'q'] },
-  { label: 'Coaching report (Google Docs)', cells: ['y', 'q', 'q', 'q'] },
-  { label: 'Player database / client file', cells: ['y', 'y', 'q', 'y'] },
-  { label: 'Videos stay local (no cloud lock-in)', cells: ['y', 'n', 'n', 'q'] },
-  { label: 'One-click YouTube publish', cells: ['y', 'q', 'q', 'q'] },
-  { label: 'SwingVision stat import (Match Decoder)', cells: ['y', 'n', 'n', 'q'] },
-];
-
 const FAQS = [
   { q: 'What is AngleMotion?', a: 'A browser-based tennis video-analysis platform: AI skeleton + angle detection you can edit by hand, Motion Layer composites, slow-motion phase replays, a recording hub, and per-player Google Docs coaching reports — all in one place.' },
   { q: 'Does the AI replace my judgment?', a: 'No. Every skeleton point and angle the AI detects is editable — drag it, correct it, trust it. AI does the fast 90%; you own the 10% that matters.' },
   { q: 'Do my videos get uploaded to a cloud?', a: 'No. Your footage is processed locally in your browser and stays on your device. Only the reports and clips you explicitly export go to your own Google Drive / YouTube.' },
   { q: 'What do I need to run it?', a: 'Just a browser — nothing to install. A laptop or desktop with graphics acceleration on gives the smoothest AI skeleton.' },
   { q: 'Is this only for coaches?', a: 'No. Plenty of players and parents run their own analysis and build their own record over time. The Academy exists so you can learn what to film and what to look for.' },
-  { q: 'How does the yearly plan and free eBook work?', a: 'Go yearly ($200/yr — 2 months free vs monthly) and we include our tennis biomechanics eBook, the coach’s guide to reading every stroke.' },
+  { q: 'How does yearly billing and the ebook work?', a: `Yearly costs less than twelve monthly payments: 16.7% less on Light (two months free) and 28.6% less on Pro and Academy. Pro and Academy billed yearly include the ${EBOOK_TITLE} ebook, downloaded from your account page. ${PRICE_TAX_NOTE}` },
   { q: 'Can I use my SwingVision data?', a: 'Yes — the Match Decoder reads SwingVision screenshots and folds match stats into the player’s file.' },
 ];
-
-function Cell({ v }: { v: string }) {
-  if (v === 'y') return <Check size={18} style={{ color: 'var(--cl-success-text)' }} aria-label="yes" />;
-  if (v === 'n') return <X size={16} style={{ color: 'var(--cl-text-secondary)' }} aria-label="no" />;
-  if (v === 'q') return <Minus size={16} style={{ color: 'var(--cl-text-secondary)' }} aria-label="unknown" />;
-  return <span className="am-tabular" style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>{v}</span>;
-}
 
 /* ────────────────────────────────────────────────────────────────────────────
    Page
@@ -452,7 +422,6 @@ export default function LandingPage() {
           <a href="#season" className="am-navlink">How it works</a>
           <a href="#academy" className="am-navlink">Academy</a>
           <a href="#pricing" className="am-navlink">Pricing</a>
-          <a href="#compare" className="am-navlink">Compare</a>
           <Link href="/login" className="am-navlink am-navlink-strong">Sign in</Link>
           <Link href="/login" className="am-btn am-btn-sm">Start free</Link>
         </div>
@@ -547,8 +516,8 @@ export default function LandingPage() {
             use it to sharpen their eye. Players and parents use it to analyse themselves properly
             instead of guessing.
           </p>
-          {/* Every paid tier as of 2026-09-09 — the Academy moved down to
-              Light with founding pricing (lib/plans.ts, middleware.ts). */}
+          {/* Every paid tier: the Academy is a Light feature (lib/plans.ts,
+              lib/entitlements.ts). */}
           <p className="am-note">Included with every plan.</p>
         </div>
       </section>
@@ -594,7 +563,7 @@ export default function LandingPage() {
         <h2 className="am-h2">Pricing that fits how you coach.</h2>
         <div className="am-toggle" role="group" aria-label="Billing period">
           <button type="button" onClick={() => setAnnual(false)} className={`am-toggle-b ${!annual ? 'is-on' : ''}`} aria-pressed={!annual}>Monthly</button>
-          <button type="button" onClick={() => setAnnual(true)} className={`am-toggle-b ${annual ? 'is-on' : ''}`} aria-pressed={annual}>Yearly · 2 months free</button>
+          <button type="button" onClick={() => setAnnual(true)} className={`am-toggle-b ${annual ? 'is-on' : ''}`} aria-pressed={annual}>Yearly · save up to {maxYearlySavingsPct()}%</button>
         </div>
 
         <div className="am-plans">
@@ -603,12 +572,12 @@ export default function LandingPage() {
               <h3 className="am-plan-name">{plan.name}</h3>
               <p className="am-plan-tag">{plan.tagline}</p>
               <p className="am-plan-price am-tabular">
-                ${annual ? yearlyPerMonth(plan) : planPrice(plan, 'monthly')}
+                {formatPrice(annual ? yearlyPerMonth(plan) : planPrice(plan, 'monthly'))}
                 <span className="am-plan-per">/mo</span>
               </p>
               <p className="am-plan-billed am-tabular">
-                {annual ? `$${planPrice(plan, 'yearly')} billed yearly` : 'billed monthly'}
-                {plan.seats > 1 ? ` · ${plan.seats} coach seats` : ''}
+                {annual ? `${formatPrice(planPrice(plan, 'yearly'))} billed yearly · ${yearlySavingsLabel(plan)}` : 'billed monthly'}
+                {plan.seats > 1 ? ` · up to ${plan.seats} coaches` : ''}
               </p>
               <ul className="am-plan-features">
                 {plan.features.map((f) => (
@@ -623,7 +592,7 @@ export default function LandingPage() {
         </div>
 
         <p className="am-note am-center">
-          Go yearly and get our tennis biomechanics eBook — the coach’s guide to reading every stroke.
+          Pro and Academy billed yearly include the {EBOOK_TITLE} ebook. {PRICE_TAX_NOTE}
         </p>
       </section>
 
@@ -648,38 +617,6 @@ export default function LandingPage() {
               </div>
             );
           })}
-        </div>
-      </section>
-
-      {/* ── COMPARE ─────────────────────────────────────────────────────── */}
-      <section id="compare" className="am-section">
-        <h2 className="am-h2">How it compares.</h2>
-        <p className="am-sub">
-          Verified data only. Where a competitor doesn’t publish an answer we leave it unknown rather
-          than guess.
-        </p>
-        <div className="am-table-wrap">
-          <table className="am-table">
-            <caption className="am-visually-hidden">Feature comparison against CoachNow and Dartfish</caption>
-            <thead>
-              <tr>
-                <th scope="col">&nbsp;</th>
-                {COMPARE_COLS.map((c, i) => (
-                  <th key={c} scope="col" className={i === 0 ? 'is-us' : ''}>{c}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {COMPARE_ROWS.map((row) => (
-                <tr key={row.label}>
-                  <th scope="row">{row.label}</th>
-                  {row.cells.map((cell, i) => (
-                    <td key={i} className={i === 0 ? 'is-us' : ''}><Cell v={cell} /></td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       </section>
 
@@ -981,16 +918,6 @@ const CSS = `
 .am-plan-features li { display: grid; grid-template-columns: 18px 1fr; gap: 9px; font-size: 15px; line-height: 1.45; color: var(--cl-text-secondary); }
 .am-plan-features svg { color: var(--cl-accent); margin-top: 3px; }
 
-/* COMPARE */
-.am-table-wrap { overflow-x: auto; border: 1px solid var(--cl-border); border-radius: var(--cl-radius-lg); }
-.am-table { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 680px; }
-.am-table th, .am-table td { padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--cl-border-subtle); }
-.am-table thead th { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cl-text-secondary); font-weight: 700; }
-.am-table thead th.is-us { color: var(--cl-accent); }
-.am-table tbody th { font-weight: 500; color: var(--cl-text-secondary); }
-.am-table td { text-align: center; width: 116px; }
-.am-table td.is-us { background: var(--cl-accent-soft); }
-.am-table tr:last-child th, .am-table tr:last-child td { border-bottom: none; }
 
 /* FAQ */
 .am-faqs { display: grid; gap: 0; max-width: 820px; }
