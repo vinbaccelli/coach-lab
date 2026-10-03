@@ -21,7 +21,6 @@ import { Check, Lock } from 'lucide-react';
 import {
   PLANS,
   DEMO,
-  FOUNDING_NOTE,
   PRICING_HEADLINE,
   PRICING_SUBHEAD,
   PRICING_FOOTNOTE,
@@ -119,17 +118,6 @@ export default function PricingPage() {
         <p style={{ margin: '0 auto 22px', maxWidth: 620, fontSize: 15, lineHeight: 1.6, color: MUTED }}>
           {PRICING_SUBHEAD}
         </p>
-
-        {/* Founding promise — account-wide, whichever tier you join at, so it is
-            stated once here rather than repeated on every card. */}
-        <div style={{
-          display: 'inline-flex', alignItems: 'flex-start', gap: 8, textAlign: 'left',
-          margin: '0 auto 26px', padding: '10px 14px', borderRadius: 10,
-          background: 'var(--cl-accent-soft)', maxWidth: 560,
-        }}>
-          <Lock size={14} style={{ color: ACCENT, flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
-          <span style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>{FOUNDING_NOTE}</span>
-        </div>
 
         {/* Billing toggle */}
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 32 }}>
@@ -231,24 +219,16 @@ export default function PricingPage() {
 
                 {/* Annual-only sweetener. Hidden on monthly so the offer is never
                     shown to someone who would not actually receive it. */}
-                {plan.annualBonus && annual && (
+                {plan.yearlyBonus && annual && (
                   <p style={{
                     margin: '16px 0 0', padding: '10px 12px', borderRadius: 10,
                     background: 'var(--cl-accent-soft)', textAlign: 'left',
                     fontSize: 12, fontWeight: 600, lineHeight: 1.5, color: INK,
                   }}>
-                    {plan.annualBonus}
+                    {plan.yearlyBonus}
                   </p>
                 )}
 
-                {plan.note && (
-                  <p style={{
-                    margin: '16px 0 0', paddingTop: 12, borderTop: '1px solid var(--cl-border-subtle)',
-                    textAlign: 'left', fontSize: 12, lineHeight: 1.5, color: MUTED,
-                  }}>
-                    {plan.note}
-                  </p>
-                )}
               </div>
             );
           })}
