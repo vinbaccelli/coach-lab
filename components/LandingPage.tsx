@@ -14,6 +14,7 @@
  *    user counts, benchmarks or press exist for this product; none are
  *    invented or implied.
  *  - Trustpilot: as of 2026-10-03 the founder states ONE Trustpilot profile
+ *    (www.trustpilot.com/review/anglemotion.com — TRUSTPILOT_URL below)
  *    covers both the app and his coaching analysis, and that every review on
  *    it is 5 stars. The star line beside the reviews says exactly that and no
  *    more — no count, no TrustScore.
@@ -32,8 +33,9 @@ import { PLANS, DEMO, planPrice, yearlyPerMonth } from '@/lib/plans';
    Product screenshots.
 
    Real captures of the product, supplied by the founder. The originals sit in
-   public/marketing/landing/ exactly as taken; what the page loads are crops of
-   them in public/marketing/landing/web/, cut to the product itself — no browser
+   marketing-originals/ at the repo root, exactly as taken and outside public/
+   so they never ship; what the page loads are crops of them in
+   public/marketing/landing/web/, cut to the product itself — no browser
    chrome, desktop notifications or other tabs. Width and height below are each
    crop's real pixel size, so next/image reserves the right box before load.
    ──────────────────────────────────────────────────────────────────────────── */
@@ -131,7 +133,7 @@ const ENTRIES: Entry[] = [
     body:
       'Every skeleton keypoint and every angle the AI detects is yours to move. Drag any point, correct any angle, trust the read. AI-fast for the 90%, coach-accurate for the 10% that matters — no black box you can’t touch.',
     micro: 'Trust the AI for speed. Trust yourself for the truth.',
-    // Screen capture supplied by the founder (Skeleton/WhatsApp Video
+    // Screen capture supplied by the founder (marketing-originals/Skeleton/WhatsApp Video
     // 2026-10-03 at 14.34.06.mp4), cropped to the canvas: the live skeleton
     // through a whole forehand, then snapshot frames with shoulder and hip
     // angle arrows. Native capture width is 390px, so it is not upscaled.
@@ -287,21 +289,12 @@ const FOUNDER_REVIEWS: Review[] = [
 ];
 
 /**
- * Trustpilot links. Verified in a browser on 2026-09-04, when they were two
- * separate profiles; on 2026-10-03 the founder reported that one profile now
- * covers both the app and his coaching. Both links are kept as they were until
- * the founder confirms which URL that profile lives at.
+ * The ONE Trustpilot profile, covering both the app and Vin's coaching
+ * analysis (founder's decision, 2026-10-03). Every Trustpilot link on this
+ * page points here. Until 2026-10-03 the page kept a separate coaching
+ * profile (it.trustpilot.com/review/vinbaccelli.com) apart from this one.
  */
-
-/** "Anglemotion by Coach Vinbaccelli" — the founder's COACHING profile, claimed
- *  June 2025, Milano. 6 reviews, TrustScore 4.2, "Molto buono" (Very Good).
- *  This is where the Trustpilot quotes in FOUNDER_REVIEWS actually live, so it
- *  is the only profile whose rating this page may state. */
-const TRUSTPILOT_COACH_URL = 'https://it.trustpilot.com/review/vinbaccelli.com';
-
-/** AngleMotion's own claimed profile. 0 reviews / 0.0 — a plain invitation
- *  only. No rating may be stated for this one until it has one. */
-const TRUSTPILOT_APP_URL = 'https://www.trustpilot.com/review/anglemotion.com';
+const TRUSTPILOT_URL = 'https://www.trustpilot.com/review/anglemotion.com';
 
 /* Verified competitor comparison. y = yes, n = no, q = unknown. Pro tier vs
    Pro tier: CoachNow PRO $499.99/yr (coachnow.com/pricing); Dartfish 360 S
@@ -595,16 +588,14 @@ export default function LandingPage() {
       </section>
 
       {/* ── FOUNDER ─────────────────────────────────────────────────────
-          Real reviews of Vin's coaching, framed as exactly that. The app is
-          new and has no reviews of its own; saying so is the reason these can
-          be shown at all. No aggregate rating — see the note at the top of
-          this file. ──────────────────────────────────────────────────────── */}
+          Real reviews of Vin's coaching analysis, framed as exactly that. No
+          aggregate rating — see the note at the top of this file.
+          ─────────────────────────────────────────────────────────────────── */}
       <section id="founder" className="am-section">
         <h2 className="am-h2">About Vin Baccelli, founder &amp; coach.</h2>
         <p className="am-sub">
           AngleMotion was built by a working tennis coach to do the job he was already doing by hand.
           The reviews below are of Vin’s own coaching analysis — the practice the tool came out of.
-          AngleMotion itself is new and hasn’t been reviewed yet.
         </p>
 
         <ul className="am-reviews">
@@ -620,8 +611,8 @@ export default function LandingPage() {
         </ul>
 
         <div className="am-review-cta">
-          <a href={TRUSTPILOT_COACH_URL} target="_blank" rel="noopener noreferrer" className="am-btn am-btn-quiet">
-            Read all reviews of Vin’s coaching <ArrowUpRight size={16} aria-hidden="true" />
+          <a href={TRUSTPILOT_URL} target="_blank" rel="noopener noreferrer" className="am-btn am-btn-quiet">
+            Read all reviews on Trustpilot <ArrowUpRight size={16} aria-hidden="true" />
           </a>
           <p className="am-note">
             All reviews on Trustpilot are 5 stars — for the app and Vin’s coaching analysis
@@ -734,13 +725,11 @@ export default function LandingPage() {
           <Link href={DEMO.url} className="am-btn am-btn-lg">{DEMO.label} <ArrowRight size={18} /></Link>
         </div>
 
-        {/* The APP's own Trustpilot profile — deliberately here, beside the app
-            CTAs, and never inside the founder section: the two profiles measure
-            different things and must not be read as one. It has no reviews yet,
-            so this is an invitation and states no rating. */}
+        {/* An invitation to review, beside the app CTAs. Same single profile as
+            the founder section; states no rating of its own. */}
         <p className="am-note am-center am-app-review">
           Already used it?{' '}
-          <a href={TRUSTPILOT_APP_URL} target="_blank" rel="noopener noreferrer" className="am-inline-link">
+          <a href={TRUSTPILOT_URL} target="_blank" rel="noopener noreferrer" className="am-inline-link">
             Review AngleMotion on Trustpilot <ArrowUpRight size={13} aria-hidden="true" />
           </a>
         </p>

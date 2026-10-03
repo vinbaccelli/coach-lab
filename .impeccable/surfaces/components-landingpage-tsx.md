@@ -45,33 +45,21 @@ The only proof this page may use is what exists.
 
 **Real, and now on the page:** seven reviews of **Vin Baccelli's coaching
 analysis** — three from Google, four from Trustpilot — supplied by the founder.
-They are reviews of the coaching service, never of the product, and the section
-states that plainly because the app itself is new and has no reviews. Nothing
-may join them without that same provenance.
+Nothing may join them without that same provenance.
 
-**Update 2026-10-03 (founder):** one Trustpilot profile now covers both the app
-and Vin's coaching analysis, and every review on it is 5 stars. The star line in
-the founder section now reads "All reviews on Trustpilot are 5 stars — for the app
-and Vin's coaching analysis", with no count or TrustScore. The two links below are
-unchanged until the founder confirms which URL that single profile lives at; the
-rest of this section records the 2026-09-04 state.
+**One Trustpilot profile** (founder's decision, 2026-10-03):
+`www.trustpilot.com/review/anglemotion.com` covers both the app and Vin's
+coaching analysis. Every Trustpilot link on the page points at it — the "Read
+all reviews on Trustpilot" button in the founder section and the "Review
+AngleMotion on Trustpilot" invitation beside the closing CTA. The star line
+reads "All reviews on Trustpilot are 5 stars — for the app and Vin's coaching
+analysis", with no count and no TrustScore.
 
-**Two Trustpilot profiles, never conflated (as of 2026-09-04).** Both verified in a browser on
-2026-09-04:
-
-- `it.trustpilot.com/review/vinbaccelli.com` — "Anglemotion by Coach
-  Vinbaccelli", claimed June 2025, Milano. **6 reviews, every one of them 5 stars** (the
-  profile's headline 4.2 TrustScore is Trustpilot's recency weighting, not the
-  star average, so the page states the star record instead). This is where the page's Trustpilot quotes live, so it is the only
-  profile whose review record this page states, and it is labelled as being for Vin's
-  coaching rather than the app.
-- `trustpilot.com/review/anglemotion.com` — the app's own claimed profile,
-  **0 reviews / 0.0**. It gets a plain invitation to review, placed with the app
-  CTAs, and **no rating may be stated for it** until it has one.
-
-Keeping these apart is a content rule, not a layout preference: they measure
-different things, and merging them would credit the product with a score the
-founder's coaching earned.
+History: until 2026-10-03 the page kept two profiles apart — the coaching
+profile `it.trustpilot.com/review/vinbaccelli.com` (6 reviews, all 5 stars,
+checked 2026-09-04) and the app's `anglemotion.com` profile (0 reviews on
+2026-09-04) — and said the app had no reviews. That separation and that
+sentence are retired.
 
 **Still absent — must not be fabricated:** no club or federation logos, user
 counts, accuracy benchmarks, press coverage, or case studies exist. Do not
@@ -80,7 +68,7 @@ invent them or imply them with placeholder social proof.
 Real and usable: the logo/icon set, `public/demo.mp4` / `demo.MOV`,
 `public/court/`, the three real pricing tiers and the 1-hour trial in
 `lib/plans.ts`, and shipped copy. **Real product screenshots** (supplied
-2026-10-01; originals in `public/marketing/landing/`, web crops in
+2026-10-01; originals in `marketing-originals/` at the repo root (moved out of `public/` on 2026-10-03 so they don't ship), web crops in
 `public/marketing/landing/web/`) now carry the hero, every season entry and
 every tutorial step, replacing the authored linework diagrams. The crops remove
 browser chrome, desktop notifications and other tabs; screens that name a real
