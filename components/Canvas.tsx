@@ -1140,7 +1140,7 @@ function drawJointChainStroke(
     ctx.setLineDash([]);
   }
 
-  const baseR = Math.max(JOINT_NODE_RADIUS, lw * 1.5 + 4);
+  const baseR = jointNodeRadius(lw);
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
     const pulse = spinning ? 1 + 0.1 * Math.sin(Date.now() / 110 + i * 0.75) : 1;
@@ -1151,7 +1151,8 @@ function drawJointChainStroke(
     ctx.fillStyle = color;
     ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 2;
+    // A 2px rim would bury a ball this small; 1px keeps its colour readable.
+    ctx.lineWidth = 1;
     ctx.stroke();
   }
 
@@ -1224,9 +1225,24 @@ const CONTEXTUAL_STROKE_TOOLS = new Set([
 /** How close (logical px) a pointer must be to claim an existing mark. */
 const SELECT_HIT_T = 28;
 
-/** Visual radius of a joint ball (logical px). */
-const JOINT_NODE_RADIUS = 8;
-/** Hit target for dragging a joint (touch gets a larger target). */
+/**
+ * Visual radius of a joint ball (logical px). The ball used to be
+ * max(8, lw*1.5+4); it is now a fifth of that (Vin, 2026-10-03: at least 80%
+ * smaller). Every drawing path — live preview, committed mark, export/replay —
+ * goes through drawJointChainStroke, and the selection ring and the chain's
+ * hit-test read this same function, so they stay in step.
+ */
+const JOINT_NODE_SCALE = 0.2;
+function jointNodeRadius(lw: number): number {
+  return Math.max(8, lw * 1.5 + 4) * JOINT_NODE_SCALE;
+}
+/** Gap between a selected ball and its gold ring (logical px). */
+const JOINT_NODE_RING_GAP = 6;
+/**
+ * Hit target for dragging a joint (touch gets a larger target). Deliberately
+ * independent of the visual radius — like TEXT_HANDLE_HIT_R for text handles —
+ * so the smaller ball is exactly as easy to grab as the old one.
+ */
 const JOINT_NODE_HIT_TOUCH = 24;
 const JOINT_NODE_HIT_POINTER = 16;
 
@@ -6204,7 +6220,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 ctx.strokeStyle = '#FFD700';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.arc(n.x, n.y, JOINT_NODE_RADIUS + 6, 0, Math.PI * 2);
+                ctx.arc(n.x, n.y, jointNodeRadius(jc.lw) + JOINT_NODE_RING_GAP, 0, Math.PI * 2);
                 ctx.stroke();
                 ctx.restore();
               }
@@ -7002,7 +7018,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           best = Math.min(best, distToSegment(pos, jc.nodes[i], jc.nodes[i + 1]));
         }
         for (const n of jc.nodes) {
-          best = Math.min(best, Math.hypot(pos.x - n.x, pos.y - n.y) - JOINT_NODE_RADIUS);
+          best = Math.min(best, Math.hypot(pos.x - n.x, pos.y - n.y) - jointNodeRadius(jc.lw));
         }
         return best;
       }
@@ -8243,7 +8259,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // A press on a node is a HANDLE press: it grabs that one node, the way a
         // text resize handle grabs its corner above. It must not compete with the
         // mark bodies on distance: hitTestStroke scores a chain's nodes as
-        // `d - JOINT_NODE_RADIUS`, always below the node pass's `d`, so the whole
+        // `d - jointNodeRadius(lw)`, always below the node pass's `d`, so the whole
         // chain used to win every node press and single-node editing was
         // unreachable (KNOWN_ISSUES 011). A press on a segment away from any node
         // misses the node pass and still selects (and moves) the whole chain.
