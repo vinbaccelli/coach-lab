@@ -49,7 +49,14 @@ They are reviews of the coaching service, never of the product, and the section
 states that plainly because the app itself is new and has no reviews. Nothing
 may join them without that same provenance.
 
-**Two Trustpilot profiles, never conflated.** Both verified in a browser on
+**Update 2026-10-03 (founder):** one Trustpilot profile now covers both the app
+and Vin's coaching analysis, and every review on it is 5 stars. The star line in
+the founder section now reads "All reviews on Trustpilot are 5 stars — for the app
+and Vin's coaching analysis", with no count or TrustScore. The two links below are
+unchanged until the founder confirms which URL that single profile lives at; the
+rest of this section records the 2026-09-04 state.
+
+**Two Trustpilot profiles, never conflated (as of 2026-09-04).** Both verified in a browser on
 2026-09-04:
 
 - `it.trustpilot.com/review/vinbaccelli.com` — "Anglemotion by Coach

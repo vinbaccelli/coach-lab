@@ -9,17 +9,14 @@
  * anglemotion-landing-1) and the contract emitted in app/layout.tsx.
  *
  * Content rules this file is held to:
- *  - The reviews in FOUNDER_REVIEWS are real, supplied by the founder, and are
- *    reviews of VIN'S COACHING, not of this app — the app is new and has none.
- *    The page says so in as many words. Nothing here may be added without that
- *    same provenance. No club logos, user counts, benchmarks or press exist for
- *    this product; none are invented or implied.
- *  - TWO Trustpilot profiles, never to be conflated. The founder's coaching
- *    profile (vinbaccelli.com, "Anglemotion by Coach Vinbaccelli") carries the
- *    reviews, all of them 5 stars; the app's own profile (anglemotion.com) has
- *    none. The star record is stated ONLY next to the coaching link, and
- *    labelled as being for Vin's coaching rather than the app. The app's
- *    profile gets a plain invitation with no rating until it earns one.
+ *  - The reviews in FOUNDER_REVIEWS are real and supplied by the founder.
+ *    Nothing here may be added without that same provenance. No club logos,
+ *    user counts, benchmarks or press exist for this product; none are
+ *    invented or implied.
+ *  - Trustpilot: as of 2026-10-03 the founder states ONE Trustpilot profile
+ *    covers both the app and his coaching analysis, and that every review on
+ *    it is 5 stars. The star line beside the reviews says exactly that and no
+ *    more — no count, no TrustScore.
  *  - The competitor table carries ONLY verified data; unknowns stay '?'.
  *  - The example player's dates and readings are illustrative and are labelled
  *    as such on the page, not passed off as a real customer.
@@ -46,6 +43,13 @@ const ACCENT = 'var(--cl-accent)';
 const SHOT_DIR = '/marketing/landing/web';
 
 type Shot = { src: string; width: number; height: number; alt: string; caption?: string };
+
+/**
+ * A looping GIF with a still twin. Visitors who asked for reduced motion get the
+ * still (a <picture> source on the media query — no script, so it holds before
+ * hydration too), the same rule the Motion Layer clip follows.
+ */
+type AnimatedShot = { src: string; still: string; width: number; height: number; alt: string };
 
 const HERO_SHOT: Shot = {
   src: `${SHOT_DIR}/hero-skeleton-overlay.webp`,
@@ -75,6 +79,8 @@ type Entry = {
   shots?: Shot[];
   /** The Motion Layer entry shows the exported clip instead of a still. */
   clip?: true;
+  /** A looping screen capture shown in place of a still. */
+  animated?: AnimatedShot;
 };
 
 /**
@@ -125,14 +131,17 @@ const ENTRIES: Entry[] = [
     body:
       'Every skeleton keypoint and every angle the AI detects is yours to move. Drag any point, correct any angle, trust the read. AI-fast for the 90%, coach-accurate for the 10% that matters — no black box you can’t touch.',
     micro: 'Trust the AI for speed. Trust yourself for the truth.',
-    shots: [
-      {
-        src: `${SHOT_DIR}/season-skeleton-track.webp`,
-        width: 1920,
-        height: 1427,
-        alt: 'An AI skeleton tracked over a forehand follow-through, with live elbow and knee angles in the data column.',
-      },
-    ],
+    // Screen capture supplied by the founder (Skeleton/WhatsApp Video
+    // 2026-10-03 at 14.34.06.mp4), cropped to the canvas: the live skeleton
+    // through a whole forehand, then snapshot frames with shoulder and hip
+    // angle arrows. Native capture width is 390px, so it is not upscaled.
+    animated: {
+      src: `${SHOT_DIR}/skeleton-track.gif`,
+      still: `${SHOT_DIR}/skeleton-track-still.webp`,
+      width: 390,
+      height: 296,
+      alt: 'The AI skeleton following a forehand from backswing to finish with live joint angles in the data column, then frozen frames with angle arrows drawn on the shoulder and hip lines.',
+    },
   },
   {
     date: 'APR 09',
@@ -278,12 +287,10 @@ const FOUNDER_REVIEWS: Review[] = [
 ];
 
 /**
- * TWO DIFFERENT Trustpilot profiles. They must never be conflated on the page:
- * one carries the founder's coaching reviews, the other is the app's own empty
- * profile, and mixing them would attribute a rating to a product that has not
- * earned one.
- *
- * Both verified in a browser on 2026-09-04.
+ * Trustpilot links. Verified in a browser on 2026-09-04, when they were two
+ * separate profiles; on 2026-10-03 the founder reported that one profile now
+ * covers both the app and his coaching. Both links are kept as they were until
+ * the founder confirms which URL that profile lives at.
  */
 
 /** "Anglemotion by Coach Vinbaccelli" — the founder's COACHING profile, claimed
@@ -291,11 +298,6 @@ const FOUNDER_REVIEWS: Review[] = [
  *  This is where the Trustpilot quotes in FOUNDER_REVIEWS actually live, so it
  *  is the only profile whose rating this page may state. */
 const TRUSTPILOT_COACH_URL = 'https://it.trustpilot.com/review/vinbaccelli.com';
-/** Every review on that profile is 5 stars (star breakdown reads 5★ 100%).
- *  The profile's headline TrustScore is 4.2 because Trustpilot weights by
- *  recency and volume rather than averaging stars — so the page states the
- *  star record, which is what the reviewers actually left. */
-const TRUSTPILOT_COACH_COUNT = 6;
 
 /** AngleMotion's own claimed profile. 0 reviews / 0.0 — a plain invitation
  *  only. No rating may be stated for this one until it has one. */
@@ -504,7 +506,7 @@ export default function LandingPage() {
         </div>
 
         <ol className="am-entries">
-          {ENTRIES.map(({ date, title, body, micro, shots, clip }) => (
+          {ENTRIES.map(({ date, title, body, micro, shots, clip, animated }) => (
             <li key={date} className="am-entry">
               <div className="am-entry-date am-tabular">{date}</div>
               <div className="am-entry-body">
@@ -514,6 +516,22 @@ export default function LandingPage() {
               </div>
               <div className={clip ? 'am-entry-figure am-entry-figure-clip' : 'am-entry-figure'}>
                 {clip && <MotionLayerClip />}
+                {animated && (
+                  <figure className="am-shot">
+                    <picture>
+                      <source media="(prefers-reduced-motion: reduce)" srcSet={animated.still} />
+                      {/* eslint-disable-next-line @next/next/no-img-element -- an animated GIF gains nothing from the optimizer */}
+                      <img
+                        src={animated.src}
+                        width={animated.width}
+                        height={animated.height}
+                        alt={animated.alt}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    </picture>
+                  </figure>
+                )}
                 {shots?.map((shot) => (
                   <figure key={shot.src} className="am-shot">
                     <Image
@@ -606,8 +624,7 @@ export default function LandingPage() {
             Read all reviews of Vin’s coaching <ArrowUpRight size={16} aria-hidden="true" />
           </a>
           <p className="am-note">
-            All {TRUSTPILOT_COACH_COUNT} reviews on Trustpilot are 5 stars — for Vin’s coaching
-            analysis, not for the app.
+            All reviews on Trustpilot are 5 stars — for the app and Vin’s coaching analysis
           </p>
         </div>
       </section>
@@ -710,8 +727,8 @@ export default function LandingPage() {
       <section className="am-close">
         <h2 className="am-display am-display-sm">Start your first file today.</h2>
         <p className="am-lede am-center">
-          One hour of every tool, free. Bring a video you already have and see what comes out the
-          other side.
+          One hour of every tool, free. Bring a video you already have (or use our demo video) and
+          see what comes out the other side.
         </p>
         <div className="am-cta-row am-center-row">
           <Link href={DEMO.url} className="am-btn am-btn-lg">{DEMO.label} <ArrowRight size={18} /></Link>
