@@ -5,6 +5,11 @@ fixed, and whether or not they are pre-existing — undocumented ≠ doesn't exi
 
 Format: symptom → verified root cause → fault assessment → proposed fix → severity.
 
+Entry numbers are stable IDs (code and commits cite them), so they are never
+reused or shifted. 019 and 020 were numbered 013 and 014 until 2026-10-01, when
+two merges had each added their own 013/014; their "Found" dates are older
+than their numbers.
+
 ---
 
 ## 001 — `--cl-accent` fails WCAG AA when used as text
@@ -448,7 +453,7 @@ looking wrong.
 
 ---
 
-## 011 — A single joint-chain node can never be selected with the Select tool
+## 011 — A single joint-chain node can never be selected with the Select tool — FIXED (awaiting device test)
 
 **Found:** 2026-09-28, browser-verifying the text-selection fix on `claude/text-tool-fix`.
 
@@ -480,9 +485,20 @@ chain by its segments still moves the whole chain.
 **Severity:** medium — per-node editing of a joint chain is impossible, but the
 chain is still movable and redrawable.
 
+**FIXED** (2026-09-30, uncommitted pending Vin's device test). The Select
+pointer-down now skips the stroke and angle passes whenever the node pass found a
+node: a node is a handle, like a text resize corner, and takes priority instead of
+competing on distance. Browser-verified in Chromium on `cfbd0d0` + the fix, with a
+three-node chain: pressing node 3 and dragging (+42, +60) moves node 3 only (the
+other two stay, gold ring on the moved node); pressing mid-segment and dragging
+still moves the whole chain; Undo after the segment drag reverts it. Reproduced
+before the fix on unmodified `cfbd0d0` (a node press moved all three nodes). Undo
+after a single-node drag needs two presses — see 016, a separate pre-existing
+defect this fix makes reachable for nodes.
+
 ---
 
-## 012 — A text label left selected keeps the canvas redrawing every frame
+## 012 — A text label left selected keeps the canvas redrawing every frame — FIXED (awaiting device test)
 
 **Found:** 2026-09-28, measuring the text-selection fix on `claude/text-tool-fix`
 before and after, per CLAUDE.md §7.
@@ -520,6 +536,35 @@ loop, and a before/after measurement.
 **Severity:** low-medium — no functional impact; continuous CPU and battery use
 while a label is selected, most noticeable on phones.
 
+**FIXED** (2026-10-01, approved). In the render loop, a selection counts as an
+active interaction only while it is being dragged
+(`isDraggingRef.current && !!selectionRef.current`), and the Style-mode target
+(`contextualTargetRef`, the same static-box pattern) no longer counts at all.
+Instead of a dirty flag at each of the 13 `selectionRef` and 4
+`contextualTargetRef` write sites, the loop compares both refs' identity with
+the last rendered values (the same pattern it already uses for zoom/pan): every
+write replaces the object, so any create/change/drop repaints once. Edits that
+mutate the selected mark already set `renderDirtyRef` (Style changes, the
+pulse toggle, text-edit commit via `pushHistory`, eraser hover).
+
+Measured in Chromium, production build (`next start`), 1400×900, video paused,
+mouse parked off the canvas, 3 s windows, two runs each:
+
+| state (at rest) | redraws/s before | after | main-thread ms/s before | after |
+|---|---|---|---|---|
+| nothing selected | 0 | 0 | 23–28 | 23–24 |
+| text label selected | 60 | 0 | 224–237 | 23–26 |
+| joint node selected | 60 | 0 | 234–236 | 22–23 |
+| Style box selected | 60 | 0 | 213–233 | 22–25 |
+
+Behaviour verified unchanged in the browser: each selection's box / handles /
+node ring / Style box appears on select, persists at rest, and disappears on an
+empty-canvas click; a dragged label follows the pointer before release; text
+resize by corner handle works; the Style-mode eraser cursor follows the pointer;
+picking a tool ends Style mode and removes its box; the full Undo/Redo suite
+from 016 still passes.
+
+---
 
 ## 013 — The foot-line notice blames the device for a model-load failure
 
@@ -644,9 +689,119 @@ should carry — but "should carry" is not "verified", and this repo has been bu
 by exactly that gap. Now that runtime checking is possible, this is a doable task
 rather than a standing unknown. Severity: medium — the defect is fixed for every
 caller; the confirmation covers one.
+
 ---
 
-## 013 — Recorded PiP position is proportional, not pixel-exact, in tab/window share
+## 016 — Undo after dragging a text label or a joint node needs two presses — FIXED (awaiting device test)
+
+**Found:** 2026-09-30, browser-verifying the fix for 011.
+
+**Symptom.** Drag a text label (or, since 011 was fixed, a single joint-chain
+node) with the Select tool, then click Undo: nothing changes. A second Undo
+reverts the drag. Measured in Chromium: after a node drag, Undo ×1 left the node
+moved and Undo ×2 restored it; after a text-label drag of 120 px on unmodified
+`cfbd0d0`, Undo ×1 left the label where it was dropped and Undo ×2 restored it.
+
+**Verified root cause.** The canvas wires `onPointerLeave={onPointerUp}`
+(`components/Canvas.tsx`, the `<canvas>` element's props). The Select finalize in
+`onPointerUp` runs whenever `selectionRef.current` is set and always calls
+`pushHistory()`. Every other stroke kind clears `selectionRef` on release, so a
+later pointer-leave finds nothing to finalize. A text label (kept selected since
+the text-tool fix, so its resize handles are reachable) and a joint node (kept
+selected by its own finalize branch) are still selected at rest, so moving the
+mouse off the canvas — which reaching the Undo button always does — runs the
+finalize again and pushes a byte-identical second entry. The first Undo steps
+onto that duplicate.
+
+**Fault assessment.** Pre-existing for text labels since the kept-selection
+change; newly reachable for joint nodes with the 011 fix. Same class as the
+duplicate-history entry already fixed for Style mode (a push on a path that did
+not change anything).
+
+**Proposed fix.** Only finalize a Select drag while one is actually in progress:
+in the finalize branch, return early when `!isDraggingRef.current` (a kept
+selection at rest is not an edit). Separately, `dropKeptStrokeSelection` clears
+`stroke`/`textResize` on undo/redo/tool switch but not `jointNode`, so a stale gold
+node ring can survive an Undo — add `'jointNode'` to its kinds. Both need
+approval; neither touches the render loop.
+
+**Severity:** medium — Undo looks broken after the most common Select edit, but
+nothing is lost (the second press works).
+
+**FIXED** (2026-10-01). The Select finalize returns early unless a drag is in
+progress (`isDraggingRef`), so a pointer-leave over a kept selection no longer
+pushes; and `dropKeptStrokeSelection` now also drops a `jointNode` selection, so
+Undo/Redo/tool switch clear the gold ring and its stale index. Browser-verified
+in Chromium: text label dragged 150 px → Undo ×1 reverts, Redo re-applies; joint
+node dragged → Undo ×1 reverts with no gold ring left, Redo re-applies; chain
+segment drag + Undo, and line draw → drag → Undo ×2 → Redo ×2, all unchanged.
+Not covered: a press-and-release with NO movement still pushes a no-op entry —
+see 018.
+
+---
+
+## 017 — The video-slot pills cover the ruler panel's header and close button
+
+**Found:** 2026-09-30, spot-checking the ruler panel drag after the PR #58 merge.
+
+**Symptom.** With Video A loaded and the Ruler tool open on desktop (1400×900),
+the "Remove A / + Add B" pills sit on top of the ruler panel's header. Measured
+with `elementFromPoint` every 20 px along the header: the left 80 px is the
+header, everything from x≈1193 to the right edge is the slot-pill group,
+including the panel's close button (its centre hit-tests to the pill). A press on
+the covered part of the header lands on Remove A / Add B instead of starting a
+drag; the close button cannot be clicked until the panel is dragged clear.
+
+**Verified root cause.** Both are anchored to the same corner of the same
+panel: the slot pills at `top: 8, right: 8, zIndex: 110`
+(`renderVideoSlotPills`, `app/analysis/page.tsx`) and the ruler panel at
+`top: 12, right: 12` until its first drag (`components/ruler/RulerOverlay.tsx`,
+the control panel's style). The pills win the stacking order.
+
+**Fault assessment.** Pre-existing: the pills date from `5cef44a` (2026-08-11)
+and the ruler anchor predates `e7376cc` (which made the panel draggable and kept
+the anchor byte-for-byte). Not a regression from today's merges. Dragging the
+panel by the uncovered left part of its header works (verified: exactly
+−300/+150, and it stays put).
+
+**Proposed fix.** Either open the ruler panel below the pill row (e.g. `top`
+offset by the row's height when Video A is loaded), or hide the slot pills while
+the ruler panel is open. Relevant to the recording-control redesign, which would
+put more controls in that same row. Needs a decision.
+
+**Severity:** low-medium — the panel is still movable and closable via the tool
+rail, but the obvious close button is unreachable.
+
+---
+
+## 018 — Clicking a mark with the Select tool (no drag) adds a no-op Undo step
+
+**Found:** 2026-10-01, browser-verifying the fix for 016.
+
+**Symptom.** Click a text label (or any mark) with the Select tool without
+moving it, then press Undo: nothing visibly changes. The next Undo works. Measured
+in Chromium after the 016 fix: plain click on a label, Undo ×1 left the label in
+place; Undo ×2 removed it (undid its creation).
+
+**Verified root cause.** The Select pointer-down sets `isDraggingRef = true` on
+any hit, and the finalize on release calls `pushHistory()` unconditionally, so a
+press-and-release that moved nothing pushes a byte-identical entry.
+
+**Fault assessment.** Pre-existing for every mark kind (it is the same finalize
+path); more noticeable now that a clicked text label stays selected, since
+clicking a label to reach its resize handles is a normal step.
+
+**Proposed fix.** Push only when the drag changed something: compare the mark
+at `finSel.idx` against `finSel.orig` (identity is enough — every move replaces
+the object) and skip `pushHistory()` when unchanged. Careful with the outline
+eraser branch, which edits the stroke at pointer-down and stores the edited
+object as `orig`; it must still push. Needs approval.
+
+**Severity:** low-medium — one extra Undo press, nothing lost.
+
+---
+
+## 019 — Recorded PiP position is proportional, not pixel-exact, in tab/window share
 
 **Found:** 2026-09-26, while fixing background removal during recording (items D/E).
 
@@ -677,7 +832,7 @@ this tab — an assumption the browser will not confirm.
 
 ---
 
-## 014 — Closing the floating window still turns the webcam off in a whole-screen recording — RESOLVED
+## 020 — Closing the floating window still turns the webcam off in a whole-screen recording — RESOLVED
 
 **Found:** 2026-09-26, while implementing E2(a) (monitor-share PiP handling).
 
@@ -708,8 +863,9 @@ and with it the canvas PiP that a whole-screen recording actually captures —
 survives.
 
 The open question this depended on ("how does the coach stop the recording once
-the window is gone?") is answered by `components/RecordingControlBar.tsx`:
-Pause / Resume / Stop now live in the analysis page's own top chrome for the
+the window is gone?") is answered by in-page recording controls (originally
+`components/RecordingControlBar.tsx`, a full-width bar in the page's top chrome;
+since 2026-10-01 `components/RecordingControls.tsx`, compact, in panel A's
+top-right video-slot row). Pause / Resume / Stop live in the analysis page for the
 duration of any recording, reachable from every tool and panel, so closing the
 floating window never removes the only way to stop.
-
