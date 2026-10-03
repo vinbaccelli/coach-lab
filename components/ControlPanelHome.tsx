@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react';
 import Link from 'next/link';
+import { maxYearlySavingsPct } from '@/lib/plans';
 import {
   Video,
   Users,
@@ -152,7 +153,7 @@ const BUSINESS_TOOLS: Tool[] = [
     href: '/pricing',
     name: 'Plans',
     Icon: CreditCard,
-    what: 'Light, Pro and Academy. Yearly billing runs two months cheaper than monthly.',
+    what: `Light, Pro and Academy. Yearly saves up to ${maxYearlySavingsPct()}% on twelve monthly payments.`,
   },
   {
     href: '/billing',
@@ -240,7 +241,7 @@ export default function ControlPanelHome() {
           </span>
         </span>
         <span style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--cl-text-secondary)' }}>
-          Draw, measure 13+ joint angles, run the AI skeleton and correct it by hand, compare
+          Draw, measure joint angles, run the AI skeleton and correct it by hand, compare
           side-by-side, step frame by frame, build Motion Layer composites, and record your screen
           with webcam and mic.
         </span>

@@ -19,7 +19,7 @@ import { ENABLE_GOOGLE_EXPORTS, GOOGLE_EXPORT_SCOPES } from '@/lib/featureFlags'
 /** What a new account actually gets. Mirrors DEMO in lib/plans.ts. */
 const FIRST_ENTRIES = [
   { date: 'DAY 1', t: 'One free hour of every tool', b: 'No card, no booking. Bring a video you already have.' },
-  { date: 'DAY 1', t: 'Your first analysed frame', b: '13+ joint angles read automatically — and editable by hand.' },
+  { date: 'DAY 1', t: 'Your first analysed frame', b: 'Elbow, knee, shoulder and hip angles read automatically — and editable by hand.' },
   { date: 'ONGOING', t: 'A file that keeps growing', b: 'Every session lands in the player’s technical and match documents.' },
 ];
 

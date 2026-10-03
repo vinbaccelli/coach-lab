@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { CreditCard, LogOut, Loader2, ExternalLink } from 'lucide-react';
 import WorkspaceChrome from '@/components/WorkspaceChrome';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import { PLANS, PRICE_TAX_NOTE, formatPrice } from '@/lib/plans';
 
 type SubStatus = { status: string; email: string | null; updatedAt?: string | null; tier?: string | null; seats?: number | null };
 
@@ -80,15 +81,17 @@ export default function BillingPage() {
             <p style={muted}>Checking subscription…</p>
           ) : isActive ? (
             <p style={muted}>
-              Plan: <strong>{sub?.tier ? TIER_LABEL[sub.tier] ?? sub.tier : 'Pro'}</strong>
-              {sub?.seats && sub.seats > 1 ? ` · ${sub.seats} seats` : ''}
+              Plan: <strong>{sub?.tier ? TIER_LABEL[sub.tier] ?? sub.tier : '—'}</strong>
+              {sub?.seats && sub.seats > 1 ? ` · up to ${sub.seats} coaches` : ''}
               {' · '}Status: <strong style={{ color: '#30D158' }}>{sub!.status}</strong>
               {sub?.updatedAt ? ` · updated ${new Date(sub.updatedAt).toLocaleDateString()}` : ''}
             </p>
           ) : (
             <p style={muted}>
               Status: <strong>{sub?.status && sub.status !== 'none' ? sub.status : 'no active subscription'}</strong>
-              {' — '}plans from $5/mo (Light) to $40/mo (Academy) via Stripe.
+              {' — '}plans from {formatPrice(PLANS[0].priceMonthly)}/mo ({PLANS[0].name}) to{' '}
+              {formatPrice(PLANS[PLANS.length - 1].priceMonthly)}/mo ({PLANS[PLANS.length - 1].name}) via Stripe.
+              {' '}{PRICE_TAX_NOTE}
             </p>
           )}
           <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
