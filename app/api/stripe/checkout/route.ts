@@ -36,9 +36,12 @@ export async function POST(req: Request) {
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${req.headers.get('origin') ?? 'http://localhost:3000'}/analysis?subscribed=1`,
       cancel_url: `${req.headers.get('origin') ?? 'http://localhost:3000'}/pricing`,
-      // Tier travels through checkout so the webhook can store it even before it
-      // resolves the price ID (belt-and-suspenders with tierForPriceId).
+      // The user travels on the session AND on the subscription itself, so every
+      // later customer.subscription.* event can be upserted by user_id (the
+      // webhook re-reads the subscription and maps its price to the tier).
+      client_reference_id: session.userId,
       metadata: { userId: session.userId, plan: planId, cycle, seats: String(getPlan(planId)?.seats ?? 1) },
+      subscription_data: { metadata: { userId: session.userId, plan: planId, cycle } },
     });
 
     return NextResponse.json({ url: checkout.url });
