@@ -253,7 +253,14 @@ exist to permit it. Vin should confirm one real upload end-to-end through
 
 ---
 
-## 007 — Light advertises $10 but Stripe charges $5
+## 007 — Light advertises $10 but Stripe charges $5 — SUPERSEDED (launch pricing)
+
+**Update 2026-10-03.** The USD prices are retired with EUR launch pricing
+(`claude/pricing-launch`). Nothing can drift silently any more: the checkout
+route now retrieves the configured Stripe price and refuses to start (503)
+unless its currency, amount and interval equal what `lib/plans.ts` displays,
+and there is no fallback price ID. Closes once the EUR env vars are live.
+
 
 **Found:** 2026-09-08, building the founding-pricing page. **BLOCKS DEPLOY.**
 
