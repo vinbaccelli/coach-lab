@@ -352,6 +352,8 @@ export default function GuidedTour({ page = 'analysis', suppressFloatingHelp = f
   const [stepIdx, setStepIdx] = useState(0);
   /** Furthest step reached in this run. Steps before it are being reviewed (Back). */
   const [maxReached, setMaxReached] = useState(0);
+  /** Steps skipped on arrival (already done): Back passes over them — the coach never saw them. */
+  const skippedRef = useRef<Set<number>>(new Set());
   /** Phones: the step picture starts folded; the coach can open it. */
   const [imageOpen, setImageOpen] = useState(false);
   const [compact, setCompact] = useState(false);
@@ -422,6 +424,7 @@ export default function GuidedTour({ page = 'analysis', suppressFloatingHelp = f
       const start = Math.min(Math.max(0, from), def.steps.length - 1);
       setStepIdx(start);
       setMaxReached(start);
+      skippedRef.current = new Set();
       writeActive({ id: def.id, step: start });
     },
     [markSeen],
@@ -436,7 +439,11 @@ export default function GuidedTour({ page = 'analysis', suppressFloatingHelp = f
 
   const next = useCallback(() => {
     if (!tour) return;
-    if (stepIdx + 1 >= tour.steps.length) {
+    // Forward from a reviewed step passes over steps that were skipped as
+    // already done, the same way Back does.
+    let to = stepIdx + 1;
+    while (to < maxReached && skippedRef.current.has(to)) to += 1;
+    if (to >= tour.steps.length) {
       saveProgress(tour.id, 0, true);
       writeActive(null);
       setTour(null);
@@ -445,17 +452,18 @@ export default function GuidedTour({ page = 'analysis', suppressFloatingHelp = f
     }
     // Written synchronously: a step whose click navigates away must already
     // have recorded where the next screen picks up.
-    writeActive({ id: tour.id, step: stepIdx + 1 });
-    saveProgress(tour.id, stepIdx + 1, false);
-    setStepIdx(stepIdx + 1);
-    setMaxReached((m) => Math.max(m, stepIdx + 1));
-  }, [tour, stepIdx, saveProgress]);
+    writeActive({ id: tour.id, step: to });
+    saveProgress(tour.id, to, false);
+    setStepIdx(to);
+    setMaxReached((m) => Math.max(m, to));
+  }, [tour, stepIdx, maxReached, saveProgress]);
 
   // Back only moves the card: it undoes nothing the coach did, and the step it
   // lands on is "being reviewed" — no skip, no instant auto-advance (below).
   const back = useCallback(() => {
     setStepIdx((i) => {
-      const to = Math.max(0, i - 1);
+      let to = Math.max(0, i - 1);
+      while (to > 0 && skippedRef.current.has(to)) to -= 1;
       if (tour) writeActive({ id: tour.id, step: to });
       return to;
     });
@@ -489,10 +497,13 @@ export default function GuidedTour({ page = 'analysis', suppressFloatingHelp = f
     if (!step?.skipIf || reviewing) return;
     const selector = step.skipIf;
     const id = window.setTimeout(() => {
-      if (findVisible(selector)) next();
+      if (findVisible(selector)) {
+        skippedRef.current.add(stepIdx);
+        next();
+      }
     }, SKIP_CHECK_DELAY_MS);
     return () => window.clearTimeout(id);
-  }, [step, next, reviewing]);
+  }, [step, next, reviewing, stepIdx]);
 
   // Finish condition: a now-visible element. On a step being reviewed, a
   // condition that is ALREADY met does not count — only a fresh one does
@@ -501,16 +512,24 @@ export default function GuidedTour({ page = 'analysis', suppressFloatingHelp = f
     if (!step || step.advance.kind !== 'visible') return;
     const selector = step.advance.selector;
     let armed = !reviewing || !findVisible(selector);
+    // Met on the very first check = the step was already done when it opened
+    // (the coach answered past it): count it as skipped, so Back passes over it.
+    let firstCheck = true;
     const id = window.setInterval(() => {
       const met = !!findVisible(selector);
+      const wasFirst = firstCheck;
+      firstCheck = false;
       if (!armed) {
         if (!met) armed = true;
         return;
       }
-      if (met) next();
+      if (met) {
+        if (wasFirst && !reviewing) skippedRef.current.add(stepIdx);
+        next();
+      }
     }, POLL_MS);
     return () => window.clearInterval(id);
-  }, [step, next, reviewing]);
+  }, [step, next, reviewing, stepIdx]);
 
   // Finish condition: a click on the target itself. Capture phase, so the step
   // sees the click even when the control stops propagation; the control's own

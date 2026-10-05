@@ -47,3 +47,9 @@ All on /analysis, desktop browser, with a clip loaded (Demo (Tutorial) is fine).
 |---|---|
 | `academy` — AngleMotion Academy | The **/academy** library with its Guides, eBooks and Drills & Exercises sections. |
 | `billing` — Account & billing | **/billing** with an active plan (Plan, Status, Manage billing). |
+
+### Manual match report (/match-report)
+
+| Step | What to capture |
+|---|---|
+| `format` — Match format | The setup screen with the **Match format** choices open (1 Set, Best of 3, Pro Set, Match Tiebreak Only …) and the details underneath. |
