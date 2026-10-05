@@ -5,7 +5,7 @@
  */
 
 import { OneEuroKeypointSmoother } from '@/lib/keypointSmooth';
-import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
+import { poseDbg, poseDebugForcedModel } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 
 /** Crop fraction used when the caller gives no explicit focus ratio. */
 const DEFAULT_FOCUS_RATIO = 0.6;
@@ -311,7 +311,9 @@ export class PoseWorkerBridge {
         this.failOver();
       };
 
-      w.postMessage({ type: 'init', wasmOnly });
+      const forceModel = poseDebugForcedModel(); // TEMP-DEBUG-POSE
+      if (forceModel) poseDbg.event(`forced model: ${forceModel}`); // TEMP-DEBUG-POSE
+      w.postMessage({ type: 'init', wasmOnly, forceModel });
     } catch {
       console.warn('[PoseWorkerBridge] Worker creation failed — falling back');
       this.initMainThread();

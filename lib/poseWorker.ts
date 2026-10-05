@@ -34,6 +34,10 @@ let prevCentroid: { x: number; y: number } | null = null;
 // too slow for realtime on this machine (older iGPUs), swap to LIGHTNING.
 let currentModel: 'thunder' | 'lightning' = 'lightning';
 let dbgBackend = '?'; // TEMP-DEBUG-POSE
+/** TEMP-DEBUG-POSE: `&pose=thunder` — hold THUNDER, never downgrade. */
+let dbgForceThunder = false;
+/** TEMP-DEBUG-POSE: the first inference times, reported once (warm-up curve). */
+const dbgFirstInfers: string[] = [];
 let inferSamples: number[] = [];
 let modelSwapInFlight = false;
 // Downgrade fast: on a weak (mobile) GPU the first Thunder frames are slow and
@@ -158,6 +162,7 @@ function makeDetector(model: 'thunder' | 'lightning') {
 
 /** Swap THUNDER → LIGHTNING when this machine can't run it at realtime. */
 async function maybeDowngradeModel(lastMs: number) {
+  if (dbgForceThunder) return; // TEMP-DEBUG-POSE
   if (currentModel !== 'thunder' || modelSwapInFlight) return;
   inferSamples.push(lastMs);
   if (inferSamples.length < SWAP_AFTER_SAMPLES) return;
@@ -242,7 +247,7 @@ async function init(wasmOnly = false) {
     // GPU: start with THUNDER (markedly more precise); measured inference
     // later downgrades to LIGHTNING if this machine can't run it realtime.
     // WASM: LIGHTNING from the start.
-    currentModel = gpu ? 'thunder' : 'lightning';
+    currentModel = gpu || dbgForceThunder ? 'thunder' : 'lightning'; // TEMP-DEBUG-POSE: `|| dbgForceThunder`
     detector = await makeDetector(currentModel);
 
     // Detect WebGL context loss the instant it happens so we recover instead of
@@ -264,6 +269,7 @@ self.onmessage = async (e: MessageEvent) => {
   const { data } = e;
 
   if (data.type === 'init') {
+    dbgForceThunder = data.forceModel === 'thunder'; // TEMP-DEBUG-POSE
     await init(!!data.wasmOnly);
     return;
   }
@@ -329,6 +335,10 @@ self.onmessage = async (e: MessageEvent) => {
         'estimatePoses',
       );
       const dbgInferMs = performance.now() - t0; // TEMP-DEBUG-POSE
+      if (dbgFirstInfers.length < 10) { // TEMP-DEBUG-POSE
+        dbgFirstInfers.push(`${Math.round(dbgInferMs)}${currentModel === 'thunder' ? 'T' : 'L'}`);
+        if (dbgFirstInfers.length === 10) self.postMessage({ type: 'dbg', message: `first 10 (T=thunder L=lightning): ${dbgFirstInfers.join(' ')}` });
+      }
       void maybeDowngradeModel(performance.now() - t0);
       if (!poses || poses.length === 0) console.warn('[PoseWorker] No poses detected in frame', data.frameId);
 
