@@ -27,7 +27,13 @@ export type TourSignalName =
   /** Select tool: a mark was dragged to a new position. */
   | 'mark-moved'
   /** AI Detect Angles read the pose on this frame and filled the data column. */
-  | 'ai-angles-detected';
+  | 'ai-angles-detected'
+  /** Ruler: a calibration was accepted (the panel now says Calibrated). */
+  | 'ruler-calibrated'
+  /** Ruler: a distance was measured on the frame. */
+  | 'ruler-measured'
+  /** Ruler: the units were switched (cm / m ↔ ft / in). */
+  | 'ruler-units';
 
 export interface TourSignalDetail {
   name: TourSignalName;
