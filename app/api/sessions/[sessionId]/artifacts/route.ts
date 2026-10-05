@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import { uploadSessionAsset } from '@/lib/sessions/serverStorage';
 import { mimeToExt, sessionArtifactPath } from '@/lib/sessions/storagePaths';
 import { rowToPlayerSession } from '@/lib/sessions/types';
@@ -11,6 +12,8 @@ export async function POST(
 ) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'players');
+  if (denied) return denied;
   const { sessionId } = await ctx.params;
 
   const form = await req.formData();

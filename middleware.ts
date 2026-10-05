@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { getEntitlement } from '@/lib/entitlements.server';
-import { hasAppAccess } from '@/lib/entitlements';
+import { canUse, hasAppAccess, type Feature } from '@/lib/entitlements';
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
@@ -73,13 +73,24 @@ export async function middleware(req: NextRequest) {
     // gated visit. Fails OPEN on query errors so an infra hiccup never locks
     // paying coaches out.
     const gated = pathname.startsWith('/analysis') || pathname.startsWith('/academy');
-    if (gated) {
+    // Pages that ARE a Pro tool (nothing saved lives on them): plan required.
+    // /players is deliberately not here — a downgraded coach must still be able
+    // to read their saved players, so that page goes read-only instead and the
+    // API refuses writes (lib/entitlements.server.ts requireFeature).
+    const pageFeature: Feature | null =
+      pathname.startsWith('/decoder') ? 'matchDecoder'
+      : pathname.startsWith('/match-report') ? 'matchAnalyzer'
+      : null;
+    if (gated || pageFeature) {
       try {
         const ent = await getEntitlement(supabase, user, { startTrial: true });
-        if (!hasAppAccess(ent)) {
+        const allowed = pageFeature ? canUse(pageFeature, ent) : hasAppAccess(ent);
+        if (!allowed) {
           const url = req.nextUrl.clone();
           url.pathname = '/pricing';
-          url.searchParams.set('required', '1');
+          url.search = '';
+          url.searchParams.set('required', pageFeature ? 'pro' : '1');
+          if (pageFeature) url.searchParams.set('feature', pageFeature);
           return NextResponse.redirect(url);
         }
       } catch {

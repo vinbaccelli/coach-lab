@@ -34,6 +34,7 @@ import {
   type PlanId,
   type BillingCycle,
 } from '@/lib/plans';
+import { FEATURES, type Feature } from '@/lib/entitlements';
 
 const INK = 'var(--cl-text-primary)';
 const MUTED = 'var(--cl-text-secondary)';
@@ -45,11 +46,21 @@ export default function PricingPage() {
      stays one tap away. */
   const [cycle, setCycle] = useState<BillingCycle>('yearly');
   const [loading, setLoading] = useState<PlanId | null>(null);
-  // Set when the middleware subscription gate redirected here from /analysis.
-  const [subscriptionRequired, setSubscriptionRequired] = useState(false);
+  // Set when a gate redirected here: ?required=1 (no plan at all) or
+  // ?required=pro&feature=<Feature> (a Pro tool on a lower plan).
+  const [requiredNotice, setRequiredNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    setSubscriptionRequired(new URLSearchParams(window.location.search).get('required') === '1');
+    const q = new URLSearchParams(window.location.search);
+    const required = q.get('required');
+    const feature = q.get('feature');
+    if (required === '1') {
+      setRequiredNotice('Video Analysis requires an active plan — pick one below to unlock it.');
+    } else if (required && feature && feature in FEATURES) {
+      const f = FEATURES[feature as Feature];
+      const plan: PlanId = f.plan;
+      setRequiredNotice(`${f.label} is part of ${plan === 'light' ? 'every plan' : plan === 'pro' ? 'Pro and Academy' : 'Academy'} — pick a plan below to unlock it.`);
+    }
   }, []);
 
   const handleCheckout = async (plan: PlanId) => {
@@ -105,13 +116,13 @@ export default function PricingPage() {
       </div>
 
       <div style={{ maxWidth: 1080, margin: '0 auto', padding: '52px 20px 72px', textAlign: 'center' }}>
-        {subscriptionRequired && (
+        {requiredNotice && (
           <div style={{
             margin: '0 auto 28px', maxWidth: 560, padding: '12px 18px', borderRadius: 10,
             background: '#FFF7ED', border: '1px solid #FCA5A5', color: '#9A3412',
             fontSize: 13, fontWeight: 600,
           }}>
-            Video Analysis requires an active plan — pick one below to unlock it.
+            {requiredNotice}
           </div>
         )}
 

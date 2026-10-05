@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { Readable } from 'stream';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import { findOrCreateFolder, playerFolderChain } from '@/lib/google/drive';
 
 export const runtime = 'nodejs';
@@ -17,6 +18,8 @@ export const maxDuration = 60;
 export async function POST(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'docsExport');
+  if (denied) return denied;
   if (!session.googleAccessToken) {
     return NextResponse.json(
       { error: 'Google access not granted — sign out and sign in again.' },

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import { createSessionInsert } from '@/lib/sessions/db';
 import { rowToPlayerSession } from '@/lib/sessions/types';
 import type { CreateSessionRequest } from '@/lib/sessions/types';
@@ -32,6 +33,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'players');
+  if (denied) return denied;
   const { id: playerId } = await ctx.params;
 
   const { data: player, error: pe } = await session.supabase

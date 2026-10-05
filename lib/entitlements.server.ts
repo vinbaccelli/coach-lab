@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isAdmin } from '@/lib/admin';
-import { billingAccess, NO_ENTITLEMENT, type Entitlement, type SubscriptionSnapshot } from '@/lib/entitlements';
+import { getPlan } from '@/lib/plans';
+import {
+  billingAccess, canUse, FEATURES, NO_ENTITLEMENT, requiredPlan,
+  type Entitlement, type Feature, type SubscriptionSnapshot,
+} from '@/lib/entitlements';
 
 /** Free self-serve trial length: one hour per account (see start_trial() SQL). */
 export const TRIAL_MS = 60 * 60 * 1000;
@@ -25,14 +29,18 @@ export async function getEntitlement(
 ): Promise<Entitlement> {
   if (isAdmin(user.email)) return { ...NO_ENTITLEMENT, admin: true };
 
+  // `*`, not a column list: works before and after the R1g migration.
   const { data: sub, error } = await supabase
     .from('subscriptions')
-    .select('status, tier, current_period_end, cancel_at_period_end')
+    .select('*')
     .eq('user_id', user.id)
-    .maybeSingle<SubscriptionSnapshot>();
+    .maybeSingle<SubscriptionSnapshot & { billing_interval?: string | null }>();
   if (error) throw new Error(`subscriptions read failed: ${error.message}`);
   const own = billingAccess(sub);
-  if (own.plan) return { ...NO_ENTITLEMENT, ...own };
+  if (own.plan) {
+    const interval = sub?.billing_interval === 'year' || sub?.billing_interval === 'month' ? sub.billing_interval : null;
+    return { ...NO_ENTITLEMENT, ...own, interval };
+  }
 
   const now = opts.now ?? Date.now();
   let startedAt: string | null = null;
@@ -45,4 +53,35 @@ export async function getEntitlement(
   }
   const trial = !!startedAt && now - new Date(startedAt).getTime() < TRIAL_MS;
   return { ...NO_ENTITLEMENT, trial };
+}
+
+/**
+ * API guard: 403 `{ error: 'plan_required', feature, required }` unless the
+ * signed-in coach may use `feature`; null when allowed. Read errors fail OPEN
+ * (logged) so a database hiccup never locks paying coaches out of their work.
+ */
+export async function requireFeature(
+  supabase: SupabaseClient,
+  user: { id: string; email?: string | null },
+  feature: Feature,
+): Promise<Response | null> {
+  try {
+    const ent = await getEntitlement(supabase, user, { startTrial: false });
+    if (canUse(feature, ent)) return null;
+    const required = requiredPlan(feature);
+    // Plain web Response (route handlers accept it): keeps this module free of
+    // next/server so the guard is unit-testable under node --test.
+    return Response.json(
+      {
+        error: 'plan_required',
+        feature,
+        required,
+        message: `${FEATURES[feature].label} is part of the ${getPlan(required)?.name ?? required} plan.`,
+      },
+      { status: 403 },
+    );
+  } catch (e) {
+    console.error('[entitlements] guard read failed, allowing:', feature, e instanceof Error ? e.message : e);
+    return null;
+  }
 }
