@@ -1,4 +1,5 @@
 import WorkspaceChrome from '@/components/WorkspaceChrome';
+import GuidedTour from '@/components/GuidedTour';
 import PlayerSessionDetailClient from '@/components/players/PlayerSessionDetailClient';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { rowToPlayerSession } from '@/lib/sessions/types';
@@ -43,6 +44,7 @@ export default async function PlayerSessionPage({
         playerName={player.display_name}
         session={session}
       />
+      <GuidedTour page="players" />
     </WorkspaceChrome>
   );
 }

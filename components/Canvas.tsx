@@ -1141,7 +1141,7 @@ function drawJointChainStroke(
     ctx.setLineDash([]);
   }
 
-  const baseR = Math.max(JOINT_NODE_RADIUS, lw * 1.5 + 4);
+  const baseR = jointNodeRadius(lw);
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
     const pulse = spinning ? 1 + 0.1 * Math.sin(Date.now() / 110 + i * 0.75) : 1;
@@ -1152,7 +1152,8 @@ function drawJointChainStroke(
     ctx.fillStyle = color;
     ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 2;
+    // A 2px rim would bury a ball this small; 1px keeps its colour readable.
+    ctx.lineWidth = 1;
     ctx.stroke();
   }
 
@@ -1225,9 +1226,24 @@ const CONTEXTUAL_STROKE_TOOLS = new Set([
 /** How close (logical px) a pointer must be to claim an existing mark. */
 const SELECT_HIT_T = 28;
 
-/** Visual radius of a joint ball (logical px). */
-const JOINT_NODE_RADIUS = 8;
-/** Hit target for dragging a joint (touch gets a larger target). */
+/**
+ * Visual radius of a joint ball (logical px). The ball used to be
+ * max(8, lw*1.5+4); it is now a fifth of that (Vin, 2026-10-03: at least 80%
+ * smaller). Every drawing path — live preview, committed mark, export/replay —
+ * goes through drawJointChainStroke, and the selection ring and the chain's
+ * hit-test read this same function, so they stay in step.
+ */
+const JOINT_NODE_SCALE = 0.2;
+function jointNodeRadius(lw: number): number {
+  return Math.max(8, lw * 1.5 + 4) * JOINT_NODE_SCALE;
+}
+/** Gap between a selected ball and its gold ring (logical px). */
+const JOINT_NODE_RING_GAP = 6;
+/**
+ * Hit target for dragging a joint (touch gets a larger target). Deliberately
+ * independent of the visual radius — like TEXT_HANDLE_HIT_R for text handles —
+ * so the smaller ball is exactly as easy to grab as the old one.
+ */
 const JOINT_NODE_HIT_TOUCH = 24;
 const JOINT_NODE_HIT_POINTER = 16;
 
@@ -2563,6 +2579,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const lastRenderVideoTimeRef = useRef(-1);
     const lastRenderZoomRef = useRef(1);
     const lastRenderPanRef = useRef({ x: 0, y: 0 });
+    // Selection identity at the last render (see selectionChanged in the loop).
+    const lastRenderSelectionRef = useRef<Selection>(null);
+    const lastRenderContextualRef = useRef<ContextualTarget | null>(null);
     // Frame-accurate "a new video frame was presented" signal. currentTime
     // advances continuously while playing, so it cannot gate to the decoded
     // frame rate; requestVideoFrameCallback fires once per presented frame
@@ -2919,8 +2938,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /**
      * Drop a selection that is being KEPT on a stroke — which now includes a
      * clicked text label, held after release so its resize handles stay
-     * reachable. Scoped to 'stroke' and 'textResize' only: joint-node and angle
-     * selections have their own lifecycles and are deliberately left alone.
+     * reachable — and a pressed joint-chain node, which its finalize also keeps
+     * (it was unreachable before KNOWN_ISSUES 011 was fixed, so it was never
+     * listed here). Angle selections clear on release and never reach this.
      *
      * Needed wherever strokesRef is replaced wholesale (undo, redo, Clear all,
      * snapshot import): the selection holds an INDEX, and after the array is
@@ -2928,7 +2948,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      */
     const dropKeptStrokeSelection = () => {
       const kind = selectionRef.current?.kind;
-      if (kind === 'stroke' || kind === 'textResize') {
+      if (kind === 'stroke' || kind === 'textResize' || kind === 'jointNode') {
         selectionRef.current = null;
         renderDirtyRef.current = true;
       }
@@ -5177,10 +5197,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         lastRenderZoomRef.current = zoomRef.current;
         lastRenderPanRef.current = { x: panXRef.current, y: panYRef.current };
 
+        // A selection's box, handles, node ring and the Style-mode box are all
+        // STATIC, so a selection at rest is drawn once — when it appears,
+        // changes or goes away — and then idles. Only a drag in progress
+        // repaints every frame (below). Counting any non-null selection as an
+        // interaction kept a selected text label / joint node / Style box
+        // repainting at the display rate for as long as it stayed selected
+        // (KNOWN_ISSUES 012). Every write to these refs replaces the object,
+        // so identity catches all of them — no per-call-site dirty flag needed.
+        const selectionChanged =
+          selectionRef.current !== lastRenderSelectionRef.current ||
+          contextualTargetRef.current !== lastRenderContextualRef.current;
+        lastRenderSelectionRef.current = selectionRef.current;
+        lastRenderContextualRef.current = contextualTargetRef.current;
+
         const hasActiveInteraction =
           !!activeStrokeRef.current ||
-          !!selectionRef.current ||
-          !!contextualTargetRef.current ||
+          (isDraggingRef.current && !!selectionRef.current) ||
           !!liveAngleRef.current ||
           isSelectingStroRegionRef.current ||
           precisionAnchorPointerIdRef.current !== null ||
@@ -5222,6 +5255,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const needsRender =
           videoFrameChanged ||
           zoomChanged ||
+          selectionChanged ||
           renderDirtyRef.current ||
           renderWaitersRef.current.length > 0 ||
           hasActiveInteraction ||
@@ -6187,7 +6221,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 ctx.strokeStyle = '#FFD700';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.arc(n.x, n.y, JOINT_NODE_RADIUS + 6, 0, Math.PI * 2);
+                ctx.arc(n.x, n.y, jointNodeRadius(jc.lw) + JOINT_NODE_RING_GAP, 0, Math.PI * 2);
                 ctx.stroke();
                 ctx.restore();
               }
@@ -6987,7 +7021,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           best = Math.min(best, distToSegment(pos, jc.nodes[i], jc.nodes[i + 1]));
         }
         for (const n of jc.nodes) {
-          best = Math.min(best, Math.hypot(pos.x - n.x, pos.y - n.y) - JOINT_NODE_RADIUS);
+          best = Math.min(best, Math.hypot(pos.x - n.x, pos.y - n.y) - jointNodeRadius(jc.lw));
         }
         return best;
       }
@@ -8226,28 +8260,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
-        // Back-to-front so the TOPMOST (last-drawn) mark wins an overlap: the
-        // distances tie at 0 anywhere two filled shapes overlap, and a strict
-        // `<` keeps whichever was seen first — which, iterating forwards, was
-        // the one painted UNDERNEATH the mark the coach was pointing at.
-        for (let i = strokesRef.current.length - 1; i >= 0; i--) {
-          const d = hitTestStroke(strokesRef.current[i], pos);
-          if (d < bestDist) {
-            bestDist = d;
-            best = { kind: 'stroke', idx: i, start: pos, orig: strokesRef.current[i] };
+        // A press on a node is a HANDLE press: it grabs that one node, the way a
+        // text resize handle grabs its corner above. It must not compete with the
+        // mark bodies on distance: hitTestStroke scores a chain's nodes as
+        // `d - jointNodeRadius(lw)`, always below the node pass's `d`, so the whole
+        // chain used to win every node press and single-node editing was
+        // unreachable (KNOWN_ISSUES 011). A press on a segment away from any node
+        // misses the node pass and still selects (and moves) the whole chain.
+        if (!best) {
+          // Back-to-front so the TOPMOST (last-drawn) mark wins an overlap: the
+          // distances tie at 0 anywhere two filled shapes overlap, and a strict
+          // `<` keeps whichever was seen first — which, iterating forwards, was
+          // the one painted UNDERNEATH the mark the coach was pointing at.
+          for (let i = strokesRef.current.length - 1; i >= 0; i--) {
+            const d = hitTestStroke(strokesRef.current[i], pos);
+            if (d < bestDist) {
+              bestDist = d;
+              best = { kind: 'stroke', idx: i, start: pos, orig: strokesRef.current[i] };
+            }
           }
-        }
 
-        for (let i = angleMeasRef.current.length - 1; i >= 0; i--) {
-          const m = angleMeasRef.current[i];
-          const d = Math.min(
-            Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
-            distToSegment(pos, m.v, m.p1),
-            distToSegment(pos, m.v, m.p2),
-          );
-          if (d < bestDist) {
-            bestDist = d;
-            best = { kind: 'angle', idx: i, start: pos, orig: m };
+          for (let i = angleMeasRef.current.length - 1; i >= 0; i--) {
+            const m = angleMeasRef.current[i];
+            const d = Math.min(
+              Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
+              distToSegment(pos, m.v, m.p1),
+              distToSegment(pos, m.v, m.p2),
+            );
+            if (d < bestDist) {
+              bestDist = d;
+              best = { kind: 'angle', idx: i, start: pos, orig: m };
+            }
           }
         }
 
@@ -8860,6 +8903,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // ── Finalize Select drag ───────────────────────────────────────────
       if (selectionRef.current) {
+        // Only a drag in progress is an edit. A text label or joint node stays
+        // selected after release, and the canvas wires onPointerLeave to this
+        // handler, so moving off the canvas (to reach Undo) used to land here
+        // with nothing dragged and push a duplicate history entry — the first
+        // Undo then stepped onto it and looked dead (KNOWN_ISSUES 016).
+        if (!isDraggingRef.current) return;
         const finSel = selectionRef.current;
         if (finSel.kind === 'textResize') {
           // Keep the text stroke selected so resize handles remain visible

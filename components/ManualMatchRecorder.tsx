@@ -633,14 +633,14 @@ export default function ManualMatchRecorder() {
 
         <div style={surface}>
           <label style={lb}>Your player</label>
-          <input list="player-pick" value={playerName} onChange={(e) => setPlayerName(e.target.value)} style={inp} />
+          <input data-tour-id="mr-player" list="player-pick" value={playerName} onChange={(e) => setPlayerName(e.target.value)} style={inp} />
           <datalist id="player-pick">
             {players.map((p) => (
               <option key={p.id} value={p.display_name} />
             ))}
           </datalist>
           <label style={lb}>Opponent</label>
-          <input list="opp-pick" value={opponentName} onChange={(e) => setOpponentName(e.target.value)} style={inp} />
+          <input data-tour-id="mr-opponent" list="opp-pick" value={opponentName} onChange={(e) => setOpponentName(e.target.value)} style={inp} />
           <datalist id="opp-pick">
             {players.map((p) => (
               <option key={p.id} value={p.display_name} />
@@ -649,7 +649,7 @@ export default function ManualMatchRecorder() {
           <label style={lb}>Match date</label>
           <input type="date" value={matchDate} onChange={(e) => setMatchDate(e.target.value)} style={inp} />
 
-          <div style={{ marginTop: 16, fontWeight: 800, fontSize: 13, marginBottom: 10 }}>Match format</div>
+          <div data-tour-id="mr-format" style={{ marginTop: 16, fontWeight: 800, fontSize: 13, marginBottom: 10 }}>Match format</div>
 
           {/* ── Quick-select preset cards ── */}
           {([
@@ -730,7 +730,7 @@ export default function ManualMatchRecorder() {
             entirely — it is not the same control as the per-point Skip, which
             stays available on every asked question either way.
           */}
-          <div style={{ marginTop: 18, fontWeight: 800, fontSize: 13, marginBottom: 8 }}>What to ask on each point</div>
+          <div data-tour-id="mr-ask" style={{ marginTop: 18, fontWeight: 800, fontSize: 13, marginBottom: 8 }}>What to ask on each point</div>
           {([
             {
               on: advancedServeStats,
@@ -779,7 +779,7 @@ export default function ManualMatchRecorder() {
 
           {/* ── FEATURE A — who serves first (alternates by game from here) ── */}
           <div style={{ marginTop: 18, fontWeight: 800, fontSize: 13, marginBottom: 8 }}>Who serves first?</div>
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div data-tour-id="mr-serve-first" style={{ display: 'flex', gap: 10 }}>
             {(['player', 'opponent'] as Side[]).map((s) => {
               const active = startingScore.server === s;
               const label = s === 'player' ? playerName.trim() || 'Player' : opponentName.trim() || 'Opponent';
@@ -871,6 +871,7 @@ export default function ManualMatchRecorder() {
 
           <button
             type="button"
+            data-tour-id="mr-start"
             disabled={!playerName.trim() || !opponentName.trim()}
             onClick={() => {
               const seeded = seedBoardFromScore(startingScore, format);
@@ -919,7 +920,7 @@ export default function ManualMatchRecorder() {
           paddingBottom: 'calc(72px + env(safe-area-inset-bottom, 0px))',
         }}
       >
-        <h2 style={{ color: 'var(--cl-text-primary)', fontSize: 20, fontWeight: 800, margin: '0 0 12px' }}>Match summary</h2>
+        <h2 data-tour-id="mr-summary" style={{ color: 'var(--cl-text-primary)', fontSize: 20, fontWeight: 800, margin: '0 0 12px' }}>Match summary</h2>
 
         {/* Deliberately OUTSIDE reportCaptureRef below — this explains the
             report, it isn't part of it, so it must never end up in the Doc's
@@ -979,7 +980,7 @@ export default function ManualMatchRecorder() {
             ))}
           </div>
         ) : null}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
+        <div data-tour-id="mr-export" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
           {/*
             ONE combined action, replacing the previous pair of buttons. This
             still does everything the "Save to player folder" button always
@@ -1163,7 +1164,7 @@ export default function ManualMatchRecorder() {
   };
 
   const errorCausePanel = errorCauseDimension ? (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div data-tour-id={`mr-q-${errorCauseDimension.key}`} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--cl-text-primary)' }}>
         {errorCauseDimension.question}
       </div>
@@ -1246,7 +1247,7 @@ export default function ManualMatchRecorder() {
   };
 
   const rallyPanel = needsRallyStep ? (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div data-tour-id="mr-q-rally" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--cl-text-primary)' }}>How long was the rally?</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {RALLY_LENGTH_OPTIONS.map((n) => (
@@ -1322,7 +1323,7 @@ export default function ManualMatchRecorder() {
   };
 
   const serveNumberPanel = needsServeNumberStep ? (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div data-tour-id="mr-q-serve-number" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--cl-text-primary)' }}>
         First serve or second serve?
       </div>
@@ -1364,7 +1365,7 @@ export default function ManualMatchRecorder() {
 
   const confirmPanel =
     pendingOutcome && pickWinner && !needsErrorCauseStep && !needsRallyStep && !needsServeNumberStep ? (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 14 }}>
+      <div data-tour-id="mr-q-confirm" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 14 }}>
         {hasErrorCause(pendingErrorCause) ? (
           <p style={{ margin: 0, fontSize: 13, color: 'var(--cl-text-primary)' }}>
             Ball:{' '}
@@ -1487,6 +1488,7 @@ export default function ManualMatchRecorder() {
       */}
       {points.length > 0 ? (
         <button
+          data-tour-id="mr-undo"
           type="button"
           onClick={undoLastPoint}
           style={{
@@ -1525,6 +1527,7 @@ export default function ManualMatchRecorder() {
         </button>
         {/* FEATURE F — explicit finish, available at any moment. */}
         <button
+          data-tour-id="mr-finish"
           type="button"
           onClick={() => {
             if (
@@ -1562,7 +1565,7 @@ export default function ManualMatchRecorder() {
       {!pendingOutcome && (
         <>
           {!pickWinner ? (
-            <div style={{ display: 'flex', gap: 12 }}>
+            <div data-tour-id="mr-q-winner" style={{ display: 'flex', gap: 12 }}>
               <button type="button" style={{ ...btnLight, background: 'var(--cl-bg-panel)' }} onClick={() => setPickWinner('player')}>
                 Point → {playerName.trim() || 'Player'}
               </button>
@@ -1571,7 +1574,7 @@ export default function ManualMatchRecorder() {
               </button>
             </div>
           ) : !cat ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div data-tour-id="mr-q-outcome" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--cl-text-primary)' }}>Outcome</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                 {OUTCOME_CATS.map((c, i) => (
@@ -1614,7 +1617,7 @@ export default function ManualMatchRecorder() {
             /* Return error — which stroke missed the return. Same STROKES list
                the winners and both error kinds use, so the breakdown reads the
                same way everywhere. */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div data-tour-id="mr-q-stroke" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--cl-text-primary)' }}>
                 Return error — which stroke missed it?
               </div>
@@ -1642,7 +1645,7 @@ export default function ManualMatchRecorder() {
               </button>
             </div>
             ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div data-tour-id="mr-q-serve-outcome" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--cl-text-primary)' }}>
                 {servingNow === 'player' ? playerName.trim() || 'Player' : opponentName.trim() || 'Opponent'} served
                 — how did the point end?
@@ -1676,7 +1679,7 @@ export default function ManualMatchRecorder() {
             )
           ) : (
             /* FEATURE D — the same stroke list serves winners and both error kinds. */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div data-tour-id="mr-q-stroke" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--cl-text-primary)' }}>
                 {cat === 'win' ? 'Winner — which stroke?' : 'Which stroke made the error?'}
               </div>
@@ -1733,7 +1736,7 @@ export default function ManualMatchRecorder() {
             padding: 16,
           }}
         >
-          <div style={{ ...surface, maxWidth: 400, width: '100%', background: 'var(--cl-bg-panel)' }}>
+          <div data-tour-id="mr-q-note" style={{ ...surface, maxWidth: 400, width: '100%', background: 'var(--cl-bg-panel)' }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Game break — note (optional)</div>
             <textarea
               value={gameNoteDraft}

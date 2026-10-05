@@ -753,7 +753,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         // is the canvas PiP, which is what the screen grab records), so closing
         // it can only mean "hide these controls". Turning the camera off there
         // silently dropped the coach out of the rest of the recording. The
-        // in-page RecordingControlBar is always available, so Pause/Resume/Stop
+        // in-page RecordingControls are always available, so Pause/Resume/Stop
         // survive the window closing and nothing is lost by keeping the camera.
         const monitorShare = isMonitorShareRef.current;
         if (!monitorShare) webcamVideoElRef.current = null; // stop drawing Source B — camera off

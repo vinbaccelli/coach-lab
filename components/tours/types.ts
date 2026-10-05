@@ -18,7 +18,7 @@ export type TourCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-righ
 export type TourAdvance =
   | { kind: 'next' }
   | { kind: 'visible'; selector: string }
-  | { kind: 'click' }
+  | { kind: 'click'; /** Clicks on this instead of the target (e.g. any card in a highlighted grid). */ selector?: string }
   | { kind: 'signal'; name: TourSignalName; tool?: string };
 
 export interface TourStep {
@@ -47,11 +47,26 @@ export interface TourStep {
   advance: TourAdvance;
   /** Skip the step on entry if this selector already matches a visible element. */
   skipIf?: string;
+  /**
+   * A small real screenshot of the tool in use (public/tours/<tour-id>/,
+   * WebP ~480 px wide). Cut from the founder's captures — never mocked. Steps
+   * with no suitable capture have none (see docs/TOUR_SCREENSHOTS.md).
+   */
+  image?: TourImage;
+}
+
+export interface TourImage {
+  src: string;
+  width: number;
+  height: number;
+  alt: string;
 }
 
 export interface TourDef {
   id: string;
   title: string;
   summary: string;
+  /** Pro tool the tour is about (lib/tourAccess.ts decides whether to offer it). */
+  feature?: string;
   steps: ReadonlyArray<TourStep>;
 }

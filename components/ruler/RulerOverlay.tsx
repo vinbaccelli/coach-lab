@@ -34,6 +34,7 @@ import {
   type UnitSystem,
 } from '@/lib/ruler/units';
 import type { Point2D, RulerCalibration, RulerMeasurement, RulerMode } from '@/lib/ruler/types';
+import { emitTourSignal } from '@/lib/tourSignals';
 
 interface Props {
   /** Displayed width/height of the video container in pixels */
@@ -161,6 +162,7 @@ export default function RulerOverlay({
       });
       setCalibStep('done');
       setMode('measure');
+      emitTourSignal('ruler-calibrated');
       return;
     }
 
@@ -195,6 +197,7 @@ export default function RulerOverlay({
     });
     setCalibStep('done');
     setMode('measure');
+    emitTourSignal('ruler-calibrated');
   }, [selectedPreset, calibPoints, resolveReferenceMeters, getSvgPoint, onCalibrationChange]);
 
   // ---- Measure clicks ----
@@ -231,6 +234,7 @@ export default function RulerOverlay({
     // formatting is unchanged. Unit switching here never rewrites what was
     // already sent, so the column stays internally consistent.
     onMeasurement?.(Math.round(distM * 100) / 100, 'm');
+    emitTourSignal('ruler-measured');
     setDrawStart(null);
     setDrawCurrent(null);
   }, [drawStart, calibration, getSvgPoint, onMeasurement]);
@@ -565,6 +569,7 @@ export default function RulerOverlay({
       {/* Control panel */}
       <div
         ref={panelRef}
+        data-tour-id="ruler-panel"
         onPointerDown={e => e.stopPropagation()}
         onPointerUp={e => e.stopPropagation()}
         onPointerMove={onPanelDragMove}
@@ -660,11 +665,13 @@ export default function RulerOverlay({
           borderBottom: '1px solid rgba(255,255,255,0.08)',
         }}>
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', flex: 1 }}>Units</span>
-          <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
+          <div data-tour-id="ruler-units" style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
             {(['metric', 'imperial'] as const).map(sys => (
               <button
                 key={sys}
+                data-active={unitSystem === sys ? 'true' : undefined}
                 onClick={() => {
+                  if (sys !== unitSystem) emitTourSignal('ruler-units');
                   onUnitSystemChange(sys);
                   // Keep the typing unit sensible for the new system, but only
                   // when the coach hasn't already typed something — retyping
@@ -692,7 +699,7 @@ export default function RulerOverlay({
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {RULER_PRESETS.map(preset => (
-                  <button key={preset.id} onClick={() => {
+                  <button key={preset.id} data-tour-id={`ruler-preset-${preset.id}`} onClick={() => {
                     setSelectedPreset(preset);
                     setCalibStep('place-points');
                     setCalibPoints([]);
@@ -729,7 +736,7 @@ export default function RulerOverlay({
           {/* STEP 2: Place calibration points */}
           {calibStep === 'place-points' && selectedPreset && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <div data-tour-id="ruler-place-points" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <button onClick={() => { setCalibStep('pick-preset'); setCalibPoints([]); setSelectedPreset(null); }}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.5)', padding: 0 }}>
                   ← back

@@ -1,4 +1,5 @@
 import type { TourDef } from './types';
+import { shot } from './shot';
 
 const visible = (id: string, extra = '') => `[data-tour-id="${id}"]${extra}`;
 
@@ -20,11 +21,12 @@ export const DRAW_TOUR: TourDef = {
     {
       id: 'load',
       title: 'Load a clip',
-      body: 'Upload a video, or open the Demo clip. Everything in this tour is drawn on whatever is on screen.',
-      target: 'tour-upload',
+      body: 'Press Upload Video, or Demo (Tutorial). Everything in this tour is drawn on whatever is on screen.',
+      target: 'tour-load',
       placement: 'bottom',
       advance: { kind: 'visible', selector: visible('tour-video-ab') },
       skipIf: visible('tour-video-ab'),
+      image: shot('draw', 'load', 300, 'The empty canvas with three buttons: Upload Video, Tennis court (strategy board) and Demo (Tutorial).'),
     },
     {
       id: 'metrics',
@@ -34,6 +36,7 @@ export const DRAW_TOUR: TourDef = {
       placement: 'right',
       advance: { kind: 'visible', selector: visible('row-m-draw') },
       skipIf: `${visible('row-m-draw')}, ${visible('row-aa-d')}`,
+      image: shot('draw', 'metrics', 299, 'The Metrics panel: Skeleton, Unlock skeleton, Draw, Data Column ON and Add note.'),
     },
     {
       id: 'draw',
@@ -43,6 +46,7 @@ export const DRAW_TOUR: TourDef = {
       placement: 'right',
       advance: { kind: 'visible', selector: visible('row-aa-d') },
       skipIf: visible('row-aa-d'),
+      image: shot('draw', 'draw', 299, 'The Draw panel: Style, Pen, Line, Arrow, Angle and Angle arrow.'),
     },
     {
       id: 'angle-arrow-tool',
@@ -52,6 +56,7 @@ export const DRAW_TOUR: TourDef = {
       placement: 'right',
       advance: { kind: 'visible', selector: visible('row-aa-d', '[data-active="true"]') },
       skipIf: visible('row-aa-d', '[data-active="true"]'),
+      image: shot('draw', 'angle-arrow-tool', 299, 'The Draw panel with Angle arrow selected.'),
     },
     {
       id: 'angle-arrow-draw',
@@ -60,6 +65,7 @@ export const DRAW_TOUR: TourDef = {
       target: 'tour-canvas',
       area: true,
       advance: { kind: 'signal', name: 'mark-drawn', tool: 'arrowAngle' },
+      image: shot('draw', 'angle-arrow-draw', 301, 'Two angle arrows on a player, along the forearm and the hips, each labelled with its angle.'),
     },
     {
       id: 'angle-diff-tool',
@@ -68,6 +74,7 @@ export const DRAW_TOUR: TourDef = {
       target: 'row-anglediff',
       placement: 'right',
       advance: { kind: 'signal', name: 'angle-diff-armed' },
+      image: shot('draw', 'angle-diff-tool', 299, 'The lower half of the Draw panel, ending with Ruler and Angle differential.'),
     },
     {
       id: 'angle-diff-first',
@@ -76,6 +83,7 @@ export const DRAW_TOUR: TourDef = {
       target: 'tour-canvas',
       area: true,
       advance: { kind: 'signal', name: 'angle-diff-first' },
+      image: shot('draw', 'angle-diff-result', 301, 'Two angle arrows on a player and the data column listing Angle 1, Angle 2 and the Angle differential between them.'),
     },
     {
       id: 'angle-diff-second',
@@ -84,6 +92,7 @@ export const DRAW_TOUR: TourDef = {
       target: 'tour-canvas',
       area: true,
       advance: { kind: 'signal', name: 'angle-diff-done' },
+      image: shot('draw', 'angle-diff-result', 301, 'Two angle arrows on a player and the data column listing Angle 1, Angle 2 and the Angle differential between them.'),
     },
     {
       id: 'pen-tool',
@@ -93,6 +102,7 @@ export const DRAW_TOUR: TourDef = {
       placement: 'right',
       advance: { kind: 'visible', selector: visible('row-pen', '[data-active="true"]') },
       skipIf: visible('row-pen', '[data-active="true"]'),
+      image: shot('draw', 'pen-tool', 299, 'The Draw panel with Pen selected.'),
     },
     {
       id: 'pen-draw',
@@ -101,6 +111,7 @@ export const DRAW_TOUR: TourDef = {
       target: 'tour-canvas',
       area: true,
       advance: { kind: 'signal', name: 'mark-drawn', tool: 'pen' },
+      image: shot('draw', 'pen-draw', 299, 'A dashed freehand loop drawn round a player’s hips on a forehand frame.'),
     },
     {
       id: 'style-open',
