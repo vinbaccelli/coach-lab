@@ -5,6 +5,7 @@
  */
 
 import { OneEuroKeypointSmoother } from '@/lib/keypointSmooth';
+import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 
 /** Crop fraction used when the caller gives no explicit focus ratio. */
 const DEFAULT_FOCUS_RATIO = 0.6;
@@ -23,6 +24,10 @@ function attachWorkerResultRouting() {
     const { data } = e;
     if (data?.type === 'result') {
       activeBridge?.handleWorkerMessage(e);
+    } else if (data?.type === 'error') {
+      poseDbg.workerError(String(data.message)); // TEMP-DEBUG-POSE (ignored after ready)
+    } else if (data?.type === 'dbg') {
+      poseDbg.event(String(data.message)); // TEMP-DEBUG-POSE
     }
   };
 }
@@ -95,20 +100,23 @@ export class PoseWorkerBridge {
 
   sendFrame(video: HTMLVideoElement) {
     if (this.disposed) return;
-    if (this.mode === 'initializing') return;
-    if (video.readyState < 2 || video.videoWidth === 0) return;
+    poseDbg.sendCall(); // TEMP-DEBUG-POSE
+    if (this.mode === 'initializing') { poseDbg.skip('init'); return; } // TEMP-DEBUG-POSE
+    if (video.readyState < 2 || video.videoWidth === 0) { poseDbg.skip('notReady'); return; } // TEMP-DEBUG-POSE
 
     this.frameCount++;
-    if (this._frameSkip > 0 && this.frameCount % (this._frameSkip + 1) !== 0) return;
+    if (this._frameSkip > 0 && this.frameCount % (this._frameSkip + 1) !== 0) { poseDbg.skip('frameSkip'); return; } // TEMP-DEBUG-POSE
 
     if (this.mode === 'worker') {
       if (this.inFlight) {
+        poseDbg.skip('busy'); // TEMP-DEBUG-POSE
         this.pendingResendVideo = video;
         return;
       }
       this.sendToWorker(video);
     } else {
       if (this.inFlight) {
+        poseDbg.skip('busy'); // TEMP-DEBUG-POSE
         this.pendingResendVideo = video;
         return;
       }
@@ -193,6 +201,9 @@ export class PoseWorkerBridge {
     const { data } = e;
     if (data.type === 'result') {
       this.inFlight = false;
+      poseDbg.result(!!data.keypoints, data.inferMs); // TEMP-DEBUG-POSE
+      if (data.model) poseDbg.set('model', String(data.model)); // TEMP-DEBUG-POSE
+      if (data.backend) poseDbg.set('backend', String(data.backend)); // TEMP-DEBUG-POSE
       // Worker coords are in (possibly downscaled) bitmap space — map back to
       // video-native pixels before smoothing/consumption.
       let kps: PoseKeypoint[] | null = data.keypoints ?? null;
@@ -235,6 +246,7 @@ export class PoseWorkerBridge {
         this.statusCb?.('Skeleton ready');
         this.worker = globalWorker;
         this.mode = 'worker';
+        poseDbg.set('mode', 'worker (reused)'); // TEMP-DEBUG-POSE
         attachWorkerResultRouting();
         this.readyCb?.();
         this.readyCb = null;
@@ -253,7 +265,9 @@ export class PoseWorkerBridge {
       globalWorkerReady = false;
 
       // 30s timeout — model download can be slow on first load
+      poseDbg.set('mode', wasmOnly ? 'initializing (wasm-only retry)' : 'initializing'); // TEMP-DEBUG-POSE
       globalInitTimeout = setTimeout(() => {
+        poseDbg.event('worker init timed out (30s)'); // TEMP-DEBUG-POSE
         console.warn('[PoseWorkerBridge] Worker timed out after 30s — failing over');
         this.statusCb?.('Worker timed out — using fallback…');
         this.failOver();
@@ -269,6 +283,8 @@ export class PoseWorkerBridge {
           if (!target.disposed) {
             target.worker = globalWorker;
             target.mode = 'worker';
+            poseDbg.set('mode', 'worker'); // TEMP-DEBUG-POSE
+            if (data.backend) poseDbg.set('backend', String(data.backend)); // TEMP-DEBUG-POSE
             attachWorkerResultRouting();
             target.statusCb?.('Skeleton ready');
             target.readyCb?.();
@@ -280,6 +296,7 @@ export class PoseWorkerBridge {
           if (!target.disposed) target.statusCb?.(data.message);
         } else if (data.type === 'error') {
           if (globalInitTimeout) { clearTimeout(globalInitTimeout); globalInitTimeout = null; }
+          poseDbg.workerError(String(data.message)); // TEMP-DEBUG-POSE
           console.error('[PoseWorkerBridge] Worker error:', data.message);
           this.statusCb?.('Skeleton engine hiccup — retrying…');
           this.failOver();
@@ -287,6 +304,7 @@ export class PoseWorkerBridge {
       };
 
       w.onerror = () => {
+        poseDbg.workerOnerror(); // TEMP-DEBUG-POSE
         if (globalInitTimeout) { clearTimeout(globalInitTimeout); globalInitTimeout = null; }
         console.warn('[PoseWorkerBridge] Worker onerror — failing over');
         this.statusCb?.('Skeleton engine hiccup — retrying…');
@@ -303,6 +321,8 @@ export class PoseWorkerBridge {
   private sendToWorker(video: HTMLVideoElement) {
     if (!this.worker || !globalWorkerReady) return;
     this.inFlight = true;
+    poseDbg.sent(); // TEMP-DEBUG-POSE
+    const tBmp = performance.now(); // TEMP-DEBUG-POSE
     try {
       // The model's input is only 192–256px — shipping full-res frames wastes
       // capture, transfer, and tensor-conversion time (the dominant cost on
@@ -326,6 +346,7 @@ export class PoseWorkerBridge {
 
       make
         .then((bmp) => {
+          poseDbg.bitmap(performance.now() - tBmp); // TEMP-DEBUG-POSE
           if (this.disposed || !this.worker) {
             bmp.close();
             this.inFlight = false;
@@ -335,6 +356,7 @@ export class PoseWorkerBridge {
           this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId: this.frameCount, focusPoint: this._focusPoint, focusRatio: this._focusRatio }, [bmp]);
         })
         .catch(() => {
+          poseDbg.bitmapFailed(); // TEMP-DEBUG-POSE
           this.inFlight = false;
         });
     } catch {
@@ -350,6 +372,8 @@ export class PoseWorkerBridge {
       if (this.disposed) return;
       this.fallbackDetector = det;
       this.mode = 'main-thread';
+      poseDbg.set('mode', 'MAIN-THREAD fallback'); // TEMP-DEBUG-POSE
+      poseDbg.set('backend', 'main-thread tfjs'); // TEMP-DEBUG-POSE
       if (process.env.NODE_ENV !== 'production') {
         console.log('[PoseWorkerBridge] Main-thread fallback active (WebGL)');
       }
@@ -365,6 +389,7 @@ export class PoseWorkerBridge {
   private sendToMainThread(video: HTMLVideoElement) {
     if (!this.fallbackDetector) return;
     this.inFlight = true;
+    poseDbg.sent(); // TEMP-DEBUG-POSE
     const det = this.fallbackDetector;
 
     const run = async () => {
@@ -373,8 +398,10 @@ export class PoseWorkerBridge {
       const { markDetectStart, markDetectEnd } = await import('@/lib/sharedPoseDetector');
       markDetectStart('poseWorkerBridge main-thread fallback');
       try {
+        const tInf = performance.now(); // TEMP-DEBUG-POSE
         const poses = await det.estimatePoses(video, { flipHorizontal: false });
         const raw = poses?.[0]?.keypoints as PoseKeypoint[] | undefined;
+        poseDbg.result(!!raw?.length, performance.now() - tInf); // TEMP-DEBUG-POSE
         this.deliverKeypoints(raw?.length ? raw : null);
       } catch {
         this.deliverKeypoints(null);
