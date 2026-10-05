@@ -20,7 +20,7 @@ import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
 import { useRecording, RECORDING_AUDIO_CONSTRAINTS } from '@/contexts/RecordingContext';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
-import RecordingControlBar from '@/components/RecordingControlBar';
+import RecordingControls from '@/components/RecordingControls';
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
 import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModal';
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
@@ -476,6 +476,8 @@ function Home() {
     reopenPipWindow,
   } = useRecording();
   const isRecording = globalRecState === 'recording' || globalRecState === 'paused' || globalRecState === 'stopped';
+  /** Pause/Resume/Stop are offered (in the video-slot row) only while these hold. */
+  const recordingControlsActive = globalRecState === 'recording' || globalRecState === 'paused';
   // Hide the canvas webcam PiP during a recording EXCEPT in a whole-screen
   // share. In a monitor share the screen grab already contains this canvas, so
   // the canvas PiP is what records the webcam — and it is the only renderer
@@ -6990,8 +6992,14 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
   });
 
+  /**
+   * The top-right action row of video panel A — the same spot on every tool
+   * screen. Holds the recording controls while a recording runs (even with no
+   * video loaded, since recording can start from an empty canvas) and the
+   * Remove A / Add B slot actions whenever there is a video.
+   */
   const renderVideoSlotPills = () => {
-    if (!hasVideoAContent) return null;
+    if (!hasVideoAContent && !recordingControlsActive) return null;
     return (
       <div
         role="group"
@@ -7010,16 +7018,19 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           maxWidth: 'calc(100% - 16px)',
         }}
       >
-        <button
-          type="button"
-          onClick={removeVideoA}
-          title="Remove Video A"
-          style={slotPillStyle('remove')}
-        >
-          <Trash2 size={16} strokeWidth={2.25} aria-hidden />
-          {phoneToolbarLayout ? null : 'Remove A'}
-        </button>
-        {!hasVideoBContent ? (
+        <RecordingControls iconOnly={phoneToolbarLayout} />
+        {hasVideoAContent ? (
+          <button
+            type="button"
+            onClick={removeVideoA}
+            title="Remove Video A"
+            style={slotPillStyle('remove')}
+          >
+            <Trash2 size={16} strokeWidth={2.25} aria-hidden />
+            {phoneToolbarLayout ? null : 'Remove A'}
+          </button>
+        ) : null}
+        {hasVideoAContent && !hasVideoBContent ? (
           <button
             type="button"
             onClick={handleAddVideoB}
@@ -7123,15 +7134,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         muted
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
       />
-
-      {/*
-        Recording controls — page chrome ABOVE the workspace, present only while
-        a recording is active. In normal flow (flex: 0 0 auto), so the row below
-        shrinks by its height and the video/canvas is never covered. Reachable
-        from every tool/panel because it lives on the page root, not inside the
-        Recording Hub. Buttons stack vertically — see RecordingControlBar.
-      */}
-      <RecordingControlBar />
 
       {/* ── Main layout: toolbar rail + canvas (no overlay) ── */}
       <div
@@ -7912,9 +7914,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       onStartRecording={(o) => startEmbedCaptureRecording('A', o)}
                       onUploadInstead={triggerVideoUploadA}
                     />
-                    {renderVideoSlotPills()}
                   </>
                 )}
+                {/* Outside the ternary: with no video loaded it still carries the
+                    recording controls during a recording. */}
+                {renderVideoSlotPills()}
                 {/* Drag-over overlay for Video A */}
                 {isDragOverA && (
                   <div style={{

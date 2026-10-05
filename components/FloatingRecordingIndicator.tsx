@@ -21,11 +21,11 @@ export default function FloatingRecordingIndicator() {
   }, [stopRecording]);
 
   if (recState !== 'recording' && recState !== 'paused') return null;
-  // A page-level control bar (components/RecordingControlBar.tsx on the
-  // analysis page) is on screen and owns Pause/Resume/Stop. Two competing Stop
-  // buttons is worse than one, and that bar sits in page chrome instead of
-  // floating over the workspace, so this widget stands down. It comes straight
-  // back on any route that has no such bar.
+  // In-page recording controls (components/RecordingControls.tsx, in the
+  // analysis page's top-right video-slot row) are on screen and own
+  // Pause/Resume/Stop. Two competing Stop buttons is worse than one, so this
+  // widget stands down. It comes straight back on any route that has no such
+  // controls.
   if (inlineRecordingControlsPresent) return null;
 
   const isRecording = recState === 'recording';
