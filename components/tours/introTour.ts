@@ -1,4 +1,5 @@
 import type { TourDef } from './types';
+import { shot } from './shot';
 
 const visible = (id: string, extra = '') => `[data-tour-id="${id}"]${extra}`;
 
@@ -25,6 +26,7 @@ export const INTRO_TOUR: TourDef = {
       placement: 'bottom',
       advance: { kind: 'visible', selector: visible('tour-video-ab') },
       skipIf: visible('tour-video-ab'),
+      image: shot('intro', 'load', 300, 'The empty canvas with three buttons: Upload Video, Tennis court (strategy board) and Demo (Tutorial).'),
     },
     {
       id: 'play',
@@ -33,6 +35,7 @@ export const INTRO_TOUR: TourDef = {
       target: 'tour-play',
       placement: 'top',
       advance: { kind: 'click' },
+      image: shot('intro', 'play', 160, 'The playback bar under the video: zoom, Fit, All, play, step back, step forward and the time.'),
     },
     {
       id: 'scrub',
@@ -41,6 +44,7 @@ export const INTRO_TOUR: TourDef = {
       target: 'tour-scrub',
       placement: 'top',
       advance: { kind: 'click' },
+      image: shot('intro', 'scrub', 102, 'The timeline under the video, with the playhead partway along it.'),
     },
     {
       id: 'step-frame',
@@ -49,6 +53,7 @@ export const INTRO_TOUR: TourDef = {
       target: 'tour-step-fwd',
       placement: 'top',
       advance: { kind: 'click' },
+      image: shot('intro', 'step-frame', 111, 'The play button and the two one-frame step buttons beside the clip time.'),
     },
     {
       id: 'metrics',
@@ -58,6 +63,7 @@ export const INTRO_TOUR: TourDef = {
       placement: 'right',
       advance: { kind: 'visible', selector: visible('row-sk-met') },
       skipIf: `${visible('row-sk-met')}, ${visible('row-sov')}`,
+      image: shot('intro', 'metrics', 299, 'The Metrics panel: Skeleton, Unlock skeleton, Draw, Data Column ON and Add note.'),
     },
     {
       id: 'skeleton-open',
@@ -67,6 +73,7 @@ export const INTRO_TOUR: TourDef = {
       placement: 'right',
       advance: { kind: 'visible', selector: visible('row-sov') },
       skipIf: visible('row-sov'),
+      image: shot('intro', 'skeleton-open', 299, 'The Skeleton panel with “Skeleton on / off” switched on, then Refresh pose overlay, AI Track and the label options.'),
     },
     {
       id: 'skeleton-check',
@@ -75,6 +82,7 @@ export const INTRO_TOUR: TourDef = {
       target: 'tour-canvas',
       area: true,
       advance: { kind: 'next' },
+      image: shot('intro', 'skeleton-check', 299, 'The AI skeleton drawn over a player’s arms and torso, with the message “Skeleton ready — press play”.'),
     },
     {
       id: 'back-to-metrics',
@@ -84,6 +92,7 @@ export const INTRO_TOUR: TourDef = {
       placement: 'right',
       advance: { kind: 'visible', selector: visible('row-m-aidetect') },
       skipIf: visible('row-m-aidetect'),
+      image: shot('intro', 'back-to-metrics', 299, 'The Back button at the top of the Skeleton panel.'),
     },
     {
       id: 'ai-detect',
@@ -92,6 +101,7 @@ export const INTRO_TOUR: TourDef = {
       target: 'row-m-aidetect',
       placement: 'right',
       advance: { kind: 'signal', name: 'ai-angles-detected' },
+      image: shot('intro', 'ai-detect', 299, 'The Metrics list with AI Detect Angles between Clear column and Snapshot.'),
     },
     {
       id: 'data-column',
@@ -101,6 +111,7 @@ export const INTRO_TOUR: TourDef = {
       area: true,
       corner: 'bottom-right',
       advance: { kind: 'next' },
+      image: shot('intro', 'data-column', 300, 'A forehand frame with the skeleton on and the Snapshot 1 data column beside the player: elbows, knees, feet, shoulder, hip, shoulder-hip difference and racket angle.'),
     },
     {
       id: 'done',
