@@ -60,6 +60,24 @@ export function poseDebugOn(): boolean {
   return enabled;
 }
 
+/**
+ * `&pose=thunder` (with ?debug=1): keep MoveNet THUNDER for the whole session
+ * — no automatic drop to Lightning — so its real per-frame cost after warm-up
+ * can be read off this panel. Sticky for the tab like the debug flag;
+ * `&pose=auto` clears it. Ignored entirely without ?debug=1.
+ */
+export function poseDebugForcedModel(): 'thunder' | null {
+  if (!poseDebugOn()) return null;
+  try {
+    const v = new URLSearchParams(window.location.search).get('pose');
+    if (v === 'thunder') window.sessionStorage.setItem('am-temp-pose', 'thunder');
+    if (v === 'auto') window.sessionStorage.removeItem('am-temp-pose');
+    return window.sessionStorage.getItem('am-temp-pose') === 'thunder' ? 'thunder' : null;
+  } catch {
+    return null;
+  }
+}
+
 const now = () => performance.now();
 const keep = (a: number[], t: number) => { while (a.length && t - a[0] > 1000) a.shift(); };
 const keepW = (a: Win, t: number) => { while (a.length && t - a[0].t > 3000) a.shift(); };
