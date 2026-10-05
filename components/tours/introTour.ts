@@ -20,8 +20,8 @@ export const INTRO_TOUR: TourDef = {
     {
       id: 'load',
       title: 'Load a clip',
-      body: 'Upload a video of your player, or open the Demo clip.',
-      target: 'tour-upload',
+      body: 'Press Upload Video for a clip of your player, or Demo (Tutorial) to follow along on ours.',
+      target: 'tour-load',
       placement: 'bottom',
       advance: { kind: 'visible', selector: visible('tour-video-ab') },
       skipIf: visible('tour-video-ab'),

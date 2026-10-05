@@ -47,6 +47,19 @@ export interface TourStep {
   advance: TourAdvance;
   /** Skip the step on entry if this selector already matches a visible element. */
   skipIf?: string;
+  /**
+   * A small real screenshot of the tool in use (public/tours/<tour-id>/,
+   * WebP ~480 px wide). Cut from the founder's captures — never mocked. Steps
+   * with no suitable capture have none (see docs/TOUR_SCREENSHOTS.md).
+   */
+  image?: TourImage;
+}
+
+export interface TourImage {
+  src: string;
+  width: number;
+  height: number;
+  alt: string;
 }
 
 export interface TourDef {

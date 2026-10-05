@@ -20,8 +20,8 @@ export const DRAW_TOUR: TourDef = {
     {
       id: 'load',
       title: 'Load a clip',
-      body: 'Upload a video, or open the Demo clip. Everything in this tour is drawn on whatever is on screen.',
-      target: 'tour-upload',
+      body: 'Press Upload Video, or Demo (Tutorial). Everything in this tour is drawn on whatever is on screen.',
+      target: 'tour-load',
       placement: 'bottom',
       advance: { kind: 'visible', selector: visible('tour-video-ab') },
       skipIf: visible('tour-video-ab'),

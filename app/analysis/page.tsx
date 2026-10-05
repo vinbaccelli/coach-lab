@@ -7600,7 +7600,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     {webcamActive ? (
                       <button
                         type="button"
-                        data-tour-id="tour-upload"
+                        data-tour-id="tour-load"
                         onClick={triggerVideoUploadA}
                         style={{
                           position: 'absolute',
@@ -7626,7 +7626,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         <Upload size={16} /> Upload Video
                       </button>
                     ) : (
-                    <div style={{
+                    <div data-tour-id="tour-load" style={{
                       display: 'flex', flexDirection: 'column',
                       alignItems: 'center', justifyContent: 'center',
                       gap: 16,

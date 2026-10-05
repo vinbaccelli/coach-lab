@@ -2,7 +2,7 @@ import { DRAW_TOUR } from './drawTour';
 import { INTRO_TOUR } from './introTour';
 import type { TourDef } from './types';
 
-export type { TourDef, TourStep, TourAdvance, TourPlacement, TourCorner } from './types';
+export type { TourDef, TourStep, TourAdvance, TourPlacement, TourCorner, TourImage } from './types';
 
 /** Every tour the ? button offers, in the order it lists them. */
 export const TOURS: ReadonlyArray<TourDef> = [INTRO_TOUR, DRAW_TOUR];
