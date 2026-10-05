@@ -13,11 +13,17 @@ import WorkspaceChrome from '@/components/WorkspaceChrome';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { PLANS, PRICE_TAX_NOTE, formatPrice } from '@/lib/plans';
 
-type SubStatus = { status: string; email: string | null; updatedAt?: string | null; tier?: string | null; seats?: number | null };
+type SubStatus = {
+  status: string; email: string | null; updatedAt?: string | null; tier?: string | null; seats?: number | null;
+  billingInterval?: string | null; currentPeriodEnd?: string | null; cancelAtPeriodEnd?: boolean;
+  /** Policy outcome from lib/entitlements.ts, computed server-side. */
+  plan?: string | null; paymentFailed?: boolean; endsAt?: string | null;
+};
+
+const fmtDate = (iso: string) =>
+  new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
 
 const TIER_LABEL: Record<string, string> = { light: 'Light', pro: 'Pro', academy: 'Academy' };
-
-const ACTIVE_STATUSES = new Set(['active', 'trialing']);
 
 export default function BillingPage() {
   const router = useRouter();
@@ -58,7 +64,9 @@ export default function BillingPage() {
     router.push('/login');
   }, [router]);
 
-  const isActive = !!sub && ACTIVE_STATUSES.has(sub.status);
+  // Access follows the server-side policy: active, trialing and past_due all
+  // still grant the plan (lib/entitlements.ts).
+  const isActive = !!sub?.plan;
 
   return (
     <WorkspaceChrome pageLabel="Account & Billing">
@@ -83,8 +91,9 @@ export default function BillingPage() {
             <p style={muted}>
               Plan: <strong>{sub?.tier ? TIER_LABEL[sub.tier] ?? sub.tier : '—'}</strong>
               {sub?.seats && sub.seats > 1 ? ` · up to ${sub.seats} coaches` : ''}
-              {' · '}Status: <strong style={{ color: '#30D158' }}>{sub!.status}</strong>
-              {sub?.updatedAt ? ` · updated ${new Date(sub.updatedAt).toLocaleDateString()}` : ''}
+              {' · '}Status: <strong style={{ color: sub?.paymentFailed ? '#FF6961' : '#30D158' }}>{sub?.paymentFailed ? 'payment failed' : sub!.status}</strong>
+              {sub?.billingInterval ? ` · billed ${sub.billingInterval === 'year' ? 'yearly' : 'monthly'}` : ''}
+              {sub?.currentPeriodEnd && !sub.endsAt ? ` · renews ${fmtDate(sub.currentPeriodEnd)}` : ''}
             </p>
           ) : (
             <p style={muted}>
@@ -92,6 +101,18 @@ export default function BillingPage() {
               {' — '}plans from {formatPrice(PLANS[0].priceMonthly)}/mo ({PLANS[0].name}) to{' '}
               {formatPrice(PLANS[PLANS.length - 1].priceMonthly)}/mo ({PLANS[PLANS.length - 1].name}) via Stripe.
               {' '}{PRICE_TAX_NOTE}
+            </p>
+          )}
+          {sub?.paymentFailed && (
+            <p role="alert" style={{ ...notice, borderColor: 'rgba(255,69,58,0.55)' }}>
+              <strong>Payment failed.</strong> Stripe is retrying your card and your plan stays active meanwhile —
+              update your card in the billing portal below to keep it.
+            </p>
+          )}
+          {sub?.endsAt && (
+            <p style={notice}>
+              Your plan is cancelled and <strong>ends on {fmtDate(sub.endsAt)}</strong>. Everything stays available
+              until then, and your saved work is kept afterwards. Resubscribe any time from the billing portal.
             </p>
           )}
           <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
@@ -123,6 +144,11 @@ const card: React.CSSProperties = {
 };
 
 const muted: React.CSSProperties = { margin: 0, fontSize: 13, lineHeight: 1.5, opacity: 0.75 };
+
+const notice: React.CSSProperties = {
+  margin: '12px 0 0', padding: '10px 12px', borderRadius: 10, fontSize: 13, lineHeight: 1.5,
+  border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(255,255,255,0.04)',
+};
 
 const primaryBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px',

@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
 import { isAdmin } from '@/lib/admin';
-
-/** Free self-serve trial length: one hour per account (mirrors middleware.ts). */
-const TRIAL_MS = 60 * 60 * 1000;
+import { billingAccess } from '@/lib/entitlements';
+import { TRIAL_MS } from '@/lib/entitlements.server';
 
 /**
  * Remaining free-trial time for the current coach. READ-ONLY — it never starts a
@@ -19,10 +18,11 @@ export async function GET() {
 
   const { data: sub } = await session.supabase
     .from('subscriptions')
-    .select('status')
+    .select('status, tier')
     .eq('user_id', session.userId)
-    .maybeSingle<{ status: string }>();
-  if (sub?.status === 'active' || sub?.status === 'trialing') {
+    .maybeSingle<{ status: string; tier: string | null }>();
+  // Same policy as every gate (lib/entitlements.ts): past_due still counts.
+  if (billingAccess(sub).plan) {
     return NextResponse.json({ state: 'subscribed' });
   }
 

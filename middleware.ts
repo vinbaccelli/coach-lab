@@ -1,9 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
-import { isAdmin } from '@/lib/admin';
-
-/** Free self-serve trial length: one hour per account (see start_trial() SQL). */
-const TRIAL_MS = 60 * 60 * 1000;
+import { getEntitlement } from '@/lib/entitlements.server';
+import { hasAppAccess } from '@/lib/entitlements';
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
@@ -68,43 +66,17 @@ export async function middleware(req: NextRequest) {
     }
 
     // ── Subscription gate ───────────────────────────────────────────────────
-    // /analysis  → any active tier (Light / Pro / Academy).
-    // /academy   → any active tier as well, as of 2026-09-09.
-    //
-    // The Academy used to be Pro-and-above: `academyOk = sub?.tier !== 'light'`.
-    // Founding pricing moved AngleMotion Academy into Light's feature list
-    // (lib/plans.ts), so that exclusion would have made /pricing promise a
-    // feature the app denied — see docs/KNOWN_ISSUES.md 008. Entitlement was
-    // widened rather than the claim narrowed, on Vin's decision.
-    //
-    // Admins bypass. Fails OPEN on query errors so an infra hiccup never locks
+    // /analysis and /academy need app access: a granting subscription (active,
+    // trialing, or past_due while Stripe retries), the free hour, or an admin
+    // account. The policy is lib/entitlements.ts; the inputs are read by
+    // lib/entitlements.server.ts, which also starts the free hour on the first
+    // gated visit. Fails OPEN on query errors so an infra hiccup never locks
     // paying coaches out.
     const gated = pathname.startsWith('/analysis') || pathname.startsWith('/academy');
-    if (gated && !isAdmin(user.email)) {
+    if (gated) {
       try {
-        const { data: sub } = await supabase
-          .from('subscriptions')
-          .select('status, tier')
-          .eq('user_id', user.id)
-          .maybeSingle<{ status: string; tier: string | null }>();
-        // Both gated routes now need the same thing: an active subscription.
-        // No per-tier carve-out remains, so there is nothing tier-specific to
-        // check here.
-        const active = sub?.status === 'active' || sub?.status === 'trialing';
-        let allowed = active;
-
-        // No active subscription → fall back to the free 1-hour trial (one per
-        // account, full access to every tool). start_trial() stamps
-        // started_at=now() on the first call and is idempotent after, so this
-        // one round-trip both starts and reads the trial clock.
-        if (!allowed) {
-          const { data: startedAt } = await supabase.rpc('start_trial');
-          if (startedAt && Date.now() - new Date(startedAt as string).getTime() < TRIAL_MS) {
-            allowed = true;
-          }
-        }
-
-        if (!allowed) {
+        const ent = await getEntitlement(supabase, user, { startTrial: true });
+        if (!hasAppAccess(ent)) {
           const url = req.nextUrl.clone();
           url.pathname = '/pricing';
           url.searchParams.set('required', '1');
