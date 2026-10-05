@@ -40,14 +40,19 @@ export interface Plan {
   yearlyBonus?: string;
 }
 
-export const CURRENCY = 'EUR';
+/**
+ * The ONE currency setting. Read by formatPrice (display), the checkout price
+ * guard (lib/billing/checkoutGuard.ts — a Stripe price in any other currency is
+ * refused) and documented for the Stripe prices in docs/STRIPE_LAUNCH_SETUP.md.
+ */
+export const PRICE_CURRENCY = 'EUR';
 
 /** "€12.90", "€129", "€24.92" — two decimals unless the amount is whole. */
 export function formatPrice(amount: number): string {
   const whole = Number.isInteger(amount);
   return new Intl.NumberFormat('en-IE', {
     style: 'currency',
-    currency: CURRENCY,
+    currency: PRICE_CURRENCY,
     minimumFractionDigits: whole ? 0 : 2,
     maximumFractionDigits: 2,
   }).format(amount);

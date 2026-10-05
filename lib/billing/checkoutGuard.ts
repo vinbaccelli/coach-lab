@@ -1,4 +1,4 @@
-import { planPrice, CURRENCY, type Plan, type BillingCycle } from '@/lib/plans';
+import { planPrice, PRICE_CURRENCY, type Plan, type BillingCycle } from '@/lib/plans';
 
 /** The fields of a Stripe Price the checkout guard reads. */
 export interface PriceFacts {
@@ -18,7 +18,7 @@ export function priceMismatch(plan: Plan, cycle: BillingCycle, price: PriceFacts
   const expectedCents = Math.round(planPrice(plan, cycle) * 100);
   const expectedInterval = cycle === 'yearly' ? 'year' : 'month';
   if (!price.active) return `price ${price.id} is archived`;
-  if (price.currency !== CURRENCY.toLowerCase()) return `price ${price.id} is ${price.currency}, expected ${CURRENCY.toLowerCase()}`;
+  if (price.currency !== PRICE_CURRENCY.toLowerCase()) return `price ${price.id} is ${price.currency}, expected ${PRICE_CURRENCY.toLowerCase()}`;
   if (price.unit_amount !== expectedCents) return `price ${price.id} is ${price.unit_amount}, site shows ${expectedCents}`;
   if (price.recurring?.interval !== expectedInterval || (price.recurring?.interval_count ?? 1) !== 1) {
     return `price ${price.id} recurs every ${price.recurring?.interval_count ?? '?'} ${price.recurring?.interval ?? '?'}, expected 1 ${expectedInterval}`;

@@ -11,7 +11,8 @@ purchased right now") rather than charging the wrong amount.
 
 Dashboard → **Product catalog** → **+ Add product**. Create three products. For
 every price:
-- Pricing model **Standard**, type **Recurring**, currency **EUR**.
+- Pricing model **Standard**, type **Recurring**, currency **EUR**. This must be
+  the currency in `PRICE_CURRENCY` (`lib/plans.ts`); checkout refuses any other.
 - **Include tax in price: Yes** ("inclusive"). This can't be changed after the
   price is created.
 - Do **not** turn on Stripe Tax / automatic tax. The site says prices are final
