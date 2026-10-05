@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { isAdmin } from '@/lib/admin';
 import { getPlan } from '@/lib/plans';
 import {
-  billingAccess, canUse, FEATURES, NO_ENTITLEMENT, requiredPlan,
+  academySeatGrants, billingAccess, canUse, FEATURES, NO_ENTITLEMENT, requiredPlan,
   type Entitlement, type Feature, type SubscriptionSnapshot,
 } from '@/lib/entitlements';
 
@@ -37,10 +37,16 @@ export async function getEntitlement(
     .maybeSingle<SubscriptionSnapshot & { billing_interval?: string | null }>();
   if (error) throw new Error(`subscriptions read failed: ${error.message}`);
   const own = billingAccess(sub);
-  if (own.plan) {
-    const interval = sub?.billing_interval === 'year' || sub?.billing_interval === 'month' ? sub.billing_interval : null;
-    return { ...NO_ENTITLEMENT, ...own, interval };
-  }
+  const interval = sub?.billing_interval === 'year' || sub?.billing_interval === 'month' ? sub.billing_interval : null;
+  // Pro or Academy of their own: nothing a seat could add.
+  if (own.plan && own.plan !== 'light') return { ...NO_ENTITLEMENT, ...own, interval };
+
+  // A seat on someone's active Academy plan gives Pro-level tools (the coach's
+  // data stays their own). Checked before the trial so a member never burns
+  // their free hour. One read, only for coaches without Pro of their own.
+  if (await isAcademySeat(supabase)) return { ...NO_ENTITLEMENT, plan: 'pro', academyMember: true };
+
+  if (own.plan) return { ...NO_ENTITLEMENT, ...own, interval };
 
   const now = opts.now ?? Date.now();
   let startedAt: string | null = null;
@@ -53,6 +59,21 @@ export async function getEntitlement(
   }
   const trial = !!startedAt && now - new Date(startedAt).getTime() < TRIAL_MS;
   return { ...NO_ENTITLEMENT, trial };
+}
+
+/**
+ * Is the signed-in coach a seat on an active Academy subscription? Reads
+ * academy_seat_subscriptions() (security definer: returns only the owners who
+ * added the caller's email). A missing function (SQL not run yet) or read
+ * error counts as "no seat" — never as access.
+ */
+async function isAcademySeat(supabase: SupabaseClient): Promise<boolean> {
+  const { data, error } = await supabase.rpc('academy_seat_subscriptions');
+  if (error) {
+    console.warn('[entitlements] academy seat lookup failed, treating as no seat:', error.message);
+    return false;
+  }
+  return academySeatGrants(data as SubscriptionSnapshot[] | null);
 }
 
 /**

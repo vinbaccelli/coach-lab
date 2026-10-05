@@ -34,7 +34,7 @@ export function useEntitlement(): { ent: Entitlement | null; can: (f: Feature) =
 
 /**
  * DEV-ONLY plan override for testing locked UI: `?devPlan=light|pro|academy|
- * none|trial|admin` (remembered in sessionStorage for the tab).
+ * none|trial|admin|member` (remembered in sessionStorage for the tab).
  *
  * Impossible in a production build: Next inlines `process.env.NODE_ENV` at
  * build time, so in production this function is `return null` and the
@@ -55,6 +55,7 @@ function devPlanOverride(): Entitlement | null {
   if (v === 'none') return { ...NO_ENTITLEMENT };
   if (v === 'trial') return { ...NO_ENTITLEMENT, trial: true };
   if (v === 'admin') return { ...NO_ENTITLEMENT, admin: true };
+  if (v === 'member') return { ...NO_ENTITLEMENT, plan: 'pro', academyMember: true };
   if (isValidPlanId(v)) return { ...NO_ENTITLEMENT, plan: v, interval: 'year' };
   return null;
 }

@@ -76,6 +76,9 @@ export const PRICING_FOOTNOTE =
   'Every account starts with one free hour of every tool. No card needed to look around.';
 
 export const EBOOK_TITLE = 'Spin Mechanics';
+
+/** Where coaches write when something billing-related needs a human (same address as /terms and /privacy). */
+export const SUPPORT_EMAIL = 'vinbaccelli@gmail.com';
 const EBOOK_BONUS = `Yearly includes the ${EBOOK_TITLE} ebook, downloadable from your account.`;
 
 export const PLANS: Plan[] = [

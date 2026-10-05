@@ -77,6 +77,27 @@ export function hasAppAccess(e: Entitlement): boolean {
   return e.admin || e.trial || e.plan !== null;
 }
 
+// ── Academy seats ───────────────────────────────────────────────────────────
+
+/** Coaches an Academy owner may add besides themself (Academy seats − owner). */
+export const ACADEMY_EXTRA_SEATS = 3;
+
+/**
+ * Does any of these owner subscriptions (the Academy owners who added this
+ * coach) currently grant Academy? Same status policy as the owner's own access:
+ * a seat lives exactly as long as the owner's Academy plan does.
+ */
+export function academySeatGrants(ownerSubs: SubscriptionSnapshot[] | null | undefined): boolean {
+  return (ownerSubs ?? []).some((s) => billingAccess(s).plan === 'academy');
+}
+
+/** Normalised seat email, or null when it isn't a plausible address. */
+export function normalizeSeatEmail(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const e = raw.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= 254 ? e : null;
+}
+
 // ── Features ────────────────────────────────────────────────────────────────
 
 /**

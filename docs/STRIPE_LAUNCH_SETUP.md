@@ -25,6 +25,36 @@ It adds:
 If the code is deployed first, webhook writes fail and Stripe keeps retrying
 until the SQL has run. Nothing is lost.
 
+Then run `supabase/migrations/20261006120000_academy_seats_ebooks.sql`, also
+safe to run twice. It adds:
+- The `academy_members` table: the coaches an Academy subscriber adds on
+  /billing (owner + 3). Only the owner can list them; adding and removing go
+  through the app, which checks the plan and the 3-seat limit (a database
+  trigger enforces the limit too).
+- `academy_seat_subscriptions()`: lets a coach who was added see whether their
+  owner's Academy plan is active, and nothing else.
+- The **private** Storage bucket `ebooks` for the Spin Mechanics PDF.
+
+If the app is deployed before this SQL runs, seats don't work yet (members just
+get their own plan or the free hour) and the ebook card says "contact us".
+Nothing breaks.
+
+### 0b. Upload the Spin Mechanics PDF (once)
+
+The PDF is **never** committed to the repo. Upload it in the dashboard:
+
+1. Supabase → **Storage** → bucket **`ebooks`**. The SQL above created it;
+   check that it is **not** marked Public.
+2. **Upload file** → choose the PDF. The file name must be exactly
+   **`spin-mechanics.pdf`**, all lowercase, at the top level of the bucket (no
+   folder). Rename it on your Mac first if needed.
+3. Don't add any policies to this bucket. The app signs a 2-minute download
+   link on the server for yearly Pro and Academy subscribers only.
+
+To replace the book later, upload a new `spin-mechanics.pdf` over the old one
+(choose "Replace"). Until the file is there, eligible coaches see "The download
+isn't ready right now. Write to vinbaccelli@gmail.com", never a broken link.
+
 ## 1. Products and prices
 
 Dashboard → **Product catalog** → **+ Add product**. Create three products. For
@@ -193,3 +223,5 @@ Card `4242 4242 4242 4242`, any future date, any CVC.
 - [ ] Portal → cancel: `cancel_at_period_end=true`, and /billing says "ends on <date>". Access stays until then.
 - [ ] Test clock or test card `4000 0000 0000 0341` (attaches, then fails on renewal): `past_due`, the red "Payment failed — update your card" pill appears, access is kept. Fix the card: `active` again.
 - [ ] SEPA test (if enabled): the row stays `incomplete` until the test payment succeeds.
+- [ ] Academy yearly: /billing shows **Coaches on your plan**. Add a second Google account's email, then sign in as that coach: every Pro tool works, /billing says "You're a coach on an Academy plan", and their /players list is empty (their own data). A 4th coach is refused. Remove the coach: they're back to their own plan or the free hour.
+- [ ] Pro **yearly** or Academy **yearly**: /billing shows **Spin Mechanics ebook → Download PDF**, and the PDF downloads. Pro monthly, Light and Academy seat coaches don't see the card. Before uploading the PDF, the card says "contact us" instead.
