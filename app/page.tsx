@@ -1,4 +1,5 @@
 import WorkspaceChrome from '@/components/WorkspaceChrome';
+import GuidedTour from '@/components/GuidedTour';
 import ControlPanelHome from '@/components/ControlPanelHome';
 import LandingPage from '@/components/LandingPage';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -25,6 +26,7 @@ export default async function HomePage() {
   return (
     <WorkspaceChrome>
       <ControlPanelHome />
+      <GuidedTour page="control-panel" />
     </WorkspaceChrome>
   );
 }

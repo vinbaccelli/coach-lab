@@ -66,5 +66,7 @@ export interface TourDef {
   id: string;
   title: string;
   summary: string;
+  /** Pro tool the tour is about (lib/tourAccess.ts decides whether to offer it). */
+  feature?: string;
   steps: ReadonlyArray<TourStep>;
 }

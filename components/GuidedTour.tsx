@@ -30,14 +30,20 @@
  *    Nothing the coach did is undone.
  *
  * Opened by the ? button (Canvas's zoom cluster dispatches
- * 'anglemotion-open-guided-tour'), which lists the tours, and once on a first
- * visit through the welcome card.
+ * 'anglemotion-open-guided-tour' on /analysis; other screens get a floating
+ * ?), which lists that screen's tours, and once on a first visit to /analysis
+ * through the welcome card.
+ *
+ * A tour can cross a navigation (the Players tour opens a profile): the open
+ * tour and its step are kept in sessionStorage, and the engine on the next
+ * screen picks it up if that screen offers the tour.
  */
 
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { TOUR_SIGNAL_EVENT, type TourSignalDetail } from '@/lib/tourSignals';
-import { TOURS, WELCOME_TOUR_ID, type TourDef, type TourStep } from '@/components/tours';
+import { ALL_TOURS, TOURS_BY_PAGE, WELCOME_TOUR_ID, type TourDef, type TourPageId, type TourStep } from '@/components/tours';
+import { tourAccess } from '@/lib/tourAccess';
 
 const Z_OVERLAY = 2_147_483_640;
 const Z_TOOLTIP = Z_OVERLAY + 1;
@@ -63,6 +69,8 @@ const SKIP_CHECK_DELAY_MS = 350;
 
 const LS_SEEN = 'anglemotion-tour-seen';
 const LS_PROGRESS = 'anglemotion-tours-v1';
+/** The tour open right now and its step, so it survives a page navigation. */
+const SS_ACTIVE = 'anglemotion-tour-active';
 const AUTO_SHOW_DELAY_MS = 2_000;
 
 interface Rect {
@@ -80,6 +88,24 @@ function readProgress(): Progress {
     return raw ? (JSON.parse(raw) as Progress) : {};
   } catch {
     return {};
+  }
+}
+
+function writeActive(active: { id: string; step: number } | null) {
+  try {
+    if (active) window.sessionStorage.setItem(SS_ACTIVE, JSON.stringify(active));
+    else window.sessionStorage.removeItem(SS_ACTIVE);
+  } catch {
+    /* private mode */
+  }
+}
+
+function readActive(): { id: string; step: number } | null {
+  try {
+    const raw = window.sessionStorage.getItem(SS_ACTIVE);
+    return raw ? (JSON.parse(raw) as { id: string; step: number }) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -311,11 +337,14 @@ const linkBtn: React.CSSProperties = {
 };
 
 type GuidedTourProps = {
+  /** Which screen this is: decides the ? list (components/tours/index.ts). */
+  page?: TourPageId;
   /** When true, ? lives in the canvas zoom cluster (analysis page) — no fixed FAB. */
   suppressFloatingHelp?: boolean;
 };
 
-export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourProps) {
+export default function GuidedTour({ page = 'analysis', suppressFloatingHelp = false }: GuidedTourProps) {
+  const tours = useMemo(() => TOURS_BY_PAGE[page].filter((t) => tourAccess(t.feature)), [page]);
   const [mounted, setMounted] = useState(false);
   const [welcomeOpen, setWelcomeOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -339,6 +368,18 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
   useEffect(() => {
     setMounted(true);
     setProgress(readProgress());
+    // A tour that was open when the coach navigated here carries on, if this
+    // screen offers it.
+    const active = readActive();
+    const carried = active ? tours.find((t) => t.id === active.id) : undefined;
+    if (active && carried) {
+      const at = Math.min(Math.max(0, active.step), carried.steps.length - 1);
+      setTour(carried);
+      setStepIdx(at);
+      setMaxReached(at);
+      return;
+    }
+    if (page !== 'analysis') return;
     try {
       const seen = window.localStorage.getItem(LS_SEEN) === '1';
       setSeenBefore(seen);
@@ -349,6 +390,8 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
     } catch {
       /* private mode */
     }
+    // Mount-only: `tours` is fixed per screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const markSeen = useCallback(() => {
@@ -370,7 +413,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
 
   const startTour = useCallback(
     (id: string, from = 0) => {
-      const def = TOURS.find((t) => t.id === id);
+      const def = ALL_TOURS.find((t) => t.id === id);
       if (!def) return;
       setWelcomeOpen(false);
       setPickerOpen(false);
@@ -379,12 +422,14 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
       const start = Math.min(Math.max(0, from), def.steps.length - 1);
       setStepIdx(start);
       setMaxReached(start);
+      writeActive({ id: def.id, step: start });
     },
     [markSeen],
   );
 
   const exitTour = useCallback(() => {
     if (tour) saveProgress(tour.id, stepIdx, false);
+    writeActive(null);
     setTour(null);
     setStepIdx(0);
   }, [tour, stepIdx, saveProgress]);
@@ -393,10 +438,14 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
     if (!tour) return;
     if (stepIdx + 1 >= tour.steps.length) {
       saveProgress(tour.id, 0, true);
+      writeActive(null);
       setTour(null);
       setStepIdx(0);
       return;
     }
+    // Written synchronously: a step whose click navigates away must already
+    // have recorded where the next screen picks up.
+    writeActive({ id: tour.id, step: stepIdx + 1 });
     saveProgress(tour.id, stepIdx + 1, false);
     setStepIdx(stepIdx + 1);
     setMaxReached((m) => Math.max(m, stepIdx + 1));
@@ -404,7 +453,13 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
 
   // Back only moves the card: it undoes nothing the coach did, and the step it
   // lands on is "being reviewed" — no skip, no instant auto-advance (below).
-  const back = useCallback(() => setStepIdx((i) => Math.max(0, i - 1)), []);
+  const back = useCallback(() => {
+    setStepIdx((i) => {
+      const to = Math.max(0, i - 1);
+      if (tour) writeActive({ id: tour.id, step: to });
+      return to;
+    });
+  }, [tour]);
 
   // A new step starts with its picture folded on phones.
   useEffect(() => {
@@ -594,7 +649,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
     padding: 24,
   };
 
-  const welcomeTour = TOURS.find((t) => t.id === WELCOME_TOUR_ID);
+  const welcomeTour = page === 'analysis' ? tours.find((t) => t.id === WELCOME_TOUR_ID) : undefined;
   const welcomeModal =
     welcomeOpen && welcomeTour ? (
       <>
@@ -641,7 +696,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
           </button>
         </div>
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 12 }}>
-          {TOURS.map((t) => {
+          {tours.map((t) => {
             const p = progress[t.id];
             const inProgress = p && !p.done && p.step > 0;
             return (
@@ -968,7 +1023,7 @@ export default function GuidedTour({ suppressFloatingHelp = false }: GuidedTourP
       @media (prefers-reduced-motion: reduce) {
         .anglemotion-tour-anim { animation: none !important; }
       }`}</style>
-      {!suppressFloatingHelp ? helpBtn : null}
+      {!suppressFloatingHelp && tours.length > 0 ? helpBtn : null}
       {welcomeModal}
       {picker}
       {tourOverlay}

@@ -1,4 +1,5 @@
 import WorkspaceChrome from '@/components/WorkspaceChrome';
+import GuidedTour from '@/components/GuidedTour';
 import MatchDecoderClient from '@/components/decoder/MatchDecoderClient';
 
 /**
@@ -15,6 +16,7 @@ export default function DecoderPage() {
       <div style={{ padding: '20px 16px 40px' }}>
         <MatchDecoderClient />
       </div>
+      <GuidedTour page="decoder" />
     </WorkspaceChrome>
   );
 }

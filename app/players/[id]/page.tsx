@@ -1,4 +1,5 @@
 import WorkspaceChrome from '@/components/WorkspaceChrome';
+import GuidedTour from '@/components/GuidedTour';
 import PlayerProfileClient from '@/components/players/PlayerProfileClient';
 
 export default async function PlayerDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -8,6 +9,7 @@ export default async function PlayerDetailPage({ params }: { params: Promise<{ i
       <div style={{ padding: '20px 16px 40px' }}>
         <PlayerProfileClient playerId={id} />
       </div>
+      <GuidedTour page="players" />
     </WorkspaceChrome>
   );
 }
