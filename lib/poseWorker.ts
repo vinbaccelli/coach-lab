@@ -33,6 +33,7 @@ let prevCentroid: { x: number; y: number } | null = null;
 // Adaptive precision: start with THUNDER on GPU, but if measured inference is
 // too slow for realtime on this machine (older iGPUs), swap to LIGHTNING.
 let currentModel: 'thunder' | 'lightning' = 'lightning';
+let dbgBackend = '?'; // TEMP-DEBUG-POSE
 let inferSamples: number[] = [];
 let modelSwapInFlight = false;
 // Downgrade fast: on a weak (mobile) GPU the first Thunder frames are slow and
@@ -85,6 +86,7 @@ function attachContextLossHandler() {
   ctxLossCanvas = canvas;
   canvas.addEventListener('webglcontextlost', (ev) => {
     ev.preventDefault(); // keep the context restorable
+    self.postMessage({ type: 'dbg', message: 'webgl context lost' }); // TEMP-DEBUG-POSE
     recoverBackend('webglcontextlost event');
   });
 }
@@ -107,6 +109,7 @@ function recoverBackend(reason: string) {
   if (now - lastRecoveryAt < backoff) return; // honour exponential backoff between attempts
   lastRecoveryAt = now;
   recovering = true;
+  self.postMessage({ type: 'dbg', message: `recovery: ${reason}` }); // TEMP-DEBUG-POSE
   ready = false;
   console.warn(`[PoseWorker] Backend recovery attempt ${recoveryFailures + 1} (${reason})`);
   void (async () => {
@@ -167,6 +170,7 @@ async function maybeDowngradeModel(lastMs: number) {
     try { detector?.dispose?.(); } catch { /* noop */ }
     detector = next;
     currentModel = 'lightning';
+    self.postMessage({ type: 'dbg', message: `thunder avg ${Math.round(avg)}ms -> lightning` }); // TEMP-DEBUG-POSE
     console.log(`[PoseWorker] Thunder too slow here (avg ${Math.round(avg)}ms) — switched to Lightning for realtime tracking`);
   } catch { /* keep thunder */ } finally {
     modelSwapInFlight = false;
@@ -247,6 +251,7 @@ async function init(wasmOnly = false) {
 
     ready = true;
     everReady = true;
+    dbgBackend = backend; // TEMP-DEBUG-POSE
     self.postMessage({ type: 'ready', backend });
     console.log(`[PoseWorker] Ready — backend: ${backend}, model: ${currentModel}`);
   } catch (err: any) {
@@ -323,6 +328,7 @@ self.onmessage = async (e: MessageEvent) => {
         ESTIMATE_TIMEOUT_MS,
         'estimatePoses',
       );
+      const dbgInferMs = performance.now() - t0; // TEMP-DEBUG-POSE
       void maybeDowngradeModel(performance.now() - t0);
       if (!poses || poses.length === 0) console.warn('[PoseWorker] No poses detected in frame', data.frameId);
 
@@ -356,12 +362,13 @@ self.onmessage = async (e: MessageEvent) => {
       }
 
       source.close();
-      self.postMessage({ type: 'result', keypoints, frameId: data.frameId });
+      self.postMessage({ type: 'result', keypoints, frameId: data.frameId, inferMs: dbgInferMs, model: currentModel, backend: dbgBackend }); // TEMP-DEBUG-POSE: inferMs/model/backend
     } catch (err) {
       // A timeout or GPU error here can mean the WebGL context died mid-readback;
       // recover so subsequent frames don't each wait out the full timeout.
       const glErr = currentGL();
       if (glErr && glErr.isContextLost()) recoverBackend('context lost during inference');
+      self.postMessage({ type: 'dbg', message: `detect error: ${(err as Error)?.message ?? err}` }); // TEMP-DEBUG-POSE
       console.error('[PoseWorker] detect error:', err);
       if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
       self.postMessage({ type: 'result', keypoints: null, frameId: data.frameId });
