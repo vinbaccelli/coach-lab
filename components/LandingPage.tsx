@@ -198,9 +198,10 @@ const ENTRIES: Entry[] = [
   },
   {
     date: 'JUN 21',
-    title: 'Published, permanent, handed over.',
+    title: 'Published, linked, handed over.',
     body:
-      'Push the finished video straight to YouTube as unlisted and drop it into the player’s report. Nothing to store, nothing to pay for, no archive to run out of — an unlimited record your students keep and can rewatch years later.',
+      'Push the finished video to your own YouTube channel as unlisted and save the link to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply.',
+    micro: 'Part of Pro and Academy: the player database, YouTube upload and Docs export.',
     shots: [
       {
         src: `${SHOT_DIR}/season-recording-complete.webp`,
