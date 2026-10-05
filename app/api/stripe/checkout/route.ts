@@ -3,6 +3,7 @@ import { getRouteSession } from '@/lib/auth/routeSession';
 import { stripe, priceIdFor, PRICE_ENV } from '@/lib/stripe';
 import { isValidPlanId, getPlan, type BillingCycle } from '@/lib/plans';
 import { priceMismatch } from '@/lib/billing/checkoutGuard';
+import { checkoutTaxParams } from '@/lib/billing/taxConfig';
 
 /**
  * Start a Stripe Checkout for one plan and cycle. FAILS CLOSED:
@@ -46,10 +47,24 @@ export async function POST(req: Request) {
     const mismatch = priceMismatch(plan, cycle, price);
     if (mismatch) return unavailable(mismatch);
 
+    // One Stripe Customer per coach: reuse the ID the webhook stored on the
+    // first checkout, so later checkouts and the portal share one customer
+    // (and its saved name, address and tax ID). First checkout: Stripe creates
+    // the Customer from the email and the details typed at checkout.
+    const { data: subRow } = await session.supabase
+      .from('subscriptions')
+      .select('stripe_customer_id')
+      .eq('user_id', session.userId)
+      .maybeSingle<{ stripe_customer_id: string | null }>();
+    const existingCustomer = subRow?.stripe_customer_id ?? null;
+
     const origin = req.headers.get('origin') ?? 'http://localhost:3000';
     const checkout = await stripe.checkout.sessions.create({
       mode: 'subscription',
-      customer_email: session.email ?? undefined,
+      ...(existingCustomer ? { customer: existingCustomer } : { customer_email: session.email ?? undefined }),
+      // Tax and customer details (name, billing address, optional business
+      // name and VAT ID) — configured only in lib/billing/taxConfig.ts.
+      ...checkoutTaxParams({ existingCustomer: !!existingCustomer }),
       line_items: [{ price: priceId, quantity: 1 }],
       allow_promotion_codes: planId === 'pro' && cycle === 'yearly' ? true : undefined,
       success_url: `${origin}/analysis?subscribed=1`,
