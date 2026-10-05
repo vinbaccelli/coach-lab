@@ -53,3 +53,11 @@ All on /analysis, desktop browser, with a clip loaded (Demo (Tutorial) is fine).
 | Step | What to capture |
 |---|---|
 | `format` — Match format | The setup screen with the **Match format** choices open (1 Set, Best of 3, Pro Set, Match Tiebreak Only …) and the details underneath. |
+
+### Match decoder (/decoder)
+
+| Step | What to capture |
+|---|---|
+| `counts` — What was read | After **Read screenshots**: the line “Read N screenshots — … stats, … timeline. Found … games and … points.” with **Start over with different screenshots**. |
+| `names` — Who played? | The **1 · Who played?** card with Singles/Doubles, both names typed, and the **Worked out automatically** box with **⇄ Swap sides**. |
+| `save` (has a picture, could be better) | The **Save to Google Docs** sheet open: “1 · Whose stats to include” and “2 · Save into which player's doc”. |

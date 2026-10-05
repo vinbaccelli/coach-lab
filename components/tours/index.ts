@@ -1,3 +1,4 @@
+import { DECODER_TOUR } from './decoderTour';
 import { DRAW_TOUR } from './drawTour';
 import { INTRO_TOUR } from './introTour';
 import { MATCH_REPORT_TOUR } from './matchReportTour';
@@ -17,7 +18,7 @@ export const TOURS_BY_PAGE: Record<TourPageId, ReadonlyArray<TourDef>> = {
   'control-panel': [OVERVIEW_TOUR],
   players: [PLAYERS_TOUR],
   'match-report': [MATCH_REPORT_TOUR],
-  decoder: [],
+  decoder: [DECODER_TOUR],
 };
 
 export const ALL_TOURS: ReadonlyArray<TourDef> = Object.values(TOURS_BY_PAGE).flat();
