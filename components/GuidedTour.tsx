@@ -517,10 +517,12 @@ export default function GuidedTour({ page = 'analysis', suppressFloatingHelp = f
   // handler still runs — nothing is prevented.
   useEffect(() => {
     if (!step?.target || step.advance.kind !== 'click') return;
-    const selector = byTourId(step.target);
+    const selector = step.advance.selector ?? byTourId(step.target);
+    // Any element with the target id counts (a grid of player cards shares
+    // one id), not only the first visible one that is highlighted.
     const onClick = (e: MouseEvent) => {
-      const el = findVisible(selector);
-      if (el && e.target instanceof Node && el.contains(e.target)) next();
+      const hit = e.target instanceof Element ? e.target.closest(selector) : null;
+      if (hit) next();
     };
     window.addEventListener('click', onClick, true);
     return () => window.removeEventListener('click', onClick, true);
@@ -934,6 +936,7 @@ export default function GuidedTour({ page = 'analysis', suppressFloatingHelp = f
           {showImage && step.image ? (
             // eslint-disable-next-line @next/next/no-img-element -- small static WebP, sized by its attributes
             <img
+              key={step.image.src}
               src={step.image.src}
               width={step.image.width}
               height={step.image.height}

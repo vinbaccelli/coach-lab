@@ -18,7 +18,7 @@ export type TourCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-righ
 export type TourAdvance =
   | { kind: 'next' }
   | { kind: 'visible'; selector: string }
-  | { kind: 'click' }
+  | { kind: 'click'; /** Clicks on this instead of the target (e.g. any card in a highlighted grid). */ selector?: string }
   | { kind: 'signal'; name: TourSignalName; tool?: string };
 
 export interface TourStep {

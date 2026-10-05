@@ -1,6 +1,7 @@
 import { DRAW_TOUR } from './drawTour';
 import { INTRO_TOUR } from './introTour';
 import { OVERVIEW_TOUR } from './overviewTour';
+import { PLAYERS_TOUR } from './playersTour';
 import { RULER_TOUR } from './rulerTour';
 import type { TourDef } from './types';
 
@@ -13,7 +14,7 @@ export type TourPageId = 'analysis' | 'control-panel' | 'players' | 'match-repor
 export const TOURS_BY_PAGE: Record<TourPageId, ReadonlyArray<TourDef>> = {
   analysis: [INTRO_TOUR, DRAW_TOUR, RULER_TOUR],
   'control-panel': [OVERVIEW_TOUR],
-  players: [],
+  players: [PLAYERS_TOUR],
   'match-report': [],
   decoder: [],
 };

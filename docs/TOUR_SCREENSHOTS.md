@@ -33,3 +33,17 @@ All on /analysis, desktop browser, with a clip loaded (Demo (Tutorial) is fine).
 |---|---|
 | `done` — You're set up | Optional: the frame after AI Detect Angles, with the data column filled. |
 | `skeleton-check` (has a picture, could be better) | The **“Is the skeleton over the player?”** prompt with its Yes / No buttons, right after switching the skeleton on. |
+
+### Player database
+
+| Step | What to capture |
+|---|---|
+| `screenshot` — Save a screenshot to a player | Video analysis after pressing **Screenshot**: the **Save Screenshot** sheet with the frame preview and the list of players to save to. |
+| `where` — Where your files live (optional) | A player's **Drive folder** open in Google Drive (AngleMotion / Players / <name>) showing the Technical and Match Analysis Docs. |
+
+### App overview
+
+| Step | What to capture |
+|---|---|
+| `academy` — AngleMotion Academy | The **/academy** library with its Guides, eBooks and Drills & Exercises sections. |
+| `billing` — Account & billing | **/billing** with an active plan (Plan, Status, Manage billing). |

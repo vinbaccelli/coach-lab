@@ -244,7 +244,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       ) : null}
 
       <div style={{ ...panel, marginBottom: 18 }}>
-        <h1 style={{ margin: '0 0 14px', fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em' }}>{player.display_name}</h1>
+        <h1 data-tour-id="player-profile" style={{ margin: '0 0 14px', fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em' }}>{player.display_name}</h1>
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
           <label style={lb}>
             Photo URL
@@ -437,6 +437,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </p>
         <button
           type="button"
+          data-tour-id="player-new-session"
           onClick={() => { void startNewSession(); }}
           disabled={creatingSession}
           style={{
@@ -471,7 +472,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Reports</h2>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div data-tour-id="player-doc-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {player.google_doc_id ? (
               <a
                 href={`https://docs.google.com/document/d/${player.google_doc_id}/edit`}
@@ -539,7 +540,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           Match and technique reports — newest first.
           {player.google_doc_id ? ' Click an entry to open it in the player’s Google Doc.' : ''}
         </p>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
+        <div data-tour-id="player-report-tabs" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
           {([['all', 'All'], ['technique', 'Technical Analysis'], ['match', 'Match Analysis']] as const).map(([key, label]) => (
             <button
               key={key}

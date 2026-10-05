@@ -33,7 +33,9 @@ export type TourSignalName =
   /** Ruler: a distance was measured on the frame. */
   | 'ruler-measured'
   /** Ruler: the units were switched (cm / m ↔ ft / in). */
-  | 'ruler-units';
+  | 'ruler-units'
+  /** Players: a new player was added from the New player box. */
+  | 'player-created';
 
 export interface TourSignalDetail {
   name: TourSignalName;

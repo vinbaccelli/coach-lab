@@ -713,3 +713,31 @@ Pause / Resume / Stop now live in the analysis page's own top chrome for the
 duration of any recording, reachable from every tool and panel, so closing the
 floating window never removes the only way to stop.
 
+
+## 021 — Save Report has no button: the session save modal is unreachable
+
+**Symptom.** The player profile tells coaches "Start from the player, use tools
+in Video Analysis, then Save Report" and, with no Doc yet, "No Google Doc yet —
+use Save Report to create one." There is no Save Report control anywhere in
+Video analysis, so a session started with **New Analysis Session** cannot be
+saved back to the player.
+
+**Verified root cause.** `app/analysis/page.tsx` passes
+`onSaveReport: () => setSessionSaveModalOpen(true)` (and `saveReportEnabled`)
+into the toolbar props, and `components/ToolPalette.tsx` destructures
+`onSaveReport` — but never renders anything that calls it. `SaveSessionModal`
+("Save Report", with Source video → YouTube link) opens only from that state, so
+no path reaches it. Present on `main` as well.
+
+**Fault assessment.** Pre-existing (found while mapping the Player database tour,
+2026-10-05). The other ways work reaches a player still work: Screenshot → Save
+Screenshot → player; capture → Upload to YouTube (Unlisted) → Save to player
+folder; Metrics → Generate → Attach to player; match report and match decoder.
+
+**Proposed fix (needs approval — ToolPalette is a hot file).** Render a
+"Save Report" row (disabled until `saveReportEnabled`) next to Screenshot in the
+toolbar footer, calling `onSaveReport`; or remove the dead prop and change the
+profile copy. The Player database tour deliberately does not send coaches down
+the New Analysis Session → Save Report path until this is decided.
+
+**Severity:** moderate — a documented, user-visible flow dead-ends.
