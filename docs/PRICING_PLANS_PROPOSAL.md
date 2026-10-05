@@ -368,3 +368,83 @@ marked **#60** (`claude/landing-screenshots`, which reworks the landing page and
   - VAT-inclusive,
   - the coach profile on downgrade,
   - whether to keep the competitor feature rows.
+
+---
+
+## B10. Stripe integration: Vin's seven "before coding" questions (2026-10-05)
+
+These answers describe the code on `claude/billing-r0` (#64) and `claude/pricing-launch` (#65), not `main`.
+Each one says what exists and then **only the gaps**. Decisions since B1–B9 replace parts of them:
+- **Tax:** Stripe Tax is **off** (forfettario, no VAT). This replaces B9's "turn on Stripe Tax".
+- **Ebook:** yearly Pro and Academy only.
+- **Coach Life:** promotion codes.
+- **Old prices:** no grandfathering.
+
+**1. Where Stripe integrates**
+- **Exists:**
+  - `lib/stripe.ts`: the client and the six-price env map.
+  - `app/api/stripe/checkout`: Stripe-hosted Checkout. It fails closed, using `lib/billing/checkoutGuard.ts`.
+  - `app/api/stripe/webhook`: verifies the signature, then hands the event to `lib/billing/webhookSync.ts`.
+  - `app/api/stripe/portal`: the customer portal.
+  - `app/api/stripe/subscription`: the billing status for /billing.
+  - `lib/billing/taxConfig.ts`: tax and customer-detail fields.
+  - `lib/entitlements.ts` and `lib/entitlements.server.ts`: the access policy.
+- **Gaps:** none in the Stripe plumbing. Feature gating is R1d.
+
+**2. Database fields**
+- **`subscriptions`, one row per user:**
+  - Existed: `stripe_customer_id`, `stripe_subscription_id`, `status`, `tier` (the plan), `seats`, `updated_at`.
+  - Added by `20261005120000_billing_r1g.sql`: `billing_interval`, `current_period_end`, `cancel_at_period_end`, `canceled_at`.
+- **New `stripe_webhook_events`:** event id, type, processed_at.
+- **Gaps:** `academy_members` (R1e). No first/last-name columns are needed: Stripe's single full name lives on the Customer.
+
+**3. Environment variables**
+- **Exist:**
+  - `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`.
+  - `STRIPE_PRICE_{LIGHT,PRO,ACADEMY}_{MONTHLY,YEARLY}`.
+  - `SUPABASE_SERVICE_ROLE_KEY`.
+  - `STRIPE_AUTOMATIC_TAX`: optional, unset means off.
+- **Unused:** `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`. Hosted Checkout doesn't need it; it's harmless to keep.
+- **Remove:** the legacy `STRIPE_PRICE_MONTHLY/YEARLY`.
+- **Gaps:** none.
+
+**4. Recommended webhooks**
+- **Handled:**
+  - `checkout.session.completed`
+  - `customer.subscription.created` / `updated` / `deleted`
+  - `invoice.paid`
+  - `invoice.payment_failed`
+- `past_due` and `unpaid` arrive through `subscription.updated`.
+- **Gaps:** none. The endpoint must have exactly these six enabled (`docs/STRIPE_LAUNCH_SETUP.md` §5).
+
+**5. How customer and subscription IDs link to users**
+- **Checkout sets:**
+  - `client_reference_id = userId`;
+  - `subscription_data.metadata.userId`, so every subscription event carries the user;
+  - `metadata.userId`.
+- **The webhook** upserts by `user_id` and stores `stripe_customer_id` on first checkout.
+- **Later checkouts and the portal** reuse that stored Customer, so there are no duplicates.
+- **Gaps:** none.
+
+**6. How access is enforced**
+- **Exists:**
+  - One policy in `lib/entitlements.ts`:
+    - active and trialing grant the plan;
+    - past_due keeps the plan, with a banner;
+    - cancel-at-period-end keeps the plan until the period ends;
+    - everything else gets no paid features;
+    - trial and admin bypass everything.
+  - Middleware page gates and `/api/entitlement` use it.
+- **Gaps:**
+  - R1d: `canUse(feature, …)`, the 403 `plan_required` API guards, `/players`/`/decoder`/`/match-report` checks, and the toolbar locks.
+  - R1e: Academy members resolve through the owner's subscription.
+
+**7. Future international B2B/B2C tax**
+- **Exists:**
+  - Checkout collects the billing address, country, optional business name and VAT/tax ID, and saves them on the Stripe Customer (`lib/billing/taxConfig.ts`).
+  - Prices are tax-inclusive.
+- **Turning tax on later** needs no code: add Stripe Tax registrations (Italy, EU OSS) in the dashboard and set `STRIPE_AUTOMATIC_TAX=true`. Stripe then applies B2C VAT by country and B2B reverse charge using the collected VAT ID.
+- **Caveat:** with inclusive prices, VAT comes out of the displayed price; it is not added on top.
+- **Gaps:**
+  - None in code.
+  - Italian *fattura elettronica* is out of scope; see the setup doc §8, "ask your accountant".
