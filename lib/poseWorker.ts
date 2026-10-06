@@ -73,6 +73,13 @@ let swapOverBudgetRun = 0;
 // Two frame sizes: a full 16:9 frame as sent (512 px) and its default 0.6 crop.
 const WARMUP_SIZES: ReadonlyArray<readonly [number, number]> = [[512, 288], [307, 173]];
 const WARMUP_RUNS_PER_SIZE = 2;
+// Device speed check, also before `ready`: time a few THUNDER inferences once the
+// shaders are compiled and keep THUNDER only if its median fits the budget the
+// in-play check uses. A device that cannot run it (an older phone) swaps to
+// LIGHTNING while the skeleton is still loading, instead of after the coach
+// presses play, where loading and compiling the new model freezes the skeleton
+// for seconds. The in-play check stays as the backstop.
+const SPEED_CHECK_RUNS = 5;
 
 // ── Backend-loss guard: an inference must never block the bridge forever ──────
 // A WebGL context loss makes estimatePoses' async GPU→CPU readback never settle,
@@ -259,6 +266,38 @@ async function warmUpDetector(det: any): Promise<void> {
   }
 }
 
+/**
+ * Median time of SPEED_CHECK_RUNS inferences on a full-size blank frame, after
+ * warm-up. MoveNet resizes every input to the same model size, so a blank frame
+ * costs what a real one does. Returns 0 (keep the model) if it cannot measure.
+ */
+async function steadyInferenceMs(det: any): Promise<number> {
+  if (typeof OffscreenCanvas === 'undefined' || !det) return 0;
+  const [w, h] = WARMUP_SIZES[0];
+  try {
+    const canvas = new OffscreenCanvas(w, h);
+    const g = canvas.getContext('2d');
+    if (g) { g.fillStyle = '#7f7f7f'; g.fillRect(0, 0, w, h); }
+    const bmp = await createImageBitmap(canvas);
+    const times: number[] = [];
+    try {
+      for (let i = 0; i < SPEED_CHECK_RUNS; i++) {
+        const t0 = performance.now();
+        await det.estimatePoses(bmp, { flipHorizontal: false });
+        times.push(performance.now() - t0);
+      }
+    } finally {
+      bmp.close();
+    }
+    times.sort((a, b) => a - b);
+    return times[times.length >> 1];
+  } catch {
+    return 0;
+  } finally {
+    try { det.reset?.(); } catch { /* noop */ }
+  }
+}
+
 /** Race a backend init against a hard timeout so a hung GPU probe can never stall the chain. */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -337,6 +376,23 @@ async function init(wasmOnly = false) {
       const tWarm = performance.now();
       await warmUpDetector(detector);
       self.postMessage({ type: 'dbg', message: `warm-up ${currentModel} ${Math.round(performance.now() - tWarm)}ms` }); // TEMP-DEBUG-POSE
+      if (currentModel === 'thunder' && !dbgForceThunder) { // TEMP-DEBUG-POSE: `&& !dbgForceThunder`
+        const med = await steadyInferenceMs(detector);
+        self.postMessage({ type: 'dbg', message: `speed check thunder median ${Math.round(med)}ms (budget ${THUNDER_BUDGET_MS})` }); // TEMP-DEBUG-POSE
+        if (med > THUNDER_BUDGET_MS) {
+          try {
+            const next = await makeDetector('lightning');
+            await warmUpDetector(next);
+            try { detector?.dispose?.(); } catch { /* noop */ }
+            detector = next;
+            currentModel = 'lightning';
+            self.postMessage({ type: 'dbg', message: 'speed check: loading on lightning' }); // TEMP-DEBUG-POSE
+          } catch (e) {
+            // Keep THUNDER; the in-play check can still swap later.
+            self.postMessage({ type: 'dbg', message: `speed check swap failed: ${(e as Error)?.message ?? e}` }); // TEMP-DEBUG-POSE
+          }
+        }
+      }
     }
     swapWarmupLeft = SWAP_WARMUP_SKIP;
     swapOverBudgetRun = 0;
