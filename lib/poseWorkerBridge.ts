@@ -7,6 +7,9 @@
 import { OneEuroKeypointSmoother } from '@/lib/keypointSmooth';
 import { poseDbg, poseDebugForcedModel } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 
+/** Init budget once the model is loaded and the worker is compiling its GPU graph. */
+const WARMUP_TIMEOUT_MS = 180_000;
+
 /** Crop fraction used when the caller gives no explicit focus ratio. */
 const DEFAULT_FOCUS_RATIO = 0.6;
 
@@ -264,14 +267,21 @@ export class PoseWorkerBridge {
       globalWorker = w;
       globalWorkerReady = false;
 
-      // 30s timeout — model download can be slow on first load
+      // 30s timeout — model download can be slow on first load. Once the worker
+      // reports 'warming' (model loaded, GPU shaders compiling) the budget
+      // becomes WARMUP_TIMEOUT_MS: an iPhone measured 37 s for that step alone,
+      // and failing over then would drop it to the slow WASM path.
       poseDbg.set('mode', wasmOnly ? 'initializing (wasm-only retry)' : 'initializing'); // TEMP-DEBUG-POSE
-      globalInitTimeout = setTimeout(() => {
-        poseDbg.event('worker init timed out (30s)'); // TEMP-DEBUG-POSE
-        console.warn('[PoseWorkerBridge] Worker timed out after 30s — failing over');
-        this.statusCb?.('Worker timed out — using fallback…');
-        this.failOver();
-      }, 30_000);
+      const armInitTimeout = (ms: number) => {
+        if (globalInitTimeout) clearTimeout(globalInitTimeout);
+        globalInitTimeout = setTimeout(() => {
+          poseDbg.event(`worker init timed out (${ms / 1000}s)`); // TEMP-DEBUG-POSE
+          console.warn(`[PoseWorkerBridge] Worker timed out after ${ms / 1000}s — failing over`);
+          this.statusCb?.('Worker timed out — using fallback…');
+          this.failOver();
+        }, ms);
+      };
+      armInitTimeout(30_000);
 
       w.onmessage = (e: MessageEvent) => {
         const { data } = e;
@@ -291,6 +301,11 @@ export class PoseWorkerBridge {
             target.readyCb = null;
           }
           console.log('[PoseWorkerBridge] Worker ready');
+        } else if (data.type === 'dbg') {
+          poseDbg.event(String(data.message)); // TEMP-DEBUG-POSE (before ready)
+        } else if (data.type === 'warming') {
+          armInitTimeout(WARMUP_TIMEOUT_MS);
+          poseDbg.event('warming up GPU'); // TEMP-DEBUG-POSE
         } else if (data.type === 'status') {
           const target = activeBridge ?? this;
           if (!target.disposed) target.statusCb?.(data.message);
