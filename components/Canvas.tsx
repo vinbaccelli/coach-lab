@@ -1226,6 +1226,41 @@ const CONTEXTUAL_STROKE_TOOLS = new Set([
 const SELECT_HIT_T = 28;
 
 /**
+ * While playing, a live pose with no newer detection for this long — or for three
+ * of this device's own detection intervals, whichever is longer — is treated as
+ * stale and hidden (with a short hint) instead of being drawn off the player.
+ * Healthy detection lands every 30-120 ms on a GPU; this only trips on a stall.
+ */
+const LIVE_POSE_STALE_MS = 600;
+
+/** A small centred pill at the top of the video, for overlay status hints. */
+function drawCanvasHint(ctx: CanvasRenderingContext2D, dx: number, dy: number, dw: number, text: string): void {
+  ctx.save();
+  ctx.translate(dx, dy);
+  ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  const padX = 10;
+  const boxH = 24;
+  const boxW = ctx.measureText(text).width + padX * 2;
+  const boxX = Math.max(6, Math.round((dw - boxW) / 2));
+  const boxY = 10;
+  ctx.globalAlpha = 0.82;
+  ctx.fillStyle = 'rgba(0,0,0,0.62)';
+  if (typeof ctx.roundRect === 'function') {
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, boxW, boxH, 12);
+    ctx.fill();
+  } else {
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillText(text, boxX + padX, boxY + boxH / 2);
+  ctx.restore();
+}
+
+/**
  * Visual radius of a joint ball (logical px). The ball used to be
  * max(8, lw*1.5+4); it is now a fifth of that (Vin, 2026-10-03: at least 80%
  * smaller). Every drawing path — live preview, committed mark, export/replay —
@@ -2531,6 +2566,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // at display framerate even when inference runs at ~10 Hz on weak GPUs.
     const posePrevSampleRef = useRef<{ kps: Array<{ x: number; y: number; score: number; name: string }>; ts: number } | null>(null);
     const poseLatestSampleRef = useRef<{ kps: Array<{ x: number; y: number; score: number; name: string }>; ts: number } | null>(null);
+    /**
+     * When the live pose clock last restarted (play, seek, return to the tab).
+     * A live pose is "stale" when neither it nor this is recent — see
+     * LIVE_POSE_STALE_MS. Measured from here so resuming after a long pause is not
+     * mistaken for a stall before the first fresh detection has had time to land.
+     */
+    const livePoseClockRef = useRef(0);
     const poseLoopActiveRef   = useRef(false);
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
     // When true, skeleton overlay + detection is temporarily suppressed (e.g. after Clear All / Undo).
@@ -4437,6 +4479,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       const onPause = () => detectStaticFrame();
       const onSeeked = () => {
+        livePoseClockRef.current = performance.now();
         // A seek invalidates MediaPipe VIDEO mode's region of interest, so the next
         // few PLAYING detections pay for the full person detector. Exclude them
         // from the latency verdict (see MP_LIVE_POST_SEEK_SKIP) — they are not the
@@ -4446,12 +4489,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
       // Resume-from-pause: snap the filter to the live frame instead of letting
       // a stale velocity estimate produce a jitter/lag burst on the first frames.
-      const onPlay = () => { poseBridgeRef.current?.resetSmoothing(); cancelScheduled(); scheduleNext(); };
+      const onPlay = () => { livePoseClockRef.current = performance.now(); poseBridgeRef.current?.resetSmoothing(); cancelScheduled(); scheduleNext(); };
       // Returning from another app/tab: rVFC/rAF were throttled or dropped
       // while hidden — restart the loop (playing) or re-snap the static frame
       // (paused) so the skeleton never "disappears" after switching apps.
       const onVisibility = () => {
         if (document.visibilityState !== 'visible') return;
+        livePoseClockRef.current = performance.now();
         const v = videoRef.current;
         if (!v) return;
         if (v.paused) detectStaticFrame();
@@ -5697,7 +5741,29 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             !bakedPose &&
             !bakingRef.current &&
             poseModeRef.current === 'live';
-          if (!hiddenByTrackScope && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
+          // A live pose that is no longer current is hidden rather than drawn
+          // off the player. While PLAYING, the render loop used to keep painting
+          // the last detection however old it was (the blend below clamps at the
+          // latest pose), so a stalled detector left a skeleton frozen in a pose
+          // the player had already left. Only the live sample on display counts:
+          // a baked track, a paused frame and a restored snapshot are exact for
+          // the frame they show and are never hidden here.
+          const liveS = poseLatestSampleRef.current;
+          const showingLiveSample =
+            !bakedPose && !!liveS && liveS.kps === latestKeypointsRef.current && liveSkeletonActive();
+          // "Stale" is relative to this device's own detection pace: a slow
+          // device that lands a pose every 700 ms is healthy, not stalled, and
+          // must not blink between detections. A real hang is caught sooner by
+          // the bridge's watchdog (`stalled`).
+          const prevLiveS = posePrevSampleRef.current;
+          const liveInterval = prevLiveS && liveS ? liveS.ts - prevLiveS.ts : 0;
+          const staleAfterMs = Math.max(LIVE_POSE_STALE_MS, 3 * liveInterval);
+          const hiddenAsStale =
+            showingLiveSample && !!video && !video.paused && (
+              !!poseBridgeRef.current?.stalled ||
+              performance.now() - Math.max(liveS!.ts, livePoseClockRef.current) > staleAfterMs
+            );
+          if (!hiddenByTrackScope && !hiddenAsStale && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
             // Motion smoothing (live path): while PLAYING, INTERPOLATE the
             // displayed pose between the last two detections (prev → latest,
             // blended by sample age). Bounded — no overshoot, no stale-freeze
@@ -5769,6 +5835,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               onSkeletonAnglesUpdateRef.current(angles);
             }
             ctx.restore();
+          } else if (hiddenAsStale && vW > 0 && vH > 0) {
+            drawCanvasHint(ctx, dx, dy, dw, 'Skeleton catching up…');
           } else if (hiddenByTrackScope && vW > 0 && vH > 0) {
             // WHY THIS LABEL EXISTS.
             // `hiddenByTrackScope` is CORRECT behaviour — once a section is

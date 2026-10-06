@@ -45,6 +45,12 @@ const D: PoseDbg = {
 };
 
 let enabled: boolean | null = null;
+/**
+ * Which deployment this is, so a screenshot proves the build it came from (a
+ * test on 2026-10-06 turned out to have run the build before the fix). Vercel
+ * exposes the commit to the client as NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA.
+ */
+const BUILD_ID = (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 7);
 
 export function poseDebugOn(): boolean {
   if (enabled !== null) return enabled;
@@ -112,7 +118,7 @@ export const poseDbg = {
 function event(msg: string) {
   const s = (now() / 1000).toFixed(1);
   D.events.push(`${s}s ${msg}`);
-  if (D.events.length > 4) D.events.shift();
+  if (D.events.length > 8) D.events.shift();
 }
 
 function stats(w: Win): string {
@@ -164,7 +170,7 @@ function install() {
         + (q ? ` drop=${q.droppedVideoFrames}/${q.totalVideoFrames}` : '');
     }
     el.textContent = [
-      `POSE ${D.mode} | ${D.backend} | ${D.model}`,
+      `POSE ${D.mode} | ${D.backend} | ${D.model} | build ${BUILD_ID}`,
       `calls/s ${D.sendCalls.length} sent/s ${D.sent.length} res/s ${D.results.length} null ${D.nullResults}`,
       `skip init ${D.skipInit} notReady ${D.skipNotReady} fskip ${D.skipFrameSkip} busy ${D.skipBusy}`,
       `ms p50/max  bitmap ${stats(D.bitmapMs)}  infer ${stats(D.inferMs)}  rtt ${stats(D.rttMs)}`,

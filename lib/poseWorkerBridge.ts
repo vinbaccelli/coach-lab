@@ -10,6 +10,25 @@ import { poseDbg, poseDebugForcedModel } from '@/lib/tempDebugPose'; // TEMP-DEB
 /** Init budget once the model is loaded and the worker is compiling its GPU graph. */
 const WARMUP_TIMEOUT_MS = 180_000;
 
+/**
+ * A frame in flight longer than this is treated as failed (the watchdog).
+ *
+ * Nothing used to bound the single in-flight slot on this side: the worker's own
+ * 2 s estimatePoses timeout cannot fire while WebGL blocks the worker thread, and
+ * it never covered the frame capture. One hung call therefore froze the live
+ * skeleton until it returned — an iPhone showed a frame in flight for 25.7 s
+ * while every other frame was skipped as "busy" and the page ran at 60 fps.
+ * Healthy inference is 30–100 ms; 2 s is far outside it.
+ */
+const INFLIGHT_WATCHDOG_MS = 2000;
+/**
+ * After the watchdog fires, a worker that still says nothing for this long is
+ * replaced (terminated and restarted on LIGHTNING). Not shorter: a worker busy
+ * compiling a model is alive, just blocked, and a replacement must compile too.
+ * Paused while the worker reports a model switch in progress.
+ */
+const WORKER_DEAD_MS = 12_000;
+
 /** Crop fraction used when the caller gives no explicit focus ratio. */
 const DEFAULT_FOCUS_RATIO = 0.6;
 
@@ -27,6 +46,8 @@ function attachWorkerResultRouting() {
     const { data } = e;
     if (data?.type === 'result') {
       activeBridge?.handleWorkerMessage(e);
+    } else if (data?.type === 'switch') {
+      activeBridge?.handleSwitchSignal(data.phase === 'start');
     } else if (data?.type === 'error') {
       poseDbg.workerError(String(data.message)); // TEMP-DEBUG-POSE (ignored after ready)
     } else if (data?.type === 'dbg') {
@@ -77,6 +98,20 @@ export class PoseWorkerBridge {
    * value and is what an omitted ratio resets to.
    */
   private _focusRatio = DEFAULT_FOCUS_RATIO;
+  /** Id of the frame in flight, and whether it has actually reached the worker. */
+  private inFlightId = 0;
+  private inFlightPosted = false;
+  /** A frame the watchdog gave up on: its result, if it ever arrives, is stale. */
+  private droppedId = -1;
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private deadTimer: ReturnType<typeof setTimeout> | null = null;
+  /** performance.now() when the current stall began; null while healthy. */
+  private stallSince: number | null = null;
+  /** The worker reported a model switch in progress (it is alive, just busy). */
+  private workerSwitching = false;
+  /** Start the next worker on LIGHTNING (set when a hung worker is replaced). */
+  private forceLightning = false;
+  private recreateStartedAt: number | null = null;
   /** Video-px per bitmap-px of the frame currently in flight (downscaled send). */
   private lastSentScale = 1;
   /** One retry with a fresh wasm-only worker before the main-thread fallback. */
@@ -139,6 +174,15 @@ export class PoseWorkerBridge {
     return this.mode !== 'initializing';
   }
 
+  /**
+   * True while the live pose cannot be trusted to be current: the watchdog has
+   * given up on a frame and the worker has not answered since. The canvas hides
+   * the (stale) live skeleton while this holds.
+   */
+  get stalled() {
+    return this.stallSince !== null;
+  }
+
   resetSmoothing() {
     this.smoother.reset();
   }
@@ -152,6 +196,7 @@ export class PoseWorkerBridge {
   resume() {
     this.inFlight = false;
     this.pendingResendVideo = null;
+    this.clearWatchdog();
     // Re-claim worker-result routing. A single shared worker delivers results
     // only to the last-active bridge (set in the constructor). A reused bridge
     // (skeleton re-enabled without reconstruction) must re-assert itself, or its
@@ -196,6 +241,7 @@ export class PoseWorkerBridge {
     this.resultCb = null;
     this.pendingResendVideo = null;
     this.inFlight = false;
+    this.clearWatchdog();
   }
 
   /** Called from module worker router */
@@ -203,7 +249,22 @@ export class PoseWorkerBridge {
     if (this.disposed) return;
     const { data } = e;
     if (data.type === 'result') {
+      this.clearWatchdog();
       this.inFlight = false;
+      if (this.stallSince !== null) {
+        poseDbg.event(`stall end ${Math.round(performance.now() - this.stallSince)}ms`); // TEMP-DEBUG-POSE
+        this.stallSince = null;
+      }
+      if (data.frameId === this.droppedId) {
+        // The worker is alive again, but this pose belongs to a frame seconds
+        // behind the video: never display it. Just restart the flow.
+        this.droppedId = -1;
+        poseDbg.event(`late result for dropped frame ${data.frameId} discarded`); // TEMP-DEBUG-POSE
+        const late = this.pendingResendVideo;
+        this.pendingResendVideo = null;
+        if (late && !this.disposed) queueMicrotask(() => { if (!this.disposed) this.sendFrame(late); });
+        return;
+      }
       poseDbg.result(!!data.keypoints, data.inferMs); // TEMP-DEBUG-POSE
       if (data.model) poseDbg.set('model', String(data.model)); // TEMP-DEBUG-POSE
       if (data.backend) poseDbg.set('backend', String(data.backend)); // TEMP-DEBUG-POSE
@@ -223,6 +284,74 @@ export class PoseWorkerBridge {
         });
       }
     }
+  }
+
+  /** The worker began (true) or finished (false) swapping its model. */
+  handleSwitchSignal(start: boolean) {
+    if (this.disposed) return;
+    this.workerSwitching = start;
+    if (start) {
+      // Alive and busy: do not replace it for being slow to answer.
+      if (this.deadTimer) { clearTimeout(this.deadTimer); this.deadTimer = null; }
+    } else if (this.stallSince !== null && !this.deadTimer) {
+      this.deadTimer = setTimeout(() => this.replaceWorker(), WORKER_DEAD_MS);
+    }
+  }
+
+  private clearWatchdog() {
+    if (this.watchdogTimer) { clearTimeout(this.watchdogTimer); this.watchdogTimer = null; }
+    if (this.deadTimer) { clearTimeout(this.deadTimer); this.deadTimer = null; }
+  }
+
+  private armWatchdog(id: number) {
+    if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
+    this.watchdogTimer = setTimeout(() => this.onWatchdog(id), INFLIGHT_WATCHDOG_MS);
+  }
+
+  /**
+   * A frame has been in flight for INFLIGHT_WATCHDOG_MS. Treat it as failed:
+   * its result is dropped whenever it comes, the canvas hides the stale
+   * skeleton, and the worker is asked to switch to LIGHTNING.
+   *
+   * If the frame never reached the worker (the capture itself hung), the slot is
+   * simply freed. If it did, the slot stays taken: a blocked worker handed more
+   * frames would only queue them behind the stuck one. It frees when the worker
+   * answers, or the worker is replaced after WORKER_DEAD_MS of silence.
+   */
+  private onWatchdog(id: number) {
+    this.watchdogTimer = null;
+    if (this.disposed || !this.inFlight || this.inFlightId !== id) return;
+    if (this.stallSince === null) {
+      this.stallSince = performance.now();
+      poseDbg.event('stall start'); // TEMP-DEBUG-POSE
+    }
+    poseDbg.event(`watchdog: frame ${id} > ${INFLIGHT_WATCHDOG_MS}ms, dropped`); // TEMP-DEBUG-POSE
+    if (!this.inFlightPosted) {
+      this.inFlight = false;
+      return;
+    }
+    this.droppedId = id;
+    try { this.worker?.postMessage({ type: 'degrade', reason: 'watchdog' }); } catch { /* noop */ }
+    if (!this.workerSwitching && !this.deadTimer) {
+      this.deadTimer = setTimeout(() => this.replaceWorker(), WORKER_DEAD_MS);
+    }
+  }
+
+  /** The worker stayed silent after the watchdog: restart it on LIGHTNING. */
+  private replaceWorker() {
+    this.deadTimer = null;
+    if (this.disposed || this.mode !== 'worker') return;
+    poseDbg.event('worker recreate start (lightning)'); // TEMP-DEBUG-POSE
+    console.warn('[PoseWorkerBridge] Worker unresponsive after watchdog — restarting it on Lightning');
+    this.recreateStartedAt = performance.now();
+    this.forceLightning = true;
+    this.inFlight = false;
+    this.droppedId = -1;
+    this.workerSwitching = false;
+    this.mode = 'initializing';
+    this.worker = null;
+    terminateGlobalPoseWorker();
+    this.tryWorker(this.triedWasmOnly);
   }
 
   /**
@@ -299,6 +428,10 @@ export class PoseWorkerBridge {
             target.statusCb?.('Skeleton ready');
             target.readyCb?.();
             target.readyCb = null;
+            if (target.recreateStartedAt !== null) {
+              poseDbg.event(`worker recreate end ${Math.round(performance.now() - target.recreateStartedAt)}ms`); // TEMP-DEBUG-POSE
+              target.recreateStartedAt = null;
+            }
           }
           console.log('[PoseWorkerBridge] Worker ready');
         } else if (data.type === 'dbg') {
@@ -328,7 +461,7 @@ export class PoseWorkerBridge {
 
       const forceModel = poseDebugForcedModel(); // TEMP-DEBUG-POSE
       if (forceModel) poseDbg.event(`forced model: ${forceModel}`); // TEMP-DEBUG-POSE
-      w.postMessage({ type: 'init', wasmOnly, forceModel });
+      w.postMessage({ type: 'init', wasmOnly, forceModel: this.forceLightning ? 'lightning' : forceModel });
     } catch {
       console.warn('[PoseWorkerBridge] Worker creation failed — falling back');
       this.initMainThread();
@@ -338,6 +471,10 @@ export class PoseWorkerBridge {
   private sendToWorker(video: HTMLVideoElement) {
     if (!this.worker || !globalWorkerReady) return;
     this.inFlight = true;
+    const frameId = this.frameCount;
+    this.inFlightId = frameId;
+    this.inFlightPosted = false;
+    this.armWatchdog(frameId);
     poseDbg.sent(); // TEMP-DEBUG-POSE
     const tBmp = performance.now(); // TEMP-DEBUG-POSE
     try {
@@ -370,7 +507,8 @@ export class PoseWorkerBridge {
             return;
           }
           this.lastSentScale = bmp.width > 0 && vw > 0 ? vw / bmp.width : 1;
-          this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId: this.frameCount, focusPoint: this._focusPoint, focusRatio: this._focusRatio }, [bmp]);
+          this.worker.postMessage({ type: 'detect', bitmap: bmp, frameId, focusPoint: this._focusPoint, focusRatio: this._focusRatio }, [bmp]);
+          this.inFlightPosted = true;
         })
         .catch(() => {
           poseDbg.bitmapFailed(); // TEMP-DEBUG-POSE
