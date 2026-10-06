@@ -448,6 +448,26 @@ function Home() {
   const [canvasSizeB, setCanvasSizeB]     = useState({ width: 800, height: 450 });
   const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('comet');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
+  /**
+   * "Skeleton ready…" is a one-off notice, not a status that lasts. Nothing used
+   * to clear it, so it stayed in the top toast while the video played and
+   * covered the top rows of the data column (L Elbow). It now goes when playback
+   * starts or after 4 s, whichever comes first. Every other message keeps its
+   * own lifetime: only a message that is still the ready notice is cleared.
+   */
+  useEffect(() => {
+    if (!processingStatus?.startsWith('Skeleton ready')) return;
+    const clearReady = () =>
+      setProcessingStatus((cur) => (cur?.startsWith('Skeleton ready') ? null : cur));
+    const timer = setTimeout(clearReady, 4000);
+    const videos = [videoRef.current, videoRefB.current].filter((v): v is HTMLVideoElement => !!v);
+    if (videos.some((v) => !v.paused)) clearReady();
+    videos.forEach((v) => v.addEventListener('play', clearReady));
+    return () => {
+      clearTimeout(timer);
+      videos.forEach((v) => v.removeEventListener('play', clearReady));
+    };
+  }, [processingStatus]);
   const [layoutMode, setLayoutMode]       = useState<'youtube' | 'reels'>('youtube');
   const [webcamActive, setWebcamActive]   = useState(false);
   const [micActive, setMicActive]         = useState(false);
