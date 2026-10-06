@@ -508,7 +508,8 @@ function Home() {
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
   const [circleSpinning, setCircleSpinning] = useState(false);
-  const [outlineEraserSize, setOutlineEraserSize] = useState(0);
+  /** The Eraser tool's size (px). Kept across uses; the eraser itself is armed below. */
+  const [eraserSize, setEraserSize] = useState(15);
   /**
    * RULER LENGTH CALIBRATION (feature #6) — owned here, not in RulerOverlay.
    *
@@ -571,34 +572,17 @@ function Home() {
   useEffect(() => { styleSelectionRef.current = styleSelection; }, [styleSelection]);
 
   /**
-   * LEAVING STYLE MODE DISARMS THE OUTLINE ERASER.
+   * THE OUTLINE ERASER IS ARMED EXACTLY WHILE THE ERASER TOOL IS ACTIVE.
    *
-   * `outlineEraserSize` is armed from the Style screen's "Erase part of line"
-   * toggle (components/ToolPalette.tsx) or the on-canvas style bar
-   * (components/ContextualStyleBar.tsx), and nothing used to put it back. It
-   * stayed armed for the rest of the session, while the control that turns it
-   * off is only reachable from inside style mode — so the coach could not see
-   * it was on, let alone switch it off.
-   *
-   * Measured consequence: with a line drawn and the eraser armed, leaving Style
-   * and dragging that line with the SELECT tool moved it from (410,435)-(850,485)
-   * to (450,600)-(890,650) AND punched an extra eraser dot into it (13 -> 14).
-   * The drag did both: it moved the mark and silently cut a hole at the grab
-   * point.
-   *
-   * STYLE MODE IS THE RIGHT BOUNDARY, not the active tool. The Style *screen* is
-   * only navigation; `styleMode` is the mode, and every exit funnels through it
-   * — pressing Style again toggles it off in place (ToolPalette), and
-   * handleToolChange below already clears it on ANY tool choice ("ANY tool
-   * choice leaves style mode"). So the coach cannot stay in style mode while the
-   * tool changes underneath, and one rule here covers the Back action, the
-   * toggle and every tool switch. Keying this on `activeTool` instead would
-   * disarm mid-session while the coach is still in style mode with the toggle
-   * visibly on.
+   * It used to be a Style-mode checkbox ("Erase part of line") that stayed armed
+   * after the coach moved on, invisibly cutting holes in later Select drags, so
+   * leaving Style had to disarm it (#56). That made "arm it, then pick Circle"
+   * silently turn it off. As a tool on the Draw list it needs no separate
+   * on/off state: it is derived from the tool, so it can never outlive the lit
+   * Eraser row. Style mode suspends it (the canvas owns the press for picking a
+   * mark there), and leaving Style brings it back while Eraser is still picked.
    */
-  useEffect(() => {
-    if (!styleMode && outlineEraserSize > 0) setOutlineEraserSize(0);
-  }, [styleMode, outlineEraserSize]);
+  const outlineEraserSize = activeTool === 'erase' && !styleMode ? eraserSize : 0;
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Distance from bottom of video stage to reserve for playback UI + 16px gap (px). */
@@ -6562,8 +6546,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onRacketMultiplier:              handleRacketMultiplier,
     circleSpinning,
     onCircleSpinningChange:          handleCircleSpinningChange,
-    outlineEraserSize,
-    onOutlineEraserSizeChange:       setOutlineEraserSize,
+    outlineEraserSize:               eraserSize,
+    onOutlineEraserSizeChange:       setEraserSize,
     styleMode,
     onStyleModeToggle:               handleStyleModeToggle,
     onAngleDifferentialStart:        handleAngleDifferentialStart,
@@ -7438,7 +7422,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   registerWebcamPipPresentation={registerWebcamPipPresentation}
                   circleSpinning={circleSpinning}
                   outlineEraserSize={outlineEraserSize}
-                  onOutlineEraserSizeChange={setOutlineEraserSize}
                   styleMode={styleMode}
                   onStyleSelectionChange={setStyleSelection}
                   webcamPipMode={webcamPipMode}
@@ -8236,7 +8219,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       registerWebcamPipPresentation={registerWebcamPipPresentation}
                       circleSpinning={circleSpinning}
                       outlineEraserSize={outlineEraserSize}
-                      onOutlineEraserSizeChange={setOutlineEraserSize}
                       styleMode={styleMode}
                       onStyleSelectionChange={setStyleSelection}
                       webcamPipMode={webcamPipMode}
