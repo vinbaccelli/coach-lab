@@ -24,7 +24,8 @@ import {
 } from '@/lib/youtubeThumbnailPose';
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
-import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
+import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
+import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { getPoseDetector } from '@/lib/poseDetection';
 import { smoothBakedTrack } from '@/lib/trackSmoothing';
 import { HelpCircle } from 'lucide-react';
@@ -1232,6 +1233,20 @@ const SELECT_HIT_T = 28;
  * Healthy detection lands every 30-120 ms on a GPU; this only trips on a stall.
  */
 const LIVE_POSE_STALE_MS = 600;
+/**
+ * Paused or scrubbing: a live pose detected more than this far (video seconds)
+ * from the frame on screen belongs to another moment, so it is hidden with the
+ * hint until the pose for this frame lands. 0.25 s is ~15 frames at 60 fps.
+ */
+const PAUSED_POSE_MAX_DRIFT_S = 0.25;
+/**
+ * A touch drag on the timeline fires a seek per move. Wait this long after the
+ * LAST one before asking for the paused frame's pose, so one detection is spent
+ * on the frame the coach stopped on rather than on frames already left behind.
+ */
+const SEEK_SETTLE_MS = 120;
+/** If the frame is not decodable yet when the seek settles, try once more after this. */
+const SEEK_RETRY_MS = 200;
 
 /** A small centred pill at the top of the video, for overlay status hints. */
 function drawCanvasHint(ctx: CanvasRenderingContext2D, dx: number, dy: number, dw: number, text: string): void {
@@ -2573,6 +2588,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      * mistaken for a stall before the first fresh detection has had time to land.
      */
     const livePoseClockRef = useRef(0);
+    /**
+     * performance.now() when the last seek STARTED. A pose requested before it
+     * belongs to a frame the coach has scrubbed away from, so it is dropped.
+     */
+    const lastSeekAtRef = useRef(0);
+    /**
+     * The video time the live pose currently on display was detected at (from a
+     * detection or a cache restore). `kps` identifies it, so a snapshot, a baked
+     * track or a restored pose written by anything else is never judged by it.
+     */
+    const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number } | null>(null);
+    /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
+    const seekRequestRef = useRef<{ t: number; at: number } | null>(null);
+    /** Whether the live pose was hidden as stale on the previous frame (log transitions only). */
+    const staleHiddenRef = useRef(false);
     const poseLoopActiveRef   = useRef(false);
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
     // When true, skeleton overlay + detection is temporarily suppressed (e.g. after Clear All / Undo).
@@ -4099,7 +4129,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       poseBridgeRef.current = bridge;
       poseLoopActiveRef.current = true;
 
-      bridge.onResult((keypoints) => {
+      bridge.onResult((keypoints, meta?: PoseResultMeta) => {
+        // A result for a frame the coach has scrubbed away from is never drawn
+        // nor cached: it was requested before the latest seek, or (paused) it
+        // belongs to another video time. It used to land on whatever frame was
+        // on screen when it arrived, and be cached under that time too, so
+        // scrubbing back restored it — a skeleton from a different moment.
+        const resV = videoRef.current;
+        // Not during an AI Track pass: it pipelines seeks and collects every
+        // result against its own frame bookkeeping.
+        if (meta && resV && !bakingRef.current && (
+          meta.requestedAt < lastSeekAtRef.current ||
+          (resV.paused && Math.abs(meta.videoTime - resV.currentTime) > 0.05)
+        )) {
+          poseDbg.event(`seek: dropped result for t=${meta.videoTime.toFixed(2)} (video t=${resV.currentTime.toFixed(2)})`); // TEMP-DEBUG-POSE
+          return;
+        }
         // Precision AI Track capture (MoveNet-fallback path only) — record every
         // detection with its video time, ahead of any display gating. When the
         // frame-stepped MediaPipe pass is collecting (bakeBridgeCollectRef
@@ -4138,7 +4183,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             posePrevSampleRef.current = poseLatestSampleRef.current;
             poseLatestSampleRef.current = { kps: keypoints, ts: performance.now() };
             latestKeypointsRef.current = keypoints;
+            livePoseStampRef.current = { kps: keypoints, t: meta?.videoTime ?? (v?.currentTime ?? 0) };
             renderDirtyRef.current = true;
+            const sr = seekRequestRef.current;
+            if (sr && meta && Math.abs(meta.videoTime - sr.t) < 0.05) {
+              poseDbg.event(`seek: result after ${Math.round(performance.now() - sr.at)}ms (t=${sr.t.toFixed(2)})`); // TEMP-DEBUG-POSE
+              seekRequestRef.current = null;
+            }
           }
 
           // ── Auto-focus crop ────────────────────────────────────────────
@@ -4385,6 +4436,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             posePrevSampleRef.current = poseLatestSampleRef.current;
             poseLatestSampleRef.current = { kps, ts: performance.now() };
             latestKeypointsRef.current = kps;
+            livePoseStampRef.current = { kps, t: nowT };
             renderDirtyRef.current = true;
           }
         } catch (e) {
@@ -4478,6 +4530,35 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
 
       const onPause = () => detectStaticFrame();
+
+      // ONE pose for the frame the coach stopped on. A touch drag on the timeline
+      // seeks on every move; detecting on each `seeked` spent the single
+      // in-flight slot on frames already left behind, and nothing guaranteed the
+      // last one was ever detected (a request made while the frame is not yet
+      // decodable is skipped by the bridge, with no retry). So: wait until the
+      // seeks stop, check the frame is decodable, retry once if it is not.
+      let seekSettleTimer: ReturnType<typeof setTimeout> | null = null;
+      // Whether the frame the last seek landed on has been PAINTED. A capture
+      // taken right after 'seeked' can still carry the previous frame's pixels
+      // until the new one is presented; the AI Track pass waits for one
+      // requestVideoFrameCallback for exactly this reason (runPrecisionPass).
+      let seekFramePainted = true;
+      let seekGeneration = 0;
+      const requestSettledFrame = (attempt: number) => {
+        seekSettleTimer = null;
+        const v = videoRef.current;
+        if (!v || !v.paused || !poseLoopActiveRef.current) return;
+        const notReady = v.seeking || v.readyState < 2 || !seekFramePainted;
+        if (notReady && attempt === 0) {
+          poseDbg.event(`seek: frame not ready (rs=${v.readyState}${seekFramePainted ? '' : ', not painted'}), retrying`); // TEMP-DEBUG-POSE
+          seekSettleTimer = setTimeout(() => requestSettledFrame(1), SEEK_RETRY_MS);
+          return;
+        }
+        seekRequestRef.current = { t: v.currentTime, at: performance.now() };
+        poseDbg.event(`seek: requested pose for t=${v.currentTime.toFixed(2)}`); // TEMP-DEBUG-POSE
+        detectStaticFrame();
+      };
+      const onSeeking = () => { lastSeekAtRef.current = performance.now(); };
       const onSeeked = () => {
         livePoseClockRef.current = performance.now();
         // A seek invalidates MediaPipe VIDEO mode's region of interest, so the next
@@ -4485,7 +4566,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // from the latency verdict (see MP_LIVE_POST_SEEK_SKIP) — they are not the
         // steady state the budget is about.
         mpLivePostSeekSkipRef.current = MP_LIVE_POST_SEEK_SKIP;
-        if (videoRef.current?.paused) detectStaticFrame();
+        if (videoRef.current?.paused) {
+          // The AI Track pass (MoveNet fallback) frame-steps by seeking and
+          // collects the detection each 'seeked' fires, waiting only ~90 ms per
+          // frame (app/analysis/page.tsx runPrecisionPass). It keeps the
+          // immediate request; only a coach's scrub is debounced.
+          if (bakingRef.current) { detectStaticFrame(); return; }
+          const sv = videoRef.current;
+          if (sv && typeof sv.requestVideoFrameCallback === 'function') {
+            seekFramePainted = false;
+            const gen = ++seekGeneration;
+            // Only the latest seek's frame counts: a callback left over from an
+            // earlier seek in the same drag paints a frame the coach has left.
+            sv.requestVideoFrameCallback(() => { if (gen === seekGeneration) seekFramePainted = true; });
+          }
+          if (seekSettleTimer) clearTimeout(seekSettleTimer);
+          seekSettleTimer = setTimeout(() => requestSettledFrame(0), SEEK_SETTLE_MS);
+        }
       };
       // Resume-from-pause: snap the filter to the live frame instead of letting
       // a stale velocity estimate produce a jitter/lag burst on the first frames.
@@ -4503,6 +4600,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
 
       video.addEventListener('pause', onPause);
+      video.addEventListener('seeking', onSeeking);
       video.addEventListener('seeked', onSeeked);
       video.addEventListener('play', onPlay);
       document.addEventListener('visibilitychange', onVisibility);
@@ -4513,7 +4611,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return () => {
         poseLoopActiveRef.current = false;
         cancelScheduled();
+        if (seekSettleTimer) clearTimeout(seekSettleTimer);
         video.removeEventListener('pause', onPause);
+        video.removeEventListener('seeking', onSeeking);
         video.removeEventListener('seeked', onSeeked);
         video.removeEventListener('play', onPlay);
         document.removeEventListener('visibilitychange', onVisibility);
@@ -4544,6 +4644,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // the live worker is off, a restored snapshot/frame pose is left intact.
         if (bestDist <= 0.12 && liveSkeletonActive()) {
           latestKeypointsRef.current = best.keypoints;
+          livePoseStampRef.current = { kps: best.keypoints, t: best.timeSeconds };
           renderDirtyRef.current = true;
         }
       };
@@ -5758,11 +5859,29 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const prevLiveS = posePrevSampleRef.current;
           const liveInterval = prevLiveS && liveS ? liveS.ts - prevLiveS.ts : 0;
           const staleAfterMs = Math.max(LIVE_POSE_STALE_MS, 3 * liveInterval);
-          const hiddenAsStale =
+          const hiddenAsStalePlaying =
             showingLiveSample && !!video && !video.paused && (
               !!poseBridgeRef.current?.stalled ||
               performance.now() - Math.max(liveS!.ts, livePoseClockRef.current) > staleAfterMs
             );
+          // Paused or scrubbing: the live (or cache-restored) pose on display
+          // was detected at another video time, and the pose for this frame has
+          // not landed yet. A snapshot, a baked track, or a cached pose that
+          // matches this frame never trips this (their pose is not the stamped
+          // one, or its time matches).
+          const stamp = livePoseStampRef.current;
+          const pausedDrift = stamp && video ? Math.abs(stamp.t - video.currentTime) : 0;
+          const hiddenAsStalePaused =
+            !bakedPose && !!video && video.paused && liveSkeletonActive() &&
+            !!stamp && stamp.kps === latestKeypointsRef.current &&
+            pausedDrift > PAUSED_POSE_MAX_DRIFT_S;
+          const hiddenAsStale = hiddenAsStalePlaying || hiddenAsStalePaused;
+          if (hiddenAsStale !== staleHiddenRef.current) { // TEMP-DEBUG-POSE
+            staleHiddenRef.current = hiddenAsStale;
+            poseDbg.event(hiddenAsStale
+              ? `stale pose hidden (${hiddenAsStalePaused ? `pose t=${stamp!.t.toFixed(2)}, video t=${video!.currentTime.toFixed(2)}` : 'no fresh result'})`
+              : 'stale pose shown again');
+          }
           if (!hiddenByTrackScope && !hiddenAsStale && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
             // Motion smoothing (live path): while PLAYING, INTERPOLATE the
             // displayed pose between the last two detections (prev → latest,

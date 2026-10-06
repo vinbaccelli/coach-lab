@@ -33,7 +33,14 @@ const WORKER_DEAD_MS = 12_000;
 const DEFAULT_FOCUS_RATIO = 0.6;
 
 export type PoseKeypoint = { x: number; y: number; score: number; name: string };
-type ResultCb = (keypoints: PoseKeypoint[] | null) => void;
+/**
+ * Which frame a result belongs to: the video time when the frame was handed to
+ * the detector, and when (performance.now()). A result can arrive after the
+ * coach has scrubbed elsewhere; the caller uses this to refuse a pose that
+ * belongs to a frame no longer on screen.
+ */
+export type PoseResultMeta = { videoTime: number; requestedAt: number };
+type ResultCb = (keypoints: PoseKeypoint[] | null, meta?: PoseResultMeta) => void;
 
 let globalWorker: Worker | null = null;
 let globalWorkerReady = false;
@@ -100,6 +107,8 @@ export class PoseWorkerBridge {
   private _focusRatio = DEFAULT_FOCUS_RATIO;
   /** Id of the frame in flight, and whether it has actually reached the worker. */
   private inFlightId = 0;
+  /** The video time and request time of the frame in flight. */
+  private inFlightMeta: PoseResultMeta | undefined;
   private inFlightPosted = false;
   /** A frame the watchdog gave up on: its result, if it ever arrives, is stale. */
   private droppedId = -1;
@@ -275,7 +284,7 @@ export class PoseWorkerBridge {
         const f = this.lastSentScale;
         kps = kps.map((k) => ({ ...k, x: k.x * f, y: k.y * f }));
       }
-      this.deliverKeypoints(kps);
+      this.deliverKeypoints(kps, this.inFlightMeta);
       const v = this.pendingResendVideo;
       this.pendingResendVideo = null;
       if (v && !this.disposed) {
@@ -472,6 +481,7 @@ export class PoseWorkerBridge {
     if (!this.worker || !globalWorkerReady) return;
     this.inFlight = true;
     const frameId = this.frameCount;
+    this.inFlightMeta = { videoTime: video.currentTime, requestedAt: performance.now() };
     this.inFlightId = frameId;
     this.inFlightPosted = false;
     this.armWatchdog(frameId);
@@ -554,10 +564,11 @@ export class PoseWorkerBridge {
       markDetectStart('poseWorkerBridge main-thread fallback');
       try {
         const tInf = performance.now(); // TEMP-DEBUG-POSE
+        const meta: PoseResultMeta = { videoTime: video.currentTime, requestedAt: performance.now() };
         const poses = await det.estimatePoses(video, { flipHorizontal: false });
         const raw = poses?.[0]?.keypoints as PoseKeypoint[] | undefined;
         poseDbg.result(!!raw?.length, performance.now() - tInf); // TEMP-DEBUG-POSE
-        this.deliverKeypoints(raw?.length ? raw : null);
+        this.deliverKeypoints(raw?.length ? raw : null, meta);
       } catch {
         this.deliverKeypoints(null);
       } finally {
@@ -588,13 +599,13 @@ export class PoseWorkerBridge {
     }
   }
 
-  private deliverKeypoints(raw: PoseKeypoint[] | null) {
+  private deliverKeypoints(raw: PoseKeypoint[] | null, meta?: PoseResultMeta) {
     if (!raw?.length) {
-      this.resultCb?.(null);
+      this.resultCb?.(null, meta);
       return;
     }
 
     const smoothed = this.smoother.apply(raw, performance.now());
-    this.resultCb?.(smoothed as PoseKeypoint[]);
+    this.resultCb?.(smoothed as PoseKeypoint[], meta);
   }
 }
