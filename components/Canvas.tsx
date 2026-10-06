@@ -6635,7 +6635,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const eraserPos = outlineEraserPosRef.current;
         const eraserTool = activeToolRef.current;
         const eraserOwnsGesture = styleModeRef.current || outlineErasingIdxRef.current >= 0;
-        if (eraserR > 0 && eraserPos && eraserOwnsGesture && OUTLINE_ERASER_TOOLS.has(eraserTool)) {
+        if (
+          eraserR > 0 && eraserPos &&
+          (eraserTool === 'erase' || (eraserOwnsGesture && OUTLINE_ERASER_TOOLS.has(eraserTool)))
+        ) {
           ctx.save();
           ctx.globalAlpha = 0.35;
           ctx.fillStyle = 'rgba(255, 59, 48, 0.25)';
@@ -7466,18 +7469,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return 'miss';
     }, [webcamVideoRef]);
 
+    /**
+     * The Eraser tool: cut every outline under the eraser ring.
+     *
+     * It used to delete whole marks, but nothing in the UI offered it; it is now
+     * the Draw list's Eraser, which does what Style's old "Erase part of line"
+     * did. Unlike that mode it is not latched to the mark the press started on —
+     * a drag across several marks cuts each one it passes over, and a press on
+     * empty space just moves the ring. Only marks the ring actually touches get a
+     * dot, so a near miss leaves nothing in the saved drawing.
+     */
     const eraseAt = useCallback((pos: Pt) => {
-      const T = 22;
-      // Same distance-to-stroke test as the Select tool so erasing hits outlines,
-      // including circles/rects/triangles (not just their center).
-      strokesRef.current = strokesRef.current.filter((s) => {
-        const d = hitTestStroke(s, pos);
-        const lw = typeof (s as { lw?: number }).lw === 'number' ? (s as { lw: number }).lw : 2;
-        return d > T + lw * 0.6;
+      outlineEraserPosRef.current = pos;
+      renderDirtyRef.current = true;
+      const r = outlineEraserSizeRef.current;
+      if (r <= 0) return;
+      strokesRef.current.forEach((s2, i) => {
+        if (!OUTLINE_ERASER_STROKES.has(s2.tool)) return;
+        const lw = (s2 as { lw?: number }).lw ?? 2;
+        if (hitTestStroke(s2, pos) <= r + lw / 2) applyOutlineEraserDot(i, pos);
       });
-      angleMeasRef.current = angleMeasRef.current.filter(
-        m => Math.hypot(m.v.x - pos.x, m.v.y - pos.y) > T,
-      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // ── Tool primitives (single drawing source of truth) ────────────────────
@@ -8930,8 +8942,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // Outline eraser dragging
-      if (outlineErasingIdxRef.current >= 0 && isDraggingRef.current) {
+      // Outline eraser dragging (latched to one mark; the Eraser tool is not)
+      if (outlineErasingIdxRef.current >= 0 && isDraggingRef.current && tool !== 'erase') {
         const idx = outlineErasingIdxRef.current;
         const s = strokesRef.current[idx];
         if (s && (
@@ -8974,8 +8986,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // the next mouse move; it is gated on the same condition the draw uses.
       if (
         outlineEraserSizeRef.current > 0 &&
-        (styleModeRef.current || outlineErasingIdxRef.current >= 0) &&
-        OUTLINE_ERASER_TOOLS.has(tool)
+        (tool === 'erase' ||
+          ((styleModeRef.current || outlineErasingIdxRef.current >= 0) && OUTLINE_ERASER_TOOLS.has(tool)))
       ) {
         outlineEraserPosRef.current = pos;
         renderDirtyRef.current = true;
@@ -9163,6 +9175,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         pushHistory();
         return;
       }
+      // An Eraser drag that cut nothing still drops its ring on lift: a finger
+      // has no hover to move it on, so it would sit where the touch ended.
+      if (activeToolRef.current === 'erase' && outlineEraserPosRef.current) {
+        outlineEraserPosRef.current = null;
+        renderDirtyRef.current = true;
+      }
 
       commitActiveStroke();
     }, [pushHistory, commitActiveStroke, openContextualStyle]);
@@ -9232,10 +9250,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       renderDirtyRef.current = true;
       const baseLw = drawingOptsRef.current.lineWidth;
 
-      // Erase: discrete tap, never holds a drag.
+      // Erase: discrete tap, never holds a drag. A tap that cut something is
+      // finalised here (one undo step), as lifting a finger would.
       if (tool === 'erase') {
         beginDrawToolAt(ch, baseLw);
         isDraggingRef.current = false;
+        if (outlineErasingIdxRef.current >= 0) {
+          outlineErasingIdxRef.current = -1;
+          pushHistory();
+        }
         return;
       }
 
@@ -9422,7 +9445,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         (cursorFor as Record<string, string>)[k] = isPanningRef.current ? 'grabbing' : 'grab';
       });
     }
-    if (outlineEraserSizeRef.current > 0) {
+    // The PROP, not outlineEraserSizeRef: the ref is synced in an effect after
+    // this render, so reading it here lagged one render behind — picking Eraser
+    // showed the 'cell' cursor under the ring, and picking Circle right after
+    // hid the cursor entirely.
+    if (outlineEraserSize > 0) {
       cursorFor.circle = 'none';
       cursorFor.bodyCircle = 'none';
       cursorFor.rect = 'none';
@@ -9431,6 +9458,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       cursorFor.arrow = 'none';
       cursorFor.arrowAngle = 'none';
       cursorFor.pen = 'none';
+      cursorFor.erase = 'none';
     }
 
     const onWheelCanvas = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {

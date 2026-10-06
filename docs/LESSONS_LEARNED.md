@@ -600,3 +600,36 @@ feature. The corollary: when a display path is suppressed "to avoid doubling",
 whatever replaces it inherits every setting the suppressed path owned, and
 nothing enforces that — the settings simply disappear, silently, with no error.
 
+
+---
+
+## 008 — A control tied to a mode turned itself off in the order coaches actually work
+
+### Symptom
+
+Vin armed "Erase part of line" in Style, picked Circle to draw the mark he wanted
+to cut, and the eraser had gone: the drag drew a new circle instead.
+
+### Verified root cause
+
+The eraser was a checkbox inside Style mode, and #56 made leaving Style disarm it
+(an armed eraser nobody could see was cutting holes in later Select drags). Every
+tool choice leaves Style (`handleToolChange` in `app/analysis/page.tsx`), so
+"arm, then pick the drawing tool" always disarmed it. Both behaviours were
+correct on their own; the control lived in the wrong place.
+
+### Fix
+
+The eraser is a tool on the Draw list (`Eraser`, tool id `erase`). Its armed size
+is derived from the active tool in the page
+(`activeTool === 'erase' && !styleMode ? eraserSize : 0`), so there is no
+separate on/off state to forget: it is on exactly while its row is lit. One drag
+cuts every outline the ring passes over (`eraseAt` in `components/Canvas.tsx`).
+
+### Class of mistake
+
+**A mode-scoped switch with a lifetime of its own.** If a setting can stay on
+after the screen that shows it is gone, it needs a disarm rule, and every disarm
+rule eventually fires in a workflow nobody pictured. When the thing is really an
+action on the canvas, make it a tool: tools already have one owner (the active
+tool), one visible state (the lit row), and one exit (picking another tool).
