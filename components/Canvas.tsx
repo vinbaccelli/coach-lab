@@ -4243,6 +4243,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       bridge.onReady(() => {
         onProcessingStatus?.('Skeleton ready — press play');
+        renderDirtyRef.current = true; // drop the on-video "Preparing" hint even while paused
         if (pendingFocusRef.current) {
           bridge.setFocusPoint(pendingFocusRef.current);
         }
@@ -5954,6 +5955,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               onSkeletonAnglesUpdateRef.current(angles);
             }
             ctx.restore();
+          } else if (
+            !bakedPose && liveSkeletonActive() && !poseBridgeRef.current!.isReady && vW > 0 && vH > 0
+          ) {
+            // The skeleton is on but still loading (model download, shader
+            // compile, device speed check — up to a minute on a phone the first
+            // time). Say so ON the video until it can really draw: the top
+            // status message can be replaced by any other message, and a coach
+            // who presses play early would otherwise just see no skeleton.
+            drawCanvasHint(ctx, dx, dy, dw, 'Preparing the skeleton…');
           } else if (hiddenAsStale && vW > 0 && vH > 0) {
             drawCanvasHint(ctx, dx, dy, dw, 'Skeleton catching up…');
           } else if (hiddenByTrackScope && vW > 0 && vH > 0) {
