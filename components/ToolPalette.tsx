@@ -90,6 +90,7 @@ interface ToolPaletteProps {
   objMultiplierActive?: boolean;
   objMultiplierProgress?: string | null;
   onCircleSpinningChange?: (spinning: boolean) => void;
+  /** Eraser tool's size (px), shown on the Draw list while the Eraser is the active tool. */
   outlineEraserSize?: number;
   onOutlineEraserSizeChange?: (size: number) => void;
   skeletonShowAngles?: boolean;
@@ -215,7 +216,7 @@ const PRESET_COLORS = ['#FFFFFF', '#1D1D1F', '#FF3B30', '#007AFF'] as const;
 // Tools surfaced on the Draw sub-screen. Used so opening Draw highlights a tool
 // (and so leaving Draw can return the canvas to a neutral select state).
 const DRAW_SCREEN_TOOLS: ToolType[] = [
-  'pen', 'line', 'arrow', 'angle', 'arrowAngle', 'rect', 'circle', 'manualSwing', 'jointChain', 'text', 'ruler',
+  'pen', 'line', 'arrow', 'angle', 'arrowAngle', 'rect', 'circle', 'manualSwing', 'jointChain', 'text', 'erase', 'ruler',
 ];
 
 type NavScreen =
@@ -1517,31 +1518,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
               onCircleSpinningChange,
               <Sparkles size={18} strokeWidth={2} />,
             )}
-          {onOutlineEraserSizeChange && outlineEraserEligible && (
-            <>
-              {chk(
-                'oe',
-                'Erase part of line',
-                outlineEraserSize > 0,
-                (v) => onOutlineEraserSizeChange(v ? 15 : 0),
-                <Eraser size={18} strokeWidth={2} />,
-              )}
-              {outlineEraserSize > 0 && !io && (
-                <div style={{ padding: '0 8px' }}>
-                  <div style={{ fontSize: 12, color: textMuted, marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
-                  <input
-                    type="range"
-                    min={5}
-                    max={50}
-                    step={1}
-                    value={outlineEraserSize}
-                    onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              )}
-            </>
-          )}
           {(activeTool === 'manualSwing' || activeTool === 'swingPath') &&
             chk('arrowEnd', 'Arrow at end of swing path', !!drawingOptions.arrowAtEnd, (v) => onOptionsChange({ arrowAtEnd: v }))}
           {activeTool === 'text' && !io && (
@@ -1612,6 +1588,28 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row chrome={chrome} k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} tooltip="Trace the racket swing path" label="Swing path" onPress={() => setTool('manualSwing')} />
           <Row chrome={chrome} k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} tooltip="Connect joint points to measure body alignment" label="Joint chain" onPress={() => setTool('jointChain')} />
           <Row chrome={chrome} k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
+          {/*
+            The outline eraser is a TOOL, not a Style checkbox. As a checkbox it
+            lived in Style mode and had to switch off when Style ended (an armed
+            eraser nobody could see punched holes in Select drags), so picking
+            Circle after arming it silently turned it off again. As a tool it is
+            on exactly while this row is lit, like every other tool here.
+          */}
+          <Row chrome={chrome} k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} tooltip="Drag over a line or shape to erase part of it" label="Eraser" onPress={() => setTool('erase')} />
+          {activeTool === 'erase' && onOutlineEraserSizeChange && !io && (
+            <div style={{ padding: '0 8px 4px' }}>
+              <div style={{ fontSize: 12, color: textMuted, marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
+              <input
+                type="range"
+                min={5}
+                max={50}
+                step={1}
+                value={outlineEraserSize}
+                onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
+                style={{ width: '100%' }}
+              />
+            </div>
+          )}
           <Row chrome={chrome} k="ruler" active={activeTool === 'ruler'} icon={<Ruler size={18} />} tooltip="Measure real-world distances (calibrate first)" label="Ruler" onPress={() => setTool('ruler')} />
           <Row chrome={chrome} k="anglediff" icon={<Activity size={18} />} tooltip="Draw two angle arrows (e.g. hips then shoulders) — the angle difference is auto-calculated" label="Angle differential" onPress={() => (onAngleDifferentialStart ? onAngleDifferentialStart() : setTool('arrowAngle'))} />
           {onPrecisionDrawToggle && (

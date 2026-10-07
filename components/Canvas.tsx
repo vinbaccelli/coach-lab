@@ -24,7 +24,8 @@ import {
 } from '@/lib/youtubeThumbnailPose';
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
-import { PoseWorkerBridge } from '@/lib/poseWorkerBridge';
+import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
+import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { getPoseDetector } from '@/lib/poseDetection';
 import { smoothBakedTrack } from '@/lib/trackSmoothing';
 import { HelpCircle } from 'lucide-react';
@@ -637,6 +638,22 @@ function isJointVisible(idx: number, parts: SkeletonPartVisibility, jointName?: 
   return true;
 }
 
+/**
+ * Blue of the skeleton's joint dots (blue colour mode). Joint-chain balls use
+ * the same constant so the two read as one family of markers.
+ */
+const SKELETON_JOINT_BLUE = '#007AFF';
+/** Dark rim drawn round a blue joint dot. */
+const SKELETON_JOINT_RIM = '#234978';
+const SKELETON_JOINT_RIM_W = 1.5;
+/**
+ * Radius (logical px) of a skeleton joint dot for a video drawn at w x h.
+ * Joint-chain balls share it, so a ball and a skeleton joint are the same size.
+ */
+function skeletonJointRadius(w: number, h: number): number {
+  return Math.max(1, Math.min(3, Math.round(Math.min(w, h) / 375)));
+}
+
 function drawSkeletonOverlay(
   ctx: CanvasRenderingContext2D,
   keypoints: Array<{ x: number; y: number; score: number; name: string }>,
@@ -662,7 +679,7 @@ function drawSkeletonOverlay(
   const classicColors = opts?.classicColors !== false;
   const showFootLine  = opts?.showFootLine !== false;
   const parts: SkeletonPartVisibility = opts?.parts ?? {};
-  const jointRadius = Math.max(1, Math.min(3, Math.round(Math.min(canvasW, canvasH) / 375)));
+  const jointRadius = skeletonJointRadius(canvasW, canvasH);
   const scoreThreshold = 0.2;
 
   // Limb bones: solid yellow lines (arms + legs)
@@ -867,15 +884,15 @@ function drawSkeletonOverlay(
     if (classicColors) {
       ctx.fillStyle = i % 2 === 0 ? '#FF4444' : '#4488FF';
     } else {
-      ctx.fillStyle = '#007AFF';
+      ctx.fillStyle = SKELETON_JOINT_BLUE;
     }
     ctx.fill();
     if (classicColors) {
       ctx.strokeStyle = i % 2 === 0 ? '#FF4444' : '#4488FF';
     } else {
-      ctx.strokeStyle = '#234978';
+      ctx.strokeStyle = SKELETON_JOINT_RIM;
     }
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = SKELETON_JOINT_RIM_W;
     ctx.stroke();
   }
 
@@ -1117,6 +1134,7 @@ function drawJointChainStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeJointChain,
   _animFrame: number,
+  ballR: number,
 ): void {
   const { nodes, color, lw, dashed, spinning } = s;
   if (nodes.length === 0) return;
@@ -1140,18 +1158,19 @@ function drawJointChainStroke(
     ctx.setLineDash([]);
   }
 
-  const baseR = Math.max(JOINT_NODE_RADIUS, lw * 1.5 + 4);
+  // The balls are drawn exactly like the skeleton's blue joint dots (same
+  // colour, radius and rim), whatever colour the chain line has.
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
     const pulse = spinning ? 1 + 0.1 * Math.sin(Date.now() / 110 + i * 0.75) : 1;
-    const r = baseR * pulse;
+    const r = ballR * pulse;
     ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = color;
+    ctx.fillStyle = SKELETON_JOINT_BLUE;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = SKELETON_JOINT_RIM;
+    ctx.lineWidth = SKELETON_JOINT_RIM_W;
     ctx.stroke();
   }
 
@@ -1224,9 +1243,73 @@ const CONTEXTUAL_STROKE_TOOLS = new Set([
 /** How close (logical px) a pointer must be to claim an existing mark. */
 const SELECT_HIT_T = 28;
 
-/** Visual radius of a joint ball (logical px). */
-const JOINT_NODE_RADIUS = 8;
-/** Hit target for dragging a joint (touch gets a larger target). */
+/**
+ * While playing, a live pose with no newer detection for this long — or for three
+ * of this device's own detection intervals, whichever is longer — is treated as
+ * stale and hidden (with a short hint) instead of being drawn off the player.
+ * Healthy detection lands every 30-120 ms on a GPU; this only trips on a stall.
+ */
+const LIVE_POSE_STALE_MS = 600;
+/**
+ * Paused or scrubbing: a live pose detected more than this far (video seconds)
+ * from the frame on screen belongs to another moment, so it is hidden with the
+ * hint until the pose for this frame lands. 0.25 s is ~15 frames at 60 fps.
+ */
+const PAUSED_POSE_MAX_DRIFT_S = 0.25;
+/**
+ * A touch drag on the timeline fires a seek per move. Wait this long after the
+ * LAST one before asking for the paused frame's pose, so one detection is spent
+ * on the frame the coach stopped on rather than on frames already left behind.
+ */
+const SEEK_SETTLE_MS = 120;
+/** If the frame is not decodable yet when the seek settles, try once more after this. */
+const SEEK_RETRY_MS = 200;
+
+/** A small centred pill at the top of the video, for overlay status hints. */
+function drawCanvasHint(ctx: CanvasRenderingContext2D, dx: number, dy: number, dw: number, text: string): void {
+  ctx.save();
+  ctx.translate(dx, dy);
+  ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  const padX = 10;
+  const boxH = 24;
+  const boxW = ctx.measureText(text).width + padX * 2;
+  const boxX = Math.max(6, Math.round((dw - boxW) / 2));
+  const boxY = 10;
+  ctx.globalAlpha = 0.82;
+  ctx.fillStyle = 'rgba(0,0,0,0.62)';
+  if (typeof ctx.roundRect === 'function') {
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, boxW, boxH, 12);
+    ctx.fill();
+  } else {
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillText(text, boxX + padX, boxY + boxH / 2);
+  ctx.restore();
+}
+
+/**
+ * Visual radius of a joint ball (logical px) for a video drawn at w x h: the
+ * skeleton's joint-dot radius (Vin, 2026-10-07: "ideally the same as the
+ * skeleton"). It used to be max(8, lw*1.5+4)*0.2, which tied it to the line
+ * width instead. Every drawing path — live preview, committed mark,
+ * export/replay — goes through drawJointChainStroke with this value, and the
+ * selection ring and the chain's hit-test read it too, so they stay in step.
+ */
+function jointNodeRadius(w: number, h: number): number {
+  return skeletonJointRadius(w, h);
+}
+/** Gap between a selected ball and its gold ring (logical px). */
+const JOINT_NODE_RING_GAP = 6;
+/**
+ * Hit target for dragging a joint (touch gets a larger target). Deliberately
+ * independent of the visual radius — like TEXT_HANDLE_HIT_R for text handles —
+ * so the smaller ball is exactly as easy to grab as the old one.
+ */
 const JOINT_NODE_HIT_TOUCH = 24;
 const JOINT_NODE_HIT_POINTER = 16;
 
@@ -1602,7 +1685,8 @@ function drawTriangleStroke(
   ctx.restore();
 }
 
-function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): void {
+/** `jointBallR`: joint-chain ball radius for this canvas (see jointNodeRadius). */
+function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, jointBallR = 1): void {
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -1665,7 +1749,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
 
   } else if (s.tool === 'jointChain') {
     ctx.restore();
-    drawJointChainStroke(ctx, s as StrokeJointChain, animFrame);
+    drawJointChainStroke(ctx, s as StrokeJointChain, animFrame, jointBallR);
     return;
 
   } else if (s.tool === 'arrow' || s.tool === 'arrowAngle') {
@@ -2515,6 +2599,28 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // at display framerate even when inference runs at ~10 Hz on weak GPUs.
     const posePrevSampleRef = useRef<{ kps: Array<{ x: number; y: number; score: number; name: string }>; ts: number } | null>(null);
     const poseLatestSampleRef = useRef<{ kps: Array<{ x: number; y: number; score: number; name: string }>; ts: number } | null>(null);
+    /**
+     * When the live pose clock last restarted (play, seek, return to the tab).
+     * A live pose is "stale" when neither it nor this is recent — see
+     * LIVE_POSE_STALE_MS. Measured from here so resuming after a long pause is not
+     * mistaken for a stall before the first fresh detection has had time to land.
+     */
+    const livePoseClockRef = useRef(0);
+    /**
+     * performance.now() when the last seek STARTED. A pose requested before it
+     * belongs to a frame the coach has scrubbed away from, so it is dropped.
+     */
+    const lastSeekAtRef = useRef(0);
+    /**
+     * The video time the live pose currently on display was detected at (from a
+     * detection or a cache restore). `kps` identifies it, so a snapshot, a baked
+     * track or a restored pose written by anything else is never judged by it.
+     */
+    const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number } | null>(null);
+    /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
+    const seekRequestRef = useRef<{ t: number; at: number } | null>(null);
+    /** Whether the live pose was hidden as stale on the previous frame (log transitions only). */
+    const staleHiddenRef = useRef(false);
     const poseLoopActiveRef   = useRef(false);
     const skeletonFramesRef   = useRef<Array<{ timeSeconds: number; keypoints: Array<{ x: number; y: number; score: number; name: string }> }>>([]);
     // When true, skeleton overlay + detection is temporarily suppressed (e.g. after Clear All / Undo).
@@ -2562,6 +2668,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const lastRenderVideoTimeRef = useRef(-1);
     const lastRenderZoomRef = useRef(1);
     const lastRenderPanRef = useRef({ x: 0, y: 0 });
+    // Selection identity at the last render (see selectionChanged in the loop).
+    const lastRenderSelectionRef = useRef<Selection>(null);
+    const lastRenderContextualRef = useRef<ContextualTarget | null>(null);
     // Frame-accurate "a new video frame was presented" signal. currentTime
     // advances continuously while playing, so it cannot gate to the decoded
     // frame rate; requestVideoFrameCallback fires once per presented frame
@@ -2918,8 +3027,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /**
      * Drop a selection that is being KEPT on a stroke — which now includes a
      * clicked text label, held after release so its resize handles stay
-     * reachable. Scoped to 'stroke' and 'textResize' only: joint-node and angle
-     * selections have their own lifecycles and are deliberately left alone.
+     * reachable — and a pressed joint-chain node, which its finalize also keeps
+     * (it was unreachable before KNOWN_ISSUES 011 was fixed, so it was never
+     * listed here). Angle selections clear on release and never reach this.
      *
      * Needed wherever strokesRef is replaced wholesale (undo, redo, Clear all,
      * snapshot import): the selection holds an INDEX, and after the array is
@@ -2927,7 +3037,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      */
     const dropKeptStrokeSelection = () => {
       const kind = selectionRef.current?.kind;
-      if (kind === 'stroke' || kind === 'textResize') {
+      if (kind === 'stroke' || kind === 'textResize' || kind === 'jointNode') {
         selectionRef.current = null;
         renderDirtyRef.current = true;
       }
@@ -3225,6 +3335,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       historyIdxRef.current = historyRef.current.length - 1;
       renderDirtyRef.current = true;
     }, []);
+
+    /**
+     * True when the live marks are not the exact objects of the current history
+     * entry, i.e. something was edited since it was pushed. Edits always
+     * replace the changed mark's object, so identity is enough.
+     */
+    const liveStateDiffersFromHistoryTop = (): boolean => {
+      const top = historyRef.current[historyIdxRef.current];
+      if (!top) return true;
+      const same = <T,>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+      return !same(strokesRef.current, top.strokes) || !same(angleMeasRef.current, top.angles);
+    };
 
     /**
      * Rewrite the CURRENT history entry from live state instead of adding one.
@@ -4037,7 +4159,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       poseBridgeRef.current = bridge;
       poseLoopActiveRef.current = true;
 
-      bridge.onResult((keypoints) => {
+      bridge.onResult((keypoints, meta?: PoseResultMeta) => {
+        // A result for a frame the coach has scrubbed away from is never drawn
+        // nor cached: it was requested before the latest seek, or (paused) it
+        // belongs to another video time. It used to land on whatever frame was
+        // on screen when it arrived, and be cached under that time too, so
+        // scrubbing back restored it — a skeleton from a different moment.
+        const resV = videoRef.current;
+        // Not during an AI Track pass: it pipelines seeks and collects every
+        // result against its own frame bookkeeping.
+        if (meta && resV && !bakingRef.current && (
+          meta.requestedAt < lastSeekAtRef.current ||
+          (resV.paused && Math.abs(meta.videoTime - resV.currentTime) > 0.05)
+        )) {
+          poseDbg.event(`seek: dropped result for t=${meta.videoTime.toFixed(2)} (video t=${resV.currentTime.toFixed(2)})`); // TEMP-DEBUG-POSE
+          return;
+        }
         // Precision AI Track capture (MoveNet-fallback path only) — record every
         // detection with its video time, ahead of any display gating. When the
         // frame-stepped MediaPipe pass is collecting (bakeBridgeCollectRef
@@ -4076,7 +4213,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             posePrevSampleRef.current = poseLatestSampleRef.current;
             poseLatestSampleRef.current = { kps: keypoints, ts: performance.now() };
             latestKeypointsRef.current = keypoints;
+            livePoseStampRef.current = { kps: keypoints, t: meta?.videoTime ?? (v?.currentTime ?? 0) };
             renderDirtyRef.current = true;
+            const sr = seekRequestRef.current;
+            if (sr && meta && Math.abs(meta.videoTime - sr.t) < 0.05) {
+              poseDbg.event(`seek: result after ${Math.round(performance.now() - sr.at)}ms (t=${sr.t.toFixed(2)})`); // TEMP-DEBUG-POSE
+              seekRequestRef.current = null;
+            }
           }
 
           // ── Auto-focus crop ────────────────────────────────────────────
@@ -4130,6 +4273,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       bridge.onReady(() => {
         onProcessingStatus?.('Skeleton ready — press play');
+        renderDirtyRef.current = true; // drop the on-video "Preparing" hint even while paused
         if (pendingFocusRef.current) {
           bridge.setFocusPoint(pendingFocusRef.current);
         }
@@ -4323,6 +4467,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             posePrevSampleRef.current = poseLatestSampleRef.current;
             poseLatestSampleRef.current = { kps, ts: performance.now() };
             latestKeypointsRef.current = kps;
+            livePoseStampRef.current = { kps, t: nowT };
             renderDirtyRef.current = true;
           }
         } catch (e) {
@@ -4416,22 +4561,69 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
 
       const onPause = () => detectStaticFrame();
+
+      // ONE pose for the frame the coach stopped on. A touch drag on the timeline
+      // seeks on every move; detecting on each `seeked` spent the single
+      // in-flight slot on frames already left behind, and nothing guaranteed the
+      // last one was ever detected (a request made while the frame is not yet
+      // decodable is skipped by the bridge, with no retry). So: wait until the
+      // seeks stop, check the frame is decodable, retry once if it is not.
+      let seekSettleTimer: ReturnType<typeof setTimeout> | null = null;
+      // Whether the frame the last seek landed on has been PAINTED. A capture
+      // taken right after 'seeked' can still carry the previous frame's pixels
+      // until the new one is presented; the AI Track pass waits for one
+      // requestVideoFrameCallback for exactly this reason (runPrecisionPass).
+      let seekFramePainted = true;
+      let seekGeneration = 0;
+      const requestSettledFrame = (attempt: number) => {
+        seekSettleTimer = null;
+        const v = videoRef.current;
+        if (!v || !v.paused || !poseLoopActiveRef.current) return;
+        const notReady = v.seeking || v.readyState < 2 || !seekFramePainted;
+        if (notReady && attempt === 0) {
+          poseDbg.event(`seek: frame not ready (rs=${v.readyState}${seekFramePainted ? '' : ', not painted'}), retrying`); // TEMP-DEBUG-POSE
+          seekSettleTimer = setTimeout(() => requestSettledFrame(1), SEEK_RETRY_MS);
+          return;
+        }
+        seekRequestRef.current = { t: v.currentTime, at: performance.now() };
+        poseDbg.event(`seek: requested pose for t=${v.currentTime.toFixed(2)}`); // TEMP-DEBUG-POSE
+        detectStaticFrame();
+      };
+      const onSeeking = () => { lastSeekAtRef.current = performance.now(); };
       const onSeeked = () => {
+        livePoseClockRef.current = performance.now();
         // A seek invalidates MediaPipe VIDEO mode's region of interest, so the next
         // few PLAYING detections pay for the full person detector. Exclude them
         // from the latency verdict (see MP_LIVE_POST_SEEK_SKIP) — they are not the
         // steady state the budget is about.
         mpLivePostSeekSkipRef.current = MP_LIVE_POST_SEEK_SKIP;
-        if (videoRef.current?.paused) detectStaticFrame();
+        if (videoRef.current?.paused) {
+          // The AI Track pass (MoveNet fallback) frame-steps by seeking and
+          // collects the detection each 'seeked' fires, waiting only ~90 ms per
+          // frame (app/analysis/page.tsx runPrecisionPass). It keeps the
+          // immediate request; only a coach's scrub is debounced.
+          if (bakingRef.current) { detectStaticFrame(); return; }
+          const sv = videoRef.current;
+          if (sv && typeof sv.requestVideoFrameCallback === 'function') {
+            seekFramePainted = false;
+            const gen = ++seekGeneration;
+            // Only the latest seek's frame counts: a callback left over from an
+            // earlier seek in the same drag paints a frame the coach has left.
+            sv.requestVideoFrameCallback(() => { if (gen === seekGeneration) seekFramePainted = true; });
+          }
+          if (seekSettleTimer) clearTimeout(seekSettleTimer);
+          seekSettleTimer = setTimeout(() => requestSettledFrame(0), SEEK_SETTLE_MS);
+        }
       };
       // Resume-from-pause: snap the filter to the live frame instead of letting
       // a stale velocity estimate produce a jitter/lag burst on the first frames.
-      const onPlay = () => { poseBridgeRef.current?.resetSmoothing(); cancelScheduled(); scheduleNext(); };
+      const onPlay = () => { livePoseClockRef.current = performance.now(); poseBridgeRef.current?.resetSmoothing(); cancelScheduled(); scheduleNext(); };
       // Returning from another app/tab: rVFC/rAF were throttled or dropped
       // while hidden — restart the loop (playing) or re-snap the static frame
       // (paused) so the skeleton never "disappears" after switching apps.
       const onVisibility = () => {
         if (document.visibilityState !== 'visible') return;
+        livePoseClockRef.current = performance.now();
         const v = videoRef.current;
         if (!v) return;
         if (v.paused) detectStaticFrame();
@@ -4439,6 +4631,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
 
       video.addEventListener('pause', onPause);
+      video.addEventListener('seeking', onSeeking);
       video.addEventListener('seeked', onSeeked);
       video.addEventListener('play', onPlay);
       document.addEventListener('visibilitychange', onVisibility);
@@ -4449,7 +4642,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return () => {
         poseLoopActiveRef.current = false;
         cancelScheduled();
+        if (seekSettleTimer) clearTimeout(seekSettleTimer);
         video.removeEventListener('pause', onPause);
+        video.removeEventListener('seeking', onSeeking);
         video.removeEventListener('seeked', onSeeked);
         video.removeEventListener('play', onPlay);
         document.removeEventListener('visibilitychange', onVisibility);
@@ -4480,6 +4675,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // the live worker is off, a restored snapshot/frame pose is left intact.
         if (bestDist <= 0.12 && liveSkeletonActive()) {
           latestKeypointsRef.current = best.keypoints;
+          livePoseStampRef.current = { kps: best.keypoints, t: best.timeSeconds };
           renderDirtyRef.current = true;
         }
       };
@@ -5176,10 +5372,23 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         lastRenderZoomRef.current = zoomRef.current;
         lastRenderPanRef.current = { x: panXRef.current, y: panYRef.current };
 
+        // A selection's box, handles, node ring and the Style-mode box are all
+        // STATIC, so a selection at rest is drawn once — when it appears,
+        // changes or goes away — and then idles. Only a drag in progress
+        // repaints every frame (below). Counting any non-null selection as an
+        // interaction kept a selected text label / joint node / Style box
+        // repainting at the display rate for as long as it stayed selected
+        // (KNOWN_ISSUES 012). Every write to these refs replaces the object,
+        // so identity catches all of them — no per-call-site dirty flag needed.
+        const selectionChanged =
+          selectionRef.current !== lastRenderSelectionRef.current ||
+          contextualTargetRef.current !== lastRenderContextualRef.current;
+        lastRenderSelectionRef.current = selectionRef.current;
+        lastRenderContextualRef.current = contextualTargetRef.current;
+
         const hasActiveInteraction =
           !!activeStrokeRef.current ||
-          !!selectionRef.current ||
-          !!contextualTargetRef.current ||
+          (isDraggingRef.current && !!selectionRef.current) ||
           !!liveAngleRef.current ||
           isSelectingStroRegionRef.current ||
           precisionAnchorPointerIdRef.current !== null ||
@@ -5221,6 +5430,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const needsRender =
           videoFrameChanged ||
           zoomChanged ||
+          selectionChanged ||
           renderDirtyRef.current ||
           renderWaitersRef.current.length > 0 ||
           hasActiveInteraction ||
@@ -5663,7 +5873,47 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             !bakedPose &&
             !bakingRef.current &&
             poseModeRef.current === 'live';
-          if (!hiddenByTrackScope && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
+          // A live pose that is no longer current is hidden rather than drawn
+          // off the player. While PLAYING, the render loop used to keep painting
+          // the last detection however old it was (the blend below clamps at the
+          // latest pose), so a stalled detector left a skeleton frozen in a pose
+          // the player had already left. Only the live sample on display counts:
+          // a baked track, a paused frame and a restored snapshot are exact for
+          // the frame they show and are never hidden here.
+          const liveS = poseLatestSampleRef.current;
+          const showingLiveSample =
+            !bakedPose && !!liveS && liveS.kps === latestKeypointsRef.current && liveSkeletonActive();
+          // "Stale" is relative to this device's own detection pace: a slow
+          // device that lands a pose every 700 ms is healthy, not stalled, and
+          // must not blink between detections. A real hang is caught sooner by
+          // the bridge's watchdog (`stalled`).
+          const prevLiveS = posePrevSampleRef.current;
+          const liveInterval = prevLiveS && liveS ? liveS.ts - prevLiveS.ts : 0;
+          const staleAfterMs = Math.max(LIVE_POSE_STALE_MS, 3 * liveInterval);
+          const hiddenAsStalePlaying =
+            showingLiveSample && !!video && !video.paused && (
+              !!poseBridgeRef.current?.stalled ||
+              performance.now() - Math.max(liveS!.ts, livePoseClockRef.current) > staleAfterMs
+            );
+          // Paused or scrubbing: the live (or cache-restored) pose on display
+          // was detected at another video time, and the pose for this frame has
+          // not landed yet. A snapshot, a baked track, or a cached pose that
+          // matches this frame never trips this (their pose is not the stamped
+          // one, or its time matches).
+          const stamp = livePoseStampRef.current;
+          const pausedDrift = stamp && video ? Math.abs(stamp.t - video.currentTime) : 0;
+          const hiddenAsStalePaused =
+            !bakedPose && !!video && video.paused && liveSkeletonActive() &&
+            !!stamp && stamp.kps === latestKeypointsRef.current &&
+            pausedDrift > PAUSED_POSE_MAX_DRIFT_S;
+          const hiddenAsStale = hiddenAsStalePlaying || hiddenAsStalePaused;
+          if (hiddenAsStale !== staleHiddenRef.current) { // TEMP-DEBUG-POSE
+            staleHiddenRef.current = hiddenAsStale;
+            poseDbg.event(hiddenAsStale
+              ? `stale pose hidden (${hiddenAsStalePaused ? `pose t=${stamp!.t.toFixed(2)}, video t=${video!.currentTime.toFixed(2)}` : 'no fresh result'})`
+              : 'stale pose shown again');
+          }
+          if (!hiddenByTrackScope && !hiddenAsStale && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
             // Motion smoothing (live path): while PLAYING, INTERPOLATE the
             // displayed pose between the last two detections (prev → latest,
             // blended by sample age). Bounded — no overshoot, no stale-freeze
@@ -5735,6 +5985,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               onSkeletonAnglesUpdateRef.current(angles);
             }
             ctx.restore();
+          } else if (
+            !bakedPose && liveSkeletonActive() && !poseBridgeRef.current!.isReady && vW > 0 && vH > 0
+          ) {
+            // The skeleton is on but still loading (model download, shader
+            // compile, device speed check — up to a minute on a phone the first
+            // time). Say so ON the video until it can really draw: the top
+            // status message can be replaced by any other message, and a coach
+            // who presses play early would otherwise just see no skeleton.
+            drawCanvasHint(ctx, dx, dy, dw, 'Preparing the skeleton…');
+          } else if (hiddenAsStale && vW > 0 && vH > 0) {
+            drawCanvasHint(ctx, dx, dy, dw, 'Skeleton catching up…');
           } else if (hiddenByTrackScope && vW > 0 && vH > 0) {
             // WHY THIS LABEL EXISTS.
             // `hiddenByTrackScope` is CORRECT behaviour — once a section is
@@ -6050,10 +6311,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         // Completed strokes
-        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current);
+        const jointBallR = jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh);
+        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current, jointBallR);
 
         // Active (in-progress) stroke
-        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current);
+        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current, jointBallR);
 
         // Swing path being drawn
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
@@ -6087,6 +6349,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               spinning: circleSpinningRef.current || undefined,
             },
             animTickRef.current,
+            jointBallR,
           );
         }
 
@@ -6186,7 +6449,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 ctx.strokeStyle = '#FFD700';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.arc(n.x, n.y, JOINT_NODE_RADIUS + 6, 0, Math.PI * 2);
+                ctx.arc(n.x, n.y, jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh) + JOINT_NODE_RING_GAP, 0, Math.PI * 2);
                 ctx.stroke();
                 ctx.restore();
               }
@@ -6414,7 +6677,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const eraserPos = outlineEraserPosRef.current;
         const eraserTool = activeToolRef.current;
         const eraserOwnsGesture = styleModeRef.current || outlineErasingIdxRef.current >= 0;
-        if (eraserR > 0 && eraserPos && eraserOwnsGesture && OUTLINE_ERASER_TOOLS.has(eraserTool)) {
+        if (
+          eraserR > 0 && eraserPos &&
+          (eraserTool === 'erase' || (eraserOwnsGesture && OUTLINE_ERASER_TOOLS.has(eraserTool)))
+        ) {
           ctx.save();
           ctx.globalAlpha = 0.35;
           ctx.fillStyle = 'rgba(255, 59, 48, 0.25)';
@@ -6984,7 +7250,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           best = Math.min(best, distToSegment(pos, jc.nodes[i], jc.nodes[i + 1]));
         }
         for (const n of jc.nodes) {
-          best = Math.min(best, Math.hypot(pos.x - n.x, pos.y - n.y) - JOINT_NODE_RADIUS);
+          best = Math.min(best, Math.hypot(pos.x - n.x, pos.y - n.y) - jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh));
         }
         return best;
       }
@@ -7245,18 +7511,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return 'miss';
     }, [webcamVideoRef]);
 
+    /**
+     * The Eraser tool: cut every outline under the eraser ring.
+     *
+     * It used to delete whole marks, but nothing in the UI offered it; it is now
+     * the Draw list's Eraser, which does what Style's old "Erase part of line"
+     * did. Unlike that mode it is not latched to the mark the press started on —
+     * a drag across several marks cuts each one it passes over, and a press on
+     * empty space just moves the ring. Only marks the ring actually touches get a
+     * dot, so a near miss leaves nothing in the saved drawing.
+     */
     const eraseAt = useCallback((pos: Pt) => {
-      const T = 22;
-      // Same distance-to-stroke test as the Select tool so erasing hits outlines,
-      // including circles/rects/triangles (not just their center).
-      strokesRef.current = strokesRef.current.filter((s) => {
-        const d = hitTestStroke(s, pos);
-        const lw = typeof (s as { lw?: number }).lw === 'number' ? (s as { lw: number }).lw : 2;
-        return d > T + lw * 0.6;
+      outlineEraserPosRef.current = pos;
+      renderDirtyRef.current = true;
+      const r = outlineEraserSizeRef.current;
+      if (r <= 0) return;
+      strokesRef.current.forEach((s2, i) => {
+        if (!OUTLINE_ERASER_STROKES.has(s2.tool)) return;
+        const lw = (s2 as { lw?: number }).lw ?? 2;
+        if (hitTestStroke(s2, pos) <= r + lw / 2) applyOutlineEraserDot(i, pos);
       });
-      angleMeasRef.current = angleMeasRef.current.filter(
-        m => Math.hypot(m.v.x - pos.x, m.v.y - pos.y) > T,
-      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // ── Tool primitives (single drawing source of truth) ────────────────────
@@ -8222,28 +8497,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
-        // Back-to-front so the TOPMOST (last-drawn) mark wins an overlap: the
-        // distances tie at 0 anywhere two filled shapes overlap, and a strict
-        // `<` keeps whichever was seen first — which, iterating forwards, was
-        // the one painted UNDERNEATH the mark the coach was pointing at.
-        for (let i = strokesRef.current.length - 1; i >= 0; i--) {
-          const d = hitTestStroke(strokesRef.current[i], pos);
-          if (d < bestDist) {
-            bestDist = d;
-            best = { kind: 'stroke', idx: i, start: pos, orig: strokesRef.current[i] };
+        // A press on a node is a HANDLE press: it grabs that one node, the way a
+        // text resize handle grabs its corner above. It must not compete with the
+        // mark bodies on distance: hitTestStroke scores a chain's nodes as
+        // `d - jointNodeRadius(...)`, always below the node pass's `d`, so the whole
+        // chain used to win every node press and single-node editing was
+        // unreachable (KNOWN_ISSUES 011). A press on a segment away from any node
+        // misses the node pass and still selects (and moves) the whole chain.
+        if (!best) {
+          // Back-to-front so the TOPMOST (last-drawn) mark wins an overlap: the
+          // distances tie at 0 anywhere two filled shapes overlap, and a strict
+          // `<` keeps whichever was seen first — which, iterating forwards, was
+          // the one painted UNDERNEATH the mark the coach was pointing at.
+          for (let i = strokesRef.current.length - 1; i >= 0; i--) {
+            const d = hitTestStroke(strokesRef.current[i], pos);
+            if (d < bestDist) {
+              bestDist = d;
+              best = { kind: 'stroke', idx: i, start: pos, orig: strokesRef.current[i] };
+            }
           }
-        }
 
-        for (let i = angleMeasRef.current.length - 1; i >= 0; i--) {
-          const m = angleMeasRef.current[i];
-          const d = Math.min(
-            Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
-            distToSegment(pos, m.v, m.p1),
-            distToSegment(pos, m.v, m.p2),
-          );
-          if (d < bestDist) {
-            bestDist = d;
-            best = { kind: 'angle', idx: i, start: pos, orig: m };
+          for (let i = angleMeasRef.current.length - 1; i >= 0; i--) {
+            const m = angleMeasRef.current[i];
+            const d = Math.min(
+              Math.hypot(pos.x - m.v.x, pos.y - m.v.y),
+              distToSegment(pos, m.v, m.p1),
+              distToSegment(pos, m.v, m.p2),
+            );
+            if (d < bestDist) {
+              bestDist = d;
+              best = { kind: 'angle', idx: i, start: pos, orig: m };
+            }
           }
         }
 
@@ -8700,8 +8984,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // Outline eraser dragging
-      if (outlineErasingIdxRef.current >= 0 && isDraggingRef.current) {
+      // Outline eraser dragging (latched to one mark; the Eraser tool is not)
+      if (outlineErasingIdxRef.current >= 0 && isDraggingRef.current && tool !== 'erase') {
         const idx = outlineErasingIdxRef.current;
         const s = strokesRef.current[idx];
         if (s && (
@@ -8744,8 +9028,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // the next mouse move; it is gated on the same condition the draw uses.
       if (
         outlineEraserSizeRef.current > 0 &&
-        (styleModeRef.current || outlineErasingIdxRef.current >= 0) &&
-        OUTLINE_ERASER_TOOLS.has(tool)
+        (tool === 'erase' ||
+          ((styleModeRef.current || outlineErasingIdxRef.current >= 0) && OUTLINE_ERASER_TOOLS.has(tool)))
       ) {
         outlineEraserPosRef.current = pos;
         renderDirtyRef.current = true;
@@ -8856,6 +9140,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // ── Finalize Select drag ───────────────────────────────────────────
       if (selectionRef.current) {
+        // Only a drag in progress is an edit. A text label or joint node stays
+        // selected after release, and the canvas wires onPointerLeave to this
+        // handler, so moving off the canvas (to reach Undo) used to land here
+        // with nothing dragged and push a duplicate history entry — the first
+        // Undo then stepped onto it and looked dead (KNOWN_ISSUES 016).
+        if (!isDraggingRef.current) return;
         const finSel = selectionRef.current;
         if (finSel.kind === 'textResize') {
           // Keep the text stroke selected so resize handles remain visible
@@ -8885,6 +9175,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           selectionRef.current = null;
         }
         isDraggingRef.current = false;
+        // A click that moved nothing is not an edit (KNOWN_ISSUES 018). Every
+        // move or resize replaces the mark's object, so if the live marks are
+        // still the very objects of the current history entry, nothing
+        // changed and a push would only add a no-op Undo step.
+        if (!liveStateDiffersFromHistoryTop()) return;
         pushHistory();
         return;
       }
@@ -8926,6 +9221,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         isDraggingRef.current = false;
         pushHistory();
         return;
+      }
+      // An Eraser drag that cut nothing still drops its ring on lift: a finger
+      // has no hover to move it on, so it would sit where the touch ended.
+      if (activeToolRef.current === 'erase' && outlineEraserPosRef.current) {
+        outlineEraserPosRef.current = null;
+        renderDirtyRef.current = true;
       }
 
       commitActiveStroke();
@@ -8996,10 +9297,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       renderDirtyRef.current = true;
       const baseLw = drawingOptsRef.current.lineWidth;
 
-      // Erase: discrete tap, never holds a drag.
+      // Erase: discrete tap, never holds a drag. A tap that cut something is
+      // finalised here (one undo step), as lifting a finger would.
       if (tool === 'erase') {
         beginDrawToolAt(ch, baseLw);
         isDraggingRef.current = false;
+        if (outlineErasingIdxRef.current >= 0) {
+          outlineErasingIdxRef.current = -1;
+          pushHistory();
+        }
         return;
       }
 
@@ -9186,7 +9492,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         (cursorFor as Record<string, string>)[k] = isPanningRef.current ? 'grabbing' : 'grab';
       });
     }
-    if (outlineEraserSizeRef.current > 0) {
+    // The PROP, not outlineEraserSizeRef: the ref is synced in an effect after
+    // this render, so reading it here lagged one render behind — picking Eraser
+    // showed the 'cell' cursor under the ring, and picking Circle right after
+    // hid the cursor entirely.
+    if (outlineEraserSize > 0) {
       cursorFor.circle = 'none';
       cursorFor.bodyCircle = 'none';
       cursorFor.rect = 'none';
@@ -9195,6 +9505,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       cursorFor.arrow = 'none';
       cursorFor.arrowAngle = 'none';
       cursorFor.pen = 'none';
+      cursorFor.erase = 'none';
     }
 
     const onWheelCanvas = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
