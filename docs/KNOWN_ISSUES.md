@@ -774,7 +774,7 @@ rail, but the obvious close button is unreachable.
 
 ---
 
-## 018 — Clicking a mark with the Select tool (no drag) adds a no-op Undo step
+## 018 — Clicking a mark with the Select tool (no drag) adds a no-op Undo step — RESOLVED
 
 **Found:** 2026-10-01, browser-verifying the fix for 016.
 
@@ -798,6 +798,20 @@ eraser branch, which edits the stroke at pointer-down and stores the edited
 object as `orig`; it must still push. Needs approval.
 
 **Severity:** low-medium — one extra Undo press, nothing lost.
+
+**RESOLVED** (2026-10-07, branch `claude/canvas-recording-polish`). The Select
+finalize in `onPointerUp` (`components/Canvas.tsx`) now pushes only when
+`liveStateDiffersFromHistoryTop()`: the live strokes or angles are no longer
+the exact objects of the current history entry. Every move and resize
+replaces the changed mark's object, so a click that moved nothing finds them
+identical and pushes nothing; any real change (including the outline eraser,
+which replaces the stroke at pointer-down) still pushes. Browser-verified in
+Chromium at 1440 px and at 390 px with touch: line + circle drawn, plain
+Select click on the line, Undo ×1 removes the circle (before the fix it did
+nothing); click + drag the line, Undo ×1 restores it, Redo re-applies; plain
+click on a text label, Undo ×1 undoes the label's creation; label drag, Undo
+×1, Redo (016) unchanged; joint-node drag and chain drag each undo in one
+press.
 
 ---
 

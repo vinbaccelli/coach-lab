@@ -3337,6 +3337,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     }, []);
 
     /**
+     * True when the live marks are not the exact objects of the current history
+     * entry, i.e. something was edited since it was pushed. Edits always
+     * replace the changed mark's object, so identity is enough.
+     */
+    const liveStateDiffersFromHistoryTop = (): boolean => {
+      const top = historyRef.current[historyIdxRef.current];
+      if (!top) return true;
+      const same = <T,>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+      return !same(strokesRef.current, top.strokes) || !same(angleMeasRef.current, top.angles);
+    };
+
+    /**
      * Rewrite the CURRENT history entry from live state instead of adding one.
      *
      * Used to coalesce a continuous edit (dragging the thickness/opacity slider
@@ -9163,6 +9175,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           selectionRef.current = null;
         }
         isDraggingRef.current = false;
+        // A click that moved nothing is not an edit (KNOWN_ISSUES 018). Every
+        // move or resize replaces the mark's object, so if the live marks are
+        // still the very objects of the current history entry, nothing
+        // changed and a push would only add a no-op Undo step.
+        if (!liveStateDiffersFromHistoryTop()) return;
         pushHistory();
         return;
       }
