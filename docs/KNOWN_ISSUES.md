@@ -977,3 +977,31 @@ more service-client writers (`app/api/academy-members`, `app/api/ebook`).
 
 **Severity:** high — YouTube Connect is unusable in production; paid checkouts
 would not record a subscription while the key is wrong.
+
+---
+
+## 024 — YouTube upload blocked by CORS ("Failed to fetch") — resumable session created without an Origin
+
+**Found:** 2026-10-07, production: Upload to YouTube on the Recording complete
+screen failed with "Failed to fetch"; console: `Access to fetch at
+'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable…&upload_id=…'
+from origin 'https://www.anglemotion.com' has been blocked by CORS policy`.
+(Numbered 024: 023 is on `claude/youtube-connect-fix`, 021 on the tours branch.)
+
+**Verified root cause.** Since 2026-09-14 (`91dc569d`, PR #47) the server only
+creates the resumable session (`app/api/youtube/upload-session/route.ts`) and the
+browser PUTs the bytes to the session URL (`lib/export/youtubeResumableUpload.ts`).
+That PUT is cross-origin, and Google's upload server answers it with
+`Access-Control-Allow-Origin` only for the origin given when the session was
+created. The session was created with Node's fetch, which sends no `Origin`
+(measured locally), so no browser origin was ever allowed. Google's upload host
+returns `access-control-allow-origin` only when the request carries an Origin
+(measured against `www.googleapis.com/upload/youtube/v3/videos`).
+
+**Fix.** The route reads the request's `Origin`, accepts only
+`https://anglemotion.com`, `https://www.anglemotion.com` (and localhost in
+development), and creates the session with it; a missing or other origin gets
+no session. A failure before Google confirms any bytes now shows "YouTube upload
+could not start. Try again, or download the file instead."
+
+**Severity:** high — no browser upload to YouTube could succeed.
