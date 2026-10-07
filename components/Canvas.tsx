@@ -10,6 +10,7 @@ import React, {
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg, arrowBearingDeg } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
+import { emitTourSignal } from '@/lib/tourSignals';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
@@ -6994,6 +6995,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       contextualDirtyRef.current = false;
       onStyleSelectionChangeRef.current?.(buildContextualSnapshot(target));
       renderDirtyRef.current = true;
+      emitTourSignal('style-mark-selected');
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -7073,6 +7075,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       onStyleSelectionChangeRef.current?.(buildContextualSnapshot(target));
       renderDirtyRef.current = true;
+      emitTourSignal('style-changed');
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [onOutlineEraserSizeChange, pushHistory, replaceHistoryTop]);
 
@@ -7809,6 +7812,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (isContextualStrokeTool(active.tool)) {
         notifyDrawCommitted();
       }
+      emitTourSignal('mark-drawn', { tool: active.tool });
       // Report measurement to the column
       const toolName = active.tool as string;
       if (toolName === 'arrowAngle' || toolName === 'arrow' || toolName === 'ruler' || toolName === 'line') {
@@ -9142,6 +9146,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         } else {
           selectionRef.current = null;
         }
+        // Every drag replaces the mark's object, so identity says whether this
+        // press actually moved something (a plain click leaves it untouched).
+        const finMark = finSel.kind === 'angle' ? angleMeasRef.current[finSel.idx] : strokesRef.current[finSel.idx];
+        if (finMark && finMark !== finSel.orig) emitTourSignal('mark-moved');
         isDraggingRef.current = false;
         pushHistory();
         return;
@@ -9657,6 +9665,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         ) : null}
         <canvas
           ref={canvasRef}
+          data-tour-id="tour-canvas"
           width={containerWidth}
           height={containerHeight}
           style={{
@@ -9934,8 +9943,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             <button
               type="button"
               data-tour-id="tour-help"
-              aria-label="Open guided tour"
-              title="Guided tour"
+              aria-label="Open guided tours"
+              title="Guided tours"
               onPointerDown={(e) => {
                 e.preventDefault();
                 e.stopPropagation();

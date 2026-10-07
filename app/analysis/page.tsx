@@ -182,6 +182,7 @@ const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportM
 import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import RulerOverlay from '@/components/ruler/RulerOverlay';
+import { emitTourSignal } from '@/lib/tourSignals';
 import type { RulerCalibration } from '@/lib/ruler/types';
 import type { UnitSystem } from '@/lib/ruler/units';
 import { uploadDataUrl } from '@/lib/supabase/storage';
@@ -5202,6 +5203,7 @@ function Home() {
     // or the whole flow is silently inert.
     setDataColumnActive(true);
     setAngleDiffState({ first: null });
+    emitTourSignal('angle-diff-armed');
   }, [handleToolChange]);
 
   /** Abandon the two-arrow flow (tool change, or the coach cancelling). */
@@ -7401,6 +7403,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                           value: m.value, unit: '°', type: 'arrowAngle',
                         }]);
                         setAngleDiffState({ first: m.value });
+                        emitTourSignal('angle-diff-first');
                       } else {
                         const diff = angleDifferenceDeg(angleDiffState.first, m.value);
                         setMeasurementColumn(prev => [
@@ -7409,6 +7412,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                           { id: `ad-${Date.now()}-d`, label: 'Angle differential', value: diff, unit: '°', type: 'differential' },
                         ]);
                         setAngleDiffState(null);
+                        emitTourSignal('angle-diff-done');
                       }
                       return;
                     }

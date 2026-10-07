@@ -901,6 +901,7 @@ function Row({
           title={tooltip ?? label}
           data-active={active ? 'true' : undefined}
           data-destructive={destructive ? 'true' : undefined}
+          data-tour-id={`row-${k}`}
           style={rowStyle}
           onPointerDown={(e) => {
             if (e.pointerType !== 'touch') e.preventDefault();
@@ -927,6 +928,7 @@ function Row({
         title={tooltip ?? label}
         data-active={active ? 'true' : undefined}
         data-destructive={destructive ? 'true' : undefined}
+        data-tour-id={`row-${k}`}
         style={rowStyle}
         onPointerDown={(e) => {
           if (e.pointerType !== 'touch') e.preventDefault();
@@ -1016,6 +1018,7 @@ function BackHeader({
         type="button"
         aria-label="Select"
         title="Select and move drawn shapes"
+        data-tour-id="toolbar-select"
         aria-pressed={selectActive}
         style={{
           ...rb(selectActive, pressedKey === `sel-${title}`, io, denseMobile),
@@ -1391,6 +1394,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               key={c}
               type="button"
               aria-label={`Color ${c}`}
+              data-tour-id={`style-color-${c.slice(1)}`}
               style={{
                 ...rb(styleVals.color === c, pressedKey === `c-${c}`, io),
                 justifyContent: io ? 'center' : 'flex-start',
