@@ -81,7 +81,10 @@ export const PLANS: Plan[] = [
     featured: true,
     features: [
       'Everything in Light',
-      'Motion Layer — you choose the frames, not an algorithm',
+      // Pro's headline tool, but not Pro-only: middleware.ts gates /analysis on
+      // an active subscription of ANY tier and nothing checks the tier, so
+      // Light gets Motion Layer too. Worded as a highlight, not an exclusive.
+      'Motion Layer, on every plan — you choose the frames, not an algorithm',
       'Live point-by-point match tracking',
       'Match Decoder, straight to the player’s timeline',
       'Charted reports, one click to Google Docs and PDF',
