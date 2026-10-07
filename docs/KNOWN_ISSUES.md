@@ -844,6 +844,12 @@ this tab — an assumption the browser will not confirm.
 
 **Severity:** low — cosmetic, sub-chrome offset; shape, size and opacity are correct.
 
+**No longer reachable while `FLOATING_CAMERA_WINDOW` is off** (2026-10-07,
+`contexts/RecordingContext.tsx`). The engine no longer stamps the webcam in any
+share mode; the canvas PiP itself is what gets recorded whenever the shared
+surface includes the AngleMotion page, so its position is exact in tab and
+window share too. Applies again only if the constant is turned back on.
+
 ---
 
 ## 020 — Closing the floating window still turns the webcam off in a whole-screen recording — RESOLVED
@@ -883,3 +889,55 @@ since 2026-10-01 `components/RecordingControls.tsx`, compact, in panel A's
 top-right video-slot row). Pause / Resume / Stop live in the analysis page for the
 duration of any recording, reachable from every tool and panel, so closing the
 floating window never removes the only way to stop.
+
+**Superseded for launch** (2026-10-07). With `FLOATING_CAMERA_WINDOW` off the
+floating window never shows the camera in any mode; where it is still opened
+(entire-screen and window share, as the keep-alive — see 022) it is
+controls-only, so closing it never turns the webcam off.
+
+---
+
+## 022 — The recording painter runs in the AngleMotion page, so a hidden tab freezes the recording without the floating window
+
+**Found:** 2026-10-07, while removing the floating camera window for launch.
+(Numbered 022: 021 is taken on the guided-tours branch.)
+
+**Symptom (measured, not yet seen by a coach).** Without a floating Document PiP
+window, a recording whose AngleMotion tab goes into the background drops to
+about 1 frame a second until the tab comes back.
+
+**Verified root cause.** The recorded video is `recCanvas.captureStream()`, and
+the painter that copies the screen grab into `recCanvas` (`paintOnce` in
+`contexts/RecordingContext.tsx`) is driven by a timer in the AngleMotion page
+(or by the floating window's animation frames when one is open). Chrome
+throttles a hidden page to one timer tick a second and stops its animation
+frames. Measured in Chromium (real windowed browser under Xvfb, Playwright's
+throttling opt-outs removed, entire-screen capture running): AngleMotion tab
+sent behind another tab → timers 30 → 1 Hz, animation frames 60 → 0, painter
+30 → 1 fps, canvas-recorded video 38 → 2 KB/s, while a MediaRecorder on the RAW
+display track kept ~44 KB/s. With a Document PiP window open, the hidden page
+kept 30 timer ticks and 60 frames a second and the painter ran at full rate.
+The canvas render loop and the webcam background removal
+(`lib/webcamSegmentation.ts`) are also animation-frame driven and stop the same
+way, which only matters when the AngleMotion page itself is in the shared
+surface.
+
+**Fault assessment.** Architectural, pre-existing: it is why the floating window
+existed. Not introduced by removing the camera window, because the window is
+kept (controls-only) as the keep-alive for entire-screen and window share
+(`KEEPALIVE_WINDOW_SURFACES`). Tab share closes it: it normally captures the
+AngleMotion tab itself, which Chrome is expected to keep rendering while
+captured; that could not be measured here (real tab capture does not start in
+the test container) and is on Vin's real-Chrome test list.
+
+**Proposed fix (needs approval — changes the painter/captureStream topology,
+CLAUDE.md §6).** Record the display track directly instead of a canvas copy of
+it: no page timer in the path, so no throttling in any mode and no keep-alive
+window. Costs: the burned-in watermark (drawn by the painter today) would have to
+move to post-processing (the WebM → MP4 ffmpeg pass already runs), the 1280 px
+downscale would come from getDisplayMedia constraints instead, and it only works
+while the engine stamps nothing into the frame (true with the camera window
+off).
+
+**Severity:** medium — silent quality loss in a recording, but avoided today by
+the keep-alive window in the two modes where it is likely.

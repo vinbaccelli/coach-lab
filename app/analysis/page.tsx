@@ -18,7 +18,7 @@ import { angleDifferenceDeg } from '@/lib/drawingTools';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
-import { useRecording, RECORDING_AUDIO_CONSTRAINTS } from '@/contexts/RecordingContext';
+import { useRecording, RECORDING_AUDIO_CONSTRAINTS, FLOATING_CAMERA_WINDOW } from '@/contexts/RecordingContext';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import RecordingControls from '@/components/RecordingControls';
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
@@ -503,7 +503,11 @@ function Home() {
   // that honors background removal and the coach's PiP shape. In a tab/window
   // share the engine stamps the webcam into its own composite instead, so the
   // canvas must stay quiet or a shared AM tab would show two webcams.
-  const suppressWebcamPipWhileRecording = !isMonitorShare;
+  //
+  // With the floating camera window off (FLOATING_CAMERA_WINDOW, launch) the
+  // engine never stamps the webcam, so the canvas PiP is the webcam in every
+  // share mode and is never hidden.
+  const suppressWebcamPipWhileRecording = FLOATING_CAMERA_WINDOW && !isMonitorShare;
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
@@ -4816,7 +4820,9 @@ function Home() {
         // (camera permission is already granted, so it resolves immediately).
         // If activation is lost anyway, reopenPipWindow resolves false and logs —
         // Source B still records; only the floating window is missing.
-        if (!isPipOpen()) {
+        // Only in the floating-camera model: there the window IS the camera
+        // view. With it off the canvas shows the camera again by itself.
+        if (FLOATING_CAMERA_WINDOW && !isPipOpen()) {
           const opened = await reopenPipWindow();
           if (!opened) {
             console.warn('[page] PiP reopen skipped/failed — recording continues, camera still composited.');
