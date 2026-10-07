@@ -77,6 +77,44 @@ export const RECORDING_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 export const RECORDING_AUDIO_BPS = 128_000;
 
 /**
+ * FLOATING CAMERA WINDOW — OFF for launch (Vin, 2026-10-07). V2 candidate.
+ *
+ * The webcam lives ONLY on the AngleMotion canvas (cutout, shape, opacity as
+ * the coach set them) and the recording controls live in the page. With this
+ * off, in EVERY share mode:
+ *   • the canvas keeps drawing its webcam PiP while recording (never
+ *     suppressed), so whatever share includes the AngleMotion page records the
+ *     webcam exactly as the coach sees it;
+ *   • the engine never stamps a second copy of the webcam into its composite;
+ *   • no floating window shows the camera.
+ *
+ * `true` restores the previous model byte for byte: a floating Document PiP
+ * window showing the camera in tab/window share (controls-only in a whole-screen
+ * share), the canvas PiP hidden during tab/window recordings and the engine
+ * stamping the webcam into the file instead. Kept, not deleted, for V2 (a
+ * floating camera with background removal — see the V2 note in the PR).
+ */
+export const FLOATING_CAMERA_WINDOW = false;
+
+/**
+ * Share surfaces that still get a small CONTROLS-ONLY floating window while
+ * FLOATING_CAMERA_WINDOW is off. It is not there for its controls (the page has
+ * them): it is the KEEP-ALIVE. The engine's painter (paintOnce below) runs in
+ * this page, and Chrome throttles a hidden page to 1 timer tick a second and no
+ * animation frames — measured on 2026-10-07 in Chromium with an entire-screen
+ * capture running: AngleMotion tab sent to the background → painter 30 → 1 fps,
+ * recorded video ~2 KB/s (a frozen picture), while an open Document PiP window
+ * kept the hidden opener at 30 timer ticks / 60 frames a second and the painter
+ * at full rate. In an entire-screen or window share the coach routinely puts
+ * another tab or app in front while recording, so these keep it. A tab share
+ * normally captures the AngleMotion tab itself, which Chrome is expected to keep
+ * rendering while it is being captured, so it records with no window. That last
+ * point could not be measured in Chromium here (real tab capture does not start
+ * in the test container) and is on the real-Chrome test list in the PR.
+ */
+const KEEPALIVE_WINDOW_SURFACES: ReadonlySet<string> = new Set(['monitor', 'window']);
+
+/**
  * Best-effort upgrade of an ALREADY-OPEN track (the Hub mic, or the webcam's mic)
  * to the constraints above. The track was opened by someone else with defaults, and
  * applyConstraints is the only way to re-negotiate it in place. Failure is
@@ -315,7 +353,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     // even if the composite path bails out below. EXCEPT in a monitor share,
     // where the window is deliberately controls-only: the screen grab captures
     // that window, so a camera in it would double the coach's own canvas PiP.
-    if (!isMonitorShareRef.current) {
+    if (FLOATING_CAMERA_WINDOW && !isMonitorShareRef.current) {
       try { pipSurfaceRef.current?.setCameraStream(stream); } catch (err) {
         console.warn('[RecordingProvider] PiP camera update failed:', err);
       }
@@ -348,7 +386,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     // Size for what the window will actually show: a camera view, or controls
     // only. A camera-sized window with no camera in it is the black box.
     // Monitor share keeps the window controls-only (see isMonitorShare).
-    const camAtReopen = isMonitorShareRef.current
+    const camAtReopen = !FLOATING_CAMERA_WINDOW || isMonitorShareRef.current
       ? null
       : (sourcesRef.current?.getWebcamStream() ?? null);
     let pw: Window;
@@ -481,7 +519,8 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     // empty black <video>; with no camera the window is the control panel, so
     // ask for the control-panel size. It grows on its own (setCameraStream) if
     // the coach switches the webcam on later.
-    const hasCameraAtStart = !!sourcesRef.current?.getWebcamStream();
+    // With the camera window off it is controls-only whatever the webcam does.
+    const hasCameraAtStart = FLOATING_CAMERA_WINDOW && !!sourcesRef.current?.getWebcamStream();
     if (docPip?.requestWindow) {
       try {
         pipWin = await docPip.requestWindow(hasCameraAtStart ? PIP_SIZE_WITH_CAMERA : PIP_SIZE_CONTROLS_ONLY);
@@ -534,6 +573,24 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     // canvas PiP must stay visible from the very first recorded frame.
     isMonitorShareRef.current = isMonitor;
     setIsMonitorShare(isMonitor);
+
+    // The window was opened before the picker (it needs this click's user
+    // activation, and the share type is unknown until now). With the camera
+    // window off it is only kept as the keep-alive for the surfaces that need
+    // one; otherwise it closes here, before anything is attached to it.
+    const keepWindow =
+      FLOATING_CAMERA_WINDOW ||
+      !displaySettings?.displaySurface ||
+      KEEPALIVE_WINDOW_SURFACES.has(displaySettings.displaySurface);
+    if (pipWin && !keepWindow) {
+      try { pipWin.close(); } catch { /* noop */ }
+      pipWin = null;
+      docPipWindowRef.current = null;
+    }
+    // The engine draws the webcam into its own composite only in the old model
+    // (camera window on, tab/window share); otherwise the canvas PiP is the
+    // webcam in the recording and a stamp would be a second copy.
+    const engineStampsWebcam = FLOATING_CAMERA_WINDOW && !isMonitor;
 
     const displayVideo = document.createElement('video');
     displayVideo.muted = true;
@@ -624,7 +681,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         const source: HTMLCanvasElement | HTMLVideoElement | null =
           webcamVideo ? (cutoutCanvas ?? (rawUsable ? webcamVideo : null)) : null;
         const useCutout = source != null && source === cutoutCanvas;
-        if (!isMonitor && source && pipMode !== 'hidden') {
+        if (engineStampsWebcam && source && pipMode !== 'hidden') {
           // Geometry from the canvas PiP, scaled into this composite. The
           // fallback (no canvas mounted — e.g. recording from another route)
           // keeps the historic corner placement but at the canvas PiP's 11/9
@@ -731,7 +788,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       // window, and the coach's webcam is already in the frame via the canvas
       // PiP (which is the renderer that honors background removal and shape) —
       // a camera here would be the second, raw copy.
-      pipSurfaceRef.current = createPipRecorderSurface(pw, isMonitor ? null : camStream, {
+      pipSurfaceRef.current = createPipRecorderSurface(pw, engineStampsWebcam ? camStream : null, {
         onPause: () => pauseRecordingRef.current(),
         onStop: () => { void stopRecordingRef.current(); },
         getDurationMs: () => activeDurationMs(),
@@ -755,7 +812,9 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
         // silently dropped the coach out of the rest of the recording. The
         // in-page RecordingControls are always available, so Pause/Resume/Stop
         // survive the window closing and nothing is lost by keeping the camera.
-        const monitorShare = isMonitorShareRef.current;
+        // With the camera window off the window is controls-only in every mode,
+        // so closing it is the monitor-share case everywhere.
+        const monitorShare = isMonitorShareRef.current || !FLOATING_CAMERA_WINDOW;
         if (!monitorShare) webcamVideoElRef.current = null; // stop drawing Source B — camera off
         pipRafRef.current = null; // PiP rAF is dead with the window
         if (!paintBackupRef.current) paintBackupRef.current = setInterval(paintOnce, 33);
@@ -912,14 +971,13 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     mimeTypeRef.current = recorder.mimeType || mimeType;
     console.info(`[RecordingProvider] recorder.mimeType=${recorder.mimeType}`);
 
-    // User ended capture from the browser chrome → stop + save through our path.
+    // User ended capture from the browser chrome ("Stop sharing") → exactly
+    // what Stop in the page does: resume a paused recorder so the last chunk
+    // flushes, fold the paused time into the duration, stop, and arm the
+    // save failsafe. It used to stop the recorder directly and skipped all
+    // three, so stopping from a paused state could lose the tail.
     displayStream.getVideoTracks()[0]?.addEventListener('ended', () => {
-      const rec = recorderRef.current;
-      if (rec && rec.state !== 'inactive') {
-        try { rec.requestData(); } catch { /* noop */ }
-        rec.stop();
-        setRecState('stopped');
-      }
+      void stopRecordingRef.current();
     });
 
     chunksRef.current = [];
