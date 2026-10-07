@@ -944,6 +944,42 @@ the keep-alive window in the two modes where it is likely.
 
 ---
 
+## 023 — A publishable/anon key in the service-role slot makes server writes fail on RLS (YouTube Connect broke in production)
+
+**Found:** 2026-10-07, production report: Connect YouTube → "Could not save the
+connection". Vercel log: `[youtube/connection] store failed: new row violates
+row-level security policy for table "youtube_connections"`.
+
+**Verified root cause (code side).** `public.youtube_connections` has RLS on and
+deliberately ZERO policies (`supabase/migrations/20260728120000_youtube_connections.sql`);
+the only writer is the service-role client (`lib/supabase/service.ts`), which
+bypasses RLS. An RLS refusal therefore means the client was built from a key
+whose role is NOT service_role. The helper read only `SUPABASE_SERVICE_ROLE_KEY`
+and accepted any non-empty value, so a publishable (`sb_publishable_…`) or anon
+key in that variable produced a client that looked configured and ran as anon:
+writes refused by RLS, reads silently empty. No code on main changed between the
+late-September key migration and the report, so the value in Vercel Production is
+the remaining suspect; env changes apply only to deployments made after them.
+
+**Fix (code).** `createSupabaseServiceClient` classifies the key by format
+(`sb_secret_…` / service_role JWT accepted; publishable / anon JWT refused),
+also accepts `SUPABASE_SECRET_KEY`, and logs one specific error naming the
+variables and their kinds instead of building an anon client. `/api/health`
+reports the key KIND (never the value). The production value itself must be
+corrected in Vercel (see the PR).
+
+**Same exposure elsewhere.** Only two server writers use this client on main:
+the YouTube connection store and the Stripe webhook (`app/api/stripe/webhook/route.ts`).
+The webhook on main IGNORES the write result (supabase-js returns `{ error }`, it
+does not throw) and always answers 200, so a refused subscription write is lost
+and Stripe never retries. PR #64 (`claude/billing-r0`) fixes that; #65 adds two
+more service-client writers (`app/api/academy-members`, `app/api/ebook`).
+
+**Severity:** high — YouTube Connect is unusable in production; paid checkouts
+would not record a subscription while the key is wrong.
+
+---
+
 ## 024 — YouTube upload blocked by CORS ("Failed to fetch") — resumable session created without an Origin
 
 **Found:** 2026-10-07, production: Upload to YouTube on the Recording complete
