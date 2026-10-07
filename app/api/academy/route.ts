@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import { isAdmin } from '@/lib/admin';
 
 export async function GET() {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'academy');
+  if (denied) return denied;
 
   const { data, error } = await session.supabase
     .from('academy_resources')
@@ -18,6 +21,8 @@ export async function GET() {
 export async function POST(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'academy');
+  if (denied) return denied;
   if (!isAdmin(session.email)) return NextResponse.json({ error: 'Admin only' }, { status: 403 });
 
   const body = (await req.json()) as {
@@ -52,6 +57,8 @@ export async function POST(req: Request) {
 export async function DELETE(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'academy');
+  if (denied) return denied;
   if (!isAdmin(session.email)) return NextResponse.json({ error: 'Admin only' }, { status: 403 });
 
   const { id } = (await req.json()) as { id: string };

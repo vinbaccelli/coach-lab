@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import {
   discardCreatedDoc,
   ensurePlayerDocEx,
@@ -23,6 +24,8 @@ export const runtime = 'nodejs';
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'docsExport');
+  if (denied) return denied;
   if (!session.googleAccessToken) {
     console.error('[google-doc] No Google access token in session — user must sign out/in to grant scopes.');
     return NextResponse.json(

@@ -1,8 +1,15 @@
 import { NextResponse } from 'next/server';
+import type Stripe from 'stripe';
 import { stripe, tierForPriceId } from '@/lib/stripe';
-import { getPlan, isValidPlanId } from '@/lib/plans';
 import { createSupabaseServiceClient } from '@/lib/supabase/service';
+import { processStripeEvent, HANDLED_EVENTS, RetryableError, type SyncDeps } from '@/lib/billing/webhookSync';
 
+/**
+ * Stripe webhook. Signature-checked, then handed to lib/billing/webhookSync.ts
+ * (the contract lives there): event-level idempotency via
+ * `stripe_webhook_events`, every write checked, failures answered 500 so
+ * Stripe retries, rows written from the subscription re-read from Stripe.
+ */
 export async function POST(req: Request) {
   const body = await req.text();
   const sig = req.headers.get('stripe-signature');
@@ -12,58 +19,57 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Missing signature or webhook secret' }, { status: 400 });
   }
 
-  let event;
+  let event: Stripe.Event;
   try {
     event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
   } catch (err: any) {
     return NextResponse.json({ error: `Webhook error: ${err.message}` }, { status: 400 });
   }
 
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object as any;
-    const userId = session.metadata?.userId;
-    const customerId = session.customer;
-    const subscriptionId = session.subscription;
-    // Tier + seats travel through checkout metadata (set in the checkout route).
-    const tier = isValidPlanId(session.metadata?.plan) ? session.metadata.plan : 'pro';
-    const seats = Number(session.metadata?.seats) || getPlan(tier)?.seats || 1;
-
-    if (userId) {
-      try {
-        // Webhooks carry no user session — writes need the service-role client
-        // (the anon/session client is blocked by RLS here).
-        const supabase = createSupabaseServiceClient();
-        if (!supabase) throw new Error('SUPABASE_SERVICE_ROLE_KEY not configured');
-        await supabase.from('subscriptions').upsert({
-          user_id: userId,
-          stripe_customer_id: customerId,
-          stripe_subscription_id: subscriptionId,
-          status: 'active',
-          tier,
-          seats,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'user_id' });
-      } catch (e) { console.error('[stripe/webhook] subscription upsert failed:', e); }
-    }
+  if (!(HANDLED_EVENTS as readonly string[]).includes(event.type)) {
+    return NextResponse.json({ received: true });
   }
 
-  if (event.type === 'customer.subscription.deleted' || event.type === 'customer.subscription.updated') {
-    const sub = event.data.object as any;
-    const status = sub.status;
-    // Resolve the current tier from the active price (covers plan changes made
-    // in the Stripe customer portal, not just our own checkout).
-    const priceId = sub.items?.data?.[0]?.price?.id as string | undefined;
-    const tier = tierForPriceId(priceId);
-    const update: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
-    if (tier) { update.tier = tier; update.seats = getPlan(tier)?.seats ?? 1; }
-    try {
-      const supabase = createSupabaseServiceClient();
-      if (!supabase) throw new Error('SUPABASE_SERVICE_ROLE_KEY not configured');
-      await supabase.from('subscriptions')
-        .update(update)
-        .eq('stripe_subscription_id', sub.id);
-    } catch (e) { console.error('[stripe/webhook] subscription update failed:', e); }
+  // Webhooks carry no user session — writes need the service-role client.
+  // Missing configuration is an error to retry, not a success to acknowledge.
+  const db = createSupabaseServiceClient();
+  if (!db) {
+    console.error('[stripe/webhook] SUPABASE_SERVICE_ROLE_KEY not configured; event', event.id, 'will be retried');
+    return NextResponse.json({ error: 'Service client not configured' }, { status: 500 });
   }
 
-  return NextResponse.json({ received: true });
+  const deps: SyncDeps = {
+    retrieveSubscription: (id) => stripe.subscriptions.retrieve(id),
+    tierForPriceId,
+    async hasProcessedEvent(eventId) {
+      const { data, error } = await db.from('stripe_webhook_events').select('event_id').eq('event_id', eventId).maybeSingle();
+      if (error) throw new RetryableError(`stripe_webhook_events read failed: ${error.message}`);
+      return !!data;
+    },
+    async recordEvent(eventId, type) {
+      const { error } = await db
+        .from('stripe_webhook_events')
+        .upsert({ event_id: eventId, type, processed_at: new Date().toISOString() }, { onConflict: 'event_id', ignoreDuplicates: true });
+      if (error) throw new RetryableError(`stripe_webhook_events write failed: ${error.message}`);
+    },
+    async upsertSubscription(row) {
+      const { error } = await db.from('subscriptions').upsert(row, { onConflict: 'user_id' });
+      if (error) throw new RetryableError(`subscriptions upsert failed for ${row.user_id}: ${error.message}`);
+    },
+    async updateBySubscriptionId(subscriptionId, patch) {
+      const { data, error } = await db.from('subscriptions').update(patch).eq('stripe_subscription_id', subscriptionId).select('user_id');
+      if (error) throw new RetryableError(`subscriptions update failed for ${subscriptionId}: ${error.message}`);
+      return data?.length ?? 0;
+    },
+    now: () => new Date(),
+    log: (...args) => console.error(...args),
+  };
+
+  try {
+    const outcome = await processStripeEvent(event, deps);
+    return NextResponse.json({ received: true, outcome });
+  } catch (e) {
+    console.error('[stripe/webhook]', event.type, event.id, 'failed — returning 500 so Stripe retries:', e instanceof Error ? e.message : e);
+    return NextResponse.json({ error: 'Sync failed' }, { status: 500 });
+  }
 }

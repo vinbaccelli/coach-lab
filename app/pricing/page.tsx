@@ -17,34 +17,50 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Check, Lock } from 'lucide-react';
+import { Check } from 'lucide-react';
 import {
   PLANS,
   DEMO,
-  FOUNDING_NOTE,
   PRICING_HEADLINE,
   PRICING_SUBHEAD,
   PRICING_FOOTNOTE,
+  PRICING_LABEL,
+  PRICE_TAX_NOTE,
+  formatPrice,
+  maxYearlySavingsPct,
   planPrice,
   yearlyPerMonth,
+  yearlySavingsLabel,
   type PlanId,
   type BillingCycle,
 } from '@/lib/plans';
+import { FEATURES, type Feature } from '@/lib/entitlements';
 
 const INK = 'var(--cl-text-primary)';
 const MUTED = 'var(--cl-text-secondary)';
 const ACCENT = 'var(--cl-accent)';
 
 export default function PricingPage() {
-  /* Annual is the default: it is the better deal on every tier and the only
-     cycle that carries the Pro ebook. Monthly stays one tap away. */
+  /* Yearly is the default: it is the better deal on every tier and the only
+     cycle that carries the Spin Mechanics ebook (Pro and Academy). Monthly
+     stays one tap away. */
   const [cycle, setCycle] = useState<BillingCycle>('yearly');
   const [loading, setLoading] = useState<PlanId | null>(null);
-  // Set when the middleware subscription gate redirected here from /analysis.
-  const [subscriptionRequired, setSubscriptionRequired] = useState(false);
+  // Set when a gate redirected here: ?required=1 (no plan at all) or
+  // ?required=pro&feature=<Feature> (a Pro tool on a lower plan).
+  const [requiredNotice, setRequiredNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    setSubscriptionRequired(new URLSearchParams(window.location.search).get('required') === '1');
+    const q = new URLSearchParams(window.location.search);
+    const required = q.get('required');
+    const feature = q.get('feature');
+    if (required === '1') {
+      setRequiredNotice('Video Analysis requires an active plan — pick one below to unlock it.');
+    } else if (required && feature && feature in FEATURES) {
+      const f = FEATURES[feature as Feature];
+      const plan: PlanId = f.plan;
+      setRequiredNotice(`${f.label} is part of ${plan === 'light' ? 'every plan' : plan === 'pro' ? 'Pro and Academy' : 'Academy'} — pick a plan below to unlock it.`);
+    }
   }, []);
 
   const handleCheckout = async (plan: PlanId) => {
@@ -100,13 +116,13 @@ export default function PricingPage() {
       </div>
 
       <div style={{ maxWidth: 1080, margin: '0 auto', padding: '52px 20px 72px', textAlign: 'center' }}>
-        {subscriptionRequired && (
+        {requiredNotice && (
           <div style={{
             margin: '0 auto 28px', maxWidth: 560, padding: '12px 18px', borderRadius: 10,
             background: '#FFF7ED', border: '1px solid #FCA5A5', color: '#9A3412',
             fontSize: 13, fontWeight: 600,
           }}>
-            Video Analysis requires an active plan — pick one below to unlock it.
+            {requiredNotice}
           </div>
         )}
 
@@ -120,17 +136,6 @@ export default function PricingPage() {
           {PRICING_SUBHEAD}
         </p>
 
-        {/* Founding promise — account-wide, whichever tier you join at, so it is
-            stated once here rather than repeated on every card. */}
-        <div style={{
-          display: 'inline-flex', alignItems: 'flex-start', gap: 8, textAlign: 'left',
-          margin: '0 auto 26px', padding: '10px 14px', borderRadius: 10,
-          background: 'var(--cl-accent-soft)', maxWidth: 560,
-        }}>
-          <Lock size={14} style={{ color: ACCENT, flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
-          <span style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>{FOUNDING_NOTE}</span>
-        </div>
-
         {/* Billing toggle */}
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 32 }}>
           <div
@@ -141,7 +146,7 @@ export default function PricingPage() {
             <button type="button" onClick={() => setCycle('yearly')} aria-pressed={annual} style={toggleBtn(annual)}>
               Yearly
               <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 800, opacity: annual ? 0.9 : 1, color: annual ? 'var(--cl-text-on-fill)' : ACCENT }}>
-                2 months free
+                save up to {maxYearlySavingsPct()}%
               </span>
             </button>
             <button type="button" onClick={() => setCycle('monthly')} aria-pressed={!annual} style={toggleBtn(!annual)}>
@@ -190,17 +195,17 @@ export default function PricingPage() {
                 {/* Ink, not accent: System Blue at 11px is ~4.0:1 on white,
                     under the 4.5 floor (docs/KNOWN_ISSUES.md 001). */}
                 <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.04em', color: INK, marginBottom: 2 }}>
-                  FOUNDING PRICE
+                  {PRICING_LABEL.toUpperCase()}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                   <span className="pr-num" style={{ fontSize: 42, fontWeight: 800, letterSpacing: '-0.03em' }}>
-                    ${price}
+                    {formatPrice(price)}
                   </span>
                   <span style={{ fontSize: 15, color: MUTED }}>{annual ? '/year' : '/month'}</span>
                 </div>
                 <p className="pr-num" style={{ fontSize: 12, color: MUTED, margin: '4px 0 18px', minHeight: 16 }}>
                   {annual
-                    ? `$${yearlyPerMonth(plan)}/mo · two months free`
+                    ? `${formatPrice(yearlyPerMonth(plan))}/mo · ${yearlySavingsLabel(plan)}`
                     : 'Billed monthly · cancel anytime'}
                 </p>
 
@@ -231,24 +236,16 @@ export default function PricingPage() {
 
                 {/* Annual-only sweetener. Hidden on monthly so the offer is never
                     shown to someone who would not actually receive it. */}
-                {plan.annualBonus && annual && (
+                {plan.yearlyBonus && annual && (
                   <p style={{
                     margin: '16px 0 0', padding: '10px 12px', borderRadius: 10,
                     background: 'var(--cl-accent-soft)', textAlign: 'left',
                     fontSize: 12, fontWeight: 600, lineHeight: 1.5, color: INK,
                   }}>
-                    {plan.annualBonus}
+                    {plan.yearlyBonus}
                   </p>
                 )}
 
-                {plan.note && (
-                  <p style={{
-                    margin: '16px 0 0', paddingTop: 12, borderTop: '1px solid var(--cl-border-subtle)',
-                    textAlign: 'left', fontSize: 12, lineHeight: 1.5, color: MUTED,
-                  }}>
-                    {plan.note}
-                  </p>
-                )}
               </div>
             );
           })}
@@ -256,6 +253,9 @@ export default function PricingPage() {
 
         <p style={{ margin: '30px auto 0', maxWidth: 560, fontSize: 14, fontWeight: 600, color: INK }}>
           {PRICING_FOOTNOTE}
+        </p>
+        <p style={{ margin: '8px auto 0', maxWidth: 560, fontSize: 13, color: MUTED }}>
+          {PRICE_TAX_NOTE}
         </p>
 
         {/* Demo CTA */}

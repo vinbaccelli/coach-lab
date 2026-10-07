@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { User } from 'lucide-react';
+import { useEntitlement } from '@/lib/useEntitlement';
+import PlanLockedNotice from '@/components/PlanLockedNotice';
 
 type Player = {
   id: string;
@@ -17,6 +19,8 @@ export default function PlayersHomeClient() {
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
+  // Without Pro the list stays readable; creating players is server-gated (403).
+  const canEdit = useEntitlement().can('players');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,6 +60,11 @@ export default function PlayersHomeClient() {
         Premium coaching profiles — technique and match timelines stay synced across devices.
       </p>
 
+      {!canEdit ? (
+        <PlanLockedNotice feature="players">
+          The player database is part of Pro. Your saved players stay readable; adding or editing them needs Pro.
+        </PlanLockedNotice>
+      ) : (
       <div
         style={{
           ...cardBase,
@@ -93,7 +102,7 @@ export default function PlayersHomeClient() {
                   body: JSON.stringify({ display_name: newName.trim() }),
                 });
                 const data = await res.json();
-                if (!res.ok) throw new Error(data.error ?? 'Failed');
+                if (!res.ok) throw new Error(data.message ?? data.error ?? 'Failed');
                 setNewName('');
                 await load();
               } catch (e: unknown) {
@@ -116,6 +125,7 @@ export default function PlayersHomeClient() {
           </button>
         </div>
       </div>
+      )}
 
       {err ? <p style={{ color: 'var(--cl-destructive-text)', fontWeight: 600, marginBottom: 12 }}>{err}</p> : null}
 

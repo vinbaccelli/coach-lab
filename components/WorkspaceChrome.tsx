@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { ENABLE_GOOGLE_EXPORTS, GOOGLE_EXPORT_SCOPES } from '@/lib/featureFlags';
 import { LogIn, LogOut } from 'lucide-react';
+import PaymentFailedBanner from '@/components/PaymentFailedBanner';
 
 type Props = {
   children: React.ReactNode;
@@ -186,6 +187,8 @@ export default function WorkspaceChrome({ children, pageLabel }: Props) {
           )
         ) : null}
       </header>
+
+      <PaymentFailedBanner inline />
 
       <main
         style={{

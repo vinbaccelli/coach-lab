@@ -188,6 +188,9 @@ import { uploadDataUrl } from '@/lib/supabase/storage';
 import { proposePhaseMarkers } from '@/lib/biomechanics/phaseDetection';
 import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import { useEntitlement } from '@/lib/useEntitlement';
+import type { Feature } from '@/lib/entitlements';
+import UpgradeSheet from '@/components/UpgradeSheet';
 
 /**
  * Has the once-per-page-load reload reset already been evaluated?
@@ -817,6 +820,10 @@ function Home() {
   const [stroIsBuildingVideoPreview, setStroIsBuildingVideoPreview] = useState(false);
   const stroPreviewVideoBlobRef = useRef<Blob | null>(null);
   const [sessionSaveModalOpen, setSessionSaveModalOpen] = useState(false);
+  // Plan gating (lib/entitlements.ts). UI courtesy only — Pro tools that run
+  // locally can't be enforced here; the server guards what goes through it.
+  const { can: canUseFeature } = useEntitlement();
+  const [upgradeFeature, setUpgradeFeature] = useState<Feature | null>(null);
 
   useEffect(() => {
     if (!contextPlayerId) {
@@ -3287,6 +3294,7 @@ function Home() {
 
   const handleScreenshotSaveToPlayer = useCallback(async (playerId: string, playerName: string) => {
     if (!screenshotDataUrl) return;
+    if (!canUseFeature('saveToPlayer')) { setUpgradeFeature('saveToPlayer'); return; }
     const supabase = createSupabaseBrowserClient();
     const userRes = await supabase?.auth.getUser();
     const userId = userRes?.data?.user?.id;
@@ -3401,7 +3409,7 @@ function Home() {
     } finally {
       setScreenshotSaving(false);
     }
-  }, [screenshotDataUrl, handleScreenshotDownload]);
+  }, [screenshotDataUrl, handleScreenshotDownload, canUseFeature]);
 
   const handleScreenshotCreateAndSave = useCallback(async () => {
     if (!screenshotNewPlayerName?.trim() || !screenshotDataUrl) return;
@@ -6525,6 +6533,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
   // Single source of truth: edit here and all three toolbar instances
   // (desktop left, mobile strip, desktop-reels) pick up the change.
   const toolPaletteBaseProps = {
+    canUseFeature,
+    onLockedFeature:                 setUpgradeFeature,
     activeTool,
     onToolChange:                    handleToolChange,
     // ── Pan / Zoom tool ────────────────────────────────────────────────────
@@ -6825,6 +6835,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       // creation so Generate stays read-only.)
       const newSnapId = createSnapshotFromLive();
       if (!newSnapId) return;
+      // Light keeps ONE snapshot: the one AI Detect creates. A new AI Detect
+      // replaces it rather than adding a second (multi-phase snapshots are Pro).
+      if (!canUseFeature('multiSnapshot')) {
+        setSnapshots(prev => prev.filter(s => s.id === newSnapId).map(s => ({ ...s, label: 'Snapshot 1', short: '1' })));
+      }
 
       // Step 3: inject AI results — captured live column + AI measurements.
       const fullCol = [...liveCol, ...items];
@@ -6853,7 +6868,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     },
     onScreenshotSave:                () => { void handleScreenshotSave(); },
     screenshotSaving,
-    onSaveReport:                    () => setSessionSaveModalOpen(true),
+    onSaveReport:                    () => (canUseFeature('saveToPlayer') ? setSessionSaveModalOpen(true) : setUpgradeFeature('saveToPlayer')),
     saveReportEnabled:               sessionDraftHasContent,
     drawContextActive,
     onExitDrawContext:               exitDrawContext,
@@ -8365,6 +8380,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         </main>
         </ReelsDesktopShell>
       </div>
+
+      <UpgradeSheet feature={upgradeFeature} onClose={() => setUpgradeFeature(null)} />
 
       {captureError ? (
         <div

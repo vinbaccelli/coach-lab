@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import { getYouTubeAccessToken } from '@/lib/youtube/connection';
 import { selectUploadOrigin, YOUTUBE_UPLOAD_COULD_NOT_START } from '@/lib/youtube/uploadOrigin';
 
@@ -35,6 +36,8 @@ export const runtime = 'nodejs';
 export async function POST(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'youtube');
+  if (denied) return denied;
 
   // The session URL only accepts the browser's bytes from the origin it was
   // created for (see lib/youtube/uploadOrigin.ts). Without an allowed origin
