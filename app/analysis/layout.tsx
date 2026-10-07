@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import TrialBanner from '@/components/TrialBanner';
+import PaymentFailedBanner from '@/components/PaymentFailedBanner';
 
 export const metadata: Metadata = {
   title: 'Video analysis – AngleMotion',
@@ -22,6 +23,7 @@ export default function AnalysisLayout({ children }: { children: React.ReactNode
       }}
     >
       <TrialBanner />
+      <PaymentFailedBanner />
       {children}
     </div>
   );

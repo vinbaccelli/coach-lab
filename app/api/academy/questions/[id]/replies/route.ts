@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import { isAdmin } from '@/lib/admin';
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'academy');
+  if (denied) return denied;
 
   const { id } = await params;
 
@@ -21,6 +24,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'academy');
+  if (denied) return denied;
 
   const { id } = await params;
   const body = await req.json();

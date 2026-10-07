@@ -13,6 +13,7 @@ import { uploadDataUrl } from '@/lib/supabase/storage';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
 import { uploadToResumableSession } from '@/lib/export/youtubeResumableUpload';
+import { YOUTUBE_UPLOAD_COULD_NOT_START } from '@/lib/youtube/uploadOrigin';
 
 export interface ReportSectionInput {
   heading: string;
@@ -83,11 +84,17 @@ export async function uploadVideoToYouTube(
 ): Promise<{ ok: boolean; url?: string; error?: string; needsConnect?: boolean }> {
   const mimeType = blob.type || 'video/mp4';
 
-  const sessionRes = await fetch('/api/youtube/upload-session', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, sizeBytes: blob.size, mimeType }),
-  });
+  let sessionRes: Response;
+  try {
+    sessionRes = await fetch('/api/youtube/upload-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, sizeBytes: blob.size, mimeType }),
+    });
+  } catch {
+    // Network failure reaching our own route: the upload never started.
+    return { ok: false, error: YOUTUBE_UPLOAD_COULD_NOT_START };
+  }
 
   // Never assume JSON: an infrastructure-level rejection (413, 502, a proxy
   // error page) has an HTML body, and calling res.json() on it throws — which
@@ -102,7 +109,7 @@ export async function uploadVideoToYouTube(
   if (!sessionRes.ok || !sessionBody.uploadUrl) {
     return {
       ok: false,
-      error: sessionBody.error ?? `Could not start the YouTube upload (${sessionRes.status}).`,
+      error: sessionBody.error ?? YOUTUBE_UPLOAD_COULD_NOT_START,
       needsConnect: sessionBody.needsConnect === true,
     };
   }

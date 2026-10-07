@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import {
   ensurePlayerDoc,
   insertSessionAtTop,
@@ -38,6 +39,8 @@ export const maxDuration = 60;
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'players');
+  if (denied) return denied;
   const { id: playerId } = await ctx.params;
 
   const body = (await req.json()) as {

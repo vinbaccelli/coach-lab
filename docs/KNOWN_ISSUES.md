@@ -5,6 +5,11 @@ fixed, and whether or not they are pre-existing — undocumented ≠ doesn't exi
 
 Format: symptom → verified root cause → fault assessment → proposed fix → severity.
 
+Entry numbers are stable IDs (code and commits cite them), so they are never
+reused or shifted. 019 and 020 were numbered 013 and 014 until 2026-10-01, when
+two merges had each added their own 013/014; their "Found" dates are older
+than their numbers.
+
 ---
 
 ## 001 — `--cl-accent` fails WCAG AA when used as text
@@ -253,7 +258,14 @@ exist to permit it. Vin should confirm one real upload end-to-end through
 
 ---
 
-## 007 — Light advertises $10 but Stripe charges $5
+## 007 — Light advertises $10 but Stripe charges $5 — SUPERSEDED (launch pricing)
+
+**Update 2026-10-03.** The USD prices are retired with EUR launch pricing
+(`claude/pricing-launch`). Nothing can drift silently any more: the checkout
+route now retrieves the configured Stripe price and refuses to start (503)
+unless its currency, amount and interval equal what `lib/plans.ts` displays,
+and there is no fallback price ID. Closes once the EUR env vars are live.
+
 
 **Found:** 2026-09-08, building the founding-pricing page. **BLOCKS DEPLOY.**
 
@@ -448,7 +460,7 @@ looking wrong.
 
 ---
 
-## 011 — A single joint-chain node can never be selected with the Select tool
+## 011 — A single joint-chain node can never be selected with the Select tool — FIXED (awaiting device test)
 
 **Found:** 2026-09-28, browser-verifying the text-selection fix on `claude/text-tool-fix`.
 
@@ -480,9 +492,20 @@ chain by its segments still moves the whole chain.
 **Severity:** medium — per-node editing of a joint chain is impossible, but the
 chain is still movable and redrawable.
 
+**FIXED** (2026-09-30, uncommitted pending Vin's device test). The Select
+pointer-down now skips the stroke and angle passes whenever the node pass found a
+node: a node is a handle, like a text resize corner, and takes priority instead of
+competing on distance. Browser-verified in Chromium on `cfbd0d0` + the fix, with a
+three-node chain: pressing node 3 and dragging (+42, +60) moves node 3 only (the
+other two stay, gold ring on the moved node); pressing mid-segment and dragging
+still moves the whole chain; Undo after the segment drag reverts it. Reproduced
+before the fix on unmodified `cfbd0d0` (a node press moved all three nodes). Undo
+after a single-node drag needs two presses — see 016, a separate pre-existing
+defect this fix makes reachable for nodes.
+
 ---
 
-## 012 — A text label left selected keeps the canvas redrawing every frame
+## 012 — A text label left selected keeps the canvas redrawing every frame — FIXED (awaiting device test)
 
 **Found:** 2026-09-28, measuring the text-selection fix on `claude/text-tool-fix`
 before and after, per CLAUDE.md §7.
@@ -520,6 +543,35 @@ loop, and a before/after measurement.
 **Severity:** low-medium — no functional impact; continuous CPU and battery use
 while a label is selected, most noticeable on phones.
 
+**FIXED** (2026-10-01, approved). In the render loop, a selection counts as an
+active interaction only while it is being dragged
+(`isDraggingRef.current && !!selectionRef.current`), and the Style-mode target
+(`contextualTargetRef`, the same static-box pattern) no longer counts at all.
+Instead of a dirty flag at each of the 13 `selectionRef` and 4
+`contextualTargetRef` write sites, the loop compares both refs' identity with
+the last rendered values (the same pattern it already uses for zoom/pan): every
+write replaces the object, so any create/change/drop repaints once. Edits that
+mutate the selected mark already set `renderDirtyRef` (Style changes, the
+pulse toggle, text-edit commit via `pushHistory`, eraser hover).
+
+Measured in Chromium, production build (`next start`), 1400×900, video paused,
+mouse parked off the canvas, 3 s windows, two runs each:
+
+| state (at rest) | redraws/s before | after | main-thread ms/s before | after |
+|---|---|---|---|---|
+| nothing selected | 0 | 0 | 23–28 | 23–24 |
+| text label selected | 60 | 0 | 224–237 | 23–26 |
+| joint node selected | 60 | 0 | 234–236 | 22–23 |
+| Style box selected | 60 | 0 | 213–233 | 22–25 |
+
+Behaviour verified unchanged in the browser: each selection's box / handles /
+node ring / Style box appears on select, persists at rest, and disappears on an
+empty-canvas click; a dragged label follows the pointer before release; text
+resize by corner handle works; the Style-mode eraser cursor follows the pointer;
+picking a tool ends Style mode and removes its box; the full Undo/Redo suite
+from 016 still passes.
+
+---
 
 ## 013 — The foot-line notice blames the device for a model-load failure
 
@@ -644,9 +696,133 @@ should carry — but "should carry" is not "verified", and this repo has been bu
 by exactly that gap. Now that runtime checking is possible, this is a doable task
 rather than a standing unknown. Severity: medium — the defect is fixed for every
 caller; the confirmation covers one.
+
 ---
 
-## 013 — Recorded PiP position is proportional, not pixel-exact, in tab/window share
+## 016 — Undo after dragging a text label or a joint node needs two presses — FIXED (awaiting device test)
+
+**Found:** 2026-09-30, browser-verifying the fix for 011.
+
+**Symptom.** Drag a text label (or, since 011 was fixed, a single joint-chain
+node) with the Select tool, then click Undo: nothing changes. A second Undo
+reverts the drag. Measured in Chromium: after a node drag, Undo ×1 left the node
+moved and Undo ×2 restored it; after a text-label drag of 120 px on unmodified
+`cfbd0d0`, Undo ×1 left the label where it was dropped and Undo ×2 restored it.
+
+**Verified root cause.** The canvas wires `onPointerLeave={onPointerUp}`
+(`components/Canvas.tsx`, the `<canvas>` element's props). The Select finalize in
+`onPointerUp` runs whenever `selectionRef.current` is set and always calls
+`pushHistory()`. Every other stroke kind clears `selectionRef` on release, so a
+later pointer-leave finds nothing to finalize. A text label (kept selected since
+the text-tool fix, so its resize handles are reachable) and a joint node (kept
+selected by its own finalize branch) are still selected at rest, so moving the
+mouse off the canvas — which reaching the Undo button always does — runs the
+finalize again and pushes a byte-identical second entry. The first Undo steps
+onto that duplicate.
+
+**Fault assessment.** Pre-existing for text labels since the kept-selection
+change; newly reachable for joint nodes with the 011 fix. Same class as the
+duplicate-history entry already fixed for Style mode (a push on a path that did
+not change anything).
+
+**Proposed fix.** Only finalize a Select drag while one is actually in progress:
+in the finalize branch, return early when `!isDraggingRef.current` (a kept
+selection at rest is not an edit). Separately, `dropKeptStrokeSelection` clears
+`stroke`/`textResize` on undo/redo/tool switch but not `jointNode`, so a stale gold
+node ring can survive an Undo — add `'jointNode'` to its kinds. Both need
+approval; neither touches the render loop.
+
+**Severity:** medium — Undo looks broken after the most common Select edit, but
+nothing is lost (the second press works).
+
+**FIXED** (2026-10-01). The Select finalize returns early unless a drag is in
+progress (`isDraggingRef`), so a pointer-leave over a kept selection no longer
+pushes; and `dropKeptStrokeSelection` now also drops a `jointNode` selection, so
+Undo/Redo/tool switch clear the gold ring and its stale index. Browser-verified
+in Chromium: text label dragged 150 px → Undo ×1 reverts, Redo re-applies; joint
+node dragged → Undo ×1 reverts with no gold ring left, Redo re-applies; chain
+segment drag + Undo, and line draw → drag → Undo ×2 → Redo ×2, all unchanged.
+Not covered: a press-and-release with NO movement still pushes a no-op entry —
+see 018.
+
+---
+
+## 017 — The video-slot pills cover the ruler panel's header and close button
+
+**Found:** 2026-09-30, spot-checking the ruler panel drag after the PR #58 merge.
+
+**Symptom.** With Video A loaded and the Ruler tool open on desktop (1400×900),
+the "Remove A / + Add B" pills sit on top of the ruler panel's header. Measured
+with `elementFromPoint` every 20 px along the header: the left 80 px is the
+header, everything from x≈1193 to the right edge is the slot-pill group,
+including the panel's close button (its centre hit-tests to the pill). A press on
+the covered part of the header lands on Remove A / Add B instead of starting a
+drag; the close button cannot be clicked until the panel is dragged clear.
+
+**Verified root cause.** Both are anchored to the same corner of the same
+panel: the slot pills at `top: 8, right: 8, zIndex: 110`
+(`renderVideoSlotPills`, `app/analysis/page.tsx`) and the ruler panel at
+`top: 12, right: 12` until its first drag (`components/ruler/RulerOverlay.tsx`,
+the control panel's style). The pills win the stacking order.
+
+**Fault assessment.** Pre-existing: the pills date from `5cef44a` (2026-08-11)
+and the ruler anchor predates `e7376cc` (which made the panel draggable and kept
+the anchor byte-for-byte). Not a regression from today's merges. Dragging the
+panel by the uncovered left part of its header works (verified: exactly
+−300/+150, and it stays put).
+
+**Proposed fix.** Either open the ruler panel below the pill row (e.g. `top`
+offset by the row's height when Video A is loaded), or hide the slot pills while
+the ruler panel is open. Relevant to the recording-control redesign, which would
+put more controls in that same row. Needs a decision.
+
+**Severity:** low-medium — the panel is still movable and closable via the tool
+rail, but the obvious close button is unreachable.
+
+---
+
+## 018 — Clicking a mark with the Select tool (no drag) adds a no-op Undo step — RESOLVED
+
+**Found:** 2026-10-01, browser-verifying the fix for 016.
+
+**Symptom.** Click a text label (or any mark) with the Select tool without
+moving it, then press Undo: nothing visibly changes. The next Undo works. Measured
+in Chromium after the 016 fix: plain click on a label, Undo ×1 left the label in
+place; Undo ×2 removed it (undid its creation).
+
+**Verified root cause.** The Select pointer-down sets `isDraggingRef = true` on
+any hit, and the finalize on release calls `pushHistory()` unconditionally, so a
+press-and-release that moved nothing pushes a byte-identical entry.
+
+**Fault assessment.** Pre-existing for every mark kind (it is the same finalize
+path); more noticeable now that a clicked text label stays selected, since
+clicking a label to reach its resize handles is a normal step.
+
+**Proposed fix.** Push only when the drag changed something: compare the mark
+at `finSel.idx` against `finSel.orig` (identity is enough — every move replaces
+the object) and skip `pushHistory()` when unchanged. Careful with the outline
+eraser branch, which edits the stroke at pointer-down and stores the edited
+object as `orig`; it must still push. Needs approval.
+
+**Severity:** low-medium — one extra Undo press, nothing lost.
+
+**RESOLVED** (2026-10-07, branch `claude/canvas-recording-polish`). The Select
+finalize in `onPointerUp` (`components/Canvas.tsx`) now pushes only when
+`liveStateDiffersFromHistoryTop()`: the live strokes or angles are no longer
+the exact objects of the current history entry. Every move and resize
+replaces the changed mark's object, so a click that moved nothing finds them
+identical and pushes nothing; any real change (including the outline eraser,
+which replaces the stroke at pointer-down) still pushes. Browser-verified in
+Chromium at 1440 px and at 390 px with touch: line + circle drawn, plain
+Select click on the line, Undo ×1 removes the circle (before the fix it did
+nothing); click + drag the line, Undo ×1 restores it, Redo re-applies; plain
+click on a text label, Undo ×1 undoes the label's creation; label drag, Undo
+×1, Redo (016) unchanged; joint-node drag and chain drag each undo in one
+press.
+
+---
+
+## 019 — Recorded PiP position is proportional, not pixel-exact, in tab/window share
 
 **Found:** 2026-09-26, while fixing background removal during recording (items D/E).
 
@@ -675,9 +851,15 @@ this tab — an assumption the browser will not confirm.
 
 **Severity:** low — cosmetic, sub-chrome offset; shape, size and opacity are correct.
 
+**No longer reachable while `FLOATING_CAMERA_WINDOW` is off** (2026-10-07,
+`contexts/RecordingContext.tsx`). The engine no longer stamps the webcam in any
+share mode; the canvas PiP itself is what gets recorded whenever the shared
+surface includes the AngleMotion page, so its position is exact in tab and
+window share too. Applies again only if the constant is turned back on.
+
 ---
 
-## 014 — Closing the floating window still turns the webcam off in a whole-screen recording — RESOLVED
+## 020 — Closing the floating window still turns the webcam off in a whole-screen recording — RESOLVED
 
 **Found:** 2026-09-26, while implementing E2(a) (monitor-share PiP handling).
 
@@ -708,8 +890,125 @@ and with it the canvas PiP that a whole-screen recording actually captures —
 survives.
 
 The open question this depended on ("how does the coach stop the recording once
-the window is gone?") is answered by `components/RecordingControlBar.tsx`:
-Pause / Resume / Stop now live in the analysis page's own top chrome for the
+the window is gone?") is answered by in-page recording controls (originally
+`components/RecordingControlBar.tsx`, a full-width bar in the page's top chrome;
+since 2026-10-01 `components/RecordingControls.tsx`, compact, in panel A's
+top-right video-slot row). Pause / Resume / Stop live in the analysis page for the
 duration of any recording, reachable from every tool and panel, so closing the
 floating window never removes the only way to stop.
 
+**Superseded for launch** (2026-10-07). With `FLOATING_CAMERA_WINDOW` off the
+floating window never shows the camera in any mode; where it is still opened
+(entire-screen and window share, as the keep-alive — see 022) it is
+controls-only, so closing it never turns the webcam off.
+
+---
+
+## 022 — The recording painter runs in the AngleMotion page, so a hidden tab freezes the recording without the floating window
+
+**Found:** 2026-10-07, while removing the floating camera window for launch.
+(Numbered 022: 021 is taken on the guided-tours branch.)
+
+**Symptom (measured, not yet seen by a coach).** Without a floating Document PiP
+window, a recording whose AngleMotion tab goes into the background drops to
+about 1 frame a second until the tab comes back.
+
+**Verified root cause.** The recorded video is `recCanvas.captureStream()`, and
+the painter that copies the screen grab into `recCanvas` (`paintOnce` in
+`contexts/RecordingContext.tsx`) is driven by a timer in the AngleMotion page
+(or by the floating window's animation frames when one is open). Chrome
+throttles a hidden page to one timer tick a second and stops its animation
+frames. Measured in Chromium (real windowed browser under Xvfb, Playwright's
+throttling opt-outs removed, entire-screen capture running): AngleMotion tab
+sent behind another tab → timers 30 → 1 Hz, animation frames 60 → 0, painter
+30 → 1 fps, canvas-recorded video 38 → 2 KB/s, while a MediaRecorder on the RAW
+display track kept ~44 KB/s. With a Document PiP window open, the hidden page
+kept 30 timer ticks and 60 frames a second and the painter ran at full rate.
+The canvas render loop and the webcam background removal
+(`lib/webcamSegmentation.ts`) are also animation-frame driven and stop the same
+way, which only matters when the AngleMotion page itself is in the shared
+surface.
+
+**Fault assessment.** Architectural, pre-existing: it is why the floating window
+existed. Not introduced by removing the camera window, because the window is
+kept (controls-only) as the keep-alive for entire-screen and window share
+(`KEEPALIVE_WINDOW_SURFACES`). Tab share closes it: it normally captures the
+AngleMotion tab itself, which Chrome is expected to keep rendering while
+captured; that could not be measured here (real tab capture does not start in
+the test container) and is on Vin's real-Chrome test list.
+
+**Proposed fix (needs approval — changes the painter/captureStream topology,
+CLAUDE.md §6).** Record the display track directly instead of a canvas copy of
+it: no page timer in the path, so no throttling in any mode and no keep-alive
+window. Costs: the burned-in watermark (drawn by the painter today) would have to
+move to post-processing (the WebM → MP4 ffmpeg pass already runs), the 1280 px
+downscale would come from getDisplayMedia constraints instead, and it only works
+while the engine stamps nothing into the frame (true with the camera window
+off).
+
+**Severity:** medium — silent quality loss in a recording, but avoided today by
+the keep-alive window in the two modes where it is likely.
+
+---
+
+## 023 — A publishable/anon key in the service-role slot makes server writes fail on RLS (YouTube Connect broke in production)
+
+**Found:** 2026-10-07, production report: Connect YouTube → "Could not save the
+connection". Vercel log: `[youtube/connection] store failed: new row violates
+row-level security policy for table "youtube_connections"`.
+
+**Verified root cause (code side).** `public.youtube_connections` has RLS on and
+deliberately ZERO policies (`supabase/migrations/20260728120000_youtube_connections.sql`);
+the only writer is the service-role client (`lib/supabase/service.ts`), which
+bypasses RLS. An RLS refusal therefore means the client was built from a key
+whose role is NOT service_role. The helper read only `SUPABASE_SERVICE_ROLE_KEY`
+and accepted any non-empty value, so a publishable (`sb_publishable_…`) or anon
+key in that variable produced a client that looked configured and ran as anon:
+writes refused by RLS, reads silently empty. No code on main changed between the
+late-September key migration and the report, so the value in Vercel Production is
+the remaining suspect; env changes apply only to deployments made after them.
+
+**Fix (code).** `createSupabaseServiceClient` classifies the key by format
+(`sb_secret_…` / service_role JWT accepted; publishable / anon JWT refused),
+also accepts `SUPABASE_SECRET_KEY`, and logs one specific error naming the
+variables and their kinds instead of building an anon client. `/api/health`
+reports the key KIND (never the value). The production value itself must be
+corrected in Vercel (see the PR).
+
+**Same exposure elsewhere.** Only two server writers use this client on main:
+the YouTube connection store and the Stripe webhook (`app/api/stripe/webhook/route.ts`).
+The webhook on main IGNORES the write result (supabase-js returns `{ error }`, it
+does not throw) and always answers 200, so a refused subscription write is lost
+and Stripe never retries. PR #64 (`claude/billing-r0`) fixes that; #65 adds two
+more service-client writers (`app/api/academy-members`, `app/api/ebook`).
+
+**Severity:** high — YouTube Connect is unusable in production; paid checkouts
+would not record a subscription while the key is wrong.
+
+---
+
+## 024 — YouTube upload blocked by CORS ("Failed to fetch") — resumable session created without an Origin
+
+**Found:** 2026-10-07, production: Upload to YouTube on the Recording complete
+screen failed with "Failed to fetch"; console: `Access to fetch at
+'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable…&upload_id=…'
+from origin 'https://www.anglemotion.com' has been blocked by CORS policy`.
+(Numbered 024: 023 is on `claude/youtube-connect-fix`, 021 on the tours branch.)
+
+**Verified root cause.** Since 2026-09-14 (`91dc569d`, PR #47) the server only
+creates the resumable session (`app/api/youtube/upload-session/route.ts`) and the
+browser PUTs the bytes to the session URL (`lib/export/youtubeResumableUpload.ts`).
+That PUT is cross-origin, and Google's upload server answers it with
+`Access-Control-Allow-Origin` only for the origin given when the session was
+created. The session was created with Node's fetch, which sends no `Origin`
+(measured locally), so no browser origin was ever allowed. Google's upload host
+returns `access-control-allow-origin` only when the request carries an Origin
+(measured against `www.googleapis.com/upload/youtube/v3/videos`).
+
+**Fix.** The route reads the request's `Origin`, accepts only
+`https://anglemotion.com`, `https://www.anglemotion.com` (and localhost in
+development), and creates the session with it; a missing or other origin gets
+no session. A failure before Google confirms any bytes now shows "YouTube upload
+could not start. Try again, or download the file instead."
+
+**Severity:** high — no browser upload to YouTube could succeed.

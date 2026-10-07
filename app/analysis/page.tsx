@@ -18,9 +18,9 @@ import { angleDifferenceDeg } from '@/lib/drawingTools';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
-import { useRecording, RECORDING_AUDIO_CONSTRAINTS } from '@/contexts/RecordingContext';
+import { useRecording, RECORDING_AUDIO_CONSTRAINTS, FLOATING_CAMERA_WINDOW } from '@/contexts/RecordingContext';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
-import RecordingControlBar from '@/components/RecordingControlBar';
+import RecordingControls from '@/components/RecordingControls';
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
 import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModal';
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
@@ -188,6 +188,9 @@ import { uploadDataUrl } from '@/lib/supabase/storage';
 import { proposePhaseMarkers } from '@/lib/biomechanics/phaseDetection';
 import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import { useEntitlement } from '@/lib/useEntitlement';
+import type { Feature } from '@/lib/entitlements';
+import UpgradeSheet from '@/components/UpgradeSheet';
 
 /**
  * Has the once-per-page-load reload reset already been evaluated?
@@ -448,6 +451,26 @@ function Home() {
   const [canvasSizeB, setCanvasSizeB]     = useState({ width: 800, height: 450 });
   const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('comet');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
+  /**
+   * "Skeleton ready…" is a one-off notice, not a status that lasts. Nothing used
+   * to clear it, so it stayed in the top toast while the video played and
+   * covered the top rows of the data column (L Elbow). It now goes when playback
+   * starts or after 4 s, whichever comes first. Every other message keeps its
+   * own lifetime: only a message that is still the ready notice is cleared.
+   */
+  useEffect(() => {
+    if (!processingStatus?.startsWith('Skeleton ready')) return;
+    const clearReady = () =>
+      setProcessingStatus((cur) => (cur?.startsWith('Skeleton ready') ? null : cur));
+    const timer = setTimeout(clearReady, 4000);
+    const videos = [videoRef.current, videoRefB.current].filter((v): v is HTMLVideoElement => !!v);
+    if (videos.some((v) => !v.paused)) clearReady();
+    videos.forEach((v) => v.addEventListener('play', clearReady));
+    return () => {
+      clearTimeout(timer);
+      videos.forEach((v) => v.removeEventListener('play', clearReady));
+    };
+  }, [processingStatus]);
   const [layoutMode, setLayoutMode]       = useState<'youtube' | 'reels'>('youtube');
   const [webcamActive, setWebcamActive]   = useState(false);
   const [micActive, setMicActive]         = useState(false);
@@ -475,18 +498,25 @@ function Home() {
     reopenPipWindow,
   } = useRecording();
   const isRecording = globalRecState === 'recording' || globalRecState === 'paused' || globalRecState === 'stopped';
+  /** Pause/Resume/Stop are offered (in the video-slot row) only while these hold. */
+  const recordingControlsActive = globalRecState === 'recording' || globalRecState === 'paused';
   // Hide the canvas webcam PiP during a recording EXCEPT in a whole-screen
   // share. In a monitor share the screen grab already contains this canvas, so
   // the canvas PiP is what records the webcam — and it is the only renderer
   // that honors background removal and the coach's PiP shape. In a tab/window
   // share the engine stamps the webcam into its own composite instead, so the
   // canvas must stay quiet or a shared AM tab would show two webcams.
-  const suppressWebcamPipWhileRecording = !isMonitorShare;
+  //
+  // With the floating camera window off (FLOATING_CAMERA_WINDOW, launch) the
+  // engine never stamps the webcam, so the canvas PiP is the webcam in every
+  // share mode and is never hidden.
+  const suppressWebcamPipWhileRecording = FLOATING_CAMERA_WINDOW && !isMonitorShare;
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
   const [circleSpinning, setCircleSpinning] = useState(false);
-  const [outlineEraserSize, setOutlineEraserSize] = useState(0);
+  /** The Eraser tool's size (px). Kept across uses; the eraser itself is armed below. */
+  const [eraserSize, setEraserSize] = useState(15);
   /**
    * RULER LENGTH CALIBRATION (feature #6) — owned here, not in RulerOverlay.
    *
@@ -549,34 +579,17 @@ function Home() {
   useEffect(() => { styleSelectionRef.current = styleSelection; }, [styleSelection]);
 
   /**
-   * LEAVING STYLE MODE DISARMS THE OUTLINE ERASER.
+   * THE OUTLINE ERASER IS ARMED EXACTLY WHILE THE ERASER TOOL IS ACTIVE.
    *
-   * `outlineEraserSize` is armed from the Style screen's "Erase part of line"
-   * toggle (components/ToolPalette.tsx) or the on-canvas style bar
-   * (components/ContextualStyleBar.tsx), and nothing used to put it back. It
-   * stayed armed for the rest of the session, while the control that turns it
-   * off is only reachable from inside style mode — so the coach could not see
-   * it was on, let alone switch it off.
-   *
-   * Measured consequence: with a line drawn and the eraser armed, leaving Style
-   * and dragging that line with the SELECT tool moved it from (410,435)-(850,485)
-   * to (450,600)-(890,650) AND punched an extra eraser dot into it (13 -> 14).
-   * The drag did both: it moved the mark and silently cut a hole at the grab
-   * point.
-   *
-   * STYLE MODE IS THE RIGHT BOUNDARY, not the active tool. The Style *screen* is
-   * only navigation; `styleMode` is the mode, and every exit funnels through it
-   * — pressing Style again toggles it off in place (ToolPalette), and
-   * handleToolChange below already clears it on ANY tool choice ("ANY tool
-   * choice leaves style mode"). So the coach cannot stay in style mode while the
-   * tool changes underneath, and one rule here covers the Back action, the
-   * toggle and every tool switch. Keying this on `activeTool` instead would
-   * disarm mid-session while the coach is still in style mode with the toggle
-   * visibly on.
+   * It used to be a Style-mode checkbox ("Erase part of line") that stayed armed
+   * after the coach moved on, invisibly cutting holes in later Select drags, so
+   * leaving Style had to disarm it (#56). That made "arm it, then pick Circle"
+   * silently turn it off. As a tool on the Draw list it needs no separate
+   * on/off state: it is derived from the tool, so it can never outlive the lit
+   * Eraser row. Style mode suspends it (the canvas owns the press for picking a
+   * mark there), and leaving Style brings it back while Eraser is still picked.
    */
-  useEffect(() => {
-    if (!styleMode && outlineEraserSize > 0) setOutlineEraserSize(0);
-  }, [styleMode, outlineEraserSize]);
+  const outlineEraserSize = activeTool === 'erase' && !styleMode ? eraserSize : 0;
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Distance from bottom of video stage to reserve for playback UI + 16px gap (px). */
@@ -807,6 +820,10 @@ function Home() {
   const [stroIsBuildingVideoPreview, setStroIsBuildingVideoPreview] = useState(false);
   const stroPreviewVideoBlobRef = useRef<Blob | null>(null);
   const [sessionSaveModalOpen, setSessionSaveModalOpen] = useState(false);
+  // Plan gating (lib/entitlements.ts). UI courtesy only — Pro tools that run
+  // locally can't be enforced here; the server guards what goes through it.
+  const { can: canUseFeature } = useEntitlement();
+  const [upgradeFeature, setUpgradeFeature] = useState<Feature | null>(null);
 
   useEffect(() => {
     if (!contextPlayerId) {
@@ -3277,6 +3294,7 @@ function Home() {
 
   const handleScreenshotSaveToPlayer = useCallback(async (playerId: string, playerName: string) => {
     if (!screenshotDataUrl) return;
+    if (!canUseFeature('saveToPlayer')) { setUpgradeFeature('saveToPlayer'); return; }
     const supabase = createSupabaseBrowserClient();
     const userRes = await supabase?.auth.getUser();
     const userId = userRes?.data?.user?.id;
@@ -3391,7 +3409,7 @@ function Home() {
     } finally {
       setScreenshotSaving(false);
     }
-  }, [screenshotDataUrl, handleScreenshotDownload]);
+  }, [screenshotDataUrl, handleScreenshotDownload, canUseFeature]);
 
   const handleScreenshotCreateAndSave = useCallback(async () => {
     if (!screenshotNewPlayerName?.trim() || !screenshotDataUrl) return;
@@ -4810,7 +4828,9 @@ function Home() {
         // (camera permission is already granted, so it resolves immediately).
         // If activation is lost anyway, reopenPipWindow resolves false and logs —
         // Source B still records; only the floating window is missing.
-        if (!isPipOpen()) {
+        // Only in the floating-camera model: there the window IS the camera
+        // view. With it off the canvas shows the camera again by itself.
+        if (FLOATING_CAMERA_WINDOW && !isPipOpen()) {
           const opened = await reopenPipWindow();
           if (!opened) {
             console.warn('[page] PiP reopen skipped/failed — recording continues, camera still composited.');
@@ -6513,6 +6533,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
   // Single source of truth: edit here and all three toolbar instances
   // (desktop left, mobile strip, desktop-reels) pick up the change.
   const toolPaletteBaseProps = {
+    canUseFeature,
+    onLockedFeature:                 setUpgradeFeature,
     activeTool,
     onToolChange:                    handleToolChange,
     // ── Pan / Zoom tool ────────────────────────────────────────────────────
@@ -6540,8 +6562,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onRacketMultiplier:              handleRacketMultiplier,
     circleSpinning,
     onCircleSpinningChange:          handleCircleSpinningChange,
-    outlineEraserSize,
-    onOutlineEraserSizeChange:       setOutlineEraserSize,
+    outlineEraserSize:               eraserSize,
+    onOutlineEraserSizeChange:       setEraserSize,
     styleMode,
     onStyleModeToggle:               handleStyleModeToggle,
     onAngleDifferentialStart:        handleAngleDifferentialStart,
@@ -6813,6 +6835,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       // creation so Generate stays read-only.)
       const newSnapId = createSnapshotFromLive();
       if (!newSnapId) return;
+      // Light keeps ONE snapshot: the one AI Detect creates. A new AI Detect
+      // replaces it rather than adding a second (multi-phase snapshots are Pro).
+      if (!canUseFeature('multiSnapshot')) {
+        setSnapshots(prev => prev.filter(s => s.id === newSnapId).map(s => ({ ...s, label: 'Snapshot 1', short: '1' })));
+      }
 
       // Step 3: inject AI results — captured live column + AI measurements.
       const fullCol = [...liveCol, ...items];
@@ -6841,7 +6868,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     },
     onScreenshotSave:                () => { void handleScreenshotSave(); },
     screenshotSaving,
-    onSaveReport:                    () => setSessionSaveModalOpen(true),
+    onSaveReport:                    () => (canUseFeature('saveToPlayer') ? setSessionSaveModalOpen(true) : setUpgradeFeature('saveToPlayer')),
     saveReportEnabled:               sessionDraftHasContent,
     drawContextActive,
     onExitDrawContext:               exitDrawContext,
@@ -6987,8 +7014,14 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
   });
 
+  /**
+   * The top-right action row of video panel A — the same spot on every tool
+   * screen. Holds the recording controls while a recording runs (even with no
+   * video loaded, since recording can start from an empty canvas) and the
+   * Remove A / Add B slot actions whenever there is a video.
+   */
   const renderVideoSlotPills = () => {
-    if (!hasVideoAContent) return null;
+    if (!hasVideoAContent && !recordingControlsActive) return null;
     return (
       <div
         role="group"
@@ -7007,16 +7040,19 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           maxWidth: 'calc(100% - 16px)',
         }}
       >
-        <button
-          type="button"
-          onClick={removeVideoA}
-          title="Remove Video A"
-          style={slotPillStyle('remove')}
-        >
-          <Trash2 size={16} strokeWidth={2.25} aria-hidden />
-          {phoneToolbarLayout ? null : 'Remove A'}
-        </button>
-        {!hasVideoBContent ? (
+        <RecordingControls iconOnly={phoneToolbarLayout} />
+        {hasVideoAContent ? (
+          <button
+            type="button"
+            onClick={removeVideoA}
+            title="Remove Video A"
+            style={slotPillStyle('remove')}
+          >
+            <Trash2 size={16} strokeWidth={2.25} aria-hidden />
+            {phoneToolbarLayout ? null : 'Remove A'}
+          </button>
+        ) : null}
+        {hasVideoAContent && !hasVideoBContent ? (
           <button
             type="button"
             onClick={handleAddVideoB}
@@ -7120,15 +7156,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         muted
         style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: -9999, left: -9999 }}
       />
-
-      {/*
-        Recording controls — page chrome ABOVE the workspace, present only while
-        a recording is active. In normal flow (flex: 0 0 auto), so the row below
-        shrinks by its height and the video/canvas is never covered. Reachable
-        from every tool/panel because it lives on the page root, not inside the
-        Recording Hub. Buttons stack vertically — see RecordingControlBar.
-      */}
-      <RecordingControlBar />
 
       {/* ── Main layout: toolbar rail + canvas (no overlay) ── */}
       <div
@@ -7416,7 +7443,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   registerWebcamPipPresentation={registerWebcamPipPresentation}
                   circleSpinning={circleSpinning}
                   outlineEraserSize={outlineEraserSize}
-                  onOutlineEraserSizeChange={setOutlineEraserSize}
                   styleMode={styleMode}
                   onStyleSelectionChange={setStyleSelection}
                   webcamPipMode={webcamPipMode}
@@ -7907,9 +7933,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       onStartRecording={(o) => startEmbedCaptureRecording('A', o)}
                       onUploadInstead={triggerVideoUploadA}
                     />
-                    {renderVideoSlotPills()}
                   </>
                 )}
+                {/* Outside the ternary: with no video loaded it still carries the
+                    recording controls during a recording. */}
+                {renderVideoSlotPills()}
                 {/* Drag-over overlay for Video A */}
                 {isDragOverA && (
                   <div style={{
@@ -8212,7 +8240,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       registerWebcamPipPresentation={registerWebcamPipPresentation}
                       circleSpinning={circleSpinning}
                       outlineEraserSize={outlineEraserSize}
-                      onOutlineEraserSizeChange={setOutlineEraserSize}
                       styleMode={styleMode}
                       onStyleSelectionChange={setStyleSelection}
                       webcamPipMode={webcamPipMode}
@@ -8353,6 +8380,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         </main>
         </ReelsDesktopShell>
       </div>
+
+      <UpgradeSheet feature={upgradeFeature} onClose={() => setUpgradeFeature(null)} />
 
       {captureError ? (
         <div

@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 
 export async function POST(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'academy');
+  if (denied) return denied;
 
   const { question_id, reply_id } = await req.json();
   if (!question_id && !reply_id) return NextResponse.json({ error: 'question_id or reply_id required' }, { status: 400 });

@@ -18,6 +18,8 @@
  *   - 4xx (other than 308)   → fatal; the session is dead, do not retry
  */
 
+import { YOUTUBE_UPLOAD_COULD_NOT_START } from '@/lib/youtube/uploadOrigin';
+
 /**
  * Google requires every chunk except the last to be a multiple of 256 KiB.
  * 8 MiB keeps the request count low on a long recording without making a single
@@ -68,6 +70,10 @@ export async function uploadToResumableSession(
 ): Promise<ResumableUploadResult> {
   const total = blob.size;
   let offset = 0;
+  // True once Google has answered a chunk at all. A failure before that means
+  // the upload never started (a blocked or unreachable session URL surfaces as
+  // a bare "Failed to fetch"), which gets one clear message instead.
+  let started = false;
 
   while (offset < total) {
     const end = Math.min(offset + CHUNK_SIZE, total);
@@ -84,6 +90,7 @@ export async function uploadToResumableSession(
           body: chunk,
         });
 
+        started = true;
         if (res.status === 200 || res.status === 201) {
           onProgress?.(1);
           const data = (await res.json().catch(() => ({}))) as { id?: string };
@@ -112,6 +119,7 @@ export async function uploadToResumableSession(
       } catch (e) {
         attempt += 1;
         if (attempt > MAX_RETRIES_PER_CHUNK) {
+          if (!started) return { ok: false, error: YOUTUBE_UPLOAD_COULD_NOT_START };
           return {
             ok: false,
             error: e instanceof Error ? e.message : 'The upload failed after several retries.',
@@ -130,6 +138,7 @@ export async function uploadToResumableSession(
           }
           offset = resumeAt;
         } catch (probeErr) {
+          if (!started) return { ok: false, error: YOUTUBE_UPLOAD_COULD_NOT_START };
           return {
             ok: false,
             error: probeErr instanceof Error ? probeErr.message : 'Lost the upload session.',

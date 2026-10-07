@@ -9,183 +9,71 @@
  * anglemotion-landing-1) and the contract emitted in app/layout.tsx.
  *
  * Content rules this file is held to:
- *  - The reviews in FOUNDER_REVIEWS are real, supplied by the founder, and are
- *    reviews of VIN'S COACHING, not of this app — the app is new and has none.
- *    The page says so in as many words. Nothing here may be added without that
- *    same provenance. No club logos, user counts, benchmarks or press exist for
- *    this product; none are invented or implied.
- *  - TWO Trustpilot profiles, never to be conflated. The founder's coaching
- *    profile (vinbaccelli.com, "Anglemotion by Coach Vinbaccelli") carries the
- *    reviews, all of them 5 stars; the app's own profile (anglemotion.com) has
- *    none. The star record is stated ONLY next to the coaching link, and
- *    labelled as being for Vin's coaching rather than the app. The app's
- *    profile gets a plain invitation with no rating until it earns one.
- *  - The competitor table carries ONLY verified data; unknowns stay '?'.
+ *  - The reviews in FOUNDER_REVIEWS are real and supplied by the founder.
+ *    Nothing here may be added without that same provenance. No club logos,
+ *    user counts, benchmarks or press exist for this product; none are
+ *    invented or implied.
+ *  - Trustpilot: as of 2026-10-03 the founder states ONE Trustpilot profile
+ *    (www.trustpilot.com/review/anglemotion.com — TRUSTPILOT_URL below)
+ *    covers both the app and his coaching analysis, and that every review on
+ *    it is 5 stars. The star line beside the reviews says exactly that and no
+ *    more — no count, no TrustScore.
+ *  - No competitor prices or competitor feature claims. The comparison table
+ *    was removed at launch pricing (2026-10-03): only two of its cells had a
+ *    recorded source. It may return only with a cited source per cell.
+ *  - Prices come from lib/plans.ts and render through formatPrice (EUR); the
+ *    tax line is PRICE_TAX_NOTE. Never hardcode a price or a currency sign.
  *  - The example player's dates and readings are illustrative and are labelled
  *    as such on the page, not passed off as a real customer.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Check, X, Minus, ChevronDown, ArrowRight, ArrowUpRight } from 'lucide-react';
-import { PLANS, DEMO, planPrice, yearlyPerMonth } from '@/lib/plans';
+import Image from 'next/image';
+import { Check, ChevronDown, ArrowRight, ArrowUpRight } from 'lucide-react';
+import {
+  PLANS, DEMO, EBOOK_TITLE, PRICE_TAX_NOTE, formatPrice, planPrice, yearlyPerMonth,
+  yearlySavingsLabel, maxYearlySavingsPct,
+} from '@/lib/plans';
 
 /* ────────────────────────────────────────────────────────────────────────────
-   Authored linework diagrams.
+   Product screenshots.
 
-   These are geometry, not pictures and not screenshots: each one states what
-   the entry does in the product's own visual language — thin charcoal rules,
-   a single blue accent for the measured thing. Real product screenshots land
-   in the tutorial section in a later pass.
+   Real captures of the product, supplied by the founder. The originals sit in
+   marketing-originals/ at the repo root, exactly as taken and outside public/
+   so they never ship; what the page loads are crops of them in
+   public/marketing/landing/web/, cut to the product itself — no browser
+   chrome, desktop notifications or other tabs. Width and height below are each
+   crop's real pixel size, so next/image reserves the right box before load.
    ──────────────────────────────────────────────────────────────────────────── */
 
-const INK = 'var(--cl-text-primary)';
-const MUTED = 'var(--cl-text-secondary)';
 const ACCENT = 'var(--cl-accent)';
-const LINE = 'var(--cl-border)';
 
-type DiagramProps = { className?: string };
+const SHOT_DIR = '/marketing/landing/web';
 
-const svgBase: React.SVGProps<SVGSVGElement> = {
-  viewBox: '0 0 240 180',
-  fill: 'none',
-  xmlns: 'http://www.w3.org/2000/svg',
-  role: 'img',
-  focusable: 'false',
+type Shot = { src: string; width: number; height: number; alt: string; caption?: string };
+
+/**
+ * A looping GIF with a still twin. Visitors who asked for reduced motion get the
+ * still (a <picture> source on the media query — no script, so it holds before
+ * hydration too), the same rule the Motion Layer clip follows.
+ */
+type AnimatedShot = { src: string; still: string; width: number; height: number; alt: string };
+
+const HERO_SHOT: Shot = {
+  src: `${SHOT_DIR}/hero-skeleton-overlay.webp`,
+  width: 1920,
+  height: 1274,
+  alt: 'A forehand mid-swing with the AI-detected skeleton drawn over the player and a panel of ten joint angles beside it — elbows, knees, feet, shoulder and hip lines.',
 };
 
-/** Joint angles read off the frame. */
-function AngleDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="A joint angle measured between two limb segments">
-      <path d="M60 150 L108 84 L188 96" stroke={INK} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M108 84 m -34 26 a 42 42 0 0 0 42 20" stroke={ACCENT} strokeWidth="2" strokeLinecap="round" />
-      <circle cx="108" cy="84" r="5" fill={ACCENT} />
-      <circle cx="60" cy="150" r="4" fill="var(--cl-bg-panel)" stroke={INK} strokeWidth="2" />
-      <circle cx="188" cy="96" r="4" fill="var(--cl-bg-panel)" stroke={INK} strokeWidth="2" />
-      <line x1="24" y1="30" x2="216" y2="30" stroke={LINE} strokeWidth="1" strokeDasharray="3 5" />
-      <text x="24" y="22" fill={MUTED} fontSize="11" fontFamily="var(--cl-font)" letterSpacing="0.08em">ELBOW</text>
-    </svg>
-  );
-}
-
-/** AI proposes the skeleton; the coach moves any point. */
-function SkeletonDiagram({ className }: DiagramProps) {
-  const edges = [
-    [120, 34, 120, 92], [120, 92, 84, 140], [120, 92, 156, 140],
-    [120, 52, 78, 78], [120, 52, 176, 66],
-  ];
-  return (
-    <svg {...svgBase} className={className} aria-label="A detected skeleton with one keypoint being corrected by hand">
-      {edges.map(([x1, y1, x2, y2], i) => (
-        <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={INK} strokeWidth="2" strokeLinecap="round" />
-      ))}
-      {[[120, 34], [120, 52], [120, 92], [78, 78], [84, 140], [156, 140]].map(([cx, cy], i) => (
-        <circle key={i} cx={cx} cy={cy} r="4.5" fill="var(--cl-bg-panel)" stroke={INK} strokeWidth="2" />
-      ))}
-      {/* the point under the coach's hand */}
-      <line x1="176" y1="66" x2="196" y2="44" stroke={ACCENT} strokeWidth="1.5" strokeDasharray="3 4" />
-      <circle cx="176" cy="66" r="6" fill={ACCENT} />
-      <circle cx="196" cy="44" r="10" fill="none" stroke={ACCENT} strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-/** The whole stroke, frozen across space. */
-function MotionLayerDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="A stroke composited as several overlapping positions">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <g key={i} transform={`translate(${i * 38} 0)`} opacity={0.18 + i * 0.205}>
-          <path
-            d="M46 148 L58 104 L46 66"
-            stroke={i === 4 ? ACCENT : INK}
-            strokeWidth={i === 4 ? 2.5 : 2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <circle cx="58" cy="58" r="7" stroke={i === 4 ? ACCENT : INK} strokeWidth={i === 4 ? 2.5 : 2} />
-        </g>
-      ))}
-    </svg>
-  );
-}
-
-/** Phases replayed frame by frame. */
-function PhaseDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="A stroke split into phases and replayed frame by frame">
-      {[0, 1, 2, 3].map((i) => (
-        <rect
-          key={i}
-          x={20 + i * 52} y={52} width={44} height={62} rx={6}
-          stroke={i === 1 ? ACCENT : LINE}
-          strokeWidth={i === 1 ? 2 : 1.5}
-          fill="none"
-        />
-      ))}
-      {[0, 1, 2, 3].map((i) => (
-        <path
-          key={i}
-          d={`M${34 + i * 52} 100 L${42 + i * 52} ${80 - i * 4} L${50 + i * 52} 92`}
-          stroke={i === 1 ? ACCENT : INK}
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          opacity={i === 1 ? 1 : 0.45}
-        />
-      ))}
-      <line x1="20" y1="132" x2="220" y2="132" stroke={LINE} strokeWidth="1" />
-      <circle cx="94" cy="132" r="4" fill={ACCENT} />
-    </svg>
-  );
-}
-
-/** Match data logged point by point. */
-function MatchDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="Match statistics charted beside a court diagram">
-      <rect x="20" y="40" width="76" height="104" rx="3" stroke={INK} strokeWidth="2" fill="none" />
-      <line x1="20" y1="92" x2="96" y2="92" stroke={INK} strokeWidth="2" />
-      <line x1="58" y1="40" x2="58" y2="144" stroke={LINE} strokeWidth="1.5" />
-      <circle cx="76" cy="66" r="4" fill={ACCENT} />
-      {[46, 30, 62, 22].map((h, i) => (
-        <rect
-          key={i}
-          x={124 + i * 26} y={144 - h} width={16} height={h} rx={3}
-          fill={i === 2 ? ACCENT : 'var(--cl-fill-inactive)'}
-        />
-      ))}
-      <line x1="124" y1="144" x2="220" y2="144" stroke={LINE} strokeWidth="1" />
-    </svg>
-  );
-}
-
-/** Two documents per player, growing all season. */
-function DocsDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="Two documents per player: technical and match analysis">
-      <rect x="30" y="34" width="94" height="118" rx="8" stroke={LINE} strokeWidth="1.5" fill="var(--cl-bg-panel)" />
-      <rect x="112" y="46" width="94" height="118" rx="8" stroke={INK} strokeWidth="2" fill="var(--cl-bg-panel)" />
-      {[70, 86, 102, 118, 134].map((y, i) => (
-        <line key={i} x1="128" y1={y} x2={i === 4 ? 166 : 190} y2={y} stroke={i === 0 ? ACCENT : LINE} strokeWidth={i === 0 ? 3 : 2} strokeLinecap="round" />
-      ))}
-    </svg>
-  );
-}
-
-/** Published to YouTube, kept forever, handed over. */
-function PublishDiagram({ className }: DiagramProps) {
-  return (
-    <svg {...svgBase} className={className} aria-label="A finished video published and shared with the player">
-      <rect x="34" y="46" width="130" height="88" rx="10" stroke={INK} strokeWidth="2" fill="none" />
-      <path d="M92 74 L120 90 L92 106 Z" fill={ACCENT} />
-      <path d="M176 66 L206 66 L206 96" stroke={ACCENT} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M206 66 L172 100" stroke={ACCENT} strokeWidth="2" strokeLinecap="round" />
-      <line x1="34" y1="150" x2="164" y2="150" stroke={LINE} strokeWidth="1" strokeDasharray="3 5" />
-    </svg>
-  );
-}
+/** The Motion Layer composite, as the moving clip it exports. */
+const MOTION_LAYER_CLIP = {
+  src: '/marketing/landing/7d.mp4',
+  width: 464,
+  height: 832,
+  label: 'A Motion Layer composite playing: the whole swing laid over a single frame.',
+};
 
 /* ────────────────────────────────────────────────────────────────────────────
    The spine.
@@ -196,21 +84,55 @@ type Entry = {
   title: string;
   body: string;
   micro?: string;
-  Diagram: React.ComponentType<DiagramProps>;
+  /** One shot, or a short sequence read top to bottom (before → after). */
+  shots?: Shot[];
+  /** The Motion Layer entry shows the exported clip instead of a still. */
+  clip?: true;
+  /** A looping screen capture shown in place of a still. */
+  animated?: AnimatedShot;
 };
 
 /**
  * One example player's season. The chain runs exactly as the product does:
- * measure → correct → composite → phase → match data → the two files →
- * published and handed over.
+ * measure → calibrate → correct → composite → phase → match data → the two
+ * files → published and handed over.
  */
 const ENTRIES: Entry[] = [
   {
     date: 'MAR 04',
     title: 'The stroke, measured.',
     body:
-      'Shoulder, hip, knee, elbow — AngleMotion reads 13+ joint angles automatically and shows the numbers right on the frame. Compare a serve to a model, prove why a stroke breaks down, and back every note with a real measurement instead of a guess.',
-    Diagram: AngleDiagram,
+      'Elbows, knees, shoulder line, hip line — AngleMotion reads the joint angles off the frame and keeps every number in a data column beside the player. Draw your own angle arrows on top, compare two of them as a differential, and back every note with a real measurement instead of a guess.',
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-angles.webp`,
+        width: 1920,
+        height: 1082,
+        alt: 'Two angle arrows drawn on a player’s shoulder and hip lines, with a data column listing both angles, their differential, and the elbow and knee angles.',
+      },
+    ],
+  },
+  {
+    date: 'MAR 11',
+    title: 'Centimetres, not pixels.',
+    body:
+      'Calibrate once against something of known size — a racket, a net post, the service box — and the ruler measures real distance anywhere in the frame. Stance width, contact point, how far a knee travels: measured, not eyeballed.',
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-ruler-reference.webp`,
+        width: 1920,
+        height: 1185,
+        alt: 'The ruler panel asking for a calibration reference: racket, net post, net width, service box, singles court or a custom distance.',
+        caption: 'Pick a reference the clip already contains.',
+      },
+      {
+        src: `${SHOT_DIR}/season-ruler-measured.webp`,
+        width: 1920,
+        height: 1100,
+        alt: 'The ruler calibrated against the racket at 68.6 cm, measuring 39.7 cm between the player’s knees.',
+        caption: 'Calibrated on the racket: 39.7 cm, knee to knee.',
+      },
+    ],
   },
   {
     date: 'MAR 18',
@@ -218,7 +140,17 @@ const ENTRIES: Entry[] = [
     body:
       'Every skeleton keypoint and every angle the AI detects is yours to move. Drag any point, correct any angle, trust the read. AI-fast for the 90%, coach-accurate for the 10% that matters — no black box you can’t touch.',
     micro: 'Trust the AI for speed. Trust yourself for the truth.',
-    Diagram: SkeletonDiagram,
+    // Screen capture supplied by the founder (marketing-originals/Skeleton/WhatsApp Video
+    // 2026-10-03 at 14.34.06.mp4), cropped to the canvas: the live skeleton
+    // through a whole forehand, then snapshot frames with shoulder and hip
+    // angle arrows. Native capture width is 390px, so it is not upscaled.
+    animated: {
+      src: `${SHOT_DIR}/skeleton-track.gif`,
+      still: `${SHOT_DIR}/skeleton-track-still.webp`,
+      width: 390,
+      height: 296,
+      alt: 'The AI skeleton following a forehand from backswing to finish with live joint angles in the data column, then frozen frames with angle arrows drawn on the shoulder and hip lines.',
+    },
   },
   {
     date: 'APR 09',
@@ -226,21 +158,35 @@ const ENTRIES: Entry[] = [
     body:
       'Motion Layer turns a swing into a multi-position composite — as a still and as video. You choose the frames and the layers, so the trail shows the path you want the player to see. The demo that sells your coaching and the shareable that markets it.',
     micro: 'Plus — it looks incredible.',
-    Diagram: MotionLayerDiagram,
+    clip: true,
   },
   {
     date: 'APR 27',
     title: 'Phase by phase, in slow motion.',
     body:
       'Snapshot every phase of the stroke and replay it frame-by-frame in slow motion, side-by-side, with angle overlays. Then screen-record it with your webcam and mic to deliver a same-day coaching video your player can rewatch until it clicks.',
-    Diagram: PhaseDiagram,
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-angle-differential.webp`,
+        width: 1920,
+        height: 1246,
+        alt: 'A paused contact point marked up by hand: a dashed ellipse at the hips and a 107° forearm-to-racket angle, logged in the data column.',
+      },
+    ],
   },
   {
     date: 'MAY 16',
     title: 'The match, in numbers.',
     body:
       'Follow a player through a live match and log every point by hand, or let the Match Decoder read your SwingVision screenshots and derive the stats SwingVision doesn’t surface. Either way the match ends as data, not an impression.',
-    Diagram: MatchDiagram,
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-match-decoder.webp`,
+        width: 1136,
+        height: 1344,
+        alt: 'A decoded match report: shot and spin distribution charts, then a coach’s summary where every line names the numbers it rests on.',
+      },
+    ],
   },
   {
     date: 'JUN 02',
@@ -248,25 +194,64 @@ const ENTRIES: Entry[] = [
     body:
       'Every player carries two documents — technical analysis and match analysis — plus a player database and progress tracking across the whole season. Rivals hand you a clip and stop. This is the client file, the deliverable, and the storefront in one place.',
     micro: 'Every student’s technical story in one file — from first lesson to nationals.',
-    Diagram: DocsDiagram,
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-player-reports.webp`,
+        width: 1320,
+        height: 1396,
+        alt: 'A player’s reports page: dated technique analyses, one with a YouTube link, and buttons that open the Technical Analysis Doc, the Match Analysis Doc and the Drive folder.',
+      },
+    ],
   },
   {
     date: 'JUN 21',
-    title: 'Published, permanent, handed over.',
+    title: 'Published, linked, handed over.',
     body:
-      'Push the finished video straight to YouTube as unlisted and drop it into the player’s report. Nothing to store, nothing to pay for, no archive to run out of — an unlimited record your students keep and can rewatch years later.',
-    Diagram: PublishDiagram,
+      'Push the finished video to your own YouTube channel as unlisted and save the link to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply.',
+    micro: 'Part of Pro and Academy: the player database, YouTube upload and Docs export.',
+    shots: [
+      {
+        src: `${SHOT_DIR}/season-recording-complete.webp`,
+        width: 1920,
+        height: 1134,
+        alt: 'A finished coaching recording — the analysed clip with the coach on camera — and the actions that follow it: Connect YouTube, Crop, Trim and Download MP4.',
+      },
+    ],
   },
 ];
 
-/** Steps for the tutorial section. Real screenshots land here in a later pass. */
-const TUTORIAL_STEPS = [
-  { t: 'Bring the video in', b: 'Upload from your camera roll, pull from Google Drive, or paste a YouTube link. Nothing to install.' },
-  { t: 'Find the frame', b: 'Step frame-by-frame to the moment that matters and snapshot it as a phase.' },
-  { t: 'Let the AI read it', b: 'Run pose detection and AI Detect Angles, then correct any point the AI got wrong.' },
-  { t: 'Build the composite', b: 'Pick your frames and layers and generate the Motion Layer still or video.' },
-  { t: 'Record the explanation', b: 'Capture screen, webcam and mic in one hub while you talk the player through it.' },
-  { t: 'Send the report', b: 'Publish to YouTube, drop everything into the player’s document, and share the link.' },
+/** Steps for the tutorial section, each with the screen it happens on. */
+const TUTORIAL_STEPS: Array<{ t: string; b: string; shot: Shot }> = [
+  {
+    t: 'Bring the video in',
+    b: 'Upload from your camera roll, pull from Google Drive, or paste a YouTube link. Nothing to install.',
+    shot: { src: `${SHOT_DIR}/step-upload.webp`, width: 1920, height: 1328, alt: 'The empty workspace with Upload Video, the tennis-court strategy board and the demo clip.' },
+  },
+  {
+    t: 'Find the frame',
+    b: 'Step frame-by-frame to the moment that matters and snapshot it as a phase.',
+    shot: { src: `${SHOT_DIR}/step-frames.webp`, width: 1920, height: 1040, alt: 'Five frames marked along the clip’s timeline, each listed with its timestamp.' },
+  },
+  {
+    t: 'Let the AI read it',
+    b: 'Run pose detection and AI Detect Angles, then correct any point the AI got wrong.',
+    shot: { src: `${SHOT_DIR}/step-ai-track.webp`, width: 1300, height: 1000, alt: 'The AI Track dialog offering three tracking speeds, from extremely precise to fastest.' },
+  },
+  {
+    t: 'Build the composite',
+    b: 'Pick your frames and layers and generate the Motion Layer still or video.',
+    shot: { src: `${SHOT_DIR}/step-mask-editor.webp`, width: 1880, height: 1340, alt: 'The Motion Layer mask editor with the player and racket detected automatically and highlighted, ready to cut from the background.' },
+  },
+  {
+    t: 'Record the explanation',
+    b: 'Capture screen, webcam and mic in one hub while you talk the player through it.',
+    shot: { src: `${SHOT_DIR}/step-record.webp`, width: 1920, height: 1079, alt: 'A recording in progress: the clip on screen, the coach in a floating camera window with a timer, Pause and Stop.' },
+  },
+  {
+    t: 'Send the report',
+    b: 'Publish to YouTube, drop everything into the player’s document, and share the link.',
+    shot: { src: `${SHOT_DIR}/step-coach-summary.webp`, width: 1136, height: 680, alt: 'A coach’s summary of six numbered observations above a Save to Google Docs button.' },
+  },
 ];
 
 /**
@@ -312,79 +297,56 @@ const FOUNDER_REVIEWS: Review[] = [
 ];
 
 /**
- * TWO DIFFERENT Trustpilot profiles. They must never be conflated on the page:
- * one carries the founder's coaching reviews, the other is the app's own empty
- * profile, and mixing them would attribute a rating to a product that has not
- * earned one.
- *
- * Both verified in a browser on 2026-09-04.
+ * The ONE Trustpilot profile, covering both the app and Vin's coaching
+ * analysis (founder's decision, 2026-10-03). Every Trustpilot link on this
+ * page points here. Until 2026-10-03 the page kept a separate coaching
+ * profile (it.trustpilot.com/review/vinbaccelli.com) apart from this one.
  */
-
-/** "Anglemotion by Coach Vinbaccelli" — the founder's COACHING profile, claimed
- *  June 2025, Milano. 6 reviews, TrustScore 4.2, "Molto buono" (Very Good).
- *  This is where the Trustpilot quotes in FOUNDER_REVIEWS actually live, so it
- *  is the only profile whose rating this page may state. */
-const TRUSTPILOT_COACH_URL = 'https://it.trustpilot.com/review/vinbaccelli.com';
-/** Every review on that profile is 5 stars (star breakdown reads 5★ 100%).
- *  The profile's headline TrustScore is 4.2 because Trustpilot weights by
- *  recency and volume rather than averaging stars — so the page states the
- *  star record, which is what the reviewers actually left. */
-const TRUSTPILOT_COACH_COUNT = 6;
-
-/** AngleMotion's own claimed profile. 0 reviews / 0.0 — a plain invitation
- *  only. No rating may be stated for this one until it has one. */
-const TRUSTPILOT_APP_URL = 'https://www.trustpilot.com/review/anglemotion.com';
-
-/* Verified competitor comparison. y = yes, n = no, q = unknown. Pro tier vs
-   Pro tier: CoachNow PRO $499.99/yr (coachnow.com/pricing); Dartfish 360 S
-   ≈ €40/mo (dartfish.com/plans) — their ~$5/mo Express tier is mobile-only and
-   not comparable; OnForm Coach Pro $599.99/yr (onform.com/pricing) — their coach
-   ladder is Basic $199.99 / Standard $399.99 / Pro $599.99 per year and, in
-   their own words, "Coach prices multiply by Number of coaches", so five coaches
-   is five times that before their 11% 3+-seat discount. Read off the live
-   pricing page 2026-09-09.
-
-   Unknowns stay '?'; nothing here is estimated. OnForm's row is mostly '?' on
-   purpose: only drawing/telestration and the athlete database are stated
-   outright on their pricing page, and a feature nobody has verified is not
-   marked 'n' just to make the column look decisive. */
-const COMPARE_COLS = ['AngleMotion', 'CoachNow', 'Dartfish', 'OnForm'];
-const COMPARE_ROWS: Array<{ label: string; cells: Array<'y' | 'n' | 'q' | string> }> = [
-  { label: 'Price (Pro tier, annual)', cells: ['$200/yr', '$499/yr', '~€480/yr', '$599/yr'] },
-  { label: 'AI pose / skeleton overlay', cells: ['y', 'y', 'y', 'q'] },
-  { label: 'Angle measurement (auto)', cells: ['y', 'y', 'y', 'q'] },
-  { label: 'Editable AI skeleton (override by hand)', cells: ['y', 'q', 'n', 'q'] },
-  { label: 'Slow-mo / frame-by-frame', cells: ['y', 'y', 'y', 'q'] },
-  { label: 'Drawing / telestration', cells: ['y', 'y', 'y', 'y'] },
-  { label: 'Side-by-side compare', cells: ['y', 'y', 'y', 'q'] },
-  { label: 'Motion Layer / motion-trail composite', cells: ['y', 'n', 'y', 'q'] },
-  { label: 'Coaching report (Google Docs)', cells: ['y', 'q', 'q', 'q'] },
-  { label: 'Player database / client file', cells: ['y', 'y', 'q', 'y'] },
-  { label: 'Videos stay local (no cloud lock-in)', cells: ['y', 'n', 'n', 'q'] },
-  { label: 'One-click YouTube publish', cells: ['y', 'q', 'q', 'q'] },
-  { label: 'SwingVision stat import (Match Decoder)', cells: ['y', 'n', 'n', 'q'] },
-];
+const TRUSTPILOT_URL = 'https://www.trustpilot.com/review/anglemotion.com';
 
 const FAQS = [
   { q: 'What is AngleMotion?', a: 'A browser-based tennis video-analysis platform: AI skeleton + angle detection you can edit by hand, Motion Layer composites, slow-motion phase replays, a recording hub, and per-player Google Docs coaching reports — all in one place.' },
   { q: 'Does the AI replace my judgment?', a: 'No. Every skeleton point and angle the AI detects is editable — drag it, correct it, trust it. AI does the fast 90%; you own the 10% that matters.' },
-  { q: 'Do my videos get uploaded to a cloud?', a: 'No. Your footage is processed locally in your browser and stays on your device. Only the reports and clips you explicitly export go to your own Google Drive / YouTube.' },
+  { q: 'Where do my videos live?', a: 'On Pro and Academy, a recording you publish goes to your own YouTube channel as an unlisted video, and its link is saved to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply. The footage you analyse is processed in your browser; a Motion Layer clip you save to a player’s session is stored by AngleMotion with that session.' },
   { q: 'What do I need to run it?', a: 'Just a browser — nothing to install. A laptop or desktop with graphics acceleration on gives the smoothest AI skeleton.' },
   { q: 'Is this only for coaches?', a: 'No. Plenty of players and parents run their own analysis and build their own record over time. The Academy exists so you can learn what to film and what to look for.' },
-  { q: 'How does the yearly plan and free eBook work?', a: 'Go yearly ($200/yr — 2 months free vs monthly) and we include our tennis biomechanics eBook, the coach’s guide to reading every stroke.' },
+  { q: 'How does yearly billing and the ebook work?', a: `Yearly costs less than twelve monthly payments: 16.7% less on Light (two months free) and 28.6% less on Pro and Academy. Pro and Academy billed yearly include the ${EBOOK_TITLE} ebook, downloaded from your account page. ${PRICE_TAX_NOTE}` },
   { q: 'Can I use my SwingVision data?', a: 'Yes — the Match Decoder reads SwingVision screenshots and folds match stats into the player’s file.' },
 ];
-
-function Cell({ v }: { v: string }) {
-  if (v === 'y') return <Check size={18} style={{ color: 'var(--cl-success-text)' }} aria-label="yes" />;
-  if (v === 'n') return <X size={16} style={{ color: 'var(--cl-text-secondary)' }} aria-label="no" />;
-  if (v === 'q') return <Minus size={16} style={{ color: 'var(--cl-text-secondary)' }} aria-label="unknown" />;
-  return <span className="am-tabular" style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>{v}</span>;
-}
 
 /* ────────────────────────────────────────────────────────────────────────────
    Page
    ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The Motion Layer clip. It plays on its own, muted and looping, like the
+ * still it replaces — unless the visitor asked for reduced motion, in which
+ * case it waits behind its controls.
+ */
+function MotionLayerClip() {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    setReduced(prefersReduced);
+    if (!prefersReduced) ref.current?.play().catch(() => { /* autoplay refused: controls stay off, clip shows its first frame */ });
+  }, []);
+  return (
+    <video
+      ref={ref}
+      className="am-clip"
+      src={MOTION_LAYER_CLIP.src}
+      width={MOTION_LAYER_CLIP.width}
+      height={MOTION_LAYER_CLIP.height}
+      muted
+      loop
+      playsInline
+      preload="metadata"
+      controls={reduced}
+      aria-label={MOTION_LAYER_CLIP.label}
+    />
+  );
+}
 
 export default function LandingPage() {
   const [annual, setAnnual] = useState(true);
@@ -446,13 +408,11 @@ export default function LandingPage() {
             <img src="/logo-square-new.jpg" alt="" width={26} height={26} />
             <span>Angle<span style={{ color: ACCENT }}>Motion</span></span>
           </Link>
-          <span className="am-slogan">Analyze Every Angle of Your Game</span>
         </div>
         <div className="am-nav-links">
           <a href="#season" className="am-navlink">How it works</a>
           <a href="#academy" className="am-navlink">Academy</a>
           <a href="#pricing" className="am-navlink">Pricing</a>
-          <a href="#compare" className="am-navlink">Compare</a>
           <Link href="/login" className="am-navlink am-navlink-strong">Sign in</Link>
           <Link href="/login" className="am-btn am-btn-sm">Start free</Link>
         </div>
@@ -460,13 +420,13 @@ export default function LandingPage() {
 
       {/* ── HERO ────────────────────────────────────────────────────────── */}
       <header className="am-hero">
-        <h1 className="am-display">
-          Video in.<br />
-          <span style={{ color: ACCENT }}>Report out.</span>
+        <h1 className="am-display am-display-hero">
+          Analyze every angle <span style={{ color: ACCENT }}>of your game.</span>
         </h1>
         <p className="am-lede">
-          AngleMotion turns the footage you already have into a permanent, shareable record of a
-          player’s development — measured, corrected by you, and kept for as long as they play.
+          Video in, report out. AngleMotion turns the footage you already have into a permanent,
+          shareable record of a player’s development — measured, corrected by you, and kept for as
+          long as they play.
         </p>
         <div className="am-cta-row">
           <Link href={DEMO.url} className="am-btn am-btn-lg">
@@ -475,6 +435,16 @@ export default function LandingPage() {
           <a href="#season" className="am-ghost">Follow one player’s season</a>
         </div>
         <p className="am-note">{DEMO.note}</p>
+        <figure className="am-hero-shot">
+          <Image
+            src={HERO_SHOT.src}
+            width={HERO_SHOT.width}
+            height={HERO_SHOT.height}
+            alt={HERO_SHOT.alt}
+            priority
+            sizes="(max-width: 1180px) 100vw, 1180px"
+          />
+        </figure>
         <ul className="am-facts">
           <li>Runs in your browser — nothing to install</li>
           <li>Your videos stay local — no cloud lock-in</li>
@@ -499,7 +469,7 @@ export default function LandingPage() {
         </div>
 
         <ol className="am-entries">
-          {ENTRIES.map(({ date, title, body, micro, Diagram }) => (
+          {ENTRIES.map(({ date, title, body, micro, shots, clip, animated }) => (
             <li key={date} className="am-entry">
               <div className="am-entry-date am-tabular">{date}</div>
               <div className="am-entry-body">
@@ -507,8 +477,36 @@ export default function LandingPage() {
                 <p className="am-p">{body}</p>
                 {micro && <p className="am-micro">{micro}</p>}
               </div>
-              <div className="am-entry-figure">
-                <Diagram className="am-diagram" />
+              <div className={clip ? 'am-entry-figure am-entry-figure-clip' : 'am-entry-figure'}>
+                {clip && <MotionLayerClip />}
+                {animated && (
+                  <figure className="am-shot">
+                    <picture>
+                      <source media="(prefers-reduced-motion: reduce)" srcSet={animated.still} />
+                      {/* eslint-disable-next-line @next/next/no-img-element -- an animated GIF gains nothing from the optimizer */}
+                      <img
+                        src={animated.src}
+                        width={animated.width}
+                        height={animated.height}
+                        alt={animated.alt}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    </picture>
+                  </figure>
+                )}
+                {shots?.map((shot) => (
+                  <figure key={shot.src} className="am-shot">
+                    <Image
+                      src={shot.src}
+                      width={shot.width}
+                      height={shot.height}
+                      alt={shot.alt}
+                      sizes="(max-width: 900px) 100vw, 560px"
+                    />
+                    {shot.caption && <figcaption className="am-shot-caption">{shot.caption}</figcaption>}
+                  </figure>
+                ))}
               </div>
             </li>
           ))}
@@ -516,10 +514,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── TUTORIAL ────────────────────────────────────────────────────
-          Structure only for now. Real product screenshots are supplied in a
-          later pass and drop into .am-step-shot — the step list reads
-          correctly without them, so nothing here is a placeholder pretending
-          to be content. ─────────────────────────────────────────────────── */}
+          The six steps, each beside the screen it happens on. ──────────── */}
       <section id="how" className="am-section am-tutorial">
         <h2 className="am-h2">From footage to a finished report, in six steps.</h2>
         <p className="am-sub">The whole loop, start to finish. No step needs a second app.</p>
@@ -531,6 +526,15 @@ export default function LandingPage() {
                 <h3 className="am-step-t">{s.t}</h3>
                 <p className="am-p">{s.b}</p>
               </div>
+              <figure className="am-shot am-step-shot">
+                <Image
+                  src={s.shot.src}
+                  width={s.shot.width}
+                  height={s.shot.height}
+                  alt={s.shot.alt}
+                  sizes="(max-width: 900px) 100vw, 520px"
+                />
+              </figure>
             </li>
           ))}
         </ol>
@@ -547,23 +551,21 @@ export default function LandingPage() {
             use it to sharpen their eye. Players and parents use it to analyse themselves properly
             instead of guessing.
           </p>
-          {/* Every paid tier as of 2026-09-09 — the Academy moved down to
-              Light with founding pricing (lib/plans.ts, middleware.ts). */}
+          {/* Every paid tier: the Academy is a Light feature (lib/plans.ts,
+              lib/entitlements.ts). */}
           <p className="am-note">Included with every plan.</p>
         </div>
       </section>
 
       {/* ── FOUNDER ─────────────────────────────────────────────────────
-          Real reviews of Vin's coaching, framed as exactly that. The app is
-          new and has no reviews of its own; saying so is the reason these can
-          be shown at all. No aggregate rating — see the note at the top of
-          this file. ──────────────────────────────────────────────────────── */}
+          Real reviews of Vin's coaching analysis, framed as exactly that. No
+          aggregate rating — see the note at the top of this file.
+          ─────────────────────────────────────────────────────────────────── */}
       <section id="founder" className="am-section">
         <h2 className="am-h2">About Vin Baccelli, founder &amp; coach.</h2>
         <p className="am-sub">
           AngleMotion was built by a working tennis coach to do the job he was already doing by hand.
           The reviews below are of Vin’s own coaching analysis — the practice the tool came out of.
-          AngleMotion itself is new and hasn’t been reviewed yet.
         </p>
 
         <ul className="am-reviews">
@@ -579,12 +581,11 @@ export default function LandingPage() {
         </ul>
 
         <div className="am-review-cta">
-          <a href={TRUSTPILOT_COACH_URL} target="_blank" rel="noopener noreferrer" className="am-btn am-btn-quiet">
-            Read all reviews of Vin’s coaching <ArrowUpRight size={16} aria-hidden="true" />
+          <a href={TRUSTPILOT_URL} target="_blank" rel="noopener noreferrer" className="am-btn am-btn-quiet">
+            Read all reviews on Trustpilot <ArrowUpRight size={16} aria-hidden="true" />
           </a>
           <p className="am-note">
-            All {TRUSTPILOT_COACH_COUNT} reviews on Trustpilot are 5 stars — for Vin’s coaching
-            analysis, not for the app.
+            All reviews on Trustpilot are 5 stars — for the app and Vin’s coaching analysis
           </p>
         </div>
       </section>
@@ -594,7 +595,7 @@ export default function LandingPage() {
         <h2 className="am-h2">Pricing that fits how you coach.</h2>
         <div className="am-toggle" role="group" aria-label="Billing period">
           <button type="button" onClick={() => setAnnual(false)} className={`am-toggle-b ${!annual ? 'is-on' : ''}`} aria-pressed={!annual}>Monthly</button>
-          <button type="button" onClick={() => setAnnual(true)} className={`am-toggle-b ${annual ? 'is-on' : ''}`} aria-pressed={annual}>Yearly · 2 months free</button>
+          <button type="button" onClick={() => setAnnual(true)} className={`am-toggle-b ${annual ? 'is-on' : ''}`} aria-pressed={annual}>Yearly · save up to {maxYearlySavingsPct()}%</button>
         </div>
 
         <div className="am-plans">
@@ -603,12 +604,12 @@ export default function LandingPage() {
               <h3 className="am-plan-name">{plan.name}</h3>
               <p className="am-plan-tag">{plan.tagline}</p>
               <p className="am-plan-price am-tabular">
-                ${annual ? yearlyPerMonth(plan) : planPrice(plan, 'monthly')}
+                {formatPrice(annual ? yearlyPerMonth(plan) : planPrice(plan, 'monthly'))}
                 <span className="am-plan-per">/mo</span>
               </p>
               <p className="am-plan-billed am-tabular">
-                {annual ? `$${planPrice(plan, 'yearly')} billed yearly` : 'billed monthly'}
-                {plan.seats > 1 ? ` · ${plan.seats} coach seats` : ''}
+                {annual ? `${formatPrice(planPrice(plan, 'yearly'))} billed yearly · ${yearlySavingsLabel(plan)}` : 'billed monthly'}
+                {plan.seats > 1 ? ` · up to ${plan.seats} coaches` : ''}
               </p>
               <ul className="am-plan-features">
                 {plan.features.map((f) => (
@@ -623,7 +624,7 @@ export default function LandingPage() {
         </div>
 
         <p className="am-note am-center">
-          Go yearly and get our tennis biomechanics eBook — the coach’s guide to reading every stroke.
+          Pro and Academy billed yearly include the {EBOOK_TITLE} ebook. {PRICE_TAX_NOTE}
         </p>
       </section>
 
@@ -651,56 +652,22 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── COMPARE ─────────────────────────────────────────────────────── */}
-      <section id="compare" className="am-section">
-        <h2 className="am-h2">How it compares.</h2>
-        <p className="am-sub">
-          Verified data only. Where a competitor doesn’t publish an answer we leave it unknown rather
-          than guess.
-        </p>
-        <div className="am-table-wrap">
-          <table className="am-table">
-            <caption className="am-visually-hidden">Feature comparison against CoachNow and Dartfish</caption>
-            <thead>
-              <tr>
-                <th scope="col">&nbsp;</th>
-                {COMPARE_COLS.map((c, i) => (
-                  <th key={c} scope="col" className={i === 0 ? 'is-us' : ''}>{c}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {COMPARE_ROWS.map((row) => (
-                <tr key={row.label}>
-                  <th scope="row">{row.label}</th>
-                  {row.cells.map((cell, i) => (
-                    <td key={i} className={i === 0 ? 'is-us' : ''}><Cell v={cell} /></td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
       {/* ── CLOSE ───────────────────────────────────────────────────────── */}
       <section className="am-close">
         <h2 className="am-display am-display-sm">Start your first file today.</h2>
         <p className="am-lede am-center">
-          One hour of every tool, free. Bring a video you already have and see what comes out the
-          other side.
+          One hour of every tool, free. Bring a video you already have (or use our demo video) and
+          see what comes out the other side.
         </p>
         <div className="am-cta-row am-center-row">
           <Link href={DEMO.url} className="am-btn am-btn-lg">{DEMO.label} <ArrowRight size={18} /></Link>
         </div>
 
-        {/* The APP's own Trustpilot profile — deliberately here, beside the app
-            CTAs, and never inside the founder section: the two profiles measure
-            different things and must not be read as one. It has no reviews yet,
-            so this is an invitation and states no rating. */}
+        {/* An invitation to review, beside the app CTAs. Same single profile as
+            the founder section; states no rating of its own. */}
         <p className="am-note am-center am-app-review">
           Already used it?{' '}
-          <a href={TRUSTPILOT_APP_URL} target="_blank" rel="noopener noreferrer" className="am-inline-link">
+          <a href={TRUSTPILOT_URL} target="_blank" rel="noopener noreferrer" className="am-inline-link">
             Review AngleMotion on Trustpilot <ArrowUpRight size={13} aria-hidden="true" />
           </a>
         </p>
@@ -771,23 +738,7 @@ const CSS = `
   font-size: 17px; font-weight: 800; letter-spacing: -0.03em; text-decoration: none;
 }
 .am-wordmark img { border-radius: var(--cl-radius-sm); display: block; }
-/* Tagline beside the wordmark. Deliberately quiet — Marketing Caption size at
-   secondary weight against the wordmark's 17px/800, separated by the same
-   hairline rule the rest of the page uses instead of a bullet or dash. It is
-   the first thing that goes when the nav runs out of room. */
 .am-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.am-slogan {
-  position: relative; padding-left: 13px;
-  font-size: 13px; font-weight: 500; letter-spacing: -0.01em;
-  color: var(--cl-text-secondary); white-space: nowrap;
-}
-.am-slogan::before {
-  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
-  width: 1px; height: 15px; background: var(--cl-border);
-}
-/* Mobile only hides it: tablet and up have room, and below 860px the nav
-   links collapse anyway, which frees exactly the space the slogan needs. */
-@media (max-width: 767px) { .am-slogan { display: none; } }
 .am-nav-links { display: flex; align-items: center; gap: 22px; }
 .am-navlink {
   font-size: 15px; font-weight: 500; color: var(--cl-text-secondary);
@@ -833,6 +784,9 @@ const CSS = `
   text-wrap: balance;
 }
 .am-display-sm { font-size: clamp(34px, 6.4vw, 68px); }
+/* The hero headline stops short of the full display size so it sets in two
+   lines on a desktop and the product shot below it breaks the fold. */
+.am-display-hero { font-size: clamp(44px, 8.2vw, 94px); }
 .am-h2 {
   margin: 0 0 14px;
   font-size: clamp(28px, 4.4vw, 52px);
@@ -861,13 +815,31 @@ const CSS = `
 .am-center-row { justify-content: center; }
 
 /* HERO */
-.am-hero { padding: clamp(64px, 11vw, 132px) var(--am-gutter) clamp(44px, 7vw, 84px); max-width: var(--am-max); margin: 0 auto; }
+.am-hero { padding: clamp(48px, 7vw, 92px) var(--am-gutter) clamp(44px, 7vw, 84px); max-width: var(--am-max); margin: 0 auto; }
 .am-cta-row { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
 .am-facts {
   display: flex; flex-wrap: wrap; gap: 10px 28px;
   margin: 44px 0 0; padding: 26px 0 0; list-style: none;
   border-top: 1px solid var(--cl-border-subtle);
   font-size: 15px; color: var(--cl-text-secondary);
+}
+/* The product at work, at full measure under the promise it makes. */
+.am-hero-shot {
+  margin: clamp(36px, 6vw, 64px) 0 0;
+  border: 1px solid var(--cl-border); border-radius: 18px; overflow: hidden;
+  box-shadow: 0 30px 60px -36px rgba(0, 0, 0, 0.35);
+}
+.am-hero-shot img { display: block; width: 100%; height: auto; }
+
+/* SCREENSHOTS — framed like the hero, one step quieter. */
+.am-shot {
+  margin: 0; border: 1px solid var(--cl-border); border-radius: 12px; overflow: hidden;
+  background: #fff;
+}
+.am-shot img { display: block; width: 100%; height: auto; }
+.am-shot-caption {
+  padding: 10px 14px; border-top: 1px solid var(--cl-border-subtle);
+  font-size: 13px; line-height: 1.45; color: var(--cl-text-secondary);
 }
 
 /* THE SPINE */
@@ -886,7 +858,7 @@ const CSS = `
 .am-entry {
   position: relative;
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr) minmax(0, 300px);
+  grid-template-columns: 88px minmax(0, 1fr) minmax(0, 1.15fr);
   gap: clamp(20px, 4vw, 56px);
   align-items: start;
   padding: clamp(34px, 5vw, 62px) var(--am-gutter);
@@ -896,13 +868,19 @@ const CSS = `
   font-size: 13px; font-weight: 700; letter-spacing: 0.11em;
   color: var(--cl-text-secondary); padding-top: 6px; white-space: nowrap;
 }
-.am-entry-figure { display: flex; justify-content: flex-end; }
-.am-diagram { width: 100%; max-width: 300px; height: auto; }
+.am-entry-figure { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* The Motion Layer clip is portrait: centre it and cap its height rather than
+   letting a 9:16 frame run the full column width. */
+.am-entry-figure-clip { align-items: center; }
+.am-clip {
+  display: block; width: 100%; max-width: 300px; height: auto; aspect-ratio: 464 / 832;
+  border: 1px solid var(--cl-border); border-radius: 12px; background: #0b0b0c;
+}
 @media (max-width: 900px) {
   .am-entry { grid-template-columns: 1fr; gap: 18px; padding-left: calc(var(--am-rail-x) + 22px); }
   .am-entry-date { padding-top: 0; }
-  .am-entry-figure { justify-content: flex-start; }
-  .am-diagram { max-width: 240px; }
+  .am-entry-figure-clip { align-items: flex-start; }
+  .am-clip { max-width: 240px; }
 }
 
 /* Anchor targets must clear the sticky nav, or every in-page link lands with
@@ -915,8 +893,12 @@ const CSS = `
 /* TUTORIAL */
 .am-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .am-step {
-  display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 20px; align-items: start;
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1.1fr); gap: 20px clamp(20px, 3vw, 40px); align-items: start;
   padding: 26px 0; border-top: 1px solid var(--cl-border-subtle);
+}
+@media (max-width: 900px) {
+  .am-step { grid-template-columns: 44px minmax(0, 1fr); }
+  .am-step-shot { grid-column: 2 / -1; }
 }
 .am-step:first-child { border-top: none; }
 .am-step-n { font-size: 13px; font-weight: 700; color: var(--cl-accent); letter-spacing: 0.08em; padding-top: 4px; }
@@ -981,16 +963,6 @@ const CSS = `
 .am-plan-features li { display: grid; grid-template-columns: 18px 1fr; gap: 9px; font-size: 15px; line-height: 1.45; color: var(--cl-text-secondary); }
 .am-plan-features svg { color: var(--cl-accent); margin-top: 3px; }
 
-/* COMPARE */
-.am-table-wrap { overflow-x: auto; border: 1px solid var(--cl-border); border-radius: var(--cl-radius-lg); }
-.am-table { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 680px; }
-.am-table th, .am-table td { padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--cl-border-subtle); }
-.am-table thead th { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cl-text-secondary); font-weight: 700; }
-.am-table thead th.is-us { color: var(--cl-accent); }
-.am-table tbody th { font-weight: 500; color: var(--cl-text-secondary); }
-.am-table td { text-align: center; width: 116px; }
-.am-table td.is-us { background: var(--cl-accent-soft); }
-.am-table tr:last-child th, .am-table tr:last-child td { border-bottom: none; }
 
 /* FAQ */
 .am-faqs { display: grid; gap: 0; max-width: 820px; }
