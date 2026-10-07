@@ -638,6 +638,22 @@ function isJointVisible(idx: number, parts: SkeletonPartVisibility, jointName?: 
   return true;
 }
 
+/**
+ * Blue of the skeleton's joint dots (blue colour mode). Joint-chain balls use
+ * the same constant so the two read as one family of markers.
+ */
+const SKELETON_JOINT_BLUE = '#007AFF';
+/** Dark rim drawn round a blue joint dot. */
+const SKELETON_JOINT_RIM = '#234978';
+const SKELETON_JOINT_RIM_W = 1.5;
+/**
+ * Radius (logical px) of a skeleton joint dot for a video drawn at w x h.
+ * Joint-chain balls share it, so a ball and a skeleton joint are the same size.
+ */
+function skeletonJointRadius(w: number, h: number): number {
+  return Math.max(1, Math.min(3, Math.round(Math.min(w, h) / 375)));
+}
+
 function drawSkeletonOverlay(
   ctx: CanvasRenderingContext2D,
   keypoints: Array<{ x: number; y: number; score: number; name: string }>,
@@ -663,7 +679,7 @@ function drawSkeletonOverlay(
   const classicColors = opts?.classicColors !== false;
   const showFootLine  = opts?.showFootLine !== false;
   const parts: SkeletonPartVisibility = opts?.parts ?? {};
-  const jointRadius = Math.max(1, Math.min(3, Math.round(Math.min(canvasW, canvasH) / 375)));
+  const jointRadius = skeletonJointRadius(canvasW, canvasH);
   const scoreThreshold = 0.2;
 
   // Limb bones: solid yellow lines (arms + legs)
@@ -868,15 +884,15 @@ function drawSkeletonOverlay(
     if (classicColors) {
       ctx.fillStyle = i % 2 === 0 ? '#FF4444' : '#4488FF';
     } else {
-      ctx.fillStyle = '#007AFF';
+      ctx.fillStyle = SKELETON_JOINT_BLUE;
     }
     ctx.fill();
     if (classicColors) {
       ctx.strokeStyle = i % 2 === 0 ? '#FF4444' : '#4488FF';
     } else {
-      ctx.strokeStyle = '#234978';
+      ctx.strokeStyle = SKELETON_JOINT_RIM;
     }
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = SKELETON_JOINT_RIM_W;
     ctx.stroke();
   }
 
@@ -1118,6 +1134,7 @@ function drawJointChainStroke(
   ctx: CanvasRenderingContext2D,
   s: StrokeJointChain,
   _animFrame: number,
+  ballR: number,
 ): void {
   const { nodes, color, lw, dashed, spinning } = s;
   if (nodes.length === 0) return;
@@ -1141,19 +1158,19 @@ function drawJointChainStroke(
     ctx.setLineDash([]);
   }
 
-  const baseR = jointNodeRadius(lw);
+  // The balls are drawn exactly like the skeleton's blue joint dots (same
+  // colour, radius and rim), whatever colour the chain line has.
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
     const pulse = spinning ? 1 + 0.1 * Math.sin(Date.now() / 110 + i * 0.75) : 1;
-    const r = baseR * pulse;
+    const r = ballR * pulse;
     ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = color;
+    ctx.fillStyle = SKELETON_JOINT_BLUE;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    // A 2px rim would bury a ball this small; 1px keeps its colour readable.
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = SKELETON_JOINT_RIM;
+    ctx.lineWidth = SKELETON_JOINT_RIM_W;
     ctx.stroke();
   }
 
@@ -1276,15 +1293,15 @@ function drawCanvasHint(ctx: CanvasRenderingContext2D, dx: number, dy: number, d
 }
 
 /**
- * Visual radius of a joint ball (logical px). The ball used to be
- * max(8, lw*1.5+4); it is now a fifth of that (Vin, 2026-10-03: at least 80%
- * smaller). Every drawing path — live preview, committed mark, export/replay —
- * goes through drawJointChainStroke, and the selection ring and the chain's
- * hit-test read this same function, so they stay in step.
+ * Visual radius of a joint ball (logical px) for a video drawn at w x h: the
+ * skeleton's joint-dot radius (Vin, 2026-10-07: "ideally the same as the
+ * skeleton"). It used to be max(8, lw*1.5+4)*0.2, which tied it to the line
+ * width instead. Every drawing path — live preview, committed mark,
+ * export/replay — goes through drawJointChainStroke with this value, and the
+ * selection ring and the chain's hit-test read it too, so they stay in step.
  */
-const JOINT_NODE_SCALE = 0.2;
-function jointNodeRadius(lw: number): number {
-  return Math.max(8, lw * 1.5 + 4) * JOINT_NODE_SCALE;
+function jointNodeRadius(w: number, h: number): number {
+  return skeletonJointRadius(w, h);
 }
 /** Gap between a selected ball and its gold ring (logical px). */
 const JOINT_NODE_RING_GAP = 6;
@@ -1668,7 +1685,8 @@ function drawTriangleStroke(
   ctx.restore();
 }
 
-function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): void {
+/** `jointBallR`: joint-chain ball radius for this canvas (see jointNodeRadius). */
+function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, jointBallR = 1): void {
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -1731,7 +1749,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0): vo
 
   } else if (s.tool === 'jointChain') {
     ctx.restore();
-    drawJointChainStroke(ctx, s as StrokeJointChain, animFrame);
+    drawJointChainStroke(ctx, s as StrokeJointChain, animFrame, jointBallR);
     return;
 
   } else if (s.tool === 'arrow' || s.tool === 'arrowAngle') {
@@ -6281,10 +6299,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         // Completed strokes
-        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current);
+        const jointBallR = jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh);
+        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current, jointBallR);
 
         // Active (in-progress) stroke
-        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current);
+        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current, jointBallR);
 
         // Swing path being drawn
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
@@ -6318,6 +6337,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               spinning: circleSpinningRef.current || undefined,
             },
             animTickRef.current,
+            jointBallR,
           );
         }
 
@@ -6417,7 +6437,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 ctx.strokeStyle = '#FFD700';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.arc(n.x, n.y, jointNodeRadius(jc.lw) + JOINT_NODE_RING_GAP, 0, Math.PI * 2);
+                ctx.arc(n.x, n.y, jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh) + JOINT_NODE_RING_GAP, 0, Math.PI * 2);
                 ctx.stroke();
                 ctx.restore();
               }
@@ -7218,7 +7238,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           best = Math.min(best, distToSegment(pos, jc.nodes[i], jc.nodes[i + 1]));
         }
         for (const n of jc.nodes) {
-          best = Math.min(best, Math.hypot(pos.x - n.x, pos.y - n.y) - jointNodeRadius(jc.lw));
+          best = Math.min(best, Math.hypot(pos.x - n.x, pos.y - n.y) - jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh));
         }
         return best;
       }
@@ -8468,7 +8488,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // A press on a node is a HANDLE press: it grabs that one node, the way a
         // text resize handle grabs its corner above. It must not compete with the
         // mark bodies on distance: hitTestStroke scores a chain's nodes as
-        // `d - jointNodeRadius(lw)`, always below the node pass's `d`, so the whole
+        // `d - jointNodeRadius(...)`, always below the node pass's `d`, so the whole
         // chain used to win every node press and single-node editing was
         // unreachable (KNOWN_ISSUES 011). A press on a segment away from any node
         // misses the node pass and still selects (and moves) the whole chain.
