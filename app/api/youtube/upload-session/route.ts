@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
 import { getYouTubeAccessToken } from '@/lib/youtube/connection';
+import { selectUploadOrigin, YOUTUBE_UPLOAD_COULD_NOT_START } from '@/lib/youtube/uploadOrigin';
 
 export const runtime = 'nodejs';
 
@@ -35,6 +36,16 @@ export async function POST(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  // The session URL only accepts the browser's bytes from the origin it was
+  // created for (see lib/youtube/uploadOrigin.ts). Without an allowed origin
+  // the browser upload is certain to be blocked by CORS, so do not mint one.
+  const requestOrigin = req.headers.get('origin');
+  const uploadOrigin = selectUploadOrigin(requestOrigin);
+  if (!uploadOrigin) {
+    console.error(`[youtube/upload-session] refused: origin ${JSON.stringify(requestOrigin)} is not allowed`);
+    return NextResponse.json({ error: YOUTUBE_UPLOAD_COULD_NOT_START }, { status: 400 });
+  }
+
   const accessToken = await getYouTubeAccessToken(session.userId);
   if (!accessToken) {
     // `needsConnect` distinguishes "you have never connected YouTube" (or the
@@ -67,6 +78,9 @@ export async function POST(req: Request) {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json; charset=UTF-8',
+        // Binds the session to the page that will PUT the bytes, so Google
+        // answers those cross-origin PUTs with Access-Control-Allow-Origin.
+        Origin: uploadOrigin,
         // Declaring both up front lets Google reject an over-quota or
         // unsupported upload HERE, before the browser sends a single byte.
         'X-Upload-Content-Length': String(sizeBytes),
