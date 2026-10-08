@@ -4,11 +4,23 @@ Do this in **test mode first**. Run the checklist at the bottom on a Vercel
 Preview (or locally with `docs/STRIPE_TEST_WALKTHROUGH.md`), then repeat in
 **live mode** and promote.
 
-The displayed prices and the Stripe price IDs go live in the **same deploy**.
-The code already refuses to sell any plan whose Stripe price doesn't match the
-site (currency, amount, interval). A half-configured release therefore fails
-safe: checkout says "can't be purchased right now" instead of charging the
-wrong amount.
+**Prices live in Stripe only.** The site shows the amount of the Stripe Price
+each `STRIPE_PRICE_*` env var points at (`lib/billing/livePrices.ts`, cached for
+one hour), so what is shown is what is charged. Checkout refuses a price that
+is archived, not in EUR, or not recurring every 1 month/year as its plan says.
+A missing or bad price shows "—" and checkout says "can't be purchased right
+now"; it never charges another amount.
+
+### Changing a price
+
+A Stripe Price can't be edited. To change one:
+1. Create a new Price on the same product. Same settings as step 1.
+2. Point the env var at the new `price_…` ID in Vercel.
+3. Redeploy. The site shows the new amount immediately: the cache is keyed by
+   the price IDs.
+4. Archive the old Price once nobody needs it.
+5. Existing subscribers stay on their old price until you move them.
+6. Update the portal's "Switch plans" price list (step 6).
 
 Everything below is **dashboard configuration only**. No code changes.
 
@@ -38,6 +50,15 @@ safe to run twice. It adds:
 If the app is deployed before this SQL runs, seats don't work yet (members just
 get their own plan or the free hour) and the ebook card says "contact us".
 Nothing breaks.
+
+Then run `supabase/migrations/20261008120000_invoicing.sql`, also safe to run
+twice. It adds:
+- three more subscription fields: price ID, period start, Checkout session;
+- the `billing_profiles` table (Italian invoice details);
+- the `fiscal_invoices` table (one record per paid invoice).
+
+See `docs/INVOICING.md`. Deployed before this SQL, webhook writes fail and
+Stripe retries until it has run; nothing is lost.
 
 ### 0b. Upload the Spin Mechanics PDF (once)
 
@@ -74,7 +95,8 @@ every price:
 | AngleMotion Academy | €599.00 | Yearly | `STRIPE_PRICE_ACADEMY_YEARLY` |
 
 The price ID starts with `price_`. It's on the price's detail page, under "API ID".
-Don't rename these env vars.
+Don't rename these env vars. The amounts in this table are the launch prices.
+The site reads whatever the Stripe Price says (see "Changing a price" above).
 
 ## 2. Coach Life coupon and promotion codes
 
@@ -134,11 +156,14 @@ Project → **Settings → Environment Variables**, for **Production** and
 - **Delete** `STRIPE_PRICE_MONTHLY` and `STRIPE_PRICE_YEARLY` (legacy; the code no longer reads them).
 - Keep `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SUPABASE_SERVICE_ROLE_KEY`.
 - Leave `STRIPE_AUTOMATIC_TAX` unset (see step 3).
+- Production only: the `INVOICE_*` settings in `docs/INVOICING.md` (seller data
+  and the accountant's wording). Until they are set, invoices are recorded but
+  can't be issued.
 
 ## 5. Webhook
 
 Developers → **Webhooks** → your endpoint (`https://<domain>/api/stripe/webhook`).
-Select exactly these six events:
+Select exactly these seven events:
 
 | Event | What the app does |
 |---|---|
@@ -147,7 +172,9 @@ Select exactly these six events:
 | `customer.subscription.updated` | Syncs status. This is how `past_due`, `unpaid`, plan switches and cancel-at-period-end arrive |
 | `customer.subscription.deleted` | Status becomes `canceled`; paid features stop; data is kept |
 | `invoice.paid` | Renewal paid: re-syncs the status and the new period end |
+| `invoice.paid` (also) | Money taken: records the fiscal-invoice row (`docs/INVOICING.md`) and the customer's billing country |
 | `invoice.payment_failed` | Renewal failed: re-syncs, so the coach sees "Payment failed — update your card" |
+| `invoice.payment_action_required` | The bank asks the customer to confirm (3-D Secure): re-syncs; /billing sends them to the portal |
 
 Each event is processed once; Stripe's repeats are ignored. A failed run
 answers 500 so Stripe retries it.
@@ -186,18 +213,15 @@ from the "update your card" banner, always with the coach's stored Customer.
   "Successful payments" on.
 - **Upcoming renewal reminders**: optional, same page.
 
-## 8. Italian invoicing — ask your accountant
+## 8. Italian invoicing
 
 Stripe's receipts and invoices are **not** Italian electronic invoices
-(*fattura elettronica* via SdI). The app builds nothing for this. Ask your
-accountant:
-1. Whether each sale needs a fattura elettronica, and who issues it (you, the
-   accountant, or an SdI-connected service).
-2. What wording receipts and invoices must carry under the regime forfettario
-   (often a reference to the regime and to the VAT exemption). Use the exact
-   text they give you.
+(*fattura elettronica* via SdI). AngleMotion records every paid invoice and
+generates the FatturaPA XML. You issue it on /admin/invoices and upload it in
+Fatture e Corrispettivi. The whole workflow, the settings and the questions for
+your accountant are in **`docs/INVOICING.md`**.
 
-Where any wording from the accountant goes:
+The Stripe receipt can also carry the accountant's wording:
 - Settings → **Billing → Invoices** → **Default memo** / **Default footer**.
   This text is printed on every invoice and its PDF.
 - Settings → **Business → Public details**: the legal business name, address and
@@ -215,7 +239,8 @@ Card `4242 4242 4242 4242`, any future date, any CVC.
 - [ ] Each of the six plan/cycle buttons on /pricing opens Checkout showing the same euro amount as the card, and **€0.00 tax**.
 - [ ] Checkout asks for full name, email, billing address and country. "Business" and VAT/tax ID are optional. After paying, the Stripe **Customer** shows the name and address. A second checkout by the same coach reuses **the same Customer**.
 - [ ] Temporarily blank one `STRIPE_PRICE_*` var: that button says "can't be purchased right now" and the others still work.
-- [ ] Point one var at a price with a different amount: refused the same way.
+- [ ] Point one var at a USD (or archived) price: refused the same way. Point it at another EUR price and redeploy: /pricing and the landing page show the new amount, and Checkout charges it.
+- [ ] Pay with an Italian billing address: /billing shows **Invoice details (Italy)**; a wrong Codice Fiscale is refused; /admin/invoices lists the payment as To issue with number 65 proposed; once the `INVOICE_*` settings are set, Issue → the XML downloads.
 - [ ] Pro yearly shows "Add promotion code". A Coach Life code makes it €149. The same code fails a second time. Pro monthly has no code field.
 - [ ] After paying, `subscriptions` has your row with `status=active`, the right `tier`, `billing_interval`, `current_period_end`, and `cancel_at_period_end=false`.
 - [ ] Stripe → Webhooks: the six events show **200**. Click **Resend** on one: still 200, and nothing changes (it's a duplicate).

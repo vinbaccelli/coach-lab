@@ -1,6 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
 import Link from 'next/link';
-import { maxYearlySavingsPct } from '@/lib/plans';
 import {
   Video,
   Users,
@@ -153,7 +152,7 @@ const BUSINESS_TOOLS: Tool[] = [
     href: '/pricing',
     name: 'Plans',
     Icon: CreditCard,
-    what: `Light, Pro and Academy. Yearly saves up to ${maxYearlySavingsPct()}% on twelve monthly payments.`,
+    what: 'Light, Pro and Academy. Yearly costs less than twelve monthly payments.',
   },
   {
     href: '/billing',

@@ -40,6 +40,7 @@ export async function POST(req: Request) {
 
   const deps: SyncDeps = {
     retrieveSubscription: (id) => stripe.subscriptions.retrieve(id),
+    retrieveCustomer: (id) => stripe.customers.retrieve(id),
     tierForPriceId,
     async hasProcessedEvent(eventId) {
       const { data, error } = await db.from('stripe_webhook_events').select('event_id').eq('event_id', eventId).maybeSingle();
@@ -60,6 +61,18 @@ export async function POST(req: Request) {
       const { data, error } = await db.from('subscriptions').update(patch).eq('stripe_subscription_id', subscriptionId).select('user_id');
       if (error) throw new RetryableError(`subscriptions update failed for ${subscriptionId}: ${error.message}`);
       return data?.length ?? 0;
+    },
+    async recordFiscalInvoice(draft) {
+      // ignoreDuplicates: a retried invoice.paid never overwrites a row Vin
+      // may already have issued (number, XML).
+      const { error } = await db.from('fiscal_invoices').upsert(draft, { onConflict: 'stripe_invoice_id', ignoreDuplicates: true });
+      if (error) throw new RetryableError(`fiscal_invoices insert failed for ${draft.stripe_invoice_id}: ${error.message}`);
+    },
+    async upsertBillingCountry(userId, country) {
+      const { error } = await db
+        .from('billing_profiles')
+        .upsert({ user_id: userId, billing_country: country, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
+      if (error) throw new RetryableError(`billing_profiles upsert failed for ${userId}: ${error.message}`);
     },
     now: () => new Date(),
     log: (...args) => console.error(...args),

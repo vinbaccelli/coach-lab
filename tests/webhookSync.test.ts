@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type Stripe from 'stripe';
 import { processStripeEvent, RetryableError, type SyncDeps, type SubscriptionRow } from '@/lib/billing/webhookSync';
+import type { FiscalInvoiceDraft } from '@/lib/billing/invoicing/draft';
 
 const NOW = new Date('2026-10-05T12:00:00Z');
+const PERIOD_START = Math.floor(Date.parse('2026-10-05T12:00:00Z') / 1000);
 const PERIOD_END = Math.floor(Date.parse('2027-10-05T12:00:00Z') / 1000);
 
 function sub(over: Partial<Stripe.Subscription> & { price?: string; interval?: 'month' | 'year' } = {}): Stripe.Subscription {
@@ -11,17 +13,20 @@ function sub(over: Partial<Stripe.Subscription> & { price?: string; interval?: '
   return {
     id: 'sub_1', object: 'subscription', status: 'active', customer: 'cus_1',
     metadata: { userId: 'user_1', plan: 'pro' }, cancel_at_period_end: false, canceled_at: null,
-    items: { data: [{ price: { id: price, recurring: { interval } }, current_period_end: PERIOD_END }] },
+    items: { data: [{ price: { id: price, recurring: { interval } }, current_period_start: PERIOD_START, current_period_end: PERIOD_END }] },
     ...rest,
   } as unknown as Stripe.Subscription;
 }
 const ev = (type: string, object: unknown, id = 'evt_1') => ({ id, type, data: { object } }) as unknown as Stripe.Event;
 
-function harness(opts: { subscription?: Stripe.Subscription; processed?: string[]; failUpsert?: boolean; matched?: number } = {}) {
-  const calls = { upserts: [] as SubscriptionRow[], updates: [] as Array<[string, Partial<SubscriptionRow>]>, recorded: [] as string[], retrieved: [] as string[], logs: [] as unknown[][] };
+function harness(opts: { subscription?: Stripe.Subscription; processed?: string[]; failUpsert?: boolean; matched?: number; customer?: Partial<Stripe.Customer> } = {}) {
+  const calls = { fiscal: [] as FiscalInvoiceDraft[], countries: [] as Array<[string, string]>, upserts: [] as SubscriptionRow[], updates: [] as Array<[string, Partial<SubscriptionRow>]>, recorded: [] as string[], retrieved: [] as string[], logs: [] as unknown[][] };
   const processed = new Set(opts.processed ?? []);
   const deps: SyncDeps = {
     async retrieveSubscription(id) { calls.retrieved.push(id); return opts.subscription ?? sub(); },
+    async retrieveCustomer(id) { return { id, object: 'customer', name: 'Mario Rossi', email: 'mario@example.it', address: null, ...opts.customer } as Stripe.Customer; },
+    async recordFiscalInvoice(d) { calls.fiscal.push(d); },
+    async upsertBillingCountry(u, c) { calls.countries.push([u, c]); },
     tierForPriceId: (p) => (p === 'price_pro_y' || p === 'price_pro_m' ? 'pro' : p === 'price_acad_y' ? 'academy' : p === 'price_light_m' ? 'light' : null),
     async hasProcessedEvent(id) { return processed.has(id); },
     async recordEvent(id) { calls.recorded.push(id); processed.add(id); },
@@ -39,8 +44,9 @@ test('checkout.session.completed writes the re-read subscription with every cach
   assert.equal(out, 'processed');
   assert.deepEqual(calls.retrieved, ['sub_1']);
   assert.deepEqual(calls.upserts[0], {
-    user_id: 'user_1', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1', status: 'active',
-    tier: 'pro', seats: 1, billing_interval: 'year', current_period_end: '2027-10-05T12:00:00.000Z',
+    user_id: 'user_1', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1', stripe_price_id: 'price_pro_y',
+    stripe_checkout_session_id: 'cs_1', status: 'active', tier: 'pro', seats: 1, billing_interval: 'year',
+    current_period_start: '2026-10-05T12:00:00.000Z', current_period_end: '2027-10-05T12:00:00.000Z',
     cancel_at_period_end: false, canceled_at: null, updated_at: NOW.toISOString(),
   });
   assert.deepEqual(calls.recorded, ['evt_1']);
@@ -112,4 +118,61 @@ test('unhandled event types are ignored without touching the event log', async (
   const { deps, calls } = harness();
   assert.equal(await processStripeEvent(ev('charge.refunded', {}), deps), 'ignored');
   assert.equal(calls.recorded.length, 0);
+});
+
+const paidInvoice = (over: Record<string, unknown> = {}) => ({
+  id: 'in_9', number: 'ABCD-0001', customer: 'cus_1', amount_paid: 29900, currency: 'eur',
+  customer_name: 'Mario Rossi', customer_email: 'mario@example.it',
+  customer_address: { line1: 'Via Roma 1', line2: null, postal_code: '20100', city: 'Milano', state: 'MI', country: 'IT' },
+  customer_tax_ids: [], status_transitions: { paid_at: PERIOD_START },
+  lines: { data: [{ period: { start: PERIOD_START, end: PERIOD_END } }] },
+  parent: { subscription_details: { subscription: 'sub_1' } },
+  ...over,
+});
+
+test('invoice.paid with money taken records the fiscal invoice snapshot and the billing country', async () => {
+  const { deps, calls } = harness();
+  assert.equal(await processStripeEvent(ev('invoice.paid', paidInvoice()), deps), 'processed');
+  assert.equal(calls.upserts[0].status, 'active');
+  assert.equal(calls.fiscal.length, 1);
+  const f = calls.fiscal[0];
+  assert.equal(f.user_id, 'user_1');
+  assert.equal(f.stripe_invoice_id, 'in_9');
+  assert.equal(f.stripe_subscription_id, 'sub_1');
+  assert.equal(f.amount_cents, 29900);
+  assert.equal(f.currency, 'EUR');
+  assert.equal(f.plan, 'pro');
+  assert.equal(f.billing_interval, 'year');
+  assert.equal(f.paid_at, '2026-10-05T12:00:00.000Z');
+  assert.equal(f.period_end, '2027-10-05T12:00:00.000Z');
+  assert.equal(f.customer_region, 'IT');
+  assert.equal(f.is_business, false);
+  assert.deepEqual(calls.countries, [['user_1', 'IT']]);
+});
+
+test('business customer: VAT ID and business name are captured; EU and non-EU regions', async () => {
+  const { deps, calls } = harness({ customer: { business_name: 'Tennis GmbH' } as Partial<Stripe.Customer> });
+  await processStripeEvent(ev('invoice.paid', paidInvoice({
+    customer_address: { country: 'DE', city: 'Berlin', line1: 'X 1', line2: null, postal_code: '10115', state: null },
+    customer_tax_ids: [{ type: 'eu_vat', value: 'DE123456789' }],
+  })), deps);
+  assert.equal(calls.fiscal[0].customer_region, 'EU');
+  assert.equal(calls.fiscal[0].is_business, true);
+  assert.equal(calls.fiscal[0].vat_id, 'DE123456789');
+  assert.equal(calls.fiscal[0].business_name, 'Tennis GmbH');
+  const us = harness();
+  await processStripeEvent(ev('invoice.paid', paidInvoice({ customer_address: { country: 'US' } })), us.deps);
+  assert.equal(us.calls.fiscal[0].customer_region, 'NON_EU');
+});
+
+test('no fiscal invoice for €0 invoices, failed payments or action-required', async () => {
+  const zero = harness();
+  await processStripeEvent(ev('invoice.paid', paidInvoice({ amount_paid: 0 })), zero.deps);
+  assert.equal(zero.calls.fiscal.length, 0);
+  for (const type of ['invoice.payment_failed', 'invoice.payment_action_required']) {
+    const { deps, calls } = harness({ subscription: sub({ status: 'past_due' } as Partial<Stripe.Subscription>) });
+    assert.equal(await processStripeEvent(ev(type, paidInvoice(), 'evt_' + type), deps), 'processed');
+    assert.equal(calls.upserts[0].status, 'past_due');
+    assert.equal(calls.fiscal.length, 0);
+  }
 });

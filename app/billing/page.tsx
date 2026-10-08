@@ -12,7 +12,7 @@ import { CreditCard, LogOut, Loader2, ExternalLink, Download, UserPlus, X } from
 import WorkspaceChrome from '@/components/WorkspaceChrome';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { useEntitlement } from '@/lib/useEntitlement';
-import { EBOOK_TITLE, PLANS, PRICE_TAX_NOTE, SUPPORT_EMAIL, formatPrice } from '@/lib/plans';
+import { EBOOK_TITLE, PLANS, PRICE_TAX_NOTE, SUPPORT_EMAIL } from '@/lib/plans';
 
 type SubStatus = {
   status: string; email: string | null; updatedAt?: string | null; tier?: string | null; seats?: number | null;
@@ -105,15 +105,14 @@ export default function BillingPage() {
           ) : (
             <p style={muted}>
               Status: <strong>{sub?.status && sub.status !== 'none' ? sub.status : 'no active subscription'}</strong>
-              {' — '}plans from {formatPrice(PLANS[0].priceMonthly)}/mo ({PLANS[0].name}) to{' '}
-              {formatPrice(PLANS[PLANS.length - 1].priceMonthly)}/mo ({PLANS[PLANS.length - 1].name}) via Stripe.
-              {' '}{PRICE_TAX_NOTE}
+              {' — '}{PLANS.map((p) => p.name).join(', ')} plans, monthly or yearly, via Stripe: see{' '}
+              <Link href="/pricing">Pricing</Link>. {PRICE_TAX_NOTE}
             </p>
           )}
           {sub?.paymentFailed && (
             <p role="alert" style={{ ...notice, borderColor: 'rgba(255,69,58,0.55)' }}>
               <strong>Payment failed.</strong> Stripe is retrying your card and your plan stays active meanwhile —
-              update your card in the billing portal below to keep it.
+              update your card, or confirm the payment if your bank asks, in the billing portal below to keep it.
             </p>
           )}
           {sub?.endsAt && (
@@ -142,10 +141,114 @@ export default function BillingPage() {
           </p>
         </div>
 
+        <InvoiceDetailsCard />
         <EbookCard />
         <AcademySeatsCard />
       </div>
     </WorkspaceChrome>
+  );
+}
+
+type InvoiceProfile = {
+  billing_country: string | null; codice_fiscale: string | null; partita_iva: string | null;
+  codice_destinatario: string | null; pec: string | null;
+};
+type InvoiceField = 'codice_fiscale' | 'partita_iva' | 'codice_destinatario' | 'pec';
+
+const INVOICE_FIELDS: Array<{ key: InvoiceField; label: string; hint: string; autoComplete?: string }> = [
+  { key: 'codice_fiscale', label: 'Codice Fiscale', hint: 'Required for private customers.' },
+  { key: 'partita_iva', label: 'Partita IVA', hint: 'Only if you buy as a business or freelancer.' },
+  { key: 'codice_destinatario', label: 'Codice Destinatario (SDI)', hint: '7 characters, if your business has one.' },
+  { key: 'pec', label: 'PEC', hint: 'Only if you have no Codice Destinatario.', autoComplete: 'email' },
+];
+
+/**
+ * "Invoice details" — the identifiers an Italian fattura elettronica needs,
+ * which Stripe Checkout does not collect. Shown only when the coach's Stripe
+ * billing country is Italy (the webhook records it on the first payment).
+ * Stored in billing_profiles; read when Vin issues the invoice.
+ */
+function InvoiceDetailsCard() {
+  const [profile, setProfile] = useState<InvoiceProfile | null>(null);
+  const [form, setForm] = useState<Record<InvoiceField, string>>({ codice_fiscale: '', partita_iva: '', codice_destinatario: '', pec: '' });
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [fieldErr, setFieldErr] = useState<Partial<Record<InvoiceField, string>>>({});
+
+  useEffect(() => {
+    fetch('/api/billing/profile', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b: { profile?: InvoiceProfile | null } | null) => {
+        const p = b?.profile ?? null;
+        setProfile(p);
+        if (p) setForm({
+          codice_fiscale: p.codice_fiscale ?? '', partita_iva: p.partita_iva ?? '',
+          codice_destinatario: p.codice_destinatario ?? '', pec: p.pec ?? '',
+        });
+      })
+      .catch(() => setProfile(null));
+  }, []);
+
+  if (profile?.billing_country !== 'IT') return null;
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true); setErr(null); setSaved(false); setFieldErr({});
+    try {
+      const res = await fetch('/api/billing/profile', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form),
+      });
+      const b = (await res.json().catch(() => ({}))) as { profile?: InvoiceProfile; error?: string; fields?: Partial<Record<InvoiceField, string>> };
+      if (!res.ok) { setErr(b.error ?? 'Could not save.'); setFieldErr(b.fields ?? {}); return; }
+      if (b.profile) setProfile(b.profile);
+      setSaved(true);
+    } catch {
+      setErr('Could not save. Check your connection and try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={card} data-invoice-details>
+      <h2 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 800 }}>Invoice details (Italy)</h2>
+      <p style={muted}>
+        Your fattura elettronica is issued with these details. Name and address come from your Stripe billing
+        details; change those in the billing portal.
+      </p>
+      <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }} noValidate>
+        {INVOICE_FIELDS.map((f) => (
+          <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, fontWeight: 600 }}>
+            {f.label}
+            <input
+              value={form[f.key]}
+              onChange={(e) => { setForm((x) => ({ ...x, [f.key]: e.target.value })); setSaved(false); }}
+              autoComplete={f.autoComplete ?? 'off'}
+              spellCheck={false}
+              aria-invalid={!!fieldErr[f.key]}
+              aria-describedby={`inv-${f.key}-hint`}
+              style={{
+                minHeight: 40, borderRadius: 10, padding: '0 12px', fontSize: 14, fontWeight: 400,
+                border: `1px solid ${fieldErr[f.key] ? 'var(--cl-destructive-text)' : 'rgba(255,255,255,0.18)'}`,
+                background: 'rgba(255,255,255,0.06)', color: 'inherit',
+                textTransform: f.key === 'pec' ? 'none' : 'uppercase',
+              }}
+            />
+            <span id={`inv-${f.key}-hint`} style={{ fontSize: 12, fontWeight: 400, opacity: fieldErr[f.key] ? 1 : 0.7, color: fieldErr[f.key] ? 'var(--cl-destructive-text)' : undefined }}>
+              {fieldErr[f.key] ?? f.hint}
+            </span>
+          </label>
+        ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button type="submit" disabled={busy} style={primaryBtn}>
+            {busy ? <Loader2 size={14} className="animate-spin" /> : null} Save invoice details
+          </button>
+          {saved && <span role="status" style={{ fontSize: 12, fontWeight: 600 }}>Saved.</span>}
+        </div>
+        {err && <p role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--cl-destructive-text)', fontWeight: 600 }}>{err}</p>}
+      </form>
+    </div>
   );
 }
 
