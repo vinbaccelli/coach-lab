@@ -1,17 +1,19 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
 import { createSupabaseServiceClient } from '@/lib/supabase/service';
-import { parseItalianFields } from '@/lib/billing/invoicing/italianFields';
+import { parseForeignTaxId, parseItalianFields } from '@/lib/billing/invoicing/italianFields';
 
 /**
  * The signed-in coach's invoice details (billing_profiles) for the Italian
- * fattura elettronica: Codice Fiscale, Partita IVA, Codice Destinatario, PEC.
+ * fattura elettronica: Codice Fiscale, Partita IVA, Codice Destinatario, PEC —
+ * or, for a customer outside Italy, their own tax ID (foreign_tax_id).
  * GET reads their own row (RLS select-own). PUT validates every field
  * (lib/billing/invoicing/italianFields.ts) and writes through the service role
  * — the table has no client write policies, and billing_country is only ever
  * written by the Stripe webhook, never here.
  */
-const FIELDS = 'billing_country, codice_fiscale, partita_iva, codice_destinatario, pec';
+const FIELDS = 'billing_country, codice_fiscale, partita_iva, codice_destinatario, pec, foreign_tax_id';
+const EDITABLE = ['codice_fiscale', 'partita_iva', 'codice_destinatario', 'pec', 'foreign_tax_id'] as const;
 
 export async function GET() {
   const session = await getRouteSession();
@@ -29,13 +31,21 @@ export async function PUT(req: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const parsed = parseItalianFields(body);
-  if (!parsed.ok) return NextResponse.json({ error: 'Please check the highlighted fields.', fields: parsed.errors }, { status: 400 });
+  const foreign = parseForeignTaxId(body.foreign_tax_id);
+  if (!parsed.ok || !foreign.ok) {
+    const fields = { ...(parsed.ok ? {} : parsed.errors), ...(foreign.ok ? {} : { foreign_tax_id: foreign.error }) };
+    return NextResponse.json({ error: 'Please check the highlighted fields.', fields }, { status: 400 });
+  }
+  // Only the fields the form sent: the Italian and the foreign form must not
+  // blank each other's values.
+  const all = { ...parsed.value, foreign_tax_id: foreign.value };
+  const patch = Object.fromEntries(EDITABLE.filter((k) => k in body).map((k) => [k, all[k]]));
 
   const db = createSupabaseServiceClient();
   if (!db) return NextResponse.json({ error: 'Saving is not available right now.' }, { status: 503 });
   const { data, error } = await db
     .from('billing_profiles')
-    .upsert({ user_id: session.userId, ...parsed.value, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+    .upsert({ user_id: session.userId, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
     .select(FIELDS)
     .single();
   if (error) {

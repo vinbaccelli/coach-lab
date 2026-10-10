@@ -1,156 +1,200 @@
-# Italian invoicing (fattura elettronica) for AngleMotion subscriptions
+# Italian invoicing (fattura elettronica) for AngleMotion sales
 
-How a paid subscription becomes a fiscal invoice. A Stripe receipt is **not** a
-fattura elettronica. Stripe takes the payment; the fiscal invoice is issued
-from AngleMotion and sent to SdI through the Agenzia delle Entrate portal.
+How a paid sale becomes a fiscal invoice. A Stripe receipt is **not** a
+fattura elettronica. Stripe takes the payment and stays the source of truth for
+it. The fiscal invoice is issued from AngleMotion and sent to SdI through the
+Agenzia delle Entrate portal.
+
+Two kinds of sale go through the same workflow (D10):
+- **Subscriptions**: AngleMotion Light, Pro and Academy. Each paid renewal is a sale.
+- **One-off sales**: payment links for coaching, the ebook, analyses and
+  anything else sold through a Stripe Checkout.
 
 ## The workflow (Vin)
 
-1. A coach pays. Stripe sends `invoice.paid`, and the webhook creates a row in
-   `fiscal_invoices` with status **To issue**. The row holds:
-   - who paid, their billing address and country;
-   - business name and VAT ID, if any;
-   - the amount actually paid (after any Coach Life discount);
-   - plan, period, and the Stripe invoice, payment, customer and subscription IDs.
+1. **A customer pays.** The Stripe webhook creates a record with status **To issue**:
+   - subscriptions on `invoice.paid`;
+   - one-off sales on `checkout.session.completed`, or on
+     `checkout.session.async_payment_succeeded` for payments that confirm later.
 
-   A €0 invoice creates no row.
-2. Italian customers see an **Invoice details (Italy)** card on /billing, where
-   they enter:
-   - Codice Fiscale (needed for private customers);
-   - Partita IVA, Codice Destinatario or PEC (businesses).
+   The record holds:
+   - who paid, their address, country and VAT/tax ID;
+   - what they bought (plan and period, or the product name);
+   - the amount actually paid;
+   - the Stripe IDs (invoice or Checkout Session, payment, customer, subscription).
 
-   The card is shown when their Stripe billing country is IT.
-3. Open **/admin/invoices** (admin accounts only). For each invoice to issue:
-   - check the **number** and the **date**. The number continues your FatturAE
-     sequence: the first one is **65**, because the last was 64 in 2026. If you
-     issue other invoices by hand in FatturAE, change the number to the next
-     free one. The same number can't be used twice in a year;
-   - fix anything listed under the invoice (for example, a missing Codice
-     Fiscale: ask the customer to add it on /billing);
-   - press **Issue**. The FatturaPA XML is generated and frozen on the row.
+   A €0 sale creates no record.
+2. **Customers add their tax details** in an **Invoice details** card on
+   /billing, once the webhook has recorded their billing country:
+   - Italian customers: Codice Fiscale (private customers), or Partita IVA,
+     Codice Destinatario or PEC (businesses);
+   - everyone else: their own tax ID, optional.
+3. **Open /admin/invoices** (admin accounts only).
+   - The first time, open **Invoice settings** and fill in your data
+     (see Settings below).
+   - For each record to issue:
+     - check the **number** (it continues your FatturAE sequence: first **65**)
+       and the **date**;
+     - fix anything listed under it;
+     - press **Issue**.
 4. **Download** the XML and upload it on the Agenzia delle Entrate site:
    **Fatture e Corrispettivi** → Fatturazione elettronica → Trasmissione →
-   upload the file. The portal signs it and sends it to SdI.
-5. Press **Mark sent**.
-   - If you issued an invoice by mistake and have **not** uploaded it yet,
-     **Undo** puts it back to To issue.
-   - Once sent, the portal is the only place to correct it, with a nota di
-     credito.
+   upload the file.
+5. **Press Mark sent.** "Undo" works only for an invoice that was never
+   uploaded. After that, corrections go through a nota di credito in the portal.
 
-Issue within **12 days** of the payment (fattura immediata). The page shows the
-deadline and marks late ones.
+Issue within **12 days** of the payment. The page shows the deadline.
 
-**Export CSV for the accountant** downloads every record.
+**Past payments without an invoice.** The **Find payments without an
+invoice** panel lists paid Stripe sales since a date you pick that have no
+record. Nothing is created automatically. For each payment you choose:
+- **Add to invoicing**: it becomes "To issue".
+- **Already invoiced elsewhere**: you invoiced it by hand in FatturAE. It is
+  recorded as *external*, never invoiced twice, and no longer listed.
+
+**Export CSV for the accountant** downloads every record with its amounts.
 
 ### Why not fully automatic
 
-FatturAE and Fatture e Corrispettivi have no public API. Sending to SdI without
-the portal needs an accredited channel or a paid intermediary (Aruba, Fatture in
-Cloud, A-Cube…). The XML this produces is the standard FatturaPA format, so it
-can later be sent through such a provider's API without changing the records.
+FatturAE and Fatture e Corrispettivi have no public API. Sending straight to
+SdI needs an accredited channel or a paid intermediary. The XML is standard
+FatturaPA, so it could be sent through such a provider later without
+changing the records.
+
+## Customer categories and VAT treatment
+
+Every invoice is classified into one of six categories.
+
+**B2B** means the customer gave a business tax number: Partita IVA, EU VAT ID
+or a foreign business tax ID. A company *name* alone is B2C.
+
+| Category | Natura (default) | Status |
+|---|---|---|
+| Italian private (IT_B2C) | N2.2 | confirmed (forfettario) |
+| Italian business (IT_B2B) | N2.2 | confirmed |
+| EU business (EU_B2B) | N2.1 | outside Italian VAT (art. 7-ter) |
+| **EU private (EU_B2C)** | **none** | **pending: T2 (OSS), ask the accountant** |
+| Non-EU private (NON_EU_B2C) | N2.1 | outside Italian VAT |
+| Non-EU business (NON_EU_B2B) | N2.1 | outside Italian VAT |
+
+Each category's Natura and optional legal reference (RiferimentoNormativo)
+are set in Invoice settings. If a category has no Natura, its invoices are
+listed with the reason and cannot be issued. Nothing is guessed.
+
+/admin/invoices shows this year's running total of EU private-customer sales,
+for the OSS question.
+
+## Amounts (D7)
+
+Every invoice keeps four amounts apart: subscription/product price, VAT,
+stamp duty, invoice total.
+
+- **VAT** is always €0 (forfettario).
+- **Stamp duty** is €2 above €77.47 for the listed Natura codes. It is
+  **absorbed by you**: declared on the invoice (DatiBollo, BolloVirtuale SI)
+  and **never added to the total**.
+- **Example:** Stripe payment €200 → taxable €200, VAT €0, stamp duty €2,
+  invoice total €200.
+- **D8, pending:** stamp duty applies to **N2.2 only** until your accountant
+  confirms N2.1. To extend it, add `N2.1` to "For Natura codes" in Invoice
+  settings.
 
 ## What the XML contains
 
-FatturaPA 1.2, format **FPR12** (fattura tra privati), TipoDocumento **TD01**.
-Built by `lib/billing/invoicing/fatturaPA.ts`.
+FatturaPA 1.2, format **FPR12**, TipoDocumento **TD01**. Built by
+`lib/billing/invoicing/fatturaPA.ts`.
 
-**Seller (you)**
-- Nome and Cognome, Partita IVA, Codice Fiscale.
-- RegimeFiscale **RF19** (forfettario).
-- Your address.
+**Seller (you):** Nome, Cognome, Partita IVA, Codice Fiscale, RegimeFiscale
+(RF19) and address, all from Invoice settings.
 
-**One line**
-- The description, then the amount paid.
-- AliquotaIVA **0.00**, Natura **N2.2** (configurable).
+**One line:** the description (subscription template, or the product name for
+one-off sales), the amount paid, AliquotaIVA 0.00 and the category's Natura.
 
-**Causale**
-- Your regime wording, exactly as configured.
+**Causale:** your forfettario wording.
 
-**DatiBollo (stamp duty)**
-- BolloVirtuale SI, €2.00, when the total is over €77.47.
-- It is **declared, not added**: the customer paid the clean price and you
-  absorb the €2. The Agenzia bills the bolli quarterly from your e-invoices.
-
-**Customer**
+**Customer:**
 
 | Customer | Identifier | Delivery |
 |---|---|---|
-| Italian private | Codice Fiscale | Codice Destinatario `0000000` (their cassetto fiscale), or their PEC |
+| Italian private | Codice Fiscale | `0000000` (cassetto fiscale), or PEC |
 | Italian business | Partita IVA | Codice Destinatario, or PEC, or `0000000` |
-| Foreign (EU or non-EU) | IdFiscaleIVA: country + VAT number, or `99999999999` for a private person | CodiceDestinatario `XXXXXXX`, CAP `00000` |
+| Foreign | country + VAT ID, or their own tax ID | **`XXXXXXX`**, CAP `00000` |
+| Foreign private without any tax ID | **pending: T3** | blocked until you set the identifier your accountant confirms |
 
-**DatiPagamento**
-- TP02 (paid in full), MP08 (card).
+The generated samples validate against the FatturaPA XSD (v1.2.1, with the
+N2.x Natura codes added as in the current specification).
 
-Four generated samples (IT private, IT business, EU business, non-EU) validate
-against the FatturaPA XSD. The checked copy was v1.2.1, with the N2.x Natura
-codes added as in the current specification.
+## Settings (Invoice settings on /admin/invoices) — D9
 
-## Settings (Vercel → Environment Variables → Production)
+Stored in the database (`invoice_settings`, admin-only). **Not** in code and
+**not** in Vercel. Until the required ones are filled in, the page lists what
+is missing and nothing can be issued.
 
-Nothing fiscal is hardcoded. Until the required ones are set, /admin/invoices
-lists what is missing and refuses to issue.
+**Seller (all required unless noted):**
+- first name, last name;
+- address, CAP, city (Comune), province (optional);
+- Partita IVA, Codice Fiscale;
+- regime fiscale (RF19);
+- ATECO (for your records only; it doesn't appear on the XML).
 
-| Variable | Required | Default | Meaning |
-|---|---|---|---|
-| `INVOICE_SELLER_FIRST_NAME` | yes | | Your first name, as on your Partita IVA |
-| `INVOICE_SELLER_LAST_NAME` | yes | | Your surname |
-| `INVOICE_SELLER_PARTITA_IVA` | yes | | 11 digits |
-| `INVOICE_SELLER_CODICE_FISCALE` | yes | | Your Codice Fiscale |
-| `INVOICE_SELLER_ADDRESS` | yes | | Street and number of your sede |
-| `INVOICE_SELLER_CAP` | yes | | 5 digits |
-| `INVOICE_SELLER_CITY` | yes | | Comune |
-| `INVOICE_SELLER_PROVINCE` | | | 2 letters, e.g. MI |
-| `INVOICE_SELLER_REGIME_FISCALE` | | `RF19` | Forfettario |
-| `INVOICE_REGIME_WORDING_IT` | **yes** | none | The legal wording your accountant gives you. Printed as Causale on every invoice |
-| `INVOICE_TAX_REFERENCE_IT` | | | Short legal reference in the VAT summary (RiferimentoNormativo, ≤100 characters) |
-| `INVOICE_TAX_NATURE_IT` | | `N2.2` | Natura for Italian customers |
-| `INVOICE_TAX_NATURE_EU_B2B` | | = IT | Natura for EU businesses. **Ask your accountant.** |
-| `INVOICE_TAX_NATURE_EU_B2C` | | = IT | Natura for EU private customers. **Ask your accountant.** |
-| `INVOICE_TAX_NATURE_NON_EU` | | = IT | Natura for customers outside the EU. **Ask your accountant.** |
-| `INVOICE_TAX_RATE_IT` | | `0` | Only 0 is supported (forfettario) |
-| `INVOICE_STAMP_DUTY_RULE_IT` | | `auto` | `auto` = record the bollo when the rule below matches; `off` = never |
-| `INVOICE_STAMP_DUTY_THRESHOLD` | | `77.47` | Bollo only above this total |
-| `INVOICE_STAMP_DUTY_AMOUNT` | | `2.00` | |
-| `INVOICE_STAMP_DUTY_NATURES` | | = IT Natura | Comma-separated Natura codes the bollo applies to |
-| `INVOICE_LAST_ISSUED_YEAR` | | `2026` | Year of the last invoice issued outside AngleMotion |
-| `INVOICE_LAST_ISSUED_NUMBER` | | `64` | Its number. The next proposed is this + 1 |
-| `INVOICE_DESCRIPTION_TEMPLATE` | | `Abbonamento AngleMotion {plan} {interval} - periodo dal {start} al {end}` | Line description |
-| `INVOICE_PAYMENT_METHOD` | | `MP08` | FatturaPA ModalitaPagamento (MP08 = card) |
-| `INVOICE_FOREIGN_PRIVATE_ID` | | `99999999999` | IdCodice for a foreign customer with no VAT number. **Confirm with your accountant.** |
+**Your SdI reception details (PEC, Codice Destinatario):** for reference only.
 
-Questions for your accountant, before the first invoice:
-1. The exact wording for `INVOICE_REGIME_WORDING_IT`. Should a short reference
-   also go in `INVOICE_TAX_REFERENCE_IT`?
-2. The Natura for EU businesses, EU private customers and non-EU customers. The
-   default is N2.2 for all.
-3. Is `99999999999` the identifier they want for foreign private customers?
-4. The bollo: €2 over €77.47, absorbed by you. Confirm.
+**Forfettario wording (required):** the exact text from your accountant.
+
+**Natura and legal reference** for each of the six categories (see above).
+
+**Foreign private customer identifier:** pending T3.
+
+**Stamp duty:** on/off, threshold, amount, Natura codes.
+
+**Numbering:** the last invoice you issued elsewhere (2026 / 64 by default),
+so the next proposed number is 65.
+
+**Line descriptions:**
+- Subscription: `{plan} {interval} {start} {end}`.
+- One-off: `{product}`.
+
+**Payment method code:** MP08 (card).
+
+**ATECO.** Your current code is 85.51.01. Selling software may need another
+code, and it can change your forfettario coefficient. Nothing in the app
+depends on it, so update the field whenever your accountant confirms.
+
+## Pending — answers from the accountant
+
+- **T2:** VAT treatment of SaaS sold to EU private customers, and whether
+  OSS registration is required. Set it as the "EU private" Natura.
+- **D8:** whether the €2 stamp duty also applies to N2.1 invoices over €77.47.
+  If yes, add `N2.1` to the stamp-duty Natura codes.
+- **T3:** the identifier for a foreign private customer with no tax ID.
+- **Forfettario wording** and **ATECO.**
 
 ## Database
 
-Created by `supabase/migrations/20261008120000_invoicing.sql` (run it once in
-the SQL editor before deploying).
+**`supabase/migrations/20261008120000_invoicing.sql`**
+- `billing_profiles`;
+- `fiscal_invoices`;
+- the subscription price, period-start and Checkout-session fields.
 
-- `billing_profiles`, one row per coach:
-  - billing country (written by the webhook);
-  - Codice Fiscale, Partita IVA, Codice Destinatario, PEC (written by
-    /api/billing/profile after validation, including the CF and P.IVA check
-    characters).
-  - Coaches can read only their own row.
-- `fiscal_invoices`, one row per paid Stripe invoice: the payment snapshot plus
-  the issued invoice (number, date, Natura, rate, wording, bollo, XML).
-  - Admin-only (service role).
-  - Unique per Stripe invoice and per (year, number).
-- `subscriptions` also gains `stripe_price_id`, `current_period_start` and
-  `stripe_checkout_session_id`.
+**`supabase/migrations/20261009120000_invoicing_v2.sql`**
+- `invoice_settings`: one row, admin-only;
+- `billing_profiles.foreign_tax_id`;
+- on `fiscal_invoices`:
+  - `source` (subscription / one-off);
+  - `stripe_checkout_session_id` (unique) for one-off sales;
+  - `product_description`;
+  - `customer_category`;
+  - `foreign_tax_id`;
+  - the four amount columns (`taxable_amount_cents`, `vat_amount_cents`,
+    `stamp_duty_cents`, `invoice_total_cents`);
+  - `note`;
+  - the status `external`.
 
-## Later: EU OSS / VAT
+**Run both, in order, in the Supabase SQL editor.**
 
-If the accountant says VAT now applies (leaving forfettario, or EU B2C OSS):
-1. Stripe Tax: add the registrations and set `STRIPE_AUTOMATIC_TAX=true`
-   (`docs/STRIPE_LAUNCH_SETUP.md` §3).
-2. VAT-bearing invoices (rate > 0, Imposta > 0) are not generated yet:
-   `INVOICE_TAX_RATE_IT` other than 0 is refused on purpose. That change needs
-   the per-invoice tax amount from Stripe on each record, and is a separate
-   piece of work.
+## Later: VAT
+
+If VAT ever applies (leaving forfettario, or OSS), Stripe Tax is switched on
+(`docs/STRIPE_LAUNCH_SETUP.md` §3). VAT-bearing invoices (rate > 0) are not
+generated by this code yet. The VAT amount column is already there for when
+they are.

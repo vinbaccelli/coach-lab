@@ -1,9 +1,11 @@
 'use client';
 
 /**
- * Invoices (admin) — turn paid Stripe subscriptions into Italian fatture
- * elettroniche. Every paid invoice arrives here as "To issue" (written by the
- * Stripe webhook). Vin checks the number (it continues his FatturAE sequence),
+ * Invoices (admin) — turn paid Stripe sales (subscriptions AND one-off
+ * payment-link sales) into Italian fatture elettroniche. Every paid sale
+ * arrives here as "To issue" (written by the Stripe webhook). Also: the
+ * Invoice settings form (D9) and the review of past payments without an
+ * invoice record (D10). Vin checks the number (it continues his FatturAE sequence),
  * issues it, downloads the FatturaPA XML and uploads it in the Agenzia delle
  * Entrate portal "Fatture e Corrispettivi", then marks it sent.
  * Workflow and settings: docs/INVOICING.md. Admin-only (API enforces it).
@@ -13,15 +15,22 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Download, FileText, Loader2, Check, Undo2, AlertTriangle } from 'lucide-react';
 import WorkspaceChrome from '@/components/WorkspaceChrome';
 import { formatPrice } from '@/lib/plans';
+import SettingsCard from './SettingsCard';
+import MissingCard from './MissingCard';
 
 type Invoice = {
-  id: string; status: 'to_issue' | 'issued' | 'sent'; paid_at: string; amount_cents: number; currency: string;
+  id: string; status: 'to_issue' | 'issued' | 'sent' | 'external'; paid_at: string; amount_cents: number; currency: string;
   plan: string | null; billing_interval: string | null; customer_name: string | null; business_name: string | null;
   customer_email: string | null; customer_country: string | null; is_business: boolean;
   invoice_number: number | null; invoice_year: number | null; invoice_date: string | null;
   stamp_duty_amount: number | null; xml_file_name: string | null; problems: string[];
+  source: 'subscription' | 'one_off'; product_description: string | null; customer_category: string | null;
+  taxable_amount_cents: number | null; vat_amount_cents: number | null; stamp_duty_cents: number | null;
+  invoice_total_cents: number | null; tax_nature: string | null; note: string | null;
 };
-type ListResponse = { invoices: Invoice[]; suggestedNumber: number; today: string; settingsProblems: string[] };
+type ListResponse = {
+  invoices: Invoice[]; suggestedNumber: number; today: string; settingsProblems: string[]; year: number; euB2cThisYearCents: number;
+};
 
 const ISSUE_WITHIN_DAYS = 12;
 const fmt = (iso: string) => new Date(iso).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -55,9 +64,12 @@ export default function AdminInvoicesPage() {
   }, [load]);
 
   const toIssue = data?.invoices.filter((i) => i.status === 'to_issue') ?? [];
-  const done = data?.invoices.filter((i) => i.status !== 'to_issue') ?? [];
+  const done = data?.invoices.filter((i) => i.status === 'issued' || i.status === 'sent') ?? [];
+  const external = data?.invoices.filter((i) => i.status === 'external') ?? [];
+  const [showSettings, setShowSettings] = useState(false);
   // The oldest unissued invoice gets the next number first.
   const ordered = [...toIssue].sort((a, b) => a.paid_at.localeCompare(b.paid_at));
+  const issuable = ordered.filter((i) => i.problems.length === 0).map((i) => i.id);
 
   return (
     <WorkspaceChrome pageLabel="Invoices">
@@ -73,14 +85,33 @@ export default function AdminInvoicesPage() {
           </a>
         </div>
 
-        {data && data.settingsProblems.length > 0 && (
+        {data && data.settingsProblems.length > 0 && !showSettings && (
           <div role="alert" style={{ ...card, borderColor: 'rgba(255,159,10,0.6)' }}>
             <p style={{ margin: 0, fontWeight: 700, fontSize: 14 }}><AlertTriangle size={14} style={{ verticalAlign: -2 }} /> Invoice settings incomplete — nothing can be issued yet</p>
             <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>
               {data.settingsProblems.map((p) => <li key={p}>{p}</li>)}
             </ul>
-            <p style={{ ...muted, marginTop: 8 }}>Set these in Vercel → Environment Variables (Production) and redeploy. See docs/INVOICING.md.</p>
+            <button type="button" onClick={() => setShowSettings(true)} style={{ ...primaryBtn, marginTop: 10 }}>Open Invoice settings</button>
           </div>
+        )}
+
+        <section style={card}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+            <h2 style={{ ...h2, margin: 0 }}>Invoice settings</h2>
+            <button type="button" onClick={() => setShowSettings((v) => !v)} aria-expanded={showSettings} style={secondaryBtn}>
+              {showSettings ? 'Close' : 'Edit'}
+            </button>
+          </div>
+          {showSettings
+            ? <SettingsCard onSaved={() => void load()} />
+            : <p style={muted}>Your fiscal data, the forfettario wording, VAT treatment per customer, stamp duty and numbering.</p>}
+        </section>
+
+        {data && data.euB2cThisYearCents > 0 && (
+          <p role="status" style={{ ...card, margin: 0, fontSize: 13 }}>
+            EU private customers in {data.year}: <strong>{formatPrice(data.euB2cThisYearCents / 100)}</strong> so far.
+            Their VAT treatment (OSS) is pending your accountant.
+          </p>
         )}
 
         {error && <p role="alert" style={{ margin: 0, fontSize: 13, color: 'var(--cl-destructive-text)', fontWeight: 600 }}>{error}</p>}
@@ -90,10 +121,13 @@ export default function AdminInvoicesPage() {
           <section style={card}>
             <h2 style={h2}>To issue ({toIssue.length})</h2>
             {ordered.length === 0 && <p style={muted}>Nothing to issue.</p>}
-            {ordered.map((inv, i) => {
+            {ordered.map((inv) => {
               const due = new Date(new Date(inv.paid_at).getTime() + ISSUE_WITHIN_DAYS * 86400000);
               const overdue = due.getTime() < Date.now();
-              const number = numbers[inv.id] ?? String(data.suggestedNumber + i);
+              // Numbers are proposed only to invoices that can be issued now, in
+              // payment order, so a blocked one never leaves a gap.
+              const slot = issuable.indexOf(inv.id);
+              const number = numbers[inv.id] ?? (slot >= 0 ? String(data.suggestedNumber + slot) : '');
               const date = dates[inv.id] ?? data.today;
               const blocked = inv.problems.length > 0 || data.settingsProblems.length > 0;
               return (
@@ -116,11 +150,11 @@ export default function AdminInvoicesPage() {
                     </label>
                     <button
                       type="button"
-                      disabled={blocked || busy !== null}
+                      disabled={blocked || busy !== null || !number}
                       onClick={() => void act(inv.id, `/api/admin/invoices/${inv.id}/issue`, { number: Number(number), date })}
                       style={primaryBtn}
                     >
-                      {busy === inv.id ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} Issue n. {number}
+                      {busy === inv.id ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} {number ? `Issue n. ${number}` : 'Issue'}
                     </button>
                   </div>
                 </div>
@@ -134,6 +168,16 @@ export default function AdminInvoicesPage() {
 
         {data && (
           <section style={card}>
+            <h2 style={h2}>Past payments without an invoice</h2>
+            <MissingCard onChanged={() => void load()} />
+            {external.length > 0 && (
+              <p style={{ ...muted, marginTop: 10 }}>{external.length} past payment{external.length === 1 ? '' : 's'} marked as already invoiced elsewhere.</p>
+            )}
+          </section>
+        )}
+
+        {data && (
+          <section style={card}>
             <h2 style={h2}>Issued ({done.length})</h2>
             {done.length === 0 && <p style={muted}>None yet.</p>}
             {done.map((inv) => (
@@ -141,7 +185,10 @@ export default function AdminInvoicesPage() {
                 <Summary inv={inv} />
                 <p style={muted}>
                   <strong>n. {inv.invoice_number}/{inv.invoice_year}</strong> del {inv.invoice_date ? fmt(inv.invoice_date) : '—'}
-                  {inv.stamp_duty_amount ? ` · bollo virtuale ${formatPrice(Number(inv.stamp_duty_amount))}` : ''}
+                  {inv.tax_nature ? ` · ${inv.tax_nature}` : ''}
+                  {inv.invoice_total_cents !== null
+                    ? ` · price ${formatPrice((inv.taxable_amount_cents ?? 0) / 100)}, VAT ${formatPrice((inv.vat_amount_cents ?? 0) / 100)}, stamp duty ${formatPrice((inv.stamp_duty_cents ?? 0) / 100)} (absorbed), total ${formatPrice(inv.invoice_total_cents / 100)}`
+                    : ''}
                   {' · '}{inv.status === 'sent' ? 'sent to SdI' : 'XML ready — upload it, then mark sent'}
                 </p>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
@@ -170,10 +217,13 @@ export default function AdminInvoicesPage() {
 
 function Summary({ inv }: { inv: Invoice }) {
   const who = inv.business_name || inv.customer_name || inv.customer_email || '—';
-  const plan = inv.plan ? `${inv.plan.charAt(0).toUpperCase()}${inv.plan.slice(1)} ${inv.billing_interval === 'year' ? 'yearly' : inv.billing_interval === 'month' ? 'monthly' : ''}` : '';
+  const plan = inv.source === 'one_off'
+    ? `One-off${inv.product_description ? `: ${inv.product_description}` : ''}`
+    : inv.plan ? `Subscription: ${inv.plan.charAt(0).toUpperCase()}${inv.plan.slice(1)} ${inv.billing_interval === 'year' ? 'yearly' : inv.billing_interval === 'month' ? 'monthly' : ''}` : 'Subscription';
+  const category = inv.customer_category ? ` · ${inv.customer_category.replace('_', ' ').replace('NON EU', 'non-EU')}` : '';
   return (
     <p style={{ margin: 0, fontSize: 14 }}>
-      <strong>{who}</strong>{inv.customer_country ? ` · ${inv.customer_country}` : ''}{inv.is_business ? ' · business' : ''}
+      <strong>{who}</strong>{inv.customer_country ? ` · ${inv.customer_country}` : ''}{category}
       {' · '}<strong>{inv.currency === 'EUR' ? formatPrice(inv.amount_cents / 100) : `${(inv.amount_cents / 100).toFixed(2)} ${inv.currency}`}</strong>
       {plan ? ` · ${plan}` : ''}
     </p>

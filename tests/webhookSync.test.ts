@@ -24,6 +24,7 @@ function harness(opts: { subscription?: Stripe.Subscription; processed?: string[
   const processed = new Set(opts.processed ?? []);
   const deps: SyncDeps = {
     async retrieveSubscription(id) { calls.retrieved.push(id); return opts.subscription ?? sub(); },
+    async listCheckoutLineItems() { return ['Spin Mechanics ebook']; },
     async retrieveCustomer(id) { return { id, object: 'customer', name: 'Mario Rossi', email: 'mario@example.it', address: null, ...opts.customer } as Stripe.Customer; },
     async recordFiscalInvoice(d) { calls.fiscal.push(d); },
     async upsertBillingCountry(u, c) { calls.countries.push([u, c]); },
@@ -175,4 +176,54 @@ test('no fiscal invoice for €0 invoices, failed payments or action-required', 
     assert.equal(calls.upserts[0].status, 'past_due');
     assert.equal(calls.fiscal.length, 0);
   }
+});
+
+const oneOff = (over: Record<string, unknown> = {}) => ({
+  id: 'cs_one', object: 'checkout.session', mode: 'payment', payment_status: 'paid', amount_total: 3000, currency: 'eur',
+  client_reference_id: null, metadata: {}, customer: null, invoice: null, payment_intent: 'pi_1',
+  customer_details: { name: 'Jon Moore', email: 'jon@example.com', business_name: null, tax_ids: [],
+    address: { line1: '4 Harriet Dr', line2: null, city: 'Woonona', postal_code: '2517', state: 'NSW', country: 'AU' } },
+  ...over,
+});
+
+test('one-off payment-link sale (D10): recorded as one_off with what was bought; no subscription touched', async () => {
+  const { deps, calls } = harness();
+  assert.equal(await processStripeEvent(ev('checkout.session.completed', oneOff()), deps), 'processed');
+  assert.equal(calls.retrieved.length, 0);
+  assert.equal(calls.upserts.length, 0);
+  const f = calls.fiscal[0];
+  assert.equal(f.source, 'one_off');
+  assert.equal(f.stripe_checkout_session_id, 'cs_one');
+  assert.equal(f.stripe_invoice_id, null);
+  assert.equal(f.stripe_payment_intent_id, 'pi_1');
+  assert.equal(f.product_description, 'Spin Mechanics ebook');
+  assert.equal(f.amount_cents, 3000);
+  assert.equal(f.customer_category, 'NON_EU_B2C');
+});
+
+test('one-off: an unpaid async checkout waits for async_payment_succeeded; €0 is not a sale', async () => {
+  const pending = harness();
+  await processStripeEvent(ev('checkout.session.completed', oneOff({ payment_status: 'unpaid' })), pending.deps);
+  assert.equal(pending.calls.fiscal.length, 0);
+  const later = harness();
+  await processStripeEvent(ev('checkout.session.async_payment_succeeded', oneOff(), 'evt_async'), later.deps);
+  assert.equal(later.calls.fiscal.length, 1);
+  const free = harness();
+  await processStripeEvent(ev('checkout.session.completed', oneOff({ amount_total: 0 })), free.deps);
+  assert.equal(free.calls.fiscal.length, 0);
+});
+
+test('B2B needs a tax ID: a company name alone stays B2C', async () => {
+  const { deps, calls } = harness();
+  await processStripeEvent(ev('checkout.session.completed', oneOff({
+    customer_details: { name: 'X', email: 'x@y.de', business_name: 'Tennis GmbH', tax_ids: [], address: { country: 'DE', line1: 'a', city: 'b' } },
+  })), deps);
+  assert.equal(calls.fiscal[0].customer_category, 'EU_B2C');
+  assert.equal(calls.fiscal[0].business_name, 'Tennis GmbH');
+});
+
+test('a non-subscription invoice.paid (payment-link invoice) is not recorded twice', async () => {
+  const { deps, calls } = harness();
+  await processStripeEvent(ev('invoice.paid', paidInvoice({ parent: null })), deps);
+  assert.equal(calls.fiscal.length, 0);
 });

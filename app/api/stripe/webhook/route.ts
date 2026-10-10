@@ -41,6 +41,10 @@ export async function POST(req: Request) {
   const deps: SyncDeps = {
     retrieveSubscription: (id) => stripe.subscriptions.retrieve(id),
     retrieveCustomer: (id) => stripe.customers.retrieve(id),
+    async listCheckoutLineItems(sessionId) {
+      const items = await stripe.checkout.sessions.listLineItems(sessionId, { limit: 20 });
+      return items.data.map((i) => i.description ?? '').filter(Boolean);
+    },
     tierForPriceId,
     async hasProcessedEvent(eventId) {
       const { data, error } = await db.from('stripe_webhook_events').select('event_id').eq('event_id', eventId).maybeSingle();
@@ -63,10 +67,12 @@ export async function POST(req: Request) {
       return data?.length ?? 0;
     },
     async recordFiscalInvoice(draft) {
-      // ignoreDuplicates: a retried invoice.paid never overwrites a row Vin
-      // may already have issued (number, XML).
-      const { error } = await db.from('fiscal_invoices').upsert(draft, { onConflict: 'stripe_invoice_id', ignoreDuplicates: true });
-      if (error) throw new RetryableError(`fiscal_invoices insert failed for ${draft.stripe_invoice_id}: ${error.message}`);
+      // ignoreDuplicates: a retried event never overwrites a row Vin may
+      // already have issued (number, XML). Subscriptions are keyed by Stripe
+      // invoice, one-off sales by Checkout Session.
+      const onConflict = draft.source === 'one_off' ? 'stripe_checkout_session_id' : 'stripe_invoice_id';
+      const { error } = await db.from('fiscal_invoices').upsert(draft, { onConflict, ignoreDuplicates: true });
+      if (error) throw new RetryableError(`fiscal_invoices insert failed for ${draft.stripe_checkout_session_id ?? draft.stripe_invoice_id}: ${error.message}`);
     },
     async upsertBillingCountry(userId, country) {
       const { error } = await db

@@ -1,6 +1,6 @@
 import type Stripe from 'stripe';
 import { getPlan, isValidPlanId, type PlanId } from '@/lib/plans';
-import { fiscalDraftFromInvoice, isFiscalSale, type FiscalInvoiceDraft } from '@/lib/billing/invoicing/draft';
+import { fiscalDraftFromCheckout, fiscalDraftFromInvoice, isFiscalSale, isOneOffSale, type FiscalInvoiceDraft } from '@/lib/billing/invoicing/draft';
 
 /**
  * Stripe → `subscriptions` sync, independent of Next and Supabase so it can be
@@ -16,10 +16,13 @@ import { fiscalDraftFromInvoice, isFiscalSale, type FiscalInvoiceDraft } from '@
  *    never the event payload — events arrive out of order. Stripe stays the
  *    source of truth; the row is a cache of it.
  *  - Plan from the subscription's price, metadata as fallback, never a default.
- *  - invoice.paid with money taken also records a fiscal_invoices row (the
- *    data the Italian fattura is issued from — docs/INVOICING.md) and copies
- *    the customer's billing country to billing_profiles. Both writes are
- *    idempotent (keyed by Stripe invoice id / user id), so a retry is safe.
+ *  - Every paid SALE also records a fiscal_invoices row (the data the Italian
+ *    fattura is issued from — docs/INVOICING.md): a subscription payment on
+ *    invoice.paid, a one-off sale (payment links: coaching, ebook…) on
+ *    checkout.session.completed / async_payment_succeeded once it is paid.
+ *    The subscription path also copies the billing country to
+ *    billing_profiles. All writes are idempotent (keyed by Stripe invoice /
+ *    Checkout Session id, user id), so a retry is safe.
  */
 
 export type SubscriptionRow = {
@@ -45,6 +48,8 @@ export class RetryableError extends Error {}
 export interface SyncDeps {
   retrieveSubscription(id: string): Promise<Stripe.Subscription>;
   retrieveCustomer(id: string): Promise<Stripe.Customer | Stripe.DeletedCustomer>;
+  /** Names of what a one-off Checkout sold (its line items). */
+  listCheckoutLineItems(sessionId: string): Promise<string[]>;
   tierForPriceId(priceId: string | null | undefined): PlanId | null;
   hasProcessedEvent(eventId: string): Promise<boolean>;
   recordEvent(eventId: string, type: string): Promise<void>;
@@ -61,6 +66,7 @@ export interface SyncDeps {
 
 export const HANDLED_EVENTS = [
   'checkout.session.completed',
+  'checkout.session.async_payment_succeeded',
   'customer.subscription.created',
   'customer.subscription.updated',
   'customer.subscription.deleted',
@@ -166,10 +172,22 @@ export async function processStripeEvent(event: Stripe.Event, deps: SyncDeps): P
   if (await deps.hasProcessedEvent(event.id)) return 'duplicate';
 
   switch (event.type) {
-    case 'checkout.session.completed': {
+    case 'checkout.session.completed':
+    case 'checkout.session.async_payment_succeeded': {
       const session = event.data.object as Stripe.Checkout.Session;
+      if (session.mode === 'payment') {
+        // One-off sale (D10). An async method (SEPA, bank transfer) completes
+        // the session unpaid and is recorded on async_payment_succeeded.
+        if (isOneOffSale(session)) {
+          const names = await deps.listCheckoutLineItems(session.id);
+          await deps.recordFiscalInvoice(fiscalDraftFromCheckout(session, names, {
+            now: deps.now(), paidAt: event.created ? new Date(event.created * 1000) : undefined,
+          }));
+        }
+        break;
+      }
       const subId = idOf(session.subscription);
-      if (session.mode !== 'subscription' || !subId) break;
+      if (event.type !== 'checkout.session.completed' || session.mode !== 'subscription' || !subId) break;
       const userId = session.client_reference_id ?? session.metadata?.userId ?? null;
       if (!userId) {
         deps.log('[stripe/webhook] checkout session without a user:', session.id);

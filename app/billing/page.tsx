@@ -151,9 +151,9 @@ export default function BillingPage() {
 
 type InvoiceProfile = {
   billing_country: string | null; codice_fiscale: string | null; partita_iva: string | null;
-  codice_destinatario: string | null; pec: string | null;
+  codice_destinatario: string | null; pec: string | null; foreign_tax_id: string | null;
 };
-type InvoiceField = 'codice_fiscale' | 'partita_iva' | 'codice_destinatario' | 'pec';
+type InvoiceField = 'codice_fiscale' | 'partita_iva' | 'codice_destinatario' | 'pec' | 'foreign_tax_id';
 
 const INVOICE_FIELDS: Array<{ key: InvoiceField; label: string; hint: string; autoComplete?: string }> = [
   { key: 'codice_fiscale', label: 'Codice Fiscale', hint: 'Required for private customers.' },
@@ -162,15 +162,20 @@ const INVOICE_FIELDS: Array<{ key: InvoiceField; label: string; hint: string; au
   { key: 'pec', label: 'PEC', hint: 'Only if you have no Codice Destinatario.', autoComplete: 'email' },
 ];
 
+const FOREIGN_FIELDS: typeof INVOICE_FIELDS = [
+  { key: 'foreign_tax_id', label: 'Tax identification number', hint: 'Optional: your country’s personal tax number, if you have one. A business VAT number given at checkout is already on file.' },
+];
+
 /**
- * "Invoice details" — the identifiers an Italian fattura elettronica needs,
- * which Stripe Checkout does not collect. Shown only when the coach's Stripe
- * billing country is Italy (the webhook records it on the first payment).
+ * "Invoice details" — the identifiers the Italian fattura elettronica needs
+ * that Stripe Checkout does not collect. Italy: Codice Fiscale, Partita IVA,
+ * Codice Destinatario, PEC. Elsewhere: an optional own tax ID. Shown once the
+ * webhook has recorded the coach's Stripe billing country (first payment).
  * Stored in billing_profiles; read when Vin issues the invoice.
  */
 function InvoiceDetailsCard() {
   const [profile, setProfile] = useState<InvoiceProfile | null>(null);
-  const [form, setForm] = useState<Record<InvoiceField, string>>({ codice_fiscale: '', partita_iva: '', codice_destinatario: '', pec: '' });
+  const [form, setForm] = useState<Record<InvoiceField, string>>({ codice_fiscale: '', partita_iva: '', codice_destinatario: '', pec: '', foreign_tax_id: '' });
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -184,20 +189,24 @@ function InvoiceDetailsCard() {
         setProfile(p);
         if (p) setForm({
           codice_fiscale: p.codice_fiscale ?? '', partita_iva: p.partita_iva ?? '',
-          codice_destinatario: p.codice_destinatario ?? '', pec: p.pec ?? '',
+          codice_destinatario: p.codice_destinatario ?? '', pec: p.pec ?? '', foreign_tax_id: p.foreign_tax_id ?? '',
         });
       })
       .catch(() => setProfile(null));
   }, []);
 
-  if (profile?.billing_country !== 'IT') return null;
+  if (!profile?.billing_country) return null;
+  const italian = profile.billing_country === 'IT';
+  const fields = italian ? INVOICE_FIELDS : FOREIGN_FIELDS;
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setErr(null); setSaved(false); setFieldErr({});
     try {
       const res = await fetch('/api/billing/profile', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form),
+        // Only the fields shown: the other set is never blanked.
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.fromEntries(fields.map((f) => [f.key, form[f.key]]))),
       });
       const b = (await res.json().catch(() => ({}))) as { profile?: InvoiceProfile; error?: string; fields?: Partial<Record<InvoiceField, string>> };
       if (!res.ok) { setErr(b.error ?? 'Could not save.'); setFieldErr(b.fields ?? {}); return; }
@@ -212,13 +221,13 @@ function InvoiceDetailsCard() {
 
   return (
     <div style={card} data-invoice-details>
-      <h2 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 800 }}>Invoice details (Italy)</h2>
+      <h2 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 800 }}>{italian ? 'Invoice details (Italy)' : 'Invoice details'}</h2>
       <p style={muted}>
-        Your fattura elettronica is issued with these details. Name and address come from your Stripe billing
-        details; change those in the billing portal.
+        Your invoice is issued with these details. Name and address come from your Stripe billing details; change
+        those in the billing portal.
       </p>
       <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }} noValidate>
-        {INVOICE_FIELDS.map((f) => (
+        {fields.map((f) => (
           <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, fontWeight: 600 }}>
             {f.label}
             <input

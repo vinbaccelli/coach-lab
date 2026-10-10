@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { adminInvoicesAccess } from '@/lib/billing/invoicing/adminAccess';
-import { invoiceSettings, romeToday } from '@/lib/billing/invoicing/settings';
+import { romeToday } from '@/lib/billing/invoicing/settings';
+import { loadInvoiceSettings } from '@/lib/billing/invoicing/settingsStore';
 import { buildFatturaPA, issueProblems, type InvoiceRecord } from '@/lib/billing/invoicing/fatturaPA';
 
 /**
  * Admin: issue one fiscal invoice — give it its number and date, freeze the
- * customer's Italian identifiers and the VAT treatment on it, and generate the
- * FatturaPA XML. Only a 'to_issue' row can be issued; the (year, number) pair
+ * customer's identifiers, category, VAT treatment and amount breakdown (price,
+ * VAT, stamp duty, total — D7) on it, and generate the FatturaPA XML. Only a 'to_issue' row can be issued; the (year, number) pair
  * is unique in SQL, so a number already used answers 409.
  */
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -30,7 +31,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   // The customer's Italian identifiers as they are now (entered on /billing).
   let profile: Record<string, string | null> = {};
   if (row.user_id) {
-    const { data: p } = await db.from('billing_profiles').select('codice_fiscale, partita_iva, codice_destinatario, pec').eq('user_id', row.user_id).maybeSingle();
+    const { data: p } = await db.from('billing_profiles').select('codice_fiscale, partita_iva, codice_destinatario, pec, foreign_tax_id').eq('user_id', row.user_id).maybeSingle();
     profile = (p ?? {}) as Record<string, string | null>;
   }
   const record: InvoiceRecord = {
@@ -39,9 +40,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     partita_iva: profile.partita_iva ?? row.partita_iva ?? null,
     codice_destinatario: profile.codice_destinatario ?? row.codice_destinatario ?? null,
     pec: profile.pec ?? row.pec ?? null,
+    foreign_tax_id: profile.foreign_tax_id ?? row.foreign_tax_id ?? null,
   };
 
-  const settings = invoiceSettings();
+  let settings;
+  try {
+    ({ settings } = await loadInvoiceSettings(db));
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not read invoice settings' }, { status: 500 });
+  }
   const problems = issueProblems(record, settings, { number, date });
   if (problems.length) return NextResponse.json({ error: 'Cannot issue yet', problems }, { status: 422 });
 
@@ -54,6 +61,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       partita_iva: record.partita_iva,
       codice_destinatario: record.codice_destinatario,
       pec: record.pec,
+      foreign_tax_id: record.foreign_tax_id,
+      customer_category: built.category,
+      ...built.amounts,
       description: built.description,
       tax_nature: built.nature,
       tax_rate: built.taxRate,

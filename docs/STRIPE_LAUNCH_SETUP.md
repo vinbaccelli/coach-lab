@@ -51,8 +51,9 @@ If the app is deployed before this SQL runs, seats don't work yet (members just
 get their own plan or the free hour) and the ebook card says "contact us".
 Nothing breaks.
 
-Then run `supabase/migrations/20261008120000_invoicing.sql`, also safe to run
-twice. It adds:
+Then run `supabase/migrations/20261008120000_invoicing.sql`, and after it
+`supabase/migrations/20261009120000_invoicing_v2.sql` (Invoice settings,
+one-off sales, amount breakdown). Both are safe to run twice. It adds:
 - three more subscription fields: price ID, period start, Checkout session;
 - the `billing_profiles` table (Italian invoice details);
 - the `fiscal_invoices` table (one record per paid invoice).
@@ -156,18 +157,18 @@ Project → **Settings → Environment Variables**, for **Production** and
 - **Delete** `STRIPE_PRICE_MONTHLY` and `STRIPE_PRICE_YEARLY` (legacy; the code no longer reads them).
 - Keep `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SUPABASE_SERVICE_ROLE_KEY`.
 - Leave `STRIPE_AUTOMATIC_TAX` unset (see step 3).
-- Production only: the `INVOICE_*` settings in `docs/INVOICING.md` (seller data
-  and the accountant's wording). Until they are set, invoices are recorded but
-  can't be issued.
+- Invoicing needs **no** Vercel variables: your fiscal data and rules are
+  entered on /admin/invoices → Invoice settings (`docs/INVOICING.md`).
 
 ## 5. Webhook
 
 Developers → **Webhooks** → your endpoint (`https://<domain>/api/stripe/webhook`).
-Select exactly these seven events:
+Select exactly these eight events:
 
 | Event | What the app does |
 |---|---|
-| `checkout.session.completed` | Links the new subscription to the coach and stores the Stripe Customer ID |
+| `checkout.session.completed` | Links the new subscription to the coach and stores the Stripe Customer ID. For a paid one-off sale (payment link), records it for invoicing |
+| `checkout.session.async_payment_succeeded` | A one-off sale paid by a method that confirms later: records it for invoicing |
 | `customer.subscription.created` | Syncs the row |
 | `customer.subscription.updated` | Syncs status. This is how `past_due`, `unpaid`, plan switches and cancel-at-period-end arrive |
 | `customer.subscription.deleted` | Status becomes `canceled`; paid features stop; data is kept |
@@ -240,7 +241,7 @@ Card `4242 4242 4242 4242`, any future date, any CVC.
 - [ ] Checkout asks for full name, email, billing address and country. "Business" and VAT/tax ID are optional. After paying, the Stripe **Customer** shows the name and address. A second checkout by the same coach reuses **the same Customer**.
 - [ ] Temporarily blank one `STRIPE_PRICE_*` var: that button says "can't be purchased right now" and the others still work.
 - [ ] Point one var at a USD (or archived) price: refused the same way. Point it at another EUR price and redeploy: /pricing and the landing page show the new amount, and Checkout charges it.
-- [ ] Pay with an Italian billing address: /billing shows **Invoice details (Italy)**; a wrong Codice Fiscale is refused; /admin/invoices lists the payment as To issue with number 65 proposed; once the `INVOICE_*` settings are set, Issue → the XML downloads.
+- [ ] Pay with an Italian billing address: /billing shows **Invoice details (Italy)**; a wrong Codice Fiscale is refused; /admin/invoices lists the payment as To issue with number 65 proposed; once Invoice settings are filled in, Issue → the XML downloads. A payment-link sale appears as One-off.
 - [ ] Pro yearly shows "Add promotion code". A Coach Life code makes it €149. The same code fails a second time. Pro monthly has no code field.
 - [ ] After paying, `subscriptions` has your row with `status=active`, the right `tier`, `billing_interval`, `current_period_end`, and `cancel_at_period_end=false`.
 - [ ] Stripe → Webhooks: the six events show **200**. Click **Resend** on one: still 200, and nothing changes (it's a duplicate).

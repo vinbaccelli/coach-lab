@@ -73,3 +73,15 @@ export function parseItalianFields(input: Record<string, unknown>):
     value: { codice_fiscale: cf || null, partita_iva: piva || null, codice_destinatario: cd || null, pec: pec || null },
   };
 }
+
+/**
+ * A non-Italian customer's own tax identification number (T3), as entered on
+ * /billing: letters and digits only (spaces, dots and dashes dropped), 2–28
+ * characters (FatturaPA IdCodice). Empty = null.
+ */
+export function parseForeignTaxId(v: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
+  const clean = typeof v === 'string' ? v.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+  if (!clean) return { ok: true, value: null };
+  if (clean.length < 2 || clean.length > 28) return { ok: false, error: 'A tax ID has 2 to 28 letters or digits.' };
+  return { ok: true, value: clean };
+}

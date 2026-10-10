@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
-import { adminInvoicesAccess, INVOICE_LIST_COLUMNS } from '@/lib/billing/invoicing/adminAccess';
-import { invoiceSettings, romeToday, settingsProblems, suggestInvoiceNumber } from '@/lib/billing/invoicing/settings';
-import { issueProblems, type InvoiceRecord } from '@/lib/billing/invoicing/fatturaPA';
+import { adminInvoicesAccess, INVOICE_LIST_COLUMNS, PROFILE_COLUMNS } from '@/lib/billing/invoicing/adminAccess';
+import { loadInvoiceSettings } from '@/lib/billing/invoicing/settingsStore';
+import { romeToday, settingsProblems, suggestInvoiceNumber } from '@/lib/billing/invoicing/settings';
+import { issueProblems, recordCategory, type InvoiceRecord } from '@/lib/billing/invoicing/fatturaPA';
 
 /**
- * Admin: every fiscal invoice record (newest first), what each still needs
- * before it can be issued, and the number to propose next. ?format=csv
- * downloads the same list for the accountant.
+ * Admin: every fiscal invoice record (newest first) — subscriptions and
+ * one-off sales — what each still needs before it can be issued, the number
+ * to propose next, and this year's EU-private-customer sales (the OSS
+ * threshold question, T2). ?format=csv downloads the list for the accountant.
  */
 export async function GET(req: Request) {
   const access = await adminInvoicesAccess();
@@ -17,27 +19,38 @@ export async function GET(req: Request) {
   if (error) return NextResponse.json({ error: `Could not read invoices: ${error.message}` }, { status: 500 });
   const rows = (data ?? []) as unknown as Array<InvoiceRecord & Record<string, unknown>>;
 
-  // Customers' current Italian identifiers (they may add them after paying).
   const userIds = [...new Set(rows.filter((r) => r.status === 'to_issue' && r.user_id).map((r) => r.user_id as string))];
   const profiles = new Map<string, Record<string, string | null>>();
   if (userIds.length) {
-    const { data: p } = await db.from('billing_profiles').select('user_id, codice_fiscale, partita_iva, codice_destinatario, pec').in('user_id', userIds);
+    const { data: p } = await db.from('billing_profiles').select(PROFILE_COLUMNS).in('user_id', userIds);
     for (const row of p ?? []) profiles.set(row.user_id as string, row as Record<string, string | null>);
   }
 
-  const settings = invoiceSettings();
+  let settings;
+  try {
+    ({ settings } = await loadInvoiceSettings(db));
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not read invoice settings' }, { status: 500 });
+  }
+  const globalProblems = settingsProblems(settings);
   const year = Number(romeToday().slice(0, 4));
   const { data: maxRow } = await db
     .from('fiscal_invoices').select('invoice_number').eq('invoice_year', year).not('invoice_number', 'is', null)
     .order('invoice_number', { ascending: false }).limit(1).maybeSingle<{ invoice_number: number }>();
 
-  const invoices = rows.map((r) => {
+  const invoices: Array<Record<string, unknown> & { problems: string[] }> = rows.map((r) => {
     const merged = r.status === 'to_issue' && r.user_id ? { ...r, ...stripNulls(profiles.get(r.user_id as string)) } : r;
     return {
       ...merged,
-      problems: r.status === 'to_issue' ? issueProblems(merged, settings).filter((p) => !settingsProblems(settings).includes(p)) : [],
+      customer_category: r.status === 'to_issue' ? recordCategory(merged) : r.customer_category,
+      problems: r.status === 'to_issue' ? issueProblems(merged, settings).filter((p) => !globalProblems.includes(p)) : [],
     };
   });
+
+  // EU private customers this calendar year, any status but 'external' (T2 / OSS threshold).
+  const euB2cCents = invoices
+    .filter((i) => i.customer_category === 'EU_B2C' && String(i.paid_at).startsWith(String(year)) && i.status !== 'external')
+    .reduce((sum, i) => sum + (i.amount_cents as number), 0);
 
   if (new URL(req.url).searchParams.get('format') === 'csv') return csv(invoices);
 
@@ -47,7 +60,8 @@ export async function GET(req: Request) {
       year,
       today: romeToday(),
       suggestedNumber: suggestInvoiceNumber(settings, year, maxRow?.invoice_number ?? null),
-      settingsProblems: settingsProblems(settings),
+      settingsProblems: globalProblems,
+      euB2cThisYearCents: euB2cCents,
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );
@@ -58,10 +72,12 @@ function stripNulls(o: Record<string, string | null> | undefined) {
 }
 
 const CSV_COLUMNS = [
-  'status', 'invoice_year', 'invoice_number', 'invoice_date', 'paid_at', 'amount_cents', 'currency', 'plan', 'billing_interval',
-  'period_start', 'period_end', 'customer_name', 'business_name', 'customer_email', 'customer_country', 'customer_region',
-  'is_business', 'vat_id', 'codice_fiscale', 'partita_iva', 'codice_destinatario', 'pec', 'tax_nature', 'stamp_duty_amount',
-  'stripe_invoice_id', 'stripe_payment_intent_id', 'stripe_customer_id', 'stripe_subscription_id',
+  'status', 'source', 'invoice_year', 'invoice_number', 'invoice_date', 'paid_at', 'currency',
+  'taxable_amount_cents', 'vat_amount_cents', 'stamp_duty_cents', 'invoice_total_cents', 'amount_cents',
+  'plan', 'billing_interval', 'product_description', 'period_start', 'period_end',
+  'customer_name', 'business_name', 'customer_email', 'customer_country', 'customer_category',
+  'vat_id', 'foreign_tax_id', 'codice_fiscale', 'partita_iva', 'codice_destinatario', 'pec', 'tax_nature', 'note',
+  'stripe_invoice_id', 'stripe_checkout_session_id', 'stripe_payment_intent_id', 'stripe_customer_id', 'stripe_subscription_id',
 ] as const;
 
 function csv(rows: Array<Record<string, unknown>>) {

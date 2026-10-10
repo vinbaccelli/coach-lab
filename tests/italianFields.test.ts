@@ -26,3 +26,11 @@ test('parse: per-field errors', () => {
   assert.equal(r.ok, false);
   if (!r.ok) assert.deepEqual(Object.keys(r.errors).sort(), ['codice_destinatario', 'codice_fiscale', 'partita_iva', 'pec']);
 });
+
+test('foreign tax ID (T3): letters and digits kept, 2–28 characters, empty → null', async () => {
+  const { parseForeignTaxId } = await import('@/lib/billing/invoicing/italianFields');
+  assert.deepEqual(parseForeignTaxId(' 123-45.6789 '), { ok: true, value: '123456789' });
+  assert.deepEqual(parseForeignTaxId(''), { ok: true, value: null });
+  assert.equal(parseForeignTaxId('A').ok, false);
+  assert.equal(parseForeignTaxId('X'.repeat(29)).ok, false);
+});
