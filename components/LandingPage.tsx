@@ -21,8 +21,10 @@
  *  - No competitor prices or competitor feature claims. The comparison table
  *    was removed at launch pricing (2026-10-03): only two of its cells had a
  *    recorded source. It may return only with a cited source per cell.
- *  - Prices come from lib/plans.ts and render through formatPrice (EUR); the
- *    tax line is PRICE_TAX_NOTE. Never hardcode a price or a currency sign.
+ *  - Prices are the live Stripe amounts passed in as `prices` (app/page.tsx
+ *    reads them via lib/billing/livePrices.ts) and render through
+ *    formatMaybePrice (EUR); the tax line is PRICE_TAX_NOTE. Never hardcode a
+ *    price, a saving percentage or a currency sign.
  *  - The example player's dates and readings are illustrative and are labelled
  *    as such on the page, not passed off as a real customer.
  */
@@ -32,8 +34,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { Check, ChevronDown, ArrowRight, ArrowUpRight } from 'lucide-react';
 import {
-  PLANS, DEMO, EBOOK_TITLE, PRICE_TAX_NOTE, formatPrice, planPrice, yearlyPerMonth,
-  yearlySavingsLabel, maxYearlySavingsPct,
+  PLANS, DEMO, EBOOK_TITLE, PRICE_TAX_NOTE, formatMaybePrice, planPrice, yearlyPerMonth,
+  yearlySavingsLabel, maxYearlySavingsPct, yearlySavingsSentence, type PlanPrices,
 } from '@/lib/plans';
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -304,15 +306,17 @@ const FOUNDER_REVIEWS: Review[] = [
  */
 const TRUSTPILOT_URL = 'https://www.trustpilot.com/review/anglemotion.com';
 
-const FAQS = [
-  { q: 'What is AngleMotion?', a: 'A browser-based tennis video-analysis platform: AI skeleton + angle detection you can edit by hand, Motion Layer composites, slow-motion phase replays, a recording hub, and per-player Google Docs coaching reports — all in one place.' },
-  { q: 'Does the AI replace my judgment?', a: 'No. Every skeleton point and angle the AI detects is editable — drag it, correct it, trust it. AI does the fast 90%; you own the 10% that matters.' },
-  { q: 'Where do my videos live?', a: 'On Pro and Academy, a recording you publish goes to your own YouTube channel as an unlisted video, and its link is saved to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply. The footage you analyse is processed in your browser; a Motion Layer clip you save to a player’s session is stored by AngleMotion with that session.' },
-  { q: 'What do I need to run it?', a: 'Just a browser — nothing to install. A laptop or desktop with graphics acceleration on gives the smoothest AI skeleton.' },
-  { q: 'Is this only for coaches?', a: 'No. Plenty of players and parents run their own analysis and build their own record over time. The Academy exists so you can learn what to film and what to look for.' },
-  { q: 'How does yearly billing and the ebook work?', a: `Yearly costs less than twelve monthly payments: 16.7% less on Light (two months free) and 28.6% less on Pro and Academy. Pro and Academy billed yearly include the ${EBOOK_TITLE} ebook, downloaded from your account page. ${PRICE_TAX_NOTE}` },
-  { q: 'Can I use my SwingVision data?', a: 'Yes — the Match Decoder reads SwingVision screenshots and folds match stats into the player’s file.' },
-];
+function buildFaqs(prices: PlanPrices) {
+  return [
+    { q: 'What is AngleMotion?', a: 'A browser-based tennis video-analysis platform: AI skeleton + angle detection you can edit by hand, Motion Layer composites, slow-motion phase replays, a recording hub, and per-player Google Docs coaching reports — all in one place.' },
+    { q: 'Does the AI replace my judgment?', a: 'No. Every skeleton point and angle the AI detects is editable — drag it, correct it, trust it. AI does the fast 90%; you own the 10% that matters.' },
+    { q: 'Where do my videos live?', a: 'On Pro and Academy, a recording you publish goes to your own YouTube channel as an unlisted video, and its link is saved to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply. The footage you analyse is processed in your browser; a Motion Layer clip you save to a player’s session is stored by AngleMotion with that session.' },
+    { q: 'What do I need to run it?', a: 'Just a browser — nothing to install. A laptop or desktop with graphics acceleration on gives the smoothest AI skeleton.' },
+    { q: 'Is this only for coaches?', a: 'No. Plenty of players and parents run their own analysis and build their own record over time. The Academy exists so you can learn what to film and what to look for.' },
+    { q: 'How does yearly billing and the ebook work?', a: `${yearlySavingsSentence(prices) ?? ''} Pro and Academy billed yearly include the ${EBOOK_TITLE} ebook, downloaded from your account page. ${PRICE_TAX_NOTE}`.trim() },
+    { q: 'Can I use my SwingVision data?', a: 'Yes — the Match Decoder reads SwingVision screenshots and folds match stats into the player’s file.' },
+  ];
+}
 
 /* ────────────────────────────────────────────────────────────────────────────
    Page
@@ -348,7 +352,9 @@ function MotionLayerClip() {
   );
 }
 
-export default function LandingPage() {
+export default function LandingPage({ prices }: { prices: PlanPrices }) {
+  const FAQS = buildFaqs(prices);
+  const maxSaving = maxYearlySavingsPct(prices);
   const [annual, setAnnual] = useState(true);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -595,7 +601,7 @@ export default function LandingPage() {
         <h2 className="am-h2">Pricing that fits how you coach.</h2>
         <div className="am-toggle" role="group" aria-label="Billing period">
           <button type="button" onClick={() => setAnnual(false)} className={`am-toggle-b ${!annual ? 'is-on' : ''}`} aria-pressed={!annual}>Monthly</button>
-          <button type="button" onClick={() => setAnnual(true)} className={`am-toggle-b ${annual ? 'is-on' : ''}`} aria-pressed={annual}>Yearly · save up to {maxYearlySavingsPct()}%</button>
+          <button type="button" onClick={() => setAnnual(true)} className={`am-toggle-b ${annual ? 'is-on' : ''}`} aria-pressed={annual}>Yearly{maxSaving !== null ? ` · save up to ${maxSaving}%` : ''}</button>
         </div>
 
         <div className="am-plans">
@@ -604,11 +610,13 @@ export default function LandingPage() {
               <h3 className="am-plan-name">{plan.name}</h3>
               <p className="am-plan-tag">{plan.tagline}</p>
               <p className="am-plan-price am-tabular">
-                {formatPrice(annual ? yearlyPerMonth(plan) : planPrice(plan, 'monthly'))}
+                {formatMaybePrice(annual ? yearlyPerMonth(prices, plan.id) : planPrice(prices, plan.id, 'monthly'))}
                 <span className="am-plan-per">/mo</span>
               </p>
               <p className="am-plan-billed am-tabular">
-                {annual ? `${formatPrice(planPrice(plan, 'yearly'))} billed yearly · ${yearlySavingsLabel(plan)}` : 'billed monthly'}
+                {annual
+                  ? [`${formatMaybePrice(planPrice(prices, plan.id, 'yearly'))} billed yearly`, yearlySavingsLabel(prices, plan.id)].filter(Boolean).join(' · ')
+                  : 'billed monthly'}
                 {plan.seats > 1 ? ` · up to ${plan.seats} coaches` : ''}
               </p>
               <ul className="am-plan-features">

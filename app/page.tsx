@@ -2,6 +2,7 @@ import WorkspaceChrome from '@/components/WorkspaceChrome';
 import ControlPanelHome from '@/components/ControlPanelHome';
 import LandingPage from '@/components/LandingPage';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { getLivePrices } from '@/lib/billing/livePrices';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,7 +21,8 @@ export default async function HomePage() {
     signedIn = false;
   }
 
-  if (!signedIn) return <LandingPage />;
+  // Prices only for the logged-out landing (cached; lib/billing/livePrices.ts).
+  if (!signedIn) return <LandingPage prices={await getLivePrices()} />;
 
   return (
     <WorkspaceChrome>

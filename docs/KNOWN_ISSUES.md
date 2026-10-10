@@ -1012,3 +1012,59 @@ no session. A failure before Google confirms any bytes now shows "YouTube upload
 could not start. Try again, or download the file instead."
 
 **Severity:** high — no browser upload to YouTube could succeed.
+
+---
+
+## 025 — Customer portal could open by email match, not by the linked Stripe Customer — RESOLVED
+
+**Found:** 2026-10-07, while mapping the Stripe integration for the invoicing work.
+
+**Symptom.** None reported. `docs/STRIPE_LAUNCH_SETUP.md` §6 said the portal
+always opens "with the coach's stored Customer", and that was not what the code
+did.
+
+**Verified root cause.** `app/api/stripe/portal/route.ts` fell back to
+`stripe.customers.list({ email })` when the coach's `subscriptions` row had no
+`stripe_customer_id`. It opened the portal for the first Stripe Customer with
+that email. That customer could be an old one-off buyer (ebook, analyses), or
+an empty email if the session had none. An email match is not proof of
+ownership.
+
+**Fault assessment.** Pre-existing (before R0). Low exposure: sign-in is Google
+with a verified email, so in practice the match was the same person. But it
+contradicted the documented contract and could surface unrelated purchase
+history.
+
+**Fix.** The portal opens only for the Customer the webhook linked to the
+account. No row means 404 ("subscribe first"). Read errors answer 503, and
+Stripe errors are caught.
+
+**Severity:** low.
+
+---
+
+## 026 — Two live webhook endpoints for one app, so one always failed its signature check — RESOLVED (dashboard)
+
+**Found:** 2026-10-07, during the live Stripe setup.
+
+**Symptom.** Live mode had two endpoints:
+- `https://anglemotion.com/api/stripe/webhook`, created 2026-06-25;
+- `https://www.anglemotion.com/api/stripe/webhook`, created 2026-07-04.
+
+Each had the same three events.
+
+**Verified root cause.** Each endpoint has its own signing secret. Vercel holds
+one `STRIPE_WEBHOOK_SECRET`, so every delivery to the other endpoint failed
+signature verification (400). The site is served at `www.anglemotion.com`
+(`app/privacy/page.tsx:12`).
+
+**Fault assessment.** Configuration only. No subscriptions existed, so nothing
+was lost.
+
+**Fix.** One new live endpoint on `www.anglemotion.com` with the launch events.
+Its secret is the one in Vercel. Both old endpoints are **disabled**: the Stripe
+connector can't delete endpoints, so delete them in the dashboard whenever
+convenient.
+
+**Severity:** medium while subscriptions exist (half the deliveries lost and
+retried); none now.

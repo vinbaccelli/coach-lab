@@ -8,10 +8,11 @@ import { checkoutTaxParams } from '@/lib/billing/taxConfig';
 /**
  * Start a Stripe Checkout for one plan and cycle. FAILS CLOSED:
  *  - the plan's own env var must be set — there is no fallback price;
- *  - the Stripe price it points at must be the one the site displays (same
- *    currency, same amount, same interval, active). A mismatch refuses the
- *    checkout rather than charging something other than what was advertised
- *    (docs/KNOWN_ISSUES.md 007 is how that happened before).
+ *  - the Stripe price it points at must be sellable: active, in
+ *    PRICE_CURRENCY, recurring every 1 month/year as the cycle says
+ *    (lib/billing/checkoutGuard.ts). The site displays this same price's
+ *    amount (lib/billing/livePrices.ts), so what is shown is what is charged
+ *    (docs/KNOWN_ISSUES.md 007 is how a mismatch happened before).
  * Promotion codes are accepted on Pro yearly only — the Coach Life coupon is
  * restricted to that price in Stripe as well.
  */
@@ -44,7 +45,7 @@ export async function POST(req: Request) {
 
   try {
     const price = await stripe.prices.retrieve(priceId);
-    const mismatch = priceMismatch(plan, cycle, price);
+    const mismatch = priceMismatch(cycle, price);
     if (mismatch) return unavailable(mismatch);
 
     // One Stripe Customer per coach: reuse the ID the webhook stored on the

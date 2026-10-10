@@ -1,5 +1,6 @@
 import type Stripe from 'stripe';
 import { getPlan, isValidPlanId, type PlanId } from '@/lib/plans';
+import { fiscalDraftFromCheckout, fiscalDraftFromInvoice, isFiscalSale, isOneOffSale, type FiscalInvoiceDraft } from '@/lib/billing/invoicing/draft';
 
 /**
  * Stripe → `subscriptions` sync, independent of Next and Supabase so it can be
@@ -15,16 +16,27 @@ import { getPlan, isValidPlanId, type PlanId } from '@/lib/plans';
  *    never the event payload — events arrive out of order. Stripe stays the
  *    source of truth; the row is a cache of it.
  *  - Plan from the subscription's price, metadata as fallback, never a default.
+ *  - Every paid SALE also records a fiscal_invoices row (the data the Italian
+ *    fattura is issued from — docs/INVOICING.md): a subscription payment on
+ *    invoice.paid, a one-off sale (payment links: coaching, ebook…) on
+ *    checkout.session.completed / async_payment_succeeded once it is paid.
+ *    The subscription path also copies the billing country to
+ *    billing_profiles. All writes are idempotent (keyed by Stripe invoice /
+ *    Checkout Session id, user id), so a retry is safe.
  */
 
 export type SubscriptionRow = {
   user_id: string;
   stripe_customer_id: string | null;
   stripe_subscription_id: string;
+  stripe_price_id: string | null;
+  /** Only on checkout.session.completed: the Checkout that created it. */
+  stripe_checkout_session_id?: string;
   status: string;
   tier?: PlanId;
   seats?: number;
   billing_interval: 'month' | 'year' | null;
+  current_period_start: string | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
   canceled_at: string | null;
@@ -35,23 +47,32 @@ export class RetryableError extends Error {}
 
 export interface SyncDeps {
   retrieveSubscription(id: string): Promise<Stripe.Subscription>;
+  retrieveCustomer(id: string): Promise<Stripe.Customer | Stripe.DeletedCustomer>;
+  /** Names of what a one-off Checkout sold (its line items). */
+  listCheckoutLineItems(sessionId: string): Promise<string[]>;
   tierForPriceId(priceId: string | null | undefined): PlanId | null;
   hasProcessedEvent(eventId: string): Promise<boolean>;
   recordEvent(eventId: string, type: string): Promise<void>;
   upsertSubscription(row: SubscriptionRow): Promise<void>;
   /** Patch rows by subscription id (legacy rows with no userId metadata). Returns rows matched. */
   updateBySubscriptionId(subscriptionId: string, patch: Partial<SubscriptionRow>): Promise<number>;
+  /** Insert unless a row for this Stripe invoice exists (never overwrites an issued one). */
+  recordFiscalInvoice(draft: FiscalInvoiceDraft): Promise<void>;
+  /** Store the coach's billing country (drives the Italian invoice-details form). */
+  upsertBillingCountry(userId: string, country: string): Promise<void>;
   now(): Date;
   log(...args: unknown[]): void;
 }
 
 export const HANDLED_EVENTS = [
   'checkout.session.completed',
+  'checkout.session.async_payment_succeeded',
   'customer.subscription.created',
   'customer.subscription.updated',
   'customer.subscription.deleted',
   'invoice.paid',
   'invoice.payment_failed',
+  'invoice.payment_action_required',
 ] as const;
 
 function idOf(v: unknown): string | null {
@@ -77,9 +98,11 @@ export function subscriptionFields(sub: Stripe.Subscription, deps: SyncDeps): Om
   const fields: Omit<SubscriptionRow, 'user_id'> = {
     stripe_customer_id: idOf(sub.customer),
     stripe_subscription_id: sub.id,
+    stripe_price_id: item?.price?.id ?? null,
     status: sub.status,
     billing_interval: interval === 'month' || interval === 'year' ? interval : null,
     // Since API 2025-03-31 the billing period lives on the subscription item.
+    current_period_start: iso((item as { current_period_start?: number } | undefined)?.current_period_start),
     current_period_end: iso((item as { current_period_end?: number } | undefined)?.current_period_end),
     cancel_at_period_end: !!sub.cancel_at_period_end,
     canceled_at: iso(sub.canceled_at),
@@ -98,13 +121,18 @@ export function subscriptionFields(sub: Stripe.Subscription, deps: SyncDeps): Om
   return fields;
 }
 
-async function syncSubscription(subId: string, userIdHint: string | null, deps: SyncDeps) {
+async function syncSubscription(
+  subId: string,
+  userIdHint: string | null,
+  deps: SyncDeps,
+  extra: Partial<SubscriptionRow> = {},
+): Promise<{ sub: Stripe.Subscription; userId: string | null; fields: Omit<SubscriptionRow, 'user_id'> }> {
   const sub = await deps.retrieveSubscription(subId);
   const userId = userIdHint ?? sub.metadata?.userId ?? null;
-  const fields = subscriptionFields(sub, deps);
+  const fields = { ...subscriptionFields(sub, deps), ...extra };
   if (userId) {
     await deps.upsertSubscription({ user_id: userId, ...fields });
-    return;
+    return { sub, userId, fields };
   }
   const matched = await deps.updateBySubscriptionId(sub.id, fields);
   if (matched === 0) {
@@ -112,6 +140,27 @@ async function syncSubscription(subId: string, userIdHint: string | null, deps: 
     // that, so it is acknowledged — loudly.
     deps.log('[stripe/webhook] subscription with no user and no stored row:', sub.id);
   }
+  return { sub, userId, fields };
+}
+
+/** invoice.paid with money taken: the fiscal record + the billing country. */
+async function recordPaidInvoice(
+  invoice: Stripe.Invoice,
+  synced: { userId: string | null; fields: Omit<SubscriptionRow, 'user_id'> } | null,
+  deps: SyncDeps,
+) {
+  if (!isFiscalSale(invoice)) return;
+  const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id ?? null;
+  const fetched = customerId ? await deps.retrieveCustomer(customerId) : null;
+  const customer = fetched && !('deleted' in fetched && fetched.deleted) ? (fetched as Stripe.Customer) : null;
+  const draft = fiscalDraftFromInvoice(invoice, customer, {
+    userId: synced?.userId ?? null,
+    plan: synced?.fields.tier ?? null,
+    interval: synced?.fields.billing_interval ?? null,
+    now: deps.now(),
+  });
+  await deps.recordFiscalInvoice(draft);
+  if (draft.user_id && draft.customer_country) await deps.upsertBillingCountry(draft.user_id, draft.customer_country);
 }
 
 /**
@@ -123,16 +172,28 @@ export async function processStripeEvent(event: Stripe.Event, deps: SyncDeps): P
   if (await deps.hasProcessedEvent(event.id)) return 'duplicate';
 
   switch (event.type) {
-    case 'checkout.session.completed': {
+    case 'checkout.session.completed':
+    case 'checkout.session.async_payment_succeeded': {
       const session = event.data.object as Stripe.Checkout.Session;
+      if (session.mode === 'payment') {
+        // One-off sale (D10). An async method (SEPA, bank transfer) completes
+        // the session unpaid and is recorded on async_payment_succeeded.
+        if (isOneOffSale(session)) {
+          const names = await deps.listCheckoutLineItems(session.id);
+          await deps.recordFiscalInvoice(fiscalDraftFromCheckout(session, names, {
+            now: deps.now(), paidAt: event.created ? new Date(event.created * 1000) : undefined,
+          }));
+        }
+        break;
+      }
       const subId = idOf(session.subscription);
-      if (session.mode !== 'subscription' || !subId) break;
+      if (event.type !== 'checkout.session.completed' || session.mode !== 'subscription' || !subId) break;
       const userId = session.client_reference_id ?? session.metadata?.userId ?? null;
       if (!userId) {
         deps.log('[stripe/webhook] checkout session without a user:', session.id);
         break;
       }
-      await syncSubscription(subId, userId, deps);
+      await syncSubscription(subId, userId, deps, { stripe_checkout_session_id: session.id });
       break;
     }
     case 'customer.subscription.created':
@@ -143,13 +204,17 @@ export async function processStripeEvent(event: Stripe.Event, deps: SyncDeps): P
       break;
     }
     case 'invoice.paid':
-    case 'invoice.payment_failed': {
-      // A renewal paid or failed: re-read the subscription so status and the
-      // period end move with it (paid → active and a new period_end; failed →
-      // past_due once Stripe updates the subscription).
+    case 'invoice.payment_failed':
+    case 'invoice.payment_action_required': {
+      // A renewal paid, failed, or needs the customer to confirm (3-D Secure):
+      // re-read the subscription so status and the period move with it (paid →
+      // active and a new period; failed / action required → past_due or
+      // incomplete once Stripe updates the subscription — the /billing banner
+      // then sends the coach to the portal to fix it).
       const invoice = event.data.object as Stripe.Invoice;
       const subId = idOf(invoice.parent?.subscription_details?.subscription);
-      if (subId) await syncSubscription(subId, null, deps);
+      const synced = subId ? await syncSubscription(subId, null, deps) : null;
+      if (event.type === 'invoice.paid') await recordPaidInvoice(invoice, synced, deps);
       break;
     }
   }

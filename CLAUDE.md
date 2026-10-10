@@ -4,10 +4,13 @@
 - Next.js app (App Router) in this directory. The analysis surface is two ~7k-line
   files: `app/analysis/page.tsx` and `components/Canvas.tsx`. Treat both as hot,
   high-risk files — change surgically.
-- **No automated test runner is configured** (scripts: `dev`, `build`, `start`,
-  `lint`). Until one exists, "tests" in the protocols below are **dormant**, and
-  the verification step means: `npx tsc --noEmit -p tsconfig.json` (0 errors) +
-  the dev server recompiles the route clean + **runtime check** at
+- **Test runner: `npm test`** (node:test + tsx, `tests/*.test.ts`, run with
+  `--conditions=react-server`). It covers pure logic (plans, entitlements,
+  billing/webhook sync, invoicing); there are no UI/browser tests. The test
+  protocols below (§4 step 4, §5) are **active** for that logic. The
+  verification step means: `npx tsc --noEmit -p tsconfig.json` (0 errors) +
+  `npm test` (0 failures) + the dev server recompiles the route clean +
+  **runtime check** at
   http://localhost:3000. With no Supabase env vars set (`NEXT_PUBLIC_SUPABASE_URL`
   / `NEXT_PUBLIC_SUPABASE_ANON_KEY`), `middleware.ts` fails open, so `/analysis`
   IS reachable on a local dev server and the assistant can verify runtime
