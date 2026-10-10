@@ -43,9 +43,16 @@ export function customerCategory(region: CustomerRegion, hasBusinessTaxId: boole
   return `${region}_${hasBusinessTaxId ? 'B2B' : 'B2C'}` as CustomerCategory;
 }
 
+export type DraftProductType = 'software_subscription' | 'coaching_service' | 'digital_product' | 'other';
+
 export interface FiscalInvoiceDraft {
   user_id: string | null;
   source: 'subscription' | 'one_off';
+  /** false = a Stripe TEST-mode payment: previewable, never issued. */
+  livemode: boolean;
+  /** Subscriptions: always the software. One-off: from the remembered Stripe-product mapping, else null (Vin picks). */
+  product_type: DraftProductType | null;
+  stripe_product_ids: string[] | null;
   stripe_invoice_id: string | null;
   stripe_invoice_number: string | null;
   stripe_checkout_session_id: string | null;
@@ -125,9 +132,13 @@ export function fiscalDraftFromInvoice(
 ): FiscalInvoiceDraft {
   const line = invoice.lines?.data?.[0];
   const payment = invoice.payments?.data?.[0] as { payment?: { payment_intent?: unknown } } | undefined;
+  const product = (line as { pricing?: { price_details?: { product?: unknown } } } | undefined)?.pricing?.price_details?.product;
   return {
     user_id: ctx.userId,
     source: 'subscription',
+    livemode: invoice.livemode !== false,
+    product_type: 'software_subscription',
+    stripe_product_ids: idOf(product) ? [idOf(product)!] : null,
     stripe_invoice_id: invoice.id!,
     stripe_invoice_number: invoice.number ?? null,
     stripe_checkout_session_id: null,
@@ -154,17 +165,40 @@ export function isOneOffSale(session: Pick<Stripe.Checkout.Session, 'mode' | 'pa
   return session.mode === 'payment' && session.payment_status === 'paid' && (session.amount_total ?? 0) > 0;
 }
 
+export interface CheckoutItems {
+  /** What was bought, e.g. ["Spin Mechanics ebook"]. */
+  names: string[];
+  /** The Stripe products behind the line items. */
+  productIds: string[];
+}
+
+/**
+ * The product type of a one-off sale from Vin's remembered mapping
+ * (invoice_product_types): known only when EVERY product in it is mapped and
+ * they all agree. Otherwise null — never guessed; Vin picks it on
+ * /admin/invoices (and that choice is remembered for the product).
+ */
+export function productTypeFor(productIds: string[], mapping: Map<string, DraftProductType>): DraftProductType | null {
+  if (!productIds.length) return null;
+  const types = new Set(productIds.map((id) => mapping.get(id) ?? null));
+  if (types.size !== 1 || types.has(null)) return null;
+  return [...types][0];
+}
+
 export function fiscalDraftFromCheckout(
   session: Stripe.Checkout.Session,
-  /** Names of what was bought, e.g. ["Spin Mechanics ebook"]. */
-  lineItemNames: string[],
-  ctx: { now: Date; paidAt?: Date },
+  items: CheckoutItems,
+  ctx: { now: Date; paidAt?: Date; productType?: DraftProductType | null },
 ): FiscalInvoiceDraft {
   const d = session.customer_details;
-  const names = lineItemNames.map((n) => n.trim()).filter(Boolean);
+  const names = items.names.map((n) => n.trim()).filter(Boolean);
+  const productIds = [...new Set(items.productIds.filter(Boolean))];
   return {
     user_id: session.client_reference_id ?? session.metadata?.userId ?? null,
     source: 'one_off',
+    livemode: session.livemode !== false,
+    product_type: ctx.productType ?? null,
+    stripe_product_ids: productIds.length ? productIds : null,
     stripe_invoice_id: idOf(session.invoice),
     stripe_invoice_number: null,
     stripe_checkout_session_id: session.id,

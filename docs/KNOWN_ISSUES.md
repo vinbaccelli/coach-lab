@@ -1068,3 +1068,53 @@ convenient.
 
 **Severity:** medium while subscriptions exist (half the deliveries lost and
 retried); none now.
+
+---
+
+## 027 — Subscription sales were recorded without their PaymentIntent, so a refund could not be matched — RESOLVED
+
+**Found:** 2026-10-10, while adding refund tracking to invoicing.
+
+**Symptom.** None yet (no live subscription sale so far). A subscription
+record's `stripe_payment_intent_id` would have been empty.
+
+**Verified root cause.** `fiscalDraftFromInvoice` (`lib/billing/invoicing/draft.ts`)
+reads the PaymentIntent from `invoice.payments`, which Stripe does not include
+in the `invoice.paid` webhook payload (it is an includable field). The value
+was always null on the webhook path.
+
+**Fault assessment.** Introduced with the invoicing work (P1); caught before
+any live subscription sale.
+
+**Fix.** When the payload lacks it, the webhook looks it up with
+`stripe.invoicePayments.list({ invoice })` (`lib/billing/webhookSync.ts`,
+`paymentIntentForInvoice`); the historical import does the same.
+`charge.refunded` then matches the sale by PaymentIntent.
+
+**Class of mistake.** Reading an expandable/includable field from a webhook
+payload as if it were always present.
+
+**Severity:** low (refunds of subscriptions are rare; nothing was lost).
+
+---
+
+## 028 — The forfettario wording contains a character SdI rejects (’ U+2019) — OPEN (needs Vin's decision)
+
+**Found:** 2026-10-10, validating generated XML against the FatturaPA 1.2.1 XSD.
+
+**Symptom.** An invoice whose Causale holds the wording exactly as on Vin's
+existing invoices fails XSD validation: `Element 'Causale': [facet 'pattern']
+… is not accepted by the pattern '[\p{IsBasicLatin}\p{IsLatin-1Supplement}]{1,200}'`.
+
+**Verified root cause.** The text uses the typographic apostrophe ’
+("dell’articolo", "d’acconto"), outside Latin-1. SdI accepts only Basic Latin
+and Latin-1 Supplement.
+
+**Fault assessment.** Not a code defect: the wording is preserved exactly, as
+required. The app flags it in Invoice settings and blocks issuing; it never
+rewrites it.
+
+**Proposed fix.** Vin presses "Replace ’ with '" (and Save) in Invoice settings,
+or edits the text directly.
+
+**Severity:** blocking for issuing until decided; no data risk.

@@ -120,7 +120,7 @@ Result: Pro yearly €299 − €150 = **€149/year**, renewing at €149.
 ## 3. Tax (read once)
 
 **Launch position.** Vin sells as an Italian sole proprietor in the regime
-forfettario, on his existing Italian VAT number (confirmed by his accountant).
+forfettario, on Vin's existing Italian VAT number (confirmed by the accountant).
 No VAT is charged: a €299 plan charges €299 and the receipt shows €0 tax.
 
 What that means in Stripe:
@@ -163,7 +163,7 @@ Project → **Settings → Environment Variables**, for **Production** and
 ## 5. Webhook
 
 Developers → **Webhooks** → your endpoint (`https://<domain>/api/stripe/webhook`).
-Select exactly these eight events:
+Select exactly these nine events:
 
 | Event | What the app does |
 |---|---|
@@ -176,9 +176,16 @@ Select exactly these eight events:
 | `invoice.paid` (also) | Money taken: records the fiscal-invoice row (`docs/INVOICING.md`) and the customer's billing country |
 | `invoice.payment_failed` | Renewal failed: re-syncs, so the coach sees "Payment failed — update your card" |
 | `invoice.payment_action_required` | The bank asks the customer to confirm (3-D Secure): re-syncs; /billing sends them to the portal |
+| `charge.refunded` | Records the refunded amount on the sale, which blocks issuing its invoice until you decide (`docs/INVOICING.md`) |
 
 Each event is processed once; Stripe's repeats are ignored. A failed run
-answers 500 so Stripe retries it.
+answers 500 so Stripe retries it, and is listed on /admin/invoices until a retry
+succeeds. An event whose mode (test/live) doesn't match the deployment's
+`STRIPE_SECRET_KEY` is refused the same way, with that reason.
+
+The live signing secret is **not verified yet**. It is verified once Stripe →
+Webhooks shows a 200 for a real live event on this endpoint (see "Live check
+without a fiscal invoice" in `docs/INVOICING.md`).
 
 ## 6. Customer portal
 
@@ -241,7 +248,8 @@ Card `4242 4242 4242 4242`, any future date, any CVC.
 - [ ] Checkout asks for full name, email, billing address and country. "Business" and VAT/tax ID are optional. After paying, the Stripe **Customer** shows the name and address. A second checkout by the same coach reuses **the same Customer**.
 - [ ] Temporarily blank one `STRIPE_PRICE_*` var: that button says "can't be purchased right now" and the others still work.
 - [ ] Point one var at a USD (or archived) price: refused the same way. Point it at another EUR price and redeploy: /pricing and the landing page show the new amount, and Checkout charges it.
-- [ ] Pay with an Italian billing address: /billing shows **Invoice details (Italy)**; a wrong Codice Fiscale is refused; /admin/invoices lists the payment as To issue with number 65 proposed; once Invoice settings are filled in, Issue → the XML downloads. A payment-link sale appears as One-off.
+- [ ] Pay with an Italian billing address: /billing shows **Invoice details (Italy)**; a wrong Codice Fiscale is refused; /admin/invoices lists the payment under **Test-mode payments** (TEST badge). **Preview** shows the XML and the checklist; **Issue is impossible** for a test payment. A payment-link sale appears as One-off and asks for its product type.
+- [ ] Refund a test payment in Stripe: the record shows REFUNDED (needs `charge.refunded` on the test endpoint).
 - [ ] Pro yearly shows "Add promotion code". A Coach Life code makes it €149. The same code fails a second time. Pro monthly has no code field.
 - [ ] After paying, `subscriptions` has your row with `status=active`, the right `tier`, `billing_interval`, `current_period_end`, and `cancel_at_period_end=false`.
 - [ ] Stripe → Webhooks: the six events show **200**. Click **Resend** on one: still 200, and nothing changes (it's a duplicate).
