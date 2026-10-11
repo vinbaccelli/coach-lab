@@ -1,4 +1,5 @@
 import LoginClient from './LoginClient';
+import { safeRedirectPath } from '@/lib/billing/checkoutIntent';
 
 // Always render at request time — this page reads the `redirect` query param
 // and must never be served from a static prerender.
@@ -11,7 +12,7 @@ export default async function LoginPage({
   searchParams?: Promise<{ redirect?: string }>;
 }) {
   const sp = (await searchParams) ?? {};
-  const redirect = sp.redirect || '/';
+  const redirect = safeRedirectPath(sp.redirect);
   return <LoginClient redirect={redirect} />;
 }
 
