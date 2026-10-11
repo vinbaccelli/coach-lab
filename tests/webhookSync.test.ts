@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type Stripe from 'stripe';
 import { processStripeEvent, RetryableError, type SyncDeps, type SubscriptionRow } from '@/lib/billing/webhookSync';
-import type { FiscalInvoiceDraft } from '@/lib/billing/invoicing/draft';
+import type { DraftProductType, FiscalInvoiceDraft } from '@/lib/billing/invoicing/draft';
 
 const NOW = new Date('2026-10-05T12:00:00Z');
 const PERIOD_START = Math.floor(Date.parse('2026-10-05T12:00:00Z') / 1000);
@@ -17,14 +17,24 @@ function sub(over: Partial<Stripe.Subscription> & { price?: string; interval?: '
     ...rest,
   } as unknown as Stripe.Subscription;
 }
-const ev = (type: string, object: unknown, id = 'evt_1') => ({ id, type, data: { object } }) as unknown as Stripe.Event;
+const ev = (type: string, object: unknown, id = 'evt_1', extra: Record<string, unknown> = {}) => ({ id, type, data: { object }, ...extra }) as unknown as Stripe.Event;
 
-function harness(opts: { subscription?: Stripe.Subscription; processed?: string[]; failUpsert?: boolean; matched?: number; customer?: Partial<Stripe.Customer> } = {}) {
-  const calls = { fiscal: [] as FiscalInvoiceDraft[], countries: [] as Array<[string, string]>, upserts: [] as SubscriptionRow[], updates: [] as Array<[string, Partial<SubscriptionRow>]>, recorded: [] as string[], retrieved: [] as string[], logs: [] as unknown[][] };
+function harness(opts: {
+  subscription?: Stripe.Subscription; processed?: string[]; failUpsert?: boolean; matched?: number; customer?: Partial<Stripe.Customer>;
+  mapping?: Record<string, DraftProductType>; refundMatched?: number;
+} = {}) {
+  const calls = {
+    fiscal: [] as FiscalInvoiceDraft[], countries: [] as Array<[string, string]>, upserts: [] as SubscriptionRow[],
+    updates: [] as Array<[string, Partial<SubscriptionRow>]>, recorded: [] as string[], retrieved: [] as string[], logs: [] as unknown[][],
+    refunds: [] as Array<[string, number, string]>,
+  };
   const processed = new Set(opts.processed ?? []);
   const deps: SyncDeps = {
     async retrieveSubscription(id) { calls.retrieved.push(id); return opts.subscription ?? sub(); },
-    async listCheckoutLineItems() { return ['Spin Mechanics ebook']; },
+    async listCheckoutLineItems() { return { names: ['Spin Mechanics ebook'], productIds: ['prod_ebook'] }; },
+    async productTypes(ids) { return new Map(ids.filter((id) => opts.mapping?.[id]).map((id) => [id, opts.mapping![id]])); },
+    async paymentIntentForInvoice() { return 'pi_sub'; },
+    async markRefunded(pi, cents, at) { calls.refunds.push([pi, cents, at]); return opts.refundMatched ?? 1; },
     async retrieveCustomer(id) { return { id, object: 'customer', name: 'Mario Rossi', email: 'mario@example.it', address: null, ...opts.customer } as Stripe.Customer; },
     async recordFiscalInvoice(d) { calls.fiscal.push(d); },
     async upsertBillingCountry(u, c) { calls.countries.push([u, c]); },
@@ -117,7 +127,7 @@ test('Academy plan carries 4 seats; legacy row without userId is updated by subs
 
 test('unhandled event types are ignored without touching the event log', async () => {
   const { deps, calls } = harness();
-  assert.equal(await processStripeEvent(ev('charge.refunded', {}), deps), 'ignored');
+  assert.equal(await processStripeEvent(ev('customer.created', {}), deps), 'ignored');
   assert.equal(calls.recorded.length, 0);
 });
 
@@ -226,4 +236,44 @@ test('a non-subscription invoice.paid (payment-link invoice) is not recorded twi
   const { deps, calls } = harness();
   await processStripeEvent(ev('invoice.paid', paidInvoice({ parent: null })), deps);
   assert.equal(calls.fiscal.length, 0);
+});
+
+test('subscription sale: software product type, live/test flag, PaymentIntent looked up for refunds', async () => {
+  const { deps, calls } = harness();
+  await processStripeEvent(ev('invoice.paid', paidInvoice({ livemode: true })), deps);
+  assert.equal(calls.fiscal[0].product_type, 'software_subscription');
+  assert.equal(calls.fiscal[0].livemode, true);
+  assert.equal(calls.fiscal[0].stripe_payment_intent_id, 'pi_sub');
+  const test = harness();
+  await processStripeEvent(ev('invoice.paid', paidInvoice({ livemode: false })), test.deps);
+  assert.equal(test.calls.fiscal[0].livemode, false);
+});
+
+test('one-off product type comes ONLY from the remembered mapping — never guessed', async () => {
+  const unknown = harness();
+  await processStripeEvent(ev('checkout.session.completed', oneOff()), unknown.deps);
+  assert.equal(unknown.calls.fiscal[0].product_type, null);
+  assert.deepEqual(unknown.calls.fiscal[0].stripe_product_ids, ['prod_ebook']);
+  const known = harness({ mapping: { prod_ebook: 'digital_product' } });
+  await processStripeEvent(ev('checkout.session.completed', oneOff({ livemode: false })), known.deps);
+  assert.equal(known.calls.fiscal[0].product_type, 'digital_product');
+  assert.equal(known.calls.fiscal[0].livemode, false);
+});
+
+test('charge.refunded records the refunded total on the sale by PaymentIntent', async () => {
+  const { deps, calls } = harness();
+  const created = Math.floor(Date.parse('2026-10-06T09:00:00Z') / 1000);
+  assert.equal(await processStripeEvent(ev('charge.refunded', { id: 'ch_1', payment_intent: 'pi_1', amount_refunded: 3000 }, 'evt_r', { created }), deps), 'processed');
+  assert.deepEqual(calls.refunds, [['pi_1', 3000, '2026-10-06T09:00:00.000Z']]);
+  assert.deepEqual(calls.recorded, ['evt_r']);
+  const orphan = harness({ refundMatched: 0 });
+  await processStripeEvent(ev('charge.refunded', { id: 'ch_2', payment_intent: 'pi_x', amount_refunded: 100 }), orphan.deps);
+  assert.equal(orphan.calls.logs.length, 1);
+});
+
+test('a retried event after success creates no second record (event-level idempotency)', async () => {
+  const { deps, calls } = harness();
+  await processStripeEvent(ev('checkout.session.completed', oneOff(), 'evt_same'), deps);
+  assert.equal(await processStripeEvent(ev('checkout.session.completed', oneOff(), 'evt_same'), deps), 'duplicate');
+  assert.equal(calls.fiscal.length, 1);
 });

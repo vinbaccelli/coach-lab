@@ -2,22 +2,41 @@ import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
 import { adminInvoicesAccess } from '@/lib/billing/invoicing/adminAccess';
 import { loadInvoiceSettings } from '@/lib/billing/invoicing/settingsStore';
-import { settingsFromRow, settingsPatchFromForm, settingsProblems, DEFAULT_SETTINGS_ROW } from '@/lib/billing/invoicing/settings';
+import {
+  pendingRules, settingsFromRow, settingsPatchFromForm, settingsProblems, unsupportedChars, DEFAULT_SETTINGS_ROW,
+  type InvoiceSettings, type InvoiceSettingsRow,
+} from '@/lib/billing/invoicing/settings';
+
+/** The row as the form edits it: structured rules normalised, plus what is missing / pending. */
+function view(row: Partial<InvoiceSettingsRow> | null, settings: InvoiceSettings) {
+  return {
+    settings: {
+      ...DEFAULT_SETTINGS_ROW,
+      ...(row ?? {}),
+      tax_rules: settings.taxRules,
+      wording_status: settings.wordingStatus,
+      stamp_duty_rules: settings.stampDuty.rules,
+      foreign_private_id_status: settings.foreignPrivateIdStatus,
+    },
+    problems: settingsProblems(settings),
+    pending: pendingRules(settings),
+    wordingUnsupportedChars: unsupportedChars(settings.wording),
+  };
+}
 
 /**
  * Admin: Vin's fiscal data and invoicing rules (D9), the single
- * invoice_settings row. GET returns it (SQL defaults when never saved) and
- * what is still missing; PUT saves the form. Admin-only; service role.
+ * invoice_settings row. GET returns it (SQL defaults when never saved), what
+ * is still missing, and every rule awaiting the commercialista; PUT saves the
+ * form (the wording exactly as typed). Admin-only; service role. Never in
+ * Vercel env vars.
  */
 export async function GET() {
   const access = await adminInvoicesAccess();
   if ('response' in access) return access.response;
   try {
     const { row, settings } = await loadInvoiceSettings(access.db);
-    return NextResponse.json(
-      { settings: { ...DEFAULT_SETTINGS_ROW, ...(row ?? {}) }, problems: settingsProblems(settings) },
-      { headers: { 'Cache-Control': 'no-store' } },
-    );
+    return NextResponse.json(view(row, settings), { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not read settings' }, { status: 500 });
   }
@@ -36,5 +55,5 @@ export async function PUT(req: Request) {
     .select('*')
     .single();
   if (error) return NextResponse.json({ error: `Could not save: ${error.message}` }, { status: 500 });
-  return NextResponse.json({ settings: data, problems: settingsProblems(settingsFromRow(data)) });
+  return NextResponse.json(view(data as Partial<InvoiceSettingsRow>, settingsFromRow(data)));
 }
