@@ -9,13 +9,17 @@ import { CUSTOMER_CATEGORIES, type CustomerCategory } from '@/lib/billing/invoic
  * Every fiscal rule carries a confirmation status. A rule that is 'pending'
  * (awaiting Vin's commercialista) can be PREVIEWED but never ISSUED: the
  * invoice is listed with the reason. Nothing is guessed. Confirmed at the
- * start (Vin, 2026-10-10):
- *  - coaching to Italian private customers: N2.2, 0% (Vin's existing invoices);
+ * start (Vin, 2026-10-10 and 2026-10-11):
+ *  - software subscriptions, coaching / video analysis, ebooks / digital:
+ *    Italian private and Italian business customers N2.2; EU business (VAT
+ *    number) and non-EU business customers N2.1 (art. 7-ter), the EU business
+ *    rule with the reference "Inversione contabile (reverse charge)";
  *  - the forfettario wording, for coaching (the existing invoices);
  *  - stamp duty €2 over €77.47 on N2.2 invoices, absorbed (D7);
  *  - foreign private customers identified as OO99999999999, recipient XXXXXXX.
- * Everything else — Anglemotion software, ebooks, foreign treatments, EU
- * private customers (OSS), stamp duty on N2.1 — starts as 'pending'.
+ * Everything else — EU private customers (OSS), non-EU private customers, the
+ * "other" product type, the wording for non-coaching products, stamp duty on
+ * N2.1 — starts as 'pending'.
  */
 
 export type ProductType = 'software_subscription' | 'coaching_service' | 'digital_product' | 'other';
@@ -32,11 +36,23 @@ export interface TaxRule { nature: string | null; reference?: string | null; sta
 export type TaxRules = Record<ProductType, Record<CustomerCategory, TaxRule>>;
 export type StampRule = 'applies' | 'not_applicable' | 'pending';
 
-const P = (nature: string | null, status: RuleStatus = 'pending'): TaxRule => ({ nature, reference: null, status });
+const P = (nature: string | null, status: RuleStatus = 'pending', reference: string | null = null): TaxRule => ({ nature, reference, status });
+/** EU business with a VAT number: N2.1 (art. 7-ter), reverse charge. */
+export const EU_B2B_REVERSE_CHARGE = 'Inversione contabile (reverse charge)';
+/** The three product types whose domestic and business rules are confirmed (Vin, 2026-10-11). */
+const confirmedProduct = (euB2C: string | null): Record<CustomerCategory, TaxRule> => ({
+  IT_B2C: P('N2.2', 'confirmed'),
+  IT_B2B: P('N2.2', 'confirmed'),
+  EU_B2C: P(euB2C),
+  EU_B2B: P('N2.1', 'confirmed', EU_B2B_REVERSE_CHARGE),
+  NON_EU_B2C: P('N2.1'),
+  NON_EU_B2B: P('N2.1', 'confirmed'),
+});
+/** Mirrors the seed in supabase/migrations/20261011120000_invoicing_v3.sql. */
 export const DEFAULT_TAX_RULES: TaxRules = {
-  software_subscription: { IT_B2C: P('N2.2'), IT_B2B: P('N2.2'), EU_B2C: P(null), EU_B2B: P('N2.1'), NON_EU_B2C: P('N2.1'), NON_EU_B2B: P('N2.1') },
-  coaching_service: { IT_B2C: P('N2.2', 'confirmed'), IT_B2B: P('N2.2'), EU_B2C: P('N2.1'), EU_B2B: P('N2.1'), NON_EU_B2C: P('N2.1'), NON_EU_B2B: P('N2.1') },
-  digital_product: { IT_B2C: P('N2.2'), IT_B2B: P('N2.2'), EU_B2C: P(null), EU_B2B: P('N2.1'), NON_EU_B2C: P('N2.1'), NON_EU_B2B: P('N2.1') },
+  software_subscription: confirmedProduct(null),
+  coaching_service: confirmedProduct('N2.1'),
+  digital_product: confirmedProduct(null),
   other: { IT_B2C: P('N2.2'), IT_B2B: P('N2.2'), EU_B2C: P(null), EU_B2B: P(null), NON_EU_B2C: P(null), NON_EU_B2B: P(null) },
 };
 export const DEFAULT_WORDING_STATUS: Record<ProductType, RuleStatus> = {

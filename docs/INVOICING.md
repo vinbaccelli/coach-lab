@@ -48,16 +48,33 @@ configuration (`DEFAULT_TAX_RULES`, seeded by the v3 migration):
 
 | | IT private | IT business | EU private | EU business | non-EU private | non-EU business |
 |---|---|---|---|---|---|---|
-| Subscriptions (software) | N2.2 pending | N2.2 pending | **none** pending (OSS) | N2.1 pending | N2.1 pending | N2.1 pending |
-| Coaching / video analysis | **N2.2 confirmed** | N2.2 pending | N2.1 pending | N2.1 pending | N2.1 pending | N2.1 pending |
-| Ebooks / digital | N2.2 pending | N2.2 pending | **none** pending (OSS) | N2.1 pending | N2.1 pending | N2.1 pending |
+| Subscriptions (software) | **N2.2 confirmed** | **N2.2 confirmed** | **none** pending (OSS) | **N2.1 confirmed** + reverse charge | N2.1 pending | **N2.1 confirmed** |
+| Coaching / video analysis | **N2.2 confirmed** | **N2.2 confirmed** | N2.1 pending | **N2.1 confirmed** + reverse charge | N2.1 pending | **N2.1 confirmed** |
+| Ebooks / digital | **N2.2 confirmed** | **N2.2 confirmed** | **none** pending (OSS) | **N2.1 confirmed** + reverse charge | N2.1 pending | **N2.1 confirmed** |
 | Other | N2.2 pending | N2.2 pending | none pending | none pending | none pending | none pending |
 
-Rate is always 0% and VAT €0 (forfettario). Only domestic coaching is confirmed,
-because that is what your existing invoices do. N2.2 is not applied to
-everything, and N2.1 is not applied to every foreign sale: each starts pending
-until you confirm it. An optional legal reference (RiferimentoNormativo,
-≤100 characters) can be set per combination.
+Rate is always 0% and VAT €0 (forfettario). Confirmed by you (2026-10-11), for
+software, coaching / video analysis and ebooks / digital only:
+- **Italian private and Italian business: N2.2.**
+- **EU business (VAT number) and non-EU business: N2.1 (art. 7-ter).** The EU
+  business rule carries the legal reference (RiferimentoNormativo)
+  **"Inversione contabile (reverse charge)"**; the non-EU business rule has none.
+
+Still pending: every EU private (OSS) and non-EU private rule, the whole
+"other" product type, and stamp duty on N2.1 (so an N2.1 invoice over €77.47
+stays blocked). The wording status is separate and unchanged: it is confirmed
+for coaching only, so software and ebook invoices stay blocked on it until you
+confirm the wording for them (below). An optional legal reference
+(RiferimentoNormativo, ≤100 characters) can be set per combination.
+
+B2B means a business tax ID was collected (see above). It is **not** checked
+against VIES here: an EU customer who entered any EU VAT number counts as EU
+business.
+
+These are the **seed** values: the v3 migration writes them only while the
+rules are still empty. If the rules were already saved (including by an
+earlier run of v3), re-running it changes nothing — set the statuses on
+/admin/invoices instead.
 
 **Pending = preview yes, issue no.** A sale whose rule is pending (or has no
 Natura) is listed with the reason; its XML can be previewed when a Natura is
@@ -252,10 +269,10 @@ invented; until they are filled in, nothing can be issued.
 
 ## Waiting for your commercialista
 
-- Subscriptions (software), ebooks/digital, other sales: Natura per category.
 - **EU private customers (OSS)** for software and digital products: no Natura
-  yet. The page shows this year's EU-private total.
-- Coaching to Italian businesses and to foreign customers.
+  yet; for coaching, N2.1 to confirm. The page shows this year's EU-private total.
+- Non-EU private customers (N2.1 to confirm) for software, coaching and ebooks.
+- Other sales: Natura per category.
 - Stamp duty on N2.1 invoices over €77.47.
 - Whether the forfettario wording applies to the software, ebook and other
   product types (confirmed for coaching).

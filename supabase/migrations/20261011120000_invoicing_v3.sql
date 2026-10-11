@@ -26,30 +26,39 @@ alter table public.invoice_settings
   add column if not exists stamp_duty_rules jsonb,
   add column if not exists foreign_private_id_status text not null default 'confirmed';
 
+-- Rules confirmed by Vin (2026-10-11), for software subscriptions, coaching /
+-- video analysis and ebooks / digital products only:
+--   Italian private + Italian business: N2.2.
+--   EU business (VAT number) + non-EU business: N2.1 (art. 7-ter); the EU
+--   business rule carries "Inversione contabile (reverse charge)".
+-- Everything else stays pending: EU private (OSS), non-EU private, the
+-- "other" product type (and stamp duty on N2.1, below).
+-- Seeded only while tax_rules is still empty: rules already saved on
+-- /admin/invoices are never overwritten.
 update public.invoice_settings set tax_rules = '{
   "software_subscription": {
-    "IT_B2C":     {"nature": "N2.2", "status": "pending"},
-    "IT_B2B":     {"nature": "N2.2", "status": "pending"},
+    "IT_B2C":     {"nature": "N2.2", "status": "confirmed"},
+    "IT_B2B":     {"nature": "N2.2", "status": "confirmed"},
     "EU_B2C":     {"nature": null,   "status": "pending"},
-    "EU_B2B":     {"nature": "N2.1", "status": "pending"},
+    "EU_B2B":     {"nature": "N2.1", "reference": "Inversione contabile (reverse charge)", "status": "confirmed"},
     "NON_EU_B2C": {"nature": "N2.1", "status": "pending"},
-    "NON_EU_B2B": {"nature": "N2.1", "status": "pending"}
+    "NON_EU_B2B": {"nature": "N2.1", "status": "confirmed"}
   },
   "coaching_service": {
     "IT_B2C":     {"nature": "N2.2", "status": "confirmed"},
-    "IT_B2B":     {"nature": "N2.2", "status": "pending"},
+    "IT_B2B":     {"nature": "N2.2", "status": "confirmed"},
     "EU_B2C":     {"nature": "N2.1", "status": "pending"},
-    "EU_B2B":     {"nature": "N2.1", "status": "pending"},
+    "EU_B2B":     {"nature": "N2.1", "reference": "Inversione contabile (reverse charge)", "status": "confirmed"},
     "NON_EU_B2C": {"nature": "N2.1", "status": "pending"},
-    "NON_EU_B2B": {"nature": "N2.1", "status": "pending"}
+    "NON_EU_B2B": {"nature": "N2.1", "status": "confirmed"}
   },
   "digital_product": {
-    "IT_B2C":     {"nature": "N2.2", "status": "pending"},
-    "IT_B2B":     {"nature": "N2.2", "status": "pending"},
+    "IT_B2C":     {"nature": "N2.2", "status": "confirmed"},
+    "IT_B2B":     {"nature": "N2.2", "status": "confirmed"},
     "EU_B2C":     {"nature": null,   "status": "pending"},
-    "EU_B2B":     {"nature": "N2.1", "status": "pending"},
+    "EU_B2B":     {"nature": "N2.1", "reference": "Inversione contabile (reverse charge)", "status": "confirmed"},
     "NON_EU_B2C": {"nature": "N2.1", "status": "pending"},
-    "NON_EU_B2B": {"nature": "N2.1", "status": "pending"}
+    "NON_EU_B2B": {"nature": "N2.1", "status": "confirmed"}
   },
   "other": {
     "IT_B2C":     {"nature": "N2.2", "status": "pending"},

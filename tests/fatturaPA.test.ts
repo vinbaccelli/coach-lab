@@ -1,4 +1,6 @@
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import {
   settingsFromRow, settingsProblems, suggestInvoiceNumber, invoiceDescription, invoiceAmounts, settingsPatchFromForm,
@@ -64,7 +66,6 @@ test('starting configuration: only what Vin confirmed is confirmed', () => {
   assert.equal(d.foreignPrivateId, 'OO99999999999');
   assert.equal(d.foreignPrivateIdStatus, 'confirmed');
   assert.deepEqual(d.taxRules.coaching_service.IT_B2C, { nature: 'N2.2', reference: null, status: 'confirmed' });
-  assert.equal(d.taxRules.software_subscription.IT_B2C.status, 'pending');
   assert.equal(d.taxRules.software_subscription.EU_B2C.nature, null); // OSS: no default
   assert.equal(d.taxRules.other.NON_EU_B2C.nature, null); // N2.1 not assumed for every foreign sale
   assert.deepEqual(d.stampDuty, { enabled: true, threshold: 77.47, amount: 2, rules: { 'N2.2': 'applies', 'N2.1': 'pending' } });
@@ -81,6 +82,65 @@ test('starting configuration: only what Vin confirmed is confirmed', () => {
   assert.ok(pending.some((p) => p.includes('Anglemotion subscription') && p.includes('EU private') && p.includes('not decided')));
   assert.ok(pending.some((p) => p.includes('Stamp duty on N2.1')));
   assert.ok(!pending.some((p) => p.includes('Coaching / video analysis → Italian private')));
+  assert.ok(!pending.some((p) => p.includes('Anglemotion subscription → EU business')));
+  assert.ok(pending.some((p) => p.includes('Other one-off sale → Italian private') && p.includes('to confirm')));
+});
+
+// Vin, 2026-10-11: exactly these 12 rules are confirmed; the other 12 are pending.
+const CONFIRMED_PRODUCTS = ['software_subscription', 'coaching_service', 'digital_product'] as const;
+const EXPECTED_CONFIRMED: Record<string, { nature: string; reference: string | null }> = {
+  IT_B2C: { nature: 'N2.2', reference: null },
+  IT_B2B: { nature: 'N2.2', reference: null },
+  EU_B2B: { nature: 'N2.1', reference: 'Inversione contabile (reverse charge)' },
+  NON_EU_B2B: { nature: 'N2.1', reference: null },
+};
+
+test('starting rule matrix: domestic + business confirmed for the 3 product types, everything else pending', () => {
+  const d = settingsFromRow(null);
+  const confirmed: string[] = [];
+  for (const [pt, byCategory] of Object.entries(d.taxRules)) {
+    for (const [c, r] of Object.entries(byCategory)) {
+      if (r.status === 'confirmed') {
+        confirmed.push(`${pt}/${c}`);
+        assert.deepEqual(r, { ...EXPECTED_CONFIRMED[c], status: 'confirmed' }, `${pt}/${c}`);
+      } else {
+        assert.equal(r.status, 'pending', `${pt}/${c}`);
+        assert.equal(r.reference, null, `${pt}/${c}`);
+      }
+    }
+  }
+  assert.deepEqual(confirmed, CONFIRMED_PRODUCTS.flatMap((pt) => Object.keys(EXPECTED_CONFIRMED).map((c) => `${pt}/${c}`)));
+  // Pending: every EU private and non-EU private rule, and the whole "other" product type.
+  for (const pt of CONFIRMED_PRODUCTS) {
+    assert.equal(d.taxRules[pt].EU_B2C.status, 'pending');
+    assert.equal(d.taxRules[pt].NON_EU_B2C.status, 'pending');
+  }
+  assert.ok(Object.values(d.taxRules.other).every((r) => r.status === 'pending'));
+  assert.equal(d.stampDuty.rules['N2.1'], 'pending');
+});
+
+test('the v3 migration seeds exactly DEFAULT_TAX_RULES', () => {
+  const sql = readFileSync(join(process.cwd(), 'supabase/migrations/20261011120000_invoicing_v3.sql'), 'utf8');
+  const seed = sql.match(/set tax_rules = '(\{[\s\S]*?\})'::jsonb where id = 1 and tax_rules is null;/);
+  assert.ok(seed, 'tax_rules seed found, guarded by "tax_rules is null"');
+  assert.deepEqual(settingsFromRow({ tax_rules: JSON.parse(seed[1]) }).taxRules, DEFAULT_TAX_RULES);
+  assert.deepEqual(settingsFromRow(null).taxRules, DEFAULT_TAX_RULES);
+});
+
+test('EU business coaching (VAT number): N2.1 with the reverse-charge reference in the XML', () => {
+  const deB2B: InvoiceRecord = {
+    ...ukPrivate, amount_cents: 5000, business_name: 'Tennis GmbH', vat_id: 'DE123456789', customer_country: 'DE', customer_region: 'EU',
+    customer_address: { line1: 'Str. 1', line2: null, postal_code: '10115', city: 'Berlin', state: null, country: 'DE' },
+  };
+  assert.deepEqual(decideTreatment(S, 'coaching_service', 'EU_B2B', 5000),
+    { nature: 'N2.1', reference: 'Inversione contabile (reverse charge)', stampDuty: null, problems: [] });
+  assert.deepEqual(issueProblems(deB2B, S, IN), []);
+  assert.match(buildFatturaPA(deB2B, S, IN).xml,
+    /<Natura>N2.1<\/Natura><ImponibileImporto>50.00<\/ImponibileImporto><Imposta>0.00<\/Imposta><RiferimentoNormativo>Inversione contabile \(reverse charge\)<\/RiferimentoNormativo><\/DatiRiepilogo>/);
+  // Non-EU business: N2.1 confirmed, no reverse-charge reference.
+  assert.deepEqual(decideTreatment(S, 'coaching_service', 'NON_EU_B2B', 5000), { nature: 'N2.1', reference: '', stampDuty: null, problems: [] });
+  // Over €77.47 an N2.1 invoice still waits for the stamp-duty rule (pending).
+  assert.ok(decideTreatment(S, 'coaching_service', 'EU_B2B', 20000).problems.some((p) => p.includes('stamp duty') && p.includes('N2.1')));
 });
 
 test('the exact wording is flagged (not rewritten) when it has characters the SdI rejects', () => {
@@ -108,7 +168,11 @@ test('six categories: B2B only with a business tax ID; product type from source 
 
 test('VAT treatment per product × category; pending rules block issuing with the reason', () => {
   assert.deepEqual(decideTreatment(S, 'coaching_service', 'IT_B2C', 20000), { nature: 'N2.2', reference: '', stampDuty: 2, problems: [] });
-  assert.ok(decideTreatment(S, 'software_subscription', 'IT_B2C', 29900).problems.some((p) => p.includes('awaiting')));
+  // Software → Italian private: the rule is confirmed; only the software wording still waits.
+  assert.deepEqual(decideTreatment(S, 'software_subscription', 'IT_B2C', 29900).problems,
+    ['The invoice wording for Anglemotion subscription is awaiting your commercialista\'s confirmation']);
+  assert.ok(decideTreatment(S, 'other', 'IT_B2C', 2000).problems.some((p) => p.includes('N2.2') && p.includes('awaiting')));
+  assert.ok(decideTreatment(S, 'coaching_service', 'NON_EU_B2C', 2000).problems.some((p) => p.includes('N2.1') && p.includes('awaiting')));
   assert.ok(decideTreatment(S, 'software_subscription', 'EU_B2C', 2000).problems.some((p) => p.includes('OSS')));
   assert.ok(decideTreatment(S, null, 'IT_B2C', 2000).problems.some((p) => p.includes('product type')));
   // Wording not confirmed for the product type blocks too.
