@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nearestYoutubePlaybackRate } from '@/lib/videoController';
+import { beginTrimDrag, dragTrimTo, fitView, resolveView, shouldAutoFit, timeAtClientX, zoomView, type TrimDrag } from '@/lib/timelineView';
 import { tempDebugPointer } from '@/lib/tempDebugPointer'; // TEMP-DEBUG-POINTER — remove after phone touch investigation
 
 function clamp(n: number, a: number, b: number) {
@@ -327,9 +328,14 @@ export default function PreciseTimeline({
   /** pointerId that started the active scrub — used by the capture-loss fallback. */
   const scrubPointerIdRef = useRef<number | null>(null);
   const phaseDragIdRef = useRef<string | null>(null);
-  const trimDragRef = useRef<'start' | 'end' | null>(null);
   const sampleDragIdRef = useRef<string | null>(null);
   const [viewWindow, setViewWindow] = useState<{ start: number; end: number } | null>(null);
+  // Read by the handle drag on every pointer move, so the drag always converts
+  // pixels with the CURRENT zoom (never a zoom captured in an old closure).
+  const viewWindowRef = useRef(viewWindow);
+  viewWindowRef.current = viewWindow;
+  /** The selection handle drag in progress (lib/timelineView.ts), with its pointer. */
+  const trimDragStateRef = useRef<(TrimDrag & { pointerId: number }) | null>(null);
   /** Live scrub thumb position while dragging (before frame-ready commit). */
   const [scrubPreviewT, setScrubPreviewT] = useState<number | null>(null);
   const pendingScrubTimeRef = useRef<number | null>(null);
@@ -528,11 +534,8 @@ export default function PreciseTimeline({
     const dur = dRef.current;
     if (!el || !dur) return null;
     const r = el.getBoundingClientRect();
-    const raw = clamp((clientX - r.left) / Math.max(1, r.width), 0, 1);
-    const vStart = viewWindow?.start ?? 0;
-    const vEnd = viewWindow?.end ?? dur;
-    const span = Math.max(vEnd - vStart, 0.001);
-    return clamp(vStart + raw * span, 0, dur);
+    // Same 10 px inset the track draws with (lib/timelineView.ts).
+    return timeAtClientX(clientX, { left: r.left, width: r.width }, resolveView(viewWindow, dur), dur);
   }, [viewWindow]);
 
   // Zoom to the trim range ONCE on entry — NOT on every trimRange change.
@@ -551,49 +554,92 @@ export default function PreciseTimeline({
    * multiplies it. Re-fit only on the latter.
    */
   const fittedSpanRef = useRef(0);
+  // THE VIEW AND THE SELECTION ARE INDEPENDENT. This used to be one effect keyed
+  // on the trimRange OBJECT: with fitting off it reset the zoom to "All" on every
+  // selection change (every handle-drag frame, and every parent re-render that
+  // rebuilt the object), so a drag after + / − threw the zoom away under the
+  // finger. Now: fitting turned off resets the view once; fitting reacts to the
+  // selection's VALUES, never during a handle drag (lib/timelineView.ts).
   useEffect(() => {
-    if (!defaultZoomToTrim || !trimRange || d <= 0) {
-      if (!defaultZoomToTrim) { setViewWindow(null); didZoomToTrimRef.current = false; fittedSpanRef.current = 0; }
-      return;
-    }
-    const newSpan = trimRange.end - trimRange.start;
-    const grewALot =
-      fittedSpanRef.current > 0 &&
-      Math.abs(newSpan - fittedSpanRef.current) / fittedSpanRef.current > 0.5;
-    if (didZoomToTrimRef.current && !grewALot) return;
+    if (!defaultZoomToTrim) { setViewWindow(null); didZoomToTrimRef.current = false; fittedSpanRef.current = 0; }
+  }, [defaultZoomToTrim]);
+  const trimStartVal = trimRange?.start;
+  const trimEndVal = trimRange?.end;
+  useEffect(() => {
+    if (!defaultZoomToTrim || trimStartVal == null || trimEndVal == null || d <= 0) return;
+    const newSpan = trimEndVal - trimStartVal;
+    if (!shouldAutoFit({
+      fitOn: true,
+      dragging: trimDragStateRef.current !== null,
+      alreadyFitted: didZoomToTrimRef.current,
+      fittedSpan: fittedSpanRef.current,
+      newSpan,
+    })) return;
     didZoomToTrimRef.current = true;
     fittedSpanRef.current = newSpan;
-    const span = trimRange.end - trimRange.start;
-    const pad = Math.max(0.08, span * 0.12);
-    setViewWindow({
-      start: Math.max(0, trimRange.start - pad),
-      end: Math.min(d, trimRange.end + pad),
-    });
-  }, [defaultZoomToTrim, trimRange, d]);
+    setViewWindow(fitView({ start: trimStartVal, end: trimEndVal }, d));
+  }, [defaultZoomToTrim, trimStartVal, trimEndVal, d]);
 
   const zoomToTrim = useCallback(() => {
     if (!trimRange || d <= 0) return;
-    const span = trimRange.end - trimRange.start;
-    const pad = Math.max(0.08, span * 0.12);
-    setViewWindow({
-      start: Math.max(0, trimRange.start - pad),
-      end: Math.min(d, trimRange.end + pad),
-    });
+    setViewWindow(fitView(trimRange, d));
   }, [trimRange, d]);
 
   const zoomFull = useCallback(() => setViewWindow(null), []);
 
+  // Zoom only ever writes the VIEW — the selection is not an input.
   const zoomBy = useCallback((factor: number) => {
     if (d <= 0) return;
-    const vStart = viewWindow?.start ?? 0;
-    const vEnd = viewWindow?.end ?? d;
-    const span = Math.max(vEnd - vStart, 0.08);
-    const newSpan = clamp(span * factor, 0.08, d);
     // Anchor zoom on the current playhead so the viewed position stays centred
-    const anchor = clamp(t, 0, d);
-    const start = clamp(anchor - newSpan / 2, 0, Math.max(0, d - newSpan));
-    setViewWindow({ start, end: start + newSpan });
-  }, [d, viewWindow, t]);
+    setViewWindow((vw) => zoomView(vw, d, factor, t));
+  }, [d, t]);
+
+  /**
+   * Selection handle drag (start or end). Relative to the pointer's movement and
+   * converted with the CURRENT zoom on every move (lib/timelineView.ts), so a
+   * handle parked at the track edge — its time outside the zoomed view — still
+   * moves instead of jumping to the edge and sticking against the other handle.
+   * Ends on up, cancel, or lost pointer capture: a missed pointerup can no
+   * longer leave a drag half-alive.
+   */
+  const trimHandleProps = (which: 'start' | 'end') => ({
+    onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+      tempDebugPointer(which === 'start' ? 'tl-start' : 'tl-end', e.nativeEvent); // TEMP-DEBUG-POINTER
+      e.stopPropagation();
+      if (!trimRange || trimDragStateRef.current) return; // one handle drag at a time
+      trimDragStateRef.current = { ...beginTrimDrag(which, trimRange, e.clientX), pointerId: e.pointerId };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+      const drag = trimDragStateRef.current;
+      if (!drag || drag.which !== which || e.pointerId !== drag.pointerId) return;
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+      tempDebugPointer(which === 'start' ? 'tl-start' : 'tl-end', e.nativeEvent); // TEMP-DEBUG-POINTER
+      e.stopPropagation();
+      const el = scrubTrackRef.current;
+      const dur = dRef.current;
+      if (!el || !dur || !onTrimChange) return;
+      const next = dragTrimTo(drag, e.clientX, resolveView(viewWindowRef.current, dur), el.getBoundingClientRect().width, dur);
+      trimDragStateRef.current = { ...next, pointerId: drag.pointerId };
+      if (next.start !== drag.start || next.end !== drag.end) {
+        // This span is the drag's own doing: it is the new baseline, never a reason to re-fit.
+        fittedSpanRef.current = next.end - next.start;
+        onTrimChange(next.start, next.end);
+      }
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => {
+      tempDebugPointer(which === 'start' ? 'tl-start' : 'tl-end', e.nativeEvent); // TEMP-DEBUG-POINTER
+      endTrimDrag(e);
+    },
+    onPointerCancel: (e: React.PointerEvent<HTMLDivElement>) => endTrimDrag(e),
+    onLostPointerCapture: (e: React.PointerEvent<HTMLDivElement>) => endTrimDrag(e),
+  });
+  const endTrimDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = trimDragStateRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    trimDragStateRef.current = null;
+    try { if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+  };
 
   const queueScrubAtClientX = useCallback((clientX: number) => {
     const next = timeFromClientX(clientX);
@@ -980,9 +1026,14 @@ export default function PreciseTimeline({
             pointerEvents: 'none',
           }}
         />
-        {trimRange && d > 0 && trimWidthPct > 0 ? (
+        {/* The handles render whenever there is a selection — also when it lies
+            entirely outside the zoomed view. They then sit pinned at the track
+            edge and still drag (relative to the pointer, at the current zoom).
+            They used to vanish with it (trimWidthPct === 0), so after + / −
+            around a playhead elsewhere there was nothing left to grab. */}
+        {trimRange && d > 0 ? (
           <>
-            <div
+            {trimWidthPct > 0 ? <div
               style={{
                 position: 'absolute',
                 left: `calc(10px + (100% - 20px) * ${trimStartPct / 100})`,
@@ -996,7 +1047,7 @@ export default function PreciseTimeline({
                 pointerEvents: 'none',
                 boxSizing: 'border-box',
               }}
-            />
+            /> : null}
             {/* Start handle — draggable when onTrimChange is provided. */}
             {onTrimChange ? (
               <>
@@ -1026,26 +1077,7 @@ export default function PreciseTimeline({
                 <div
                   aria-label="Trim start — drag to adjust"
                   title="Drag to set trim start"
-                  onPointerDown={(e) => {
-                    tempDebugPointer('tl-start', e.nativeEvent); // TEMP-DEBUG-POINTER
-                    e.stopPropagation();
-                    trimDragRef.current = 'start';
-                    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-                  }}
-                  onPointerMove={(e) => {
-                    if (trimDragRef.current !== 'start') return;
-                    if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
-                    tempDebugPointer('tl-start', e.nativeEvent); // TEMP-DEBUG-POINTER
-                    e.stopPropagation();
-                    const next = timeFromClientX(e.clientX);
-                    if (next === null || !trimRange) return;
-                    onTrimChange(clamp(next, 0, trimRange.end - 0.04), trimRange.end);
-                  }}
-                  onPointerUp={(e) => {
-                    tempDebugPointer('tl-start', e.nativeEvent); // TEMP-DEBUG-POINTER
-                    trimDragRef.current = null;
-                    try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
-                  }}
+                  {...trimHandleProps('start')}
                   style={{
                     position: 'absolute',
                     right: trimStartTabRight,
@@ -1116,26 +1148,7 @@ export default function PreciseTimeline({
                 <div
                   aria-label="Trim end — drag to adjust"
                   title="Drag to set trim end"
-                  onPointerDown={(e) => {
-                    tempDebugPointer('tl-end', e.nativeEvent); // TEMP-DEBUG-POINTER
-                    e.stopPropagation();
-                    trimDragRef.current = 'end';
-                    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-                  }}
-                  onPointerMove={(e) => {
-                    if (trimDragRef.current !== 'end') return;
-                    if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
-                    tempDebugPointer('tl-end', e.nativeEvent); // TEMP-DEBUG-POINTER
-                    e.stopPropagation();
-                    const next = timeFromClientX(e.clientX);
-                    if (next === null || !trimRange) return;
-                    onTrimChange(trimRange.start, clamp(next, trimRange.start + 0.04, d));
-                  }}
-                  onPointerUp={(e) => {
-                    tempDebugPointer('tl-end', e.nativeEvent); // TEMP-DEBUG-POINTER
-                    trimDragRef.current = null;
-                    try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
-                  }}
+                  {...trimHandleProps('end')}
                   style={{
                     position: 'absolute',
                     left: trimEndTabLeft,
