@@ -44,7 +44,7 @@ export default function PrivacyPage() {
 
       <main style={{ maxWidth: 760, margin: '0 auto', padding: '48px 20px 80px', lineHeight: 1.65 }}>
         <h1 style={{ fontSize: 32, fontWeight: 900, letterSpacing: -0.5, margin: '0 0 6px' }}>Privacy Policy</h1>
-        <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13, margin: '0 0 36px' }}>Last updated: July 3, 2026</p>
+        <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13, margin: '0 0 36px' }}>Last updated: October 12, 2026</p>
 
         <Section title="Who we are">
           AngleMotion (&ldquo;we&rdquo;, &ldquo;us&rdquo;) is a video-analysis platform for tennis coaches, available at{' '}
@@ -63,7 +63,7 @@ export default function PrivacyPage() {
             <li><strong>Account information:</strong> when you sign in with Google we receive your name, email address, and profile picture.</li>
             <li><strong>Content you create:</strong> player profiles, notes, measurements, and analysis screenshots you choose to save are stored in our database (hosted by Supabase) so you can access them across devices.</li>
             <li><strong>Payment information:</strong> subscriptions are processed by Stripe. We never see or store your card details — we only store your subscription status.</li>
-            <li><strong>Technical basics:</strong> authentication cookies to keep you signed in. We do not run third-party advertising or tracking.</li>
+            <li><strong>Technical basics:</strong> authentication cookies to keep you signed in. We do not run third-party advertising.</li>
           </ul>
         </Section>
 
@@ -88,7 +88,14 @@ export default function PrivacyPage() {
 
         <Section title="Who we share data with">
           We do not sell your data. We share it only with the processors that run the service: Supabase (database and
-          authentication), Stripe (payments), Google (only the exports you trigger), and Vercel (hosting).
+          authentication), Stripe (payments), Google (only the exports you trigger), and Vercel (hosting), plus Trustpilot
+          through the review widget described below.
+          <p style={{ marginTop: 12 }}>
+            Our landing page shows a Trustpilot review widget. When it loads, Trustpilot receives your IP address and
+            basic browser information, as described in{' '}
+            <a href="https://legal.trustpilot.com/for-reviewers/privacy-policy" style={a}>Trustpilot&rsquo;s privacy policy</a>.
+            We don&rsquo;t use this for advertising.
+          </p>
         </Section>
 
         <Section title="Data retention and deletion">

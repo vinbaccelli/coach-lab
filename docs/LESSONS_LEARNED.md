@@ -600,3 +600,79 @@ feature. The corollary: when a display path is suppressed "to avoid doubling",
 whatever replaces it inherits every setting the suppressed path owned, and
 nothing enforces that — the settings simply disappear, silently, with no error.
 
+
+---
+
+## 008 — A control tied to a mode turned itself off in the order coaches actually work
+
+### Symptom
+
+Vin armed "Erase part of line" in Style, picked Circle to draw the mark he wanted
+to cut, and the eraser had gone: the drag drew a new circle instead.
+
+### Verified root cause
+
+The eraser was a checkbox inside Style mode, and #56 made leaving Style disarm it
+(an armed eraser nobody could see was cutting holes in later Select drags). Every
+tool choice leaves Style (`handleToolChange` in `app/analysis/page.tsx`), so
+"arm, then pick the drawing tool" always disarmed it. Both behaviours were
+correct on their own; the control lived in the wrong place.
+
+### Fix
+
+The eraser is a tool on the Draw list (`Eraser`, tool id `erase`). Its armed size
+is derived from the active tool in the page
+(`activeTool === 'erase' && !styleMode ? eraserSize : 0`), so there is no
+separate on/off state to forget: it is on exactly while its row is lit. One drag
+cuts every outline the ring passes over (`eraseAt` in `components/Canvas.tsx`).
+
+### Class of mistake
+
+**A mode-scoped switch with a lifetime of its own.** If a setting can stay on
+after the screen that shows it is gone, it needs a disarm rule, and every disarm
+rule eventually fires in a workflow nobody pictured. When the thing is really an
+action on the canvas, make it a tool: tools already have one owner (the active
+tool), one visible state (the lit row), and one exit (picking another tool).
+
+---
+
+## 009 — "Re-acquire near where they were last seen" adopted the other player
+
+**Symptom.** First run of the locked-player AI Track on a two-player clip: the
+locked (left) player was followed correctly, the stretch where they left the
+frame stayed empty — and after they came back the track was on the RIGHT player.
+
+**Verified root cause.** While the player is out of view the search radius
+grows with time (by design: they may come back somewhere else). After about a
+second it reached the other player, who was the same size, so size matching
+could not tell them apart.
+
+**Fix.** Follow everyone, not just the locked player (`followStep` in
+`lib/aiTrackLock.ts`): every candidate is assigned to at most one tracked
+person, best continuation first. A person who stays in view while the locked
+player is gone keeps continuing their own track and can never be adopted;
+only a NEW appearance can be the locked player coming back. Regression test:
+"the other player, visible while ours is out of view, is never adopted".
+
+**Class of mistake.** Identity by proximity alone. A growing search area needs
+an exclusion of everyone already accounted for, or it eventually finds the
+wrong look-alike.
+
+## 010 — A third-party widget can be blocked by our own security headers
+
+**Symptom.** Adding the Trustpilot TrustBox: with a stub widget served
+without a COEP header, the widget rendered as an empty grey error box in
+Chromium, and the plain fallback link was already gone (the bootstrap removes
+it before the iframe loads).
+
+**Verified root cause.** The site sends `Cross-Origin-Embedder-Policy:
+credentialless` on every page (`next.config.js`). COEP applies to iframes;
+`credentialless` relaxes only subresources.
+
+**Fix.** Mark the widget's iframe `credentialless` (per-iframe exemption, Chrome/Edge
+110+) as it is inserted — `markCredentialless` in `lib/trustpilot.ts`.
+KNOWN_ISSUES 033.
+
+**Class of mistake.** Checking only CSP for an embed. On this site, check
+COOP/COEP too: every new iframe needs its own COEP header or the
+`credentialless` attribute, and must be tried in a browser with the real headers.

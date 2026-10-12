@@ -40,11 +40,17 @@ import {
   Target,
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
+import { requiredPlan, type Feature } from '@/lib/entitlements';
+import { ERASER_PRESETS, ERASER_SIZE_MAX, ERASER_SIZE_MIN, clampEraserSize, eraserPresetFor } from '@/lib/eraser';
 
 export type BallTrailMode = 'comet' | 'arc' | 'strobe';
 export type WebcamPipMode = 'rectangle' | 'circle' | 'hidden';
 
 interface ToolPaletteProps {
+  /** Plan gate for Pro rows (lib/entitlements.ts canUse). Absent = nothing locked. */
+  canUseFeature?: (feature: Feature) => boolean;
+  /** A locked row was pressed: the page opens its upgrade sheet. */
+  onLockedFeature?: (feature: Feature) => void;
   activeTool: ToolType;
   onToolChange: (tool: ToolType) => void;
   compact?: boolean;
@@ -85,6 +91,7 @@ interface ToolPaletteProps {
   objMultiplierActive?: boolean;
   objMultiplierProgress?: string | null;
   onCircleSpinningChange?: (spinning: boolean) => void;
+  /** Eraser tool's size (px), shown on the Draw list while the Eraser is the active tool. */
   outlineEraserSize?: number;
   onOutlineEraserSizeChange?: (size: number) => void;
   skeletonShowAngles?: boolean;
@@ -210,7 +217,7 @@ const PRESET_COLORS = ['#FFFFFF', '#1D1D1F', '#FF3B30', '#007AFF'] as const;
 // Tools surfaced on the Draw sub-screen. Used so opening Draw highlights a tool
 // (and so leaving Draw can return the canvas to a neutral select state).
 const DRAW_SCREEN_TOOLS: ToolType[] = [
-  'pen', 'line', 'arrow', 'angle', 'arrowAngle', 'rect', 'circle', 'manualSwing', 'jointChain', 'text', 'ruler',
+  'pen', 'line', 'arrow', 'angle', 'arrowAngle', 'rect', 'circle', 'manualSwing', 'jointChain', 'text', 'erase', 'ruler',
 ];
 
 type NavScreen =
@@ -683,6 +690,10 @@ interface ToolbarChrome {
   onToggleCollapsed?: () => void;
   onToggleToolbarLabels?: () => void;
   authContent?: React.ReactNode;
+  /** Plan gate for rows that carry a `feature` (lib/entitlements.ts). Absent = nothing locked. */
+  canUseFeature?: (feature: Feature) => boolean;
+  /** A locked row was pressed: open the upgrade sheet for that feature. */
+  onLockedFeature?: (feature: Feature) => void;
 }
 
 function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
@@ -866,6 +877,7 @@ function Row({
     sub,
     destructive,
     tooltip,
+    feature,
   }: {
     k: string;
     active?: boolean;
@@ -876,8 +888,17 @@ function Row({
     destructive?: boolean;
     tooltip?: string;
     chrome: ToolbarChrome;
+    /**
+     * Plan-gated capability. When the coach's plan doesn't include it the row
+     * stays VISIBLE with a plan chip, and pressing it opens the upgrade sheet
+     * instead of the tool (client-side courtesy; the server enforces what it can).
+     */
+    feature?: Feature;
   }) {
-    const { pressedKey, io, denseMobile, rb, fire, iconBox, textMuted } = chrome;
+    const { pressedKey, io, denseMobile, rb, fire, iconBox, textMuted, canUseFeature, onLockedFeature } = chrome;
+    const locked = !!feature && !!canUseFeature && !canUseFeature(feature);
+    const planChip = feature ? (requiredPlan(feature) === 'academy' ? 'Academy' : 'Pro') : '';
+    const press = locked ? () => onLockedFeature?.(feature!) : onPress;
     const pressed = pressedKey === k;
     const rowStyle = {
       ...rb(!!active, pressed, io, denseMobile),
@@ -896,17 +917,19 @@ function Row({
       return (
         <button
           type="button"
-          aria-label={sub ? `${label} — ${sub}` : label}
-          title={tooltip ?? label}
+          aria-label={`${sub ? `${label} — ${sub}` : label}${locked ? ` (${planChip})` : ''}`}
+          title={locked ? `${label} — part of ${planChip}` : tooltip ?? label}
           data-active={active ? 'true' : undefined}
           data-destructive={destructive ? 'true' : undefined}
           data-tour-id={`row-${k}`}
-          style={rowStyle}
+          data-locked={locked ? 'true' : undefined}
+          style={{ ...rowStyle, position: 'relative' }}
           onPointerDown={(e) => {
             if (e.pointerType !== 'touch') e.preventDefault();
-            fire(k, onPress, e);
+            fire(k, press, e);
           }}
         >
+          {locked ? <PlanChip label={planChip} corner /> : null}
           <span
             style={{
               display: 'flex',
@@ -924,14 +947,16 @@ function Row({
     return (
       <button
         type="button"
-        title={tooltip ?? label}
+        title={locked ? `${label} — part of ${planChip}` : tooltip ?? label}
+        aria-label={locked ? `${label} (${planChip})` : undefined}
         data-active={active ? 'true' : undefined}
         data-destructive={destructive ? 'true' : undefined}
         data-tour-id={`row-${k}`}
+        data-locked={locked ? 'true' : undefined}
         style={rowStyle}
         onPointerDown={(e) => {
           if (e.pointerType !== 'touch') e.preventDefault();
-          fire(k, onPress, e);
+          fire(k, press, e);
         }}
       >
         <span style={{ display: 'flex', width: 26, justifyContent: 'center', flexShrink: 0 }}>
@@ -957,8 +982,35 @@ function Row({
             </span>
           ) : null}
         </span>
+        {locked ? <PlanChip label={planChip} /> : null}
       </button>
     );
+}
+
+/** "Pro" chip on a locked toolbar row. Ink on a soft fill: readable at 10px. */
+function PlanChip({ label, corner = false }: { label: string; corner?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        // Corner badge sits INSIDE the rail button: the rail scroll container
+        // clips anything outside it on phones.
+        ...(corner ? { position: 'absolute', top: 2, right: 2 } : { marginLeft: 6, flexShrink: 0 }),
+        fontSize: corner ? 7 : 9,
+        fontWeight: 800,
+        letterSpacing: '0.04em',
+        lineHeight: 1,
+        padding: corner ? '2px 3px' : '3px 5px',
+        borderRadius: 999,
+        background: 'var(--cl-action-primary)',
+        color: 'var(--cl-text-on-fill)',
+        textTransform: 'uppercase',
+        pointerEvents: 'none',
+      }}
+    >
+      {label}
+    </span>
+  );
 }
 
 function BackHeader({
@@ -1062,6 +1114,8 @@ function BackHeader({
 
 export default function ToolPalette(props: ToolPaletteProps) {
   const {
+    canUseFeature,
+    onLockedFeature,
     activeTool,
     onToolChange,
     drawingOptions,
@@ -1243,6 +1297,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onSelectTool: () => { onExitDrawContext?.(); setTool('select'); },
     onUndo, onRedo, onClear, onCleanSession, onScreenshotSave,
     onToggleCollapsed, onToggleToolbarLabels, authContent,
+    canUseFeature, onLockedFeature,
   }), [
     io, denseMobile, mobileChrome, phoneLayout, compactToolbarChrome, collapsed,
     showCollapseControl, toolbarLabelsExpanded, screenshotSaving, iconBox,
@@ -1250,6 +1305,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     activeTool, onExitDrawContext, setTool,
     onUndo, onRedo, onClear, onCleanSession, onScreenshotSave,
     onToggleCollapsed, onToggleToolbarLabels, authContent,
+    canUseFeature, onLockedFeature,
   ]);
 
 
@@ -1468,31 +1524,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
               onCircleSpinningChange,
               <Sparkles size={18} strokeWidth={2} />,
             )}
-          {onOutlineEraserSizeChange && outlineEraserEligible && (
-            <>
-              {chk(
-                'oe',
-                'Erase part of line',
-                outlineEraserSize > 0,
-                (v) => onOutlineEraserSizeChange(v ? 15 : 0),
-                <Eraser size={18} strokeWidth={2} />,
-              )}
-              {outlineEraserSize > 0 && !io && (
-                <div style={{ padding: '0 8px' }}>
-                  <div style={{ fontSize: 12, color: textMuted, marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
-                  <input
-                    type="range"
-                    min={5}
-                    max={50}
-                    step={1}
-                    value={outlineEraserSize}
-                    onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              )}
-            </>
-          )}
           {(activeTool === 'manualSwing' || activeTool === 'swingPath') &&
             chk('arrowEnd', 'Arrow at end of swing path', !!drawingOptions.arrowAtEnd, (v) => onOptionsChange({ arrowAtEnd: v }))}
           {activeTool === 'text' && !io && (
@@ -1563,6 +1594,82 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row chrome={chrome} k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} tooltip="Trace the racket swing path" label="Swing path" onPress={() => setTool('manualSwing')} />
           <Row chrome={chrome} k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} tooltip="Connect joint points to measure body alignment" label="Joint chain" onPress={() => setTool('jointChain')} />
           <Row chrome={chrome} k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
+          {/*
+            The outline eraser is a TOOL, not a Style checkbox. As a checkbox it
+            lived in Style mode and had to switch off when Style ended (an armed
+            eraser nobody could see punched holes in Select drags), so picking
+            Circle after arming it silently turned it off again. As a tool it is
+            on exactly while this row is lit, like every other tool here.
+          */}
+          <Row chrome={chrome} k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} tooltip="Drag over a line or shape to erase part of it" label="Eraser" onPress={() => setTool('erase')} />
+          {/*
+            Eraser size: three presets + a slider, shown while the Eraser is
+            the active tool, in every layout. It used to be hidden in the
+            icon-only toolbar (phones, collapsed), so a coach there could not
+            change it at all. Preset buttons are dots, not words: three
+            labelled buttons in one row get cut off in the compact column.
+          */}
+          {activeTool === 'erase' && onOutlineEraserSizeChange && (
+            <div
+              role="group"
+              aria-label="Eraser size"
+              data-testid="eraser-size"
+              style={{ padding: io ? '0 0 4px' : '0 8px 4px', display: 'flex', flexDirection: 'column', alignItems: io ? 'center' : 'stretch', gap: 4 }}
+            >
+              <div style={{ fontSize: io ? 9 : 12, fontWeight: io ? 500 : undefined, color: textMuted, textAlign: io ? 'center' : undefined }}>
+                {io ? `${outlineEraserSize}px` : `Eraser size (${outlineEraserSize}px)`}
+              </div>
+              <div style={{ display: 'flex', flexDirection: io ? 'column' : 'row', gap: 4, alignItems: 'center' }}>
+                {ERASER_PRESETS.map((preset) => {
+                  const on = eraserPresetFor(outlineEraserSize) === preset.id;
+                  const dot = Math.round(6 + preset.size * 0.4);
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      aria-label={`${preset.label} eraser (${preset.size}px)`}
+                      aria-pressed={on}
+                      title={`${preset.label} (${preset.size}px)`}
+                      style={{
+                        ...rb(on, pressedKey === `er-${preset.id}`, io),
+                        justifyContent: 'center',
+                        transform: pressedKey === `er-${preset.id}` ? 'scale(0.95)' : undefined,
+                        ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : { flex: 1, minWidth: 0, padding: 0, minHeight: 36 }),
+                      }}
+                      onPointerDown={(e) => {
+                        if (e.pointerType !== 'touch') e.preventDefault();
+                        fire(`er-${preset.id}`, () => onOutlineEraserSizeChange(preset.size), e);
+                      }}
+                    >
+                      <span style={{ width: dot, height: dot, borderRadius: '50%', background: 'currentColor', display: 'block' }} />
+                    </button>
+                  );
+                })}
+              </div>
+              <input
+                type="range"
+                min={ERASER_SIZE_MIN}
+                max={ERASER_SIZE_MAX}
+                step={1}
+                value={outlineEraserSize}
+                onChange={(e) => onOutlineEraserSizeChange(clampEraserSize(Number(e.target.value)))}
+                aria-label="Eraser size"
+                style={
+                  io
+                    ? {
+                        width: 28,
+                        height: 96,
+                        margin: 0,
+                        accentColor: 'var(--cl-accent)',
+                        WebkitAppearance: 'slider-vertical' as React.CSSProperties['WebkitAppearance'],
+                        writingMode: 'vertical-lr',
+                        direction: 'rtl',
+                      }
+                    : { width: '100%' }
+                }
+              />
+            </div>
+          )}
           <Row chrome={chrome} k="ruler" active={activeTool === 'ruler'} icon={<Ruler size={18} />} tooltip="Measure real-world distances (calibrate first)" label="Ruler" onPress={() => setTool('ruler')} />
           <Row chrome={chrome} k="anglediff" icon={<Activity size={18} />} tooltip="Draw two angle arrows (e.g. hips then shoulders) — the angle difference is auto-calculated" label="Angle differential" onPress={() => (onAngleDifferentialStart ? onAngleDifferentialStart() : setTool('arrowAngle'))} />
           {onPrecisionDrawToggle && (
@@ -1630,6 +1737,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           {onOpenPrecisionTrack !== undefined && precisionTrackState === 'idle' && (
             <Row chrome={chrome}
               k="ptrack"
+              feature="aiTrack"
               icon={<Sparkles size={18} strokeWidth={2} />}
               label="AI Track"
               tooltip="Records one perfect skeleton track, then plays aligned at ANY speed. Select a timeline section first to track just that part."
@@ -1650,6 +1758,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               {onOpenPrecisionTrack !== undefined && (
                 <Row chrome={chrome}
                   k="ptrack-more"
+                  feature="aiTrack"
                   icon={<Sparkles size={18} strokeWidth={2} />}
                   label="AI Track — another section"
                   tooltip="Move the green timeline handles to a new section and track it too — the skeleton shows only inside tracked sections"
@@ -1713,7 +1822,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <ToolbarLead chrome={chrome} />
           <BackHeader chrome={chrome} title="Tools" icon={<LayoutGrid size={18} />} />
           <Row chrome={chrome} k="met-t" icon={<BarChart3 size={18} />} tooltip="Skeleton, drawing tools, and measurements" label="Metrics" onPress={() => push('aimetrics')} />
-          <Row chrome={chrome} k="sm-t" icon={<Layers size={18} />} tooltip="Create multi-frame ghost overlay composites" label="Motion Layer" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
+          <Row chrome={chrome} k="sm-t" feature="motionLayer" icon={<Layers size={18} />} tooltip="Create multi-frame ghost overlay composites" label="Motion Layer" onPress={() => { onExitDrawContext?.(); push('stromotion'); }} />
         </ToolbarScrollArea>
         <GlobalActionsFooter chrome={chrome} />
       </div>
@@ -1809,6 +1918,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               {onStroMotionToggle ? (
                 <Row chrome={chrome}
                   k="sm-on"
+                  feature="motionLayer"
                   active={stroMotionEnabled}
                   icon={<Layers size={18} />}
                   label="Motion Layer"
@@ -1889,12 +1999,12 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
           {/* Create Snapshot — freeze the current frame into a snapshot */}
           {onOpenPhases && (
-            <Row chrome={chrome} k="m-snapshot" icon={<Target size={metricIcon} />} tooltip="Create a snapshot — freeze the current frame (skeleton + drawings + data column)" label="Snapshot" onPress={onOpenPhases} />
+            <Row chrome={chrome} k="m-snapshot" feature="multiSnapshot" icon={<Target size={metricIcon} />} tooltip="Create a snapshot — freeze the current frame (skeleton + drawings + data column)" label="Snapshot" onPress={onOpenPhases} />
           )}
 
           {/* Generate — capture phase screenshots + slow-mo replay */}
           {onMetricsGenerate && (
-            <Row chrome={chrome} k="m-generate" icon={<Layers size={metricIcon} />} tooltip="Capture every phase and replay the stroke in slow motion" label="Generate" onPress={onMetricsGenerate} />
+            <Row chrome={chrome} k="m-generate" feature="generate" icon={<Layers size={metricIcon} />} tooltip="Capture every phase and replay the stroke in slow motion" label="Generate" onPress={onMetricsGenerate} />
           )}
         </ToolbarScrollArea>
         <GlobalActionsFooter chrome={chrome} />
@@ -1933,6 +2043,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
         />
         <Row chrome={chrome}
           k="sm-h"
+          feature="motionLayer"
           icon={<Layers size={denseMobile ? 16 : 20} />}
           label="Motion Layer"
           onPress={() => { onExitDrawContext?.(); push('stromotion'); }}
@@ -1941,6 +2052,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <div data-tour-id="recording-hub" style={phoneLayout || mobileChrome ? { display: 'flex', flexDirection: 'column', gap: 4 } : undefined}>
             <Row chrome={chrome}
               k="cp"
+              feature="recordingHub"
               icon={<RecordHubIcon size={denseMobile ? 16 : 20} />}
               label="Recording Hub"
               onPress={() => push('recording')}

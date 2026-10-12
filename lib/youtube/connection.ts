@@ -97,7 +97,9 @@ export async function storeYouTubeConnection(
   if (!refreshToken) return false;
   const supabase = createSupabaseServiceClient();
   if (!supabase) {
-    console.error('[youtube/connection] SUPABASE_SERVICE_ROLE_KEY not configured');
+    // The specific reason (missing vs. a publishable/anon key) is logged by
+    // createSupabaseServiceClient just above.
+    console.error('[youtube/connection] store skipped: no service-role Supabase key');
     return false;
   }
   const refresh_token_enc = encryptSecret(refreshToken);

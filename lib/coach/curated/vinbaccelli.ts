@@ -12,18 +12,21 @@ import type { CuratedCoachProfile } from './types';
  *    COACHING. On this page that is exactly what they describe, so they need no
  *    disclaimer of the kind the landing page carries — but they may still never
  *    be presented as reviews of the AngleMotion product.
- *  - TWO Trustpilot profiles exist and are never conflated: this page links only
- *    to the COACHING profile (it.trustpilot.com/review/vinbaccelli.com), which
- *    is where these quotes live. The app's own profile has no reviews and does
- *    not appear here. See components/LandingPage.tsx for the full provenance
- *    note, verified in a browser on 2026-09-04.
+ *  - Trustpilot is ONE profile for both the app and Vin's coaching analysis
+ *    (Vin's decision, 2026-10-03; the landing page links
+ *    www.trustpilot.com/review/anglemotion.com). This page's review display —
+ *    the link below, the badge and the star note — is deliberately left as it
+ *    was on Vin's instruction, so it still points at the older coaching URL
+ *    (it.trustpilot.com/review/vinbaccelli.com), checked in a browser on
+ *    2026-09-04.
  *  - Section order is Vin's and is deliberate: he sells before he explains, and
  *    proof lands last. Do not reorder without asking him.
  */
 
 const WHATSAPP = 'https://api.whatsapp.com/message/CIFH5W444GPEO1?autoload=1&app_absent=0';
 
-/** The founder's COACHING Trustpilot profile — the one these quotes come from. */
+/** Older coaching-profile URL, kept for this page's review display (see the
+ *  Trustpilot rule above); the single profile is the anglemotion.com one. */
 const TRUSTPILOT_COACH_URL = 'https://it.trustpilot.com/review/vinbaccelli.com';
 
 /**

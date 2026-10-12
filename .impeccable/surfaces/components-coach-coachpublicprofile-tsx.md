@@ -90,8 +90,11 @@ plausible stand-in — the `reviewBonus` action renderer drops any action whose
 
 The seven platform reviews are reviews of **Vin's coaching**, which is precisely
 what this page sells, so they need no disclaimer here — but they may never be
-presented as reviews of the AngleMotion product. Only the founder's COACHING
-Trustpilot profile appears; the app's own (0 reviews) does not.
+presented as reviews of the AngleMotion product. Trustpilot is ONE profile for
+the app and Vin's coaching (founder's decision, 2026-10-03; the landing page
+links `www.trustpilot.com/review/anglemotion.com`). This page's review display is
+deliberately unchanged for now and still links the older coaching URL
+(`it.trustpilot.com/review/vinbaccelli.com`).
 
 ## Discovery — six links, one of them contextual
 

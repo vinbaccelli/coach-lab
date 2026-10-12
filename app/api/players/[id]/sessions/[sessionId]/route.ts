@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import { deleteSessionAssets } from '@/lib/sessions/serverStorage';
 import { updateSessionPatch } from '@/lib/sessions/db';
 import { rowToPlayerSession } from '@/lib/sessions/types';
@@ -31,6 +32,8 @@ export async function PATCH(
 ) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'players');
+  if (denied) return denied;
   const { id: playerId, sessionId } = await ctx.params;
 
   const { data: existing, error: fe } = await session.supabase
@@ -65,6 +68,8 @@ export async function DELETE(
 ) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'players');
+  if (denied) return denied;
   const { id: playerId, sessionId } = await ctx.params;
 
   const { data: existing, error: fe } = await session.supabase

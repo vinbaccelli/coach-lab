@@ -258,7 +258,14 @@ exist to permit it. Vin should confirm one real upload end-to-end through
 
 ---
 
-## 007 — Light advertises $10 but Stripe charges $5
+## 007 — Light advertises $10 but Stripe charges $5 — SUPERSEDED (launch pricing)
+
+**Update 2026-10-03.** The USD prices are retired with EUR launch pricing
+(`claude/pricing-launch`). Nothing can drift silently any more: the checkout
+route now retrieves the configured Stripe price and refuses to start (503)
+unless its currency, amount and interval equal what `lib/plans.ts` displays,
+and there is no fallback price ID. Closes once the EUR env vars are live.
+
 
 **Found:** 2026-09-08, building the founding-pricing page. **BLOCKS DEPLOY.**
 
@@ -774,7 +781,7 @@ rail, but the obvious close button is unreachable.
 
 ---
 
-## 018 — Clicking a mark with the Select tool (no drag) adds a no-op Undo step
+## 018 — Clicking a mark with the Select tool (no drag) adds a no-op Undo step — RESOLVED
 
 **Found:** 2026-10-01, browser-verifying the fix for 016.
 
@@ -798,6 +805,20 @@ eraser branch, which edits the stroke at pointer-down and stores the edited
 object as `orig`; it must still push. Needs approval.
 
 **Severity:** low-medium — one extra Undo press, nothing lost.
+
+**RESOLVED** (2026-10-07, branch `claude/canvas-recording-polish`). The Select
+finalize in `onPointerUp` (`components/Canvas.tsx`) now pushes only when
+`liveStateDiffersFromHistoryTop()`: the live strokes or angles are no longer
+the exact objects of the current history entry. Every move and resize
+replaces the changed mark's object, so a click that moved nothing finds them
+identical and pushes nothing; any real change (including the outline eraser,
+which replaces the stroke at pointer-down) still pushes. Browser-verified in
+Chromium at 1440 px and at 390 px with touch: line + circle drawn, plain
+Select click on the line, Undo ×1 removes the circle (before the fix it did
+nothing); click + drag the line, Undo ×1 restores it, Redo re-applies; plain
+click on a text label, Undo ×1 undoes the label's creation; label drag, Undo
+×1, Redo (016) unchanged; joint-node drag and chain drag each undo in one
+press.
 
 ---
 
@@ -829,6 +850,12 @@ measuring the canvas against the viewport and assuming the shared surface *is*
 this tab — an assumption the browser will not confirm.
 
 **Severity:** low — cosmetic, sub-chrome offset; shape, size and opacity are correct.
+
+**No longer reachable while `FLOATING_CAMERA_WINDOW` is off** (2026-10-07,
+`contexts/RecordingContext.tsx`). The engine no longer stamps the webcam in any
+share mode; the canvas PiP itself is what gets recorded whenever the shared
+surface includes the AngleMotion page, so its position is exact in tab and
+window share too. Applies again only if the constant is turned back on.
 
 ---
 
@@ -870,8 +897,376 @@ top-right video-slot row). Pause / Resume / Stop live in the analysis page for t
 duration of any recording, reachable from every tool and panel, so closing the
 floating window never removes the only way to stop.
 
+**Superseded for launch** (2026-10-07). With `FLOATING_CAMERA_WINDOW` off the
+floating window never shows the camera in any mode; where it is still opened
+(entire-screen and window share, as the keep-alive — see 022) it is
+controls-only, so closing it never turns the webcam off.
 
-## 021 — Save Report has no button: the session save modal is unreachable
+---
+
+## 022 — The recording painter runs in the AngleMotion page, so a hidden tab freezes the recording without the floating window
+
+**Found:** 2026-10-07, while removing the floating camera window for launch.
+(Numbered 022: 021 was held for the guided-tours branch, whose entry landed as 035.)
+
+**Symptom (measured, not yet seen by a coach).** Without a floating Document PiP
+window, a recording whose AngleMotion tab goes into the background drops to
+about 1 frame a second until the tab comes back.
+
+**Verified root cause.** The recorded video is `recCanvas.captureStream()`, and
+the painter that copies the screen grab into `recCanvas` (`paintOnce` in
+`contexts/RecordingContext.tsx`) is driven by a timer in the AngleMotion page
+(or by the floating window's animation frames when one is open). Chrome
+throttles a hidden page to one timer tick a second and stops its animation
+frames. Measured in Chromium (real windowed browser under Xvfb, Playwright's
+throttling opt-outs removed, entire-screen capture running): AngleMotion tab
+sent behind another tab → timers 30 → 1 Hz, animation frames 60 → 0, painter
+30 → 1 fps, canvas-recorded video 38 → 2 KB/s, while a MediaRecorder on the RAW
+display track kept ~44 KB/s. With a Document PiP window open, the hidden page
+kept 30 timer ticks and 60 frames a second and the painter ran at full rate.
+The canvas render loop and the webcam background removal
+(`lib/webcamSegmentation.ts`) are also animation-frame driven and stop the same
+way, which only matters when the AngleMotion page itself is in the shared
+surface.
+
+**Fault assessment.** Architectural, pre-existing: it is why the floating window
+existed. Not introduced by removing the camera window, because the window is
+kept (controls-only) as the keep-alive for entire-screen and window share
+(`KEEPALIVE_WINDOW_SURFACES`). Tab share closes it: it normally captures the
+AngleMotion tab itself, which Chrome is expected to keep rendering while
+captured; that could not be measured here (real tab capture does not start in
+the test container) and is on Vin's real-Chrome test list.
+
+**Proposed fix (needs approval — changes the painter/captureStream topology,
+CLAUDE.md §6).** Record the display track directly instead of a canvas copy of
+it: no page timer in the path, so no throttling in any mode and no keep-alive
+window. Costs: the burned-in watermark (drawn by the painter today) would have to
+move to post-processing (the WebM → MP4 ffmpeg pass already runs), the 1280 px
+downscale would come from getDisplayMedia constraints instead, and it only works
+while the engine stamps nothing into the frame (true with the camera window
+off).
+
+**Severity:** medium — silent quality loss in a recording, but avoided today by
+the keep-alive window in the two modes where it is likely.
+
+---
+
+## 023 — A publishable/anon key in the service-role slot makes server writes fail on RLS (YouTube Connect broke in production)
+
+**Found:** 2026-10-07, production report: Connect YouTube → "Could not save the
+connection". Vercel log: `[youtube/connection] store failed: new row violates
+row-level security policy for table "youtube_connections"`.
+
+**Verified root cause (code side).** `public.youtube_connections` has RLS on and
+deliberately ZERO policies (`supabase/migrations/20260728120000_youtube_connections.sql`);
+the only writer is the service-role client (`lib/supabase/service.ts`), which
+bypasses RLS. An RLS refusal therefore means the client was built from a key
+whose role is NOT service_role. The helper read only `SUPABASE_SERVICE_ROLE_KEY`
+and accepted any non-empty value, so a publishable (`sb_publishable_…`) or anon
+key in that variable produced a client that looked configured and ran as anon:
+writes refused by RLS, reads silently empty. No code on main changed between the
+late-September key migration and the report, so the value in Vercel Production is
+the remaining suspect; env changes apply only to deployments made after them.
+
+**Fix (code).** `createSupabaseServiceClient` classifies the key by format
+(`sb_secret_…` / service_role JWT accepted; publishable / anon JWT refused),
+also accepts `SUPABASE_SECRET_KEY`, and logs one specific error naming the
+variables and their kinds instead of building an anon client. `/api/health`
+reports the key KIND (never the value). The production value itself must be
+corrected in Vercel (see the PR).
+
+**Same exposure elsewhere.** Only two server writers use this client on main:
+the YouTube connection store and the Stripe webhook (`app/api/stripe/webhook/route.ts`).
+The webhook on main IGNORES the write result (supabase-js returns `{ error }`, it
+does not throw) and always answers 200, so a refused subscription write is lost
+and Stripe never retries. PR #64 (`claude/billing-r0`) fixes that; #65 adds two
+more service-client writers (`app/api/academy-members`, `app/api/ebook`).
+
+**Severity:** high — YouTube Connect is unusable in production; paid checkouts
+would not record a subscription while the key is wrong.
+
+---
+
+## 024 — YouTube upload blocked by CORS ("Failed to fetch") — resumable session created without an Origin
+
+**Found:** 2026-10-07, production: Upload to YouTube on the Recording complete
+screen failed with "Failed to fetch"; console: `Access to fetch at
+'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable…&upload_id=…'
+from origin 'https://www.anglemotion.com' has been blocked by CORS policy`.
+(Numbered 024: 023 is on `claude/youtube-connect-fix`; the tours branch's entry landed as 035.)
+
+**Verified root cause.** Since 2026-09-14 (`91dc569d`, PR #47) the server only
+creates the resumable session (`app/api/youtube/upload-session/route.ts`) and the
+browser PUTs the bytes to the session URL (`lib/export/youtubeResumableUpload.ts`).
+That PUT is cross-origin, and Google's upload server answers it with
+`Access-Control-Allow-Origin` only for the origin given when the session was
+created. The session was created with Node's fetch, which sends no `Origin`
+(measured locally), so no browser origin was ever allowed. Google's upload host
+returns `access-control-allow-origin` only when the request carries an Origin
+(measured against `www.googleapis.com/upload/youtube/v3/videos`).
+
+**Fix.** The route reads the request's `Origin`, accepts only
+`https://anglemotion.com`, `https://www.anglemotion.com` (and localhost in
+development), and creates the session with it; a missing or other origin gets
+no session. A failure before Google confirms any bytes now shows "YouTube upload
+could not start. Try again, or download the file instead."
+
+**Severity:** high — no browser upload to YouTube could succeed.
+
+---
+
+## 025 — Customer portal could open by email match, not by the linked Stripe Customer — RESOLVED
+
+**Found:** 2026-10-07, while mapping the Stripe integration for the invoicing work.
+
+**Symptom.** None reported. `docs/STRIPE_LAUNCH_SETUP.md` §6 said the portal
+always opens "with the coach's stored Customer", and that was not what the code
+did.
+
+**Verified root cause.** `app/api/stripe/portal/route.ts` fell back to
+`stripe.customers.list({ email })` when the coach's `subscriptions` row had no
+`stripe_customer_id`. It opened the portal for the first Stripe Customer with
+that email. That customer could be an old one-off buyer (ebook, analyses), or
+an empty email if the session had none. An email match is not proof of
+ownership.
+
+**Fault assessment.** Pre-existing (before R0). Low exposure: sign-in is Google
+with a verified email, so in practice the match was the same person. But it
+contradicted the documented contract and could surface unrelated purchase
+history.
+
+**Fix.** The portal opens only for the Customer the webhook linked to the
+account. No row means 404 ("subscribe first"). Read errors answer 503, and
+Stripe errors are caught.
+
+**Severity:** low.
+
+---
+
+## 026 — Two live webhook endpoints for one app, so one always failed its signature check — RESOLVED (dashboard)
+
+**Found:** 2026-10-07, during the live Stripe setup.
+
+**Symptom.** Live mode had two endpoints:
+- `https://anglemotion.com/api/stripe/webhook`, created 2026-06-25;
+- `https://www.anglemotion.com/api/stripe/webhook`, created 2026-07-04.
+
+Each had the same three events.
+
+**Verified root cause.** Each endpoint has its own signing secret. Vercel holds
+one `STRIPE_WEBHOOK_SECRET`, so every delivery to the other endpoint failed
+signature verification (400). The site is served at `www.anglemotion.com`
+(`app/privacy/page.tsx:12`).
+
+**Fault assessment.** Configuration only. No subscriptions existed, so nothing
+was lost.
+
+**Fix.** One new live endpoint on `www.anglemotion.com` with the launch events.
+Its secret is the one in Vercel. Both old endpoints are **disabled**: the Stripe
+connector can't delete endpoints, so delete them in the dashboard whenever
+convenient.
+
+**Severity:** medium while subscriptions exist (half the deliveries lost and
+retried); none now.
+
+---
+
+## 027 — Subscription sales were recorded without their PaymentIntent, so a refund could not be matched — RESOLVED
+
+**Found:** 2026-10-10, while adding refund tracking to invoicing.
+
+**Symptom.** None yet (no live subscription sale so far). A subscription
+record's `stripe_payment_intent_id` would have been empty.
+
+**Verified root cause.** `fiscalDraftFromInvoice` (`lib/billing/invoicing/draft.ts`)
+reads the PaymentIntent from `invoice.payments`, which Stripe does not include
+in the `invoice.paid` webhook payload (it is an includable field). The value
+was always null on the webhook path.
+
+**Fault assessment.** Introduced with the invoicing work (P1); caught before
+any live subscription sale.
+
+**Fix.** When the payload lacks it, the webhook looks it up with
+`stripe.invoicePayments.list({ invoice })` (`lib/billing/webhookSync.ts`,
+`paymentIntentForInvoice`); the historical import does the same.
+`charge.refunded` then matches the sale by PaymentIntent.
+
+**Class of mistake.** Reading an expandable/includable field from a webhook
+payload as if it were always present.
+
+**Severity:** low (refunds of subscriptions are rare; nothing was lost).
+
+---
+
+## 028 — The forfettario wording contains a character SdI rejects (’ U+2019) — OPEN (needs Vin's decision)
+
+**Found:** 2026-10-10, validating generated XML against the FatturaPA 1.2.1 XSD.
+
+**Symptom.** An invoice whose Causale holds the wording exactly as on Vin's
+existing invoices fails XSD validation: `Element 'Causale': [facet 'pattern']
+… is not accepted by the pattern '[\p{IsBasicLatin}\p{IsLatin-1Supplement}]{1,200}'`.
+
+**Verified root cause.** The text uses the typographic apostrophe ’
+("dell’articolo", "d’acconto"), outside Latin-1. SdI accepts only Basic Latin
+and Latin-1 Supplement.
+
+**Fault assessment.** Not a code defect: the wording is preserved exactly, as
+required. The app flags it in Invoice settings and blocks issuing; it never
+rewrites it.
+
+**Proposed fix.** Vin presses "Replace ’ with '" (and Save) in Invoice settings,
+or edits the text directly.
+
+**Severity:** blocking for issuing until decided; no data risk.
+
+---
+
+## 029 — The Eraser's size could not be changed on phones (or with the toolbar collapsed) — RESOLVED
+
+**Found:** 2026-10-12, while adding size presets to the Eraser.
+
+**Symptom.** With the Eraser picked, the Draw list showed an "Eraser size"
+slider on a desktop-width toolbar, but nothing on a phone or with the toolbar
+collapsed: those coaches were stuck at the 15 px default.
+
+**Verified root cause.** `components/ToolPalette.tsx` rendered the slider only
+when `!io` (not icon-only), and the toolbar is icon-only on phones, on mobile
+chrome and when collapsed.
+
+**Fault assessment.** Our defect (layout condition copied from the label-only
+rows); no data risk.
+
+**Fix.** The size control (Small / Medium / Large presets + slider) now shows in
+every layout; in the icon-only column the presets stack and the slider is
+vertical, like the Style panel's thickness bar. Verified at 1400 px and 390 px
+(touch) in Chromium.
+
+**Severity:** low (feature unreachable on phones; erasing itself worked).
+
+---
+
+## 030 — The skeleton-lock click point was never cleared — RESOLVED (cleared on a new video)
+
+**Found:** 2026-10-12, while making AI Track use the locked player.
+
+**Symptom.** None visible on its own; a latent wrong value. The point a coach
+clicked to lock the skeleton (`pendingFocusRef` in `components/Canvas.tsx`) was
+kept for the rest of the session — across unlocks and across loading a
+different video — and is the fallback crop centre whenever auto-focus loses the
+player.
+
+**Verified root cause.** It was assigned in exactly one place (the click) and
+never reset anywhere.
+
+**Fault assessment.** Our defect; low impact (auto-focus usually overrides it),
+but a point on one clip is meaningless on another.
+
+**Fix.** Cleared together with the AI Track lock target when a NEW video loads
+(the video-source lifecycle effect). Deliberately NOT cleared on unlock (owner's
+decision, 2026-10-12).
+
+**Severity:** low.
+
+---
+
+## 031 — The live MediaPipe skeleton ignores the player lock — OPEN
+
+**Found:** 2026-10-12, same investigation.
+
+**Symptom.** With foot lines on (live MediaPipe), the live skeleton can sit on a
+different person from the one the coach locked.
+
+**Verified root cause.** `detectPoseLive` (`lib/mediapipePose.ts`) runs the
+VIDEO-mode landmarker on the full frame with `numPoses: 1`; the lock's click
+point / crop is only sent to the MoveNet worker (`poseWorkerBridge.setFocusPoint`).
+
+**Fault assessment.** Our gap; the lock was built for the MoveNet live path.
+
+**Proposed fix.** Feed the live landmarker a crop around the locked player, or
+run it multi-person and pick with `lib/aiTrackLock.ts` (as AI Track now does).
+Needs a latency measurement first — the live budget is tight.
+
+**Severity:** medium (wrong-player skeleton on two-player footage with foot lines on).
+
+**Not changed** in the AI Track change (owner's decision, 2026-10-12).
+
+---
+
+## 032 — Timeline selection (Motion Layer / Metrics section) stuck or ran away after + / − — RESOLVED
+
+**Found:** 2026-10-12, reported by Vin; reproduced in Chromium on a 9 s clip.
+
+**Symptom.** After using the timeline's + / − zoom, the selection handles
+could not be dragged, or a small drag threw the selection somewhere else.
+Measured on main: (1) zoom in ×4 around a playhead outside the selection →
+both handles disappeared; (2) Motion Layer: dragging the end handle to 30 %
+collapsed the selection to 0.008–0.253 s; (3) zoomed in, dragging the end
+handle +40 px reset the zoom mid-drag and moved the end to a different place
+(2.64 → 6.67 s on the Metrics section instead of +0.14 s).
+
+**Verified root cause** (`components/PreciseTimeline.tsx`).
+- The handles rendered only while part of the selection was in view
+  (`trimWidthPct > 0`), so zooming elsewhere removed them.
+- The view effect was keyed on the `trimRange` OBJECT: with fitting off it set
+  the view to "All" on every selection change (every drag frame); with fitting
+  on (Motion Layer) it re-fitted mid-drag once the span changed by > 50 %.
+  Either way the pixels under the finger meant a new time on the next move.
+- Handle drags mapped the pointer to an ABSOLUTE time, ignoring the 10 px
+  track inset, and had no pointercancel / lostpointercapture handling.
+
+**Fix.** View and selection are independent (`lib/timelineView.ts`): zoom only
+writes the view; the auto-fit reacts to the selection's values, never during a
+handle drag; handle drags move by the pointer's movement converted with the
+current zoom (so a handle pinned at the edge still moves); handles always
+render; drags end on up, cancel or lost capture. Tests: `tests/timelineView.test.ts`.
+
+**Severity:** high for the Motion Layer workflow (selection unusable after zooming).
+
+## 033 — Third-party iframes are blocked by the site-wide COEP header — MITIGATED for the Trustpilot widget
+
+**Found:** 2026-10-12, while adding the Trustpilot Review Collector to the landing.
+
+**Symptom.** In Chromium, a cross-origin iframe on any page of this site
+renders as an empty grey error box (`chrome-error://chromewebdata/`) unless
+the framed page sends its own `Cross-Origin-Embedder-Policy` header. Measured
+with a stub TrustBox served without that header; with the header it loads.
+
+**Verified root cause.** `next.config.js` sends `Cross-Origin-Embedder-Policy:
+credentialless` (with `Cross-Origin-Opener-Policy: same-origin`) on every
+non-API route. COEP applies to nested documents, and `credentialless` only
+relaxes subresources, not iframes.
+
+**Fault.** Not a bug in the header (it gives the app cross-origin isolation);
+a constraint any new embed must meet.
+
+**Fix (Trustpilot).** `components/TrustpilotReviewCollector.tsx` marks the
+widget's iframe with the `credentialless` attribute as the bootstrap inserts
+it and restarts its load once (`markCredentialless`, `lib/trustpilot.ts`);
+one request per load, measured. Chrome/Edge 110+ honour the attribute (the
+iframe then runs without Trustpilot cookies, in ephemeral storage). Not
+verified against the real widget.trustpilot.com (unreachable from the dev
+sandbox), nor in Firefox or Safari. If a browser enforces COEP but lacks the
+attribute and Trustpilot sends no COEP header, the widget shows the grey box.
+
+**Any other new embed** needs the same treatment or its own COEP header.
+Headers are unchanged.
+
+**Severity:** medium (a broken box on the public landing in the worst case).
+
+## 034 — Landing header wraps "Sign in" and "Start free" onto two lines at 390 px — OPEN (pre-existing)
+
+**Found:** 2026-10-12, in the 390 px screenshots for the Trustpilot widget.
+
+**Symptom.** On a 390 px-wide phone the sticky landing header has the
+wordmark, "Sign in" and "Start free"; both buttons wrap onto two lines.
+
+**Root cause.** Not investigated (header CSS in `components/LandingPage.tsx`,
+untouched by the Trustpilot change). Proposed fix: `white-space: nowrap` on
+the header buttons and a smaller gap below ~400 px.
+
+**Severity:** low (cosmetic).
+
+## 035 — Save Report has no button: the session save modal is unreachable
 
 **Symptom.** The player profile tells coaches "Start from the player, use tools
 in Video Analysis, then Save Report" and, with no Doc yet, "No Google Doc yet —

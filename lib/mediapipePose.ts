@@ -371,6 +371,125 @@ export async function detectPosePrecise(
   });
 }
 
+// ── LOCKED-PLAYER path: a separate multi-person landmarker ──────────────────
+//
+// Used ONLY when the coach has locked a player (lib/aiTrackLock.ts). It asks
+// for up to MAX_TRACK_POSES people per frame so the pass can follow the locked
+// one instead of taking MediaPipe's single most salient person. A separate
+// instance on purpose: the shared IMAGE landmarkers above (numPoses 1) back
+// AI Track without a lock, AI Detect and the foot probe, and must stay exactly
+// as they are.
+const multiLandmarkerPromises: Partial<Record<PoseModel, Promise<PoseLandmarkerT | null>>> = {};
+
+async function getMultiLandmarker(model: PoseModel, numPoses: number): Promise<PoseLandmarkerT | null> {
+  if (!multiLandmarkerPromises[model]) {
+    multiLandmarkerPromises[model] = (async () => {
+      try {
+        const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision');
+        const fileset = await FilesetResolver.forVisionTasks('/mediapipe-wasm');
+        const make = (delegate: 'GPU' | 'CPU') =>
+          PoseLandmarker.createFromOptions(fileset, {
+            baseOptions: { modelAssetPath: MODEL_ASSET[model], delegate },
+            runningMode: 'IMAGE',
+            numPoses,
+          });
+        try {
+          return await make('GPU');
+        } catch {
+          return await make('CPU');
+        }
+      } catch (e) {
+        console.warn(`[mediapipePose] multi-person Pose Landmarker (${model}) unavailable:`, e);
+        return null;
+      }
+    })();
+  }
+  return multiLandmarkerPromises[model]!;
+}
+
+/** Overlap of two poses' joint boxes (for pairing a flipped detection with its base). */
+function kpBoxIou(a: PoseKeypoint[], b: PoseKeypoint[]): number {
+  const box = (k: PoseKeypoint[]) => {
+    const s = k.slice(0, 17).filter((p) => p.score >= 0.3);
+    if (s.length < 4) return null;
+    return {
+      x0: Math.min(...s.map((p) => p.x)), x1: Math.max(...s.map((p) => p.x)),
+      y0: Math.min(...s.map((p) => p.y)), y1: Math.max(...s.map((p) => p.y)),
+    };
+  };
+  const p = box(a), q = box(b);
+  if (!p || !q) return 0;
+  const ix = Math.max(0, Math.min(p.x1, q.x1) - Math.max(p.x0, q.x0));
+  const iy = Math.max(0, Math.min(p.y1, q.y1) - Math.max(p.y0, q.y0));
+  const area = (r: typeof p) => Math.max(1, r.x1 - r.x0) * Math.max(1, r.y1 - r.y0);
+  return (ix * iy) / (area(p) + area(q) - ix * iy);
+}
+
+/**
+ * Locked-player detection on the current PAUSED frame: every person found (up
+ * to `maxPoses`), then `pick` chooses which one is the locked player (-1 =
+ * none). With TTA the flipped pass is paired to the chosen person by overlap
+ * and merged exactly as detectPosePrecise does (agreeing joints only).
+ * `pose` is null when there is no frame, no model, or `pick` found nobody;
+ * `available` is false only when the model could not be loaded.
+ */
+export async function detectLockedPose(
+  video: HTMLVideoElement,
+  params: TrackParams,
+  maxPoses: number,
+  pick: (candidates: PoseKeypoint[][]) => number,
+): Promise<{ pose: PoseKeypoint[] | null; candidates: number; available: boolean }> {
+  if (!video || video.videoWidth < 16 || video.readyState < 2) return { pose: null, candidates: 0, available: true };
+  const lm = (await getMultiLandmarker(params.model, maxPoses)) ?? (await getMultiLandmarker('full', maxPoses));
+  if (!lm) return { pose: null, candidates: 0, available: false };
+
+  const vw = video.videoWidth, vh = video.videoHeight;
+  let cands: PoseKeypoint[][];
+  try {
+    cands = (lm.detect(video)?.landmarks ?? [])
+      .map((l) => landmarksToKeypoints(l, vw, vh, false))
+      .filter((k): k is PoseKeypoint[] => !!k);
+  } catch {
+    return { pose: null, candidates: 0, available: true };
+  }
+  const idx = cands.length ? pick(cands) : -1;
+  if (idx < 0 || !cands[idx]) return { pose: null, candidates: cands.length, available: true };
+  const base = cands[idx];
+  if (!params.tta) return { pose: base, candidates: cands.length, available: true };
+
+  let flip: PoseKeypoint[] | null = null;
+  try {
+    const flips = (lm.detect(drawFlipped(video))?.landmarks ?? [])
+      .map((l) => landmarksToKeypoints(l, vw, vh, true))
+      .filter((k): k is PoseKeypoint[] => !!k);
+    let bestIou = 0.3;
+    for (const f of flips) {
+      const v = kpBoxIou(base, f);
+      if (v >= bestIou) { bestIou = v; flip = f; }
+    }
+  } catch {
+    flip = null;
+  }
+  if (!flip) return { pose: base, candidates: cands.length, available: true };
+
+  const AGREE = vw * 0.08;
+  const byName = new Map(flip.map((k) => [k.name, k]));
+  const merged = base.map((ka) => {
+    const kb = byName.get(ka.name);
+    if (!kb) return ka;
+    if (Math.hypot(ka.x - kb.x, ka.y - kb.y) > AGREE) return ka;
+    const w = ka.score + kb.score;
+    if (w <= 0) return ka;
+    return {
+      name: ka.name,
+      x: (ka.x * ka.score + kb.x * kb.score) / w,
+      y: (ka.y * ka.score + kb.y * kb.score) / w,
+      score: Math.max(ka.score, kb.score),
+    };
+  });
+  return { pose: merged, candidates: cands.length, available: true };
+}
+
 // ── LIVE path: a SECOND landmarker, in VIDEO running mode ──────────────────
 //
 // Deliberately a separate instance from the IMAGE-mode ones above. Two reasons:

@@ -7,6 +7,8 @@ import { ArrowLeft, Plus, X } from 'lucide-react';
 import PlayerSessionTimeline from '@/components/players/PlayerSessionTimeline';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
+import { useEntitlement } from '@/lib/useEntitlement';
+import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 
 type Player = {
@@ -49,6 +51,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const [sessions, setSessions] = useState<PlayerSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // Without Pro the profile stays readable; edits are server-gated (403 plan_required).
+  const canEdit = useEntitlement().can('players');
   const [saving, setSaving] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
   const [sheet, setSheet] = useState<TechnicalSheetRow[] | null>(null);
@@ -82,7 +86,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error ?? 'Could not save the technical sheet');
+        throw new Error(data.message ?? data.error ?? 'Could not save the technical sheet');
       }
     } catch (e: unknown) {
       // Surface the failure instead of reporting a silent false success.
@@ -174,7 +178,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Save failed');
+      if (!res.ok) throw new Error(data.message ?? data.error ?? 'Save failed');
       setPlayer(data.player);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Save failed');
@@ -224,6 +228,12 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       >
         <ArrowLeft size={16} /> Players
       </Link>
+
+      {!canEdit ? (
+        <PlanLockedNotice feature="players">
+          The player database is part of Pro. This profile stays readable; editing it needs Pro.
+        </PlanLockedNotice>
+      ) : null}
 
       {err ? (
         <div

@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 
 export async function GET() {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'academy');
+  if (denied) return denied;
 
   const { data, error } = await session.supabase
     .from('academy_questions')
@@ -17,6 +20,8 @@ export async function GET() {
 export async function POST(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'academy');
+  if (denied) return denied;
 
   const body = await req.json();
   if (!body.title?.trim()) return NextResponse.json({ error: 'title is required' }, { status: 400 });
@@ -41,6 +46,8 @@ export async function POST(req: Request) {
 export async function DELETE(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'academy');
+  if (denied) return denied;
 
   const { id } = await req.json();
   const { error } = await session.supabase

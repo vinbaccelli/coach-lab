@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import { DEFAULT_TECHNICAL_SHEET_LABELS } from '@/lib/players/technicalSheet';
 
 /**
@@ -26,6 +27,8 @@ export async function GET() {
 export async function PUT(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'players');
+  if (denied) return denied;
 
   const body = (await req.json()) as { technicalSheetTemplate?: string[] };
   const labels = (body.technicalSheetTemplate ?? [])

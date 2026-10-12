@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { supabaseKeyKind } from '@/lib/supabase/service';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,6 +16,11 @@ export async function GET() {
       NEXT_PUBLIC_SUPABASE_URL: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
       SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      // The KIND of key only (e.g. 'secret', 'publishable', 'jwt:anon'), never
+      // the value: a publishable/anon key here makes every server write fail on
+      // RLS while the presence boolean above still reads true.
+      SUPABASE_SERVICE_ROLE_KEY_kind: supabaseKeyKind(process.env.SUPABASE_SERVICE_ROLE_KEY),
+      SUPABASE_SECRET_KEY_kind: supabaseKeyKind(process.env.SUPABASE_SECRET_KEY),
       GOOGLE_OAUTH_CLIENT_ID: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
       GOOGLE_OAUTH_CLIENT_SECRET: !!process.env.GOOGLE_OAUTH_CLIENT_SECRET,
       STRIPE_SECRET_KEY: !!process.env.STRIPE_SECRET_KEY,

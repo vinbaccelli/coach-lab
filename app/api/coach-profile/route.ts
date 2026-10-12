@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 
 /** Generous, but small enough that an accidental paste of a document is caught. */
 const MAX_BIO_CHARS = 4000;
@@ -32,6 +33,8 @@ export async function GET() {
 export async function PUT(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'coachProfile');
+  if (denied) return denied;
 
   const body = await req.json();
   const { profile: profileData, services, links } = body as {

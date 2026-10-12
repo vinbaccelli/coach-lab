@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { decodeMatchScreenshots } from '@/lib/gemini/decodeMatchScreenshots';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { isAdmin } from '@/lib/admin';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -8,6 +9,10 @@ export const maxDuration = 300;
 export async function POST(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  // Unreferenced since the decoder moved to local OCR (app/decoder/page.tsx),
+  // but still deployed and it spends the Gemini key: admins only until it is
+  // either wired back in (behind a plan check) or deleted.
+  if (!isAdmin(session.email)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const ct = req.headers.get('content-type') ?? '';
   if (!ct.includes('multipart/form-data')) {

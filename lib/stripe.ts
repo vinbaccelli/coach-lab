@@ -6,33 +6,28 @@ export const stripe = process.env.STRIPE_SECRET_KEY
   ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2026-05-27.dahlia' })
   : (null as unknown as Stripe);
 
-// Six recurring prices — 2 cycles × 3 tiers. Pro falls back to the original
-// single-tier env vars (STRIPE_PRICE_MONTHLY/YEARLY) so existing Pro subscribers
-// and config keep working; STRIPE_PRICE_PRO_* override them when set.
-export const PRICES = {
-  lightMonthly: process.env.STRIPE_PRICE_LIGHT_MONTHLY ?? '',
-  lightYearly: process.env.STRIPE_PRICE_LIGHT_YEARLY ?? '',
-  proMonthly: process.env.STRIPE_PRICE_PRO_MONTHLY ?? process.env.STRIPE_PRICE_MONTHLY ?? '',
-  proYearly: process.env.STRIPE_PRICE_PRO_YEARLY ?? process.env.STRIPE_PRICE_YEARLY ?? '',
-  academyMonthly: process.env.STRIPE_PRICE_ACADEMY_MONTHLY ?? '',
-  academyYearly: process.env.STRIPE_PRICE_ACADEMY_YEARLY ?? '',
+/**
+ * The six EUR launch prices — one env var per (plan, cycle), nothing else.
+ * There is deliberately NO fallback: the pre-launch USD prices and the legacy
+ * single-tier STRIPE_PRICE_MONTHLY/YEARLY vars are gone, so a missing var
+ * means "not sold", never "sold at some other price".
+ */
+export const PRICE_ENV: Record<PlanId, Record<BillingCycle, string>> = {
+  light: { monthly: 'STRIPE_PRICE_LIGHT_MONTHLY', yearly: 'STRIPE_PRICE_LIGHT_YEARLY' },
+  pro: { monthly: 'STRIPE_PRICE_PRO_MONTHLY', yearly: 'STRIPE_PRICE_PRO_YEARLY' },
+  academy: { monthly: 'STRIPE_PRICE_ACADEMY_MONTHLY', yearly: 'STRIPE_PRICE_ACADEMY_YEARLY' },
+};
 
-  // Back-compat aliases (old callers used PRICES.monthly / PRICES.yearly = Pro).
-  monthly: process.env.STRIPE_PRICE_PRO_MONTHLY ?? process.env.STRIPE_PRICE_MONTHLY ?? '',
-  yearly: process.env.STRIPE_PRICE_PRO_YEARLY ?? process.env.STRIPE_PRICE_YEARLY ?? '',
-} as const;
-
-/** Resolve a (plan, cycle) to its configured Stripe price ID (or '' if unset). */
+/** The configured Stripe price ID for (plan, cycle), or '' when its env var is unset. */
 export function priceIdFor(plan: PlanId, cycle: BillingCycle): string {
-  const key = `${plan}${cycle === 'yearly' ? 'Yearly' : 'Monthly'}` as keyof typeof PRICES;
-  return PRICES[key] ?? '';
+  return (process.env[PRICE_ENV[plan][cycle]] ?? '').trim();
 }
 
-/** Reverse-map a purchased Stripe price ID back to its tier (for the webhook). */
+/** Reverse-map a purchased Stripe price ID back to its plan (for the webhook). */
 export function tierForPriceId(priceId: string | null | undefined): PlanId | null {
   if (!priceId) return null;
-  if (priceId === PRICES.lightMonthly || priceId === PRICES.lightYearly) return 'light';
-  if (priceId === PRICES.proMonthly || priceId === PRICES.proYearly) return 'pro';
-  if (priceId === PRICES.academyMonthly || priceId === PRICES.academyYearly) return 'academy';
+  for (const plan of Object.keys(PRICE_ENV) as PlanId[]) {
+    if (priceId === priceIdFor(plan, 'monthly') || priceId === priceIdFor(plan, 'yearly')) return plan;
+  }
   return null;
 }

@@ -33,16 +33,53 @@ let prevCentroid: { x: number; y: number } | null = null;
 // Adaptive precision: start with THUNDER on GPU, but if measured inference is
 // too slow for realtime on this machine (older iGPUs), swap to LIGHTNING.
 let currentModel: 'thunder' | 'lightning' = 'lightning';
+let dbgBackend = '?'; // TEMP-DEBUG-POSE
+/** TEMP-DEBUG-POSE: `&pose=thunder` — hold THUNDER, never downgrade. */
+let dbgForceThunder = false;
+/** Set by the bridge when this worker replaces one that hung. */
+let startOnLightning = false;
+/** TEMP-DEBUG-POSE: the first inference times, reported once (warm-up curve). */
+const dbgFirstInfers: string[] = [];
 let inferSamples: number[] = [];
 let modelSwapInFlight = false;
-// Downgrade fast: on a weak (mobile) GPU the first Thunder frames are slow and
-// jittery. 6 samples cuts that jitter window in half vs 12 while still averaging
-// out one-off slow frames on capable desktops (which stay on Thunder).
-const SWAP_AFTER_SAMPLES = 6;
-// 55 ms keeps THUNDER (markedly more precise) on borderline GPUs that hover in
-// the 45-55 ms band — with display interpolation, ~18 Hz detection is smooth,
-// so precision is worth more than the extra frames Lightning would give.
-const SWAP_THRESHOLD_MS = 55;
+// Sliding window of THUNDER inference times the speed check judges.
+const SWAP_WINDOW = 6;
+// THUNDER's budget: keep the more precise model while its MEDIAN inference stays
+// at or under this. Sized from what the skeleton has to keep up with, not a fixed
+// frame rate. The display interpolates between detections, so it trails the
+// video by about one round trip plus one detection interval. The fastest joint in
+// the demo clip (the racket wrist on the forward swing, 1920x1080 @ 60 fps) moves
+// about 220 px/s, under 4 px per video frame. At 80 ms inference (~100 ms round
+// trip, ~10 detections/s) the skeleton trails that wrist by ~45 px of a 1920 px
+// frame (about 2%), inside the 100-250 ms refresh a coach reads as locked on.
+// The old 55 ms budget pushed devices in the 55-80 ms band to LIGHTNING for
+// refresh they did not need.
+const THUNDER_BUDGET_MS = 80;
+// Judge the steady state, not the warm-up. The first inferences on a fresh GPU
+// graph pay one-off shader compilation — measured on an iPhone 14 (WebKit,
+// WebGL, THUNDER): 37301, 728, 684, 692, then 40–53 ms. Averaging the first six
+// of those dropped a phone that runs THUNDER at ~45 ms to LIGHTNING. So: discard
+// the first inferences, judge the MEDIAN of a sliding window, and only downgrade
+// when it stays over budget for a full window's worth of consecutive results —
+// sustained slowness, not one slow stretch (the live MediaPipe guard follows the
+// same rules, MP_LIVE_* in components/Canvas.tsx).
+const SWAP_WARMUP_SKIP = 3;
+const SWAP_SUSTAIN = SWAP_WINDOW;
+let swapWarmupLeft = SWAP_WARMUP_SKIP;
+let swapOverBudgetRun = 0;
+// Practice inferences run before `ready`, so the shader compilation above
+// happens while the skeleton is loading instead of after the coach presses play
+// (the worker is blocked while WebGL compiles, so a frame sent then simply waits).
+// Two frame sizes: a full 16:9 frame as sent (512 px) and its default 0.6 crop.
+const WARMUP_SIZES: ReadonlyArray<readonly [number, number]> = [[512, 288], [307, 173]];
+const WARMUP_RUNS_PER_SIZE = 2;
+// Device speed check, also before `ready`: time a few THUNDER inferences once the
+// shaders are compiled and keep THUNDER only if its median fits the budget the
+// in-play check uses. A device that cannot run it (an older phone) swaps to
+// LIGHTNING while the skeleton is still loading, instead of after the coach
+// presses play, where loading and compiling the new model freezes the skeleton
+// for seconds. The in-play check stays as the backstop.
+const SPEED_CHECK_RUNS = 5;
 
 // ── Backend-loss guard: an inference must never block the bridge forever ──────
 // A WebGL context loss makes estimatePoses' async GPU→CPU readback never settle,
@@ -85,6 +122,7 @@ function attachContextLossHandler() {
   ctxLossCanvas = canvas;
   canvas.addEventListener('webglcontextlost', (ev) => {
     ev.preventDefault(); // keep the context restorable
+    self.postMessage({ type: 'dbg', message: 'webgl context lost' }); // TEMP-DEBUG-POSE
     recoverBackend('webglcontextlost event');
   });
 }
@@ -107,6 +145,7 @@ function recoverBackend(reason: string) {
   if (now - lastRecoveryAt < backoff) return; // honour exponential backoff between attempts
   lastRecoveryAt = now;
   recovering = true;
+  self.postMessage({ type: 'dbg', message: `recovery: ${reason}` }); // TEMP-DEBUG-POSE
   ready = false;
   console.warn(`[PoseWorker] Backend recovery attempt ${recoveryFailures + 1} (${reason})`);
   void (async () => {
@@ -154,22 +193,108 @@ function makeDetector(model: 'thunder' | 'lightning') {
 }
 
 /** Swap THUNDER → LIGHTNING when this machine can't run it at realtime. */
-async function maybeDowngradeModel(lastMs: number) {
+function maybeDowngradeModel(lastMs: number) {
+  if (dbgForceThunder) return; // TEMP-DEBUG-POSE
   if (currentModel !== 'thunder' || modelSwapInFlight) return;
+  if (swapWarmupLeft > 0) { swapWarmupLeft -= 1; return; }
   inferSamples.push(lastMs);
-  if (inferSamples.length < SWAP_AFTER_SAMPLES) return;
-  const avg = inferSamples.reduce((s, v) => s + v, 0) / inferSamples.length;
-  inferSamples = [];
-  if (avg <= SWAP_THRESHOLD_MS) return;
+  if (inferSamples.length > SWAP_WINDOW) inferSamples.shift();
+  if (inferSamples.length < SWAP_WINDOW) return;
+  const sorted = [...inferSamples].sort((a, b) => a - b);
+  const med = sorted[sorted.length >> 1];
+  swapOverBudgetRun = med > THUNDER_BUDGET_MS ? swapOverBudgetRun + 1 : 0;
+  if (swapOverBudgetRun < SWAP_SUSTAIN) return;
+  void switchToLightning(`thunder median ${Math.round(med)}ms > ${THUNDER_BUDGET_MS}ms`);
+}
+
+/**
+ * Load, warm and swap in LIGHTNING. Used by the speed check and by the bridge's
+ * watchdog ('degrade'). The worker posts 'switch' start/end so the bridge knows
+ * it is busy, not dead, while the new model compiles (which blocks this thread).
+ */
+async function switchToLightning(reason: string) {
+  if (currentModel !== 'thunder' || modelSwapInFlight) return;
   modelSwapInFlight = true;
+  const t0 = performance.now();
+  self.postMessage({ type: 'switch', phase: 'start' });
+  self.postMessage({ type: 'dbg', message: `model switch start (${reason})` }); // TEMP-DEBUG-POSE
   try {
     const next = await makeDetector('lightning');
+    const tLoaded = performance.now();
+    await warmUpDetector(next);
     try { detector?.dispose?.(); } catch { /* noop */ }
     detector = next;
     currentModel = 'lightning';
-    console.log(`[PoseWorker] Thunder too slow here (avg ${Math.round(avg)}ms) — switched to Lightning for realtime tracking`);
-  } catch { /* keep thunder */ } finally {
+    const now = performance.now();
+    self.postMessage({ type: 'dbg', message: `model switch end ${Math.round(now - t0)}ms (load ${Math.round(tLoaded - t0)}, warm ${Math.round(now - tLoaded)})` }); // TEMP-DEBUG-POSE
+    console.log(`[PoseWorker] Switched to Lightning (${reason})`);
+  } catch (e) {
+    self.postMessage({ type: 'dbg', message: `model switch failed: ${(e as Error)?.message ?? e}` }); // TEMP-DEBUG-POSE
+  } finally {
     modelSwapInFlight = false;
+    inferSamples = [];
+    swapOverBudgetRun = 0;
+    self.postMessage({ type: 'switch', phase: 'end' });
+  }
+}
+
+/**
+ * Run a few inferences on blank frames so the GPU compiles its shaders now.
+ * Never fails init: a warm-up error only means the first real frames pay the
+ * cost instead, which is how it worked before.
+ */
+async function warmUpDetector(det: any): Promise<void> {
+  if (typeof OffscreenCanvas === 'undefined' || !det) return;
+  try {
+    for (const [w, h] of WARMUP_SIZES) {
+      const canvas = new OffscreenCanvas(w, h);
+      const g = canvas.getContext('2d');
+      if (g) { g.fillStyle = '#7f7f7f'; g.fillRect(0, 0, w, h); }
+      const bmp = await createImageBitmap(canvas);
+      try {
+        for (let i = 0; i < WARMUP_RUNS_PER_SIZE; i++) {
+          await det.estimatePoses(bmp, { flipHorizontal: false });
+        }
+      } finally {
+        bmp.close();
+      }
+    }
+  } catch (e) {
+    console.warn('[PoseWorker] warm-up failed (first frames will be slower):', (e as Error)?.message);
+  } finally {
+    try { det.reset?.(); } catch { /* noop */ }
+  }
+}
+
+/**
+ * Median time of SPEED_CHECK_RUNS inferences on a full-size blank frame, after
+ * warm-up. MoveNet resizes every input to the same model size, so a blank frame
+ * costs what a real one does. Returns 0 (keep the model) if it cannot measure.
+ */
+async function steadyInferenceMs(det: any): Promise<number> {
+  if (typeof OffscreenCanvas === 'undefined' || !det) return 0;
+  const [w, h] = WARMUP_SIZES[0];
+  try {
+    const canvas = new OffscreenCanvas(w, h);
+    const g = canvas.getContext('2d');
+    if (g) { g.fillStyle = '#7f7f7f'; g.fillRect(0, 0, w, h); }
+    const bmp = await createImageBitmap(canvas);
+    const times: number[] = [];
+    try {
+      for (let i = 0; i < SPEED_CHECK_RUNS; i++) {
+        const t0 = performance.now();
+        await det.estimatePoses(bmp, { flipHorizontal: false });
+        times.push(performance.now() - t0);
+      }
+    } finally {
+      bmp.close();
+    }
+    times.sort((a, b) => a - b);
+    return times[times.length >> 1];
+  } catch {
+    return 0;
+  } finally {
+    try { det.reset?.(); } catch { /* noop */ }
   }
 }
 
@@ -238,8 +363,40 @@ async function init(wasmOnly = false) {
     // GPU: start with THUNDER (markedly more precise); measured inference
     // later downgrades to LIGHTNING if this machine can't run it realtime.
     // WASM: LIGHTNING from the start.
-    currentModel = gpu ? 'thunder' : 'lightning';
+    // A worker started to replace a hung one goes straight to LIGHTNING.
+    currentModel = startOnLightning ? 'lightning' : gpu || dbgForceThunder ? 'thunder' : 'lightning'; // TEMP-DEBUG-POSE: `|| dbgForceThunder`
     detector = await makeDetector(currentModel);
+
+    // Compile the GPU graph before reporting ready (see WARMUP_SIZES). The
+    // bridge extends its init timeout on 'warming': on a phone this can take
+    // longer than the model download did.
+    if (gpu) {
+      self.postMessage({ type: 'warming' });
+      self.postMessage({ type: 'status', message: 'Preparing the skeleton for this device…' });
+      const tWarm = performance.now();
+      await warmUpDetector(detector);
+      self.postMessage({ type: 'dbg', message: `warm-up ${currentModel} ${Math.round(performance.now() - tWarm)}ms` }); // TEMP-DEBUG-POSE
+      if (currentModel === 'thunder' && !dbgForceThunder) { // TEMP-DEBUG-POSE: `&& !dbgForceThunder`
+        const med = await steadyInferenceMs(detector);
+        self.postMessage({ type: 'dbg', message: `speed check thunder median ${Math.round(med)}ms (budget ${THUNDER_BUDGET_MS})` }); // TEMP-DEBUG-POSE
+        if (med > THUNDER_BUDGET_MS) {
+          try {
+            const next = await makeDetector('lightning');
+            await warmUpDetector(next);
+            try { detector?.dispose?.(); } catch { /* noop */ }
+            detector = next;
+            currentModel = 'lightning';
+            self.postMessage({ type: 'dbg', message: 'speed check: loading on lightning' }); // TEMP-DEBUG-POSE
+          } catch (e) {
+            // Keep THUNDER; the in-play check can still swap later.
+            self.postMessage({ type: 'dbg', message: `speed check swap failed: ${(e as Error)?.message ?? e}` }); // TEMP-DEBUG-POSE
+          }
+        }
+      }
+    }
+    swapWarmupLeft = SWAP_WARMUP_SKIP;
+    swapOverBudgetRun = 0;
+    inferSamples = [];
 
     // Detect WebGL context loss the instant it happens so we recover instead of
     // hanging on the next inference's readback.
@@ -247,6 +404,7 @@ async function init(wasmOnly = false) {
 
     ready = true;
     everReady = true;
+    dbgBackend = backend; // TEMP-DEBUG-POSE
     self.postMessage({ type: 'ready', backend });
     console.log(`[PoseWorker] Ready — backend: ${backend}, model: ${currentModel}`);
   } catch (err: any) {
@@ -259,7 +417,17 @@ self.onmessage = async (e: MessageEvent) => {
   const { data } = e;
 
   if (data.type === 'init') {
+    dbgForceThunder = data.forceModel === 'thunder'; // TEMP-DEBUG-POSE
+    startOnLightning = data.forceModel === 'lightning';
     await init(!!data.wasmOnly);
+    return;
+  }
+
+  // The bridge's watchdog gave up on a frame: drop to the faster model. Ignored
+  // under the debug `&pose=thunder` hold, whose point is to keep THUNDER.
+  if (data.type === 'degrade') {
+    if (dbgForceThunder) { self.postMessage({ type: 'dbg', message: 'degrade ignored (pose=thunder)' }); return; } // TEMP-DEBUG-POSE
+    void switchToLightning(`requested: ${data.reason ?? 'bridge'}`);
     return;
   }
 
@@ -323,6 +491,11 @@ self.onmessage = async (e: MessageEvent) => {
         ESTIMATE_TIMEOUT_MS,
         'estimatePoses',
       );
+      const dbgInferMs = performance.now() - t0; // TEMP-DEBUG-POSE
+      if (dbgFirstInfers.length < 10) { // TEMP-DEBUG-POSE
+        dbgFirstInfers.push(`${Math.round(dbgInferMs)}${currentModel === 'thunder' ? 'T' : 'L'}`);
+        if (dbgFirstInfers.length === 10) self.postMessage({ type: 'dbg', message: `first 10 (T=thunder L=lightning): ${dbgFirstInfers.join(' ')}` });
+      }
       void maybeDowngradeModel(performance.now() - t0);
       if (!poses || poses.length === 0) console.warn('[PoseWorker] No poses detected in frame', data.frameId);
 
@@ -356,12 +529,13 @@ self.onmessage = async (e: MessageEvent) => {
       }
 
       source.close();
-      self.postMessage({ type: 'result', keypoints, frameId: data.frameId });
+      self.postMessage({ type: 'result', keypoints, frameId: data.frameId, inferMs: dbgInferMs, model: currentModel, backend: dbgBackend }); // TEMP-DEBUG-POSE: inferMs/model/backend
     } catch (err) {
       // A timeout or GPU error here can mean the WebGL context died mid-readback;
       // recover so subsequent frames don't each wait out the full timeout.
       const glErr = currentGL();
       if (glErr && glErr.isContextLost()) recoverBackend('context lost during inference');
+      self.postMessage({ type: 'dbg', message: `detect error: ${(err as Error)?.message ?? err}` }); // TEMP-DEBUG-POSE
       console.error('[PoseWorker] detect error:', err);
       if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
       self.postMessage({ type: 'result', keypoints: null, frameId: data.frameId });

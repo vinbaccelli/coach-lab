@@ -15,10 +15,15 @@ import { Camera, Image as ImageIcon, PlayCircle, Plus, Trash2, Upload } from 'lu
 import type { CanvasHandle } from '@/components/Canvas';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 import { angleDifferenceDeg } from '@/lib/drawingTools';
+import {
+  AI_TRACK_USE_LOCK, MAX_TRACK_POSES, TRACK_GAP_SPLIT_SEC, followStep, inSection, lockForPass, matchAtLock,
+  passPlan, poseBox, startFollow, type FollowState,
+} from '@/lib/aiTrackLock';
+import { ERASER_SIZE_DEFAULT } from '@/lib/eraser';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
-import { useRecording, RECORDING_AUDIO_CONSTRAINTS } from '@/contexts/RecordingContext';
+import { useRecording, RECORDING_AUDIO_CONSTRAINTS, FLOATING_CAMERA_WINDOW } from '@/contexts/RecordingContext';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import RecordingControls from '@/components/RecordingControls';
 import type { ViewportRegion } from '@/components/RegionRecordOverlay';
@@ -189,6 +194,9 @@ import { uploadDataUrl } from '@/lib/supabase/storage';
 import { proposePhaseMarkers } from '@/lib/biomechanics/phaseDetection';
 import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import { useEntitlement } from '@/lib/useEntitlement';
+import type { Feature } from '@/lib/entitlements';
+import UpgradeSheet from '@/components/UpgradeSheet';
 
 /**
  * Has the once-per-page-load reload reset already been evaluated?
@@ -449,6 +457,26 @@ function Home() {
   const [canvasSizeB, setCanvasSizeB]     = useState({ width: 800, height: 450 });
   const [ballTrailMode, setBallTrailMode]  = useState<BallTrailMode>('comet');
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
+  /**
+   * "Skeleton ready…" is a one-off notice, not a status that lasts. Nothing used
+   * to clear it, so it stayed in the top toast while the video played and
+   * covered the top rows of the data column (L Elbow). It now goes when playback
+   * starts or after 4 s, whichever comes first. Every other message keeps its
+   * own lifetime: only a message that is still the ready notice is cleared.
+   */
+  useEffect(() => {
+    if (!processingStatus?.startsWith('Skeleton ready')) return;
+    const clearReady = () =>
+      setProcessingStatus((cur) => (cur?.startsWith('Skeleton ready') ? null : cur));
+    const timer = setTimeout(clearReady, 4000);
+    const videos = [videoRef.current, videoRefB.current].filter((v): v is HTMLVideoElement => !!v);
+    if (videos.some((v) => !v.paused)) clearReady();
+    videos.forEach((v) => v.addEventListener('play', clearReady));
+    return () => {
+      clearTimeout(timer);
+      videos.forEach((v) => v.removeEventListener('play', clearReady));
+    };
+  }, [processingStatus]);
   const [layoutMode, setLayoutMode]       = useState<'youtube' | 'reels'>('youtube');
   const [webcamActive, setWebcamActive]   = useState(false);
   const [micActive, setMicActive]         = useState(false);
@@ -484,12 +512,21 @@ function Home() {
   // that honors background removal and the coach's PiP shape. In a tab/window
   // share the engine stamps the webcam into its own composite instead, so the
   // canvas must stay quiet or a shared AM tab would show two webcams.
-  const suppressWebcamPipWhileRecording = !isMonitorShare;
+  //
+  // With the floating camera window off (FLOATING_CAMERA_WINDOW, launch) the
+  // engine never stamps the webcam, so the canvas PiP is the webcam in every
+  // share mode and is never hidden.
+  const suppressWebcamPipWhileRecording = FLOATING_CAMERA_WINDOW && !isMonitorShare;
   const [videoBLoaded, setVideoBLoaded]   = useState(false);
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
   const [circleSpinning, setCircleSpinning] = useState(false);
-  const [outlineEraserSize, setOutlineEraserSize] = useState(0);
+  /**
+   * The Eraser tool's size (ring radius, px). Kept across tool switches for the
+   * page session and reset on reload, like the line thickness; the eraser
+   * itself is armed below.
+   */
+  const [eraserSize, setEraserSize] = useState(ERASER_SIZE_DEFAULT);
   /**
    * RULER LENGTH CALIBRATION (feature #6) — owned here, not in RulerOverlay.
    *
@@ -552,34 +589,17 @@ function Home() {
   useEffect(() => { styleSelectionRef.current = styleSelection; }, [styleSelection]);
 
   /**
-   * LEAVING STYLE MODE DISARMS THE OUTLINE ERASER.
+   * THE OUTLINE ERASER IS ARMED EXACTLY WHILE THE ERASER TOOL IS ACTIVE.
    *
-   * `outlineEraserSize` is armed from the Style screen's "Erase part of line"
-   * toggle (components/ToolPalette.tsx) or the on-canvas style bar
-   * (components/ContextualStyleBar.tsx), and nothing used to put it back. It
-   * stayed armed for the rest of the session, while the control that turns it
-   * off is only reachable from inside style mode — so the coach could not see
-   * it was on, let alone switch it off.
-   *
-   * Measured consequence: with a line drawn and the eraser armed, leaving Style
-   * and dragging that line with the SELECT tool moved it from (410,435)-(850,485)
-   * to (450,600)-(890,650) AND punched an extra eraser dot into it (13 -> 14).
-   * The drag did both: it moved the mark and silently cut a hole at the grab
-   * point.
-   *
-   * STYLE MODE IS THE RIGHT BOUNDARY, not the active tool. The Style *screen* is
-   * only navigation; `styleMode` is the mode, and every exit funnels through it
-   * — pressing Style again toggles it off in place (ToolPalette), and
-   * handleToolChange below already clears it on ANY tool choice ("ANY tool
-   * choice leaves style mode"). So the coach cannot stay in style mode while the
-   * tool changes underneath, and one rule here covers the Back action, the
-   * toggle and every tool switch. Keying this on `activeTool` instead would
-   * disarm mid-session while the coach is still in style mode with the toggle
-   * visibly on.
+   * It used to be a Style-mode checkbox ("Erase part of line") that stayed armed
+   * after the coach moved on, invisibly cutting holes in later Select drags, so
+   * leaving Style had to disarm it (#56). That made "arm it, then pick Circle"
+   * silently turn it off. As a tool on the Draw list it needs no separate
+   * on/off state: it is derived from the tool, so it can never outlive the lit
+   * Eraser row. Style mode suspends it (the canvas owns the press for picking a
+   * mark there), and leaving Style brings it back while Eraser is still picked.
    */
-  useEffect(() => {
-    if (!styleMode && outlineEraserSize > 0) setOutlineEraserSize(0);
-  }, [styleMode, outlineEraserSize]);
+  const outlineEraserSize = activeTool === 'erase' && !styleMode ? eraserSize : 0;
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Distance from bottom of video stage to reserve for playback UI + 16px gap (px). */
@@ -810,6 +830,10 @@ function Home() {
   const [stroIsBuildingVideoPreview, setStroIsBuildingVideoPreview] = useState(false);
   const stroPreviewVideoBlobRef = useRef<Blob | null>(null);
   const [sessionSaveModalOpen, setSessionSaveModalOpen] = useState(false);
+  // Plan gating (lib/entitlements.ts). UI courtesy only — Pro tools that run
+  // locally can't be enforced here; the server guards what goes through it.
+  const { can: canUseFeature } = useEntitlement();
+  const [upgradeFeature, setUpgradeFeature] = useState<Feature | null>(null);
 
   useEffect(() => {
     if (!contextPlayerId) {
@@ -996,6 +1020,9 @@ function Home() {
   const [footLineUnsupported, setFootLineUnsupported] = useState<string | null>(null);
   const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
   const [skeletonLocked, setSkeletonLocked] = useState(false);
+  // Read by the AI Track pass (a stable callback), so it follows the lock as of NOW.
+  const skeletonLockedRef = useRef(false);
+  useEffect(() => { skeletonLockedRef.current = skeletonLocked; }, [skeletonLocked]);
   const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
   /**
    * ANGLE DIFFERENTIAL — the two-arrow measuring flow.
@@ -1442,6 +1469,10 @@ function Home() {
   // samples land ON frames instead of at arbitrary wall-clock times.
   const [precisionTrackState, setPrecisionTrackState] = useState<'idle' | 'running' | 'ready'>('idle');
   const precisionAbortRef = useRef(false);
+  /** Locked-player pass: its own final status (ready / stopped), replacing the generic one. */
+  const passFinalRef = useRef<string | null>(null);
+  /** Appended to the final status, e.g. "the lock was not used". */
+  const lockNoteRef = useRef<string | null>(null);
 
   /**
    * The frame-stepped tracking pass over [start, end]. Returns the number of
@@ -1462,8 +1493,21 @@ function Home() {
       // the whole pass so MoveNet and MediaPipe coords never mix in one track.
       const probe = await mp.detectPosePrecise(v, params).catch(() => null);
       const useMediaPipe = !!probe;
-      canvasRef.current?.startBakeCapture?.(!useMediaPipe);
-      if (probe) canvasRef.current?.addBakeSample?.(v.currentTime, probe);
+      // LOCKED PLAYER (lib/aiTrackLock.ts). No lock, or AI_TRACK_USE_LOCK off →
+      // `lock` is null and everything below runs exactly as before.
+      passFinalRef.current = null;
+      lockNoteRef.current = null;
+      const lockWanted = lockForPass(AI_TRACK_USE_LOCK, skeletonLockedRef.current, canvasRef.current?.getLockTarget?.() ?? null);
+      const lock = useMediaPipe ? lockWanted : null;
+      if (lockWanted && !useMediaPipe) {
+        // MoveNet fallback does not follow the lock (decision P7): say so, keep today's behaviour.
+        lockNoteRef.current = 'Your locked player was not used: the precision model is unavailable on this device, so AI Track picked the player as before.';
+        setProcessingStatus(lockNoteRef.current);
+      }
+      if (!lock) {
+        canvasRef.current?.startBakeCapture?.(!useMediaPipe);
+        if (probe) canvasRef.current?.addBakeSample?.(v.currentTime, probe);
+      }
 
       // Exact-frame seek: set time → await 'seeked' → await one
       // requestVideoFrameCallback so the seeked frame is actually PAINTED before
@@ -1481,6 +1525,90 @@ function Home() {
         vv.currentTime = t;
         window.setTimeout(fin, 300);
       });
+
+      if (lock) {
+        // Start AT the lock frame, find the locked player there (or stop), then
+        // follow them forward to `end` and backward to `start`. Frames where
+        // they cannot be found are gaps; nobody else is ever taken.
+        const step = 1 / params.fps;
+        const { forward, backward } = passPlan(start, end, lock.t, step);
+        const total = forward.length + backward.length + 1;
+        const label = 'Following locked player';
+        const passT0 = performance.now();
+        let done = 0;
+        let gaps = 0;
+        const detectLocked = (pick: (c: Array<Array<{ x: number; y: number; score: number; name: string }>>) => number) =>
+          mp.detectLockedPose(v, params, MAX_TRACK_POSES, pick).catch(() => ({ pose: null, candidates: 0, available: true }));
+        canvasRef.current?.startBakeCapture?.(false);
+        setProcessingStatus('AI Track: finding your locked player…');
+        await seekTo(lock.t);
+        const lockFrameT = v.currentTime;
+        // Everyone else on the lock frame is a known "other" from the start.
+        let seedOthers: NonNullable<ReturnType<typeof poseBox>>[] = [];
+        const first = await detectLocked((c) => {
+          const i = matchAtLock(c, lock, { w: v.videoWidth, h: v.videoHeight });
+          seedOthers = c.filter((_, j) => j !== i).map((k) => poseBox(k)).filter((b): b is NonNullable<typeof b> => !!b);
+          return i;
+        });
+        const seedBox = poseBox(first.pose);
+        if (!first.pose || !seedBox) {
+          canvasRef.current?.discardBakeCapture?.();
+          canvasRef.current?.setAiTrackFollow?.(null);
+          passFinalRef.current = first.available
+            ? `AI Track stopped: your locked player was not found at ${lockFrameT.toFixed(2)} s (${first.candidates} ${first.candidates === 1 ? 'person' : 'people'} detected there). Lock the player again, then retry.`
+            : 'AI Track stopped: the multi-person tracking model could not be loaded, so your locked player cannot be followed. Try again.';
+          return 0;
+        }
+        if (inSection(lockFrameT, start, end)) canvasRef.current?.addBakeSample?.(lockFrameT, first.pose);
+        canvasRef.current?.setAiTrackFollow?.({ box: seedBox, label });
+        const walk = async (times: number[]) => {
+          let st: FollowState = startFollow(seedBox, lockFrameT, seedOthers);
+          let inGap = false;
+          for (const t of times) {
+            if (precisionAbortRef.current) return;
+            await seekTo(t);
+            const ft = v.currentTime;
+            let next = st;
+            const r = await detectLocked((c) => {
+              const f = followStep(st, c, ft);
+              next = f.state;
+              return f.index;
+            });
+            if (r.pose) {
+              st = next;
+              inGap = false;
+              canvasRef.current?.setAiTrackFollow?.({ box: st.box, label });
+              if (inSection(ft, start, end)) canvasRef.current?.addBakeSample?.(ft, r.pose);
+            } else if (!inGap) {
+              inGap = true;
+              gaps++;
+            }
+            done++;
+            if (done % 3 === 0 || done === total - 1) {
+              setProcessingStatus(`AI-tracking your locked player… ${Math.round(((done + 1) / total) * 100)}% (${params.speedLabel} · real feet)`);
+            }
+          }
+        };
+        await walk(forward);
+        await walk(backward);
+        canvasRef.current?.setAiTrackFollow?.(null);
+        if (precisionAbortRef.current) {
+          canvasRef.current?.discardBakeCapture?.();
+          return 0;
+        }
+        const kept = canvasRef.current?.finishBakeCapture?.(
+          { start, end },
+          { splitGapSec: Math.max(TRACK_GAP_SPLIT_SEC, 2.5 * step), locked: true },
+        ) ?? 0;
+        if (process.env.NODE_ENV !== 'production') {
+          const passMs = performance.now() - passT0;
+          console.log(`[PrecisionTrack] LOCKED ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(0.001, end - start))}ms per video-second, ${total} frames visited, gaps=${gaps})`);
+        }
+        passFinalRef.current = kept >= 2
+          ? `AI Track ready — following your locked player: ${kept} frame-exact poses${gaps ? `; ${gaps} stretch${gaps === 1 ? '' : 'es'} where they were out of view left empty` : ''}. Play at any speed.`
+          : 'AI Track stopped: your locked player could not be followed through that range.';
+        return kept;
+      }
 
       const step = 1 / params.fps;
       const total = Math.max(1, Math.ceil((end - start) / step));
@@ -1532,10 +1660,15 @@ function Home() {
     setPrecisionTrackState('running');
     try {
       const kept = await runPrecisionPass(start, end, quality);
-      if (kept < 2) {
-        setProcessingStatus(precisionAbortRef.current ? 'AI Track cancelled' : 'AI Track found no skeleton in that range');
+      const note = lockNoteRef.current ? ` ${lockNoteRef.current}` : '';
+      if (precisionAbortRef.current) {
+        setProcessingStatus('AI Track cancelled');
+      } else if (passFinalRef.current) {
+        setProcessingStatus(passFinalRef.current);
+      } else if (kept < 2) {
+        setProcessingStatus(`AI Track found no skeleton in that range${note}`);
       } else {
-        setProcessingStatus(`AI Track ready — ${kept} frame-exact poses locked. Play at any speed.`);
+        setProcessingStatus(`AI Track ready — ${kept} frame-exact poses locked. Play at any speed.${note}`);
       }
     } finally {
       // Earlier sections survive a failed/cancelled pass — reflect reality.
@@ -3280,6 +3413,7 @@ function Home() {
 
   const handleScreenshotSaveToPlayer = useCallback(async (playerId: string, playerName: string) => {
     if (!screenshotDataUrl) return;
+    if (!canUseFeature('saveToPlayer')) { setUpgradeFeature('saveToPlayer'); return; }
     const supabase = createSupabaseBrowserClient();
     const userRes = await supabase?.auth.getUser();
     const userId = userRes?.data?.user?.id;
@@ -3394,7 +3528,7 @@ function Home() {
     } finally {
       setScreenshotSaving(false);
     }
-  }, [screenshotDataUrl, handleScreenshotDownload]);
+  }, [screenshotDataUrl, handleScreenshotDownload, canUseFeature]);
 
   const handleScreenshotCreateAndSave = useCallback(async () => {
     if (!screenshotNewPlayerName?.trim() || !screenshotDataUrl) return;
@@ -4813,7 +4947,9 @@ function Home() {
         // (camera permission is already granted, so it resolves immediately).
         // If activation is lost anyway, reopenPipWindow resolves false and logs —
         // Source B still records; only the floating window is missing.
-        if (!isPipOpen()) {
+        // Only in the floating-camera model: there the window IS the camera
+        // view. With it off the canvas shows the camera again by itself.
+        if (FLOATING_CAMERA_WINDOW && !isPipOpen()) {
           const opened = await reopenPipWindow();
           if (!opened) {
             console.warn('[page] PiP reopen skipped/failed — recording continues, camera still composited.');
@@ -6517,6 +6653,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
   // Single source of truth: edit here and all three toolbar instances
   // (desktop left, mobile strip, desktop-reels) pick up the change.
   const toolPaletteBaseProps = {
+    canUseFeature,
+    onLockedFeature:                 setUpgradeFeature,
     activeTool,
     onToolChange:                    handleToolChange,
     // ── Pan / Zoom tool ────────────────────────────────────────────────────
@@ -6544,8 +6682,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onRacketMultiplier:              handleRacketMultiplier,
     circleSpinning,
     onCircleSpinningChange:          handleCircleSpinningChange,
-    outlineEraserSize,
-    onOutlineEraserSizeChange:       setOutlineEraserSize,
+    outlineEraserSize:               eraserSize,
+    onOutlineEraserSizeChange:       setEraserSize,
     styleMode,
     onStyleModeToggle:               handleStyleModeToggle,
     onAngleDifferentialStart:        handleAngleDifferentialStart,
@@ -6817,6 +6955,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       // creation so Generate stays read-only.)
       const newSnapId = createSnapshotFromLive();
       if (!newSnapId) return;
+      // Light keeps ONE snapshot: the one AI Detect creates. A new AI Detect
+      // replaces it rather than adding a second (multi-phase snapshots are Pro).
+      if (!canUseFeature('multiSnapshot')) {
+        setSnapshots(prev => prev.filter(s => s.id === newSnapId).map(s => ({ ...s, label: 'Snapshot 1', short: '1' })));
+      }
 
       // Step 3: inject AI results — captured live column + AI measurements.
       const fullCol = [...liveCol, ...items];
@@ -6846,7 +6989,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     },
     onScreenshotSave:                () => { void handleScreenshotSave(); },
     screenshotSaving,
-    onSaveReport:                    () => setSessionSaveModalOpen(true),
+    onSaveReport:                    () => (canUseFeature('saveToPlayer') ? setSessionSaveModalOpen(true) : setUpgradeFeature('saveToPlayer')),
     saveReportEnabled:               sessionDraftHasContent,
     drawContextActive,
     onExitDrawContext:               exitDrawContext,
@@ -7423,7 +7566,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   registerWebcamPipPresentation={registerWebcamPipPresentation}
                   circleSpinning={circleSpinning}
                   outlineEraserSize={outlineEraserSize}
-                  onOutlineEraserSizeChange={setOutlineEraserSize}
                   styleMode={styleMode}
                   onStyleSelectionChange={setStyleSelection}
                   webcamPipMode={webcamPipMode}
@@ -8221,7 +8363,6 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       registerWebcamPipPresentation={registerWebcamPipPresentation}
                       circleSpinning={circleSpinning}
                       outlineEraserSize={outlineEraserSize}
-                      onOutlineEraserSizeChange={setOutlineEraserSize}
                       styleMode={styleMode}
                       onStyleSelectionChange={setStyleSelection}
                       webcamPipMode={webcamPipMode}
@@ -8362,6 +8503,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         </main>
         </ReelsDesktopShell>
       </div>
+
+      <UpgradeSheet feature={upgradeFeature} onClose={() => setUpgradeFeature(null)} />
 
       {captureError ? (
         <div
@@ -9291,7 +9434,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           <div style={{ display: 'flex', gap: 10, width: '100%' }}>
             <button
               type="button"
-              onClick={() => { setSkeletonConfirmOpen(false); setSkeletonWaitingForClick(false); setSkeletonLocked(true); canvasRef.current?.setSkeletonWaitingForClick(false); }}
+              onClick={() => { setSkeletonConfirmOpen(false); setSkeletonWaitingForClick(false); setSkeletonLocked(true); canvasRef.current?.setSkeletonWaitingForClick(false); canvasRef.current?.captureLockTarget?.(false); }}
               style={{
                 flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
                 background: '#34C759', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer',
@@ -9339,6 +9482,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               // Explicit confirm: the ONLY way to exit the click-to-focus session.
               setSkeletonWaitingForClick(false);
               setSkeletonLocked(true);
+              // AI Track's lock target: the last click + the skeleton shown now.
+              canvasRef.current?.captureLockTarget?.(true);
               canvasRef.current?.setSkeletonWaitingForClick(false);
               setProcessingStatus('Skeleton locked on player');
             }}

@@ -121,7 +121,7 @@ and the AI number share the one `estimateFootVector` (frozen).
 
 **Auth / Trial / Billing.** Supabase SSR; `middleware.ts` gates `/analysis`+`/academy` by active Stripe sub OR
 an unexpired `trials` row (Google sign-in → 1 free hour, one per account, `start_trial()` SECURITY DEFINER).
-Prices in `lib/plans.ts` (Light $5/$50, Pro $20/$200, Academy $40/$400).
+Prices in `lib/plans.ts`, EUR launch pricing (Light €12.90/€129, Pro €34.90/€299, Academy €69.90/€599 for up to 4 coaches); per-plan features and their enforcement in `lib/entitlements.ts`.
 
 ---
 

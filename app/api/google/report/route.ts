@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import type { docs_v1 } from 'googleapis';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { requireFeature } from '@/lib/entitlements.server';
 import { reportsFolderChain } from '@/lib/google/drive';
 import { ensurePlayerDoc, insertSessionAtTop, type PlayerDocRow } from '@/lib/google/playerDocs';
 
@@ -41,6 +42,8 @@ const IMG_PLACEHOLDER = '￼';
 export async function POST(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'docsExport');
+  if (denied) return denied;
   if (!session.googleAccessToken) {
     return NextResponse.json(
       { error: 'Google access not granted — sign out and sign in again to enable Docs export.' },
