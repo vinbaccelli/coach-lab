@@ -31,6 +31,7 @@ import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModa
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
 import { exportCroppedVideo } from '@/lib/cropExport';
 import GuidedTour from '@/components/GuidedTour';
+import { useToursEnabled } from '@/lib/useToursEnabled';
 import { terminateGlobalPoseWorker } from '@/lib/poseWorkerBridge';
 import PrecisionDrawInstructions, {
   hasSeenPrecisionInstructions,
@@ -359,6 +360,8 @@ type AnalysisMode =
   | { kind: 'snapshot'; snapshotId: string };
 
 function Home() {
+  // Tours switch (lib/toursSwitch.ts): the ? in the zoom cluster follows it.
+  const toursEnabled = useToursEnabled();
   const router = useRouter();
   const searchParams = useSearchParams();
   const contextPlayerId = searchParams.get('playerId');
@@ -7600,7 +7603,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
                   webcamPipMobileChrome={isMobile}
                   webcamPipBottomInsetPx={toolbarBottomReservePx}
-                  showTourHelpInZoomCluster
+                  showTourHelpInZoomCluster={toursEnabled}
                   poseFrameSkip={hasVideoBContent ? 1 : 0}
                   panModeEnabled={panModeEnabled}
                   onPanModeToggle={() => setPanModeEnabled((p) => !p)}
