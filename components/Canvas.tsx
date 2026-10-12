@@ -28,6 +28,7 @@ import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { getPoseDetector } from '@/lib/poseDetection';
 import { smoothBakedTrack } from '@/lib/trackSmoothing';
+import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
@@ -314,8 +315,14 @@ export interface CanvasHandle {
   discardBakeCapture: () => void;
   /** Finish the tracking pass (applies offline outlier repair + zero-lag
    *  smoothing); returns the number of samples kept (0 = failed). */
-  finishBakeCapture: (range: { start: number; end: number }) => number;
+  finishBakeCapture: (range: { start: number; end: number }, opts?: { splitGapSec?: number; locked?: boolean }) => number;
   clearBakedTrack: () => void;
+  /** The locked player as captured when the coach locked (lib/aiTrackLock.ts), or null. */
+  getLockTarget: () => LockTarget | null;
+  /** Re-capture the lock from the skeleton shown now. keepPoint=false drops the click ("Yes ✓"). */
+  captureLockTarget: (keepPoint: boolean) => void;
+  /** Read-only overlay: the box AI Track is following during a locked pass (video px), or null. */
+  setAiTrackFollow: (f: { box: { x0: number; y0: number; x1: number; y1: number }; label: string } | null) => void;
   getBakedTrackInfo: () => { samples: number; start: number; end: number } | null;
   getBakedPoseAt: (t: number) => Array<{ x: number; y: number; score: number; name: string }> | null;
   isRangeBaked: (start: number, end: number) => boolean;
@@ -2193,7 +2200,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // video.currentTime — perfectly aligned at ANY playback speed, because the
     // lookup is keyed to media time, not to live inference wall-clock.
     type BakedSample = { t: number; kps: Array<{ x: number; y: number; score: number; name: string }> };
-    type BakedTrack = { samples: BakedSample[]; start: number; end: number };
+    // locked: baked by the locked-player pass (lib/aiTrackLock.ts) — gets the result tag.
+    type BakedTrack = { samples: BakedSample[]; start: number; end: number; locked?: boolean };
     const bakingRef = useRef(false);
     // When false, the frame-stepped MediaPipe pass owns sample collection and
     // MoveNet bridge results must NOT be mixed into the same track.
@@ -2661,6 +2669,35 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /** So the unsupported notice fires once per opt-in, not once per frame. */
     const mpLiveNotifiedRef = useRef(false);
     const pendingFocusRef = useRef<{ x: number; y: number } | null>(null);
+    /**
+     * The LOCK TARGET for AI Track (lib/aiTrackLock.ts): the click, its video
+     * time, and the locked skeleton's box + keypoints. A click stores the point
+     * at once; the box/keypoints come from the first live pose that arrives
+     * after it and contains the click (lockCapturePendingRef counts down the
+     * results we are willing to wait for). Cleared with the click point when a
+     * new video loads — never on unlock. Read-only with respect to the display.
+     */
+    const lockTargetRef = useRef<LockTarget | null>(null);
+    const lockCapturePendingRef = useRef(0);
+    /** Read-only overlay drawn while a locked AI Track pass runs. */
+    const aiTrackFollowRef = useRef<{ box: { x0: number; y0: number; x1: number; y1: number }; label: string } | null>(null);
+    /** Fill the pending lock's box/keypoints from a live pose (never writes the display). */
+    const noteLivePoseForLock = (kps: Array<{ x: number; y: number; score: number; name: string }> | null) => {
+      if (lockCapturePendingRef.current <= 0 || !kps) return;
+      const lock = lockTargetRef.current;
+      const v = videoRef.current;
+      if (!lock || !v || v.videoWidth <= 0) { lockCapturePendingRef.current = 0; return; }
+      lockCapturePendingRef.current--;
+      const box = poseBox(kps);
+      if (!box) return;
+      if (lock.point) {
+        const px = lock.point.x * v.videoWidth, py = lock.point.y * v.videoHeight;
+        const mx = (box.x1 - box.x0) * 0.15, my = (box.y1 - box.y0) * 0.15;
+        if (px < box.x0 - mx || px > box.x1 + mx || py < box.y0 - my || py > box.y1 + my) return;
+      }
+      lockTargetRef.current = { ...lock, box, kps: kps.map((k) => ({ ...k })) };
+      lockCapturePendingRef.current = 0;
+    };
     // Continuous auto-focus crop target (torso centroid, normalized). Distinct
     // from pendingFocusRef, which is the coach's explicit skeleton-lock click.
     const autoFocusRef = useRef<{ x: number; y: number; ratio: number } | null>(null);
@@ -3642,13 +3679,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         bakingRef.current = false;
         bakeSamplesRef.current = [];
       },
-      finishBakeCapture: (range) => {
+      finishBakeCapture: (range, opts) => {
         bakingRef.current = false;
         const kept = bakeSamplesRef.current
           .filter((x) => x.t >= range.start - 0.2 && x.t <= range.end + 0.2)
           .sort((a, b) => a.t - b.t);
         bakeSamplesRef.current = [];
         if (kept.length < 2) return 0;
+        // Locked-player pass only: one track per stretch the player was in view,
+        // so a stretch where they were not stays EMPTY (the lookup would snap
+        // across a hole inside one track). Without opts: exactly as before.
+        if (opts?.splitGapSec !== undefined) {
+          const segs = splitAtGaps(kept, opts.splitGapSec).filter((g) => g.length >= 2);
+          if (!segs.length) return 0;
+          const made = segs.map((g) => ({ samples: smoothBakedTrack(g), start: g[0].t, end: g[g.length - 1].t, locked: opts.locked }));
+          bakedTracksRef.current = [
+            ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
+            ...made,
+          ].sort((a, b) => a.start - b.start);
+          renderDirtyRef.current = true;
+          return made.reduce((n, b) => n + b.samples.length, 0);
+        }
         // Offline post-pass: outlier repair + centered (zero-lag) smoothing —
         // the precision live tracking can mathematically never reach.
         const smoothed = smoothBakedTrack(kept);
@@ -3659,6 +3710,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         ].sort((a, b) => a.start - b.start);
         renderDirtyRef.current = true;
         return smoothed.length;
+      },
+      getLockTarget: () => lockTargetRef.current,
+      captureLockTarget: (keepPoint) => {
+        const v = videoRef.current;
+        const kps = latestKeypointsRef.current;
+        const box = poseBox(kps);
+        const prev = lockTargetRef.current;
+        lockCapturePendingRef.current = 0;
+        lockTargetRef.current = {
+          t: v ? v.currentTime : prev?.t ?? 0,
+          point: keepPoint ? prev?.point ?? null : null,
+          box,
+          kps: box && kps ? kps.map((k) => ({ ...k })) : null,
+        };
+      },
+      setAiTrackFollow: (f) => {
+        aiTrackFollowRef.current = f;
+        renderDirtyRef.current = true;
       },
       clearBakedTrack: () => {
         bakedTracksRef.current = [];
@@ -4214,6 +4283,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             posePrevSampleRef.current = poseLatestSampleRef.current;
             poseLatestSampleRef.current = { kps: keypoints, ts: performance.now() };
             latestKeypointsRef.current = keypoints;
+            noteLivePoseForLock(keypoints);
             livePoseStampRef.current = { kps: keypoints, t: meta?.videoTime ?? (v?.currentTime ?? 0) };
             renderDirtyRef.current = true;
             const sr = seekRequestRef.current;
@@ -4468,6 +4538,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             posePrevSampleRef.current = poseLatestSampleRef.current;
             poseLatestSampleRef.current = { kps, ts: performance.now() };
             latestKeypointsRef.current = kps;
+            noteLivePoseForLock(kps);
             livePoseStampRef.current = { kps, t: nowT };
             renderDirtyRef.current = true;
           }
@@ -5271,6 +5342,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       bakedTracksRef.current = [];
       bakingRef.current = false;
       bakeSamplesRef.current = [];
+      // So do the skeleton-lock click and the AI Track lock target: a point on
+      // the previous clip means nothing on this one (KNOWN_ISSUES 030).
+      pendingFocusRef.current = null;
+      lockTargetRef.current = null;
+      lockCapturePendingRef.current = 0;
+      aiTrackFollowRef.current = null;
 
       const markDirty = () => {
         renderDirtyRef.current = true;
@@ -6661,6 +6738,48 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
+        // ── AI Track: which player is followed (READ-ONLY overlay) ─────────
+        // A box + "Following locked player" while a locked pass runs, and the
+        // same tag above the skeleton inside tracks that pass produced. Drawn
+        // from aiTrackFollowRef / the baked track; never writes a pose.
+        if (video && vW > 0 && vH > 0) {
+          const sx = dw / vW, sy = dh / vH;
+          const drawTag = (b: { x0: number; y0: number; x1: number; y1: number }, label: string, withBox: boolean) => {
+            const x0 = dx + b.x0 * sx, y0 = dy + b.y0 * sy, x1 = dx + b.x1 * sx, y1 = dy + b.y1 * sy;
+            ctx.save();
+            if (withBox) {
+              ctx.strokeStyle = 'rgba(52, 199, 89, 0.95)';
+              ctx.lineWidth = 2;
+              ctx.setLineDash([6, 4]);
+              ctx.strokeRect(x0 - 6, y0 - 6, x1 - x0 + 12, y1 - y0 + 12);
+              ctx.setLineDash([]);
+            }
+            ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+            const tw = ctx.measureText(label).width;
+            const tx = Math.max(dx, Math.min(dx + dw - tw - 12, (x0 + x1) / 2 - tw / 2 - 6));
+            const ty = Math.max(dy, y0 - 30);
+            ctx.fillStyle = 'rgba(52, 199, 89, 0.92)';
+            ctx.fillRect(tx, ty, tw + 12, 20);
+            ctx.fillStyle = '#fff';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, tx + 6, ty + 10);
+            ctx.restore();
+          };
+          const follow = aiTrackFollowRef.current;
+          if (follow && bakingRef.current) {
+            drawTag(follow.box, follow.label, true);
+          } else if (
+            skeletonAuthorised && skeletonDimsOk && !bakingRef.current &&
+            !exactPoseLockRef.current && poseModeRef.current === 'live'
+          ) {
+            const track = findBakedTrack(video.currentTime);
+            if (track?.locked) {
+              const tb = poseBox(lookupBakedPose(video.currentTime));
+              if (tb) drawTag(tb, 'Following locked player', false);
+            }
+          }
+        }
+
         // ── Outline eraser cursor preview ──────────────────────────────────
         // ARMED IS NOT ENOUGH. The guard used to be size>0 + the tool being in
         // OUTLINE_ERASER_TOOLS, and that set is nearly every tool — so after
@@ -8042,6 +8161,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const normY = (pos.y - bounds.dy) / bounds.dh;
         if (normX < 0 || normX > 1 || normY < 0 || normY > 1) return false;
         pendingFocusRef.current = { x: normX, y: normY };
+        lockTargetRef.current = { t: video.currentTime, point: { x: normX, y: normY }, box: null, kps: null };
+        lockCapturePendingRef.current = 10;
         poseBridgeRef.current?.setFocusPoint({ x: normX, y: normY });
         poseBridgeRef.current?.resetSmoothing();
         // Paused: re-run detection on this frame so the pose snaps immediately

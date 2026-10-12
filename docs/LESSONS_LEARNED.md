@@ -633,3 +633,27 @@ after the screen that shows it is gone, it needs a disarm rule, and every disarm
 rule eventually fires in a workflow nobody pictured. When the thing is really an
 action on the canvas, make it a tool: tools already have one owner (the active
 tool), one visible state (the lit row), and one exit (picking another tool).
+
+---
+
+## 009 — "Re-acquire near where they were last seen" adopted the other player
+
+**Symptom.** First run of the locked-player AI Track on a two-player clip: the
+locked (left) player was followed correctly, the stretch where they left the
+frame stayed empty — and after they came back the track was on the RIGHT player.
+
+**Verified root cause.** While the player is out of view the search radius
+grows with time (by design: they may come back somewhere else). After about a
+second it reached the other player, who was the same size, so size matching
+could not tell them apart.
+
+**Fix.** Follow everyone, not just the locked player (`followStep` in
+`lib/aiTrackLock.ts`): every candidate is assigned to at most one tracked
+person, best continuation first. A person who stays in view while the locked
+player is gone keeps continuing their own track and can never be adopted;
+only a NEW appearance can be the locked player coming back. Regression test:
+"the other player, visible while ours is out of view, is never adopted".
+
+**Class of mistake.** Identity by proximity alone. A growing search area needs
+an exclusion of everyone already accounted for, or it eventually finds the
+wrong look-alike.

@@ -15,6 +15,10 @@ import { Camera, Image as ImageIcon, PlayCircle, Plus, Trash2, Upload } from 'lu
 import type { CanvasHandle } from '@/components/Canvas';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 import { angleDifferenceDeg } from '@/lib/drawingTools';
+import {
+  AI_TRACK_USE_LOCK, MAX_TRACK_POSES, TRACK_GAP_SPLIT_SEC, followStep, inSection, lockForPass, matchAtLock,
+  passPlan, poseBox, startFollow, type FollowState,
+} from '@/lib/aiTrackLock';
 import { ERASER_SIZE_DEFAULT } from '@/lib/eraser';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
@@ -1015,6 +1019,9 @@ function Home() {
   const [footLineUnsupported, setFootLineUnsupported] = useState<string | null>(null);
   const [skeletonWaitingForClick, setSkeletonWaitingForClick] = useState(false);
   const [skeletonLocked, setSkeletonLocked] = useState(false);
+  // Read by the AI Track pass (a stable callback), so it follows the lock as of NOW.
+  const skeletonLockedRef = useRef(false);
+  useEffect(() => { skeletonLockedRef.current = skeletonLocked; }, [skeletonLocked]);
   const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
   /**
    * ANGLE DIFFERENTIAL — the two-arrow measuring flow.
@@ -1461,6 +1468,10 @@ function Home() {
   // samples land ON frames instead of at arbitrary wall-clock times.
   const [precisionTrackState, setPrecisionTrackState] = useState<'idle' | 'running' | 'ready'>('idle');
   const precisionAbortRef = useRef(false);
+  /** Locked-player pass: its own final status (ready / stopped), replacing the generic one. */
+  const passFinalRef = useRef<string | null>(null);
+  /** Appended to the final status, e.g. "the lock was not used". */
+  const lockNoteRef = useRef<string | null>(null);
 
   /**
    * The frame-stepped tracking pass over [start, end]. Returns the number of
@@ -1481,8 +1492,21 @@ function Home() {
       // the whole pass so MoveNet and MediaPipe coords never mix in one track.
       const probe = await mp.detectPosePrecise(v, params).catch(() => null);
       const useMediaPipe = !!probe;
-      canvasRef.current?.startBakeCapture?.(!useMediaPipe);
-      if (probe) canvasRef.current?.addBakeSample?.(v.currentTime, probe);
+      // LOCKED PLAYER (lib/aiTrackLock.ts). No lock, or AI_TRACK_USE_LOCK off →
+      // `lock` is null and everything below runs exactly as before.
+      passFinalRef.current = null;
+      lockNoteRef.current = null;
+      const lockWanted = lockForPass(AI_TRACK_USE_LOCK, skeletonLockedRef.current, canvasRef.current?.getLockTarget?.() ?? null);
+      const lock = useMediaPipe ? lockWanted : null;
+      if (lockWanted && !useMediaPipe) {
+        // MoveNet fallback does not follow the lock (decision P7): say so, keep today's behaviour.
+        lockNoteRef.current = 'Your locked player was not used: the precision model is unavailable on this device, so AI Track picked the player as before.';
+        setProcessingStatus(lockNoteRef.current);
+      }
+      if (!lock) {
+        canvasRef.current?.startBakeCapture?.(!useMediaPipe);
+        if (probe) canvasRef.current?.addBakeSample?.(v.currentTime, probe);
+      }
 
       // Exact-frame seek: set time → await 'seeked' → await one
       // requestVideoFrameCallback so the seeked frame is actually PAINTED before
@@ -1500,6 +1524,90 @@ function Home() {
         vv.currentTime = t;
         window.setTimeout(fin, 300);
       });
+
+      if (lock) {
+        // Start AT the lock frame, find the locked player there (or stop), then
+        // follow them forward to `end` and backward to `start`. Frames where
+        // they cannot be found are gaps; nobody else is ever taken.
+        const step = 1 / params.fps;
+        const { forward, backward } = passPlan(start, end, lock.t, step);
+        const total = forward.length + backward.length + 1;
+        const label = 'Following locked player';
+        const passT0 = performance.now();
+        let done = 0;
+        let gaps = 0;
+        const detectLocked = (pick: (c: Array<Array<{ x: number; y: number; score: number; name: string }>>) => number) =>
+          mp.detectLockedPose(v, params, MAX_TRACK_POSES, pick).catch(() => ({ pose: null, candidates: 0, available: true }));
+        canvasRef.current?.startBakeCapture?.(false);
+        setProcessingStatus('AI Track: finding your locked player…');
+        await seekTo(lock.t);
+        const lockFrameT = v.currentTime;
+        // Everyone else on the lock frame is a known "other" from the start.
+        let seedOthers: NonNullable<ReturnType<typeof poseBox>>[] = [];
+        const first = await detectLocked((c) => {
+          const i = matchAtLock(c, lock, { w: v.videoWidth, h: v.videoHeight });
+          seedOthers = c.filter((_, j) => j !== i).map((k) => poseBox(k)).filter((b): b is NonNullable<typeof b> => !!b);
+          return i;
+        });
+        const seedBox = poseBox(first.pose);
+        if (!first.pose || !seedBox) {
+          canvasRef.current?.discardBakeCapture?.();
+          canvasRef.current?.setAiTrackFollow?.(null);
+          passFinalRef.current = first.available
+            ? `AI Track stopped: your locked player was not found at ${lockFrameT.toFixed(2)} s (${first.candidates} ${first.candidates === 1 ? 'person' : 'people'} detected there). Lock the player again, then retry.`
+            : 'AI Track stopped: the multi-person tracking model could not be loaded, so your locked player cannot be followed. Try again.';
+          return 0;
+        }
+        if (inSection(lockFrameT, start, end)) canvasRef.current?.addBakeSample?.(lockFrameT, first.pose);
+        canvasRef.current?.setAiTrackFollow?.({ box: seedBox, label });
+        const walk = async (times: number[]) => {
+          let st: FollowState = startFollow(seedBox, lockFrameT, seedOthers);
+          let inGap = false;
+          for (const t of times) {
+            if (precisionAbortRef.current) return;
+            await seekTo(t);
+            const ft = v.currentTime;
+            let next = st;
+            const r = await detectLocked((c) => {
+              const f = followStep(st, c, ft);
+              next = f.state;
+              return f.index;
+            });
+            if (r.pose) {
+              st = next;
+              inGap = false;
+              canvasRef.current?.setAiTrackFollow?.({ box: st.box, label });
+              if (inSection(ft, start, end)) canvasRef.current?.addBakeSample?.(ft, r.pose);
+            } else if (!inGap) {
+              inGap = true;
+              gaps++;
+            }
+            done++;
+            if (done % 3 === 0 || done === total - 1) {
+              setProcessingStatus(`AI-tracking your locked player… ${Math.round(((done + 1) / total) * 100)}% (${params.speedLabel} · real feet)`);
+            }
+          }
+        };
+        await walk(forward);
+        await walk(backward);
+        canvasRef.current?.setAiTrackFollow?.(null);
+        if (precisionAbortRef.current) {
+          canvasRef.current?.discardBakeCapture?.();
+          return 0;
+        }
+        const kept = canvasRef.current?.finishBakeCapture?.(
+          { start, end },
+          { splitGapSec: Math.max(TRACK_GAP_SPLIT_SEC, 2.5 * step), locked: true },
+        ) ?? 0;
+        if (process.env.NODE_ENV !== 'production') {
+          const passMs = performance.now() - passT0;
+          console.log(`[PrecisionTrack] LOCKED ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(0.001, end - start))}ms per video-second, ${total} frames visited, gaps=${gaps})`);
+        }
+        passFinalRef.current = kept >= 2
+          ? `AI Track ready — following your locked player: ${kept} frame-exact poses${gaps ? `; ${gaps} stretch${gaps === 1 ? '' : 'es'} where they were out of view left empty` : ''}. Play at any speed.`
+          : 'AI Track stopped: your locked player could not be followed through that range.';
+        return kept;
+      }
 
       const step = 1 / params.fps;
       const total = Math.max(1, Math.ceil((end - start) / step));
@@ -1551,10 +1659,15 @@ function Home() {
     setPrecisionTrackState('running');
     try {
       const kept = await runPrecisionPass(start, end, quality);
-      if (kept < 2) {
-        setProcessingStatus(precisionAbortRef.current ? 'AI Track cancelled' : 'AI Track found no skeleton in that range');
+      const note = lockNoteRef.current ? ` ${lockNoteRef.current}` : '';
+      if (precisionAbortRef.current) {
+        setProcessingStatus('AI Track cancelled');
+      } else if (passFinalRef.current) {
+        setProcessingStatus(passFinalRef.current);
+      } else if (kept < 2) {
+        setProcessingStatus(`AI Track found no skeleton in that range${note}`);
       } else {
-        setProcessingStatus(`AI Track ready — ${kept} frame-exact poses locked. Play at any speed.`);
+        setProcessingStatus(`AI Track ready — ${kept} frame-exact poses locked. Play at any speed.${note}`);
       }
     } finally {
       // Earlier sections survive a failed/cancelled pass — reflect reality.
@@ -9316,7 +9429,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           <div style={{ display: 'flex', gap: 10, width: '100%' }}>
             <button
               type="button"
-              onClick={() => { setSkeletonConfirmOpen(false); setSkeletonWaitingForClick(false); setSkeletonLocked(true); canvasRef.current?.setSkeletonWaitingForClick(false); }}
+              onClick={() => { setSkeletonConfirmOpen(false); setSkeletonWaitingForClick(false); setSkeletonLocked(true); canvasRef.current?.setSkeletonWaitingForClick(false); canvasRef.current?.captureLockTarget?.(false); }}
               style={{
                 flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
                 background: '#34C759', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer',
@@ -9364,6 +9477,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               // Explicit confirm: the ONLY way to exit the click-to-focus session.
               setSkeletonWaitingForClick(false);
               setSkeletonLocked(true);
+              // AI Track's lock target: the last click + the skeleton shown now.
+              canvasRef.current?.captureLockTarget?.(true);
               canvasRef.current?.setSkeletonWaitingForClick(false);
               setProcessingStatus('Skeleton locked on player');
             }}
