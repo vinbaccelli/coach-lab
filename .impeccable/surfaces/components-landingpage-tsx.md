@@ -50,8 +50,12 @@ Nothing may join them without that same provenance.
 **One Trustpilot profile** (founder's decision, 2026-10-03):
 `www.trustpilot.com/review/anglemotion.com` covers both the app and Vin's
 coaching analysis. Every Trustpilot link on the page points at it — the "Read
-all reviews on Trustpilot" button in the founder section and the "Review
-AngleMotion on Trustpilot" invitation beside the closing CTA. The star line
+all reviews on Trustpilot" button in the founder section and, beside the
+closing CTA, "Used AngleMotion? Tell us what you think." over Trustpilot's
+Review Collector widget (`components/TrustpilotReviewCollector.tsx`, since
+2026-10-12; it replaced the "Review AngleMotion on Trustpilot" text link). The
+widget shows no rating; its 52px are reserved and its plain "Trustpilot" link
+stays if the script does not load. The star line
 reads "All reviews on Trustpilot are 5 stars — for the app and Vin's coaching
 analysis", with no count and no TrustScore.
 

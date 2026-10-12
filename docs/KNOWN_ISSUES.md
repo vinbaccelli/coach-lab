@@ -1221,3 +1221,47 @@ current zoom (so a handle pinned at the edge still moves); handles always
 render; drags end on up, cancel or lost capture. Tests: `tests/timelineView.test.ts`.
 
 **Severity:** high for the Motion Layer workflow (selection unusable after zooming).
+
+## 033 — Third-party iframes are blocked by the site-wide COEP header — MITIGATED for the Trustpilot widget
+
+**Found:** 2026-10-12, while adding the Trustpilot Review Collector to the landing.
+
+**Symptom.** In Chromium, a cross-origin iframe on any page of this site
+renders as an empty grey error box (`chrome-error://chromewebdata/`) unless
+the framed page sends its own `Cross-Origin-Embedder-Policy` header. Measured
+with a stub TrustBox served without that header; with the header it loads.
+
+**Verified root cause.** `next.config.js` sends `Cross-Origin-Embedder-Policy:
+credentialless` (with `Cross-Origin-Opener-Policy: same-origin`) on every
+non-API route. COEP applies to nested documents, and `credentialless` only
+relaxes subresources, not iframes.
+
+**Fault.** Not a bug in the header (it gives the app cross-origin isolation);
+a constraint any new embed must meet.
+
+**Fix (Trustpilot).** `components/TrustpilotReviewCollector.tsx` marks the
+widget's iframe with the `credentialless` attribute as the bootstrap inserts
+it and restarts its load once (`markCredentialless`, `lib/trustpilot.ts`);
+one request per load, measured. Chrome/Edge 110+ honour the attribute (the
+iframe then runs without Trustpilot cookies, in ephemeral storage). Not
+verified against the real widget.trustpilot.com (unreachable from the dev
+sandbox), nor in Firefox or Safari. If a browser enforces COEP but lacks the
+attribute and Trustpilot sends no COEP header, the widget shows the grey box.
+
+**Any other new embed** needs the same treatment or its own COEP header.
+Headers are unchanged.
+
+**Severity:** medium (a broken box on the public landing in the worst case).
+
+## 034 — Landing header wraps "Sign in" and "Start free" onto two lines at 390 px — OPEN (pre-existing)
+
+**Found:** 2026-10-12, in the 390 px screenshots for the Trustpilot widget.
+
+**Symptom.** On a 390 px-wide phone the sticky landing header has the
+wordmark, "Sign in" and "Start free"; both buttons wrap onto two lines.
+
+**Root cause.** Not investigated (header CSS in `components/LandingPage.tsx`,
+untouched by the Trustpilot change). Proposed fix: `white-space: nowrap` on
+the header buttons and a smaller gap below ~400 px.
+
+**Severity:** low (cosmetic).
