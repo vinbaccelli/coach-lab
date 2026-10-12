@@ -1118,3 +1118,50 @@ rewrites it.
 or edits the text directly.
 
 **Severity:** blocking for issuing until decided; no data risk.
+
+---
+
+## 030 — The skeleton-lock click point was never cleared — RESOLVED (cleared on a new video)
+
+**Found:** 2026-10-12, while making AI Track use the locked player.
+
+**Symptom.** None visible on its own; a latent wrong value. The point a coach
+clicked to lock the skeleton (`pendingFocusRef` in `components/Canvas.tsx`) was
+kept for the rest of the session — across unlocks and across loading a
+different video — and is the fallback crop centre whenever auto-focus loses the
+player.
+
+**Verified root cause.** It was assigned in exactly one place (the click) and
+never reset anywhere.
+
+**Fault assessment.** Our defect; low impact (auto-focus usually overrides it),
+but a point on one clip is meaningless on another.
+
+**Fix.** Cleared together with the AI Track lock target when a NEW video loads
+(the video-source lifecycle effect). Deliberately NOT cleared on unlock (owner's
+decision, 2026-10-12).
+
+**Severity:** low.
+
+---
+
+## 031 — The live MediaPipe skeleton ignores the player lock — OPEN
+
+**Found:** 2026-10-12, same investigation.
+
+**Symptom.** With foot lines on (live MediaPipe), the live skeleton can sit on a
+different person from the one the coach locked.
+
+**Verified root cause.** `detectPoseLive` (`lib/mediapipePose.ts`) runs the
+VIDEO-mode landmarker on the full frame with `numPoses: 1`; the lock's click
+point / crop is only sent to the MoveNet worker (`poseWorkerBridge.setFocusPoint`).
+
+**Fault assessment.** Our gap; the lock was built for the MoveNet live path.
+
+**Proposed fix.** Feed the live landmarker a crop around the locked player, or
+run it multi-person and pick with `lib/aiTrackLock.ts` (as AI Track now does).
+Needs a latency measurement first — the live budget is tight.
+
+**Severity:** medium (wrong-player skeleton on two-player footage with foot lines on).
+
+**Not changed** in the AI Track change (owner's decision, 2026-10-12).
