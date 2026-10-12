@@ -1118,3 +1118,35 @@ rewrites it.
 or edits the text directly.
 
 **Severity:** blocking for issuing until decided; no data risk.
+
+---
+
+## 032 — Timeline selection (Motion Layer / Metrics section) stuck or ran away after + / − — RESOLVED
+
+**Found:** 2026-10-12, reported by Vin; reproduced in Chromium on a 9 s clip.
+
+**Symptom.** After using the timeline's + / − zoom, the selection handles
+could not be dragged, or a small drag threw the selection somewhere else.
+Measured on main: (1) zoom in ×4 around a playhead outside the selection →
+both handles disappeared; (2) Motion Layer: dragging the end handle to 30 %
+collapsed the selection to 0.008–0.253 s; (3) zoomed in, dragging the end
+handle +40 px reset the zoom mid-drag and moved the end to a different place
+(2.64 → 6.67 s on the Metrics section instead of +0.14 s).
+
+**Verified root cause** (`components/PreciseTimeline.tsx`).
+- The handles rendered only while part of the selection was in view
+  (`trimWidthPct > 0`), so zooming elsewhere removed them.
+- The view effect was keyed on the `trimRange` OBJECT: with fitting off it set
+  the view to "All" on every selection change (every drag frame); with fitting
+  on (Motion Layer) it re-fitted mid-drag once the span changed by > 50 %.
+  Either way the pixels under the finger meant a new time on the next move.
+- Handle drags mapped the pointer to an ABSOLUTE time, ignoring the 10 px
+  track inset, and had no pointercancel / lostpointercapture handling.
+
+**Fix.** View and selection are independent (`lib/timelineView.ts`): zoom only
+writes the view; the auto-fit reacts to the selection's values, never during a
+handle drag; handle drags move by the pointer's movement converted with the
+current zoom (so a handle pinned at the edge still moves); handles always
+render; drags end on up, cancel or lost capture. Tests: `tests/timelineView.test.ts`.
+
+**Severity:** high for the Motion Layer workflow (selection unusable after zooming).
