@@ -83,14 +83,24 @@ export function lockForPass(useLock: boolean, locked: boolean, target: LockTarge
 
 /** A click counts as "on" a body when it is inside its box grown by this share of its size. */
 const CLICK_MARGIN = 0.15;
-/** Without a click, the locked skeleton's box must overlap a candidate this much. */
-const LOCK_MIN_IOU = 0.3;
+/** Without a click, this share of the locked skeleton's box must lie inside a candidate's body. */
+const LOCK_MIN_COVER = 0.6;
+
+/** Share of box `a` that lies inside box `b`. */
+export function coverage(a: Box, b: Box): number {
+  const ix = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const iy = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  return (ix * iy) / (boxW(a) * boxH(a));
+}
 
 /**
  * Which candidate is the locked player on the lock frame, or -1.
  * With a click: a candidate whose body contains the click (several → the one
- * best matching the locked box, else nearest to the click). Without one: the
- * candidate best overlapping the locked skeleton's box (IoU ≥ 0.3).
+ * best matching the locked box, else nearest to the click). Without one
+ * ("Yes ✓"): the candidate whose body holds most of the locked skeleton's box
+ * (at least 60%). Coverage, not IoU: the shown skeleton may be only partly
+ * confident — measured on a two-player clip, the live pose at "Yes ✓" had only
+ * the head above the score bar, a box a fraction of the body's size.
  */
 export function matchAtLock(
   candidates: ReadonlyArray<readonly TrackKp[]>,
@@ -113,11 +123,13 @@ export function matchAtLock(
     return best;
   }
   if (lock.box) {
-    let best = -1, bestIou = LOCK_MIN_IOU;
+    let best = -1, bestKey = -Infinity;
     boxes.forEach((b, i) => {
       if (!b) return;
-      const v = iou(b, lock.box!);
-      if (v >= bestIou) { bestIou = v; best = i; }
+      const cover = coverage(lock.box!, b);
+      if (cover < LOCK_MIN_COVER) return;
+      const key = cover + iou(b, lock.box!);
+      if (key > bestKey) { bestKey = key; best = i; }
     });
     return best;
   }

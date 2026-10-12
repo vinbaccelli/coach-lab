@@ -44,6 +44,15 @@ test('lock frame without a click ("Yes ✓"): the shown skeleton\'s box decides'
   assert.equal(matchAtLock([FAR, NEAR], lock, FRAME), 1);
 });
 
+test('"Yes ✓" when only the head of the shown skeleton was confident: still the right player', () => {
+  // Measured: the live pose at "Yes ✓" had a 17×34 px box (head only).
+  const head = { x0: 490, y0: 390, x1: 510, y1: 420 };
+  const lock: LockTarget = { t: 2, point: null, box: head, kps: null };
+  assert.equal(matchAtLock([FAR, NEAR], lock, FRAME), 1);
+  // A box straddling both players (a merged single-person pose) matches nobody.
+  assert.equal(matchAtLock([FAR, NEAR], { ...lock, box: { x0: 400, y0: 300, x1: 1500, y1: 800 } }, FRAME), -1);
+});
+
 test('lock frame: the locked player missing → -1 (the pass stops, never picks someone else)', () => {
   const clickOnEmpty: LockTarget = { t: 2, point: { x: 0.05, y: 0.1 }, box: null, kps: null };
   assert.equal(matchAtLock([FAR, NEAR], clickOnEmpty, FRAME), -1);
