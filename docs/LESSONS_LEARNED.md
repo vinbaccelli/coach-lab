@@ -657,3 +657,22 @@ only a NEW appearance can be the locked player coming back. Regression test:
 **Class of mistake.** Identity by proximity alone. A growing search area needs
 an exclusion of everyone already accounted for, or it eventually finds the
 wrong look-alike.
+
+## 010 — A third-party widget can be blocked by our own security headers
+
+**Symptom.** Adding the Trustpilot TrustBox: with a stub widget served
+without a COEP header, the widget rendered as an empty grey error box in
+Chromium, and the plain fallback link was already gone (the bootstrap removes
+it before the iframe loads).
+
+**Verified root cause.** The site sends `Cross-Origin-Embedder-Policy:
+credentialless` on every page (`next.config.js`). COEP applies to iframes;
+`credentialless` relaxes only subresources.
+
+**Fix.** Mark the widget's iframe `credentialless` (per-iframe exemption, Chrome/Edge
+110+) as it is inserted — `markCredentialless` in `lib/trustpilot.ts`.
+KNOWN_ISSUES 033.
+
+**Class of mistake.** Checking only CSP for an embed. On this site, check
+COOP/COEP too: every new iframe needs its own COEP header or the
+`credentialless` attribute, and must be tried in a browser with the real headers.

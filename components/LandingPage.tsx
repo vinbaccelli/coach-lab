@@ -17,7 +17,9 @@
  *    (www.trustpilot.com/review/anglemotion.com — TRUSTPILOT_URL below)
  *    covers both the app and his coaching analysis, and that every review on
  *    it is 5 stars. The star line beside the reviews says exactly that and no
- *    more — no count, no TrustScore.
+ *    more — no count, no TrustScore. The closing section embeds Trustpilot's
+ *    Review Collector widget (components/TrustpilotReviewCollector.tsx), an
+ *    invitation to write a review that shows no rating either.
  *  - No competitor prices or competitor feature claims. The comparison table
  *    was removed at launch pricing (2026-10-03): only two of its cells had a
  *    recorded source. It may return only with a cited source per cell.
@@ -37,6 +39,8 @@ import {
   PLANS, DEMO, EBOOK_TITLE, PRICE_TAX_NOTE, formatMaybePrice, planPrice, yearlyPerMonth,
   yearlySavingsLabel, maxYearlySavingsPct, yearlySavingsSentence, type PlanPrices,
 } from '@/lib/plans';
+import { TRUSTPILOT_PROFILE_URL } from '@/lib/trustpilot';
+import TrustpilotReviewCollector from '@/components/TrustpilotReviewCollector';
 
 /* ────────────────────────────────────────────────────────────────────────────
    Product screenshots.
@@ -304,7 +308,7 @@ const FOUNDER_REVIEWS: Review[] = [
  * page points here. Until 2026-10-03 the page kept a separate coaching
  * profile (it.trustpilot.com/review/vinbaccelli.com) apart from this one.
  */
-const TRUSTPILOT_URL = 'https://www.trustpilot.com/review/anglemotion.com';
+const TRUSTPILOT_URL = TRUSTPILOT_PROFILE_URL;
 
 function buildFaqs(prices: PlanPrices) {
   return [
@@ -671,14 +675,14 @@ export default function LandingPage({ prices }: { prices: PlanPrices }) {
           <Link href={DEMO.url} className="am-btn am-btn-lg">{DEMO.label} <ArrowRight size={18} /></Link>
         </div>
 
-        {/* An invitation to review, beside the app CTAs. Same single profile as
-            the founder section; states no rating of its own. */}
-        <p className="am-note am-center am-app-review">
-          Already used it?{' '}
-          <a href={TRUSTPILOT_URL} target="_blank" rel="noopener noreferrer" className="am-inline-link">
-            Review AngleMotion on Trustpilot <ArrowUpRight size={13} aria-hidden="true" />
-          </a>
-        </p>
+        {/* An invitation to review, beside the app CTAs: Trustpilot's Review
+            Collector widget on the same single profile as the founder section.
+            It replaced the "Review AngleMotion on Trustpilot" text link
+            (2026-10-12); states no rating of its own. */}
+        <div className="am-app-review">
+          <p className="am-note am-center">Used AngleMotion? Tell us what you think.</p>
+          <TrustpilotReviewCollector />
+        </div>
       </section>
 
       <footer className="am-footer">
@@ -987,12 +991,10 @@ const CSS = `
 .am-faq-a { margin: 0 0 22px; max-width: 68ch; font-size: 15px; line-height: 1.62; color: var(--cl-text-secondary); }
 
 /* CLOSE + FOOTER */
-.am-app-review { max-width: 46ch; }
-.am-inline-link {
-  display: inline-flex; align-items: center; gap: 4px;
-  color: var(--cl-accent); font-weight: 600; text-decoration: none;
-}
-.am-inline-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* Review Collector: the widget's 52px is reserved by the component itself. */
+.am-app-review { max-width: 46ch; margin: 0 auto; }
+.am-app-review .trustpilot-widget { margin-top: 10px; }
+.am-app-review .trustpilot-widget > a { color: var(--cl-accent); font-weight: 600; }
 
 .am-close {
   max-width: var(--am-max); margin: 0 auto; text-align: center;
