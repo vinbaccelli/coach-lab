@@ -41,6 +41,7 @@ import {
 } from 'lucide-react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { requiredPlan, type Feature } from '@/lib/entitlements';
+import { ERASER_PRESETS, ERASER_SIZE_MAX, ERASER_SIZE_MIN, clampEraserSize, eraserPresetFor } from '@/lib/eraser';
 
 export type BallTrailMode = 'comet' | 'arc' | 'strobe';
 export type WebcamPipMode = 'rectangle' | 'circle' | 'hidden';
@@ -1596,17 +1597,71 @@ export default function ToolPalette(props: ToolPaletteProps) {
             on exactly while this row is lit, like every other tool here.
           */}
           <Row chrome={chrome} k="erase" active={activeTool === 'erase'} icon={<Eraser size={18} />} tooltip="Drag over a line or shape to erase part of it" label="Eraser" onPress={() => setTool('erase')} />
-          {activeTool === 'erase' && onOutlineEraserSizeChange && !io && (
-            <div style={{ padding: '0 8px 4px' }}>
-              <div style={{ fontSize: 12, color: textMuted, marginBottom: 4 }}>Eraser size ({outlineEraserSize}px)</div>
+          {/*
+            Eraser size: three presets + a slider, shown while the Eraser is
+            the active tool, in every layout. It used to be hidden in the
+            icon-only toolbar (phones, collapsed), so a coach there could not
+            change it at all. Preset buttons are dots, not words: three
+            labelled buttons in one row get cut off in the compact column.
+          */}
+          {activeTool === 'erase' && onOutlineEraserSizeChange && (
+            <div
+              role="group"
+              aria-label="Eraser size"
+              data-testid="eraser-size"
+              style={{ padding: io ? '0 0 4px' : '0 8px 4px', display: 'flex', flexDirection: 'column', alignItems: io ? 'center' : 'stretch', gap: 4 }}
+            >
+              <div style={{ fontSize: io ? 9 : 12, fontWeight: io ? 500 : undefined, color: textMuted, textAlign: io ? 'center' : undefined }}>
+                {io ? `${outlineEraserSize}px` : `Eraser size (${outlineEraserSize}px)`}
+              </div>
+              <div style={{ display: 'flex', flexDirection: io ? 'column' : 'row', gap: 4, alignItems: 'center' }}>
+                {ERASER_PRESETS.map((preset) => {
+                  const on = eraserPresetFor(outlineEraserSize) === preset.id;
+                  const dot = Math.round(6 + preset.size * 0.4);
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      aria-label={`${preset.label} eraser (${preset.size}px)`}
+                      aria-pressed={on}
+                      title={`${preset.label} (${preset.size}px)`}
+                      style={{
+                        ...rb(on, pressedKey === `er-${preset.id}`, io),
+                        justifyContent: 'center',
+                        transform: pressedKey === `er-${preset.id}` ? 'scale(0.95)' : undefined,
+                        ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0 } : { flex: 1, minWidth: 0, padding: 0, minHeight: 36 }),
+                      }}
+                      onPointerDown={(e) => {
+                        if (e.pointerType !== 'touch') e.preventDefault();
+                        fire(`er-${preset.id}`, () => onOutlineEraserSizeChange(preset.size), e);
+                      }}
+                    >
+                      <span style={{ width: dot, height: dot, borderRadius: '50%', background: 'currentColor', display: 'block' }} />
+                    </button>
+                  );
+                })}
+              </div>
               <input
                 type="range"
-                min={5}
-                max={50}
+                min={ERASER_SIZE_MIN}
+                max={ERASER_SIZE_MAX}
                 step={1}
                 value={outlineEraserSize}
-                onChange={(e) => onOutlineEraserSizeChange(Number(e.target.value))}
-                style={{ width: '100%' }}
+                onChange={(e) => onOutlineEraserSizeChange(clampEraserSize(Number(e.target.value)))}
+                aria-label="Eraser size"
+                style={
+                  io
+                    ? {
+                        width: 28,
+                        height: 96,
+                        margin: 0,
+                        accentColor: 'var(--cl-accent)',
+                        WebkitAppearance: 'slider-vertical' as React.CSSProperties['WebkitAppearance'],
+                        writingMode: 'vertical-lr',
+                        direction: 'rtl',
+                      }
+                    : { width: '100%' }
+                }
               />
             </div>
           )}

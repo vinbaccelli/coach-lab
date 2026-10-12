@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
+import { safeRedirectPath } from '@/lib/billing/checkoutIntent';
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
-  const redirectTo = searchParams.get('redirect') || '/';
+  // Same-origin paths only: `new URL('//evil.com', origin)` or an absolute URL
+  // would otherwise send a freshly signed-in visitor to another site.
+  const redirectTo = safeRedirectPath(searchParams.get('redirect'));
 
   // Bind Set-Cookie to THIS response object. In Next 15 route handlers, cookies
   // written to the `next/headers` store are not reliably attached to a

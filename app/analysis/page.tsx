@@ -15,6 +15,7 @@ import { Camera, Image as ImageIcon, PlayCircle, Plus, Trash2, Upload } from 'lu
 import type { CanvasHandle } from '@/components/Canvas';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 import { angleDifferenceDeg } from '@/lib/drawingTools';
+import { ERASER_SIZE_DEFAULT } from '@/lib/eraser';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
@@ -515,8 +516,12 @@ function Home() {
   const [videoBDuration, setVideoBDuration] = useState(0);
   const [playBothEnabled, setPlayBothEnabled] = useState(false);
   const [circleSpinning, setCircleSpinning] = useState(false);
-  /** The Eraser tool's size (px). Kept across uses; the eraser itself is armed below. */
-  const [eraserSize, setEraserSize] = useState(15);
+  /**
+   * The Eraser tool's size (ring radius, px). Kept across tool switches for the
+   * page session and reset on reload, like the line thickness; the eraser
+   * itself is armed below.
+   */
+  const [eraserSize, setEraserSize] = useState(ERASER_SIZE_DEFAULT);
   /**
    * RULER LENGTH CALIBRATION (feature #6) — owned here, not in RulerOverlay.
    *
