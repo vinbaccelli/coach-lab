@@ -1121,6 +1121,30 @@ or edits the text directly.
 
 ---
 
+## 029 — The Eraser's size could not be changed on phones (or with the toolbar collapsed) — RESOLVED
+
+**Found:** 2026-10-12, while adding size presets to the Eraser.
+
+**Symptom.** With the Eraser picked, the Draw list showed an "Eraser size"
+slider on a desktop-width toolbar, but nothing on a phone or with the toolbar
+collapsed: those coaches were stuck at the 15 px default.
+
+**Verified root cause.** `components/ToolPalette.tsx` rendered the slider only
+when `!io` (not icon-only), and the toolbar is icon-only on phones, on mobile
+chrome and when collapsed.
+
+**Fault assessment.** Our defect (layout condition copied from the label-only
+rows); no data risk.
+
+**Fix.** The size control (Small / Medium / Large presets + slider) now shows in
+every layout; in the icon-only column the presets stack and the slider is
+vertical, like the Style panel's thickness bar. Verified at 1400 px and 390 px
+(touch) in Chromium.
+
+**Severity:** low (feature unreachable on phones; erasing itself worked).
+
+---
+
 ## 030 — The skeleton-lock click point was never cleared — RESOLVED (cleared on a new video)
 
 **Found:** 2026-10-12, while making AI Track use the locked player.

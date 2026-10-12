@@ -29,6 +29,7 @@ import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { getPoseDetector } from '@/lib/poseDetection';
 import { smoothBakedTrack } from '@/lib/trackSmoothing';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
+import { eraseUnderRing } from '@/lib/eraser';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
@@ -7645,11 +7646,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       renderDirtyRef.current = true;
       const r = outlineEraserSizeRef.current;
       if (r <= 0) return;
-      strokesRef.current.forEach((s2, i) => {
-        if (!OUTLINE_ERASER_STROKES.has(s2.tool)) return;
-        const lw = (s2 as { lw?: number }).lw ?? 2;
-        if (hitTestStroke(s2, pos) <= r + lw / 2) applyOutlineEraserDot(i, pos);
+      // lib/eraser.ts: the same ring test and dots as before (radius = the
+      // chosen size), pure so it is unit-tested. Cut marks are new objects, so
+      // the history entry from before the drag stays intact (one Undo step).
+      const { strokes, cut } = eraseUnderRing(strokesRef.current, pos, r, {
+        eligible: (s2) => OUTLINE_ERASER_STROKES.has(s2.tool),
+        distance: hitTestStroke,
       });
+      if (cut.length === 0) return;
+      strokesRef.current = strokes;
+      outlineErasingIdxRef.current = cut[cut.length - 1];
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 

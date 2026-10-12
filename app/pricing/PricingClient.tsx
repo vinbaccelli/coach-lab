@@ -37,6 +37,26 @@ import {
   type PlanPrices,
 } from '@/lib/plans';
 import { FEATURES, type Feature } from '@/lib/entitlements';
+import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import {
+  resumeCheckout,
+  startCheckout,
+  type CheckoutDeps,
+  type CheckoutOutcome,
+} from '@/lib/billing/checkoutIntent';
+
+/** Signed in? Read from the session cookie the browser client already holds. */
+async function browserIsSignedIn(): Promise<boolean> {
+  const supabase = createSupabaseBrowserClient();
+  if (!supabase) return false;
+  const { data } = await supabase.auth.getSession();
+  return !!data.session;
+}
+
+const CHECKOUT_DEPS: CheckoutDeps = {
+  isSignedIn: browserIsSignedIn,
+  fetch: (...args) => fetch(...args),
+};
 
 const INK = 'var(--cl-text-primary)';
 const MUTED = 'var(--cl-text-secondary)';
@@ -52,6 +72,8 @@ export default function PricingClient({ prices }: { prices: PlanPrices }) {
   // Set when a gate redirected here: ?required=1 (no plan at all) or
   // ?required=pro&feature=<Feature> (a Pro tool on a lower plan).
   const [requiredNotice, setRequiredNotice] = useState<string | null>(null);
+  // Shown under the plan's button when checkout could not start (never alert()).
+  const [checkoutError, setCheckoutError] = useState<{ plan: PlanId; message: string; signInUrl?: string } | null>(null);
 
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
@@ -66,26 +88,51 @@ export default function PricingClient({ prices }: { prices: PlanPrices }) {
     }
   }, []);
 
-  const handleCheckout = async (plan: PlanId) => {
-    setLoading(plan);
-    try {
-      const res = await fetch('/api/stripe/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan, cycle }),
-      });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        alert(data.error || 'Failed to create checkout');
-        setLoading(null);
-      }
-    } catch {
-      alert('Something went wrong');
+  const applyOutcome = (plan: PlanId, outcome: CheckoutOutcome) => {
+    if (outcome.kind === 'error') {
+      setCheckoutError({ plan, message: outcome.message, signInUrl: outcome.signInUrl });
       setLoading(null);
+      return;
     }
+    // 'sign-in' or 'stripe': leave the page; the button reads "Redirecting…".
+    window.location.href = outcome.url;
   };
+
+  const handleCheckout = async (plan: PlanId) => {
+    setCheckoutError(null);
+    setLoading(plan);
+    applyOutcome(plan, await startCheckout({ plan, interval: cycle }, CHECKOUT_DEPS));
+  };
+
+  // Back from sign-in (/pricing?plan=…&interval=…): start that checkout once.
+  // The params are dropped from the address first, so a reload or a Back from
+  // Stripe never starts it again. Invalid or missing params start nothing.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const resumed = await resumeCheckout(window.location.search, CHECKOUT_DEPS);
+      if (cancelled) return;
+      if (resumed.search !== window.location.search) {
+        window.history.replaceState(null, '', `${window.location.pathname}${resumed.search}${window.location.hash}`);
+      }
+      if (!resumed.intent) return;
+      setCycle(resumed.intent.interval);
+      if (!resumed.outcome) return;
+      setLoading(resumed.intent.plan);
+      applyOutcome(resumed.intent.plan, resumed.outcome);
+    })();
+    return () => { cancelled = true; };
+    // Runs once on arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Returning with Back after leaving for Stripe or sign-in restores this page
+  // from the back/forward cache with the button still on "Redirecting…".
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => { if (e.persisted) setLoading(null); };
+    window.addEventListener('pageshow', onShow);
+    return () => window.removeEventListener('pageshow', onShow);
+  }, []);
 
   const annual = cycle === 'yearly';
 
@@ -229,6 +276,15 @@ export default function PricingClient({ prices }: { prices: PlanPrices }) {
                 >
                   {loading === plan.id ? 'Redirecting…' : `Choose ${plan.name}`}
                 </button>
+                {checkoutError?.plan === plan.id && (
+                  <p role="alert" style={{ margin: '8px 0 0', fontSize: 13, fontWeight: 600, lineHeight: 1.45, color: 'var(--cl-destructive-text)' }}>
+                    {checkoutError.signInUrl ? (
+                      <a href={checkoutError.signInUrl} style={{ color: 'inherit' }}>{checkoutError.message}</a>
+                    ) : (
+                      checkoutError.message
+                    )}
+                  </p>
+                )}
 
                 <ul style={{ listStyle: 'none', padding: 0, margin: '18px 0 0', display: 'flex', flexDirection: 'column', gap: 9, textAlign: 'left' }}>
                   {plan.features.map((f) => (
