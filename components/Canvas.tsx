@@ -10,7 +10,7 @@ import React, {
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg, arrowBearingDeg } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
-import { emitTourSignal } from '@/lib/tourSignals';
+import { emitTourSignal, reportTourState } from '@/lib/tourSignals';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
 import type { SwingSegment } from '@/lib/swingDetection';
@@ -4225,7 +4225,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       const bridge = new PoseWorkerBridge({
         frameSkip: poseFrameSkipRef.current,
-        onStatus: onProcessingStatus ?? undefined,
+        onStatus: (msg: string) => {
+          onProcessingStatus?.(msg);
+          // lib/poseWorkerBridge.ts's own failure message; a waiting tour step shows it.
+          if (msg.startsWith('Skeleton load failed')) reportTourState('skeleton', 'failed');
+        },
       });
       poseBridgeRef.current = bridge;
       poseLoopActiveRef.current = true;
@@ -4345,6 +4349,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       bridge.onReady(() => {
         onProcessingStatus?.('Skeleton ready — press play');
+        reportTourState('skeleton', 'ready');
         renderDirtyRef.current = true; // drop the on-video "Preparing" hint even while paused
         if (pendingFocusRef.current) {
           bridge.setFocusPoint(pendingFocusRef.current);
@@ -5040,6 +5045,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (detectorCancelled) return;
         youtubePoseDetectorRef.current = det;
         if (det) onProcessingStatus?.('Skeleton ready — press play');
+        reportTourState('skeleton', det ? 'ready' : 'failed');
       });
 
       let thumb: HTMLImageElement | null = null;
@@ -6073,6 +6079,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             // status message can be replaced by any other message, and a coach
             // who presses play early would otherwise just see no skeleton.
             drawCanvasHint(ctx, dx, dy, dw, 'Preparing the skeleton…');
+            reportTourState('skeleton', 'loading'); // a waiting tour step shows it too
           } else if (hiddenAsStale && vW > 0 && vH > 0) {
             drawCanvasHint(ctx, dx, dy, dw, 'Skeleton catching up…');
           } else if (hiddenByTrackScope && vW > 0 && vH > 0) {

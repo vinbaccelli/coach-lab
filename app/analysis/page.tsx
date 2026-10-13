@@ -9423,6 +9423,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
 
       {skeletonConfirmOpen && createPortal(
         <div
+          data-tour-id="skeleton-confirm"
           style={{
             position: 'fixed', bottom: 140, left: '50%', transform: 'translateX(-50%)',
             zIndex: 9500, background: '#1D1D1F', borderRadius: 16,

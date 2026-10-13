@@ -45,7 +45,8 @@
 
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { TOUR_SIGNAL_EVENT, type TourSignalDetail } from '@/lib/tourSignals';
+import { TOUR_SIGNAL_EVENT, TOUR_STATE_EVENT, readTourState, type TourSignalDetail } from '@/lib/tourSignals';
+import { tourWaitPhase, type TourWaitPhase } from '@/lib/tourWait';
 import { ALL_TOURS, TOURS_BY_PAGE, WELCOME_TOUR_ID, type TourDef, type TourPageId, type TourStep } from '@/components/tours';
 import { tourAccess } from '@/lib/tourAccess';
 
@@ -250,6 +251,44 @@ function pointerSegment(card: Rect, target: Rect): { x1: number; y1: number; x2:
 }
 
 /** Live rect of a step's target, re-read every POLL_MS while the step is open. */
+/**
+ * For a step that waits on something slow (`step.wait`): whether it is still
+ * loading, slow, failed or ready — from the app's reported state and its own
+ * "ready" prompt, re-read on every report and every POLL_MS. Once ready it
+ * stays ready for this opening of the step. Never advances anything.
+ */
+function useStepWaitPhase(step: TourStep | null): TourWaitPhase {
+  const [phase, setPhase] = useState<TourWaitPhase>('ready');
+  useEffect(() => {
+    const w = step?.wait;
+    if (!w) {
+      setPhase('ready');
+      return;
+    }
+    const openedAt = Date.now();
+    let id = 0;
+    const read = () => {
+      const p = tourWaitPhase({
+        state: readTourState(w.state),
+        readyPromptVisible: !!w.readySelector && !!findVisible(w.readySelector),
+        elapsedMs: Date.now() - openedAt,
+        slowAfterMs: w.slowAfterMs,
+      });
+      setPhase(p);
+      if (p === 'ready') stop();
+    };
+    const stop = () => {
+      window.clearInterval(id);
+      window.removeEventListener(TOUR_STATE_EVENT, read);
+    };
+    id = window.setInterval(read, POLL_MS);
+    window.addEventListener(TOUR_STATE_EVENT, read);
+    read();
+    return stop;
+  }, [step]);
+  return phase;
+}
+
 function useStepTargetRect(step: TourStep | null): Rect | null {
   const [rect, setRect] = useState<Rect | null>(null);
   useLayoutEffect(() => {
@@ -370,6 +409,7 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
   const step: TourStep | null = tour ? tour.steps[stepIdx] ?? null : null;
   const reviewing = stepIdx < maxReached;
   const targetRect = useStepTargetRect(step);
+  const waitPhase = useStepWaitPhase(step);
 
   useEffect(() => {
     setMounted(true);
@@ -784,7 +824,9 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
     };
     const seg = pointing && spotlight ? pointerSegment(cardBox, spotlight) : null;
     const segLen = seg ? Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1) : 0;
-    const showImage = !!step.image && (!compact || imageOpen);
+    // A step waiting on something slow holds back its instructions (and picture).
+    const holding = !!step.wait && waitPhase !== 'ready';
+    const showImage = !!step.image && (!compact || imageOpen) && !holding;
     const blockers =
       spotlight && !missing
         ? [
@@ -946,7 +988,7 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
           <h3 id={`tour-title-${stepIdx}`} style={{ margin: '0 0 6px', fontSize: 17, fontWeight: 700, lineHeight: 1.25 }}>
             {step.title}
           </h3>
-          {step.image && compact ? (
+          {step.image && compact && !holding ? (
             <button
               type="button"
               onClick={() => setImageOpen((o) => !o)}
@@ -978,7 +1020,35 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
               }}
             />
           ) : null}
-          <p style={{ margin: '0 0 12px', fontSize: 14, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>{step.body}</p>
+          {holding && step.wait ? (
+            <div role="status" aria-live="polite" data-tour-wait={waitPhase} style={{ margin: '0 0 12px' }}>
+              {waitPhase !== 'failed' ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, lineHeight: 1.5, color: 'var(--cl-text-primary)' }}>
+                  <span
+                    aria-hidden
+                    className="anglemotion-tour-spinner"
+                    style={{
+                      width: 16,
+                      height: 16,
+                      flex: 'none',
+                      borderRadius: '50%',
+                      border: '2px solid var(--cl-border)',
+                      borderTopColor: 'var(--cl-action-primary)',
+                      animation: 'anglemotion-tour-spin 0.9s linear infinite',
+                    }}
+                  />
+                  <span>{step.wait.loadingText}</span>
+                </div>
+              ) : null}
+              {waitPhase === 'slow' || waitPhase === 'failed' ? (
+                <p style={{ margin: waitPhase === 'failed' ? 0 : '8px 0 0', fontSize: 13, lineHeight: 1.45, color: 'var(--cl-text-secondary)' }}>
+                  {step.wait.slowText}
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p style={{ margin: '0 0 12px', fontSize: 14, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>{step.body}</p>
+          )}
           {missing ? (
             <p style={{ margin: '0 0 12px', fontSize: 13, lineHeight: 1.45, color: 'var(--cl-text-primary)' }}>
               Not on screen right now — go back to the panel this step is about, and the tour picks up from there.
@@ -1019,11 +1089,11 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
             ) : (
               <button
                 type="button"
-                aria-label={last ? 'Finish tour' : 'Next step'}
+                aria-label={last ? 'Finish tour' : holding ? 'Skip this step' : 'Next step'}
                 onClick={next}
                 style={{ ...primaryBtn, flex: 1 }}
               >
-                {last ? 'Finish' : 'Next →'}
+                {last ? 'Finish' : holding ? 'Skip step' : 'Next →'}
               </button>
             )}
           </div>
@@ -1046,7 +1116,11 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
         0%, 100% { transform: translate(0, 0); }
         50%      { transform: translate(calc(var(--am-nx) * -7px), calc(var(--am-ny) * -7px)); }
       }
+      @keyframes anglemotion-tour-spin {
+        to { transform: rotate(360deg); }
+      }
       @media (prefers-reduced-motion: reduce) {
+        .anglemotion-tour-spinner { animation-duration: 2.4s !important; }
         .anglemotion-tour-anim { animation: none !important; }
       }`}</style>
       {!suppressFloatingHelp && tours.length > 0 ? helpBtn : null}

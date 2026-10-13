@@ -1,4 +1,4 @@
-import type { TourSignalName } from '@/lib/tourSignals';
+import type { TourSignalName, TourStateName } from '@/lib/tourSignals';
 
 export type TourPlacement = 'top' | 'bottom' | 'left' | 'right' | 'center';
 export type TourCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
@@ -53,6 +53,23 @@ export interface TourStep {
    * with no suitable capture have none (see docs/TOUR_SCREENSHOTS.md).
    */
   image?: TourImage;
+  /**
+   * The step is about something that takes a while to be ready (the live
+   * skeleton loading). Until it is, the card shows a spinner and `loadingText`
+   * instead of `body` (and no picture); after `slowAfterMs`, or if the app
+   * reports a failure, it adds `slowText`. Never advances the step by itself.
+   */
+  wait?: TourWait;
+}
+
+export interface TourWait {
+  /** The app state to wait for (lib/tourSignals.ts reportTourState). */
+  state: TourStateName;
+  /** Also counts as ready while this selector matches a visible element (the app's own prompt). */
+  readySelector?: string;
+  loadingText: string;
+  slowText: string;
+  slowAfterMs: number;
 }
 
 export interface TourImage {

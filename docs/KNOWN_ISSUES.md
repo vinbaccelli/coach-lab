@@ -1293,3 +1293,40 @@ profile copy. The Player database tour deliberately does not send coaches down
 the New Analysis Session → Save Report path until this is decided.
 
 **Severity:** moderate — a documented, user-visible flow dead-ends.
+
+## 036 — Tour steps that wait on slow work show no progress — PARTLY RESOLVED (Getting started step 7)
+
+**Found:** 2026-10-13, reported by Vin on Getting started step 7 ("Check it
+found your player"): while the skeleton loaded, the card said "give it a
+moment" with no sign of progress.
+
+**Root cause.** The tour card only knew a step's instructions and "Your turn…";
+it had no view of an app task still running.
+
+**Fix (step 7 only).** `lib/tourSignals.ts` keeps a tour STATE the app reports
+where it already detects it (`components/Canvas.tsx`: 'loading' where it draws
+"Preparing the skeleton…", 'ready' where it says "Skeleton ready", 'failed' on
+the pose engine's "Skeleton load failed"); the "Is the skeleton over the
+player?" prompt carries `data-tour-id="skeleton-confirm"`. A step with `wait`
+shows a spinner and a loading line instead of its instructions, adds a
+fallback line after 15 s or on failure, and switches to the instructions when
+ready (`lib/tourWait.ts`). It never advances by itself. Tests:
+`tests/tourWait.test.ts`.
+
+**Same problem, not changed yet** (the card keeps the "press …" text and
+"Your turn…" while the app works):
+- Getting started 1, Draw and angles 1, Ruler 1 — "Load a clip": after Demo
+  (Tutorial) the demo video downloads before the video slot appears; on a slow
+  phone connection that is seconds with no sign in the card.
+- Getting started 9 — "AI Detect Angles": waits on the detection; if it finds
+  nothing, the app's status line says so but the card keeps waiting.
+- Match decoder 2 — "Read screenshots": OCR of up to 25 screenshots can take
+  tens of seconds; the highlighted button shows "(n/total)" but the card does
+  not.
+- Player database 1 — "Add a player": waits on the API call; an error shows on
+  the page, the card keeps waiting (normally fast).
+
+No tour has a step on AI Track or Motion Layer.
+
+**Severity:** low–moderate (confusing, never a dead end: Skip step and Back
+always work).

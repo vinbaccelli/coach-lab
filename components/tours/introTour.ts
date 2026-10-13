@@ -78,10 +78,20 @@ export const INTRO_TOUR: TourDef = {
     {
       id: 'skeleton-check',
       title: 'Check it found your player',
-      body: 'Give it a moment to land on the player. If it asks whether the skeleton is over the player, answer Yes — or No, then click your player.',
+      body: 'If the skeleton is over your player, answer Yes. If it isn’t, answer No, then click your player.',
       target: 'tour-canvas',
       area: true,
       advance: { kind: 'next' },
+      // The skeleton can take seconds (a minute on a phone, the first time) to
+      // load: hold the Yes / No instructions back until it is ready or the
+      // app asks "Is the skeleton over the player?".
+      wait: {
+        state: 'skeleton',
+        readySelector: visible('skeleton-confirm'),
+        loadingText: 'Loading the skeleton, this can take a few seconds…',
+        slowText: 'Still loading. If nothing appears, tap Skeleton again or reload the page.',
+        slowAfterMs: 15_000,
+      },
       image: shot('intro', 'skeleton-check', 299, 'The AI skeleton drawn over a player’s arms and torso, with the message “Skeleton ready — press play”.'),
     },
     {
