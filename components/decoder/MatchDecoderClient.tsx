@@ -175,7 +175,7 @@ export default function MatchDecoderClient() {
             on this device with OCR; no AI is involved and nothing is estimated. Scrolled captures of the same
             screen are fine, they get stitched.
           </p>
-          <label style={dropzone}>
+          <label style={dropzone} data-tour-id="dec-upload">
             <input
               type="file"
               accept="image/*"
@@ -188,7 +188,7 @@ export default function MatchDecoderClient() {
           {files.length > 0 && (
             <ul style={{ margin: '12px 0 0', paddingLeft: 18, fontSize: 12.5, color: 'var(--cl-text-primary)' }}>
               {files.map((f, i) => (
-                <li key={`${f.name}-${i}`} style={{ marginBottom: 5 }}>
+                <li key={`${f.name}-${i}`} data-tour-id="dec-file" style={{ marginBottom: 5 }}>
                   {f.name}{' '}
                   <button
                     type="button"
@@ -205,6 +205,7 @@ export default function MatchDecoderClient() {
             type="button"
             disabled={busy || !files.length}
             onClick={() => void runDecode()}
+            data-tour-id="dec-read"
             style={{ ...btnPrimary, marginTop: 16, width: '100%' }}
           >
             {busy ? progress || 'Reading…' : 'Read screenshots'}
@@ -215,7 +216,7 @@ export default function MatchDecoderClient() {
 
       {/* ── What was read ──────────────────────────────────────────────── */}
       {counts && (
-        <div style={{ ...card, paddingTop: 16, paddingBottom: 16 }}>
+        <div data-tour-id="dec-counts" style={{ ...card, paddingTop: 16, paddingBottom: 16 }}>
           <div style={{ fontSize: 12.5, color: 'var(--cl-text-secondary)' }}>
             Read <b style={{ color: 'var(--cl-text-primary)' }}>{counts.total}</b> screenshots — {counts.stats} stats,{' '}
             {counts.timeline} timeline
@@ -251,7 +252,7 @@ export default function MatchDecoderClient() {
       {/* ── Report ─────────────────────────────────────────────────────── */}
       {reports && analysis && (
         <div style={{ ...card, padding: '28px 26px 32px' }}>
-          <h2 style={{ ...h2, marginBottom: 4 }}>2 · Match report</h2>
+          <h2 data-tour-id="dec-report" style={{ ...h2, marginBottom: 4 }}>2 · Match report</h2>
           <p style={{ ...hint, marginBottom: 28 }}>
             Every number below was read from your screenshots. Where something could not be read, the report
             says so instead of filling the gap.
@@ -259,7 +260,7 @@ export default function MatchDecoderClient() {
           <MatchReportView reports={reports} analysis={analysis} />
 
           {ENABLE_GOOGLE_EXPORTS && (
-            <button type="button" onClick={() => setSaveOpen(true)} style={{ ...btnPrimary, width: '100%', marginTop: 12 }}>
+            <button type="button" data-tour-id="dec-save" onClick={() => setSaveOpen(true)} style={{ ...btnPrimary, width: '100%', marginTop: 12 }}>
               Save to Google Docs
             </button>
           )}

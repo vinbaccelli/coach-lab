@@ -72,7 +72,7 @@ export default function MatchReportView({
 function SectionBlock({ section }: { section: ReportSection }) {
   return (
     <div style={{ marginBottom: 40 }}>
-      <h3 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>
+      <h3 data-tour-id={`dec-section-${section.id}`} style={{ fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>
         <span style={{ color: '#C7C7CC', marginRight: 8 }}>{section.number}</span>
         {section.heading}
       </h3>

@@ -31,6 +31,7 @@ import type { CropAspect, PixelRegion } from '@/components/PostRecordingCropModa
 const PostRecordingCropModal = React.lazy(() => import('@/components/PostRecordingCropModal'));
 import { exportCroppedVideo } from '@/lib/cropExport';
 import GuidedTour from '@/components/GuidedTour';
+import { useToursEnabled } from '@/lib/useToursEnabled';
 import { terminateGlobalPoseWorker } from '@/lib/poseWorkerBridge';
 import PrecisionDrawInstructions, {
   hasSeenPrecisionInstructions,
@@ -187,6 +188,7 @@ const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportM
 import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import RulerOverlay from '@/components/ruler/RulerOverlay';
+import { emitTourSignal } from '@/lib/tourSignals';
 import type { RulerCalibration } from '@/lib/ruler/types';
 import type { UnitSystem } from '@/lib/ruler/units';
 import { uploadDataUrl } from '@/lib/supabase/storage';
@@ -358,6 +360,8 @@ type AnalysisMode =
   | { kind: 'snapshot'; snapshotId: string };
 
 function Home() {
+  // Tours switch (lib/toursSwitch.ts): the ? in the zoom cluster follows it.
+  const toursEnabled = useToursEnabled();
   const router = useRouter();
   const searchParams = useSearchParams();
   const contextPlayerId = searchParams.get('playerId');
@@ -5334,6 +5338,7 @@ function Home() {
     // or the whole flow is silently inert.
     setDataColumnActive(true);
     setAngleDiffState({ first: null });
+    emitTourSignal('angle-diff-armed');
   }, [handleToolChange]);
 
   /** Abandon the two-arrow flow (tool change, or the coach cancelling). */
@@ -6983,6 +6988,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         overlaysOn: true,
       } : s));
       setProcessingStatus(`AI detected ${items.length} measurements`);
+      emitTourSignal('ai-angles-detected');
     },
     onScreenshotSave:                () => { void handleScreenshotSave(); },
     screenshotSaving,
@@ -7540,6 +7546,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                           value: m.value, unit: '°', type: 'arrowAngle',
                         }]);
                         setAngleDiffState({ first: m.value });
+                        emitTourSignal('angle-diff-first');
                       } else {
                         const diff = angleDifferenceDeg(angleDiffState.first, m.value);
                         setMeasurementColumn(prev => [
@@ -7548,6 +7555,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                           { id: `ad-${Date.now()}-d`, label: 'Angle differential', value: diff, unit: '°', type: 'differential' },
                         ]);
                         setAngleDiffState(null);
+                        emitTourSignal('angle-diff-done');
                       }
                       return;
                     }
@@ -7595,7 +7603,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
                   webcamPipMobileChrome={isMobile}
                   webcamPipBottomInsetPx={toolbarBottomReservePx}
-                  showTourHelpInZoomCluster
+                  showTourHelpInZoomCluster={toursEnabled}
                   poseFrameSkip={hasVideoBContent ? 1 : 0}
                   panModeEnabled={panModeEnabled}
                   onPanModeToggle={() => setPanModeEnabled((p) => !p)}
@@ -7739,7 +7747,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     {webcamActive ? (
                       <button
                         type="button"
-                        data-tour-id="tour-upload"
+                        data-tour-id="tour-load"
                         onClick={triggerVideoUploadA}
                         style={{
                           position: 'absolute',
@@ -7765,7 +7773,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         <Upload size={16} /> Upload Video
                       </button>
                     ) : (
-                    <div style={{
+                    <div data-tour-id="tour-load" style={{
                       display: 'flex', flexDirection: 'column',
                       alignItems: 'center', justifyContent: 'center',
                       gap: 16,
@@ -9415,6 +9423,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
 
       {skeletonConfirmOpen && createPortal(
         <div
+          data-tour-id="skeleton-confirm"
           style={{
             position: 'fixed', bottom: 140, left: '50%', transform: 'translateX(-50%)',
             zIndex: 9500, background: '#1D1D1F', borderRadius: 16,

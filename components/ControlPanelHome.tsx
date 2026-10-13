@@ -165,7 +165,7 @@ const BUSINESS_TOOLS: Tool[] = [
 function ToolCard({ tool }: { tool: Tool }) {
   const { href, name, Icon, what, steps } = tool;
   return (
-    <div style={card}>
+    <div style={card} data-tour-id={`cp-${href.slice(1)}`}>
       <Link href={href} className="cp-tool-link" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit' }}>
         <Icon size={18} strokeWidth={2} aria-hidden="true" style={{ flex: 'none', color: 'var(--cl-text-primary)' }} />
         <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em' }}>{name}</span>
@@ -220,7 +220,7 @@ export default function ControlPanelHome() {
       </header>
 
       {/* ── Primary entry: the analysis lab ─────────────────────────────── */}
-      <Link href="/analysis" className="cp-primary" style={{ ...card, gap: 10, padding: 22, marginBottom: 30, border: '1px solid var(--cl-accent)' }}>
+      <Link href="/analysis" className="cp-primary" data-tour-id="cp-analysis" style={{ ...card, gap: 10, padding: 22, marginBottom: 30, border: '1px solid var(--cl-accent)' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span
             aria-hidden="true"

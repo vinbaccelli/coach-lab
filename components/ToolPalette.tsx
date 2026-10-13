@@ -921,6 +921,7 @@ function Row({
           title={locked ? `${label} — part of ${planChip}` : tooltip ?? label}
           data-active={active ? 'true' : undefined}
           data-destructive={destructive ? 'true' : undefined}
+          data-tour-id={`row-${k}`}
           data-locked={locked ? 'true' : undefined}
           style={{ ...rowStyle, position: 'relative' }}
           onPointerDown={(e) => {
@@ -950,6 +951,7 @@ function Row({
         aria-label={locked ? `${label} (${planChip})` : undefined}
         data-active={active ? 'true' : undefined}
         data-destructive={destructive ? 'true' : undefined}
+        data-tour-id={`row-${k}`}
         data-locked={locked ? 'true' : undefined}
         style={rowStyle}
         onPointerDown={(e) => {
@@ -1042,6 +1044,7 @@ function BackHeader({
       <button
         type="button"
         aria-label="Back"
+        data-tour-id="toolbar-back"
         style={{
           ...rb(false, pressedKey === `back-${title}`, io, denseMobile),
           ...(io ? { width: 44, height: 44, minHeight: 44, padding: 0, justifyContent: 'center' } : null),
@@ -1067,6 +1070,7 @@ function BackHeader({
         type="button"
         aria-label="Select"
         title="Select and move drawn shapes"
+        data-tour-id="toolbar-select"
         aria-pressed={selectActive}
         style={{
           ...rb(selectActive, pressedKey === `sel-${title}`, io, denseMobile),
@@ -1446,6 +1450,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               key={c}
               type="button"
               aria-label={`Color ${c}`}
+              data-tour-id={`style-color-${c.slice(1)}`}
               style={{
                 ...rb(styleVals.color === c, pressedKey === `c-${c}`, io),
                 justifyContent: io ? 'center' : 'flex-start',

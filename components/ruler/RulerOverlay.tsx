@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { usePrecisionTouch } from '@/hooks/usePrecisionTouch';
 import { ENABLE_RULER_PRECISION } from '@/lib/featureFlags';
 import {
@@ -34,6 +34,7 @@ import {
   type UnitSystem,
 } from '@/lib/ruler/units';
 import type { Point2D, RulerCalibration, RulerMeasurement, RulerMode } from '@/lib/ruler/types';
+import { emitTourSignal } from '@/lib/tourSignals';
 
 interface Props {
   /** Displayed width/height of the video container in pixels */
@@ -161,6 +162,7 @@ export default function RulerOverlay({
       });
       setCalibStep('done');
       setMode('measure');
+      emitTourSignal('ruler-calibrated');
       return;
     }
 
@@ -195,6 +197,7 @@ export default function RulerOverlay({
     });
     setCalibStep('done');
     setMode('measure');
+    emitTourSignal('ruler-calibrated');
   }, [selectedPreset, calibPoints, resolveReferenceMeters, getSvgPoint, onCalibrationChange]);
 
   // ---- Measure clicks ----
@@ -231,6 +234,7 @@ export default function RulerOverlay({
     // formatting is unchanged. Unit switching here never rewrites what was
     // already sent, so the column stays internally consistent.
     onMeasurement?.(Math.round(distM * 100) / 100, 'm');
+    emitTourSignal('ruler-measured');
     setDrawStart(null);
     setDrawCurrent(null);
   }, [drawStart, calibration, getSvgPoint, onMeasurement]);
@@ -324,6 +328,50 @@ export default function RulerOverlay({
   const [panelPos, setPanelPos] = useState<Point2D | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const panelDragRef = useRef<{ dx: number; dy: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Where the panel may start so it does not open UNDER the video's top-right
+   * action row ("Remove A / + Add B", app/analysis/page.tsx renderVideoSlotPills).
+   * Both are anchored to the same corner of the same panel and the row stacks
+   * above this overlay, so at the default anchor it covered most of the header,
+   * close button included (KNOWN_ISSUES 017). The row's real bottom edge is
+   * measured rather than assumed: it wraps on a narrow panel and grows when
+   * more controls join it. Only the default anchor uses this — once the coach
+   * drags the panel, their position stands.
+   */
+  const [slotRowClearance, setSlotRowClearance] = useState(0);
+  useEffect(() => {
+    const root = rootRef.current;
+    const host = root?.parentElement;
+    if (!root || !host) return;
+    const measure = () => {
+      const row = host.querySelector<HTMLElement>('[aria-label="Video slot actions"]');
+      if (!row) { setSlotRowClearance(0); return; }
+      const rr = row.getBoundingClientRect();
+      const br = root.getBoundingClientRect();
+      setSlotRowClearance(rr.height > 0 ? Math.max(0, Math.round(rr.bottom - br.top) + 8) : 0);
+    };
+    measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(host);
+    const row = host.querySelector('[aria-label="Video slot actions"]');
+    if (row) ro?.observe(row);
+    // The row appears and disappears with Video A / Video B, and wraps when it grows.
+    const mo = new MutationObserver(() => {
+      const r = host.querySelector('[aria-label="Video slot actions"]');
+      if (r) ro?.observe(r);
+      measure();
+    });
+    mo.observe(host, { childList: true, subtree: true });
+    window.addEventListener('resize', measure);
+    return () => {
+      ro?.disconnect();
+      mo.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
+  const panelDefaultTop = Math.max(compact ? 8 : 12, slotRowClearance);
 
   const onPanelDragStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     // Never start a drag from a control inside the header (the precision
@@ -384,6 +432,7 @@ export default function RulerOverlay({
 
   return (
     <div
+      ref={rootRef}
       style={{
         position: 'absolute',
         inset: 0,
@@ -520,19 +569,26 @@ export default function RulerOverlay({
       {/* Control panel */}
       <div
         ref={panelRef}
+        data-tour-id="ruler-panel"
         onPointerDown={e => e.stopPropagation()}
         onPointerUp={e => e.stopPropagation()}
         onPointerMove={onPanelDragMove}
         onLostPointerCapture={onPanelDragEnd}
         style={{
         position: 'absolute',
-        // Until the first drag this is the original top-right anchor, untouched.
+        // Until the first drag: the top-right anchor, pushed down below the
+        // video's action row when one is showing.
         ...(panelPos
           ? { left: panelPos.x, top: panelPos.y, right: 'auto' as const }
-          : { top: compact ? 8 : 12, right: compact ? 8 : 12 }),
+          : { top: panelDefaultTop, right: compact ? 8 : 12 }),
         width: compact ? 'min(236px, calc(100% - 16px))' : 280,
-        maxHeight: compact ? 'calc(100% - 16px)' : undefined,
-        overflowY: compact ? 'auto' : undefined,
+        // At the default anchor the panel must fit below its (possibly lowered)
+        // top. A dragged panel keeps its original sizing, so dragging it down
+        // never shrinks it under the drag clamp that measures its height.
+        maxHeight: panelPos
+          ? (compact ? 'calc(100% - 16px)' : undefined)
+          : `calc(100% - ${panelDefaultTop + (compact ? 8 : 12)}px)`,
+        overflowY: 'auto',
         WebkitOverflowScrolling: 'touch',
         background: 'rgba(15,15,20,0.95)',
         borderRadius: 12,
@@ -540,7 +596,10 @@ export default function RulerOverlay({
         color: 'var(--cl-text-on-fill)',
         fontSize: compact ? 12 : 13,
         boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-        overflow: 'hidden',
+        // overflowX, not the overflow shorthand: the shorthand silently reset
+        // overflowY above to hidden, so a height-capped panel clipped its
+        // content instead of scrolling.
+        overflowX: 'hidden',
       }}>
         {/* Header — also the drag handle for the whole panel. */}
         <div
@@ -606,11 +665,13 @@ export default function RulerOverlay({
           borderBottom: '1px solid rgba(255,255,255,0.08)',
         }}>
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', flex: 1 }}>Units</span>
-          <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
+          <div data-tour-id="ruler-units" style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
             {(['metric', 'imperial'] as const).map(sys => (
               <button
                 key={sys}
+                data-active={unitSystem === sys ? 'true' : undefined}
                 onClick={() => {
+                  if (sys !== unitSystem) emitTourSignal('ruler-units');
                   onUnitSystemChange(sys);
                   // Keep the typing unit sensible for the new system, but only
                   // when the coach hasn't already typed something — retyping
@@ -638,7 +699,7 @@ export default function RulerOverlay({
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {RULER_PRESETS.map(preset => (
-                  <button key={preset.id} onClick={() => {
+                  <button key={preset.id} data-tour-id={`ruler-preset-${preset.id}`} onClick={() => {
                     setSelectedPreset(preset);
                     setCalibStep('place-points');
                     setCalibPoints([]);
@@ -675,7 +736,7 @@ export default function RulerOverlay({
           {/* STEP 2: Place calibration points */}
           {calibStep === 'place-points' && selectedPreset && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <div data-tour-id="ruler-place-points" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <button onClick={() => { setCalibStep('pick-preset'); setCalibPoints([]); setSelectedPreset(null); }}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.5)', padding: 0 }}>
                   ← back

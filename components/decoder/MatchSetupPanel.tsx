@@ -82,7 +82,7 @@ export default function MatchSetupPanel({
     Object.entries(setup.statsScreenshotToSide).filter(([, v]) => v === id).length;
 
   return (
-    <div style={card}>
+    <div style={card} data-tour-id="dec-setup">
       <h2 style={h2}>1 · Who played?</h2>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>

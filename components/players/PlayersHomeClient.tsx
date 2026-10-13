@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { User } from 'lucide-react';
+import { emitTourSignal } from '@/lib/tourSignals';
 import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 
@@ -66,6 +67,7 @@ export default function PlayersHomeClient() {
         </PlanLockedNotice>
       ) : (
       <div
+        data-tour-id="players-new"
         style={{
           ...cardBase,
           marginBottom: 20,
@@ -104,6 +106,7 @@ export default function PlayersHomeClient() {
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.message ?? data.error ?? 'Failed');
                 setNewName('');
+                emitTourSignal('player-created');
                 await load();
               } catch (e: unknown) {
                 setErr(e instanceof Error ? e.message : 'Failed');
@@ -134,9 +137,9 @@ export default function PlayersHomeClient() {
       ) : players.length === 0 ? (
         <p style={{ color: 'var(--cl-text-secondary)', fontSize: 14 }}>No players yet — add one above or create from an upload flow.</p>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
+        <div data-tour-id="players-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
           {players.map((p) => (
-            <Link key={p.id} href={`/players/${p.id}`} style={cardBase} className="anglemotion-player-card">
+            <Link key={p.id} href={`/players/${p.id}`} style={cardBase} className="anglemotion-player-card" data-tour-id="player-card">
               <div
                 style={{
                   width: 52,
