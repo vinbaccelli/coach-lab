@@ -1330,3 +1330,27 @@ No tour has a step on AI Track or Motion Layer.
 
 **Severity:** low–moderate (confusing, never a dead end: Skip step and Back
 always work).
+
+## 037 — Timeline tick marks ignored the zoom (and grew with the clip) — RESOLVED (timeline V1 stage 1)
+
+**Symptom.** Zoomed in, the tick marks under the timeline no longer matched
+the track: they were laid out over the whole clip whatever the view, with no
+labels except on hover. On a 2-hour clip they were 240 elements re-rendered on
+every time update (274 nodes in the timeline, measured).
+
+**Verified root cause.** `TimelineMarkers` in `components/PreciseTimeline.tsx`
+placed ticks at `time / duration` with an interval chosen from the duration
+alone (1–30 s), ignoring the view and the 10 px track inset.
+
+**Fix.** A time ruler drawn from the VIEW (`rulerTicks` in
+`lib/timelineView.ts`): the smallest step from single frames to hours whose
+labels are ≥ 64 px apart, minor ticks as one repeating pattern, memoised so
+playback updates never re-render it (52 timeline nodes at any clip length),
+plus an overview bar of the whole clip. Zoom (pinch, Ctrl/⌘-wheel), scroll
+(trackpad, ruler drag, overview) and follow-the-playhead came with it.
+Tests: `tests/timelineRuler.test.ts`.
+
+**Not verified:** YouTube sources (unreachable from the dev sandbox) and real
+phones (Chromium touch emulation only).
+
+**Severity:** moderate (misleading ruler on any zoomed timeline).

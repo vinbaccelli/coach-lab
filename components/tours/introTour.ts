@@ -40,10 +40,12 @@ export const INTRO_TOUR: TourDef = {
     {
       id: 'scrub',
       title: 'Find the moment',
-      body: 'Press or drag along the timeline to jump to the moment you want to look at — the load, contact, the finish.',
+      body: 'Press or drag along the timeline to jump to the moment you want to look at — the load, contact, the finish. On a long clip, pinch the timeline (or Ctrl-scroll) to zoom in, and drag the time ruler under it to move along.',
       target: 'tour-scrub',
       placement: 'top',
       advance: { kind: 'click' },
+      // Captured before the time ruler and the overview bar existed (timeline V1
+      // stage 1): still shows the track correctly; a fresh capture would add them.
       image: shot('intro', 'scrub', 102, 'The timeline under the video, with the playhead partway along it.'),
     },
     {
