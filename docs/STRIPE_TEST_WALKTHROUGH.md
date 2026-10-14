@@ -51,7 +51,7 @@ The login lasts 90 days.
 At https://dashboard.stripe.com, turn the **Test mode** toggle on (top right).
 Then follow `docs/STRIPE_LAUNCH_SETUP.md`:
 - **step 1:** the six EUR prices, with "Include tax in price: Yes";
-- **step 2:** the Coach Life coupon, plus one promotion code. Call it `COACHLIFE-TEST1`: single use, minimum €299, Pro only.
+- **step 2:** the Coach Life coupon (50%, once, Pro and Academy), plus one promotion code. Call it `COACHLIFE-TEST1`: first-time customers, minimum €299.
 
 Copy the six `price_…` IDs.
 
@@ -112,7 +112,7 @@ Leave Terminal B running. Every event Stripe sends shows up here.
    - **€299.00** and **Tax €0.00**;
    - fields for email, full name, billing address and country;
    - optional fields for business name and VAT/tax ID;
-   - the **Add promotion code** link (Pro yearly only).
+   - the **Add promotion code** link (Pro yearly and Academy yearly only).
 3. Pay with card `4242 4242 4242 4242`, any future expiry, any CVC.
 4. You land back on /analysis.
 
@@ -160,16 +160,17 @@ Also point it at a wrong price, for example the Pro monthly ID. The log says `pr
 
 Undo both changes and restart.
 
-## 9. Promo code on Pro yearly (Coach Life)
+## 9. Promo code on Pro and Academy yearly (Coach Life)
 
 1. /pricing → Yearly → Choose Pro → **Add promotion code** → `COACHLIFE-TEST1`.
 
-   **Checkout:** the total becomes **€149.00**.
+   **Checkout:** the total becomes **€149.50**.
 2. Pay with 4242…
 
-   **Dashboard → the subscription:** it shows the coupon "Coach Life — Pro yearly", forever.
-3. Try the same code again with another test account: Stripe rejects it.
-4. Pro monthly has no promotion-code field.
+   **Dashboard → the subscription:** it shows the coupon "Coach Life 50% — Pro & Academy yearly", once (the renewal is €299).
+3. Try the same code again with the same test account: Stripe rejects it (first-time customers only).
+4. With another test account: Yearly → Choose Academy → the same code makes it **€299.50**.
+5. Pro monthly, Academy monthly and Light have no promotion-code field.
 
 ## 10. SEPA delayed payment
 

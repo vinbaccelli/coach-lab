@@ -4,6 +4,7 @@ import { stripe, priceIdFor, PRICE_ENV } from '@/lib/stripe';
 import { isValidPlanId, getPlan, type BillingCycle } from '@/lib/plans';
 import { priceMismatch } from '@/lib/billing/checkoutGuard';
 import { checkoutTaxParams } from '@/lib/billing/taxConfig';
+import { promoCodesAllowed } from '@/lib/billing/promoCodes';
 
 /**
  * Start a Stripe Checkout for one plan and cycle. FAILS CLOSED:
@@ -13,8 +14,9 @@ import { checkoutTaxParams } from '@/lib/billing/taxConfig';
  *    (lib/billing/checkoutGuard.ts). The site displays this same price's
  *    amount (lib/billing/livePrices.ts), so what is shown is what is charged
  *    (docs/KNOWN_ISSUES.md 007 is how a mismatch happened before).
- * Promotion codes are accepted on Pro yearly only — the Coach Life coupon is
- * restricted to that price in Stripe as well.
+ * Promotion codes are accepted on Pro yearly and Academy yearly only
+ * (lib/billing/promoCodes.ts) — the Coach Life coupon is restricted to those
+ * products in Stripe as well.
  */
 export async function POST(req: Request) {
   const session = await getRouteSession();
@@ -67,7 +69,7 @@ export async function POST(req: Request) {
       // name and VAT ID) — configured only in lib/billing/taxConfig.ts.
       ...checkoutTaxParams({ existingCustomer: !!existingCustomer }),
       line_items: [{ price: priceId, quantity: 1 }],
-      allow_promotion_codes: planId === 'pro' && cycle === 'yearly' ? true : undefined,
+      allow_promotion_codes: promoCodesAllowed(planId, cycle) ? true : undefined,
       success_url: `${origin}/analysis?subscribed=1`,
       cancel_url: `${origin}/pricing`,
       // The user travels on the session AND on the subscription itself, so every

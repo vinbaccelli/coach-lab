@@ -99,23 +99,31 @@ The price ID starts with `price_`. It's on the price's detail page, under "API I
 Don't rename these env vars. The amounts in this table are the launch prices.
 The site reads whatever the Stripe Price says (see "Changing a price" above).
 
-## 2. Coach Life coupon and promotion codes
+## 2. Coach Life coupon and promotion code
+
+The Coach Life community offer: **50% off the first year** of Pro or Academy,
+with one shared code.
 
 1. **Product catalog → Coupons → + New**:
-   - Name: `Coach Life — Pro yearly`
-   - Type: **Fixed amount**, **€150.00**, currency EUR
-   - Duration: **Forever** (renewals stay at €149)
-   - **Apply to specific products → AngleMotion Pro**
-2. On the coupon, go to **Promotion codes → + Create**. Create one code per member:
-   - **Limit to first-time customers:** on
-   - **Limit the number of times this code can be redeemed:** 1
-   - **Require minimum order value:** **€299.00**. Without this, the €150 would apply to Pro monthly (€34.90) too.
-
-   For many codes at once, use the API or a CSV import. Every code points at the same coupon.
+   - Name: `Coach Life 50% — Pro & Academy yearly`
+   - Type: **Percentage**, **50%**
+   - Duration: **Once** (first payment only; renewals at the full price)
+   - **Apply to specific products → AngleMotion Pro** and **AngleMotion Academy**
+2. On the coupon, go to **Promotion codes → + Create**. One shared code, for
+   example `COACHLIFE50`:
+   - **Limit to first-time customers:** on (once per customer)
+   - **Limit the number of times this code can be redeemed:** off (shared code)
+   - **Require minimum order value:** **€299.00**. Without this, the 50% would
+     also apply to the monthly prices if they ever got a code field.
 3. Nothing to set in Vercel for this. Checkout shows the "Add promotion code"
-   field on **Pro yearly only**.
+   field on **Pro yearly and Academy yearly only** (`lib/billing/promoCodes.ts`).
 
-Result: Pro yearly €299 − €150 = **€149/year**, renewing at €149.
+Result: Pro yearly €299 → **€149.50** for the first year, Academy yearly
+€599 → **€299.50**; both renew at the full price.
+
+Retired: the earlier `Coach Life — Pro yearly` coupon (€150 off Pro yearly,
+forever) and its single-use codes. Deactivate those codes in Stripe when the
+50% code goes live.
 
 ## 3. Tax (read once)
 
@@ -250,7 +258,7 @@ Card `4242 4242 4242 4242`, any future date, any CVC.
 - [ ] Point one var at a USD (or archived) price: refused the same way. Point it at another EUR price and redeploy: /pricing and the landing page show the new amount, and Checkout charges it.
 - [ ] Pay with an Italian billing address: /billing shows **Invoice details (Italy)**; a wrong Codice Fiscale is refused; /admin/invoices lists the payment under **Test-mode payments** (TEST badge). **Preview** shows the XML and the checklist; **Issue is impossible** for a test payment. A payment-link sale appears as One-off and asks for its product type.
 - [ ] Refund a test payment in Stripe: the record shows REFUNDED (needs `charge.refunded` on the test endpoint).
-- [ ] Pro yearly shows "Add promotion code". A Coach Life code makes it €149. The same code fails a second time. Pro monthly has no code field.
+- [ ] Pro yearly and Academy yearly show "Add promotion code". The Coach Life code makes them €149.50 and €299.50. The same customer cannot use it twice. Pro monthly, Academy monthly and Light have no code field.
 - [ ] After paying, `subscriptions` has your row with `status=active`, the right `tier`, `billing_interval`, `current_period_end`, and `cancel_at_period_end=false`.
 - [ ] Stripe → Webhooks: the six events show **200**. Click **Resend** on one: still 200, and nothing changes (it's a duplicate).
 - [ ] Temporarily remove `SUPABASE_SERVICE_ROLE_KEY` on Preview and trigger an event: **500**, and Stripe retries. Restore the key: the retry succeeds.
