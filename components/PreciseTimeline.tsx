@@ -7,6 +7,9 @@ import {
   resolveView, rulerTicks, secondsPerPx, shouldAutoFit, timeAtClientX, zoomAt, zoomView,
   type FollowEvent, type TimeRange, type TrimDrag,
 } from '@/lib/timelineView';
+import {
+  HOLD_TO_GRAB_MS, ballPressHold, ballPressMove, pressOnPlayheadBall, startBallPress, type BallPress,
+} from '@/lib/timelinePress';
 import { tempDebugPointer } from '@/lib/tempDebugPointer'; // TEMP-DEBUG-POINTER — remove after phone touch investigation
 
 function clamp(n: number, a: number, b: number) {
@@ -325,6 +328,10 @@ export default function PreciseTimeline({
   const scrubPointerIdRef = useRef<number | null>(null);
   const phaseDragIdRef = useRef<string | null>(null);
   const sampleDragIdRef = useRef<string | null>(null);
+  /** A press on a frame stop that sits under the playhead ball, not yet decided. */
+  const ballPressRef = useRef<{ id: string; time: number; pointerId: number; press: BallPress; timer: number } | null>(null);
+  /** Frame stop grabbed by a hold on the playhead ball (drawn larger while dragged). */
+  const [heldSampleId, setHeldSampleId] = useState<string | null>(null);
   const [viewWindow, setViewWindow] = useState<{ start: number; end: number } | null>(null);
   // Read by the handle drag on every pointer move, so the drag always converts
   // pixels with the CURRENT zoom (never a zoom captured in an old closure).
@@ -674,6 +681,32 @@ export default function PreciseTimeline({
     // per raw pointer event.
     scheduleScrubSeek();
   }, [scheduleScrubSeek, timeFromClientX]);
+
+  /** Start dragging a frame stop (Motion Layer): selects it, then moves follow. */
+  const grabSampleMarker = (id: string, time: number, held = false) => {
+    sampleDragIdRef.current = id;
+    if (held) setHeldSampleId(id);
+    onSampleMarkerSelect?.(id, time);
+  };
+  const endBallPress = () => {
+    const bp = ballPressRef.current;
+    if (!bp) return;
+    window.clearTimeout(bp.timer);
+    ballPressRef.current = null;
+  };
+  useEffect(() => () => endBallPress(), []);
+
+  /** Start a playhead scrub for this pointer; the track holds the capture. */
+  const beginScrub = (pointerId: number, clientX: number) => {
+    scrubbingRef.current = true;
+    scrubPointerIdRef.current = pointerId;
+    lastScrubCommitRef.current = null;
+    noteFollow('seek');
+    try { scrubTrackRef.current?.setPointerCapture(pointerId); } catch { /* noop */ }
+    const v = source.kind === 'html' ? source.videoRef.current : null;
+    if (v) v.pause();
+    queueScrubAtClientX(clientX);
+  };
 
   useEffect(() => {
     // Pointer MOVE during a scrub is normally handled by the scrub track's own
@@ -1220,14 +1253,7 @@ export default function PreciseTimeline({
           // The trim handles are now grabbed exclusively via their ABOVE-TRACK
           // tabs, so the in-track region carries no handle grab-zone: a press
           // anywhere on the track scrubs uniformly, with no near-handle dead zone.
-          scrubbingRef.current = true;
-          scrubPointerIdRef.current = e.pointerId;
-          lastScrubCommitRef.current = null;
-          noteFollow('seek');
-          (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-          const v = source.kind === 'html' ? source.videoRef.current : null;
-          if (v) v.pause();
-          queueScrubAtClientX(e.clientX);
+          beginScrub(e.pointerId, e.clientX);
         }}
         onPointerMove={(e) => {
           if (!scrubbingRef.current || d <= 0) return;
@@ -1505,11 +1531,41 @@ export default function PreciseTimeline({
               title={`Frame stop ${m.label ?? ''} @ ${formatTimeShort(m.time)} — drag to adjust`}
               onPointerDown={(e) => {
                 e.stopPropagation();
-                sampleDragIdRef.current = m.id;
-                onSampleMarkerSelect?.(m.id, m.time);
+                if (scrubbingRef.current || ballPressRef.current) return;
                 (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+                // Under the playhead ball: the ball wins unless the press is held
+                // still first (lib/timelinePress.ts). Decided on move / hold.
+                const r = scrubTrackRef.current?.getBoundingClientRect();
+                const ballX = r ? r.left + TRACK_INSET_PX + (r.width - 2 * TRACK_INSET_PX) * (pct / 100) : NaN;
+                if (r && pressOnPlayheadBall(e.clientX, ballX, thumbSize)) {
+                  const pointerId = e.pointerId;
+                  const press = startBallPress(e.clientX, performance.now());
+                  const timer = window.setTimeout(() => {
+                    const bp = ballPressRef.current;
+                    if (!bp || bp.pointerId !== pointerId || pinchRef.current) return;
+                    bp.press = ballPressHold(bp.press, performance.now());
+                    if (bp.press.phase === 'frame-stop') grabSampleMarker(bp.id, bp.time, true);
+                  }, HOLD_TO_GRAB_MS);
+                  ballPressRef.current = { id: m.id, time: m.time, pointerId, press, timer };
+                  return;
+                }
+                grabSampleMarker(m.id, m.time);
               }}
               onPointerMove={(e) => {
+                const bp = ballPressRef.current;
+                if (bp && bp.id === m.id && bp.pointerId === e.pointerId && bp.press.phase === 'pending') {
+                  e.stopPropagation();
+                  bp.press = ballPressMove(bp.press, e.clientX, performance.now());
+                  if (bp.press.phase === 'scrub') {
+                    // The playhead's drag: hand the pointer to the track's scrub.
+                    endBallPress();
+                    try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+                    beginScrub(e.pointerId, e.clientX);
+                    return;
+                  }
+                  if (bp.press.phase === 'frame-stop') grabSampleMarker(bp.id, bp.time, true);
+                  else return;
+                }
                 if (sampleDragIdRef.current !== m.id) return;
                 if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
                 e.stopPropagation();
@@ -1520,9 +1576,15 @@ export default function PreciseTimeline({
                 onSampleMarkerChange(m.id, clamp(next, lo, hi));
               }}
               onPointerUp={(e) => {
+                if (ballPressRef.current?.id === m.id) endBallPress();
                 if (sampleDragIdRef.current !== m.id) return;
                 sampleDragIdRef.current = null;
+                setHeldSampleId(null);
                 try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+              }}
+              onPointerCancel={() => {
+                if (ballPressRef.current?.id === m.id) endBallPress();
+                if (sampleDragIdRef.current === m.id) { sampleDragIdRef.current = null; setHeldSampleId(null); }
               }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -1533,7 +1595,9 @@ export default function PreciseTimeline({
                 position: 'absolute',
                 left: `calc(10px + (100% - 20px) * ${pctM / 100} - 7px)`,
                 top: '50%',
-                transform: 'translateY(-50%)',
+                // A frame stop grabbed by holding on the playhead ball grows so
+                // the coach sees which drag they are in.
+                transform: heldSampleId === m.id ? 'translateY(-50%) scale(1.5)' : 'translateY(-50%)',
                 width: 14,
                 height: 14,
                 borderRadius: '50%',

@@ -676,3 +676,22 @@ KNOWN_ISSUES 033.
 **Class of mistake.** Checking only CSP for an embed. On this site, check
 COOP/COEP too: every new iframe needs its own COEP header or the
 `credentialless` attribute, and must be tried in a browser with the real headers.
+
+## 011 — "The ball jumps back": the press never reached the ball
+
+**Symptom.** Motion Layer: dragging the playhead ball would not leave it where
+it was dropped (reported on a real phone while testing the timeline PR).
+
+**Verified root cause.** The playhead ball is `pointer-events: none` and a
+frame-stop ball is drawn on top of it whenever the playhead rests on a frame
+stop — so the "ball drag" was a frame-stop drag. Found by recording a stack
+for every `HTMLMediaElement.currentTime` write during the drag, not by
+reading the new timeline code the bug was reported against. KNOWN_ISSUES 038.
+
+**Fix.** A press on the ball over a frame stop scrubs the playhead once it
+moves; holding still first grabs the frame stop (`lib/timelinePress.ts`).
+
+**Class of mistake.** Two draggable things drawn at the same spot, with the
+one the user sees as "on top" not the one that receives the press. When a
+control "does the wrong thing", first prove which element got the
+pointerdown; and check the bug on the base branch before suspecting the PR.
