@@ -2,7 +2,14 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nearestYoutubePlaybackRate } from '@/lib/videoController';
-import { beginTrimDrag, dragTrimTo, fitView, resolveView, shouldAutoFit, timeAtClientX, zoomView, type TrimDrag } from '@/lib/timelineView';
+import {
+  TRACK_INSET_PX, beginTrimDrag, centerViewOn, dragTrimTo, fitView, followPlayhead, nextFollow, panView, pinchView,
+  resolveView, rulerTicks, secondsPerPx, shouldAutoFit, timeAtClientX, zoomAt, zoomView,
+  type FollowEvent, type TimeRange, type TrimDrag,
+} from '@/lib/timelineView';
+import {
+  HOLD_TO_GRAB_MS, ballPressHold, ballPressMove, pressOnPlayheadBall, startBallPress, type BallPress,
+} from '@/lib/timelinePress';
 import { tempDebugPointer } from '@/lib/tempDebugPointer'; // TEMP-DEBUG-POINTER — remove after phone touch investigation
 
 function clamp(n: number, a: number, b: number) {
@@ -26,14 +33,6 @@ function formatTimeShort(seconds: number): string {
   const secs = Math.floor(seconds % 60);
   const time = `${mins}:${secs.toString().padStart(2, '0')}`;
   return hrs > 0 ? `${hrs}:${time}` : time;
-}
-
-function getMarkerInterval(duration: number): number {
-  if (duration <= 15) return 1;
-  if (duration <= 60) return 2;
-  if (duration <= 180) return 5;
-  if (duration <= 600) return 10;
-  return 30;
 }
 
 type Source =
@@ -329,11 +328,30 @@ export default function PreciseTimeline({
   const scrubPointerIdRef = useRef<number | null>(null);
   const phaseDragIdRef = useRef<string | null>(null);
   const sampleDragIdRef = useRef<string | null>(null);
+  /** A press on a frame stop that sits under the playhead ball, not yet decided. */
+  const ballPressRef = useRef<{ id: string; time: number; pointerId: number; press: BallPress; timer: number } | null>(null);
+  /** Frame stop grabbed by a hold on the playhead ball (drawn larger while dragged). */
+  const [heldSampleId, setHeldSampleId] = useState<string | null>(null);
   const [viewWindow, setViewWindow] = useState<{ start: number; end: number } | null>(null);
   // Read by the handle drag on every pointer move, so the drag always converts
   // pixels with the CURRENT zoom (never a zoom captured in an old closure).
   const viewWindowRef = useRef(viewWindow);
   viewWindowRef.current = viewWindow;
+  /**
+   * Whether the view follows the playhead (lib/timelineView.ts nextFollow):
+   * the coach moving the view by hand pauses it; play or a seek resumes it.
+   */
+  const followRef = useRef(true);
+  const noteFollow = useCallback((ev: FollowEvent) => { followRef.current = nextFollow(ev); }, []);
+  /** The view set by the coach's own hand (scroll, pinch / wheel zoom, Fit): pauses following. */
+  const setViewByHand = useCallback((next: TimeRange | null) => {
+    noteFollow('manual-view');
+    viewWindowRef.current = next; // the next coalesced wheel / pinch frame reads it before React re-renders
+    setViewWindow(next);
+  }, [noteFollow]);
+  /** Track width (px) — the ruler is laid out for it; re-measured on resize only. */
+  const [trackW, setTrackW] = useState(0);
+  const shellRef = useRef<HTMLDivElement | null>(null);
   /** The selection handle drag in progress (lib/timelineView.ts), with its pointer. */
   const trimDragStateRef = useRef<(TrimDrag & { pointerId: number }) | null>(null);
   /** Live scrub thumb position while dragging (before frame-ready commit). */
@@ -345,6 +363,17 @@ export default function PreciseTimeline({
   const stepInFlightRef = useRef(false);
   /** Net frame delta requested while a step seek is in flight (coalesced, not dropped). */
   const pendingStepFramesRef = useRef(0);
+
+  useEffect(() => {
+    const el = scrubTrackRef.current;
+    if (!el) return;
+    const measure = () => setTrackW(el.getBoundingClientRect().width);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const applyTimeUi = useCallback((next: number) => {
     tRef.current = next;
@@ -510,6 +539,7 @@ export default function PreciseTimeline({
   }, [applyTimeUi, source]);
 
   const seekTo = useCallback(async (next: number) => {
+    noteFollow('seek');
     const dur = dRef.current;
     const nextClamped = clamp(next, 0, dur || next);
     if (source.kind === 'html') {
@@ -527,7 +557,7 @@ export default function PreciseTimeline({
       /* YT iframe can throw internal errors (e.g. this.g.src) while tearing down */
     }
     applyTimeUi(nextClamped);
-  }, [applyTimeUi, commitHtmlSeek, source]);
+  }, [applyTimeUi, commitHtmlSeek, noteFollow, source]);
 
   const timeFromClientX = useCallback((clientX: number) => {
     const el = scrubTrackRef.current;
@@ -577,13 +607,14 @@ export default function PreciseTimeline({
     })) return;
     didZoomToTrimRef.current = true;
     fittedSpanRef.current = newSpan;
-    setViewWindow(fitView({ start: trimStartVal, end: trimEndVal }, d));
-  }, [defaultZoomToTrim, trimStartVal, trimEndVal, d]);
+    // A fit frames the selection: it must not be paged away to the playhead.
+    setViewByHand(fitView({ start: trimStartVal, end: trimEndVal }, d));
+  }, [defaultZoomToTrim, trimStartVal, trimEndVal, d, setViewByHand]);
 
   const zoomToTrim = useCallback(() => {
     if (!trimRange || d <= 0) return;
-    setViewWindow(fitView(trimRange, d));
-  }, [trimRange, d]);
+    setViewByHand(fitView(trimRange, d));
+  }, [trimRange, d, setViewByHand]);
 
   const zoomFull = useCallback(() => setViewWindow(null), []);
 
@@ -650,6 +681,32 @@ export default function PreciseTimeline({
     // per raw pointer event.
     scheduleScrubSeek();
   }, [scheduleScrubSeek, timeFromClientX]);
+
+  /** Start dragging a frame stop (Motion Layer): selects it, then moves follow. */
+  const grabSampleMarker = (id: string, time: number, held = false) => {
+    sampleDragIdRef.current = id;
+    if (held) setHeldSampleId(id);
+    onSampleMarkerSelect?.(id, time);
+  };
+  const endBallPress = () => {
+    const bp = ballPressRef.current;
+    if (!bp) return;
+    window.clearTimeout(bp.timer);
+    ballPressRef.current = null;
+  };
+  useEffect(() => () => endBallPress(), []);
+
+  /** Start a playhead scrub for this pointer; the track holds the capture. */
+  const beginScrub = (pointerId: number, clientX: number) => {
+    scrubbingRef.current = true;
+    scrubPointerIdRef.current = pointerId;
+    lastScrubCommitRef.current = null;
+    noteFollow('seek');
+    try { scrubTrackRef.current?.setPointerCapture(pointerId); } catch { /* noop */ }
+    const v = source.kind === 'html' ? source.videoRef.current : null;
+    if (v) v.pause();
+    queueScrubAtClientX(clientX);
+  };
 
   useEffect(() => {
     // Pointer MOVE during a scrub is normally handled by the scrub track's own
@@ -760,6 +817,7 @@ export default function PreciseTimeline({
   }, [beforePause, beforePlay, isPlaying, onPlayBlocked, source]);
 
   const stepFrame = useCallback((dir: 1 | -1, mult = 1) => {
+    noteFollow('seek');
     const frames = dir * mult;
     if (stepInFlightRef.current) {
       // A step arrived while one is still resolving — accumulate the NET frame
@@ -804,7 +862,7 @@ export default function PreciseTimeline({
         stepInFlightRef.current = false;
       }
     })();
-  }, [commitHtmlStep, seekTo, source]);
+  }, [commitHtmlStep, noteFollow, seekTo, source]);
 
   // Keyboard: frame-accurate stepping + play/pause
   useEffect(() => {
@@ -817,6 +875,224 @@ export default function PreciseTimeline({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [stepFrame, togglePlay]);
+
+  // ── Follow the playhead (lib/timelineView.ts followPlayhead) ───────────────
+  // Playing: the view pages when the playhead passes 90 % of it. Paused: a seek
+  // outside the view brings it back into view. Never during a scrub or a handle
+  // drag, and not after the coach moved the view by hand (until play / seek).
+  // Work per time update: one comparison; a view change only on a page turn.
+  useEffect(() => { if (isPlaying) noteFollow('play'); }, [isPlaying, noteFollow]);
+  useEffect(() => {
+    if (!followRef.current || scrubbingRef.current || trimDragStateRef.current) return;
+    const v = viewWindowRef.current;
+    if (!v || d <= 0) return;
+    const next = followPlayhead(v, d, t, isPlaying ? 'playing' : 'reveal');
+    if (next !== v) { viewWindowRef.current = next; setViewWindow(next); }
+  }, [t, d, isPlaying]);
+
+  /** Track geometry for pointer → time maps outside the track's own handlers. */
+  const trackGeom = () => {
+    const el = scrubTrackRef.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { left: r.left, width: r.width, usable: Math.max(1, r.width - 2 * TRACK_INSET_PX) };
+  };
+
+  // ── Ctrl/⌘ + wheel zooms on the pointer; horizontal (or Shift) wheel scrolls ──
+  // Wheel events arrive far faster than frames: they are summed and applied
+  // once per animation frame. A plain vertical wheel is left to the page.
+  const wheelAccRef = useRef({ zoom: 1, pan: 0, anchorX: 0, raf: 0 });
+  useEffect(() => {
+    const el = shellRef.current;
+    if (!el) return;
+    const apply = () => {
+      const acc = wheelAccRef.current;
+      acc.raf = 0;
+      const dur = dRef.current;
+      const g = trackGeom();
+      const zoomF = acc.zoom;
+      const pan = acc.pan;
+      acc.zoom = 1;
+      acc.pan = 0;
+      if (!g || !(dur > 0)) return;
+      let v = viewWindowRef.current;
+      if (zoomF !== 1) {
+        const anchorT = timeAtClientX(acc.anchorX, g, resolveView(v, dur), dur);
+        const frac = (acc.anchorX - g.left - TRACK_INSET_PX) / g.usable;
+        v = zoomAt(v, dur, zoomF, anchorT, frac);
+      }
+      if (pan) v = panView(v, dur, pan * secondsPerPx(resolveView(v, dur), g.width));
+      if (v !== viewWindowRef.current) setViewByHand(v);
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (!(dRef.current > 0)) return;
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+      const acc = wheelAccRef.current;
+      if (e.ctrlKey || e.metaKey) {
+        // Ctrl-wheel is also what a trackpad pinch sends. Down / pinch-in = zoom out.
+        e.preventDefault();
+        acc.zoom *= Math.exp(e.deltaY * unit * 0.0025);
+        acc.anchorX = e.clientX;
+      } else {
+        const dx = e.deltaX !== 0 ? e.deltaX : e.shiftKey ? e.deltaY : 0;
+        if (!dx || !viewWindowRef.current) return; // nothing to scroll: leave the event alone
+        e.preventDefault();
+        acc.pan += dx * unit;
+      }
+      if (!acc.raf) acc.raf = requestAnimationFrame(apply);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      if (wheelAccRef.current.raf) cancelAnimationFrame(wheelAccRef.current.raf);
+      wheelAccRef.current.raf = 0;
+    };
+    // Reads only refs; setViewByHand is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setViewByHand]);
+
+  // ── Two-finger pinch on the track, ruler or overview ───────────────────────
+  // Tracked in the capture phase so the second finger never starts its own
+  // scrub; a pinch ends whatever the first finger had started (scrub, ruler
+  // scroll, overview drag). Applied once per animation frame.
+  const touchesRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{ startDist: number; anchorT: number; startView: TimeRange | null; raf: number } | null>(null);
+  const rulerDragRef = useRef<{ pointerId: number; startX: number; startView: TimeRange | null; moved: boolean } | null>(null);
+  const overviewDragRef = useRef<{ pointerId: number; startX: number; startView: TimeRange | null } | null>(null);
+  const applyPinch = () => {
+    const p = pinchRef.current;
+    if (!p) return;
+    p.raf = 0;
+    const pts = [...touchesRef.current.values()];
+    const g = trackGeom();
+    if (pts.length < 2 || !g) return;
+    const dist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
+    const midFrac = ((pts[0].x + pts[1].x) / 2 - g.left - TRACK_INSET_PX) / g.usable;
+    const v = pinchView(p.startView, dRef.current, p.startDist, dist, p.anchorT, midFrac);
+    if (v !== viewWindowRef.current) setViewByHand(v);
+  };
+  const pinchCapture = {
+    onPointerDownCapture: (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.pointerType !== 'touch') return;
+      if (!(e.target as Element | null)?.closest?.('[data-tl-zoom]')) return;
+      touchesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touchesRef.current.size !== 2 || !(dRef.current > 0) || trimDragStateRef.current) return;
+      const g = trackGeom();
+      if (!g) return;
+      // The second finger: this is a pinch, not a scrub / scroll.
+      e.stopPropagation();
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
+      if (scrubbingRef.current) {
+        scrubbingRef.current = false;
+        scrubPointerIdRef.current = null;
+        void finalizeScrub();
+      }
+      rulerDragRef.current = null;
+      overviewDragRef.current = null;
+      const pts = [...touchesRef.current.values()];
+      const mid = (pts[0].x + pts[1].x) / 2;
+      const dur = dRef.current;
+      pinchRef.current = {
+        startDist: Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)),
+        anchorT: timeAtClientX(mid, g, resolveView(viewWindowRef.current, dur), dur),
+        startView: viewWindowRef.current,
+        raf: 0,
+      };
+    },
+    onPointerMoveCapture: (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!touchesRef.current.has(e.pointerId)) return;
+      touchesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const p = pinchRef.current;
+      if (!p) return;
+      e.stopPropagation();
+      if (!p.raf) p.raf = requestAnimationFrame(applyPinch);
+    },
+    onPointerUpCapture: (e: React.PointerEvent<HTMLDivElement>) => endTouch(e),
+    onPointerCancelCapture: (e: React.PointerEvent<HTMLDivElement>) => endTouch(e),
+  };
+  const endTouch = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!touchesRef.current.delete(e.pointerId)) return;
+    const p = pinchRef.current;
+    if (p && touchesRef.current.size < 2) {
+      if (p.raf) cancelAnimationFrame(p.raf);
+      pinchRef.current = null;
+      e.stopPropagation();
+    }
+  };
+
+  // ── Ruler: drag to scroll the view; a tap (no drag) seeks there ───────────
+  const rulerHandlers = {
+    onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!(d > 0) || pinchRef.current || rulerDragRef.current) return;
+      rulerDragRef.current = { pointerId: e.pointerId, startX: e.clientX, startView: viewWindowRef.current, moved: false };
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+      const r = rulerDragRef.current;
+      if (!r || r.pointerId !== e.pointerId) return;
+      const dx = e.clientX - r.startX;
+      if (!r.moved && Math.abs(dx) < 5) return;
+      r.moved = true;
+      if (!r.startView) return; // whole clip on screen: nothing to scroll
+      const g = trackGeom();
+      if (!g) return;
+      const v = panView(r.startView, d, -dx * secondsPerPx(r.startView, g.width));
+      if (v !== viewWindowRef.current) setViewByHand(v);
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => {
+      const r = rulerDragRef.current;
+      if (!r || r.pointerId !== e.pointerId) return;
+      rulerDragRef.current = null;
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+      if (!r.moved) {
+        const g = trackGeom();
+        if (g) void seekTo(timeAtClientX(e.clientX, g, resolveView(viewWindowRef.current, d), d));
+      }
+    },
+    onPointerCancel: () => { rulerDragRef.current = null; },
+    onLostPointerCapture: () => { rulerDragRef.current = null; },
+  };
+
+  // ── Overview: the whole clip; drag the window to scroll, press elsewhere to jump the view there ──
+  const overviewTimeAt = (clientX: number) => {
+    const g = trackGeom();
+    if (!g || !(d > 0)) return null;
+    return clamp((clientX - g.left - TRACK_INSET_PX) / g.usable, 0, 1) * d;
+  };
+  const overviewHandlers = {
+    onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+      const v = viewWindowRef.current;
+      if (!v || pinchRef.current || overviewDragRef.current) return;
+      const at = overviewTimeAt(e.clientX);
+      const g = trackGeom();
+      if (at === null || !g) return;
+      // "On the window" as DRAWN: at least 6 px wide, plus a little slop for a finger.
+      const secPerPx = d / g.usable;
+      const slop = (e.pointerType === 'touch' ? 10 : 3) * secPerPx;
+      const drawnEnd = Math.max(v.end, v.start + 6 * secPerPx);
+      let startView: TimeRange | null = v;
+      if (at < v.start - slop || at > drawnEnd + slop) {
+        startView = centerViewOn(v, d, at);
+        setViewByHand(startView);
+      }
+      overviewDragRef.current = { pointerId: e.pointerId, startX: e.clientX, startView };
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+      const o = overviewDragRef.current;
+      const g = trackGeom();
+      if (!o || o.pointerId !== e.pointerId || !g || !(d > 0)) return;
+      const v = panView(o.startView, d, ((e.clientX - o.startX) / g.usable) * d);
+      if (v !== viewWindowRef.current) setViewByHand(v);
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => {
+      if (overviewDragRef.current?.pointerId !== e.pointerId) return;
+      overviewDragRef.current = null;
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+    },
+    onPointerCancel: () => { overviewDragRef.current = null; },
+    onLostPointerCapture: () => { overviewDragRef.current = null; },
+  };
 
   const displayT = scrubPreviewT ?? t;
   const viewStart = viewWindow?.start ?? 0;
@@ -942,7 +1218,7 @@ export default function PreciseTimeline({
   const trimEndTabWidth = `min(${TRIM_TAB_W}px, calc(100% - ${TRIM_TAB_EDGE}px - ${trimEndTabLeft}))`;
 
   return (
-    <div data-tour-id="tour-timeline" style={shellStyle} aria-label="Timeline">
+    <div ref={shellRef} data-tour-id="tour-timeline" style={shellStyle} aria-label="Timeline" {...pinchCapture}>
       {/* Full-width scrub bar — placed first so it stays visible above control chrome */}
       <div
         ref={scrubTrackRef}
@@ -953,6 +1229,7 @@ export default function PreciseTimeline({
         aria-valuenow={displayT}
         aria-label="Scrub timeline"
         data-tour-id="tour-scrub"
+        data-tl-zoom=""
         aria-disabled={d <= 0}
         style={{
           width: '100%',
@@ -976,13 +1253,7 @@ export default function PreciseTimeline({
           // The trim handles are now grabbed exclusively via their ABOVE-TRACK
           // tabs, so the in-track region carries no handle grab-zone: a press
           // anywhere on the track scrubs uniformly, with no near-handle dead zone.
-          scrubbingRef.current = true;
-          scrubPointerIdRef.current = e.pointerId;
-          lastScrubCommitRef.current = null;
-          (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-          const v = source.kind === 'html' ? source.videoRef.current : null;
-          if (v) v.pause();
-          queueScrubAtClientX(e.clientX);
+          beginScrub(e.pointerId, e.clientX);
         }}
         onPointerMove={(e) => {
           if (!scrubbingRef.current || d <= 0) return;
@@ -1260,11 +1531,41 @@ export default function PreciseTimeline({
               title={`Frame stop ${m.label ?? ''} @ ${formatTimeShort(m.time)} — drag to adjust`}
               onPointerDown={(e) => {
                 e.stopPropagation();
-                sampleDragIdRef.current = m.id;
-                onSampleMarkerSelect?.(m.id, m.time);
+                if (scrubbingRef.current || ballPressRef.current) return;
                 (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+                // Under the playhead ball: the ball wins unless the press is held
+                // still first (lib/timelinePress.ts). Decided on move / hold.
+                const r = scrubTrackRef.current?.getBoundingClientRect();
+                const ballX = r ? r.left + TRACK_INSET_PX + (r.width - 2 * TRACK_INSET_PX) * (pct / 100) : NaN;
+                if (r && pressOnPlayheadBall(e.clientX, ballX, thumbSize)) {
+                  const pointerId = e.pointerId;
+                  const press = startBallPress(e.clientX, performance.now());
+                  const timer = window.setTimeout(() => {
+                    const bp = ballPressRef.current;
+                    if (!bp || bp.pointerId !== pointerId || pinchRef.current) return;
+                    bp.press = ballPressHold(bp.press, performance.now());
+                    if (bp.press.phase === 'frame-stop') grabSampleMarker(bp.id, bp.time, true);
+                  }, HOLD_TO_GRAB_MS);
+                  ballPressRef.current = { id: m.id, time: m.time, pointerId, press, timer };
+                  return;
+                }
+                grabSampleMarker(m.id, m.time);
               }}
               onPointerMove={(e) => {
+                const bp = ballPressRef.current;
+                if (bp && bp.id === m.id && bp.pointerId === e.pointerId && bp.press.phase === 'pending') {
+                  e.stopPropagation();
+                  bp.press = ballPressMove(bp.press, e.clientX, performance.now());
+                  if (bp.press.phase === 'scrub') {
+                    // The playhead's drag: hand the pointer to the track's scrub.
+                    endBallPress();
+                    try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+                    beginScrub(e.pointerId, e.clientX);
+                    return;
+                  }
+                  if (bp.press.phase === 'frame-stop') grabSampleMarker(bp.id, bp.time, true);
+                  else return;
+                }
                 if (sampleDragIdRef.current !== m.id) return;
                 if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
                 e.stopPropagation();
@@ -1275,9 +1576,15 @@ export default function PreciseTimeline({
                 onSampleMarkerChange(m.id, clamp(next, lo, hi));
               }}
               onPointerUp={(e) => {
+                if (ballPressRef.current?.id === m.id) endBallPress();
                 if (sampleDragIdRef.current !== m.id) return;
                 sampleDragIdRef.current = null;
+                setHeldSampleId(null);
                 try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+              }}
+              onPointerCancel={() => {
+                if (ballPressRef.current?.id === m.id) endBallPress();
+                if (sampleDragIdRef.current === m.id) { sampleDragIdRef.current = null; setHeldSampleId(null); }
               }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -1288,7 +1595,9 @@ export default function PreciseTimeline({
                 position: 'absolute',
                 left: `calc(10px + (100% - 20px) * ${pctM / 100} - 7px)`,
                 top: '50%',
-                transform: 'translateY(-50%)',
+                // A frame stop grabbed by holding on the playhead ball grows so
+                // the coach sees which drag they are in.
+                transform: heldSampleId === m.id ? 'translateY(-50%) scale(1.5)' : 'translateY(-50%)',
                 width: 14,
                 height: 14,
                 borderRadius: '50%',
@@ -1320,6 +1629,61 @@ export default function PreciseTimeline({
             pointerEvents: 'none',
           }}
         />
+      </div>
+
+      {/* Ruler (follows the zoom) and the overview of the whole clip. One flex
+          child, so the dock grows by their height only. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+        <div
+          data-tl-zoom=""
+          data-tour-id="tour-ruler"
+          aria-label="Time ruler — drag to scroll, pinch or Ctrl-scroll to zoom"
+          {...rulerHandlers}
+          style={{
+            position: 'relative',
+            height: phoneChrome ? 20 : 16,
+            overflow: 'hidden',
+            cursor: d > 0 && viewWindow ? 'grab' : 'default',
+            touchAction: 'none',
+            userSelect: 'none',
+          }}
+        >
+          {d > 0 && trackW > 0 ? (
+            <TimelineRuler start={viewStart} end={viewEnd} width={trackW} fps={selectedFps} dur={d} overlay={overlay} />
+          ) : null}
+        </div>
+        <div
+          data-tl-zoom=""
+          data-tour-id="tour-overview"
+          aria-label="Whole clip — drag the window to scroll"
+          {...overviewHandlers}
+          style={{ position: 'relative', height: phoneChrome ? 14 : 10, cursor: viewWindow ? 'grab' : 'default', touchAction: 'none' }}
+        >
+          {d > 0 ? (
+            <div style={{ position: 'absolute', left: TRACK_INSET_PX, right: TRACK_INSET_PX, top: '50%', height: phoneChrome ? 8 : 6, transform: 'translateY(-50%)', borderRadius: 3, background: 'rgba(255,255,255,0.14)', pointerEvents: 'none' }}>
+              {trimRange ? (
+                <div style={{ position: 'absolute', left: `${(trimRange.start / d) * 100}%`, width: `${Math.max(0, (trimRange.end - trimRange.start) / d) * 100}%`, top: 0, bottom: 0, background: `${trimAccent}66` }} />
+              ) : null}
+              {viewWindow ? (
+                <div
+                  data-overview-window=""
+                  style={{
+                    position: 'absolute',
+                    left: `${(viewStart / d) * 100}%`,
+                    width: `max(6px, ${(viewSpan / d) * 100}%)`,
+                    top: -2,
+                    bottom: -2,
+                    borderRadius: 3,
+                    border: '1.5px solid rgba(255,255,255,0.85)',
+                    background: 'rgba(255,255,255,0.18)',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              ) : null}
+              <div style={{ position: 'absolute', left: `${clamp(displayT / d, 0, 1) * 100}%`, top: -3, bottom: -3, width: 2, marginLeft: -1, background: accent }} />
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div
@@ -1503,100 +1867,46 @@ export default function PreciseTimeline({
           </>
         )}
       </div>
-
-      {/* Vertical tick markers */}
-      {d > 0 && (
-        <TimelineMarkers
-          duration={d}
-          overlay={overlay}
-          onSeek={(time) => { void seekTo(time); }}
-        />
-      )}
     </div>
   );
 }
 
-function TimelineMarkers({
-  duration,
-  overlay,
-  onSeek,
-}: {
-  duration: number;
-  overlay: boolean;
-  onSeek: (t: number) => void;
-}) {
-  const interval = getMarkerInterval(duration);
-  const majorEvery = 5;
-  const count = Math.floor(duration / interval);
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-
-  const markers = useMemo(() => {
-    const m: { time: number; isMajor: boolean }[] = [];
-    for (let i = 1; i <= count; i++) {
-      m.push({ time: i * interval, isMajor: i % majorEvery === 0 });
-    }
-    return m;
-  }, [count, interval]);
-
-  const lineColor = overlay ? 'rgba(255,255,255,0.3)' : '#CCCCCC';
-  const majorColor = overlay ? 'rgba(255,255,255,0.5)' : '#AAAAAA';
-
+/**
+ * The time ruler: labelled ticks for the CURRENT view (lib/timelineView.ts
+ * rulerTicks) — from hours across a whole long clip down to single frames —
+ * with minor ticks drawn as one repeating pattern. Memoised on the view, width
+ * and frame rate, so the time updates during playback never re-render it.
+ */
+const TimelineRuler = React.memo(function TimelineRuler({
+  start, end, width, fps, dur, overlay,
+}: { start: number; end: number; width: number; fps: number; dur: number; overlay: boolean }) {
+  const r = rulerTicks({ start, end }, width, fps, dur);
+  const major = overlay ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.6)';
+  const minor = overlay ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.35)';
   return (
-    <div
-      style={{
-        position: 'relative',
-        width: '100%',
-        height: 16,
-        flexShrink: 0,
-      }}
-    >
-      {markers.map((mk, i) => {
-        const leftPct = (mk.time / duration) * 100;
-        const h = mk.isMajor ? 12 : 8;
-        return (
-          <div
-            key={i}
-            style={{
-              position: 'absolute',
-              left: `${leftPct}%`,
-              top: 0,
-              width: 1,
-              height: h,
-              background: mk.isMajor ? majorColor : lineColor,
-              cursor: 'pointer',
-              padding: '0 3px',
-              marginLeft: -0.5,
-              backgroundClip: 'content-box',
-            }}
-            onClick={() => onSeek(mk.time)}
-            onMouseEnter={() => setHoveredIdx(i)}
-            onMouseLeave={() => setHoveredIdx(null)}
-          >
-            {hoveredIdx === i && (
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: h + 4,
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  background: overlay ? 'rgba(0,0,0,0.75)' : '#1D1D1F',
-                  color: '#fff',
-                  fontSize: 10,
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                  padding: '2px 6px',
-                  borderRadius: 4,
-                  whiteSpace: 'nowrap',
-                  pointerEvents: 'none',
-                  zIndex: 10,
-                }}
-              >
-                {formatTimeShort(mk.time)}
-              </div>
-            )}
-          </div>
-        );
-      })}
+    <div aria-hidden style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} data-ruler-step={r.step} data-view-start={start} data-view-end={end}>
+      {r.minorPx > 0 ? (
+        <div
+          style={{
+            position: 'absolute', left: 0, right: 0, top: 0, height: 4,
+            backgroundImage: `repeating-linear-gradient(to right, ${minor} 0 1px, transparent 1px ${r.minorPx}px)`,
+            backgroundPosition: `${r.minorOffsetPx}px 0`,
+          }}
+        />
+      ) : null}
+      {r.ticks.map((k) => (
+        <span
+          key={k.t}
+          data-ruler-label=""
+          style={{
+            position: 'absolute', left: k.x, top: 0, bottom: 0, paddingLeft: 3, paddingTop: 3,
+            borderLeft: `1px solid ${major}`, color: 'rgba(255,255,255,0.82)', fontSize: 10, lineHeight: '11px',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'nowrap',
+          }}
+        >
+          {k.label}
+        </span>
+      ))}
     </div>
   );
-}
-
+});

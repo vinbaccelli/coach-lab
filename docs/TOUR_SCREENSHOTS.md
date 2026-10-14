@@ -32,6 +32,7 @@ All on /analysis, desktop browser, with a clip loaded (Demo (Tutorial) is fine).
 | Step | What to capture |
 |---|---|
 | `done` — You're set up | Optional: the frame after AI Detect Angles, with the data column filled. |
+| `scrub` — Find the moment (has a picture, now out of date) | The timeline zoomed in on a long clip: the track with the playhead, the **time ruler** under it (labels such as 12:30 · 12:35) and the thin **overview bar** with its window. The current picture predates the ruler and the overview (timeline V1 stage 1). |
 | `skeleton-check` (has a picture, could be better) | The **“Is the skeleton over the player?”** prompt with its Yes / No buttons, right after switching the skeleton on. |
 
 ### Player database

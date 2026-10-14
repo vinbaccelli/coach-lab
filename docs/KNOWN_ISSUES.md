@@ -1330,3 +1330,97 @@ No tour has a step on AI Track or Motion Layer.
 
 **Severity:** low–moderate (confusing, never a dead end: Skip step and Back
 always work).
+
+## 037 — Timeline tick marks ignored the zoom (and grew with the clip) — RESOLVED (timeline V1 stage 1)
+
+**Symptom.** Zoomed in, the tick marks under the timeline no longer matched
+the track: they were laid out over the whole clip whatever the view, with no
+labels except on hover. On a 2-hour clip they were 240 elements re-rendered on
+every time update (274 nodes in the timeline, measured).
+
+**Verified root cause.** `TimelineMarkers` in `components/PreciseTimeline.tsx`
+placed ticks at `time / duration` with an interval chosen from the duration
+alone (1–30 s), ignoring the view and the 10 px track inset.
+
+**Fix.** A time ruler drawn from the VIEW (`rulerTicks` in
+`lib/timelineView.ts`): the smallest step from single frames to hours whose
+labels are ≥ 64 px apart, minor ticks as one repeating pattern, memoised so
+playback updates never re-render it (52 timeline nodes at any clip length),
+plus an overview bar of the whole clip. Zoom (pinch, Ctrl/⌘-wheel), scroll
+(trackpad, ruler drag, overview) and follow-the-playhead came with it.
+Tests: `tests/timelineRuler.test.ts`.
+
+**Not verified:** YouTube sources (unreachable from the dev sandbox) and real
+phones (Chromium touch emulation only).
+
+**Severity:** moderate (misleading ruler on any zoomed timeline).
+
+## 038 — Motion Layer: dragging the playhead ball moved a frame stop instead — RESOLVED
+
+**Symptom (owner, real phone, testing PR #86).** In the Motion Layer, dragging
+the big playhead ball to a new time and letting go did not leave it there; the
+time position could not be changed.
+
+**Verified root cause (main and PR #86 alike — not a timeline V1 regression).**
+The playhead ball in `components/PreciseTimeline.tsx` takes no pointer events,
+and the Motion Layer frame-stop balls (14 px, z-index 9) are drawn on top of
+it. Whenever the playhead rests on a frame stop — a freshly opened Motion Layer
+(playhead at 0 on Frame stop 1, which is the selection start) or right after
+tapping a frame stop — a press on the ball grabbed the FRAME STOP. The drag
+then moved the frame stop (`onSampleMarkerChange`: clamped to the selection,
+neighbours pushed by `enforceMonotonicSampleTimes`) and the video only
+followed it. Reproduced in Chromium on both builds, mouse 1440 px and touch
+390 px: with the selection ending at 40 %, the ball stopped at the selection
+end instead of where it was dropped, and a plain ball drag from 0 to 70 %
+piled Frame stops 1–4 onto 0:06. Stack traces of every `currentTime` write
+showed the seeks coming from the frame-stop handlers, not the scrub.
+
+**Not reproduced:** the exact "lands at 0 on release" seen on the phone. No
+code path writes 0 on release on either build. The likeliest reading is the
+fresh-Motion-Layer case above (the grabbed stop is Frame stop 1, at the
+selection start = 0), but the release-at-0 itself was not seen in emulation.
+
+**Fix.** A press on the ball over a frame stop is undecided until it moves or
+is held (`lib/timelinePress.ts`): moving past 6 px first hands the pointer to
+the playhead scrub (the ball follows the pointer and stays where it is
+dropped, at any zoom; view and selection untouched); holding still for 400 ms
+first grabs the frame stop (shown enlarged) for the old drag-to-adjust; a tap
+still selects it. Frame stops not under the ball drag at once, as before.
+Tests: `tests/timelinePress.test.ts`.
+
+**Severity:** high (the Motion Layer's main control did not work on a phone).
+
+## 039 — Dragging one frame stop shoves or crosses its neighbours — OPEN (pre-existing)
+
+**Symptom.** Dragging a frame stop right past the next one pushes every later
+stop along with it (they pile up at the drop time); dragging it left past the
+previous one leaves the stops out of order (seen: "1 @0:00 | 2 @0:02 |
+3 @0:00").
+
+**Root cause.** `onSampleMarkerChange` in `app/analysis/page.tsx` runs the
+override through `enforceMonotonicSampleTimes` (forward-only push) but also
+writes the raw time into the draft frame (`updateStroFrameTime`) and seeks
+to the raw time, so the two disagree when a stop crosses a neighbour.
+
+**Proposed fix.** Clamp a dragged stop between its neighbours (previous +
+gap, next − gap) before writing either place. Needs owner approval (changes
+how stops can be re-ordered).
+
+**Severity:** moderate (silently rearranges the coach's frame stops).
+
+## 040 — Racket detector preload: unhandled "Failed to fetch" when the model cannot download — OPEN (pre-existing)
+
+**Symptom.** `TypeError: Failed to fetch` as an uncaught page error a few
+seconds after loading a clip (main and PR #86 alike), whenever the COCO-SSD
+model host is unreachable (the dev sandbox's proxy; an offline phone).
+
+**Root cause.** `preloadRacketDetector` in `lib/racketCocoDetect.ts` calls
+`void getRacketDetectorModel()` with no `catch`, and the rejected promise stays
+cached in `modelPromise`, so racket detection fails for the rest of the
+session even after the network returns.
+
+**Proposed fix.** Catch in the preload, and clear `modelPromise` on failure so
+the next detection retries.
+
+**Severity:** low (log noise; racket detection unavailable until reload when
+the first download fails).
