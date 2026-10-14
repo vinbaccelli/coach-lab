@@ -13,7 +13,7 @@
  * Launch: set TOURS_ENABLED_FOR_ALL to true. Nothing else changes — every
  * screen then shows the tours for everyone, whatever the URL says.
  */
-export const TOURS_ENABLED_FOR_ALL = false;
+export const TOURS_ENABLED_FOR_ALL = true;
 
 export const TOURS_URL_PARAM = 'tours';
 /** sessionStorage key holding this tab's `?tours=1` opt-in. */
