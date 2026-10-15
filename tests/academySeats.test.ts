@@ -71,7 +71,7 @@ test('a coach with no plan on an active Academy seat resolves to Pro-level, with
   assert.equal(e.plan, 'pro');
   assert.equal(e.academyMember, true);
   assert.equal(e.trial, false);
-  assert.deepEqual(calls, ['academy_seat_subscriptions']);
+  assert.deepEqual(calls, ['my_access_grant', 'academy_seat_subscriptions']);
   assert.equal(canUse('players', e), true);
   assert.equal(canUse('motionLayer', e), true);
   assert.equal(canDownloadEbook(e), false, 'the ebook is the subscriber’s, not the seat’s');
@@ -105,7 +105,7 @@ test('lapsed owner: the seat grants nothing and the member falls back to their o
   const e2 = await getEntitlement(none.client, user, { startTrial: true });
   assert.equal(e2.plan, null);
   assert.equal(e2.trial, true, 'falls through to the free hour');
-  assert.deepEqual(none.calls, ['academy_seat_subscriptions', 'start_trial']);
+  assert.deepEqual(none.calls, ['my_access_grant', 'academy_seat_subscriptions', 'start_trial']);
 });
 
 test('seat lookup failure (SQL not run yet) counts as no seat, never as access', async () => {

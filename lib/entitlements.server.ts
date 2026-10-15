@@ -41,6 +41,11 @@ export async function getEntitlement(
   // Pro or Academy of their own: nothing a seat could add.
   if (own.plan && own.plan !== 'light') return { ...NO_ENTITLEMENT, ...own, interval };
 
+  // A complimentary grant on the coach's email (public.access_grants) gives Pro
+  // tools with no subscription, no trial and no end date. Checked before the
+  // trial so a granted coach never starts their free hour.
+  if (await hasAccessGrant(supabase)) return { ...NO_ENTITLEMENT, plan: 'pro' };
+
   // A seat on someone's active Academy plan gives Pro-level tools (the coach's
   // data stays their own). Checked before the trial so a member never burns
   // their free hour. One read, only for coaches without Pro of their own.
@@ -59,6 +64,21 @@ export async function getEntitlement(
   }
   const trial = !!startedAt && now - new Date(startedAt).getTime() < TRIAL_MS;
   return { ...NO_ENTITLEMENT, trial };
+}
+
+/**
+ * Does the signed-in coach's email hold an active complimentary grant? Reads
+ * my_access_grant() (security definer: returns only the caller's own grant
+ * tier, or null when revoked or absent). A missing function (SQL not run yet)
+ * or read error counts as "no grant" — never as access.
+ */
+async function hasAccessGrant(supabase: SupabaseClient): Promise<boolean> {
+  const { data, error } = await supabase.rpc('my_access_grant');
+  if (error) {
+    console.warn('[entitlements] access grant lookup failed, treating as no grant:', error.message);
+    return false;
+  }
+  return data === 'pro';
 }
 
 /**
