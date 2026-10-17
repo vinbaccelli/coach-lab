@@ -48,6 +48,8 @@ import { useStroMotion } from '@/hooks/useStroMotion';
 const StroMotionPanel = React.lazy(() => import('@/components/StroMotionPanel'));
 const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/SnapshotScrollPanel'));
 const GenerateWorkspace = React.lazy(() => import('@/components/metrics/GenerateWorkspace'));
+// Static (not lazy): Generate must open with no chunk fetch on the click.
+import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
@@ -1256,6 +1258,9 @@ function Home() {
   // Stays true after the first Generate so the workspace keeps its local state
   // (order, selection, title, notes) across close/reopen within the session.
   const [generateWorkspaceMounted, setGenerateWorkspaceMounted] = useState(false);
+  // Metrics → Generate opens the video-export panel; the snapshot flow above
+  // is reached from its "Snapshot report" button.
+  const [metricsExportOpen, setMetricsExportOpen] = useState(false);
   const [generateReplayRate, setGenerateReplayRate] = useState(0.25);
   /** Seconds each snapshot stays frozen during the replay/recorded video. */
   const [generateHoldSec, setGenerateHoldSec] = useState(3);
@@ -6803,7 +6808,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     measurementColumnItems:          measurementColumn,
     onDeleteMeasurement:             (id: string) => setMeasurementColumn(prev => prev.filter(m => m.id !== id)),
     onOpenPhases:                    () => { createSnapshotFromLive(); },
-    onMetricsGenerate:               () => { void handleGenerateSnapshots(); },
+    onMetricsGenerate:               () => { setMetricsExportOpen(true); },
     onAutoDetectMeasurements:        async () => {
       // Prefer the Precision-AI-Track pose at the CURRENT frame (video-time
       // exact); fall back to the live cache — BY TIME, never by position.
@@ -9701,6 +9706,26 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             isMobile={isMobile}
           />
         </React.Suspense>
+      )}
+
+      {/* Mounted only while open: closing it frees its preview and export URLs. */}
+      {metricsExportOpen && (
+        <MetricsExportPanel
+          videoSrc={html5FileUpload ? videoSrc : null}
+          exportBlockedReason={youtubeVideoIdA || genericEmbedSrcA
+            ? 'This is a YouTube or embedded video, so it can’t be exported here. Upload the video file to export it.'
+            : null}
+          sectionStart={metricsSectionStart}
+          sectionEnd={metricsSectionEnd}
+          snapshotCount={snapshots.length}
+          onSnapshotReport={() => {
+            if (snapshots.length > 0) setMetricsExportOpen(false);
+            void handleGenerateSnapshots();
+          }}
+          pauseAnalysisVideo={() => { const v = videoRef.current; if (v && !v.paused) v.pause(); }}
+          onClose={() => setMetricsExportOpen(false)}
+          isMobile={isMobile}
+        />
       )}
 
     </div>

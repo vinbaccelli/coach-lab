@@ -695,3 +695,18 @@ moves; holding still first grabs the frame stop (`lib/timelinePress.ts`).
 one the user sees as "on top" not the one that receives the press. When a
 control "does the wrong thing", first prove which element got the
 pointerdown; and check the bug on the base branch before suspecting the PR.
+
+## 012 — A "cheaper" render loop that quietly dropped a quarter of the frames
+
+**Symptom.** Metrics export: a CPU profile showed `drawImage` was nearly all of
+the export's main-thread time (8.3 s of an 18 s render), because the rAF loop
+redraws each 30 fps frame twice on a 60 Hz display.
+
+**What happened.** Drawing only when `requestVideoFrameCallback` reported a new
+frame cut `drawImage` time by 24 %, but the exported files had 392–433 frames
+instead of 540: the callback does not fire for every frame when the page is
+busy. The change was reverted before review; the rAF loop is kept.
+
+**Class of mistake.** Judging a performance change only by the cost it removes.
+For any capture/render change, also count what comes out (frames, duration) —
+a smoother UI bought with a choppier video is a regression.

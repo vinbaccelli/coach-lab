@@ -20,6 +20,7 @@
 
 import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
+import { scaledExportSize } from '@/lib/exportEstimate';
 
 export type ExportRegion = { x: number; y: number; w: number; h: number };
 /** In/out points in seconds on the SOURCE timeline. */
@@ -31,11 +32,33 @@ export interface EditExportOptions {
   /** Omit (or null) to keep the whole clip. */
   trim?: TrimRange | null;
   onProgress?: (msg: string) => void;
+  /**
+   * The settings below are optional and used only by the Metrics export
+   * (components/metrics/MetricsExportPanel.tsx). Omitted, the render is exactly
+   * the Recording Hub's: full source size, 5 Mbps, crf 23 on MP4 conversion,
+   * no cancel, no pausing.
+   */
+  /** Scale the output down so its height is at most this (aspect kept; never upscales). */
+  maxHeight?: number | null;
+  /** Recorder video bitrate (default 5 Mbps). Also caps the MP4 conversion when one is needed. */
+  videoBitsPerSecond?: number;
+  /** Abort → the render stops, nothing is returned but `{ ok: false, cancelled: true }`. */
+  signal?: AbortSignal;
+  /**
+   * Pause the render (video + recorder) while the tab is hidden and resume when
+   * it is visible again: hidden tabs stop requestAnimationFrame, so the frames
+   * would otherwise be lost while the source keeps playing.
+   */
+  pauseWhenHidden?: boolean;
+  /** Fraction of the range rendered so far (0..1), reported from the paint loop. */
+  onRenderProgress?: (fraction: number) => void;
 }
 
 export type EditExportResult =
   | { ok: true; blob: Blob; ext: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; cancelled?: true };
+
+const CANCELLED: EditExportResult = { ok: false, error: 'Export cancelled.', cancelled: true };
 
 function even(n: number): number {
   const v = Math.max(0, Math.round(n));
@@ -63,11 +86,15 @@ function pickMime(): string {
  */
 export async function exportEditedVideo(
   srcBlob: Blob,
-  { region = null, trim = null, onProgress }: EditExportOptions = {},
+  {
+    region = null, trim = null, onProgress,
+    maxHeight = null, videoBitsPerSecond, signal, pauseWhenHidden = false, onRenderProgress,
+  }: EditExportOptions = {},
 ): Promise<EditExportResult> {
   if (typeof MediaRecorder === 'undefined') {
     return { ok: false, error: 'Recording is not supported in this browser.' };
   }
+  if (signal?.aborted) return CANCELLED;
 
   const url = URL.createObjectURL(srcBlob);
   const video = document.createElement('video');
@@ -79,7 +106,12 @@ export async function exportEditedVideo(
     await new Promise<void>((resolve, reject) => {
       video.onloadedmetadata = () => resolve();
       video.onerror = () => reject(new Error('Could not load the recording for export.'));
+      signal?.addEventListener('abort', () => resolve(), { once: true });
     });
+    if (signal?.aborted) {
+      URL.revokeObjectURL(url);
+      return CANCELLED;
+    }
 
     // Region defaults to the full frame, so a trim-only export needs no crop box.
     const src = region ?? { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
@@ -107,9 +139,14 @@ export async function exportEditedVideo(
       }
     }
 
+    // Output size: the region itself unless `maxHeight` scales it down.
+    const out = scaledExportSize(cw, ch, maxHeight);
+    const ow = out.width;
+    const oh = out.height;
+
     const canvas = document.createElement('canvas');
-    canvas.width = cw;
-    canvas.height = ch;
+    canvas.width = ow;
+    canvas.height = oh;
     const ctx = canvas.getContext('2d');
     if (!ctx) {
       URL.revokeObjectURL(url);
@@ -126,9 +163,14 @@ export async function exportEditedVideo(
         const done = () => { if (!settled) { settled = true; resolve(); } };
         video.onseeked = done;
         setTimeout(done, 4000);
+        signal?.addEventListener('abort', done, { once: true });
         try { video.currentTime = inPoint; } catch { done(); }
       });
       video.onseeked = null;
+      if (signal?.aborted) {
+        URL.revokeObjectURL(url);
+        return CANCELLED;
+      }
     }
 
     const canvasStream = (canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(30);
@@ -156,7 +198,7 @@ export async function exportEditedVideo(
       // added a second generation of loss on top of the capture.
       recorder = new MediaRecorder(combined, {
         mimeType: mime || undefined,
-        videoBitsPerSecond: 5_000_000,
+        videoBitsPerSecond: videoBitsPerSecond ?? 5_000_000,
         audioBitsPerSecond: 128_000,
       });
     } catch {
@@ -169,8 +211,14 @@ export async function exportEditedVideo(
 
     let raf = 0;
     let reachedOutPoint: (() => void) | null = null;
+    // Progress span: the trim range, else the clip (unknown length → no progress).
+    const progressSpan = Number.isFinite(outPoint)
+      ? outPoint - inPoint
+      : (Number.isFinite(video.duration) ? video.duration - inPoint : 0);
     const draw = () => {
-      if (video.readyState >= 2) ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+      // Always the video's CURRENT frame: a slow frame is dropped, never caught up.
+      if (video.readyState >= 2) ctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
+      if (onRenderProgress && progressSpan > 0) onRenderProgress((video.currentTime - inPoint) / progressSpan);
       // Out-point is checked on the paint loop (not `timeupdate`, which fires
       // only ~4x/second and would overshoot the cut by up to a quarter second).
       if (video.currentTime >= outPoint) {
@@ -186,22 +234,66 @@ export async function exportEditedVideo(
     draw();
     await video.play().catch(() => {});
 
+    // Time spent paused in a hidden tab (pauseWhenHidden) — not part of the clip.
+    let pausedMs = 0;
+    let pausedAt = 0;
+    let onVisibility: (() => void) | null = null;
+    let guardTimer: ReturnType<typeof setTimeout> | null = null;
     await new Promise<void>((resolve) => {
       let settled = false;
       const done = () => { if (!settled) { settled = true; resolve(); } };
       reachedOutPoint = done;
       video.onended = done;
+      signal?.addEventListener('abort', done, { once: true });
       // Failsafe: stop if the video stalls past the length we expect to render.
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
       const spanS = Number.isFinite(outPoint) ? outPoint - inPoint : Math.max(0, dur - inPoint);
       const guardMs = spanS * 1000 + 5000;
-      if (guardMs > 5000) setTimeout(done, guardMs);
+      if (!pauseWhenHidden) {
+        if (guardMs > 5000) setTimeout(done, guardMs);
+        return;
+      }
+      // Same failsafe, counting only the time the render was running.
+      const activeMs = () => Date.now() - startedAt - pausedMs - (pausedAt ? Date.now() - pausedAt : 0);
+      const guard = () => {
+        if (settled) return;
+        if (guardMs > 5000 && !pausedAt && activeMs() >= guardMs) { done(); return; }
+        guardTimer = setTimeout(guard, 1000);
+      };
+      guardTimer = setTimeout(guard, 1000);
+      onVisibility = () => {
+        if (settled) return;
+        if (document.visibilityState === 'hidden' && !pausedAt) {
+          pausedAt = Date.now();
+          try { video.pause(); } catch { /* noop */ }
+          try { if (recorder.state === 'recording') recorder.pause(); } catch { /* noop */ }
+        } else if (document.visibilityState === 'visible' && pausedAt) {
+          pausedMs += Date.now() - pausedAt;
+          pausedAt = 0;
+          try { if (recorder.state === 'paused') recorder.resume(); } catch { /* noop */ }
+          void video.play().catch(() => {});
+          cancelAnimationFrame(raf);
+          raf = requestAnimationFrame(draw);
+        }
+      };
+      document.addEventListener('visibilitychange', onVisibility);
+      if (document.visibilityState === 'hidden') onVisibility();
     });
+    if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
+    if (guardTimer) clearTimeout(guardTimer);
+    if (pausedAt) { pausedMs += Date.now() - pausedAt; pausedAt = 0; }
 
     cancelAnimationFrame(raf);
     try { video.pause(); } catch { /* noop */ }
 
-    const duration = Date.now() - startedAt;
+    if (signal?.aborted) {
+      try { recorder.stop(); } catch { /* noop */ }
+      canvasStream.getTracks().forEach((t) => t.stop());
+      URL.revokeObjectURL(url);
+      return CANCELLED;
+    }
+
+    const duration = Date.now() - startedAt - pausedMs;
     await new Promise<void>((resolve) => {
       recorder.onstop = () => resolve();
       try { recorder.requestData(); } catch { /* noop */ }
@@ -211,16 +303,21 @@ export async function exportEditedVideo(
     canvasStream.getTracks().forEach((t) => t.stop());
     URL.revokeObjectURL(url);
 
-    let out = new Blob(chunks, { type: mime || 'video/webm' });
-    if (out.size === 0) return { ok: false, error: 'Export produced an empty file.' };
+    let result = new Blob(chunks, { type: mime || 'video/webm' });
+    if (result.size === 0) return { ok: false, error: 'Export produced an empty file.' };
     try {
-      out = await webmFixDuration(out, duration, mime || 'video/webm');
+      result = await webmFixDuration(result, duration, mime || 'video/webm');
     } catch { /* noop */ }
 
-    if (/mp4/i.test(mime)) return { ok: true, blob: out, ext: 'mp4' };
+    if (/mp4/i.test(mime)) return { ok: true, blob: result, ext: 'mp4' };
 
+    if (signal?.aborted) return CANCELLED;
     onProgress?.('Converting to MP4…');
-    const conv = await convertWebmToMp4ForScreenRecord(out);
+    const conv = await convertWebmToMp4ForScreenRecord(
+      result,
+      videoBitsPerSecond !== undefined ? { videoBitsPerSecond } : undefined,
+    );
+    if (signal?.aborted) return CANCELLED;
     if (conv.ok) return { ok: true, blob: conv.blob, ext: 'mp4' };
     return { ok: false, error: 'Could not convert the edited recording to MP4.' };
   } catch (e) {
