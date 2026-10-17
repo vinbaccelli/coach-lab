@@ -1424,3 +1424,18 @@ the next detection retries.
 
 **Severity:** low (log noise; racket detection unavailable until reload when
 the first download fails).
+
+## 041 — Admin pages: dark text on dark cards in the light theme — OPEN (pre-existing)
+
+**Symptom.** In the light theme, `/admin/invoices` (and `/admin/affiliates`,
+which copies its styles on purpose) shows near-black text on dark-grey cards:
+readable, but low contrast. Seen in Chromium on a local dev server, 2026-10-17.
+
+**Root cause.** The cards use a fixed dark background
+(`rgba(15, 15, 18, 0.65)`) while the text colour follows the theme
+(`app/admin/invoices/page.tsx`, the `card` style at the end of the file).
+
+**Proposed fix.** Use the theme's panel token for the card background (or a
+fixed light text colour) on both admin pages. Admin-only, so low priority.
+
+**Severity:** low (admin-only, still readable).

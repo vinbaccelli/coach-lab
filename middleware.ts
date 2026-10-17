@@ -27,6 +27,8 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith('/terms') ||
     pathname.startsWith('/coaches') ||
     pathname.startsWith('/coach/') ||
+    pathname.startsWith('/r/') ||         // affiliate links (app/r/[code]/route.ts)
+    pathname.startsWith('/affiliate/') || // an affiliate's read-only page (by private token)
     // Dev-only rebuild harnesses under /dev/ (mask-editor Phase 1 verification).
     // NODE_ENV is inlined at build time, so in a production build this term is a
     // constant `false` and /dev/* is auth-gated exactly like any other route.

@@ -4,6 +4,7 @@ import { stripe, tierForPriceId } from '@/lib/stripe';
 import { createSupabaseServiceClient } from '@/lib/supabase/service';
 import { processStripeEvent, HANDLED_EVENTS, RetryableError, type SyncDeps } from '@/lib/billing/webhookSync';
 import type { DraftProductType } from '@/lib/billing/invoicing/draft';
+import { recordAffiliateCommission } from '@/lib/affiliates.server';
 
 const idOf = (v: unknown): string | null =>
   typeof v === 'string' ? v : v && typeof (v as { id?: unknown }).id === 'string' ? (v as { id: string }).id : null;
@@ -128,6 +129,17 @@ export async function POST(req: Request) {
     if (outcome === 'processed') {
       // Stripe's retry succeeded: close any error logged for this event.
       await db.from('billing_event_errors').update({ resolved_at: new Date().toISOString() }).eq('event_id', event.id).is('resolved_at', null);
+    }
+    // Affiliate commission (lib/affiliates.server.ts): a separate best-effort
+    // step AFTER the subscription and fiscal record are handled. It never
+    // throws, and is wrapped again so it can never change this response.
+    // Idempotent per Stripe invoice, so a duplicate delivery is harmless.
+    if (event.type === 'invoice.paid') {
+      try {
+        await recordAffiliateCommission(db, event.data.object as Stripe.Invoice);
+      } catch (e) {
+        console.warn('[stripe/webhook] affiliate commission skipped:', e instanceof Error ? e.message : e);
+      }
     }
     return NextResponse.json({ received: true, outcome });
   } catch (e) {
