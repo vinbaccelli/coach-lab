@@ -1439,3 +1439,84 @@ readable, but low contrast. Seen in Chromium on a local dev server, 2026-10-17.
 fixed light text colour) on both admin pages. Admin-only, so low priority.
 
 **Severity:** low (admin-only, still readable).
+
+## 042 — Metrics export: real file is ~35–40% smaller than the size estimate in Chromium — OPEN (found with the export panel)
+
+**Symptom.** Metrics → Generate shows "≈ X MB (approximate)"; in the test
+Chromium the exported file came out at 0.59–0.66× of it, on every preset and
+on a high-detail clip too (2026-10-17, production build, `next start`):
+
+| Clip / range | Preset | Estimate | Real |
+|---|---|---|---|
+| 1080p tennis, 18 s | 1080p (8 Mbps) | 18.3 MB | 10.8 MB |
+| 1080p tennis, 18 s | 720p (4 Mbps) | 9.3 MB | 6.0 MB |
+| 1080p tennis, 18 s | Original (8 Mbps) | 18.3 MB | 10.9 MB |
+| 1080p tennis, 4–13 s | 1080p | 9.1 MB | 5.4 MB |
+| 1080p high-detail (mandelbrot), 12 s | 1080p | 12.2 MB | 8.0 MB |
+
+**Root cause.** The estimate is the recorder's TARGET bitrate × duration
+(`lib/exportEstimate.ts`). This Chromium has no H.264 encoder; MediaRecorder
+writes VP9 (in MP4) with a software encoder that undershoots the requested
+`videoBitsPerSecond` (a bare canvas recording at 8 Mbps gave 4.3 Mbps;
+`videoBitrateMode: 'constant'` made no difference). The files are complete
+(540 frames / 18.0 s for an 18 s range), so it is the encoder, not lost frames.
+Real Chrome (H.264) and Safari (hardware H.264) were not measured.
+
+**Fault assessment.** The estimate formula is as specified; the 25 % accuracy
+target is not met in the test browser.
+
+**Proposed fix.** Measure the same clip on an iPhone (Safari) and desktop
+Chrome; if they also undershoot, scale the estimate per encoder (or show it as
+"up to ≈ X MB"). Needs owner approval (changes the number coaches see).
+
+**Severity:** low (the estimate is high, never low: files are smaller than
+announced).
+
+## 043 — Crop/trim export: `webmFixDuration` parses MP4 output on the main thread — OPEN (pre-existing)
+
+**Symptom.** At the end of every `exportEditedVideo` render (Recording Hub
+crop/trim and the Metrics export) there is one main-thread long task of
+60–800 ms (Chromium, 4.8–10 MB outputs; intermittent size).
+
+**Root cause.** `lib/cropExport.ts` always runs `webmFixDuration` on the
+recorded blob, also when the recorder wrote MP4. A CPU profile attributes the
+task to the library's `setSource/updateBySource` (EBML parser) plus GC.
+
+**Proposed fix.** Skip `webmFixDuration` when the recorder's MIME type is MP4.
+Touches the Recording Hub path, so it needs approval.
+
+**Severity:** low (one hitch when the export finishes; nothing is moving).
+
+## 044 — Stale copy after Generate became the export panel — OPEN
+
+**Symptom.** Two texts still describe the old Generate:
+`components/ToolPalette.tsx` (the Generate row's tooltip: "Capture every phase
+and replay the stroke in slow motion") and `components/tours/playersTour.ts`
+("Metrics → Generate builds a report"). The report is now one tap further:
+Generate → Snapshot report.
+
+**Root cause.** Out of the file list allowed for the export-panel change.
+
+**Proposed fix.** Tooltip: "Export the video or a section"; tour step:
+"Metrics → Generate → Snapshot report builds a report".
+
+**Severity:** low (wording).
+
+## 045 — Metrics section default covers only the first snapshot — OPEN (pre-existing)
+
+**Symptom.** Create snapshots at 3 s and then 8 s: the Metrics section (the
+timeline handles, and the export panel's *Use section*) is 2.7–3.3 s, not the
+2.7–8.3 s "snapshot span" the code comment promises. Seen in Chromium on the
+export-panel branch, 2026-10-17; the code is unchanged from main.
+
+**Root cause.** `app/analysis/page.tsx` (the effect after
+`handleReplaySnapshots`, "Default the metrics section to the snapshot span")
+only fills the section while it is null (`prev == null ? … : prev`), so the
+first snapshot fixes it and later snapshots never widen it.
+
+**Proposed fix.** Widen the default with each new snapshot until the coach
+drags a handle (`metricsTrimUserAdjusted`). Changes what Replay/Record video
+cover by default, so it needs approval.
+
+**Severity:** low (the coach can drag the handles; *Whole video* is the
+export default).

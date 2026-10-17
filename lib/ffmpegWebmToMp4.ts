@@ -216,6 +216,11 @@ export async function convertWebmBlobToMp4(
  */
 export async function convertWebmToMp4ForScreenRecord(
   webmBlob: Blob,
+  /**
+   * Optional: encode H.264 at this bitrate instead of crf 23, so the MP4 keeps
+   * the size the caller estimated (Metrics export). Omitted: crf 23, as before.
+   */
+  opts?: { videoBitsPerSecond?: number },
 ): Promise<{ ok: true; blob: Blob } | { ok: false; error: string }> {
   const inputName = 'screen-in.webm';
   const outputName = 'screen-out.mp4';
@@ -235,9 +240,13 @@ export async function convertWebmToMp4ForScreenRecord(
     }
     await ffmpeg.writeFile(inputName, buf);
 
+    const kbps = opts?.videoBitsPerSecond && opts.videoBitsPerSecond > 0 ? Math.round(opts.videoBitsPerSecond / 1000) : 0;
+    const rate = kbps
+      ? ['-b:v', `${kbps}k`, '-maxrate', `${kbps}k`, '-bufsize', `${kbps * 2}k`]
+      : ['-crf', '23'];
     const withAudio = [
       '-i', inputName,
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
+      '-c:v', 'libx264', '-preset', 'ultrafast', ...rate, '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-b:a', '128k',
       '-movflags', '+faststart',
       outputName,
@@ -245,7 +254,7 @@ export async function convertWebmToMp4ForScreenRecord(
     const videoOnly = [
       '-i', inputName,
       '-an',
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
+      '-c:v', 'libx264', '-preset', 'ultrafast', ...rate, '-pix_fmt', 'yuv420p',
       '-movflags', '+faststart',
       outputName,
     ];
