@@ -52,6 +52,12 @@ export interface EditExportOptions {
   pauseWhenHidden?: boolean;
   /** Fraction of the range rendered so far (0..1), reported from the paint loop. */
   onRenderProgress?: (fraction: number) => void;
+  /**
+   * Draws on top of each video frame, right after it is drawn: `mediaTime` is
+   * the source video's time, `ow`×`oh` the output size (Metrics export:
+   * skeleton + drawings). Omitted, nothing else is drawn.
+   */
+  drawOverlay?: (ctx: CanvasRenderingContext2D, mediaTime: number, ow: number, oh: number) => void;
 }
 
 export type EditExportResult =
@@ -88,7 +94,7 @@ export async function exportEditedVideo(
   srcBlob: Blob,
   {
     region = null, trim = null, onProgress,
-    maxHeight = null, videoBitsPerSecond, signal, pauseWhenHidden = false, onRenderProgress,
+    maxHeight = null, videoBitsPerSecond, signal, pauseWhenHidden = false, onRenderProgress, drawOverlay,
   }: EditExportOptions = {},
 ): Promise<EditExportResult> {
   if (typeof MediaRecorder === 'undefined') {
@@ -217,7 +223,12 @@ export async function exportEditedVideo(
       : (Number.isFinite(video.duration) ? video.duration - inPoint : 0);
     const draw = () => {
       // Always the video's CURRENT frame: a slow frame is dropped, never caught up.
-      if (video.readyState >= 2) ctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
+      if (video.readyState >= 2) {
+        ctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
+        if (drawOverlay) {
+          try { drawOverlay(ctx, video.currentTime, ow, oh); } catch { /* the frame itself is already drawn */ }
+        }
+      }
       if (onRenderProgress && progressSpan > 0) onRenderProgress((video.currentTime - inPoint) / progressSpan);
       // Out-point is checked on the paint loop (not `timeupdate`, which fires
       // only ~4x/second and would overshoot the cut by up to a quarter second).

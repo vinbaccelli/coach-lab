@@ -3,7 +3,8 @@
 Metrics → **Generate** opens the export panel
 (`components/metrics/MetricsExportPanel.tsx`, wired in `app/analysis/page.tsx`
 `onMetricsGenerate`). It exports the loaded video, whole or a trimmed section,
-as a **clean** video file: no drawings, skeleton or measurements are burned in.
+with the coach's **drawings** and the **AI-tracked skeleton** drawn on when they
+are included (see *Skeleton and drawings* below).
 
 ## What it does
 
@@ -44,14 +45,49 @@ as a **clean** video file: no drawings, skeleton or measurements are burned in.
   Replay, Record video). With no snapshots it shows the existing message.
 - Closing the panel unmounts it and frees its object URLs.
 
+## Skeleton and drawings
+
+Two switches in the panel's **Include** section; the quality panel names what
+the file will contain ("Includes: video + skeleton + drawings").
+
+- **Drawings** (lines, shapes, text, angle measurements) are the LIVE-mode
+  drawings on the analysis canvas. In SNAPSHOT mode the canvas drawings belong
+  to the snapshot and are not exported ("Snapshot drawings aren't exported.
+  Use Snapshot report."). With none: "No drawings on the video".
+- **Skeleton** is the AI Track pose for each frame's own time, drawn only where
+  the range is AI-tracked — the screen's rule once a track exists. Status:
+  "Turn on Skeleton to include it." / "Ready." / "Skeleton covers X% of this
+  range." / "No AI Track on this range, so no skeleton in the video." The
+  percentage samples the stored track (`lib/exportOverlay.ts trackedFraction`).
+- When the range is not fully tracked the panel says how to fix it: run
+  Metrics → Skeleton → AI Track on the whole video or on a Metrics section that
+  covers the range. There is no "Run AI Track" button in the panel: the
+  existing AI Track flow (`handlePrecisionTrack`) only tracks the whole video
+  or the Metrics section, so tracking the export range would mean changing it.
+- **Not exported in V1:** AI measurement overlays, the data column, the ball
+  trail, the zoom (the file is always the full, unzoomed frame).
+
+**How.** `lib/cropExport.ts` calls an optional `drawOverlay(ctx, mediaTime, ow,
+oh)` right after drawing each video frame. The panel passes Canvas
+`drawExportOverlay` (`components/Canvas.tsx`), a read-only handle method that
+draws with the screen's own functions — `drawStroke`, `drawAngleMeas`,
+`drawSkeletonOverlay` (same display options, `showAngles: false`) and
+`lookupBakedPose` for the frame's media time. It maps the on-screen video box
+onto the whole output frame (`lib/exportOverlay.ts overlayTransform`), so
+drawings keep their place and proportion at 720p, 1080p and Original. The video
+box, strokes and angles are captured once at export start, so a resize during
+the export cannot move them. No pose work runs during the export: the skeleton
+is read from the stored track only.
+
 The Recording Hub calls `exportEditedVideo` without the new options, which
 keeps its render exactly as before (full size, 5 Mbps, crf 23 on MP4
 conversion, no cancel, no pausing).
 
 ## V2 (not built)
 
-Out of scope for V1 and not started: burned-in drawings/measurements (needs
-annotations in video coordinates first, KNOWN_ISSUES 010), ball tracking,
+Out of scope for V1 and not started: AI measurement overlays and the data
+column in the export, snapshot drawings in the export (would need holds or
+time-bound drawings), ball tracking,
 effects, a WebCodecs encoder (faster than real time), and a JPEG change to the
 snapshot report's per-snapshot PNG capture (the main cost of the old Generate:
 2.7 s to open with 6 snapshots of a 1080p clip).

@@ -1520,3 +1520,74 @@ cover by default, so it needs approval.
 
 **Severity:** low (the coach can drag the handles; *Whole video* is the
 export default).
+
+## 046 — Metrics export has no AngleMotion watermark — OPEN (found with the export overlays)
+
+**Symptom.** Files exported from Metrics → Generate (the export panel, PR #92)
+have no watermark; the analysis canvas shows it bottom-left of the video.
+Seen comparing the screen and exported frames in Chromium, 2026-10-17.
+
+**Root cause.** `lib/videoWatermark.ts` states the watermark "has to appear on
+the live analysis canvas AND inside every recorded/exported video". The old
+Generate recording captured the canvas, which draws it (`Canvas.tsx` render
+loop, `drawVideoWatermark`). The export panel renders the video itself
+(`lib/cropExport.ts`) and never calls `drawVideoWatermark`.
+
+**Fault assessment.** Gap introduced by PR #92 (the export panel); the overlay
+PR did not change it (out of its allowed scope).
+
+**Proposed fix.** In the panel's export, always pass a `drawOverlay` that ends
+with `drawVideoWatermark(ctx, ow, oh)` (no area: bottom-left of the frame, the
+recording-canvas case the function documents). Needs approval (changes every
+Metrics export).
+
+**Severity:** moderate (branding contract; no functional loss).
+
+## 047 — Exporting right after turning the Skeleton on drops ~45% of frames (test browser) — OPEN (pre-existing)
+
+**Symptom.** Metrics export of an 18 s 1080p clip, started within seconds of
+turning the Skeleton on: 277–316 frames instead of ~540 — on main and on the
+overlay branch alike. Skeleton off: 516–540. Skeleton on, export started after
+waiting 60 s: 539.
+
+**Root cause (partial).** Start-up work that turning the Skeleton on triggers in
+the background competes with the export on this 4-core, GPU-less browser. The
+main thread is not the cause (a CPU profile shows only the export's own
+`drawImage`; the analysis canvas does not repaint during the export). Not
+measured on a real phone or desktop browser.
+
+**Proposed fix.** Measure on real devices first. If it reproduces, wait for the
+pose model to be ready (or show "Preparing…") before an export starts.
+
+**Severity:** low–moderate (choppier file, only right after enabling Skeleton).
+
+## 048 — 4K Original export runs at ~6 fps in the test browser — OPEN (pre-existing, environment)
+
+**Symptom.** A 6 s 3840×2160 clip exported at Original gives 35–39 frames on
+main and 36–37 on the overlay branch (36 with skeleton + drawings on).
+
+**Root cause.** Software 4K decode + `drawImage` in a GPU-less headless
+Chromium; the overlay adds nothing measurable. Real phones decode 4K in
+hardware — not measured here.
+
+**Proposed fix.** None until measured on a real iPhone/Android. If real devices
+also drop, cap Original at 1080p on phones.
+
+**Severity:** unknown (environment-specific until measured).
+
+## 049 — AI measurement overlays do not follow the player during tracked playback — OPEN (pre-existing, by code)
+
+**Symptom (expected from the code, not seen at runtime).** With an AI Track and
+measurement overlays on, the shoulder/hip/racket/foot arrows stay where the
+last live pose put them while the video plays.
+
+**Root cause.** The overlays draw from `latestKeypointsRef` (`Canvas.tsx`,
+"Live measurement overlays"), but once any track exists the live pose loop
+stops sending frames ("tracks own the display"), so that ref is not updated.
+The skeleton itself uses the track (`lookupBakedPose`).
+
+**Proposed fix.** Draw the overlays from the same pose the skeleton uses (the
+baked pose when there is one). Touches skeleton/measurement display: needs
+approval and a runtime repro first. This is why the export leaves them out.
+
+**Severity:** moderate if confirmed.

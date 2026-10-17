@@ -9725,6 +9725,16 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           pauseAnalysisVideo={() => { const v = videoRef.current; if (v && !v.paused) v.pause(); }}
           onClose={() => setMetricsExportOpen(false)}
           isMobile={isMobile}
+          overlay={{
+            // Same condition the analysis canvas uses to draw the skeleton (skeletonDrawEnabled for A).
+            skeletonOn: skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused,
+            snapshotMode: analysisMode.kind === 'snapshot',
+            getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,
+            isRangeBaked: (a, b) => canvasRef.current?.isRangeBaked?.(a, b) ?? false,
+            drawExportOverlay: (ctx, t, w, h, o) =>
+              canvasRef.current?.drawExportOverlay?.(ctx, t, w, h, o)
+              ?? { box: { dx: 0, dy: 0, dw: 0, dh: 0 }, videoW: 0, videoH: 0, drawingCount: 0, strokes: [], angles: [] },
+          }}
         />
       )}
 
