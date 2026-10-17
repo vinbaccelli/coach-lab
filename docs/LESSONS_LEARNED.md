@@ -710,3 +710,20 @@ busy. The change was reverted before review; the rAF loop is kept.
 **Class of mistake.** Judging a performance change only by the cost it removes.
 For any capture/render change, also count what comes out (frames, duration) —
 a smoother UI bought with a choppier video is a regression.
+
+## 013 — A probe that reads 0 must first be shown to read more than 0
+
+**Symptom.** The Metrics export PR (#92) reported "0 pose-worker messages during
+the export, with the skeleton on" as proof of no pose work.
+
+**What was actually true.** The test tapped the Skeleton row (which turns it
+ON) and then "Skeleton on / off" (which turned it OFF again), and in the
+headless test browser the live pose worker never sends frames at all. The probe
+could not have read anything but 0. Found while verifying the export overlays.
+
+**Fix.** The overlay PR checks the probe against a positive case first: a CPU
+profile of an AI Track pass (MediaPipe `vision_wasm_internal.*`, ~118 s of
+self time) compared with a profile of the export (0 ms of those scripts).
+
+**Class of mistake.** Negative evidence from an unvalidated instrument. Before
+quoting "0 X during Y", show the same instrument counting X when X happens.

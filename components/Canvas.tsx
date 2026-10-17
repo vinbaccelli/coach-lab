@@ -31,6 +31,7 @@ import { getPoseDetector } from '@/lib/poseDetection';
 import { smoothBakedTrack } from '@/lib/trackSmoothing';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
+import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
@@ -248,6 +249,17 @@ type Selection =
 
 // ── Public handle ──────────────────────────────────────────────────────────
 
+/** What drawExportOverlay captured at export start (opaque to callers except the counts). */
+export interface ExportOverlayFrozen {
+  box: VideoBox;
+  videoW: number;
+  videoH: number;
+  /** Strokes + locked angles on the canvas when captured. */
+  drawingCount: number;
+  readonly strokes: readonly unknown[];
+  readonly angles: readonly unknown[];
+}
+
 export interface CanvasHandle {
   clearAll: () => void;
   resetSkeleton: () => void;
@@ -327,6 +339,21 @@ export interface CanvasHandle {
   getBakedTrackInfo: () => { samples: number; start: number; end: number } | null;
   getBakedPoseAt: (t: number) => Array<{ x: number; y: number; score: number; name: string }> | null;
   isRangeBaked: (start: number, end: number) => boolean;
+  /**
+   * Metrics export (components/metrics/MetricsExportPanel.tsx): draw the LIVE
+   * drawings and the AI-tracked skeleton for `mediaTime` onto `ctx`, a canvas
+   * that is the whole video frame (outW × outH). READ-ONLY: writes no ref, mode
+   * or pose state. The first call (pass `frozen` = undefined) captures the video
+   * box, strokes and angles and returns them; pass that back on every later call
+   * so a resize mid-export cannot move anything. `ctx` = null only captures.
+   */
+  drawExportOverlay: (
+    ctx: CanvasRenderingContext2D | null,
+    mediaTime: number,
+    outW: number,
+    outH: number,
+    opts: { skeleton: boolean; drawings: boolean; frozen?: ExportOverlayFrozen },
+  ) => ExportOverlayFrozen;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
   /** Cancel an in-progress StroMotion region selection; fires the pending callback with null */
@@ -3749,6 +3776,62 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       /** True when one baked track fully covers [start, end] (small tolerance). */
       isRangeBaked: (start: number, end: number) =>
         bakedTracksRef.current.some((b) => b.start <= start + 0.05 && b.end >= end - 0.05),
+      drawExportOverlay: (ctx, mediaTime, outW, outH, opts) => {
+        // Capture once (export start): the logical video box the strokes are
+        // stored against, plus copies of the stroke/angle lists. Copies of the
+        // ARRAYS only — nothing here writes to any ref.
+        const frozen: ExportOverlayFrozen = opts.frozen ?? {
+          box: { ...videoBoundsRef.current },
+          videoW: videoRef.current?.videoWidth ?? 0,
+          videoH: videoRef.current?.videoHeight ?? 0,
+          drawingCount: strokesRef.current.length + angleMeasRef.current.length,
+          strokes: [...strokesRef.current],
+          angles: [...angleMeasRef.current],
+        };
+        const tf = overlayTransform(frozen.box, outW, outH);
+        if (!ctx || !tf) return frozen;
+        const { dx, dy, dw, dh } = frozen.box;
+        ctx.save();
+        try {
+          // Logical canvas px → output px: the on-screen video box becomes the frame.
+          ctx.setTransform(tf.sx, 0, 0, tf.sy, tf.tx, tf.ty);
+          if (opts.drawings) {
+            // Same draw calls as the screen (render loop: completed strokes, then
+            // locked angles). The screen's tick advances once per ~60 Hz frame.
+            const tick = Math.round(mediaTime * 60);
+            const jointBallR = jointNodeRadius(dw, dh);
+            for (const st of frozen.strokes as Stroke[]) drawStroke(ctx, st, tick, jointBallR);
+            for (const m of frozen.angles as AngleMeas[]) drawAngleMeas(ctx, m);
+          }
+          // Skeleton: only the AI-tracked pose for this media time (the screen's
+          // track-scope rule — untracked time draws nothing), only while the
+          // coach's own skeleton switches are on, never mid-bake. No live pose,
+          // no pose worker: lookupBakedPose is a pure read of the stored track.
+          if (
+            opts.skeleton && skeletonEnabledRef.current && skeletonDrawEnabledRef.current &&
+            !bakingRef.current && frozen.videoW > 0 && frozen.videoH > 0
+          ) {
+            const kps = lookupBakedPose(mediaTime);
+            if (kps && kps.length) {
+              ctx.translate(dx, dy);
+              drawSkeletonOverlay(ctx, kps, frozen.videoW, frozen.videoH, dw, dh, {
+                showAngles: false,
+                showHeadLine: skeletonShowHeadLineRef.current,
+                showHeadDirection: skeletonShowHeadDirectionRef.current,
+                showFootLine: skeletonShowFootLineRef.current,
+                classicColors: skeletonClassicColorsRef.current,
+                parts: skeletonPartsRef.current,
+              });
+            }
+          }
+        } catch (e) {
+          // An overlay error must never stop the export: the video frame is already drawn.
+          if (process.env.NODE_ENV !== 'production') console.warn('[Canvas] export overlay skipped:', e);
+        } finally {
+          ctx.restore();
+        }
+        return frozen;
+      },
       startStroMotionRegionSelect: (cb) => {
         isSelectingStroRegionRef.current = true;
         stroRegionCallbackRef.current = cb;

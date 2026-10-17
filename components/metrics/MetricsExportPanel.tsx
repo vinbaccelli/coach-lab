@@ -6,10 +6,17 @@ import { exportEditedVideo } from '@/lib/cropExport';
 import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, type ExportQuality,
 } from '@/lib/exportEstimate';
+import {
+  drawingsExportStatus, includesLabel, skeletonExportStatus, trackedFraction,
+} from '@/lib/exportOverlay';
+import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
 
 /**
- * Metrics → Generate: export the loaded video (whole or a trimmed section) as
- * a CLEAN video file — no drawings, skeleton or measurements burned in.
+ * Metrics → Generate: export the loaded video (whole or a trimmed section),
+ * with the LIVE drawings and the AI-tracked skeleton drawn on when the coach
+ * includes them (Canvas drawExportOverlay, called from the export loop). AI
+ * measurement overlays, the data column and snapshot drawings are never
+ * exported; the skeleton only where the range is AI-tracked (the screen's rule).
  *
  * Opening does no work: no seek of the analysis video, no frame capture, no
  * snapshot writes. Snapshots and angle data are not needed and never touched;
@@ -37,6 +44,19 @@ export interface MetricsExportPanelProps {
   pauseAnalysisVideo: () => void;
   onClose: () => void;
   isMobile?: boolean;
+  /**
+   * Skeleton + drawings for the export (read-only Canvas calls). Null: the
+   * export is video only and the toggles are hidden.
+   */
+  overlay?: {
+    /** The coach's skeleton switches are on (what the screen requires to draw it). */
+    skeletonOn: boolean;
+    /** SNAPSHOT mode: the canvas drawings belong to a snapshot and are not exported. */
+    snapshotMode: boolean;
+    getBakedPoseAt: CanvasHandle['getBakedPoseAt'];
+    isRangeBaked: CanvasHandle['isRangeBaked'];
+    drawExportOverlay: CanvasHandle['drawExportOverlay'];
+  } | null;
 }
 
 type Phase = 'idle' | 'reading' | 'exporting' | 'done' | 'error';
@@ -51,7 +71,7 @@ const PLACEHOLDER_OPTIONS: Array<{ id: ExportQuality; label: string; width?: num
 
 export default function MetricsExportPanel({
   videoSrc, exportBlockedReason, sectionStart, sectionEnd, snapshotCount,
-  onSnapshotReport, pauseAnalysisVideo, onClose, isMobile = false,
+  onSnapshotReport, pauseAnalysisVideo, onClose, isMobile = false, overlay = null,
 }: MetricsExportPanelProps) {
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const [meta, setMeta] = useState<{ w: number; h: number; duration: number } | null>(null);
@@ -153,6 +173,26 @@ export default function MetricsExportPanel({
   const spanSec = Math.max(0, range.end - range.start);
   const estimateBytes = selected ? estimateExportBytes(spanSec, selected.videoBitsPerSecond, EXPORT_AUDIO_BPS) : 0;
 
+  // ── Skeleton + drawings (read-only probes; nothing is drawn until Export) ──
+  // Drawings cannot change while this modal is open, so count them once.
+  const drawingCount = useMemo(
+    () => (overlay ? overlay.drawExportOverlay(null, 0, 1, 1, { skeleton: false, drawings: false }).drawingCount : 0),
+    [overlay],
+  );
+  const trackedFrac = useMemo(() => {
+    if (!overlay || !meta || !(range.end > range.start)) return 0;
+    if (overlay.isRangeBaked(range.start, range.end)) return 1;
+    return trackedFraction(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null);
+  }, [overlay, meta, range.start, range.end]);
+  const skStatus = skeletonExportStatus(Boolean(overlay?.skeletonOn), trackedFrac);
+  const drStatus = drawingsExportStatus(Boolean(overlay?.snapshotMode), drawingCount);
+  const skAvailable = skStatus.state === 'ready' || skStatus.state === 'partial';
+  const drAvailable = drStatus.state === 'ready';
+  const [skeletonWanted, setSkeletonWanted] = useState(true);
+  const [drawingsWanted, setDrawingsWanted] = useState(true);
+  const includeSkeleton = Boolean(overlay) && skAvailable && skeletonWanted;
+  const includeDrawings = Boolean(overlay) && drAvailable && drawingsWanted;
+
   const onTrimChange = useCallback((next: { start: number; end: number }, moved: 'start' | 'end') => {
     setRange(next);
     clearResult();
@@ -227,12 +267,21 @@ export default function MetricsExportPanel({
       if (ac.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       setPhase('exporting');
       const whole = range.start <= 0.01 && range.end >= meta.duration - 0.01;
+      // Overlays: capture the video box, strokes and angles NOW (export start),
+      // then reuse that capture for every frame so a resize cannot move them.
+      let drawOverlay: ((ctx: CanvasRenderingContext2D, t: number, w: number, h: number) => void) | undefined;
+      if (overlay && (includeSkeleton || includeDrawings)) {
+        const flags = { skeleton: includeSkeleton, drawings: includeDrawings };
+        const frozen: ExportOverlayFrozen = overlay.drawExportOverlay(null, range.start, 1, 1, flags);
+        drawOverlay = (ctx, t, w, h) => { overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen }); };
+      }
       const res = await exportEditedVideo(src, {
         trim: whole ? null : { start: range.start, end: range.end },
         maxHeight: selected.maxHeight,
         videoBitsPerSecond: selected.videoBitsPerSecond,
         signal: ac.signal,
         pauseWhenHidden: true,
+        drawOverlay,
         onProgress: (msg) => {
           if (ac.signal.aborted) return;
           lastProgressAtRef.current = performance.now();
@@ -269,7 +318,7 @@ export default function MetricsExportPanel({
       restorePreview();
       if (restoreRef.current === restorePreview) restoreRef.current = null;
     }
-  }, [videoSrc, meta, selected, busy, range, clearResult, pauseAnalysisVideo, pumpSeek]);
+  }, [videoSrc, meta, selected, busy, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings]);
 
   const cancelExport = useCallback(() => {
     const ac = abortRef.current;
@@ -401,8 +450,50 @@ export default function MetricsExportPanel({
               />
             </section>
 
+            {overlay ? (
+              <section aria-label="Include" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 700 }}>Include</span>
+                {([
+                  { key: 'drawings', title: 'Drawings', label: 'Include drawings', on: includeDrawings, avail: drAvailable, text: drStatus.text, set: setDrawingsWanted },
+                  { key: 'skeleton', title: 'Skeleton', label: 'Include skeleton', on: includeSkeleton, avail: skAvailable, text: skStatus.text, set: setSkeletonWanted },
+                ] as const).map((row) => {
+                  const off = !row.avail || busy;
+                  return (
+                    <div key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 44 }}>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={row.on}
+                        aria-label={row.label}
+                        disabled={off}
+                        onClick={() => { row.set(!row.on); clearResult(); }}
+                        style={{
+                          flex: '0 0 auto', width: 48, height: 28, borderRadius: 14, padding: 2, border: 'none',
+                          background: row.on ? 'var(--cl-accent)' : 'rgba(255,255,255,0.22)',
+                          cursor: off ? 'default' : 'pointer', opacity: off ? 0.45 : 1,
+                          display: 'flex', justifyContent: row.on ? 'flex-end' : 'flex-start',
+                        }}
+                      >
+                        <span style={{ width: 24, height: 24, borderRadius: 12, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.4)' }} />
+                      </button>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                        <span style={{ fontSize: 14, fontWeight: 600 }}>{row.title}</span>
+                        <span data-testid={`export-${row.key}-status`} style={muted}>{row.text}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+                {skStatus.state === 'partial' || skStatus.state === 'none' ? (
+                  <span data-testid="export-aitrack-hint" style={muted}>
+                    To include the skeleton everywhere, close this panel and run Metrics → Skeleton → AI Track on the whole video, or on a Metrics section that covers this range.
+                  </span>
+                ) : null}
+              </section>
+            ) : null}
+
             <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <span style={{ fontSize: 14, fontWeight: 700 }}>Quality</span>
+              <span data-testid="export-includes" style={muted}>{includesLabel(includeSkeleton, includeDrawings)}</span>
               <div role="radiogroup" aria-label="Quality" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
                 {(options.length ? options : PLACEHOLDER_OPTIONS).map((o) => {
                   const on = o.id === quality;
@@ -439,7 +530,7 @@ export default function MetricsExportPanel({
               </span>
               <span style={muted}>
                 {selected
-                  ? `${formatClock(spanSec)} · ${selected.width}×${selected.height} · ${(selected.videoBitsPerSecond / 1_000_000).toFixed(0)} Mbps · clean video, no drawings`
+                  ? `${formatClock(spanSec)} · ${selected.width}×${selected.height} · ${(selected.videoBitsPerSecond / 1_000_000).toFixed(0)} Mbps`
                   : 'Reading video…'}
               </span>
             </div>
