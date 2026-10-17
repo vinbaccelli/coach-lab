@@ -4,9 +4,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
-  commissionForInvoice, invoiceBaseCents, normalizeAffiliateCode, normalizePct, summarizeAffiliate, type Affiliate,
+  commissionForInvoice, invoiceBaseCents, isNewAccount, NEW_ACCOUNT_WINDOW_MS, normalizeAffiliateCode, normalizePct, summarizeAffiliate,
+  type Affiliate,
 } from '@/lib/affiliates';
-import { attributeReferral, influencerView, recordAffiliateCommission, referralRedirect, trackReferralClick } from '@/lib/affiliates.server';
+import {
+  attributeNewSignup, attributeReferral, influencerView, recordAffiliateCommission, referralRedirect, trackReferralClick,
+} from '@/lib/affiliates.server';
 
 const root = process.cwd();
 const src = (f: string) => readFileSync(join(root, f), 'utf8');
@@ -232,10 +235,66 @@ test('sign-in attribution: the first link wins and is never replaced', async () 
   assert.equal(tables.affiliate_referrals.length, 1);
 });
 
-test('the auth callback attributes after the session exchange, wrapped so it can never break sign-in', () => {
+const NOW = Date.parse('2026-10-17T12:00:00Z');
+const createdAgo = (ms: number) => new Date(NOW - ms).toISOString();
+const MIN = 60 * 1000;
+
+test('new accounts only: an account created in the last 15 minutes is attributed', async () => {
+  const { db, tables } = fakeDb({ affiliates: [aff()] });
+  assert.equal(await attributeNewSignup(db, { id: 'new-1', created_at: createdAgo(30 * 1000) }, 'dani', NOW), 'attributed');
+  assert.equal(await attributeNewSignup(db, { id: 'new-2', created_at: createdAgo(14 * MIN) }, 'dani', NOW), 'attributed');
+  assert.equal(await attributeNewSignup(db, { id: 'new-3', created_at: createdAgo(NEW_ACCOUNT_WINDOW_MS) }, 'dani', NOW), 'attributed', 'exactly 15 minutes');
+  assert.deepEqual(tables.affiliate_referrals.map((r) => r.user_id), ['new-1', 'new-2', 'new-3']);
+});
+
+test('new accounts only: an existing account signing in again never becomes a referral', async () => {
+  const { db, tables, calls } = fakeDb({ affiliates: [aff()] });
+  for (const [name, created_at] of [
+    ['16 minutes old', createdAgo(16 * MIN)],
+    ['a year old', createdAgo(365 * 24 * 60 * MIN)],
+    ['created in the future (bad clock)', createdAgo(-10 * MIN)],
+    ['no created_at', null],
+    ['unreadable created_at', 'yesterday'],
+  ] as const) {
+    assert.equal(await attributeNewSignup(db, { id: 'old-1', created_at }, 'dani', NOW), 'existing-account', name);
+  }
+  assert.equal(tables.affiliate_referrals?.length ?? 0, 0);
+  assert.deepEqual(calls, [], 'an old account does not even look the code up');
+  assert.equal(await attributeNewSignup(db, null, 'dani', NOW), 'none');
+  assert.equal(await attributeNewSignup(db, { id: null, created_at: createdAgo(MIN) }, 'dani', NOW), 'none');
+  // The window itself: 15 min inclusive, a minute of clock skew tolerated.
+  assert.equal(isNewAccount(createdAgo(NEW_ACCOUNT_WINDOW_MS + 1), NOW), false);
+  assert.equal(isNewAccount(createdAgo(-30 * 1000), NOW), true, '30 s of clock skew');
+  assert.equal(isNewAccount(createdAgo(-2 * MIN), NOW), false);
+});
+
+test('new accounts only: the first link still wins', async () => {
+  const { db, tables } = fakeDb({ affiliates: [aff(), aff({ id: 'aff-2', code: 'marco', view_token: 'w'.repeat(43) })] });
+  const user = { id: 'new-1', created_at: createdAgo(2 * MIN) };
+  assert.equal(await attributeNewSignup(db, user, 'dani', NOW), 'attributed');
+  assert.equal(await attributeNewSignup(db, user, 'marco', NOW + 5 * MIN), 'kept', 'still within 15 minutes: another link does not replace it');
+  assert.equal(await attributeNewSignup(db, user, 'marco', NOW + 30 * MIN), 'existing-account', 'later: no longer a new account');
+  assert.equal(tables.affiliate_referrals.length, 1);
+  assert.equal(tables.affiliate_referrals[0].affiliate_id, 'aff-1');
+});
+
+test('new accounts only: any failure still never blocks sign-in', async () => {
+  await quiet(async () => {
+    const fresh = { id: 'new-1', created_at: createdAgo(MIN) };
+    assert.equal(await attributeNewSignup(explodingDb, fresh, 'dani', NOW), 'none');
+    assert.equal(await attributeNewSignup(fakeDb({ affiliates: [aff()] }, { failOn: 'affiliate_referrals' }).db, fresh, 'dani', NOW), 'none');
+    assert.equal(await attributeNewSignup(null, fresh, 'dani', NOW), 'none');
+    // A user object whose fields throw when read.
+    const hostile = Object.defineProperty({}, 'id', { get() { throw new Error('bad user'); } });
+    assert.equal(await attributeNewSignup(fakeDb().db, hostile as never, 'dani', NOW), 'none');
+  });
+});
+
+test('the auth callback attributes only through the new-account gate, after the session exchange, wrapped so it can never break sign-in', () => {
   const s = src('app/auth/callback/route.ts');
-  assert.ok(s.indexOf('attributeReferral(') > s.indexOf('exchangeCodeForSession(code)'));
-  assert.match(s, /try \{\s*const ref = cookieStore\.get\(REF_COOKIE\)\?\.value;[\s\S]*?attributeReferral\([\s\S]*?\} catch \(e\) \{/);
+  assert.ok(s.indexOf('attributeNewSignup(') > s.indexOf('exchangeCodeForSession(code)'));
+  assert.doesNotMatch(s, /attributeReferral\(/, 'no path around the new-account check');
+  assert.match(s, /try \{\s*const ref = cookieStore\.get\(REF_COOKIE\)\?\.value;\s*if \(ref\) await attributeNewSignup\(createSupabaseServiceClient\(\), exchanged\?\.data\?\.user, ref\);\s*\} catch \(e\) \{/);
   assert.match(s, /return response;\s*\}\s*$/);
 });
 

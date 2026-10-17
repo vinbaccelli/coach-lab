@@ -47,6 +47,25 @@ export function normalizePct(raw: unknown): number | null {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
 }
 
+/** Only an account created this recently becomes a referral (a NEW signup). */
+export const NEW_ACCOUNT_WINDOW_MS = 15 * 60 * 1000;
+/** Tolerated clock difference between Supabase and this server. */
+const CLOCK_SKEW_MS = 60 * 1000;
+
+/**
+ * Is this a brand-new account? True only when the auth user's `created_at` is
+ * within the last 15 minutes (a minute of clock skew either way tolerated).
+ * A missing or unreadable date counts as NOT new, so an existing coach who
+ * signs in again through a link never becomes a referral.
+ */
+export function isNewAccount(createdAt: unknown, nowMs: number): boolean {
+  if (typeof createdAt !== 'string' || !createdAt) return false;
+  const created = Date.parse(createdAt);
+  if (!Number.isFinite(created)) return false;
+  const age = nowMs - created;
+  return age >= -CLOCK_SKEW_MS && age <= NEW_ACCOUNT_WINDOW_MS;
+}
+
 export const referralLink = (code: string) => `${PUBLIC_SITE}/r/${code}`;
 export const influencerPagePath = (viewToken: string) => `/affiliate/${viewToken}`;
 

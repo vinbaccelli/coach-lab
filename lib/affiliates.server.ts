@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
-  commissionForInvoice, normalizeAffiliateCode, REF_COOKIE, REF_COOKIE_MAX_AGE_S, summarizeAffiliate,
+  commissionForInvoice, isNewAccount, normalizeAffiliateCode, REF_COOKIE, REF_COOKIE_MAX_AGE_S, summarizeAffiliate,
   type Affiliate, type AffiliateSummary, type CommissionStatus, type InvoiceFacts,
 } from '@/lib/affiliates';
 
@@ -96,6 +96,28 @@ export async function attributeReferral(
       .select('user_id');
     if (error) throw new Error(`affiliate_referrals upsert failed: ${error.message}`);
     return data && data.length > 0 ? 'attributed' : 'kept';
+  } catch (e) {
+    warn('signup attribution failed', e);
+    return 'none';
+  }
+}
+
+/**
+ * The sign-in callback's entry point: attribute ONLY a new account (created in
+ * the last 15 minutes, lib/affiliates.ts isNewAccount). An existing coach
+ * signing in again is never made a referral, whatever cookie they carry.
+ * Never throws.
+ */
+export async function attributeNewSignup(
+  db: SupabaseClient | null,
+  user: { id?: string | null; created_at?: string | null } | null | undefined,
+  rawCode: unknown,
+  nowMs: number = Date.now(),
+): Promise<'attributed' | 'kept' | 'none' | 'existing-account'> {
+  try {
+    if (!user?.id) return 'none';
+    if (!isNewAccount(user.created_at, nowMs)) return 'existing-account';
+    return await attributeReferral(db, user.id, rawCode);
   } catch (e) {
     warn('signup attribution failed', e);
     return 'none';

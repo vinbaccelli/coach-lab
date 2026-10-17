@@ -10,7 +10,7 @@ commission that Vin pays outside the app.
    - sets the first-party cookie `am_ref=<code>` (60 days, SameSite=Lax, Secure, HttpOnly). It holds only the code.
 
    It always redirects to `/`, even on an unknown code or an error.
-2. **Sign-in.** After a successful sign-in, `app/auth/callback/route.ts` turns the cookie into a row in `affiliate_referrals`. The **first link wins**: a coach is never moved to another affiliate. This is best effort and can never block sign-in. It applies to any sign-in, so an *existing* coach who uses a link and signs in again also becomes a referral, if they had none.
+2. **Sign-in.** After a successful sign-in, `app/auth/callback/route.ts` turns the cookie into a row in `affiliate_referrals`. The **first link wins**: a coach is never moved to another affiliate. Only a **new account** counts: one created in the last 15 minutes (the auth user's `created_at`). An existing coach who uses a link and signs in again never becomes a referral. This is best effort and can never block sign-in.
 3. **Payment.** On `invoice.paid`, the Stripe webhook runs a separate best-effort step after its normal handling. It never changes the webhook's answer, and `lib/billing/webhookSync.ts` is untouched. A commission is recorded when all of these hold:
    - the payer is a referral;
    - the affiliate is active;

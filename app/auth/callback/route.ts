@@ -3,7 +3,7 @@ import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
 import { safeRedirectPath } from '@/lib/billing/checkoutIntent';
 import { createSupabaseServiceClient } from '@/lib/supabase/service';
-import { attributeReferral } from '@/lib/affiliates.server';
+import { attributeNewSignup } from '@/lib/affiliates.server';
 import { REF_COOKIE } from '@/lib/affiliates';
 
 export async function GET(request: Request) {
@@ -43,12 +43,12 @@ export async function GET(request: Request) {
     const exchanged = await supabase.auth.exchangeCodeForSession(code);
 
     // Affiliate attribution (lib/affiliates.server.ts): the am_ref cookie set by
-    // /r/<code> makes this coach that affiliate's referral, first link wins.
-    // Best effort — it must NEVER break sign-in.
+    // /r/<code> makes a NEW account (created in the last 15 minutes) that
+    // affiliate's referral, first link wins; an existing account signing in
+    // again never becomes one. Best effort — it must NEVER break sign-in.
     try {
       const ref = cookieStore.get(REF_COOKIE)?.value;
-      const userId = exchanged?.data?.user?.id;
-      if (ref && userId) await attributeReferral(createSupabaseServiceClient(), userId, ref);
+      if (ref) await attributeNewSignup(createSupabaseServiceClient(), exchanged?.data?.user, ref);
     } catch (e) {
       console.warn('[affiliates] signup attribution skipped:', e instanceof Error ? e.message : e);
     }
