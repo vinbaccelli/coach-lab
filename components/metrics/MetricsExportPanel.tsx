@@ -7,7 +7,8 @@ import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, type ExportQuality,
 } from '@/lib/exportEstimate';
 import {
-  drawingsExportStatus, includesLabel, skeletonExportStatus, trackedFraction,
+  analysisProgress, drawingsExportStatus, includesLabel, parsePassProgress, skeletonExportStatus, trackedFraction,
+  untrackedIntervals,
 } from '@/lib/exportOverlay';
 import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
 
@@ -16,7 +17,11 @@ import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
  * with the LIVE drawings and the AI-tracked skeleton drawn on when the coach
  * includes them (Canvas drawExportOverlay, called from the export loop). AI
  * measurement overlays, the data column and snapshot drawings are never
- * exported; the skeleton only where the range is AI-tracked (the screen's rule).
+ * exported. The skeleton is drawn from the stored AI Track: when the coach
+ * includes it and part of the range is untracked, Export first runs the
+ * existing AI Track pass (runPrecisionPass, 'fast', unchanged) on the untracked
+ * parts only, with its own progress and Cancel, then renders. No live pose runs
+ * while rendering.
  *
  * Opening does no work: no seek of the analysis video, no frame capture, no
  * snapshot writes. Snapshots and angle data are not needed and never touched;
@@ -49,8 +54,14 @@ export interface MetricsExportPanelProps {
    * export is video only and the toggles are hidden.
    */
   overlay?: {
-    /** The coach's skeleton switches are on (what the screen requires to draw it). */
-    skeletonOn: boolean;
+    /** An AI Track started from the toolbar is running (the export must wait for it). */
+    trackRunning: boolean;
+    /** The pass's own status line (page processingStatus): "AI-tracking… 42% (…)". */
+    passStatus: string | null;
+    /** Runs the existing AI Track pass on [start, end] ('fast'); resolves to the poses kept (0 if cancelled). */
+    analyzeRange: (start: number, end: number) => Promise<number>;
+    /** Stops a running analyzeRange pass. */
+    cancelAnalysis: () => void;
     /** SNAPSHOT mode: the canvas drawings belong to a snapshot and are not exported. */
     snapshotMode: boolean;
     getBakedPoseAt: CanvasHandle['getBakedPoseAt'];
@@ -59,7 +70,7 @@ export interface MetricsExportPanelProps {
   } | null;
 }
 
-type Phase = 'idle' | 'reading' | 'exporting' | 'done' | 'error';
+type Phase = 'idle' | 'analyzing' | 'reading' | 'exporting' | 'done' | 'error';
 
 const NO_SNAPSHOT_MESSAGE = 'Create a snapshot first (Create Snapshot or AI Detect)';
 /** No render progress for this long (tab visible) → show the stalled state. */
@@ -90,10 +101,15 @@ export default function MetricsExportPanel({
   const pctRef = useRef(0);
   const resultUrlRef = useRef<string | null>(null);
   const restoreRef = useRef<(() => void) | null>(null);
+  // The export's own skeleton analysis while it runs (untracked parts, current one, start time).
+  const analysisRef = useRef<{ intervals: Array<{ start: number; end: number }>; index: number; startedAt: number } | null>(null);
+  // Latest cancelAnalysis, for the unmount cleanup (which only sees the first render).
+  const cancelAnalysisRef = useRef<(() => void) | null>(null);
+  cancelAnalysisRef.current = overlay?.cancelAnalysis ?? null;
   const markCancelled = useCallback(() => { setPhase('idle'); setNotice('Export cancelled.'); }, []);
 
   const blockedReason = exportBlockedReason ?? (videoSrc ? null : 'Load a video first.');
-  const busy = phase === 'reading' || phase === 'exporting';
+  const busy = phase === 'analyzing' || phase === 'reading' || phase === 'exporting';
 
   // Open: pause the analysis video (no seek, nothing else). Pausing here, not
   // at export start, keeps the one pose detection a pause triggers out of the
@@ -103,6 +119,7 @@ export default function MetricsExportPanel({
   // Close/unmount: stop any export and free the result's object URL.
   useEffect(() => () => {
     abortRef.current?.abort();
+    if (analysisRef.current) { analysisRef.current = null; cancelAnalysisRef.current?.(); }
     if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
     resultUrlRef.current = null;
   }, []);
@@ -179,18 +196,39 @@ export default function MetricsExportPanel({
     () => (overlay ? overlay.drawExportOverlay(null, 0, 1, 1, { skeleton: false, drawings: false }).drawingCount : 0),
     [overlay],
   );
+  // Bumped after the export's own analysis so the coverage is read again.
+  const [trackVersion, setTrackVersion] = useState(0);
   const trackedFrac = useMemo(() => {
     if (!overlay || !meta || !(range.end > range.start)) return 0;
     if (overlay.isRangeBaked(range.start, range.end)) return 1;
     return trackedFraction(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null);
-  }, [overlay, meta, range.start, range.end]);
-  const skStatus = skeletonExportStatus(Boolean(overlay?.skeletonOn), trackedFrac);
+  }, [overlay, meta, range.start, range.end, trackVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Our own analysis also runs as an AI Track: only someone else's pass makes it wait.
+  const skStatus = skeletonExportStatus(Boolean(overlay?.trackRunning) && phase !== 'analyzing', trackedFrac);
   const drStatus = drawingsExportStatus(Boolean(overlay?.snapshotMode), drawingCount);
-  const skAvailable = skStatus.state === 'ready' || skStatus.state === 'partial';
+  const skAvailable = skStatus.state !== 'busy';
   const drAvailable = drStatus.state === 'ready';
-  const [skeletonWanted, setSkeletonWanted] = useState(true);
+  // Unset until the coach flips it: on by default when some of the range is tracked.
+  const [skeletonChoice, setSkeletonChoice] = useState<boolean | null>(null);
+  const skeletonWanted = skeletonChoice ?? trackedFrac > 0;
+  const setSkeletonWanted = (v: boolean) => setSkeletonChoice(v);
   const [drawingsWanted, setDrawingsWanted] = useState(true);
   const includeSkeleton = Boolean(overlay) && skAvailable && skeletonWanted;
+  const needsAnalysis = includeSkeleton && skStatus.state === 'analyze';
+
+  // Analysis progress (0..1 over all untracked parts) and a remaining-time
+  // estimate MEASURED from this run's own progress (shown once it is reliable).
+  const [analysis, setAnalysis] = useState<{ frac: number; leftSec: number | null }>({ frac: 0, leftSec: null });
+  const passStatus = overlay?.passStatus ?? null;
+  useEffect(() => {
+    const a = analysisRef.current;
+    if (phase !== 'analyzing' || !a) return;
+    const frac = analysisProgress(a.intervals, a.index, parsePassProgress(passStatus) ?? 0);
+    const elapsed = (performance.now() - a.startedAt) / 1000;
+    const leftSec = frac >= 0.05 && elapsed >= 3 ? (elapsed / frac) * (1 - frac) : null;
+    lastProgressAtRef.current = performance.now();
+    setAnalysis({ frac, leftSec });
+  }, [passStatus, phase]);
   const includeDrawings = Boolean(overlay) && drAvailable && drawingsWanted;
 
   const onTrimChange = useCallback((next: { start: number; end: number }, moved: 'start' | 'end') => {
@@ -261,6 +299,30 @@ export default function MetricsExportPanel({
     setPct(0);
     lastProgressAtRef.current = performance.now();
     try {
+      // ── 1. Skeleton analysis (only the untracked parts of the range) ──
+      // The existing AI Track pass, unchanged ('fast'). It seeks the analysis
+      // video, which is paused and covered by this panel; the preview is unloaded.
+      if (overlay && needsAnalysis) {
+        const intervals = untrackedIntervals(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null);
+        analysisRef.current = { intervals, index: 0, startedAt: performance.now() };
+        setAnalysis({ frac: 0, leftSec: null });
+        setPhase('analyzing');
+        setStage('Analyzing skeleton…');
+        for (let i = 0; i < intervals.length; i++) {
+          analysisRef.current = { ...analysisRef.current, index: i };
+          await overlay.analyzeRange(intervals[i].start, intervals[i].end);
+          if (ac.signal.aborted) return;
+        }
+        analysisRef.current = null;
+        setTrackVersion((v) => v + 1);
+        const covered = overlay.isRangeBaked(range.start, range.end)
+          ? 1 : trackedFraction(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null);
+        if (covered <= 0) {
+          setPhase('error');
+          setError('The skeleton analysis found no player in this range. Turn Skeleton off to export without it, or run AI Track from the Skeleton menu.');
+          return;
+        }
+      }
       setPhase('reading');
       setStage('Reading video…');
       const src = await (await fetch(videoSrc, { signal: ac.signal })).blob();
@@ -318,17 +380,18 @@ export default function MetricsExportPanel({
       restorePreview();
       if (restoreRef.current === restorePreview) restoreRef.current = null;
     }
-  }, [videoSrc, meta, selected, busy, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings]);
+  }, [videoSrc, meta, selected, busy, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis]);
 
   const cancelExport = useCallback(() => {
     const ac = abortRef.current;
     if (!ac) return;
     abortRef.current = null;
     ac.abort();
+    if (analysisRef.current) { analysisRef.current = null; overlay?.cancelAnalysis(); }
     setStage(null);
     markCancelled();
     restoreRef.current?.();
-  }, [markCancelled]);
+  }, [markCancelled, overlay]);
 
   const download = () => {
     if (!result) return;
@@ -357,7 +420,11 @@ export default function MetricsExportPanel({
     onSnapshotReport();
   };
 
-  const close = useCallback(() => { abortRef.current?.abort(); onClose(); }, [onClose]);
+  const close = useCallback(() => {
+    abortRef.current?.abort();
+    if (analysisRef.current) { analysisRef.current = null; overlay?.cancelAnalysis(); }
+    onClose();
+  }, [onClose, overlay]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) close(); };
     window.addEventListener('keydown', onKey);
@@ -376,9 +443,17 @@ export default function MetricsExportPanel({
 
   let status: string | null = null;
   if (busy) {
-    if (tabHidden) status = 'Paused — this tab is in the background. Come back to continue, or Cancel.';
+    if (tabHidden) {
+      status = phase === 'analyzing'
+        ? 'The skeleton analysis slows down while this tab is in the background. Come back to continue, or Cancel.'
+        : 'Paused — this tab is in the background. Come back to continue, or Cancel.';
+    }
     else if (stalled) status = 'Waiting for the video… the export has not moved for a few seconds. You can Cancel.';
-    else status = stage ?? 'Exporting…';
+    else if (phase === 'analyzing') {
+      const left = analysis.leftSec;
+      status = `Analyzing skeleton… ${Math.round(analysis.frac * 100)}%`
+        + (left != null ? ` · about ${left >= 90 ? `${Math.round(left / 60)} min` : `${Math.max(5, Math.round(left / 5) * 5)} s`} left` : '');
+    } else status = stage ?? 'Exporting…';
   }
 
   return (
@@ -483,11 +558,6 @@ export default function MetricsExportPanel({
                     </div>
                   );
                 })}
-                {skStatus.state === 'partial' || skStatus.state === 'none' ? (
-                  <span data-testid="export-aitrack-hint" style={muted}>
-                    To include the skeleton everywhere, close this panel and run Metrics → Skeleton → AI Track on the whole video, or on a Metrics section that covers this range.
-                  </span>
-                ) : null}
               </section>
             ) : null}
 
@@ -537,15 +607,27 @@ export default function MetricsExportPanel({
 
             {busy ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div aria-label="Export progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
-                  style={{ height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
-                  <div style={{ width: `${phase === 'reading' ? 0 : pct}%`, height: '100%', background: 'var(--cl-accent)' }} />
-                </div>
+                {phase === 'analyzing' ? (
+                  <div aria-label="Skeleton analysis progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(analysis.frac * 100)}
+                    data-testid="analysis-progress"
+                    style={{ height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.round(analysis.frac * 100)}%`, height: '100%', background: '#F5B800' }} />
+                  </div>
+                ) : (
+                  <div aria-label="Export progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+                    style={{ height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
+                    <div style={{ width: `${phase === 'reading' ? 0 : pct}%`, height: '100%', background: 'var(--cl-accent)' }} />
+                  </div>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <span data-testid="export-status" style={{ fontSize: 13, flex: 1, minWidth: 0 }}>{status}{phase === 'exporting' && !tabHidden ? ` ${pct}%` : ''}</span>
                   <button type="button" style={btn(false)} onClick={cancelExport}>Cancel</button>
                 </div>
-                <span style={muted}>Exports in real time: a {formatClock(spanSec)} range takes about that long.</span>
+                <span style={muted}>
+                  {phase === 'analyzing'
+                    ? 'Step 1 of 2: analyzing the skeleton. Then the video is exported in real time.'
+                    : `Exports in real time: a ${formatClock(spanSec)} range takes about that long.`}
+                </span>
               </div>
             ) : result ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -566,8 +648,13 @@ export default function MetricsExportPanel({
                   disabled={!selected || selected.disabled}
                   onClick={() => { void startExport(); }}
                 >
-                  Export
+                  {needsAnalysis ? 'Analyze skeleton + export' : 'Export'}
                 </button>
+                {needsAnalysis ? (
+                  <span data-testid="export-analysis-note" style={muted}>
+                    Skeleton will be analyzed first, this adds time. Then the {formatClock(spanSec)} range is exported in real time.
+                  </span>
+                ) : null}
                 {error ? <span style={{ fontSize: 13, color: 'var(--cl-destructive-text)' }}>{error}</span> : null}
                 {notice ? <span style={muted}>{notice}</span> : null}
               </div>

@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  drawingsExportStatus, includesLabel, mapPoint, overlayTransform, skeletonExportStatus, trackedFraction,
+  analysisProgress, drawingsExportStatus, includesLabel, mapPoint, overlayTransform, parsePassProgress, skeletonExportStatus,
+  trackedFraction, untrackedIntervals,
 } from '@/lib/exportOverlay';
 
 const close = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} ≈ ${b}`);
@@ -61,14 +62,67 @@ test('trackedFraction caps the number of samples on a long range', () => {
   assert.equal(calls, 20);
 });
 
-test('skeleton status lines', () => {
-  assert.deepEqual(skeletonExportStatus(false, 1), { state: 'off', text: 'Turn on Skeleton to include it.' });
-  assert.deepEqual(skeletonExportStatus(true, 1), { state: 'ready', text: 'Ready.' });
-  assert.deepEqual(skeletonExportStatus(true, 0), { state: 'none', text: 'No AI Track on this range, so no skeleton in the video.' });
-  assert.equal(skeletonExportStatus(true, 0.42).text, 'Skeleton covers 42% of this range.');
+test('skeleton switch is never dead: untracked or partly tracked ranges are analyzed first', () => {
+  assert.deepEqual(skeletonExportStatus(false, 1), { state: 'ready', text: 'Skeleton ready.' });
+  assert.deepEqual(skeletonExportStatus(false, 0), {
+    state: 'analyze', text: 'Not analyzed yet. The skeleton will be analyzed first when you export, which adds time.',
+  });
+  assert.equal(skeletonExportStatus(false, 0.42).text, 'Skeleton covers 42% of this range. The rest will be analyzed first when you export, which adds time.');
+  assert.equal(skeletonExportStatus(false, 0.42).state, 'analyze');
   // Partial never reads 0% or 100%.
-  assert.equal(skeletonExportStatus(true, 0.001).text, 'Skeleton covers 1% of this range.');
-  assert.equal(skeletonExportStatus(true, 0.996).text, 'Skeleton covers 99% of this range.');
+  assert.match(skeletonExportStatus(false, 0.001).text, /covers 1% /);
+  assert.match(skeletonExportStatus(false, 0.996).text, /covers 99% /);
+});
+
+test('skeleton switch waits only for an AI Track already running', () => {
+  assert.deepEqual(skeletonExportStatus(true, 1), { state: 'busy', text: 'AI Track is running. Wait for it to finish, then export.' });
+  assert.equal(skeletonExportStatus(true, 0).state, 'busy');
+});
+
+test('untrackedIntervals: nothing tracked → the whole range (inset)', () => {
+  const r = untrackedIntervals(2, 6, () => false);
+  assert.equal(r.length, 1);
+  close(r[0].start, 2.05, 1e-9); close(r[0].end, 5.95, 1e-9);
+});
+
+test('untrackedIntervals: fully tracked → nothing to analyze', () => {
+  assert.deepEqual(untrackedIntervals(0, 9, () => true), []);
+});
+
+test('untrackedIntervals: gaps between tracks stay clear of the neighbouring tracks', () => {
+  // A track [0, 3] and a track [6, 9]; the look-up reaches 0.1 s past each.
+  const tracked = (t: number) => (t >= -0.1 && t <= 3.1) || (t >= 5.9 && t <= 9.1);
+  const r = untrackedIntervals(0, 9, tracked);
+  assert.equal(r.length, 1);
+  // finishBakeCapture drops tracks with end >= start - 0.05 (or start <= end + 0.05):
+  assert.ok(3 < r[0].start - 0.05, `left track kept (gap starts ${r[0].start})`);
+  assert.ok(6 > r[0].end + 0.05, `right track kept (gap ends ${r[0].end})`);
+  // ...and the 0.1 s look-up reach still covers the inset on both sides.
+  assert.ok(r[0].start - 0.1 <= 3.1 + 1e-9);
+  assert.ok(r[0].end + 0.1 >= 5.9 - 1e-9);
+});
+
+test('untrackedIntervals: tiny gaps are skipped, bad ranges give nothing', () => {
+  const tracked = (t: number) => !(t > 4.0 && t < 4.15);
+  assert.deepEqual(untrackedIntervals(0, 9, tracked), []);
+  assert.deepEqual(untrackedIntervals(5, 5, () => false), []);
+  assert.deepEqual(untrackedIntervals(5, 4, () => false), []);
+});
+
+test('parsePassProgress reads the AI Track pass status line', () => {
+  assert.equal(parsePassProgress('AI-tracking… 42% (0.5× · real feet)'), 0.42);
+  assert.equal(parsePassProgress('AI-tracking… 100% (0.5×)'), 1);
+  assert.equal(parsePassProgress('Loading precision tracking model…'), null);
+  assert.equal(parsePassProgress(null), null);
+});
+
+test('analysisProgress spans several intervals by their length', () => {
+  const iv = [{ start: 0, end: 2 }, { start: 5, end: 11 }];
+  assert.equal(analysisProgress(iv, 0, 0), 0);
+  assert.equal(analysisProgress(iv, 0, 1), 0.25);
+  assert.equal(analysisProgress(iv, 1, 0.5), 0.625);
+  assert.equal(analysisProgress(iv, 2, 0), 1);
+  assert.equal(analysisProgress([], 0, 0.5), 0);
 });
 
 test('drawings status lines', () => {

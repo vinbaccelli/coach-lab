@@ -54,16 +54,28 @@ the file will contain ("Includes: video + skeleton + drawings").
   drawings on the analysis canvas. In SNAPSHOT mode the canvas drawings belong
   to the snapshot and are not exported ("Snapshot drawings aren't exported.
   Use Snapshot report."). With none: "No drawings on the video".
-- **Skeleton** is the AI Track pose for each frame's own time, drawn only where
-  the range is AI-tracked — the screen's rule once a track exists. Status:
-  "Turn on Skeleton to include it." / "Ready." / "Skeleton covers X% of this
-  range." / "No AI Track on this range, so no skeleton in the video." The
-  percentage samples the stored track (`lib/exportOverlay.ts trackedFraction`).
-- When the range is not fully tracked the panel says how to fix it: run
-  Metrics → Skeleton → AI Track on the whole video or on a Metrics section that
-  covers the range. There is no "Run AI Track" button in the panel: the
-  existing AI Track flow (`handlePrecisionTrack`) only tracks the whole video
-  or the Metrics section, so tracking the export range would mean changing it.
+- **Skeleton** is the AI Track pose for each frame's own time (the stored
+  track; nothing is detected while rendering). The switch is never dead and
+  does not depend on the on-screen Skeleton switch:
+  - range fully tracked → "Skeleton ready." — Export renders straight away;
+  - range untracked or partly tracked → "Not analyzed yet…" / "Skeleton covers
+    X% of this range…", and Export becomes **Analyze skeleton + export** with
+    the note "Skeleton will be analyzed first, this adds time."
+  - an AI Track already running from the toolbar → "AI Track is running. Wait
+    for it to finish, then export." (the only state that disables it).
+  It is on by default when part of the range is tracked, off otherwise.
+- **Analysis before export.** The untracked parts of the range
+  (`lib/exportOverlay.ts untrackedIntervals`) are tracked with the existing AI
+  Track pass, unchanged: `runPrecisionPass(start, end, 'fast')` (wired in
+  `app/analysis/page.tsx`, with the toolbar's running/ready bookkeeping). Each
+  part is pulled 0.05 s in from its neighbours so the pass never replaces a
+  track the coach already made (it drops tracks within 0.05 s of its range).
+  The panel shows "Analyzing skeleton… X%" from the pass's own progress, and a
+  remaining-time estimate measured from this run's progress (after 5% and 3 s;
+  no estimate is shown before Export). Cancel stops the pass (no track is kept)
+  and returns to idle at once. If no player is found, the export stops and says
+  so. Then the video renders exactly as before. The UI stutters during the
+  analysis (KNOWN_ISSUES 050).
 - **Not exported in V1:** AI measurement overlays, the data column, the ball
   trail, the zoom (the file is always the full, unzoomed frame).
 
@@ -76,8 +88,8 @@ draws with the screen's own functions — `drawStroke`, `drawAngleMeas`,
 onto the whole output frame (`lib/exportOverlay.ts overlayTransform`), so
 drawings keep their place and proportion at 720p, 1080p and Original. The video
 box, strokes and angles are captured once at export start, so a resize during
-the export cannot move them. No pose work runs during the export: the skeleton
-is read from the stored track only.
+the export cannot move them. No pose work runs while rendering: the skeleton is
+read from the stored track only (the analysis step, when needed, runs before).
 
 The Recording Hub calls `exportEditedVideo` without the new options, which
 keeps its render exactly as before (full size, 5 Mbps, crf 23 on MP4

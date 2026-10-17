@@ -1591,3 +1591,50 @@ baked pose when there is one). Touches skeleton/measurement display: needs
 approval and a runtime repro first. This is why the export leaves them out.
 
 **Severity:** moderate if confirmed.
+
+## 050 — The export's skeleton analysis (AI Track pass) freezes the UI in bursts — OPEN (pre-existing pass)
+
+**Symptom.** While the Metrics export analyzes the skeleton (the existing AI
+Track pass), the page stutters: in the test browser (4 cores, no GPU) 57–75 long
+tasks per analysis, the longest 1.4–1.5 s, and one ~6 s gap at the start (model
+load). Rendering afterwards is smooth (0–1 long tasks). Cancel still answered
+in 66 ms (it is checked between frames).
+
+**Root cause.** `runPrecisionPass` (`app/analysis/page.tsx`) runs MediaPipe
+(`lib/mediapipePose.ts detectPosePrecise`) on the MAIN thread, one frame at a
+time; the same happens when AI Track is started from the toolbar. Its
+internals are frozen, so the export reuses it as is.
+
+**Proposed fix.** Run the precision detection off the main thread (a worker
+for the precise pass), or yield to the UI between frames. Both change
+`runPrecisionPass` internals or the pose-worker architecture: needs approval.
+Measure on a real iPhone first (GPU delegate) — the bursts may be much shorter.
+
+**Severity:** moderate (UI stutters during the analysis step only).
+
+## 051 — Phone: "the app zoomed in after drawing and would not come back" — NOT REPRODUCED
+
+**Reported.** Vin, real device, while testing PR #93: after drawing on the
+canvas the app was zoomed in and did not return, so the export could not be
+reached.
+
+**What was checked (Chromium, 375 px touch, main and PR #93 alike).** Line,
+angle (3 quick taps), text, pen and a double-tap on the canvas: no zoom
+(`visualViewport.scale` 1, video transform unchanged). A two-finger pinch on the
+canvas zooms the canvas — a 96 px finger spread jumps straight to the 500%
+maximum — and the ⌂ button (title "Reset zoom & pan") brings it back on both.
+
+**Candidates (not confirmed).** (1) A second finger or palm during a draw
+stroke triggers the canvas pinch zoom (`Canvas.tsx` touch pinch →
+`applyZoomAtRef`); the way back is ⌂, at the right edge of the video, which is
+easy to miss. (2) iOS Safari's PAGE zoom (focus on a text field under 16 px —
+the Text tool's box uses the chosen text size; default 24 px — or a
+double-tap on an element without `touch-action: manipulation`): the canvas
+swallows pinch gestures (`touch-action: none`), so there is no way to pinch the
+page back out. Playwright cannot emulate iOS page zoom.
+
+**Needed to decide.** Device + browser, and whether the whole page (toolbar too)
+was zoomed or only the video with a "%" label in its corner. Fixes would be in
+Canvas zoom code or `app/layout.tsx` viewport — outside PR #93's files.
+
+**Severity:** high if (2) on iPhone (blocks the export).

@@ -9726,8 +9726,23 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           onClose={() => setMetricsExportOpen(false)}
           isMobile={isMobile}
           overlay={{
-            // Same condition the analysis canvas uses to draw the skeleton (skeletonDrawEnabled for A).
-            skeletonOn: skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused,
+            trackRunning: precisionTrackState === 'running',
+            passStatus: processingStatus,
+            // The export's skeleton analysis IS the existing AI Track pass, unchanged
+            // ('fast', any range), with the same running/ready bookkeeping as the toolbar.
+            analyzeRange: async (a, b) => {
+              precisionAbortRef.current = false;
+              setPrecisionTrackState('running');
+              try {
+                const kept = await runPrecisionPass(a, b, 'fast');
+                if (precisionAbortRef.current) { setProcessingStatus('Skeleton analysis cancelled'); return 0; }
+                setProcessingStatus(kept >= 2 ? `Skeleton analyzed for the export — ${kept} frame-exact poses.` : 'Skeleton analysis found no player in that range');
+                return kept;
+              } finally {
+                setPrecisionTrackState(canvasRef.current?.getBakedTrackInfo?.() ? 'ready' : 'idle');
+              }
+            },
+            cancelAnalysis: () => { precisionAbortRef.current = true; },
             snapshotMode: analysisMode.kind === 'snapshot',
             getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,
             isRangeBaked: (a, b) => canvasRef.current?.isRangeBaked?.(a, b) ?? false,

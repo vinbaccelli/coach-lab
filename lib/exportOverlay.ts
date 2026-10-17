@@ -48,15 +48,68 @@ export function trackedFraction(
   return hit / n;
 }
 
-export type SkeletonExportState = 'off' | 'ready' | 'partial' | 'none';
+export type SkeletonExportState = 'ready' | 'analyze' | 'busy';
 
-/** The skeleton toggle's state and status line. */
-export function skeletonExportStatus(skeletonOn: boolean, fraction: number): { state: SkeletonExportState; text: string } {
-  if (!skeletonOn) return { state: 'off', text: 'Turn on Skeleton to include it.' };
-  if (fraction >= 0.999) return { state: 'ready', text: 'Ready.' };
-  if (fraction <= 0) return { state: 'none', text: 'No AI Track on this range, so no skeleton in the video.' };
+/**
+ * The skeleton switch's state and status line. It is never a dead switch: the
+ * skeleton can always be included (the coach's on-screen Skeleton switch does
+ * not gate the export). An untracked part of the range is analyzed first, with
+ * the existing AI Track pass, when the coach exports — said here before Export.
+ * Only an AI Track already running from the toolbar makes it wait.
+ */
+export function skeletonExportStatus(trackRunning: boolean, fraction: number): { state: SkeletonExportState; text: string } {
+  if (trackRunning) return { state: 'busy', text: 'AI Track is running. Wait for it to finish, then export.' };
+  if (fraction >= 0.999) return { state: 'ready', text: 'Skeleton ready.' };
+  if (fraction <= 0) return { state: 'analyze', text: 'Not analyzed yet. The skeleton will be analyzed first when you export, which adds time.' };
   const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
-  return { state: 'partial', text: `Skeleton covers ${pct}% of this range.` };
+  return { state: 'analyze', text: `Skeleton covers ${pct}% of this range. The rest will be analyzed first when you export, which adds time.` };
+}
+
+/**
+ * The parts of [start, end] with no AI Track, to analyze before the export.
+ * `isTracked` is Canvas `getBakedPoseAt(t) !== null`, which already reaches
+ * 0.1 s past each tracked section. Each interval is pulled in by `inset` so the
+ * existing pass (finishBakeCapture) does not replace the coach's neighbouring
+ * tracks — it drops any track within 0.05 s of the new range. The 0.1 s
+ * look-up reach bridges the inset. Intervals shorter than `minLen` are skipped.
+ */
+export function untrackedIntervals(
+  start: number,
+  end: number,
+  isTracked: (t: number) => boolean,
+  step = 0.05,
+  minLen = 0.2,
+  inset = 0.05,
+): Array<{ start: number; end: number }> {
+  if (!(end > start) || !Number.isFinite(end - start)) return [];
+  const raw: Array<{ start: number; end: number }> = [];
+  let openAt: number | null = null;
+  const n = Math.ceil((end - start) / step);
+  for (let i = 0; i <= n; i++) {
+    const t = Math.min(end, start + i * step);
+    const tracked = isTracked(t);
+    if (!tracked && openAt === null) openAt = t;
+    if (tracked && openAt !== null) { raw.push({ start: openAt, end: t }); openAt = null; }
+  }
+  if (openAt !== null) raw.push({ start: openAt, end });
+  return raw
+    .map((r) => ({ start: r.start + inset, end: r.end - inset }))
+    .filter((r) => r.end - r.start >= minLen);
+}
+
+/** The pass's own progress line ("AI-tracking… 42% (…)") as 0..1, or null. */
+export function parsePassProgress(statusText: string | null | undefined): number | null {
+  const m = typeof statusText === 'string' ? statusText.match(/AI-tracking…\s*(\d{1,3})%/) : null;
+  return m ? Math.min(1, Number(m[1]) / 100) : null;
+}
+
+/** Overall analysis progress across several intervals: seconds done / seconds total. */
+export function analysisProgress(intervals: Array<{ start: number; end: number }>, index: number, current: number): number {
+  const total = intervals.reduce((s, r) => s + (r.end - r.start), 0);
+  if (!(total > 0)) return 0;
+  const done = intervals.slice(0, index).reduce((s, r) => s + (r.end - r.start), 0);
+  const cur = intervals[index] ? (intervals[index].end - intervals[index].start) * Math.max(0, Math.min(1, current)) : 0;
+  return Math.max(0, Math.min(1, (done + cur) / total));
 }
 
 export type DrawingsExportState = 'ready' | 'none' | 'snapshot';

@@ -3804,13 +3804,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             for (const m of frozen.angles as AngleMeas[]) drawAngleMeas(ctx, m);
           }
           // Skeleton: only the AI-tracked pose for this media time (the screen's
-          // track-scope rule — untracked time draws nothing), only while the
-          // coach's own skeleton switches are on, never mid-bake. No live pose,
-          // no pose worker: lookupBakedPose is a pure read of the stored track.
-          if (
-            opts.skeleton && skeletonEnabledRef.current && skeletonDrawEnabledRef.current &&
-            !bakingRef.current && frozen.videoW > 0 && frozen.videoH > 0
-          ) {
+          // track-scope rule — untracked time draws nothing), never mid-bake.
+          // Included on request whatever the on-screen Skeleton switch says (the
+          // panel decides); the display options still follow the screen. No live
+          // pose, no pose worker: lookupBakedPose is a pure read of the stored track.
+          if (opts.skeleton && !bakingRef.current && frozen.videoW > 0 && frozen.videoH > 0) {
             const kps = lookupBakedPose(mediaTime);
             if (kps && kps.length) {
               ctx.translate(dx, dy);
