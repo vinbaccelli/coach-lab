@@ -1,14 +1,15 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import TrimRangeBar, { formatClock } from '@/components/TrimRangeBar';
 import { exportEditedVideo } from '@/lib/cropExport';
 import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, type ExportQuality,
 } from '@/lib/exportEstimate';
 import {
-  ANALYSIS_FAILED_TEXT, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, drawingsExportStatus, includesLabel,
-  parsePassProgress, skeletonExportStatus, trackedFraction, untrackedIntervals,
+  analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, dockAnalysisBar, drawingsExportStatus,
+  FOLLOW_STEP_SEC, includesLabel, meanAbsDiff, parsePassProgress, poseRegion, poseShift, skeletonExportStatus,
+  skeletonFollowsVideo, toGrey, trackedFraction, untrackedIntervals, type FollowStep, type Rect,
 } from '@/lib/exportOverlay';
 import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
 
@@ -67,6 +68,13 @@ export interface MetricsExportPanelProps {
     getBakedPoseAt: CanvasHandle['getBakedPoseAt'];
     isRangeBaked: CanvasHandle['isRangeBaked'];
     drawExportOverlay: CanvasHandle['drawExportOverlay'];
+    /**
+     * The analysis video's picture on screen (CSS px), or null. While the
+     * skeleton is analyzed the panel shrinks to a bar docked outside it: the
+     * pass seeks that video, and iOS Safari may not hand the detector fresh
+     * frames of a covered video.
+     */
+    getVideoRect?: () => Rect | null;
   } | null;
 }
 
@@ -266,6 +274,14 @@ export default function MetricsExportPanel({
     return () => { document.removeEventListener('visibilitychange', onVis); window.clearInterval(iv); };
   }, [busy, phase]);
 
+  /** The skeleton analysis failed a check: say why (with its numbers) and leave the skeleton off. */
+  const failSkeleton = useCallback((text: string) => {
+    setAnalysisFailed(true);
+    setSkeletonChoice(false);
+    setPhase('error');
+    setError(`${text} Skeleton is now off: export again to save the video without it.`);
+  }, []);
+
   // ── Export ───────────────────────────────────────────────────────────────
   const startExport = useCallback(async () => {
     if (!videoSrc || !meta || !selected || selected.disabled || busy) return;
@@ -300,10 +316,14 @@ export default function MetricsExportPanel({
     pctRef.current = 0;
     setPct(0);
     lastProgressAtRef.current = performance.now();
+    // The pre-render check's numbers, repeated if the render check fails later.
+    let analyzed: { check: ReturnType<typeof checkAnalyzedTrack>; kept: number; span: number } | null = null;
     try {
       // ── 1. Skeleton analysis (only the untracked parts of the range) ──
       // The existing AI Track pass, unchanged ('fast'). It seeks the analysis
-      // video, which is paused and covered by this panel; the preview is unloaded.
+      // video; meanwhile this panel is a bar docked outside that video's picture
+      // (phase 'analyzing'), so the video is on screen as with the toolbar's AI
+      // Track. The preview is unloaded.
       if (overlay && needsAnalysis) {
         const intervals = untrackedIntervals(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null);
         analysisRef.current = { intervals, index: 0, startedAt: performance.now() };
@@ -325,19 +345,16 @@ export default function MetricsExportPanel({
           setError('The skeleton analysis found no player in this range. Turn Skeleton off to export without it, or run AI Track from the Skeleton menu.');
           return;
         }
-        // Self-check before rendering: enough poses, and a pose that moves. A
-        // pass that read the same picture on every frame would export a frozen skeleton.
+        // Self-check before rendering: enough poses, a pose that moves, and not
+        // the same pose frame after frame (sampled once per pass frame). A pass
+        // that read the same picture again and again would export a frozen skeleton.
         const span = intervals.reduce((sum, r) => sum + (r.end - r.start), 0);
-        const check = checkAnalyzedTrack(kept, span, analysisSampleTimes(intervals).map((t) => overlay.getBakedPoseAt(t)));
+        const check = checkAnalyzedTrack(kept, span, analysisSampleTimes(intervals, 1 / 30, 3600).map((t) => overlay.getBakedPoseAt(t)));
         if (!check.ok) {
-          setAnalysisFailed(true);
-          setSkeletonChoice(false);
-          setPhase('error');
-          setError(`${ANALYSIS_FAILED_TEXT} (${check.reason === 'static'
-            ? 'the pose did not change from frame to frame'
-            : `${kept} pose${kept === 1 ? '' : 's'} in ${span.toFixed(1)} s`}). Skeleton is now off: export again to save the video without it.`);
+          failSkeleton(analysisFailedText(check, kept, span, null));
           return;
         }
+        analyzed = { check, kept, span };
       }
       setPhase('reading');
       setStage('Reading video…');
@@ -348,10 +365,47 @@ export default function MetricsExportPanel({
       // Overlays: capture the video box, strokes and angles NOW (export start),
       // then reuse that capture for every frame so a resize cannot move them.
       let drawOverlay: ((ctx: CanvasRenderingContext2D, t: number, w: number, h: number) => void) | undefined;
+      // Render-time check (skeleton only): every FOLLOW_STEP_SEC of media time,
+      // compare the picture around the skeleton with the previous step's (same
+      // region) and the skeleton's own move. Read BEFORE the overlay is drawn, so
+      // it is the video frame alone. A skeleton that stays put while the picture
+      // moves stops the export (KNOWN_ISSUES 052).
+      type FollowLast = { kps: NonNullable<ReturnType<CanvasHandle['getBakedPoseAt']>>; region: Rect; grey: Uint8Array };
+      const follow = {
+        steps: [] as FollowStep[],
+        nextAt: -Infinity,
+        last: null as FollowLast | null,
+        verdict: null as { moved: number; still: number } | null,
+      };
       if (overlay && (includeSkeleton || includeDrawings)) {
         const flags = { skeleton: includeSkeleton, drawings: includeDrawings };
         const frozen: ExportOverlayFrozen = overlay.drawExportOverlay(null, range.start, 1, 1, flags);
-        drawOverlay = (ctx, t, w, h) => { overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen }); };
+        const thumb = includeSkeleton ? document.createElement('canvas') : null;
+        if (thumb) { thumb.width = 32; thumb.height = 32; }
+        const tctx = thumb?.getContext('2d', { willReadFrequently: true }) ?? null;
+        const grab = (src: CanvasRenderingContext2D, r: Rect) => {
+          tctx!.drawImage(src.canvas, r.x, r.y, r.w, r.h, 0, 0, 32, 32);
+          return toGrey(tctx!.getImageData(0, 0, 32, 32).data);
+        };
+        const probe = (ctx: CanvasRenderingContext2D, t: number, w: number, h: number) => {
+          if (t < follow.nextAt || follow.verdict || !(frozen.videoW > 0) || !(frozen.videoH > 0)) return;
+          follow.nextAt = t + FOLLOW_STEP_SEC;
+          const kps = overlay.getBakedPoseAt(t);
+          const region = poseRegion(kps, w / frozen.videoW, h / frozen.videoH, w, h);
+          if (!kps || !region) { follow.last = null; return; }
+          const last = follow.last;
+          if (last) {
+            const shift = poseShift(last.kps, kps);
+            if (shift !== null) follow.steps.push({ image: meanAbsDiff(last.grey, grab(ctx, last.region)), pose: shift });
+            const v = skeletonFollowsVideo(follow.steps, 6);
+            if (v.ok === false) { follow.verdict = v; ac.abort(); return; }
+          }
+          follow.last = { kps, region, grey: grab(ctx, region) };
+        };
+        drawOverlay = (ctx, t, w, h) => {
+          if (tctx) { try { probe(ctx, t, w, h); } catch { /* the check must never stop the export */ } }
+          overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen });
+        };
       }
       const res = await exportEditedVideo(src, {
         trim: whole ? null : { start: range.start, end: range.end },
@@ -373,6 +427,15 @@ export default function MetricsExportPanel({
           if (p !== pctRef.current) { pctRef.current = p; setPct(p); }
         },
       });
+      // The render check stopped it, or it finished frozen: no file with a frozen skeleton.
+      const finalFollow = follow.verdict ?? (() => {
+        const v = skeletonFollowsVideo(follow.steps);
+        return v.ok === false ? v : null;
+      })();
+      if (finalFollow && abortRef.current === ac) {
+        failSkeleton(analysisFailedText(analyzed?.check ?? null, analyzed?.kept ?? 0, analyzed?.span ?? 0, finalFollow));
+        return;
+      }
       // Cancelled (or closed): the UI was already reset by cancelExport.
       if (ac.signal.aborted) return;
       if (res.ok) {
@@ -396,7 +459,7 @@ export default function MetricsExportPanel({
       restorePreview();
       if (restoreRef.current === restorePreview) restoreRef.current = null;
     }
-  }, [videoSrc, meta, selected, busy, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis]);
+  }, [videoSrc, meta, selected, busy, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton]);
 
   const cancelExport = useCallback(() => {
     const ac = abortRef.current;
@@ -457,6 +520,30 @@ export default function MetricsExportPanel({
   });
   const muted: React.CSSProperties = { fontSize: 12, color: 'rgba(255,255,255,0.7)' };
 
+  // ── Analysis: the panel collapses to a bar docked outside the video's picture ──
+  const collapsed = phase === 'analyzing';
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const getVideoRectRef = useRef(overlay?.getVideoRect);
+  getVideoRectRef.current = overlay?.getVideoRect;
+  const [dock, setDock] = useState<ReturnType<typeof dockAnalysisBar> | null>(null);
+  // No room for the full bar outside the picture: drop its note (and stay compact, so it cannot flip back).
+  const [barCompact, setBarCompact] = useState(false);
+  useEffect(() => { if (dock && dock.overlap > 0) setBarCompact(true); }, [dock]);
+  useLayoutEffect(() => {
+    if (!collapsed) { setDock(null); setBarCompact(false); return; }
+    const place = () => {
+      const next = dockAnalysisBar({ w: window.innerWidth, h: window.innerHeight }, getVideoRectRef.current?.() ?? null, barRef.current?.offsetHeight || 110);
+      setDock((d) => (d && d.left === next.left && d.top === next.top && d.width === next.width ? d : next));
+    };
+    place();
+    const ro = typeof ResizeObserver !== 'undefined' && barRef.current ? new ResizeObserver(place) : null;
+    if (ro && barRef.current) ro.observe(barRef.current);
+    window.addEventListener('resize', place);
+    // The page can move the video under the bar (layout, zoom): follow it.
+    const iv = window.setInterval(place, 1000);
+    return () => { ro?.disconnect(); window.removeEventListener('resize', place); window.clearInterval(iv); };
+  }, [collapsed]);
+
   let status: string | null = null;
   if (busy) {
     if (tabHidden) {
@@ -472,15 +559,51 @@ export default function MetricsExportPanel({
     } else status = stage ?? 'Exporting…';
   }
 
+  const analysisBar = collapsed ? (
+    <div
+      ref={barRef}
+      role="region"
+      aria-label="Skeleton analysis"
+      data-testid="analysis-bar"
+      data-dock-side={dock?.side}
+      data-dock-overlap={dock?.overlap}
+      data-compact={barCompact || undefined}
+      style={{
+        position: 'fixed', zIndex: 10050, left: dock?.left ?? 8, top: dock?.top ?? 8, width: dock?.width ?? 'calc(100% - 16px)',
+        // Hidden until placed, and for the one layout before it turns compact.
+        visibility: dock && !(dock.overlap > 0 && !barCompact) ? 'visible' : 'hidden', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 12,
+        background: 'rgba(18,18,22,0.96)', border: '1px solid rgba(255,255,255,0.14)', boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
+        color: 'var(--cl-text-on-fill)', display: 'flex', flexDirection: 'column', gap: 8,
+      }}
+    >
+      <div aria-label="Skeleton analysis progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(analysis.frac * 100)}
+        data-testid="analysis-progress"
+        style={{ height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.round(analysis.frac * 100)}%`, height: '100%', background: '#F5B800' }} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span data-testid="export-status" style={{ fontSize: 13, flex: 1, minWidth: 0 }}>{status}</span>
+        <button type="button" style={btn(false)} onClick={cancelExport}>Cancel</button>
+      </div>
+      {barCompact ? null : (
+        <span style={muted}>Step 1 of 2: the video stays in view while its skeleton is analyzed. Then it is exported in real time.</span>
+      )}
+    </div>
+  ) : null;
+
   return (
+    <>
+    {analysisBar}
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Export video"
+      aria-hidden={collapsed || undefined}
       onPointerDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}
       style={{
         position: 'fixed', inset: 0, zIndex: 10050, background: 'rgba(0,0,0,0.85)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 8 : 16,
+        // While the skeleton is analyzed the panel is the bar above: nothing covers the video.
+        display: collapsed ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 8 : 16,
       }}
     >
       <div
@@ -623,27 +746,15 @@ export default function MetricsExportPanel({
 
             {busy ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {phase === 'analyzing' ? (
-                  <div aria-label="Skeleton analysis progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(analysis.frac * 100)}
-                    data-testid="analysis-progress"
-                    style={{ height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.round(analysis.frac * 100)}%`, height: '100%', background: '#F5B800' }} />
-                  </div>
-                ) : (
-                  <div aria-label="Export progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
-                    style={{ height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
-                    <div style={{ width: `${phase === 'reading' ? 0 : pct}%`, height: '100%', background: 'var(--cl-accent)' }} />
-                  </div>
-                )}
+                <div aria-label="Export progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+                  style={{ height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
+                  <div style={{ width: `${phase === 'reading' ? 0 : pct}%`, height: '100%', background: 'var(--cl-accent)' }} />
+                </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <span data-testid="export-status" style={{ fontSize: 13, flex: 1, minWidth: 0 }}>{status}{phase === 'exporting' && !tabHidden ? ` ${pct}%` : ''}</span>
                   <button type="button" style={btn(false)} onClick={cancelExport}>Cancel</button>
                 </div>
-                <span style={muted}>
-                  {phase === 'analyzing'
-                    ? 'Step 1 of 2: analyzing the skeleton. Then the video is exported in real time.'
-                    : `Exports in real time: a ${formatClock(spanSec)} range takes about that long.`}
-                </span>
+                <span style={muted}>Exports in real time: a {formatClock(spanSec)} range takes about that long.</span>
               </div>
             ) : result ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -688,5 +799,6 @@ export default function MetricsExportPanel({
         </div>
       </div>
     </div>
+    </>
   );
 }

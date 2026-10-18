@@ -9749,6 +9749,16 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             drawExportOverlay: (ctx, t, w, h, o) =>
               canvasRef.current?.drawExportOverlay?.(ctx, t, w, h, o)
               ?? { box: { dx: 0, dy: 0, dw: 0, dh: 0 }, videoW: 0, videoH: 0, drawingCount: 0, strokes: [], angles: [] },
+            // The picture of the video the pass seeks (object-fit: contain), so the
+            // panel's analysis bar can dock outside it.
+            getVideoRect: () => {
+              const v = videoRef.current;
+              if (!v || !v.videoWidth || !v.videoHeight) return null;
+              const r = v.getBoundingClientRect();
+              const s = Math.min(r.width / v.videoWidth, r.height / v.videoHeight);
+              const w = v.videoWidth * s, h = v.videoHeight * s;
+              return { x: r.left + (r.width - w) / 2, y: r.top + (r.height - h) / 2, w, h };
+            },
           }}
         />
       )}

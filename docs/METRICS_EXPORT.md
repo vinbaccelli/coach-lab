@@ -70,20 +70,39 @@ the file will contain ("Includes: video + skeleton + drawings").
   `app/analysis/page.tsx`, with the toolbar's running/ready bookkeeping). Each
   part is pulled 0.05 s in from its neighbours so the pass never replaces a
   track the coach already made (it drops tracks within 0.05 s of its range).
-  The panel shows "Analyzing skeleton… X%" from the pass's own progress, and a
-  remaining-time estimate measured from this run's progress (after 5% and 3 s;
-  no estimate is shown before Export). Cancel stops the pass (no track is kept)
-  and returns to idle at once. If no player is found, the export stops and says
-  so. **Self-check:** before rendering, the panel checks what the analysis
-  stored (`lib/exportOverlay.ts checkAnalyzedTrack`): at least 3 poses per
-  analyzed second (the pass samples 30), and a pose that moves (the largest mean
-  joint shift from the first sampled pose is at least 0.1% of the body's size).
-  A pass that saw the same picture on every frame stores the same pose every
-  time, which would export a frozen skeleton (KNOWN_ISSUES 052). If the check
-  fails the export stops with "Skeleton could not be analyzed on this video
-  (…)", the Skeleton switch turns off and shows that line, and Export saves the
-  video without it. Then the video renders exactly as before. The UI stutters
-  during the analysis (KNOWN_ISSUES 050).
+  **While it analyzes, the panel is a compact bar** (progress, "Analyzing
+  skeleton… X% · about N s left", Cancel) docked outside the analysis video's
+  picture (`lib/exportOverlay.ts dockAnalysisBar`: below, above, right or left
+  of it; without its note when space is tight), so the video the pass seeks is
+  on screen and uncovered, as with the toolbar's AI Track. Covered by the full
+  panel, iOS Safari exported a frozen skeleton (KNOWN_ISSUES 052). The full
+  panel comes back when the analysis ends, is cancelled or fails. The
+  remaining-time estimate is measured from this run's progress (after 5% and
+  3 s; none before Export). Cancel stops the pass (no track is kept) and
+  returns to idle at once. If no player is found, the export stops and says so.
+  Then the video renders exactly as before. The UI stutters during the analysis
+  (KNOWN_ISSUES 050).
+- **Skeleton checks.** A wrong skeleton is never exported; instead the export
+  stops with "Skeleton could not be analyzed on this video (…numbers…)", the
+  Skeleton switch turns off and shows that line, and Export saves the video
+  without it. The numbers say what happened.
+  - *Before rendering* (`checkAnalyzedTrack`, on the poses the analysis stored,
+    sampled once per pass frame): at least 3 poses per analyzed second; a pose
+    that moves (≥ 0.1% of the body's size from the first one); and the same
+    pose repeated exactly from one frame to the next on no more than 60% of the
+    range (a real detection always jitters; a pass that gets a fresh picture
+    only now and then repeats). Numbers: poses, poses per second, motion,
+    repeated share.
+  - *While rendering* (`skeletonFollowsVideo`, any skeleton, also one from the
+    toolbar): every 0.25 s of video, the picture around the skeleton (its joint
+    box grown by half on each side, a 32×32 grey thumbnail of the frame being
+    encoded, before the overlay) is compared with the previous step's, and the
+    skeleton's own move with it. When the picture moved (mean change ≥ 6/255) on
+    at least 6 steps (4 at the end) and the skeleton stayed within 0.4% of its
+    size on more than 70% of them, the render stops and no file is given.
+    Numbers: steps where the video moved, and where the skeleton stayed still
+    (after the export's own analysis, also that analysis's numbers above).
+    A still scene gives no verdict, so a player standing still is not refused.
 - **Not exported in V1:** AI measurement overlays, the data column, the ball
   trail, the zoom (the file is always the full, unzoomed frame).
 

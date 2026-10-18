@@ -1639,7 +1639,7 @@ Canvas zoom code or `app/layout.tsx` viewport — outside PR #93's files.
 
 **Severity:** high if (2) on iPhone (blocks the export).
 
-## 052 — Phone: exported skeleton frozen when the export analyzed it (no prior AI Track) — GUARDED, root cause NOT REPRODUCED
+## 052 — Phone: exported skeleton frozen when the export analyzed it (no prior AI Track) — FIX IN PR #93, to confirm on the device
 
 **Reported.** Vin, real device, PR #93: Metrics export, Include skeleton on, no
 prior AI Track. The panel analyzed the range ("Analyze skeleton + export") and
@@ -1683,18 +1683,40 @@ delivery, `app/analysis/page.tsx hiddenDecoderVideoStyle`). (2) The tier: the
 panel uses 'fast' (the FULL landmarker, shared with other live features),
 the toolbar's default is balanced (HEAVY).
 
-**Guard (PR #93).** The panel checks its own analysis before rendering
-(`checkAnalyzedTrack`): too few poses or a pose that does not move stops the
-export with "Skeleton could not be analyzed on this video (…)" and turns the
-Skeleton switch off. Verified with a simulated frozen pass (every sample given
-the first frame's pose): motion 0, the message, no file.
+**Device result (Vin).** AI Track from the toolbar at 0.5× — the same 'fast'
+tier the panel uses — tracks the same clip correctly; the panel's analysis
+still exports a frozen skeleton. So the tier is not the cause; how the pass
+runs is. The only differences in page state (checked in code: both call
+`runPrecisionPass` on the same `videoRef`, paused, same lock and mode; the
+pass reads no skeleton display flag) are the panel itself — a fixed,
+full-screen dialog (85% black) covering the video being seeked — and its
+unloaded preview `<video>`. iOS Safari is known here to stop delivering frames
+of a video it does not show (`app/analysis/page.tsx hiddenDecoderVideoStyle`).
 
-**Next step on a device.** The message's detail says which case it was ("the
-pose did not change from frame to frame" vs "N poses in X s"). Then run AI Track
-from the toolbar at 0.5× on the same clip: frozen there too → the tier is the
-cause (switch the panel to balanced, ~3.3× the analysis time); fine there →
-the covered video is the cause (proposed: collapse the panel during the
-analysis so the video is visible, as with the toolbar).
+**Fix (PR #93, third round).** While the skeleton is analyzed the panel is a
+compact bar docked outside the video's picture (`dockAnalysisBar`); the video
+is fully on screen and uncovered, as with the toolbar's AI Track. Measured in
+the test browser: 0 of 49 points of the picture covered, opacity 1, nothing
+hidden in the video's parents, at 375×812 and 1440×900, landscape and portrait
+clips (a portrait clip on the phone needs the compact bar, without its note).
+
+**Why the first guard (c8c72033) let a frozen skeleton through.** It refused
+only a pose that never moved at all (≥ 0.1% of body size from the first pose)
+or too few poses. Reproduced holes (tests in `tests/exportOverlay.test.ts`):
+(1) a fresh picture only now and then — the pose repeats exactly between
+jumps (motion 155%, passed); (2) a stale picture with detector noise — a pose
+that jitters ~0.5% and never follows the player (passed). Whether Vin's
+preview already had c8c72033 (Vercel preview ready at 11:44 UTC, 18 Oct) is not
+known here; either way these holes are closed now:
+- before rendering, `checkAnalyzedTrack` also refuses a pose repeated exactly
+  from frame to frame on more than 60% of the range (simulated: refused,
+  "repeated 86%");
+- while rendering, `skeletonFollowsVideo` compares the picture around the
+  skeleton with the skeleton's own move every 0.25 s and stops the export when
+  the picture moves and the skeleton does not (simulated stale picture + noise:
+  stopped 1.5 s into the render, "video moved 6×, skeleton still 6×").
+The failure line carries the numbers (poses, poses/s, motion, repeated share,
+video-moved / skeleton-still counts) so a phone screenshot says which case it was.
 
 **Left over.** The failed track stays stored (the on-screen skeleton uses it
 too) until the coach clears AI Track. Removing just that track needs a Canvas
@@ -1722,3 +1744,23 @@ do not hit it.
 Safari and Chrome on devices first.
 
 **Severity:** low (a one-frame lag on a third of samples, smoothed).
+
+## 054 — For 1–2 s after Cancel during the export's analysis, the Skeleton switch reads "AI Track is running" — OPEN (pre-existing, PR #93)
+
+**Symptom.** Cancel returns the panel to idle at once (137 ms, production
+build), but the pass stops only after the frame it is detecting (~1.4 s in the
+test browser). Until then the page's AI Track state is still "running", so the
+Skeleton switch shows "AI Track is running. Wait for it to finish, then
+export." and is off; Export in that moment would save the video without the
+skeleton.
+
+**Root cause.** `skeletonExportStatus` treats any running pass as someone
+else's once the panel is no longer analyzing; the cancelled pass is the
+panel's own, winding down (`runPrecisionPass` checks the abort flag between
+frames).
+
+**Proposed fix (panel only).** Remember that the running pass is the panel's own
+until `analyzeRange` settles, and show "Stopping the analysis…" with Export
+disabled meanwhile.
+
+**Severity:** low (a short, self-clearing state).

@@ -746,3 +746,26 @@ now refuses a static or sparse track (`checkAnalyzedTrack`).
 
 **Class of mistake.** Checking presence when the requirement is behaviour over
 time. For anything that should move or change, measure the change.
+
+## 015 — A guard tested only against the failure I simulated
+
+**Symptom.** The self-check added for the frozen skeleton (c8c72033) passed its
+tests and refused the simulated frozen pass. Vin still got a frozen skeleton on
+the phone.
+
+**What was missing.** The simulation was the cleanest possible failure (the
+same pose on every frame, motion exactly 0), and the guard was a fixed
+threshold on the pose alone. A real failure need not be that clean: a picture
+refreshed only now and then, or a stale picture plus detector noise, both clear
+a "did it move at all" bar. One of the tests even pinned "still with jitter
+passes" as wanted behaviour.
+
+**Fix.** Guard against the mechanism, not one symptom: refuse exact frame-to-
+frame repeats (a real detection never repeats), and compare the skeleton with
+the video itself while rendering (did the picture move, did the skeleton?).
+Each hole is reproduced as a test that the old guard passes.
+
+**Class of mistake.** Validating a detector only on the one failure you
+manufactured. List the ways the failure can look before choosing the measure,
+and prefer a measure tied to ground truth (here the video frames) over a
+threshold on the output alone.
