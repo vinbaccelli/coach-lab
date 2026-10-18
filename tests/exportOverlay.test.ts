@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  analysisProgress, drawingsExportStatus, includesLabel, mapPoint, overlayTransform, parsePassProgress, skeletonExportStatus,
+  ANALYSIS_FAILED_TEXT, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, drawingsExportStatus, includesLabel, mapPoint, overlayTransform, parsePassProgress, skeletonExportStatus,
   trackedFraction, untrackedIntervals,
 } from '@/lib/exportOverlay';
 
@@ -137,4 +137,67 @@ test('includes label', () => {
   assert.equal(includesLabel(false, true), 'Includes: video + drawings');
   assert.equal(includesLabel(true, false), 'Includes: video + skeleton');
   assert.equal(includesLabel(false, false), 'Includes: video');
+});
+
+// A 17-joint pose: a standing figure about 100 px tall, shifted by (dx, dy), the right wrist raised by `wrist`.
+const pose = (dx = 0, dy = 0, wrist = 0) => Array.from({ length: 17 }, (_, j) => ({
+  x: 100 + dx + (j % 2 ? 20 : -20), y: 50 + dy + j * 6 - (j === 10 ? wrist : 0), score: 0.9, name: String(j),
+}));
+
+test('checkAnalyzedTrack: a moving player passes', () => {
+  const poses = Array.from({ length: 20 }, (_, i) => pose(i * 2, 0, i));
+  const r = checkAnalyzedTrack(58, 1.9, poses);
+  assert.equal(r.ok, true);
+  assert.equal(r.reason, null);
+  assert.ok(r.motion > 0.1, `motion ${r.motion}`);
+  close(r.posesPerSec, 58 / 1.9, 1e-9);
+});
+
+test('checkAnalyzedTrack: the same pose on every frame is a frozen skeleton', () => {
+  const p = pose(5, 5);
+  const r = checkAnalyzedTrack(58, 1.9, Array.from({ length: 20 }, () => p.map((k) => ({ ...k }))));
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'static');
+  assert.equal(r.motion, 0);
+});
+
+test('checkAnalyzedTrack: a still player with normal detection jitter still passes', () => {
+  // ±0.5 px of jitter on a ~117 px body (the smallest real motion the pass reports).
+  const poses = Array.from({ length: 20 }, (_, i) => pose(i % 2 ? 0.5 : -0.5, i % 3 ? 0.4 : 0));
+  assert.equal(checkAnalyzedTrack(58, 1.9, poses).ok, true);
+});
+
+test('checkAnalyzedTrack: too few poses for the analyzed time is too sparse', () => {
+  const moving = Array.from({ length: 20 }, (_, i) => pose(i * 3));
+  assert.equal(checkAnalyzedTrack(1, 2, moving).reason, 'sparse');
+  assert.equal(checkAnalyzedTrack(5, 9, moving).reason, 'sparse'); // 0.6 poses/s from a 30 fps pass
+  assert.equal(checkAnalyzedTrack(30, 2, [pose()]).reason, 'sparse'); // one pose across the range
+  assert.equal(checkAnalyzedTrack(30, 2, [null, null]).reason, 'sparse');
+  assert.equal(checkAnalyzedTrack(0, 0, []).reason, 'sparse');
+  assert.equal(checkAnalyzedTrack(27, 9, moving).ok, true); // 3 poses/s is enough
+});
+
+test('checkAnalyzedTrack: low-score joints are ignored', () => {
+  // Only the hidden joints "move"; the visible body is frozen.
+  const poses = Array.from({ length: 10 }, (_, i) => pose().map((k, j) => (j >= 13 ? { ...k, x: k.x + i * 10, score: 0.1 } : k)));
+  assert.equal(checkAnalyzedTrack(58, 1.9, poses).reason, 'static');
+});
+
+test('the analysis failure message, and the switch after a failed analysis', () => {
+  assert.equal(ANALYSIS_FAILED_TEXT, 'Skeleton could not be analyzed on this video');
+  // The failed track covers the range, but it is not offered as "ready".
+  assert.deepEqual(skeletonExportStatus(false, 1, true), { state: 'failed', text: 'Skeleton could not be analyzed on this video.' });
+  assert.equal(skeletonExportStatus(true, 1, true).state, 'failed');
+  assert.equal(skeletonExportStatus(false, 1, false).state, 'ready');
+});
+
+test('analysisSampleTimes: spread over the analyzed intervals, capped', () => {
+  const one = analysisSampleTimes([{ start: 0.05, end: 1.95 }]);
+  assert.equal(one.length, 19);
+  assert.ok(one.every((t) => t > 0.05 && t < 1.95));
+  const two = analysisSampleTimes([{ start: 0, end: 1 }, { start: 5, end: 8 }]);
+  assert.ok(two.filter((t) => t < 1).length >= 2 && two.filter((t) => t >= 5).length >= 2);
+  assert.ok(two.every((t) => (t > 0 && t < 1) || (t > 5 && t < 8)));
+  assert.equal(analysisSampleTimes([{ start: 0, end: 7200 }]).length, 300);
+  assert.deepEqual(analysisSampleTimes([]), []);
 });

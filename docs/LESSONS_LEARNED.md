@@ -727,3 +727,22 @@ self time) compared with a profile of the export (0 ms of those scripts).
 
 **Class of mistake.** Negative evidence from an unvalidated instrument. Before
 quoting "0 X during Y", show the same instrument counting X when X happens.
+
+## 014 — "The skeleton is in the export" is not "the skeleton follows the player"
+
+**Symptom.** PR #93 reported the exported skeleton as verified (skeleton pixels
+present in every sampled frame). On Vin's phone, with the export analyzing the
+skeleton itself, the skeleton was there but frozen in one position.
+
+**What the check missed.** It counted skeleton-coloured pixels per frame. A
+frozen skeleton has exactly as many. Nothing compared one frame with the next,
+or the drawn joints with the stored track at that frame's time.
+
+**Fix.** The verification now taps every pose the pass stores, reports the
+pose's motion over the range, finds the joint dots in exported frames at 5
+times, and compares them with the stored track at each frame's time and with
+the previous sampled frame (exported shift vs track shift). The panel itself
+now refuses a static or sparse track (`checkAnalyzedTrack`).
+
+**Class of mistake.** Checking presence when the requirement is behaviour over
+time. For anything that should move or change, measure the change.

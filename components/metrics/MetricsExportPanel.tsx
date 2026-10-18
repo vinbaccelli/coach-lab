@@ -7,8 +7,8 @@ import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, type ExportQuality,
 } from '@/lib/exportEstimate';
 import {
-  analysisProgress, drawingsExportStatus, includesLabel, parsePassProgress, skeletonExportStatus, trackedFraction,
-  untrackedIntervals,
+  ANALYSIS_FAILED_TEXT, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, drawingsExportStatus, includesLabel,
+  parsePassProgress, skeletonExportStatus, trackedFraction, untrackedIntervals,
 } from '@/lib/exportOverlay';
 import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
 
@@ -204,9 +204,11 @@ export default function MetricsExportPanel({
     return trackedFraction(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null);
   }, [overlay, meta, range.start, range.end, trackVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   // Our own analysis also runs as an AI Track: only someone else's pass makes it wait.
-  const skStatus = skeletonExportStatus(Boolean(overlay?.trackRunning) && phase !== 'analyzing', trackedFrac);
+  // Set when this panel's own analysis failed its self-check (frozen or too sparse).
+  const [analysisFailed, setAnalysisFailed] = useState(false);
+  const skStatus = skeletonExportStatus(Boolean(overlay?.trackRunning) && phase !== 'analyzing', trackedFrac, analysisFailed);
   const drStatus = drawingsExportStatus(Boolean(overlay?.snapshotMode), drawingCount);
-  const skAvailable = skStatus.state !== 'busy';
+  const skAvailable = skStatus.state !== 'busy' && skStatus.state !== 'failed';
   const drAvailable = drStatus.state === 'ready';
   // Unset until the coach flips it: on by default when some of the range is tracked.
   const [skeletonChoice, setSkeletonChoice] = useState<boolean | null>(null);
@@ -308,9 +310,10 @@ export default function MetricsExportPanel({
         setAnalysis({ frac: 0, leftSec: null });
         setPhase('analyzing');
         setStage('Analyzing skeleton…');
+        let kept = 0;
         for (let i = 0; i < intervals.length; i++) {
           analysisRef.current = { ...analysisRef.current, index: i };
-          await overlay.analyzeRange(intervals[i].start, intervals[i].end);
+          kept += await overlay.analyzeRange(intervals[i].start, intervals[i].end);
           if (ac.signal.aborted) return;
         }
         analysisRef.current = null;
@@ -320,6 +323,19 @@ export default function MetricsExportPanel({
         if (covered <= 0) {
           setPhase('error');
           setError('The skeleton analysis found no player in this range. Turn Skeleton off to export without it, or run AI Track from the Skeleton menu.');
+          return;
+        }
+        // Self-check before rendering: enough poses, and a pose that moves. A
+        // pass that read the same picture on every frame would export a frozen skeleton.
+        const span = intervals.reduce((sum, r) => sum + (r.end - r.start), 0);
+        const check = checkAnalyzedTrack(kept, span, analysisSampleTimes(intervals).map((t) => overlay.getBakedPoseAt(t)));
+        if (!check.ok) {
+          setAnalysisFailed(true);
+          setSkeletonChoice(false);
+          setPhase('error');
+          setError(`${ANALYSIS_FAILED_TEXT} (${check.reason === 'static'
+            ? 'the pose did not change from frame to frame'
+            : `${kept} pose${kept === 1 ? '' : 's'} in ${span.toFixed(1)} s`}). Skeleton is now off: export again to save the video without it.`);
           return;
         }
       }

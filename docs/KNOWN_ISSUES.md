@@ -1638,3 +1638,87 @@ was zoomed or only the video with a "%" label in its corner. Fixes would be in
 Canvas zoom code or `app/layout.tsx` viewport — outside PR #93's files.
 
 **Severity:** high if (2) on iPhone (blocks the export).
+
+## 052 — Phone: exported skeleton frozen when the export analyzed it (no prior AI Track) — GUARDED, root cause NOT REPRODUCED
+
+**Reported.** Vin, real device, PR #93: Metrics export, Include skeleton on, no
+prior AI Track. The panel analyzed the range ("Analyze skeleton + export") and
+the video had a skeleton that stayed in one position. The same clip exported
+correctly after AI Track from the toolbar.
+
+**What was measured (Chromium, 4 cores, no GPU, dev build; same 2 s clip).**
+Every pass sample was tapped (`addBakeSample(t, kps)`) and the stored track
+read back with `getBakedPoseAt`:
+
+| Path | Poses | Spacing | Distinct poses | Joint shift from first pose, over 2 s | Time |
+|---|---|---|---|---|---|
+| Panel, on-screen skeleton never on | 58 (0.05–1.95 s) | 1/30 s | 58 | 0 → 19.9 px | 89 s pass |
+| Panel, on-screen skeleton on | 58 | 1/30 s | 58 | 0 → 19.9 px | 87 s |
+| Toolbar 0.5× (fast) | 61 (0–2 s) | 1/30 s | 41 | 0 → 20.3 px | 104 s |
+| Toolbar 0.25× (balanced, the dialog default) | 91 (0–2 s) | 1/45 s | 60 | 0 → 21.6 px | 339 s |
+
+All four used MediaPipe (`engine=mediapipe-full` in the pass log), the time
+base is the analysis video's `currentTime` (absolute media time) in every case,
+and the export reads it live per frame (`drawExportOverlay` → `lookupBakedPose(
+video.currentTime)` of the hidden export video; only the video box, strokes and
+angles are captured once, after the analysis). The exported files' joint dots
+matched the stored track within 0.6–2.2 px and moved with it. So in this
+browser the panel's track is not frozen, and the panel and the toolbar store the
+same kind of track; only the tier differs ('fast' = FULL model at 30 fps,
+balanced = HEAVY at 45 fps, about 3.3× slower here).
+
+**What a frozen track would be, by code.** `detectPosePrecise` runs MediaPipe
+on the analysis `<video>` after each seek. If the picture it reads never
+changes (a frame the browser does not repaint after a seek), every sample gets
+the same pose: a stored track with motion 0 — exactly the symptom. A pass that
+finds the player on very few frames gives a few samples spread over the range,
+and `lookupBakedPose` snaps to the nearest one across gaps over 0.5 s: a skeleton
+that stands still and jumps now and then.
+
+**Device-only candidates (not confirmed).** (1) During the panel's analysis the
+analysis video sits under the panel (fixed, 85% black) while it is seeked;
+WebKit may not hand a repainted frame to WebGL for a seeked paused video in
+that state (the page already notes that hidden videos can block Safari frame
+delivery, `app/analysis/page.tsx hiddenDecoderVideoStyle`). (2) The tier: the
+panel uses 'fast' (the FULL landmarker, shared with other live features),
+the toolbar's default is balanced (HEAVY).
+
+**Guard (PR #93).** The panel checks its own analysis before rendering
+(`checkAnalyzedTrack`): too few poses or a pose that does not move stops the
+export with "Skeleton could not be analyzed on this video (…)" and turns the
+Skeleton switch off. Verified with a simulated frozen pass (every sample given
+the first frame's pose): motion 0, the message, no file.
+
+**Next step on a device.** The message's detail says which case it was ("the
+pose did not change from frame to frame" vs "N poses in X s"). Then run AI Track
+from the toolbar at 0.5× on the same clip: frozen there too → the tier is the
+cause (switch the panel to balanced, ~3.3× the analysis time); fine there →
+the covered video is the cause (proposed: collapse the panel during the
+analysis so the video is visible, as with the toolbar).
+
+**Left over.** The failed track stays stored (the on-screen skeleton uses it
+too) until the coach clears AI Track. Removing just that track needs a Canvas
+method: needs approval.
+
+**Severity:** high on the affected device (a wrong skeleton in a shared video);
+now blocked by the self-check instead of exported.
+
+## 053 — AI Track samples land on the previous frame about a third of the time (test browser) — OPEN (pre-existing pass)
+
+**Symptom.** Found while dumping tracks for 052. Toolbar AI Track stores the
+same pose for two consecutive sample times on 20 of 61 samples (0.5×, 2 s clip)
+and 90 of 271 (0.5×, 9 s clip); 31 of 91 at 0.25×, where 45 samples a second on
+a 30 fps clip repeat frames by design. The export's analysis of the same clips,
+whose sample times start 0.05 s in, stores 0 repeats (58 of 58, 268 of 268).
+
+**Likely cause (not proven).** The toolbar pass seeks to
+exact frame boundaries (`start + k / 30` with start 0) and the browser can
+show the previous frame for a time that sits on a boundary; the sample is
+stamped with `video.currentTime` (the requested time), so the pose is one frame early. Mid-frame times
+do not hit it.
+
+**Proposed fix.** Seek to the middle of each frame (`+ 0.5 / fps`) in
+`runPrecisionPass`, whose internals are frozen: needs approval. Check on
+Safari and Chrome on devices first.
+
+**Severity:** low (a one-frame lag on a third of samples, smoothed).

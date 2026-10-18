@@ -74,8 +74,16 @@ the file will contain ("Includes: video + skeleton + drawings").
   remaining-time estimate measured from this run's progress (after 5% and 3 s;
   no estimate is shown before Export). Cancel stops the pass (no track is kept)
   and returns to idle at once. If no player is found, the export stops and says
-  so. Then the video renders exactly as before. The UI stutters during the
-  analysis (KNOWN_ISSUES 050).
+  so. **Self-check:** before rendering, the panel checks what the analysis
+  stored (`lib/exportOverlay.ts checkAnalyzedTrack`): at least 3 poses per
+  analyzed second (the pass samples 30), and a pose that moves (the largest mean
+  joint shift from the first sampled pose is at least 0.1% of the body's size).
+  A pass that saw the same picture on every frame stores the same pose every
+  time, which would export a frozen skeleton (KNOWN_ISSUES 052). If the check
+  fails the export stops with "Skeleton could not be analyzed on this video
+  (…)", the Skeleton switch turns off and shows that line, and Export saves the
+  video without it. Then the video renders exactly as before. The UI stutters
+  during the analysis (KNOWN_ISSUES 050).
 - **Not exported in V1:** AI measurement overlays, the data column, the ball
   trail, the zoom (the file is always the full, unzoomed frame).
 
