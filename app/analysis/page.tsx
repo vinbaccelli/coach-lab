@@ -65,7 +65,7 @@ import {
   normalizeSubjectBox,
   subjectBoxFromRegion,
 } from '@/lib/stroMotion';
-import { makeSnapshot, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
+import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
@@ -1142,6 +1142,7 @@ function Home() {
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
     const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
+    const box = canvasRef.current?.getVideoBounds?.() ?? undefined;
     const col = measurementColumnRef.current;
     setSnapshots(prev => prev.map(s => s.id === id ? {
       ...s,
@@ -1150,6 +1151,9 @@ function Home() {
       overlayAdjustments,
       drawingsJson,
       ...(skeleton ? { skeleton } : {}),
+      // The box these strokes are in: the canvas re-fits its strokes to every
+      // resize, so they match today's box until they are stored here.
+      ...(box ? { drawingsBox: box } : {}),
     } : s));
   }, []);
 
@@ -1225,6 +1229,8 @@ function Home() {
     snap.drawingsJson = drawingsJson;
     snap.overlayAdjustments = overlayAdjustments;
     if (skeleton) snap.skeleton = skeleton;
+    const box = canvasRef.current?.getVideoBounds?.();
+    if (box) snap.drawingsBox = box;
     snap.column = liveColumn;
     snap.overlaysOn = showMeasurementOverlays;
     if (screenshot) snap.screenshot = screenshot;
@@ -1259,7 +1265,7 @@ function Home() {
   // (order, selection, title, notes) across close/reopen within the session.
   const [generateWorkspaceMounted, setGenerateWorkspaceMounted] = useState(false);
   // Metrics → Generate opens the video-export panel; the snapshot flow above
-  // is reached from its "Snapshot report" button.
+  // is reached from its "Snapshot images & report" button.
   const [metricsExportOpen, setMetricsExportOpen] = useState(false);
   const [generateReplayRate, setGenerateReplayRate] = useState(0.25);
   /** Seconds each snapshot stays frozen during the replay/recorded video. */
@@ -9718,6 +9724,31 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           sectionStart={metricsSectionStart}
           sectionEnd={metricsSectionEnd}
           snapshotCount={snapshots.length}
+          // This video's snapshots, for the hold count and the trim bar's ticks.
+          snapshotMarks={sortSnapshots(snapshots)
+            .filter(s => !s.mediaId || !currentMediaIdRef.current || s.mediaId === currentMediaIdRef.current)
+            .map(s => ({ id: s.id, timeSec: s.timeSec }))}
+          // At export start: each snapshot's strokes, box and frozen pose. The
+          // ACTIVE snapshot is read from the canvas (its latest strokes and pose,
+          // edits not yet saved into `snapshots` included). Read-only.
+          getSnapshotsForExport={() => {
+            const activeId = biomechSelectedPhaseIdRef.current;
+            const media = currentMediaIdRef.current;
+            return sortSnapshots(snapshots)
+              .filter(s => !s.mediaId || !media || s.mediaId === media)
+              .map(s => {
+                const active = s.id === activeId;
+                let strokes: unknown[] = [];
+                try {
+                  const parsed = JSON.parse((active ? canvasRef.current?.exportStrokes?.() : null) ?? (s.drawingsJson || '[]'));
+                  if (Array.isArray(parsed)) strokes = parsed;
+                } catch { /* unreadable drawings: hold the frame without them */ }
+                const skeleton = (active ? canvasRef.current?.getSkeletonKeypoints?.() : null) ?? s.skeleton ?? null;
+                // On-canvas strokes follow resizes, so the active one is in today's box.
+                const box = (active ? canvasRef.current?.getVideoBounds?.() : null) ?? s.drawingsBox ?? null;
+                return { id: s.id, timeSec: s.timeSec, strokes, box, skeleton };
+              });
+          }}
           onSnapshotReport={() => {
             if (snapshots.length > 0) setMetricsExportOpen(false);
             void handleGenerateSnapshots();

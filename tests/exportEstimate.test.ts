@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, originalVideoBps, scaledExportSize, TIER_VIDEO_BPS,
 } from '@/lib/exportEstimate';
+import { holdSchedule } from '@/lib/exportOverlay';
 
 test('estimate is (video + audio bits/s) × duration ÷ 8', () => {
   assert.equal(estimateExportBytes(10, 4_000_000, 128_000), 5_160_000);
@@ -77,4 +78,14 @@ test('formatMegabytes shows decimal megabytes', () => {
   assert.equal(formatMegabytes(0), '0.0 MB');
   assert.equal(formatMegabytes(20_000), '< 0.1 MB');
   assert.equal(formatMegabytes(123_456_789), '123 MB');
+});
+
+test('hold-aware estimate: the range plus every hold, at the same bitrates', () => {
+  // 9 s range + 2 snapshot holds of 2 s at 1080p (8 Mbps video + 128 kbps audio).
+  const holds = holdSchedule([{ id: 'a', timeSec: 2 }, { id: 'b', timeSec: 5 }, { id: 'c', timeSec: 12 }], 1, 10, 2);
+  assert.equal(holds.totalHoldSec, 4);
+  assert.equal(estimateExportBytes(9 + holds.totalHoldSec, 8_000_000), estimateExportBytes(13, 8_000_000));
+  assert.equal(estimateExportBytes(13, 8_000_000, 128_000), Math.round((8_128_000 * 13) / 8));
+  // Snapshots off (no holds): exactly the range's estimate, as before.
+  assert.equal(estimateExportBytes(9 + 0, 8_000_000), estimateExportBytes(9, 8_000_000));
 });

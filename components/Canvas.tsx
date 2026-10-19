@@ -346,13 +346,26 @@ export interface CanvasHandle {
    * or pose state. The first call (pass `frozen` = undefined) captures the video
    * box, strokes and angles and returns them; pass that back on every later call
    * so a resize mid-export cannot move anything. `ctx` = null only captures.
+   *
+   * `hold` (a snapshot hold): draw THAT snapshot's strokes, mapped from the
+   * video box they were drawn in (`box`; null = today's box), and its frozen
+   * pose — and nothing else: no live drawings, no AI Track skeleton.
    */
   drawExportOverlay: (
     ctx: CanvasRenderingContext2D | null,
     mediaTime: number,
     outW: number,
     outH: number,
-    opts: { skeleton: boolean; drawings: boolean; frozen?: ExportOverlayFrozen },
+    opts: {
+      skeleton: boolean;
+      drawings: boolean;
+      frozen?: ExportOverlayFrozen;
+      hold?: {
+        strokes: readonly unknown[];
+        box: VideoBox | null;
+        skeleton: ReadonlyArray<{ x: number; y: number; score: number; name: string }> | null;
+      } | null;
+    },
   ) => ExportOverlayFrozen;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
@@ -3788,6 +3801,36 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           strokes: [...strokesRef.current],
           angles: [...angleMeasRef.current],
         };
+        if (ctx && opts.hold) {
+          // Snapshot hold: its own strokes in its own box, its frozen pose. Read-only.
+          const hold = opts.hold;
+          const box = hold.box && hold.box.dw > 0 && hold.box.dh > 0 ? hold.box : frozen.box;
+          const htf = overlayTransform(box, outW, outH);
+          if (!htf) return frozen;
+          ctx.save();
+          try {
+            ctx.setTransform(htf.sx, 0, 0, htf.sy, htf.tx, htf.ty);
+            const tick = Math.round(mediaTime * 60);
+            const jointBallR = jointNodeRadius(box.dw, box.dh);
+            for (const st of hold.strokes as Stroke[]) drawStroke(ctx, st, tick, jointBallR);
+            if (hold.skeleton && hold.skeleton.length && frozen.videoW > 0 && frozen.videoH > 0) {
+              ctx.translate(box.dx, box.dy);
+              drawSkeletonOverlay(ctx, [...hold.skeleton], frozen.videoW, frozen.videoH, box.dw, box.dh, {
+                showAngles: false,
+                showHeadLine: skeletonShowHeadLineRef.current,
+                showHeadDirection: skeletonShowHeadDirectionRef.current,
+                showFootLine: skeletonShowFootLineRef.current,
+                classicColors: skeletonClassicColorsRef.current,
+                parts: skeletonPartsRef.current,
+              });
+            }
+          } catch (e) {
+            if (process.env.NODE_ENV !== 'production') console.warn('[Canvas] export hold overlay skipped:', e);
+          } finally {
+            ctx.restore();
+          }
+          return frozen;
+        }
         const tf = overlayTransform(frozen.box, outW, outH);
         if (!ctx || !tf) return frozen;
         const { dx, dy, dw, dh } = frozen.box;

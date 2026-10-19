@@ -4,6 +4,8 @@ import {
   ANALYSIS_FAILED_TEXT, analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, drawingsExportStatus,
   dockAnalysisBar, meanAbsDiff, poseRegion, poseShift, skeletonFollowsVideo, toGrey, includesLabel, mapPoint, overlayTransform, parsePassProgress, skeletonExportStatus,
   trackedFraction, untrackedIntervals,
+  clampHoldSec, formatHoldSec, holdSchedule, includesLabelWithHolds, outputProgress, snapshotsExportStatus, snapshotsSwitchText,
+  HOLD_DEFAULT_SEC, HOLD_FRAME_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC,
 } from '@/lib/exportOverlay';
 
 const close = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} ≈ ${b}`);
@@ -127,7 +129,11 @@ test('analysisProgress spans several intervals by their length', () => {
 });
 
 test('drawings status lines', () => {
-  assert.deepEqual(drawingsExportStatus(true, 4), { state: 'snapshot', text: 'Snapshot drawings aren’t exported. Use Snapshot report.' });
+  // SNAPSHOT mode: the canvas drawings are the snapshot's; they go out with its hold, never as running drawings.
+  const snap = drawingsExportStatus(true, 4);
+  assert.equal(snap.state, 'snapshot');
+  assert.doesNotMatch(snap.text, /aren’t exported/);
+  assert.match(snap.text, /Turn on Snapshots/);
   assert.deepEqual(drawingsExportStatus(false, 0), { state: 'none', text: 'No drawings on the video' });
   assert.equal(drawingsExportStatus(false, 1).text, '1 drawing on the video.');
   assert.equal(drawingsExportStatus(false, 3).text, '3 drawings on the video.');
@@ -328,4 +334,113 @@ test('failed or cancelled analysis: clear only when there was no track before it
   const kept = analysisCleanup(true);
   assert.equal(kept.clear, false);
   assert.match(kept.note, /earlier AI Track was left as it is/);
+});
+
+// ── Snapshot holds ──────────────────────────────────────────────────────────
+
+const snaps = (...ts: number[]) => ts.map((timeSec, i) => ({ id: `s${i + 1}`, timeSec }));
+
+test('hold schedule: only snapshots inside the range, in time order, at their own time', () => {
+  // Range 2–10 s; snapshots at 4 s, 12 s (outside), 3 s.
+  const plan = holdSchedule(snaps(4, 12, 3), 2, 10, 2);
+  assert.deepEqual(plan.holds, [{ at: 3, seconds: 2, id: 's3' }, { at: 4, seconds: 2, id: 's1' }]);
+  assert.equal(plan.inRange, 2);
+  assert.equal(plan.total, 3);
+  assert.equal(plan.totalHoldSec, 4);
+  // Just outside either end (by more than the 1 ms tolerance): no hold.
+  assert.equal(holdSchedule(snaps(1.99, 10.01), 2, 10, 2).inRange, 0);
+  // Non-finite times are not snapshots for the export.
+  assert.equal(holdSchedule([{ id: 'x', timeSec: Number.NaN }], 0, 10, 2).total, 0);
+  // An empty or reversed range holds nothing.
+  assert.equal(holdSchedule(snaps(1), 5, 5, 2).holds.length, 0);
+});
+
+test('hold schedule: a snapshot at the very start is held at the in-point, one at the very end one frame before the out-point', () => {
+  const plan = holdSchedule(snaps(2, 10), 2, 10, 1);
+  assert.equal(plan.holds[0].at, 2);
+  close(plan.holds[1].at, 10 - HOLD_FRAME_SEC);
+  // Within the 1 ms tolerance of the ends still counts, clamped onto the range.
+  const edge = holdSchedule(snaps(1.9995, 10.0005), 2, 10, 1);
+  assert.equal(edge.holds[0].at, 2);
+  close(edge.holds[1].at, 10 - HOLD_FRAME_SEC);
+  // A range shorter than a frame: the end clamp never goes before the start.
+  assert.equal(holdSchedule(snaps(0.02), 0, 0.02, 1).holds[0].at, 0);
+});
+
+test('hold schedule: close or identical snapshots are not merged — each keeps its own hold, ties in order', () => {
+  const plan = holdSchedule(snaps(5, 5, 5.01), 0, 10, 2);
+  assert.deepEqual(plan.holds.map((h) => h.id), ['s1', 's2', 's3']);
+  assert.deepEqual(plan.holds.map((h) => h.at), [5, 5, 5.01]);
+  assert.equal(plan.totalHoldSec, 6);
+  // Two snapshots at the very end both land on the last frame, one after the other.
+  const end = holdSchedule(snaps(10, 9.99), 0, 10, 1);
+  assert.deepEqual(end.holds.map((h) => h.id), ['s2', 's1']);
+  close(end.holds[0].at, 10 - HOLD_FRAME_SEC);
+  close(end.holds[1].at, 10 - HOLD_FRAME_SEC);
+});
+
+test('hold length: 0.5–5 s in 0.5 s steps, default 2 s', () => {
+  assert.equal(HOLD_DEFAULT_SEC, 2);
+  assert.equal(clampHoldSec(0.1), HOLD_MIN_SEC);
+  assert.equal(clampHoldSec(9), HOLD_MAX_SEC);
+  assert.equal(clampHoldSec(1.3), 1.5);
+  assert.equal(clampHoldSec(Number.NaN), 2);
+  assert.equal(holdSchedule(snaps(1), 0, 2, 99).holds[0].seconds, 5);
+  assert.equal(formatHoldSec(4), '4 s');
+  assert.equal(formatHoldSec(1.5), '1.5 s');
+});
+
+test('snapshots status lines', () => {
+  const none = snapshotsExportStatus(holdSchedule([], 0, 10, 2), true);
+  assert.equal(none.state, 'none');
+  assert.match(none.text, /No snapshots yet/);
+  const outside = snapshotsExportStatus(holdSchedule(snaps(12, 14), 0, 10, 2), true);
+  assert.equal(outside.state, 'outside');
+  assert.equal(outside.text, 'None of your 2 snapshots are in this range. Move the trim to include one.');
+  const ready = snapshotsExportStatus(holdSchedule(snaps(1, 2, 12), 0, 10, 2), true);
+  assert.deepEqual(ready, { state: 'ready', text: '2 of 3 snapshots are in this range · +4 s of holds' });
+  assert.equal(snapshotsExportStatus(holdSchedule(snaps(1, 12), 0, 10, 1.5), true).text, '1 of 2 snapshots is in this range · +1.5 s of holds');
+  assert.match(snapshotsExportStatus(holdSchedule(snaps(1), 0, 10, 2), false).text, /^1 of 1 snapshot is in this range\. Turn on/);
+  // The switch's own line.
+  assert.match(snapshotsSwitchText('none', false, 2), /No snapshots yet/);
+  assert.equal(snapshotsSwitchText('outside', true, 2), 'No snapshot in this range.');
+  assert.equal(snapshotsSwitchText('ready', true, 2.5), 'The video freezes 2.5 s on each, with its drawings and pose.');
+  assert.equal(snapshotsSwitchText('ready', false, 2), 'Off: the video plays straight through.');
+});
+
+test('output progress counts hold seconds, so a hold moves the bar and never reads as a stall', () => {
+  // 9 s range + 2 holds of 2 s = 13 s of output.
+  close(outputProgress(0, 0, 9, 4), 0);
+  close(outputProgress(3, 0, 9, 4), 3 / 13);
+  // During the first hold the video stands still at 3 s; progress keeps moving.
+  close(outputProgress(3, 1, 9, 4), 4 / 13);
+  close(outputProgress(3, 2, 9, 4), 5 / 13);
+  close(outputProgress(9, 4, 9, 4), 1);
+  // Clamped: overshoot past the out-point or the holds never passes 1.
+  close(outputProgress(9.2, 5, 9, 4), 1);
+  // No holds: the plain media fraction (the Recording Hub / Snapshots-off path).
+  close(outputProgress(4.5, 0, 9, 0), 0.5);
+  assert.equal(outputProgress(1, 1, 0, 0), 0);
+});
+
+test('a snapshot drawn at one panel width lines up after a resize when its own box is used', () => {
+  // 1920x1080 video. Drawn while the video sat at (40, 0) 800x450; a stroke on
+  // the player's hand at video pixel (960, 540) is at logical (440, 225).
+  const drawnBox = { dx: 40, dy: 0, dw: 800, dh: 450 };
+  const drawnPoint = { x: 40 + 960 * (800 / 1920), y: 540 * (450 / 1080) };
+  // After a resize the video sits at (0, 60) 1200x675.
+  const nowBox = { dx: 0, dy: 60, dw: 1200, dh: 675 };
+  const out = { w: 1280, h: 720 };
+  const right = mapPoint(overlayTransform(drawnBox, out.w, out.h)!, drawnPoint);
+  close(right.x, 640, 1e-6);
+  close(right.y, 360, 1e-6);
+  // The box of today's canvas (old snapshots without drawingsBox) puts it elsewhere.
+  const wrong = mapPoint(overlayTransform(nowBox, out.w, out.h)!, drawnPoint);
+  assert.ok(Math.abs(wrong.x - 640) > 100 || Math.abs(wrong.y - 360) > 100);
+});
+
+test('includes label with holds', () => {
+  assert.equal(includesLabelWithHolds(true, false, 2), 'Includes: video + skeleton + 2 snapshot holds');
+  assert.equal(includesLabelWithHolds(false, false, 1), 'Includes: video + 1 snapshot hold');
+  assert.equal(includesLabelWithHolds(false, true, 0), 'Includes: video + drawings');
 });

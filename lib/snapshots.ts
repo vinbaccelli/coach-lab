@@ -51,6 +51,14 @@ export interface Snapshot {
   aiDetection?: Record<string, number>;
   /** Derived joint angles keyed by joint label. */
   jointAngles?: Record<string, number>;
+  /**
+   * The on-screen video box (logical canvas px, Canvas getVideoBounds) when
+   * `drawingsJson` was stored. The canvas re-fits its strokes on every resize,
+   * but stored strokes stay in canvas px of that moment, so the Metrics export
+   * maps them from THIS box onto the frame. Without it (snapshots made before
+   * it existed) today's box is used, as on screen.
+   */
+  drawingsBox?: { dx: number; dy: number; dw: number; dh: number };
 }
 
 let snapshotCounter = 0;

@@ -769,3 +769,44 @@ Each hole is reproduced as a test that the old guard passes.
 manufactured. List the ways the failure can look before choosing the measure,
 and prefer a measure tied to ground truth (here the video frames) over a
 threshold on the output alone.
+
+## 016 — "Audio length equals video length" is not "audio in sync"
+
+**Symptom.** The first snapshot-hold export had a 13.25 s video and a 13.2 s
+audio track, which looked right. A test clip with a beep at every whole second
+showed the beeps playing DURING the holds and arriving up to 2.2 s before
+their frames afterwards.
+
+**Verified root cause.** During a hold the source `<video>` is paused, so its
+captured audio track sends no samples; the recorder does not leave a gap, it
+packs the following audio straight after. (The track lengths still matched
+because the audio simply ended early with silence padding.)
+
+**Fix.** With holds, the audio goes through Web Audio, whose destination track
+runs in real time and sends silence while the source is paused. Measured:
+silent holds (RMS 0.0000) and a constant beep-to-frame offset before and after
+each hold (−92 to −148 ms; main's own path measures −175 to −208 ms).
+
+**Class of mistake.** Checking a sync property by comparing lengths. Encode a
+signal you can find in both streams (here: frame numbers in the picture, beeps
+in the sound) and compare them event by event.
+
+## 017 — Picking the moment a stored coordinate is valid without reading who mutates it
+
+**Symptom.** The first `drawingsBox` rule kept the box from the snapshot's
+creation, because stored strokes do not move on resize. A snapshot resized
+while active and then saved would have been exported with the wrong box.
+
+**Verified root cause.** The CANVAS re-fits its own strokes on every resize
+(`components/Canvas.tsx` letterbox remap, KNOWN_ISSUES 010); only the stored
+JSON stops moving, at the moment it is saved. The live green test stroke still
+lined up after a resize, which gave it away.
+
+**Fix.** The box is recorded at every save (the strokes being stored are in
+today's box), and the active snapshot is exported with today's box. Verified
+with a resize while the snapshot was active and an unsaved edit on the active
+one.
+
+**Class of mistake.** Deciding when data is "fixed" from one place that stores
+it, without reading every place that changes it. Before choosing a capture
+point, list the writers.

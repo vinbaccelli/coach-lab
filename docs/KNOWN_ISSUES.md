@@ -458,6 +458,15 @@ own SVG and was not audited for the same class of bug.
 persisted case, because it silently corrupts saved work rather than merely
 looking wrong.
 
+**Export only (2026-10-19, snapshot holds).** Each snapshot now stores
+`drawingsBox`, the video box when its drawings were saved (`lib/snapshots.ts`),
+and the Metrics export maps its strokes from that box, so a snapshot exported
+after a resize lines up (measured: drawn at 1200 px, resized while active,
+exported at 860 and 940 px: strokes within 0.5 px of where they were drawn). The
+SCREEN is unchanged: re-entering a snapshot after a resize still restores its
+strokes misaligned. Snapshots saved before this change have no box and use
+today's box.
+
 ---
 
 ## 011 — A single joint-chain node can never be selected with the Select tool — FIXED (awaiting device test)
@@ -1472,6 +1481,12 @@ Chrome; if they also undershoot, scale the estimate per encoder (or show it as
 **Severity:** low (the estimate is high, never low: files are smaller than
 announced).
 
+**Holds (2026-10-19).** The estimate counts hold seconds at the full bitrate. A
+held frame does not change, so it costs far less: on a 9 s real clip with three
+5 s holds the file was 4.29 MB vs 2.71 MB without (the 15 s of holds added
+1.57 MB, ≈ 0.84 Mbps against ≈ 2.4 Mbps while playing), estimate 12.4 MB. Same
+direction as above (high, never low).
+
 ## 043 — Crop/trim export: `webmFixDuration` parses MP4 output on the main thread — OPEN (pre-existing)
 
 **Symptom.** At the end of every `exportEditedVideo` render (Recording Hub
@@ -1493,12 +1508,13 @@ Touches the Recording Hub path, so it needs approval.
 `components/ToolPalette.tsx` (the Generate row's tooltip: "Capture every phase
 and replay the stroke in slow motion") and `components/tours/playersTour.ts`
 ("Metrics → Generate builds a report"). The report is now one tap further:
-Generate → Snapshot report.
+Generate → Snapshot images & report (renamed from "Snapshot report" with the
+snapshot holds).
 
 **Root cause.** Out of the file list allowed for the export-panel change.
 
 **Proposed fix.** Tooltip: "Export the video or a section"; tour step:
-"Metrics → Generate → Snapshot report builds a report".
+"Metrics → Generate → Snapshot images & report builds a report".
 
 **Severity:** low (wording).
 
@@ -1788,3 +1804,47 @@ disabled meanwhile.
 disabled (`skeletonExportStatus(…, stopping)`). Measured at 375 px: "Stopping
 the analysis…" 6 ms after Cancel, back to normal at 1.4 s, "AI Track is
 running" never shown.
+
+## 055 — Arrow keys on the export trim bar also frame-step the analysis video — OPEN (pre-existing, PR #92)
+
+**Found:** 2026-10-19, testing snapshot holds (Chromium, production build).
+
+**Symptom.** With a trim handle focused in Metrics → Generate, each ArrowLeft /
+ArrowRight moves the handle AND steps the analysis video behind the panel one
+frame (10 presses: 5.5 s → 5.83 s). In SNAPSHOT mode that takes the playhead off
+the snapshot, so the page leaves the snapshot (its edits are saved first, so
+nothing is lost) and the Drawings switch changes from the snapshot line to "No
+drawings on the video" while the panel is open.
+
+**Root cause.** `components/TrimRangeBar.tsx` `onKey` calls `preventDefault()`
+but not `stopPropagation()`. The frame-step shortcuts listen on `window`
+(`components/PlaybackControls.tsx:100-114`, `components/PreciseTimeline.tsx:868-874`)
+and only skip INPUT/TEXTAREA targets, not a `role="slider"` div or an open modal.
+
+**Fault assessment.** Pre-existing since the trim bar (PR #92); not caused by
+the holds. Pointer/touch trimming is not affected (phones are unaffected).
+
+**Proposed fix.** In `TrimRangeBar` `onKey`, call `e.stopPropagation()` when a
+key is handled (one line; the shortcuts are bubble-phase `window` listeners).
+Needs approval (outside this task).
+
+**Severity:** low (keyboard only; desktop).
+
+## 056 — Snapshot holds: the exact seek of the hidden export video is not verified on iOS — OPEN (risk)
+
+**What.** A hold pauses the detached, hidden export `<video>` and seeks it to the
+snapshot's time (`lib/cropExport.ts startHold`). Verified in Chromium (both
+holds on the snapshot's own frame, 75 and 165). Not verified on iOS Safari,
+where seeking a detached element may never report 'seeked'.
+
+**Fallback (implemented, labelled in code).** After 300 ms without 'seeked'
+the hold goes on with the frame the paused video shows: the first frame painted
+at or after the snapshot's time, i.e. within one frame of it. While the video
+has no decodable frame, nothing is redrawn and the canvas keeps the last good
+frame (which then still carries the running overlays instead of the
+snapshot's).
+
+**Check on a phone.** Export with two snapshots; in each hold the picture must
+be the snapshot's frame, with its drawings and pose.
+
+**Severity:** medium until checked on an iPhone.

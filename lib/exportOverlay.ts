@@ -367,9 +367,13 @@ export function dockAnalysisBar(
 
 export type DrawingsExportState = 'ready' | 'none' | 'snapshot';
 
-/** The drawings toggle's state and status line. Snapshot-mode drawings are never exported. */
+/**
+ * The drawings toggle's state and status line. In SNAPSHOT mode the drawings on
+ * the canvas are the snapshot's: they go into the video with that snapshot's
+ * hold (Snapshots switch), never as running drawings.
+ */
 export function drawingsExportStatus(snapshotMode: boolean, drawingCount: number): { state: DrawingsExportState; text: string } {
-  if (snapshotMode) return { state: 'snapshot', text: 'Snapshot drawings aren’t exported. Use Snapshot report.' };
+  if (snapshotMode) return { state: 'snapshot', text: 'The drawings on screen belong to a snapshot. Turn on Snapshots to show them in its hold.' };
   if (drawingCount <= 0) return { state: 'none', text: 'No drawings on the video' };
   return { state: 'ready', text: `${drawingCount} drawing${drawingCount === 1 ? '' : 's'} on the video.` };
 }
@@ -377,4 +381,112 @@ export function drawingsExportStatus(snapshotMode: boolean, drawingCount: number
 /** "Includes: video + skeleton + drawings" for the quality panel. */
 export function includesLabel(skeleton: boolean, drawings: boolean): string {
   return ['Includes: video', skeleton ? 'skeleton' : null, drawings ? 'drawings' : null].filter(Boolean).join(' + ');
+}
+
+// ── Snapshot holds ──────────────────────────────────────────────────────────
+//
+// With Snapshots on, each snapshot inside the trimmed range becomes a HOLD in
+// the exported video: the video plays, freezes on the snapshot's frame for
+// `seconds` with that snapshot's drawings and frozen pose, then continues
+// (lib/cropExport.ts `holds`, Canvas drawExportOverlay `hold`).
+
+/** Hold length setting (seconds): range, step and default. */
+export const HOLD_MIN_SEC = 0.5;
+export const HOLD_MAX_SEC = 5;
+export const HOLD_STEP_SEC = 0.5;
+export const HOLD_DEFAULT_SEC = 2;
+/** One video frame at 30 fps: a snapshot at the out-point is held this much before it. */
+export const HOLD_FRAME_SEC = 1 / 30;
+
+/** A hold length clamped to the setting's range and step. */
+export function clampHoldSec(sec: number): number {
+  if (!Number.isFinite(sec)) return HOLD_DEFAULT_SEC;
+  const stepped = Math.round(sec / HOLD_STEP_SEC) * HOLD_STEP_SEC;
+  return Math.min(HOLD_MAX_SEC, Math.max(HOLD_MIN_SEC, stepped));
+}
+
+export type HoldPlan = {
+  /** One per snapshot in the range, in time order: `at` = source seconds to freeze on. */
+  holds: Array<{ at: number; seconds: number; id: string }>;
+  inRange: number;
+  total: number;
+  totalHoldSec: number;
+};
+
+/**
+ * Which snapshots become holds for the range [start, end], and where.
+ * - In range: start ≤ timeSec ≤ end (1 ms tolerance). Outside: no hold.
+ * - Very start: held at `start` (before playback begins).
+ * - Very end: clamped to one frame before `end` (the render stops AT `end`,
+ *   so a hold there would never be reached).
+ * - Close or identical times are NOT merged: every snapshot keeps its own hold
+ *   with its own drawings; two on the same frame are held one after the other
+ *   on the same picture. Ties keep the snapshots' order.
+ */
+export function holdSchedule(
+  snapshots: ReadonlyArray<{ id: string; timeSec: number }>,
+  start: number,
+  end: number,
+  holdSec: number,
+): HoldPlan {
+  const eps = 1e-3;
+  const seconds = clampHoldSec(holdSec);
+  const valid = snapshots.filter((s) => Number.isFinite(s.timeSec));
+  if (!(end > start)) return { holds: [], inRange: 0, total: valid.length, totalHoldSec: 0 };
+  const last = Math.max(start, end - HOLD_FRAME_SEC);
+  const holds = valid
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => s.timeSec >= start - eps && s.timeSec <= end + eps)
+    .sort((a, b) => a.s.timeSec - b.s.timeSec || a.i - b.i)
+    .map(({ s }) => ({ at: Math.min(last, Math.max(start, s.timeSec)), seconds, id: s.id }));
+  return { holds, inRange: holds.length, total: valid.length, totalHoldSec: holds.length * seconds };
+}
+
+/** "2 s", "1.5 s" */
+export function formatHoldSec(sec: number): string {
+  const r = Math.round(sec * 10) / 10;
+  return `${Number.isInteger(r) ? r.toFixed(0) : r.toFixed(1)} s`;
+}
+
+export type SnapshotsExportState = 'ready' | 'none' | 'outside';
+
+/** The Snapshots switch's state and status line. */
+export function snapshotsExportStatus(plan: HoldPlan, on: boolean): { state: SnapshotsExportState; text: string } {
+  if (plan.total <= 0) return { state: 'none', text: 'No snapshots yet. Create one (Create Snapshot or AI Detect) to hold on it in the video.' };
+  const of = `${plan.inRange} of ${plan.total} snapshot${plan.total === 1 ? '' : 's'}`;
+  if (plan.inRange <= 0) return { state: 'outside', text: `None of your ${plan.total} snapshot${plan.total === 1 ? ' is' : 's are'} in this range. Move the trim to include one.` };
+  const verb = plan.inRange === 1 ? 'is' : 'are';
+  return {
+    state: 'ready',
+    text: on
+      ? `${of} ${verb} in this range · +${formatHoldSec(plan.totalHoldSec)} of holds`
+      : `${of} ${verb} in this range. Turn on to hold on each with its drawings and pose.`,
+  };
+}
+
+/** The Snapshots switch's own line (the range line under the trim bar is `snapshotsExportStatus`). */
+export function snapshotsSwitchText(state: SnapshotsExportState, on: boolean, holdSec: number): string {
+  if (state === 'none') return 'No snapshots yet. Create one (Create Snapshot or AI Detect) to hold on it in the video.';
+  if (state === 'outside') return 'No snapshot in this range.';
+  return on
+    ? `The video freezes ${formatHoldSec(clampHoldSec(holdSec))} on each, with its drawings and pose.`
+    : 'Off: the video plays straight through.';
+}
+
+/**
+ * Render progress (0..1) on the OUTPUT timeline: media seconds rendered plus
+ * hold seconds shown, over the range plus all holds. The video stands still
+ * during a hold while this keeps moving, so a hold never reads as a stall.
+ */
+export function outputProgress(mediaDoneSec: number, holdDoneSec: number, spanSec: number, totalHoldSec: number): number {
+  const total = Math.max(0, spanSec) + Math.max(0, totalHoldSec);
+  if (!(total > 0)) return 0;
+  const done = Math.max(0, Math.min(spanSec, mediaDoneSec)) + Math.max(0, Math.min(totalHoldSec, holdDoneSec));
+  return Math.max(0, Math.min(1, done / total));
+}
+
+/** "Includes: video + skeleton + drawings + 2 snapshot holds" */
+export function includesLabelWithHolds(skeleton: boolean, drawings: boolean, holds: number): string {
+  const base = includesLabel(skeleton, drawings);
+  return holds > 0 ? `${base} + ${holds} snapshot hold${holds === 1 ? '' : 's'}` : base;
 }
