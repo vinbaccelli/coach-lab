@@ -50,6 +50,8 @@ const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/Snapsh
 const GenerateWorkspace = React.lazy(() => import('@/components/metrics/GenerateWorkspace'));
 // Static (not lazy): Generate must open with no chunk fetch on the click.
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
+import VideoDebugBox from '@/components/VideoDebugBox';
+import { ensureFirstFrame, withFirstFrameFragment } from '@/lib/firstFrame';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
@@ -244,6 +246,9 @@ const DRAW_CONTEXT_TOOLS: ToolType[] = [
   'bodyCircle', 'text', 'angle', 'manualSwing', 'swingPath', 'jointChain',
 ];
 
+/** Older iOS Safari needs the prefixed attribute as well as `playsInline` to stay inline. */
+const WEBKIT_PLAYSINLINE = { 'webkit-playsinline': 'true' } as Record<string, string>;
+
 /** Full-viewport invisible decoder — opacity 0 can block Safari frame delivery; keep off-screen but sized. */
 const hiddenDecoderVideoStyle: React.CSSProperties = {
   position: 'fixed',
@@ -366,6 +371,8 @@ function Home() {
   const toursEnabled = useToursEnabled();
   const router = useRouter();
   const searchParams = useSearchParams();
+  /** ?vdebug=1: on-screen first-frame diagnostic (VideoDebugBox). Nothing renders or changes without it. */
+  const vdebug = searchParams?.get('vdebug') === '1';
   const contextPlayerId = searchParams.get('playerId');
   const contextSessionId = searchParams.get('sessionId');
   const [contextPlayerName, setContextPlayerName] = useState<string | null>(null);
@@ -4381,6 +4388,7 @@ function Home() {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !videoSrc) return;
+    const html5Upload = !youtubeVideoIdA && !genericEmbedSrcA;
 
     const paintFirstFrame = () => {
       requestCanvasPaintAfterVideoLoad('A');
@@ -4396,16 +4404,6 @@ function Home() {
       paintFirstFrame();
     };
 
-    // iOS Safari never decodes a frame of a paused, never-played video by
-    // itself: it stops at HAVE_METADATA, `loadeddata` does not fire and the
-    // picture stays black until Play. A tiny seek as soon as the metadata is in
-    // asks it for that frame (desktop browsers already have it; same seek as above).
-    const onMetadata = () => {
-      try {
-        if (video.readyState >= 1 && video.currentTime === 0 && video.paused) video.currentTime = 0.001;
-      } catch { /* noop */ }
-    };
-
     const onError = () => {
       const code = video.error?.code;
       const message = code === MediaError.MEDIA_ERR_DECODE
@@ -4415,17 +4413,23 @@ function Home() {
       setShowTapToPlay(false);
     };
 
-    video.addEventListener('loadedmetadata', onMetadata, { once: true });
     video.addEventListener('loadeddata', onLoaded, { once: true });
     video.addEventListener('error', onError);
-    if (video.readyState >= 1) onMetadata();
     if (video.readyState >= 2) onLoaded();
+    // iOS Safari never decodes a frame of a paused, never-played video by itself
+    // (no `loadeddata`): layered first-frame strategies, lib/firstFrame.ts.
+    const cancelFirstFrame = html5Upload ? ensureFirstFrame(video, {
+      slot: 'A',
+      tapTarget: () => video.parentElement,
+      debug: vdebug,
+      onFrame: () => { requestCanvasPaintAfterVideoLoad('A'); void canvasRef.current?.waitForRender?.(); },
+    }) : null;
 
     return () => {
-      video.removeEventListener('loadedmetadata', onMetadata);
+      cancelFirstFrame?.();
       video.removeEventListener('error', onError);
     };
-  }, [requestCanvasPaintAfterVideoLoad, videoSrc, youtubeVideoIdA, genericEmbedSrcA]);
+  }, [requestCanvasPaintAfterVideoLoad, videoSrc, youtubeVideoIdA, genericEmbedSrcA, vdebug]);
 
   useEffect(() => {
     const video = videoRefB.current;
@@ -4438,23 +4442,21 @@ function Home() {
       } catch { /* noop */ }
       void canvasRefB.current?.waitForRender?.();
     };
-    // Same iOS first-frame nudge as slot A (see there).
-    const onMetadata = () => {
-      try {
-        if (video.readyState >= 1 && video.currentTime === 0 && video.paused) video.currentTime = 0.001;
-      } catch { /* noop */ }
-    };
-
-    video.addEventListener('loadedmetadata', onMetadata, { once: true });
     video.addEventListener('loadeddata', onLoaded, { once: true });
-    if (video.readyState >= 1) onMetadata();
     if (video.readyState >= 2) onLoaded();
+    // Same first-frame strategies as slot A (lib/firstFrame.ts).
+    const cancelFirstFrame = ensureFirstFrame(video, {
+      slot: 'B',
+      tapTarget: () => canvasRefB.current?.getCanvas?.()?.parentElement ?? null,
+      debug: vdebug,
+      onFrame: () => { requestCanvasPaintAfterVideoLoad('B'); void canvasRefB.current?.waitForRender?.(); },
+    });
 
     return () => {
-      video.removeEventListener('loadedmetadata', onMetadata);
+      cancelFirstFrame();
       video.removeEventListener('loadeddata', onLoaded);
     };
-  }, [requestCanvasPaintAfterVideoLoad, videoSrcB]);
+  }, [requestCanvasPaintAfterVideoLoad, videoSrcB, vdebug]);
 
   const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -7287,9 +7289,10 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       {/* ── Hidden decoders — slot B + webcam; slot A video lives in the panel ── */}
       <video
         ref={videoRefB}
-        src={videoSrcB ?? undefined}
+        src={withFirstFrameFragment(videoSrcB)}
         crossOrigin={videoSrcB?.startsWith('/api/') ? 'anonymous' : undefined}
         playsInline
+        {...WEBKIT_PLAYSINLINE}
         muted
         preload="auto"
         style={hiddenDecoderVideoStyle}
@@ -7475,9 +7478,10 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 {/* In-panel decoder — visible for uploads; canvas composites embeds / StroMotion */}
                 <video
                   ref={videoRef}
-                  src={videoSrc ?? undefined}
+                  src={withFirstFrameFragment(videoSrc)}
                   crossOrigin={videoSrc?.startsWith('/api/') ? 'anonymous' : undefined}
                   playsInline
+                  {...WEBKIT_PLAYSINLINE}
                   muted
                   preload="auto"
                   style={html5VideoStyle}
@@ -9729,6 +9733,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           />
         </React.Suspense>
       )}
+
+      {vdebug ? <VideoDebugBox videoRef={videoRef} /> : null}
 
       {/* Mounted only while open: closing it frees its preview and export URLs. */}
       {metricsExportOpen && (

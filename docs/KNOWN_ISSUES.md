@@ -1768,7 +1768,7 @@ disabled meanwhile.
 
 **Severity:** low (a short, self-clearing state).
 
-## 055 — Uploaded video black until Play (iPhone) — FIXED (first-frame branch, to confirm on the device)
+## 055 — Uploaded video black until Play (iPhone) — FIX IN PR #94, to confirm on the device
 
 **Symptom.** After uploading a video in /analysis the video area stays black
 until Play.
@@ -1793,3 +1793,27 @@ with or without `loadeddata`; one seek only; play, pause, seek and frame-step
 unchanged; re-upload shows the new first frame; the skeleton overlay draws.
 
 **Severity:** high on iPhone (the coach sees nothing after upload).
+
+**Round 2 (PR #94: the seek alone did not fix Vin's iPhone).** The first-frame
+code is now `lib/firstFrame.ts ensureFirstFrame`, layered, each step checked
+with readyState ≥ 2 and a drawImage that paints pixels, stopping at the first
+that works: S2 media fragment `blob:…#t=0.001` on the element's src (state,
+revoke and the export keep the raw URL); S3 preload="auto" (already set on
+both analysis videos, so no extra `load()`); S1 the seek to 0.001 on
+loadedmetadata; S4 "prime": muted play() → pause() → seek back to 0.001, with
+the play/pause/playing/timeupdate/volumechange events of that play swallowed in
+the window's capture phase so no app listener runs (pose loop, playback UI,
+A/B sync, return-to-live), muted restored; S5 the first tap on the video panel
+retries S1 + S4 inside the gesture. `webkit-playsinline` added next to
+`playsInline`. The paint switch, Canvas and the pose worker are untouched.
+`/analysis?vdebug=1` shows a read-only box with the video's events, state and
+which strategy ran and how it ended; nothing renders without the flag.
+
+**Measured (Chromium, production build).** Plain: stops at S1 as before.
+Simulated iOS (readyState held at 1 until the video really played, page never
+sees loadeddata/canplay): S1 fails, S4 decodes the frame. With play() also
+rejected without a gesture: S1 and S4 fail, the box says it waits for a tap,
+the tap decodes it (S5). In both, the prime's play/pause reached the window
+(positive control) but no listener on the element; the Play/Pause button kept
+one look (a real play adds the second); muted restored; video B not started.
+Play/pause/seek/frame-step, re-upload and the skeleton overlay unchanged.
