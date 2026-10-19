@@ -1767,3 +1767,29 @@ until `analyzeRange` settles, and show "Stopping the analysis…" with Export
 disabled meanwhile.
 
 **Severity:** low (a short, self-clearing state).
+
+## 055 — Uploaded video black until Play (iPhone) — FIXED (first-frame branch, to confirm on the device)
+
+**Symptom.** After uploading a video in /analysis the video area stays black
+until Play.
+
+**Root cause (code + platform behaviour; not reproducible in the test
+browser).** The only thing that asks for a first frame is a tiny seek
+(`currentTime = 0.001`) in the `loadeddata` handler, gated on
+`readyState >= 2` (`app/analysis/page.tsx`, the `videoSrc` effect). Desktop
+Chromium decodes the first frame on its own (`preload="auto"`), fires
+`loadeddata`, and shows the picture — measured: brightness 128–132 of 255 in
+the picture at 0.4 s after upload, 1280 px and 375 px. iOS Safari does not
+decode a frame of a paused, never-played video: it stops at HAVE_METADATA, so
+`loadeddata` never fires, the seek never runs and nothing is painted. With the
+page's `loadeddata` listeners suppressed in the test browser (that iOS
+condition), the seek indeed never ran (time stayed 0.000).
+
+**Fix.** The same tiny seek also runs on `loadedmetadata` (only while paused at
+0), for slot A and slot B. Every way a file enters /analysis (upload, drop,
+Recording Hub / capture result, stream URL) goes through these effects; YouTube
+and embeds do not. Measured after the fix: the seek runs at `loadedmetadata`
+with or without `loadeddata`; one seek only; play, pause, seek and frame-step
+unchanged; re-upload shows the new first frame; the skeleton overlay draws.
+
+**Severity:** high on iPhone (the coach sees nothing after upload).

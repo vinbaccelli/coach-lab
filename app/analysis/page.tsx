@@ -4396,6 +4396,16 @@ function Home() {
       paintFirstFrame();
     };
 
+    // iOS Safari never decodes a frame of a paused, never-played video by
+    // itself: it stops at HAVE_METADATA, `loadeddata` does not fire and the
+    // picture stays black until Play. A tiny seek as soon as the metadata is in
+    // asks it for that frame (desktop browsers already have it; same seek as above).
+    const onMetadata = () => {
+      try {
+        if (video.readyState >= 1 && video.currentTime === 0 && video.paused) video.currentTime = 0.001;
+      } catch { /* noop */ }
+    };
+
     const onError = () => {
       const code = video.error?.code;
       const message = code === MediaError.MEDIA_ERR_DECODE
@@ -4405,11 +4415,14 @@ function Home() {
       setShowTapToPlay(false);
     };
 
+    video.addEventListener('loadedmetadata', onMetadata, { once: true });
     video.addEventListener('loadeddata', onLoaded, { once: true });
     video.addEventListener('error', onError);
+    if (video.readyState >= 1) onMetadata();
     if (video.readyState >= 2) onLoaded();
 
     return () => {
+      video.removeEventListener('loadedmetadata', onMetadata);
       video.removeEventListener('error', onError);
     };
   }, [requestCanvasPaintAfterVideoLoad, videoSrc, youtubeVideoIdA, genericEmbedSrcA]);
@@ -4425,11 +4438,20 @@ function Home() {
       } catch { /* noop */ }
       void canvasRefB.current?.waitForRender?.();
     };
+    // Same iOS first-frame nudge as slot A (see there).
+    const onMetadata = () => {
+      try {
+        if (video.readyState >= 1 && video.currentTime === 0 && video.paused) video.currentTime = 0.001;
+      } catch { /* noop */ }
+    };
 
+    video.addEventListener('loadedmetadata', onMetadata, { once: true });
     video.addEventListener('loadeddata', onLoaded, { once: true });
+    if (video.readyState >= 1) onMetadata();
     if (video.readyState >= 2) onLoaded();
 
     return () => {
+      video.removeEventListener('loadedmetadata', onMetadata);
       video.removeEventListener('loadeddata', onLoaded);
     };
   }, [requestCanvasPaintAfterVideoLoad, videoSrcB]);
