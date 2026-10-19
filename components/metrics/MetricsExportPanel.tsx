@@ -3,11 +3,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import TrimRangeBar, { formatClock } from '@/components/TrimRangeBar';
 import { exportEditedVideo } from '@/lib/cropExport';
+import { drawVideoWatermark } from '@/lib/videoWatermark';
 import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, type ExportQuality,
 } from '@/lib/exportEstimate';
 import {
-  analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, dockAnalysisBar, drawingsExportStatus,
+  analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, dockAnalysisBar, drawingsExportStatus,
   FOLLOW_STEP_SEC, includesLabel, meanAbsDiff, parsePassProgress, poseRegion, poseShift, skeletonExportStatus,
   skeletonFollowsVideo, toGrey, trackedFraction, untrackedIntervals, type FollowStep, type Rect,
 } from '@/lib/exportOverlay';
@@ -75,6 +76,10 @@ export interface MetricsExportPanelProps {
      * frames of a covered video.
      */
     getVideoRect?: () => Rect | null;
+    /** Any AI Track stored right now (Canvas getBakedTrackInfo() !== null). */
+    hasBakedTrack: () => boolean;
+    /** Clears every AI Track (Canvas clearBakedTrack) and returns the toolbar to idle. */
+    clearBakedTrack: () => void;
   } | null;
 }
 
@@ -214,9 +219,12 @@ export default function MetricsExportPanel({
   // Our own analysis also runs as an AI Track: only someone else's pass makes it wait.
   // Set when this panel's own analysis failed its self-check (frozen or too sparse).
   const [analysisFailed, setAnalysisFailed] = useState(false);
-  const skStatus = skeletonExportStatus(Boolean(overlay?.trackRunning) && phase !== 'analyzing', trackedFrac, analysisFailed);
+  // Cancel was pressed during our own analysis and its pass is still finishing
+  // the frame it is on: from Cancel until analyzeRange settles (KNOWN_ISSUES 054).
+  const [stopping, setStopping] = useState(false);
+  const skStatus = skeletonExportStatus(Boolean(overlay?.trackRunning) && phase !== 'analyzing', trackedFrac, analysisFailed, stopping);
   const drStatus = drawingsExportStatus(Boolean(overlay?.snapshotMode), drawingCount);
-  const skAvailable = skStatus.state !== 'busy' && skStatus.state !== 'failed';
+  const skAvailable = skStatus.state !== 'busy' && skStatus.state !== 'failed' && skStatus.state !== 'stopping';
   const drAvailable = drStatus.state === 'ready';
   // Unset until the coach flips it: on by default when some of the range is tracked.
   const [skeletonChoice, setSkeletonChoice] = useState<boolean | null>(null);
@@ -274,17 +282,33 @@ export default function MetricsExportPanel({
     return () => { document.removeEventListener('visibilitychange', onVis); window.clearInterval(iv); };
   }, [busy, phase]);
 
-  /** The skeleton analysis failed a check: say why (with its numbers) and leave the skeleton off. */
-  const failSkeleton = useCallback((text: string) => {
-    setAnalysisFailed(true);
+  /**
+   * The skeleton analysis failed a check: say why (with its numbers) and leave
+   * the skeleton off. `after`: what happened to the analysis's track — cleared
+   * (the switch is usable again: nothing bad is stored) or left with an earlier
+   * AI Track (the switch stays on "could not be analyzed").
+   */
+  const failSkeleton = useCallback((text: string, after?: { cleared: boolean; note: string }) => {
+    setAnalysisFailed(!after?.cleared);
     setSkeletonChoice(false);
     setPhase('error');
-    setError(`${text} Skeleton is now off: export again to save the video without it.`);
+    setError(`${text} Skeleton is now off: export again to save the video without it.${after ? ` ${after.note}` : ''}`);
+  }, []);
+
+  // The watermark's logo loads lazily on first draw: warm it now, so the first
+  // exported frame already carries it (the analysis canvas usually has).
+  useEffect(() => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = 1; c.height = 1;
+      const x = c.getContext('2d');
+      if (x) drawVideoWatermark(x, 1, 1);
+    } catch { /* noop */ }
   }, []);
 
   // ── Export ───────────────────────────────────────────────────────────────
   const startExport = useCallback(async () => {
-    if (!videoSrc || !meta || !selected || selected.disabled || busy) return;
+    if (!videoSrc || !meta || !selected || selected.disabled || busy || stopping) return;
     clearResult();
     setError(null);
     setNotice(null);
@@ -318,6 +342,14 @@ export default function MetricsExportPanel({
     lastProgressAtRef.current = performance.now();
     // The pre-render check's numbers, repeated if the render check fails later.
     let analyzed: { check: ReturnType<typeof checkAnalyzedTrack>; kept: number; span: number } | null = null;
+    // Was any AI Track stored before our analysis? Decides whether a failed or
+    // cancelled analysis can be cleaned up (analysisCleanup).
+    let hadTrackBefore: boolean | null = null;
+    const cleanUpAnalysis = () => {
+      const c = analysisCleanup(hadTrackBefore !== false);
+      if (c.clear) { overlay?.clearBakedTrack(); setTrackVersion((v) => v + 1); }
+      return { cleared: c.clear, note: c.note };
+    };
     try {
       // ── 1. Skeleton analysis (only the untracked parts of the range) ──
       // The existing AI Track pass, unchanged ('fast'). It seeks the analysis
@@ -330,19 +362,34 @@ export default function MetricsExportPanel({
         setAnalysis({ frac: 0, leftSec: null });
         setPhase('analyzing');
         setStage('Analyzing skeleton…');
+        hadTrackBefore = overlay.hasBakedTrack();
         let kept = 0;
-        for (let i = 0; i < intervals.length; i++) {
-          analysisRef.current = { ...analysisRef.current, index: i };
-          kept += await overlay.analyzeRange(intervals[i].start, intervals[i].end);
-          if (ac.signal.aborted) return;
+        let cancelled = false;
+        try {
+          for (let i = 0; i < intervals.length; i++) {
+            analysisRef.current = { ...analysisRef.current, index: i };
+            kept += await overlay.analyzeRange(intervals[i].start, intervals[i].end);
+            if (ac.signal.aborted) { cancelled = true; break; }
+          }
+        } finally {
+          // The pass has settled (finished, cancelled or thrown): no longer "stopping".
+          setStopping(false);
+        }
+        if (cancelled) {
+          // Cancel already reset the UI ("Export cancelled."); the pass has now
+          // stopped, so its parts can be cleaned up.
+          const after = cleanUpAnalysis();
+          setNotice(`Export cancelled. ${after.note}`);
+          return;
         }
         analysisRef.current = null;
         setTrackVersion((v) => v + 1);
         const covered = overlay.isRangeBaked(range.start, range.end)
           ? 1 : trackedFraction(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null);
         if (covered <= 0) {
+          const after = cleanUpAnalysis();
           setPhase('error');
-          setError('The skeleton analysis found no player in this range. Turn Skeleton off to export without it, or run AI Track from the Skeleton menu.');
+          setError(`The skeleton analysis found no player in this range. Turn Skeleton off to export without it, or run AI Track from the Skeleton menu. ${after.note}`);
           return;
         }
         // Self-check before rendering: enough poses, a pose that moves, and not
@@ -351,7 +398,7 @@ export default function MetricsExportPanel({
         const span = intervals.reduce((sum, r) => sum + (r.end - r.start), 0);
         const check = checkAnalyzedTrack(kept, span, analysisSampleTimes(intervals, 1 / 30, 3600).map((t) => overlay.getBakedPoseAt(t)));
         if (!check.ok) {
-          failSkeleton(analysisFailedText(check, kept, span, null));
+          failSkeleton(analysisFailedText(check, kept, span, null), cleanUpAnalysis());
           return;
         }
         analyzed = { check, kept, span };
@@ -364,7 +411,7 @@ export default function MetricsExportPanel({
       const whole = range.start <= 0.01 && range.end >= meta.duration - 0.01;
       // Overlays: capture the video box, strokes and angles NOW (export start),
       // then reuse that capture for every frame so a resize cannot move them.
-      let drawOverlay: ((ctx: CanvasRenderingContext2D, t: number, w: number, h: number) => void) | undefined;
+      let drawOverlays: ((ctx: CanvasRenderingContext2D, t: number, w: number, h: number) => void) | undefined;
       // Render-time check (skeleton only): every FOLLOW_STEP_SEC of media time,
       // compare the picture around the skeleton with the previous step's (same
       // region) and the skeleton's own move. Read BEFORE the overlay is drawn, so
@@ -402,11 +449,18 @@ export default function MetricsExportPanel({
           }
           follow.last = { kps, region, grey: grab(ctx, region) };
         };
-        drawOverlay = (ctx, t, w, h) => {
+        drawOverlays = (ctx, t, w, h) => {
           if (tctx) { try { probe(ctx, t, w, h); } catch { /* the check must never stop the export */ } }
           overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen });
         };
       }
+      // Every export carries the AngleMotion watermark (lib/videoWatermark.ts),
+      // bottom-left of the frame, LAST: after the render check has read the bare
+      // frame and after the skeleton and drawings (KNOWN_ISSUES 046).
+      const drawOverlay = (ctx: CanvasRenderingContext2D, t: number, w: number, h: number) => {
+        drawOverlays?.(ctx, t, w, h);
+        drawVideoWatermark(ctx, w, h);
+      };
       const res = await exportEditedVideo(src, {
         trim: whole ? null : { start: range.start, end: range.end },
         maxHeight: selected.maxHeight,
@@ -433,7 +487,12 @@ export default function MetricsExportPanel({
         return v.ok === false ? v : null;
       })();
       if (finalFollow && abortRef.current === ac) {
-        failSkeleton(analysisFailedText(analyzed?.check ?? null, analyzed?.kept ?? 0, analyzed?.span ?? 0, finalFollow));
+        // Only the export's own analysis is cleaned up; a toolbar AI Track that
+        // fails the render check is left to the coach.
+        failSkeleton(
+          analysisFailedText(analyzed?.check ?? null, analyzed?.kept ?? 0, analyzed?.span ?? 0, finalFollow),
+          analyzed ? cleanUpAnalysis() : undefined,
+        );
         return;
       }
       // Cancelled (or closed): the UI was already reset by cancelExport.
@@ -459,14 +518,14 @@ export default function MetricsExportPanel({
       restorePreview();
       if (restoreRef.current === restorePreview) restoreRef.current = null;
     }
-  }, [videoSrc, meta, selected, busy, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton]);
+  }, [videoSrc, meta, selected, busy, stopping, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton]);
 
   const cancelExport = useCallback(() => {
     const ac = abortRef.current;
     if (!ac) return;
     abortRef.current = null;
     ac.abort();
-    if (analysisRef.current) { analysisRef.current = null; overlay?.cancelAnalysis(); }
+    if (analysisRef.current) { analysisRef.current = null; overlay?.cancelAnalysis(); setStopping(true); }
     setStage(null);
     markCancelled();
     restoreRef.current?.();
@@ -771,8 +830,8 @@ export default function MetricsExportPanel({
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <button
                   type="button"
-                  style={btn(true, !selected || selected.disabled)}
-                  disabled={!selected || selected.disabled}
+                  style={btn(true, !selected || selected.disabled || stopping)}
+                  disabled={!selected || selected.disabled || stopping}
                   onClick={() => { void startExport(); }}
                 >
                   {needsAnalysis ? 'Analyze skeleton + export' : 'Export'}

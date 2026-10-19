@@ -48,7 +48,7 @@ export function trackedFraction(
   return hit / n;
 }
 
-export type SkeletonExportState = 'ready' | 'analyze' | 'busy' | 'failed';
+export type SkeletonExportState = 'ready' | 'analyze' | 'busy' | 'failed' | 'stopping';
 
 /** Shown when the export's own analysis fails its self-check (checkAnalyzedTrack). */
 export const ANALYSIS_FAILED_TEXT = 'Skeleton could not be analyzed on this video';
@@ -60,7 +60,16 @@ export const ANALYSIS_FAILED_TEXT = 'Skeleton could not be analyzed on this vide
  * the existing AI Track pass, when the coach exports — said here before Export.
  * Only an AI Track already running from the toolbar makes it wait.
  */
-export function skeletonExportStatus(trackRunning: boolean, fraction: number, analysisFailed = false): { state: SkeletonExportState; text: string } {
+export function skeletonExportStatus(
+  trackRunning: boolean,
+  fraction: number,
+  analysisFailed = false,
+  stopping = false,
+): { state: SkeletonExportState; text: string } {
+  // The export's own pass, cancelled, still finishing the frame it is on (it
+  // checks the abort between frames): it is ours, not "an AI Track running"
+  // (KNOWN_ISSUES 054). Export waits until it has settled.
+  if (stopping) return { state: 'stopping', text: 'Stopping the analysis…' };
   // The export's own analysis failed its self-check (checkAnalyzedTrack): the
   // stored track would export a frozen skeleton, so it is not offered again.
   if (analysisFailed) return { state: 'failed', text: `${ANALYSIS_FAILED_TEXT}.` };
@@ -69,6 +78,19 @@ export function skeletonExportStatus(trackRunning: boolean, fraction: number, an
   if (fraction <= 0) return { state: 'analyze', text: 'Not analyzed yet. The skeleton will be analyzed first when you export, which adds time.' };
   const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
   return { state: 'analyze', text: `Skeleton covers ${pct}% of this range. The rest will be analyzed first when you export, which adds time.` };
+}
+
+/**
+ * After the export's own analysis failed or was cancelled: what to do with the
+ * track it may have left (a cancelled pass keeps the parts it finished; a
+ * failed one keeps the bad track). With no track before the analysis, all
+ * tracks are the analysis's own, so clearing all of them is exact. With an
+ * earlier AI Track, Canvas can only clear every track, so nothing is removed.
+ */
+export function analysisCleanup(hadTrackBefore: boolean): { clear: boolean; note: string } {
+  return hadTrackBefore
+    ? { clear: false, note: 'Your earlier AI Track was left as it is (AI Track can only be cleared as a whole, from the Skeleton menu).' }
+    : { clear: true, note: 'The unfinished skeleton analysis was removed.' };
 }
 
 /**

@@ -9774,6 +9774,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             snapshotMode: analysisMode.kind === 'snapshot',
             getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,
             isRangeBaked: (a, b) => canvasRef.current?.isRangeBaked?.(a, b) ?? false,
+            hasBakedTrack: () => !!canvasRef.current?.getBakedTrackInfo?.(),
+            clearBakedTrack: () => { canvasRef.current?.clearBakedTrack?.(); setPrecisionTrackState('idle'); },
             drawExportOverlay: (ctx, t, w, h, o) =>
               canvasRef.current?.drawExportOverlay?.(ctx, t, w, h, o)
               ?? { box: { dx: 0, dy: 0, dw: 0, dh: 0 }, videoW: 0, videoH: 0, drawingCount: 0, strokes: [], angles: [] },
