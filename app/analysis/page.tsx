@@ -9725,6 +9725,41 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           pauseAnalysisVideo={() => { const v = videoRef.current; if (v && !v.paused) v.pause(); }}
           onClose={() => setMetricsExportOpen(false)}
           isMobile={isMobile}
+          overlay={{
+            trackRunning: precisionTrackState === 'running',
+            passStatus: processingStatus,
+            // The export's skeleton analysis IS the existing AI Track pass, unchanged
+            // ('fast', any range), with the same running/ready bookkeeping as the toolbar.
+            analyzeRange: async (a, b) => {
+              precisionAbortRef.current = false;
+              setPrecisionTrackState('running');
+              try {
+                const kept = await runPrecisionPass(a, b, 'fast');
+                if (precisionAbortRef.current) { setProcessingStatus('Skeleton analysis cancelled'); return 0; }
+                setProcessingStatus(kept >= 2 ? `Skeleton analyzed for the export — ${kept} frame-exact poses.` : 'Skeleton analysis found no player in that range');
+                return kept;
+              } finally {
+                setPrecisionTrackState(canvasRef.current?.getBakedTrackInfo?.() ? 'ready' : 'idle');
+              }
+            },
+            cancelAnalysis: () => { precisionAbortRef.current = true; },
+            snapshotMode: analysisMode.kind === 'snapshot',
+            getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,
+            isRangeBaked: (a, b) => canvasRef.current?.isRangeBaked?.(a, b) ?? false,
+            drawExportOverlay: (ctx, t, w, h, o) =>
+              canvasRef.current?.drawExportOverlay?.(ctx, t, w, h, o)
+              ?? { box: { dx: 0, dy: 0, dw: 0, dh: 0 }, videoW: 0, videoH: 0, drawingCount: 0, strokes: [], angles: [] },
+            // The picture of the video the pass seeks (object-fit: contain), so the
+            // panel's analysis bar can dock outside it.
+            getVideoRect: () => {
+              const v = videoRef.current;
+              if (!v || !v.videoWidth || !v.videoHeight) return null;
+              const r = v.getBoundingClientRect();
+              const s = Math.min(r.width / v.videoWidth, r.height / v.videoHeight);
+              const w = v.videoWidth * s, h = v.videoHeight * s;
+              return { x: r.left + (r.width - w) / 2, y: r.top + (r.height - h) / 2, w, h };
+            },
+          }}
         />
       )}
 

@@ -1520,3 +1520,250 @@ cover by default, so it needs approval.
 
 **Severity:** low (the coach can drag the handles; *Whole video* is the
 export default).
+
+## 046 — Metrics export has no AngleMotion watermark — OPEN (found with the export overlays)
+
+**Symptom.** Files exported from Metrics → Generate (the export panel, PR #92)
+have no watermark; the analysis canvas shows it bottom-left of the video.
+Seen comparing the screen and exported frames in Chromium, 2026-10-17.
+
+**Root cause.** `lib/videoWatermark.ts` states the watermark "has to appear on
+the live analysis canvas AND inside every recorded/exported video". The old
+Generate recording captured the canvas, which draws it (`Canvas.tsx` render
+loop, `drawVideoWatermark`). The export panel renders the video itself
+(`lib/cropExport.ts`) and never calls `drawVideoWatermark`.
+
+**Fault assessment.** Gap introduced by PR #92 (the export panel); the overlay
+PR did not change it (out of its allowed scope).
+
+**Proposed fix.** In the panel's export, always pass a `drawOverlay` that ends
+with `drawVideoWatermark(ctx, ow, oh)` (no area: bottom-left of the frame, the
+recording-canvas case the function documents). Needs approval (changes every
+Metrics export).
+
+**Severity:** moderate (branding contract; no functional loss).
+
+## 047 — Exporting right after turning the Skeleton on drops ~45% of frames (test browser) — OPEN (pre-existing)
+
+**Symptom.** Metrics export of an 18 s 1080p clip, started within seconds of
+turning the Skeleton on: 277–316 frames instead of ~540 — on main and on the
+overlay branch alike. Skeleton off: 516–540. Skeleton on, export started after
+waiting 60 s: 539.
+
+**Root cause (partial).** Start-up work that turning the Skeleton on triggers in
+the background competes with the export on this 4-core, GPU-less browser. The
+main thread is not the cause (a CPU profile shows only the export's own
+`drawImage`; the analysis canvas does not repaint during the export). Not
+measured on a real phone or desktop browser.
+
+**Proposed fix.** Measure on real devices first. If it reproduces, wait for the
+pose model to be ready (or show "Preparing…") before an export starts.
+
+**Severity:** low–moderate (choppier file, only right after enabling Skeleton).
+
+## 048 — 4K Original export runs at ~6 fps in the test browser — OPEN (pre-existing, environment)
+
+**Symptom.** A 6 s 3840×2160 clip exported at Original gives 35–39 frames on
+main and 36–37 on the overlay branch (36 with skeleton + drawings on).
+
+**Root cause.** Software 4K decode + `drawImage` in a GPU-less headless
+Chromium; the overlay adds nothing measurable. Real phones decode 4K in
+hardware — not measured here.
+
+**Proposed fix.** None until measured on a real iPhone/Android. If real devices
+also drop, cap Original at 1080p on phones.
+
+**Severity:** unknown (environment-specific until measured).
+
+## 049 — AI measurement overlays do not follow the player during tracked playback — OPEN (pre-existing, by code)
+
+**Symptom (expected from the code, not seen at runtime).** With an AI Track and
+measurement overlays on, the shoulder/hip/racket/foot arrows stay where the
+last live pose put them while the video plays.
+
+**Root cause.** The overlays draw from `latestKeypointsRef` (`Canvas.tsx`,
+"Live measurement overlays"), but once any track exists the live pose loop
+stops sending frames ("tracks own the display"), so that ref is not updated.
+The skeleton itself uses the track (`lookupBakedPose`).
+
+**Proposed fix.** Draw the overlays from the same pose the skeleton uses (the
+baked pose when there is one). Touches skeleton/measurement display: needs
+approval and a runtime repro first. This is why the export leaves them out.
+
+**Severity:** moderate if confirmed.
+
+## 050 — The export's skeleton analysis (AI Track pass) freezes the UI in bursts — OPEN (pre-existing pass)
+
+**Symptom.** While the Metrics export analyzes the skeleton (the existing AI
+Track pass), the page stutters: in the test browser (4 cores, no GPU) 57–75 long
+tasks per analysis, the longest 1.4–1.5 s, and one ~6 s gap at the start (model
+load). Rendering afterwards is smooth (0–1 long tasks). Cancel still answered
+in 66 ms (it is checked between frames).
+
+**Root cause.** `runPrecisionPass` (`app/analysis/page.tsx`) runs MediaPipe
+(`lib/mediapipePose.ts detectPosePrecise`) on the MAIN thread, one frame at a
+time; the same happens when AI Track is started from the toolbar. Its
+internals are frozen, so the export reuses it as is.
+
+**Proposed fix.** Run the precision detection off the main thread (a worker
+for the precise pass), or yield to the UI between frames. Both change
+`runPrecisionPass` internals or the pose-worker architecture: needs approval.
+Measure on a real iPhone first (GPU delegate) — the bursts may be much shorter.
+
+**Severity:** moderate (UI stutters during the analysis step only).
+
+## 051 — Phone: "the app zoomed in after drawing and would not come back" — NOT REPRODUCED
+
+**Reported.** Vin, real device, while testing PR #93: after drawing on the
+canvas the app was zoomed in and did not return, so the export could not be
+reached.
+
+**What was checked (Chromium, 375 px touch, main and PR #93 alike).** Line,
+angle (3 quick taps), text, pen and a double-tap on the canvas: no zoom
+(`visualViewport.scale` 1, video transform unchanged). A two-finger pinch on the
+canvas zooms the canvas — a 96 px finger spread jumps straight to the 500%
+maximum — and the ⌂ button (title "Reset zoom & pan") brings it back on both.
+
+**Candidates (not confirmed).** (1) A second finger or palm during a draw
+stroke triggers the canvas pinch zoom (`Canvas.tsx` touch pinch →
+`applyZoomAtRef`); the way back is ⌂, at the right edge of the video, which is
+easy to miss. (2) iOS Safari's PAGE zoom (focus on a text field under 16 px —
+the Text tool's box uses the chosen text size; default 24 px — or a
+double-tap on an element without `touch-action: manipulation`): the canvas
+swallows pinch gestures (`touch-action: none`), so there is no way to pinch the
+page back out. Playwright cannot emulate iOS page zoom.
+
+**Needed to decide.** Device + browser, and whether the whole page (toolbar too)
+was zoomed or only the video with a "%" label in its corner. Fixes would be in
+Canvas zoom code or `app/layout.tsx` viewport — outside PR #93's files.
+
+**Severity:** high if (2) on iPhone (blocks the export).
+
+## 052 — Phone: exported skeleton frozen when the export analyzed it (no prior AI Track) — FIXED (PR #93, confirmed on Vin's iPhone)
+
+**Reported.** Vin, real device, PR #93: Metrics export, Include skeleton on, no
+prior AI Track. The panel analyzed the range ("Analyze skeleton + export") and
+the video had a skeleton that stayed in one position. The same clip exported
+correctly after AI Track from the toolbar.
+
+**What was measured (Chromium, 4 cores, no GPU, dev build; same 2 s clip).**
+Every pass sample was tapped (`addBakeSample(t, kps)`) and the stored track
+read back with `getBakedPoseAt`:
+
+| Path | Poses | Spacing | Distinct poses | Joint shift from first pose, over 2 s | Time |
+|---|---|---|---|---|---|
+| Panel, on-screen skeleton never on | 58 (0.05–1.95 s) | 1/30 s | 58 | 0 → 19.9 px | 89 s pass |
+| Panel, on-screen skeleton on | 58 | 1/30 s | 58 | 0 → 19.9 px | 87 s |
+| Toolbar 0.5× (fast) | 61 (0–2 s) | 1/30 s | 41 | 0 → 20.3 px | 104 s |
+| Toolbar 0.25× (balanced, the dialog default) | 91 (0–2 s) | 1/45 s | 60 | 0 → 21.6 px | 339 s |
+
+All four used MediaPipe (`engine=mediapipe-full` in the pass log), the time
+base is the analysis video's `currentTime` (absolute media time) in every case,
+and the export reads it live per frame (`drawExportOverlay` → `lookupBakedPose(
+video.currentTime)` of the hidden export video; only the video box, strokes and
+angles are captured once, after the analysis). The exported files' joint dots
+matched the stored track within 0.6–2.2 px and moved with it. So in this
+browser the panel's track is not frozen, and the panel and the toolbar store the
+same kind of track; only the tier differs ('fast' = FULL model at 30 fps,
+balanced = HEAVY at 45 fps, about 3.3× slower here).
+
+**What a frozen track would be, by code.** `detectPosePrecise` runs MediaPipe
+on the analysis `<video>` after each seek. If the picture it reads never
+changes (a frame the browser does not repaint after a seek), every sample gets
+the same pose: a stored track with motion 0 — exactly the symptom. A pass that
+finds the player on very few frames gives a few samples spread over the range,
+and `lookupBakedPose` snaps to the nearest one across gaps over 0.5 s: a skeleton
+that stands still and jumps now and then.
+
+**Device-only candidates (not confirmed).** (1) During the panel's analysis the
+analysis video sits under the panel (fixed, 85% black) while it is seeked;
+WebKit may not hand a repainted frame to WebGL for a seeked paused video in
+that state (the page already notes that hidden videos can block Safari frame
+delivery, `app/analysis/page.tsx hiddenDecoderVideoStyle`). (2) The tier: the
+panel uses 'fast' (the FULL landmarker, shared with other live features),
+the toolbar's default is balanced (HEAVY).
+
+**Device result (Vin).** AI Track from the toolbar at 0.5× — the same 'fast'
+tier the panel uses — tracks the same clip correctly; the panel's analysis
+still exports a frozen skeleton. So the tier is not the cause; how the pass
+runs is. The only differences in page state (checked in code: both call
+`runPrecisionPass` on the same `videoRef`, paused, same lock and mode; the
+pass reads no skeleton display flag) are the panel itself — a fixed,
+full-screen dialog (85% black) covering the video being seeked — and its
+unloaded preview `<video>`. iOS Safari is known here to stop delivering frames
+of a video it does not show (`app/analysis/page.tsx hiddenDecoderVideoStyle`).
+
+**Fix (PR #93, third round).** While the skeleton is analyzed the panel is a
+compact bar docked outside the video's picture (`dockAnalysisBar`); the video
+is fully on screen and uncovered, as with the toolbar's AI Track. Measured in
+the test browser: 0 of 49 points of the picture covered, opacity 1, nothing
+hidden in the video's parents, at 375×812 and 1440×900, landscape and portrait
+clips (a portrait clip on the phone needs the compact bar, without its note).
+
+**Why the first guard (c8c72033) let a frozen skeleton through.** It refused
+only a pose that never moved at all (≥ 0.1% of body size from the first pose)
+or too few poses. Reproduced holes (tests in `tests/exportOverlay.test.ts`):
+(1) a fresh picture only now and then — the pose repeats exactly between
+jumps (motion 155%, passed); (2) a stale picture with detector noise — a pose
+that jitters ~0.5% and never follows the player (passed). Whether Vin's
+preview already had c8c72033 (Vercel preview ready at 11:44 UTC, 18 Oct) is not
+known here; either way these holes are closed now:
+- before rendering, `checkAnalyzedTrack` also refuses a pose repeated exactly
+  from frame to frame on more than 60% of the range (simulated: refused,
+  "repeated 86%");
+- while rendering, `skeletonFollowsVideo` compares the picture around the
+  skeleton with the skeleton's own move every 0.25 s and stops the export when
+  the picture moves and the skeleton does not (simulated stale picture + noise:
+  stopped 1.5 s into the render, "video moved 6×, skeleton still 6×").
+The failure line carries the numbers (poses, poses/s, motion, repeated share,
+video-moved / skeleton-still counts) so a phone screenshot says which case it was.
+
+**Confirmed on the device.** Vin, iPhone, preview of ac8f6aed: the export with
+no prior AI Track now exports a skeleton that follows the player.
+
+**Left over.** The failed track stays stored (the on-screen skeleton uses it
+too) until the coach clears AI Track. Removing just that track needs a Canvas
+method: needs approval.
+
+**Severity:** high on the affected device (a wrong skeleton in a shared video);
+now blocked by the self-check instead of exported.
+
+## 053 — AI Track samples land on the previous frame about a third of the time (test browser) — OPEN (pre-existing pass)
+
+**Symptom.** Found while dumping tracks for 052. Toolbar AI Track stores the
+same pose for two consecutive sample times on 20 of 61 samples (0.5×, 2 s clip)
+and 90 of 271 (0.5×, 9 s clip); 31 of 91 at 0.25×, where 45 samples a second on
+a 30 fps clip repeat frames by design. The export's analysis of the same clips,
+whose sample times start 0.05 s in, stores 0 repeats (58 of 58, 268 of 268).
+
+**Likely cause (not proven).** The toolbar pass seeks to
+exact frame boundaries (`start + k / 30` with start 0) and the browser can
+show the previous frame for a time that sits on a boundary; the sample is
+stamped with `video.currentTime` (the requested time), so the pose is one frame early. Mid-frame times
+do not hit it.
+
+**Proposed fix.** Seek to the middle of each frame (`+ 0.5 / fps`) in
+`runPrecisionPass`, whose internals are frozen: needs approval. Check on
+Safari and Chrome on devices first.
+
+**Severity:** low (a one-frame lag on a third of samples, smoothed).
+
+## 054 — For 1–2 s after Cancel during the export's analysis, the Skeleton switch reads "AI Track is running" — OPEN (pre-existing, PR #93)
+
+**Symptom.** Cancel returns the panel to idle at once (137 ms, production
+build), but the pass stops only after the frame it is detecting (~1.4 s in the
+test browser). Until then the page's AI Track state is still "running", so the
+Skeleton switch shows "AI Track is running. Wait for it to finish, then
+export." and is off; Export in that moment would save the video without the
+skeleton.
+
+**Root cause.** `skeletonExportStatus` treats any running pass as someone
+else's once the panel is no longer analyzing; the cancelled pass is the
+panel's own, winding down (`runPrecisionPass` checks the abort flag between
+frames).
+
+**Proposed fix (panel only).** Remember that the running pass is the panel's own
+until `analyzeRange` settles, and show "Stopping the analysis…" with Export
+disabled meanwhile.
+
+**Severity:** low (a short, self-clearing state).
