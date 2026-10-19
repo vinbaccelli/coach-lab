@@ -1805,6 +1805,90 @@ disabled (`skeletonExportStatus(…, stopping)`). Measured at 375 px: "Stopping
 the analysis…" 6 ms after Cancel, back to normal at 1.4 s, "AI Track is
 running" never shown.
 
+## 055 — Uploaded video black until Play (iPhone) — FIX IN PR #94, to confirm on the device
+
+**Symptom.** After uploading a video in /analysis the video area stays black
+until Play.
+
+**Root cause (code + platform behaviour; not reproducible in the test
+browser).** The only thing that asks for a first frame is a tiny seek
+(`currentTime = 0.001`) in the `loadeddata` handler, gated on
+`readyState >= 2` (`app/analysis/page.tsx`, the `videoSrc` effect). Desktop
+Chromium decodes the first frame on its own (`preload="auto"`), fires
+`loadeddata`, and shows the picture — measured: brightness 128–132 of 255 in
+the picture at 0.4 s after upload, 1280 px and 375 px. iOS Safari does not
+decode a frame of a paused, never-played video: it stops at HAVE_METADATA, so
+`loadeddata` never fires, the seek never runs and nothing is painted. With the
+page's `loadeddata` listeners suppressed in the test browser (that iOS
+condition), the seek indeed never ran (time stayed 0.000).
+
+**Fix.** The same tiny seek also runs on `loadedmetadata` (only while paused at
+0), for slot A and slot B. Every way a file enters /analysis (upload, drop,
+Recording Hub / capture result, stream URL) goes through these effects; YouTube
+and embeds do not. Measured after the fix: the seek runs at `loadedmetadata`
+with or without `loadeddata`; one seek only; play, pause, seek and frame-step
+unchanged; re-upload shows the new first frame; the skeleton overlay draws.
+
+**Severity:** high on iPhone (the coach sees nothing after upload).
+
+**Round 2 (PR #94: the seek alone did not fix Vin's iPhone).** The first-frame
+code is now `lib/firstFrame.ts ensureFirstFrame`, layered, each step checked
+with readyState ≥ 2 and a drawImage that paints pixels, stopping at the first
+that works: S2 media fragment `blob:…#t=0.001` on the element's src (state,
+revoke and the export keep the raw URL); S3 preload="auto" (already set on
+both analysis videos, so no extra `load()`); S1 the seek to 0.001 on
+loadedmetadata; S4 "prime": muted play() → pause() → seek back to 0.001, with
+the play/pause/playing/timeupdate/volumechange events of that play swallowed in
+the window's capture phase so no app listener runs (pose loop, playback UI,
+A/B sync, return-to-live), muted restored; S5 the first tap on the video panel
+retries S1 + S4 inside the gesture. `webkit-playsinline` added next to
+`playsInline`. The paint switch, Canvas and the pose worker are untouched.
+`/analysis?vdebug=1` shows a read-only box with the video's events, state and
+which strategy ran and how it ended; nothing renders without the flag.
+
+**Measured (Chromium, production build).** Plain: stops at S1 as before.
+Simulated iOS (readyState held at 1 until the video really played, page never
+sees loadeddata/canplay): S1 fails, S4 decodes the frame. With play() also
+rejected without a gesture: S1 and S4 fail, the box says it waits for a tap,
+the tap decodes it (S5). In both, the prime's play/pause reached the window
+(positive control) but no listener on the element; the Play/Pause button kept
+one look (a real play adds the second); muted restored; video B not started.
+Play/pause/seek/frame-step, re-upload and the skeleton overlay unchanged.
+
+**Round 3 — regression: "Could not load this video file" (Vin's iPhone, Chrome
+for iOS / WebKit, PR #94 preview).** Uploading from the camera roll failed.
+
+*Root cause (by code + simulation; WebKit not available here).* Round 2 put a
+media fragment on the upload's blob URL (`src="blob:…#t=0.001"`, S2). It was the
+only change to how the file LOADS; everything else ran after metadata. When a
+blob URL with a fragment is refused, the element fails with MediaError 4 at
+readyState 0, and the page's `error` handler shows exactly that message
+(`app/analysis/page.tsx`, slot A effect). Reproduced in Chromium by making any
+fragment-carrying blob src fail: same message, same state (rs 0, ns 3, code 4).
+The other strategies were checked: S3 called `load()` only if `preload` was not
+"auto" (never on this path); S1/S4/S5 run only after metadata and never touch
+the src; nothing else assigns the src (React sets it once).
+
+*Fix.* The src is the raw URL again, set once, as on main (fragment helper
+removed). S3 removed: nothing writes `preload` or calls `load()`. Kept: S1 seek,
+S4 muted prime, S5 tap retry, only on an element with metadata and no error,
+each wrapped in try/catch. Safety net: an `error` after one of these touched a
+video that HAD reached readyState ≥ 1 is ignored (logged under ?vdebug=1); any
+other error is shown exactly as on main. The ?vdebug=1 box sits below the iPhone
+status bar (`safe-area-inset-top`; the page draws under it with
+viewport-fit=cover, which likely hid the box at `top: 4px`) and is also shown
+inside the "Could not load" panel, with MediaError code + message,
+readyState, networkState, src type (blob/stream, "#frag" if a fragment), how
+many times the src was set, and the last strategy.
+
+*Measured (Chromium, production build).* With fragment blob URLs forced to
+fail: the upload now loads (rs 4, src set once, no fragment), first frame by S1.
+A synthetic `error` after S1 ran: ignored, no message. A corrupt file: the same
+message as main (rs 0, code 4), with the diagnostic in the panel. iOS
+simulations as in round 2: S1 / S4 / tap still give the frame; muted restored,
+pose worker not started (0 messages), video B not started. Upload, re-upload,
+play/pause/seek/frame-step and the skeleton behave as on main.
+
 ## 056 — Arrow keys on the export trim bar also frame-step the analysis video — OPEN (pre-existing, PR #92)
 
 **Found:** 2026-10-19, testing snapshot holds (Chromium, production build).
