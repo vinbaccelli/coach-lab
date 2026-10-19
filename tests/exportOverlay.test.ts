@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ANALYSIS_FAILED_TEXT, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, drawingsExportStatus,
+  ANALYSIS_FAILED_TEXT, analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, drawingsExportStatus,
   dockAnalysisBar, meanAbsDiff, poseRegion, poseShift, skeletonFollowsVideo, toGrey, includesLabel, mapPoint, overlayTransform, parsePassProgress, skeletonExportStatus,
   trackedFraction, untrackedIntervals,
 } from '@/lib/exportOverlay';
@@ -310,4 +310,22 @@ test('dockAnalysisBar: a picture that fills the screen gets the bottom edge and 
   assert.equal(r.side, 'edge');
   assert.equal(r.overlap, r.width * 110);
   assert.equal(dockAnalysisBar({ w: 375, h: 812 }, null, 110).side, 'edge');
+});
+
+test('054: while our own cancelled pass winds down the switch says "Stopping the analysis…", never "AI Track is running"', () => {
+  // trackRunning is still true until the pass settles; our own pass wins.
+  assert.deepEqual(skeletonExportStatus(true, 0, false, true), { state: 'stopping', text: 'Stopping the analysis…' });
+  assert.deepEqual(skeletonExportStatus(true, 1, true, true), { state: 'stopping', text: 'Stopping the analysis…' });
+  // Settled: back to normal.
+  assert.equal(skeletonExportStatus(false, 0, false, false).state, 'analyze');
+  assert.equal(skeletonExportStatus(false, 1, false, false).state, 'ready');
+  // Someone else's pass (the toolbar) still reads as busy.
+  assert.equal(skeletonExportStatus(true, 0.5, false, false).state, 'busy');
+});
+
+test('failed or cancelled analysis: clear only when there was no track before it', () => {
+  assert.deepEqual(analysisCleanup(false), { clear: true, note: 'The unfinished skeleton analysis was removed.' });
+  const kept = analysisCleanup(true);
+  assert.equal(kept.clear, false);
+  assert.match(kept.note, /earlier AI Track was left as it is/);
 });
