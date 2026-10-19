@@ -3,30 +3,50 @@
  *
  * iOS Safari does not decode a frame of a paused, never-played video by
  * itself: it stops at HAVE_METADATA and the picture stays black until Play.
- * Desktop browsers decode the first frame on their own. This module layers the
- * iOS-safe ways to get that frame, in order, and stops as soon as one works:
+ * Desktop browsers decode the first frame on their own. Only strategies that
+ * cannot affect LOADING are used, after the element already has metadata, and
+ * each stops as soon as a frame is there:
  *
- *   S2  media fragment  `blob:…#t=0.001` on the element's src (set at render,
- *       see `withFirstFrameFragment`; state keeps the raw URL)
- *   S3  preload="auto"  (set on the element; `load()` only if it is not)
- *   S1  tiny seek       on loadedmetadata, currentTime = 0.001
- *   S4  prime           muted play() → pause() → seek back to 0.001, with the
- *       media events of that play/pause swallowed before any app listener
- *       sees them (no pose loop, no playing UI, no A/B sync) and the muted
- *       state restored
- *   S5  tap             the first tap on the video area retries S1 + S4
- *       inside the user gesture
+ *   S1  tiny seek  currentTime = 0.001
+ *   S4  prime      muted play() → pause() → seek back to 0.001, with the media
+ *       events of that play/pause swallowed before any app listener sees them
+ *       (no pose loop, no playing UI, no A/B sync) and the muted state restored
+ *   S5  tap        the first tap on the video area retries S1 + S4 inside the
+ *       user gesture
+ *
+ * NEVER here: changing `src` (no media fragment), `preload`, or calling
+ * `load()`. The page sets the src exactly once, as on main. The PR #94 round 2
+ * fragment (`blob:…#t=0.001`) made iOS refuse the file ("Could not load this
+ * video file", KNOWN_ISSUES 055 round 3).
  *
  * "Decoded" means readyState ≥ HAVE_CURRENT_DATA and a drawImage of the video
  * paints something (any alpha). Nothing here changes how the video plays once
  * it has a frame.
  */
 
-/** The media fragment that asks Safari to show the frame at 0.001 s (S2). Blob URLs only. */
-export function withFirstFrameFragment(src: string | null | undefined): string | undefined {
-  if (!src) return undefined;
-  if (!src.startsWith('blob:') || src.includes('#')) return src;
-  return `${src}#t=0.001`;
+// ── Per-element state (read by the page's error handler and ?vdebug=1) ──────
+
+export type FirstFrameState = {
+  /** A strategy has touched the element (seek / play / pause). */
+  touched: boolean;
+  /** The element reached readyState ≥ 1 (HAVE_METADATA) at some point. */
+  reachedMetadata: boolean;
+  /** The last strategy step that ran, for the diagnostic. */
+  last: string;
+};
+const states = new WeakMap<HTMLVideoElement, FirstFrameState>();
+export function firstFrameState(v: HTMLVideoElement): FirstFrameState | null {
+  return states.get(v) ?? null;
+}
+
+/**
+ * Safety net for the page's 'error' handler: ignore an error only when one of
+ * our strategies had touched the element AND it had loaded metadata before (so
+ * the file itself loads; the error can only be about what we did). Anything
+ * else is shown exactly as on main.
+ */
+export function ignoreLoadError(state: Pick<FirstFrameState, 'touched' | 'reachedMetadata'> | null): boolean {
+  return Boolean(state && state.touched && state.reachedMetadata);
 }
 
 /** Is there a decoded frame to show? (readyState ≥ 2 and drawImage paints pixels.) */
@@ -66,11 +86,16 @@ export function subscribeFirstFrameLog(fn: () => void): () => void {
   return () => { logListeners.delete(fn); };
 }
 
+/** blob (upload) / stream (URL) / none, plus "#frag" if the src carries a fragment. */
+export function srcKind(src: string | null | undefined): string {
+  const s = src || '';
+  return `${s.startsWith('blob:') ? 'blob' : s ? 'stream' : 'none'}${s.includes('#') ? '#frag' : ''}`;
+}
+
 export function videoStateText(v: HTMLVideoElement): string {
-  const src = v.currentSrc || v.getAttribute('src') || '';
-  const kind = src.startsWith('blob:') ? 'blob' : src ? 'stream' : 'none';
+  const err = v.error ? ` ERROR code=${v.error.code}${v.error.message ? ` "${v.error.message}"` : ''}` : '';
   return `rs=${v.readyState} ns=${v.networkState} ${v.videoWidth}x${v.videoHeight} t=${v.currentTime.toFixed(3)} `
-    + `${v.paused ? 'paused' : 'playing'} src=${kind}${src.includes('#t=') ? '#t' : ''} preload=${v.preload} muted=${v.muted}`;
+    + `${v.paused ? 'paused' : 'playing'} src=${srcKind(v.getAttribute('src') || v.currentSrc)} muted=${v.muted}${err}`;
 }
 
 // ── S4: swallow the media events of the prime's own play/pause ──────────────
@@ -145,16 +170,25 @@ export function ensureFirstFrame(
   let cancelled = false;
   let running = false;
   let finished = false;
-  const log = (s: string) => { if (debug) firstFrameLog(slot, `${s} | ${videoStateText(v)}`); };
+  // One state per load: the page's effect calls this again for each new src.
+  const state: FirstFrameState = { touched: false, reachedMetadata: v.readyState >= 1, last: 'waiting for metadata' };
+  states.set(v, state);
+  const log = (s: string) => {
+    state.last = s;
+    if (debug) firstFrameLog(slot, `${s} | ${videoStateText(v)}`);
+  };
   const cleanups: Array<() => void> = [];
+  const onMetaSeen = () => { state.reachedMetadata = true; };
+  v.addEventListener('loadedmetadata', onMetaSeen);
+  cleanups.push(() => v.removeEventListener('loadedmetadata', onMetaSeen));
 
   if (debug) {
-    for (const type of ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'seeked', 'error'] as const) {
-      const fn = () => log(`event ${type}${type === 'error' ? ` code=${v.error?.code ?? '?'}` : ''}`);
+    for (const type of ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'seeked', 'error', 'abort', 'emptied', 'stalled'] as const) {
+      const fn = () => firstFrameLog(slot, `event ${type} | ${videoStateText(v)}`);
       v.addEventListener(type, fn);
       cleanups.push(() => v.removeEventListener(type, fn));
     }
-    log(`S2 fragment ${(v.getAttribute('src') || '').includes('#t=') ? 'on src' : 'not used (not a blob)'}`);
+    firstFrameLog(slot, `new load, src=${srcKind(v.getAttribute('src'))} | ${videoStateText(v)}`);
   }
 
   const succeed = (by: string) => {
@@ -170,23 +204,23 @@ export function ensureFirstFrame(
     if (running || finished || cancelled) return;
     running = true;
     try {
+      // Only on an element that has loaded metadata: nothing here may touch a load in progress.
+      if (v.readyState < 1 || v.error) return;
+      state.reachedMetadata = true;
       if (frameDecoded(v)) { succeed('already'); return; }
-      // S3: preload. Both analysis videos render preload="auto"; load() only if something changed it.
-      if (v.preload !== 'auto') {
-        v.preload = 'auto';
-        if (v.readyState === 0) { try { v.load(); } catch { /* noop */ } }
-        log('S3 preload set to auto (+load)');
-      } else log('S3 preload=auto already');
       // S1: tiny seek.
-      if (untouched()) { await nudge(v); log('S1 seek 0.001 done'); }
+      if (untouched()) { state.touched = true; log('S1 seek 0.001'); await nudge(v); log('S1 seek 0.001 done'); }
       if (cancelled) return;
       if (frameDecoded(v)) { succeed('S1'); return; }
       // S4: prime.
-      if (untouched()) await prime(v, log);
+      if (untouched() && !v.error) { state.touched = true; log('S4 prime'); await prime(v, log); }
       if (cancelled) return;
       if (frameDecoded(v)) { succeed('S4'); return; }
       log('no frame yet: waiting for a tap on the video (S5)');
       armTap();
+    } catch (e) {
+      // Never surfaces: the video simply keeps whatever it shows.
+      log(`strategy error ignored: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120));
     } finally {
       running = false;
     }
@@ -198,18 +232,23 @@ export function ensureFirstFrame(
     if (!el) { log('S5 unavailable: no video panel'); return; }
     const onTap = () => {
       el.removeEventListener('pointerdown', onTap, true);
-      if (cancelled || finished || frameDecoded(v)) return;
-      if (!untouched()) { log('S5 skipped: video already played or moved'); return; }
-      log('S5 tap: retry S1 + S4 in the gesture');
-      const wasMuted = v.muted;
-      v.muted = true; // prime() restores wasMuted
-      let started: Promise<void> | null = null;
-      try { started = v.play(); } catch (e) { started = Promise.reject(e); }
-      void (async () => {
-        await prime(v, log, started, wasMuted);
-        if (!cancelled && frameDecoded(v)) succeed('S5');
-        else log('S5: still no frame');
-      })();
+      try {
+        if (cancelled || finished || v.error || frameDecoded(v)) return;
+        if (!untouched()) { log('S5 skipped: video already played or moved'); return; }
+        state.touched = true;
+        log('S5 tap: retry S1 + S4 in the gesture');
+        const wasMuted = v.muted;
+        v.muted = true; // prime() restores wasMuted
+        let started: Promise<void> | null = null;
+        try { started = v.play(); } catch (e) { started = Promise.reject(e); }
+        void (async () => {
+          try {
+            await prime(v, log, started, wasMuted);
+            if (!cancelled && frameDecoded(v)) succeed('S5');
+            else log('S5: still no frame');
+          } catch (e) { log(`S5 error ignored: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120)); }
+        })();
+      } catch (e) { log(`S5 error ignored: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120)); }
     };
     el.addEventListener('pointerdown', onTap, true);
     cleanups.push(() => el.removeEventListener('pointerdown', onTap, true));

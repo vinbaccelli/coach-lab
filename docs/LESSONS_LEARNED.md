@@ -769,3 +769,25 @@ Each hole is reproduced as a test that the old guard passes.
 manufactured. List the ways the failure can look before choosing the measure,
 and prefer a measure tied to ground truth (here the video frames) over a
 threshold on the output alone.
+
+## 018 — A display fix that changed how the file loads
+
+**Symptom.** PR #94 round 2 (first frame on iPhone) made Vin's camera-roll
+uploads fail with "Could not load this video file" — worse than the black
+frame it was fixing.
+
+**Verified root cause.** One of the five layered strategies changed the load
+input itself: a media fragment on the blob URL (`blob:…#t=0.001`). The others
+only acted after the file had loaded. A refused URL fails before metadata, and
+the page reports every such failure as "Could not load".
+
+**Fix.** The src is set once, exactly as on main; only strategies that act on
+an already-loaded element remain, each unable to surface an error; an error
+after one of them on a loaded video is ignored, every other error is shown as
+before.
+
+**Class of mistake.** Stacking "harmless" fallbacks without separating the
+ones that can break the primary path (here: loading) from the ones that cannot.
+On a platform you cannot run, never change the inputs of the thing that already
+works; add only steps that act after it succeeded, and make each fail closed.
+

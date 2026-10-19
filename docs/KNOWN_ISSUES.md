@@ -1838,3 +1838,37 @@ the tap decodes it (S5). In both, the prime's play/pause reached the window
 (positive control) but no listener on the element; the Play/Pause button kept
 one look (a real play adds the second); muted restored; video B not started.
 Play/pause/seek/frame-step, re-upload and the skeleton overlay unchanged.
+
+**Round 3 — regression: "Could not load this video file" (Vin's iPhone, Chrome
+for iOS / WebKit, PR #94 preview).** Uploading from the camera roll failed.
+
+*Root cause (by code + simulation; WebKit not available here).* Round 2 put a
+media fragment on the upload's blob URL (`src="blob:…#t=0.001"`, S2). It was the
+only change to how the file LOADS; everything else ran after metadata. When a
+blob URL with a fragment is refused, the element fails with MediaError 4 at
+readyState 0, and the page's `error` handler shows exactly that message
+(`app/analysis/page.tsx`, slot A effect). Reproduced in Chromium by making any
+fragment-carrying blob src fail: same message, same state (rs 0, ns 3, code 4).
+The other strategies were checked: S3 called `load()` only if `preload` was not
+"auto" (never on this path); S1/S4/S5 run only after metadata and never touch
+the src; nothing else assigns the src (React sets it once).
+
+*Fix.* The src is the raw URL again, set once, as on main (fragment helper
+removed). S3 removed: nothing writes `preload` or calls `load()`. Kept: S1 seek,
+S4 muted prime, S5 tap retry, only on an element with metadata and no error,
+each wrapped in try/catch. Safety net: an `error` after one of these touched a
+video that HAD reached readyState ≥ 1 is ignored (logged under ?vdebug=1); any
+other error is shown exactly as on main. The ?vdebug=1 box sits below the iPhone
+status bar (`safe-area-inset-top`; the page draws under it with
+viewport-fit=cover, which likely hid the box at `top: 4px`) and is also shown
+inside the "Could not load" panel, with MediaError code + message,
+readyState, networkState, src type (blob/stream, "#frag" if a fragment), how
+many times the src was set, and the last strategy.
+
+*Measured (Chromium, production build).* With fragment blob URLs forced to
+fail: the upload now loads (rs 4, src set once, no fragment), first frame by S1.
+A synthetic `error` after S1 ran: ignored, no message. A corrupt file: the same
+message as main (rs 0, code 4), with the diagnostic in the panel. iOS
+simulations as in round 2: S1 / S4 / tap still give the frame; muted restored,
+pose worker not started (0 messages), video B not started. Upload, re-upload,
+play/pause/seek/frame-step and the skeleton behave as on main.

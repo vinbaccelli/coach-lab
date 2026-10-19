@@ -51,7 +51,7 @@ const GenerateWorkspace = React.lazy(() => import('@/components/metrics/Generate
 // Static (not lazy): Generate must open with no chunk fetch on the click.
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
-import { ensureFirstFrame, withFirstFrameFragment } from '@/lib/firstFrame';
+import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoStateText } from '@/lib/firstFrame';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
@@ -4405,6 +4405,14 @@ function Home() {
     };
 
     const onError = () => {
+      // Safety net (KNOWN_ISSUES 055): an error after a first-frame strategy
+      // touched a video that HAD loaded metadata is ignored, so the strategies
+      // can never leave the coach worse off than main. Every other error is
+      // shown exactly as on main.
+      if (ignoreLoadError(firstFrameState(video))) {
+        if (vdebug) firstFrameLog('A', `error ignored (after a first-frame strategy, metadata had loaded) | ${videoStateText(video)}`);
+        return;
+      }
       const code = video.error?.code;
       const message = code === MediaError.MEDIA_ERR_DECODE
         ? 'This video format is not supported. Try exporting as MP4 (H.264).'
@@ -7289,7 +7297,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       {/* ── Hidden decoders — slot B + webcam; slot A video lives in the panel ── */}
       <video
         ref={videoRefB}
-        src={withFirstFrameFragment(videoSrcB)}
+        src={videoSrcB ?? undefined}
         crossOrigin={videoSrcB?.startsWith('/api/') ? 'anonymous' : undefined}
         playsInline
         {...WEBKIT_PLAYSINLINE}
@@ -7478,7 +7486,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 {/* In-panel decoder — visible for uploads; canvas composites embeds / StroMotion */}
                 <video
                   ref={videoRef}
-                  src={withFirstFrameFragment(videoSrc)}
+                  src={videoSrc ?? undefined}
                   crossOrigin={videoSrc?.startsWith('/api/') ? 'anonymous' : undefined}
                   playsInline
                   {...WEBKIT_PLAYSINLINE}
@@ -8131,6 +8139,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       gap: 12,
                     }}>
                       <div>{videoLoadErrorA}</div>
+                      {/* ?vdebug=1: the cause on the same screenshot as the error. */}
+                      {vdebug ? <VideoDebugBox videoRef={videoRef} inline /> : null}
                       <button
                         type="button"
                         onClick={triggerVideoUploadA}
