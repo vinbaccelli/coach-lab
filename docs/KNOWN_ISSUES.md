@@ -1521,7 +1521,7 @@ cover by default, so it needs approval.
 **Severity:** low (the coach can drag the handles; *Whole video* is the
 export default).
 
-## 046 — Metrics export has no AngleMotion watermark — OPEN (found with the export overlays)
+## 046 — Metrics export has no AngleMotion watermark — FIXED (export-panel fixes)
 
 **Symptom.** Files exported from Metrics → Generate (the export panel, PR #92)
 have no watermark; the analysis canvas shows it bottom-left of the video.
@@ -1542,6 +1542,17 @@ recording-canvas case the function documents). Needs approval (changes every
 Metrics export).
 
 **Severity:** moderate (branding contract; no functional loss).
+
+**Fixed.** `MetricsExportPanel.tsx` now always passes `drawOverlay` and ends it
+with `drawVideoWatermark(ctx, w, h)` (no area: bottom-left of the frame), after
+the skeleton/drawings and after the render check's frame sample. The logo is
+warmed when the panel opens. Measured (Chromium, production build), skeleton
+and drawings both off: the mark is in the first and last frame at 720p, 1080p
+and Original, landscape (1280×720, 1920×1080, 960×540) and portrait (720×1280,
+1080×1920), inside the box the function computes, and nothing else in the
+frame changed. Cost: 0.02–0.1 ms per frame (1280×720 … 3840×2160). The
+Recording Hub path (`cropExport` without `drawOverlay`) is untouched: same
+MP4/VP9 1280×720 + Opus, 3.11 s.
 
 ## 047 — Exporting right after turning the Skeleton on drops ~45% of frames (test browser) — OPEN (pre-existing)
 
@@ -1721,9 +1732,13 @@ video-moved / skeleton-still counts) so a phone screenshot says which case it wa
 **Confirmed on the device.** Vin, iPhone, preview of ac8f6aed: the export with
 no prior AI Track now exports a skeleton that follows the player.
 
-**Left over.** The failed track stays stored (the on-screen skeleton uses it
-too) until the coach clears AI Track. Removing just that track needs a Canvas
-method: needs approval.
+**Left over → partly fixed.** When the panel's own analysis fails a check, finds
+no player, or is cancelled, and there was NO track before it started, the panel
+now clears every track (`clearBakedTrack`, the only Canvas call available) and
+the toolbar returns to idle; the Skeleton switch is usable again. With an
+earlier AI Track nothing is removed (Canvas can only clear all tracks) and the
+error line says so. Removing just the failed part still needs a Canvas method:
+needs approval.
 
 **Severity:** high on the affected device (a wrong skeleton in a shared video);
 now blocked by the self-check instead of exported.
@@ -1748,7 +1763,7 @@ Safari and Chrome on devices first.
 
 **Severity:** low (a one-frame lag on a third of samples, smoothed).
 
-## 054 — For 1–2 s after Cancel during the export's analysis, the Skeleton switch reads "AI Track is running" — OPEN (pre-existing, PR #93)
+## 054 — For 1–2 s after Cancel during the export's analysis, the Skeleton switch reads "AI Track is running" — FIXED (export-panel fixes)
 
 **Symptom.** Cancel returns the panel to idle at once (137 ms, production
 build), but the pass stops only after the frame it is detecting (~1.4 s in the
@@ -1767,3 +1782,9 @@ until `analyzeRange` settles, and show "Stopping the analysis…" with Export
 disabled meanwhile.
 
 **Severity:** low (a short, self-clearing state).
+
+**Fixed.** Cancel during the panel's own analysis sets a "stopping" flag until
+`analyzeRange` settles: the switch reads "Stopping the analysis…" and Export is
+disabled (`skeletonExportStatus(…, stopping)`). Measured at 375 px: "Stopping
+the analysis…" 6 ms after Cancel, back to normal at 1.4 s, "AI Track is
+running" never shown.
