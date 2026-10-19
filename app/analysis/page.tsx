@@ -50,6 +50,8 @@ const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/Snapsh
 const GenerateWorkspace = React.lazy(() => import('@/components/metrics/GenerateWorkspace'));
 // Static (not lazy): Generate must open with no chunk fetch on the click.
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
+import VideoDebugBox from '@/components/VideoDebugBox';
+import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoStateText } from '@/lib/firstFrame';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
@@ -244,6 +246,9 @@ const DRAW_CONTEXT_TOOLS: ToolType[] = [
   'bodyCircle', 'text', 'angle', 'manualSwing', 'swingPath', 'jointChain',
 ];
 
+/** Older iOS Safari needs the prefixed attribute as well as `playsInline` to stay inline. */
+const WEBKIT_PLAYSINLINE = { 'webkit-playsinline': 'true' } as Record<string, string>;
+
 /** Full-viewport invisible decoder — opacity 0 can block Safari frame delivery; keep off-screen but sized. */
 const hiddenDecoderVideoStyle: React.CSSProperties = {
   position: 'fixed',
@@ -366,6 +371,8 @@ function Home() {
   const toursEnabled = useToursEnabled();
   const router = useRouter();
   const searchParams = useSearchParams();
+  /** ?vdebug=1: on-screen first-frame diagnostic (VideoDebugBox). Nothing renders or changes without it. */
+  const vdebug = searchParams?.get('vdebug') === '1';
   const contextPlayerId = searchParams.get('playerId');
   const contextSessionId = searchParams.get('sessionId');
   const [contextPlayerName, setContextPlayerName] = useState<string | null>(null);
@@ -4381,6 +4388,7 @@ function Home() {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !videoSrc) return;
+    const html5Upload = !youtubeVideoIdA && !genericEmbedSrcA;
 
     const paintFirstFrame = () => {
       requestCanvasPaintAfterVideoLoad('A');
@@ -4397,6 +4405,14 @@ function Home() {
     };
 
     const onError = () => {
+      // Safety net (KNOWN_ISSUES 055): an error after a first-frame strategy
+      // touched a video that HAD loaded metadata is ignored, so the strategies
+      // can never leave the coach worse off than main. Every other error is
+      // shown exactly as on main.
+      if (ignoreLoadError(firstFrameState(video))) {
+        if (vdebug) firstFrameLog('A', `error ignored (after a first-frame strategy, metadata had loaded) | ${videoStateText(video)}`);
+        return;
+      }
       const code = video.error?.code;
       const message = code === MediaError.MEDIA_ERR_DECODE
         ? 'This video format is not supported. Try exporting as MP4 (H.264).'
@@ -4408,11 +4424,20 @@ function Home() {
     video.addEventListener('loadeddata', onLoaded, { once: true });
     video.addEventListener('error', onError);
     if (video.readyState >= 2) onLoaded();
+    // iOS Safari never decodes a frame of a paused, never-played video by itself
+    // (no `loadeddata`): layered first-frame strategies, lib/firstFrame.ts.
+    const cancelFirstFrame = html5Upload ? ensureFirstFrame(video, {
+      slot: 'A',
+      tapTarget: () => video.parentElement,
+      debug: vdebug,
+      onFrame: () => { requestCanvasPaintAfterVideoLoad('A'); void canvasRef.current?.waitForRender?.(); },
+    }) : null;
 
     return () => {
+      cancelFirstFrame?.();
       video.removeEventListener('error', onError);
     };
-  }, [requestCanvasPaintAfterVideoLoad, videoSrc, youtubeVideoIdA, genericEmbedSrcA]);
+  }, [requestCanvasPaintAfterVideoLoad, videoSrc, youtubeVideoIdA, genericEmbedSrcA, vdebug]);
 
   useEffect(() => {
     const video = videoRefB.current;
@@ -4425,14 +4450,21 @@ function Home() {
       } catch { /* noop */ }
       void canvasRefB.current?.waitForRender?.();
     };
-
     video.addEventListener('loadeddata', onLoaded, { once: true });
     if (video.readyState >= 2) onLoaded();
+    // Same first-frame strategies as slot A (lib/firstFrame.ts).
+    const cancelFirstFrame = ensureFirstFrame(video, {
+      slot: 'B',
+      tapTarget: () => canvasRefB.current?.getCanvas?.()?.parentElement ?? null,
+      debug: vdebug,
+      onFrame: () => { requestCanvasPaintAfterVideoLoad('B'); void canvasRefB.current?.waitForRender?.(); },
+    });
 
     return () => {
+      cancelFirstFrame();
       video.removeEventListener('loadeddata', onLoaded);
     };
-  }, [requestCanvasPaintAfterVideoLoad, videoSrcB]);
+  }, [requestCanvasPaintAfterVideoLoad, videoSrcB, vdebug]);
 
   const handleVideoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -7268,6 +7300,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         src={videoSrcB ?? undefined}
         crossOrigin={videoSrcB?.startsWith('/api/') ? 'anonymous' : undefined}
         playsInline
+        {...WEBKIT_PLAYSINLINE}
         muted
         preload="auto"
         style={hiddenDecoderVideoStyle}
@@ -7456,6 +7489,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   src={videoSrc ?? undefined}
                   crossOrigin={videoSrc?.startsWith('/api/') ? 'anonymous' : undefined}
                   playsInline
+                  {...WEBKIT_PLAYSINLINE}
                   muted
                   preload="auto"
                   style={html5VideoStyle}
@@ -8105,6 +8139,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       gap: 12,
                     }}>
                       <div>{videoLoadErrorA}</div>
+                      {/* ?vdebug=1: the cause on the same screenshot as the error. */}
+                      {vdebug ? <VideoDebugBox videoRef={videoRef} inline /> : null}
                       <button
                         type="button"
                         onClick={triggerVideoUploadA}
@@ -9707,6 +9743,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           />
         </React.Suspense>
       )}
+
+      {vdebug ? <VideoDebugBox videoRef={videoRef} /> : null}
 
       {/* Mounted only while open: closing it frees its preview and export URLs. */}
       {metricsExportOpen && (
