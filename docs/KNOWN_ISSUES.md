@@ -1639,7 +1639,7 @@ Canvas zoom code or `app/layout.tsx` viewport — outside PR #93's files.
 
 **Severity:** high if (2) on iPhone (blocks the export).
 
-## 052 — Phone: exported skeleton frozen when the export analyzed it (no prior AI Track) — FIX IN PR #93, to confirm on the device
+## 052 — Phone: exported skeleton frozen when the export analyzed it (no prior AI Track) — FIXED (PR #93, confirmed on Vin's iPhone)
 
 **Reported.** Vin, real device, PR #93: Metrics export, Include skeleton on, no
 prior AI Track. The panel analyzed the range ("Analyze skeleton + export") and
@@ -1717,6 +1717,9 @@ known here; either way these holes are closed now:
   stopped 1.5 s into the render, "video moved 6×, skeleton still 6×").
 The failure line carries the numbers (poses, poses/s, motion, repeated share,
 video-moved / skeleton-still counts) so a phone screenshot says which case it was.
+
+**Confirmed on the device.** Vin, iPhone, preview of ac8f6aed: the export with
+no prior AI Track now exports a skeleton that follows the player.
 
 **Left over.** The failed track stays stored (the on-screen skeleton uses it
 too) until the coach clears AI Track. Removing just that track needs a Canvas
