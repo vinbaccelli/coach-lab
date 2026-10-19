@@ -1805,7 +1805,7 @@ disabled (`skeletonExportStatus(…, stopping)`). Measured at 375 px: "Stopping
 the analysis…" 6 ms after Cancel, back to normal at 1.4 s, "AI Track is
 running" never shown.
 
-## 055 — Arrow keys on the export trim bar also frame-step the analysis video — OPEN (pre-existing, PR #92)
+## 056 — Arrow keys on the export trim bar also frame-step the analysis video — OPEN (pre-existing, PR #92)
 
 **Found:** 2026-10-19, testing snapshot holds (Chromium, production build).
 
@@ -1830,7 +1830,7 @@ Needs approval (outside this task).
 
 **Severity:** low (keyboard only; desktop).
 
-## 056 — Snapshot holds: the exact seek of the hidden export video is not verified on iOS — OPEN (risk)
+## 057 — Snapshot holds: the exact seek of the hidden export video is not verified on iOS — OPEN (risk)
 
 **What.** A hold pauses the detached, hidden export `<video>` and seeks it to the
 snapshot's time (`lib/cropExport.ts startHold`). Verified in Chromium (both
