@@ -524,33 +524,6 @@ export function includesLabelWithHolds(skeleton: boolean, drawings: boolean, hol
   return holds > 0 ? `${base} + ${holds} snapshot hold${holds === 1 ? '' : 's'}` : base;
 }
 
-// ── Skeleton analysis under the toolbar AI Track's conditions ───────────────
-
-/** The analysis video's pose loop (Canvas skeleton on), as the export's analysis drives it. */
-export type AnalysisPoseLoop = {
-  isOn: () => boolean;
-  setOn: (on: boolean) => void;
-  /** Resolves once the loop can read frames (or gives up waiting); rejects to stop. */
-  waitReady: () => Promise<void>;
-};
-
-/**
- * Runs the export's skeleton analysis with the analysis video's pose loop ON,
- * the condition the toolbar AI Track always runs under (it refuses to start
- * with Skeleton off). Turns it on only if it was off and turns it back off
- * afterwards whatever happens: done, cancelled or failed. KNOWN_ISSUES 061.
- */
-export async function withAnalysisPoseLoop<T>(loop: AnalysisPoseLoop, run: () => Promise<T>): Promise<T> {
-  const turnedOn = !loop.isOn();
-  if (turnedOn) loop.setOn(true);
-  try {
-    if (turnedOn) await loop.waitReady();
-    return await run();
-  } finally {
-    if (turnedOn) loop.setOn(false);
-  }
-}
-
 // ── Holds on a device whose hidden video does not seek (iOS, KNOWN_ISSUES 057) ──
 
 /** How far from the hold's time the paused video may be and still count as there. */
@@ -587,4 +560,38 @@ export const RESUME_FAILED_TEXT =
 export function emptyExportError(framesPainted: number, bytes: number, holds: number): string | null {
   if (framesPainted > 0 && bytes > 0) return null;
   return `Export failed: no video frames were recorded. Keep this app in front with the screen on and try again${holds > 0 ? ', or turn Snapshots off' : ''}.`;
+}
+
+// ── The export's skeleton analysis = the toolbar AI Track ───────────────────
+
+export type ExportAnalysisDeps = {
+  /** The page's Skeleton switch. */
+  skeletonOn: () => boolean;
+  /** Turns Skeleton on the way the toolbar does. It is left on afterwards. */
+  turnSkeletonOn: () => void;
+  /** Resolves once the page has rendered with Skeleton on. */
+  skeletonCommitted: () => Promise<void>;
+  /** The toolbar AI Track's own handler, on [start, end]; resolves to the poses kept (0: cancelled / none). */
+  track: (start: number, end: number) => Promise<number>;
+  /** Starts the on-device frame log; returns stop(). */
+  watch: () => () => void;
+};
+
+/**
+ * One part of the export's skeleton analysis: Skeleton on (as a coach would
+ * turn it on for AI Track, and left on), then the toolbar AI Track handler on
+ * the range. The frame log always stops, also on Cancel and on error.
+ * KNOWN_ISSUES 061.
+ */
+export async function analyzeForExport(d: ExportAnalysisDeps, start: number, end: number): Promise<number> {
+  if (!d.skeletonOn()) {
+    d.turnSkeletonOn();
+    await d.skeletonCommitted();
+  }
+  const stop = d.watch();
+  try {
+    return await d.track(start, end);
+  } finally {
+    stop();
+  }
 }

@@ -12,7 +12,7 @@ import {
   analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, clampHoldSec, dockAnalysisBar, drawingsDefaultOn, drawingsExportStatus, analysisBlockedReason,
   FOLLOW_STEP_SEC, formatHoldSec, HOLD_DEFAULT_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC, HOLD_STEP_SEC, holdSchedule, includesLabelWithHolds, meanAbsDiff,
   parsePassProgress, poseRegion, poseShift, skeletonExportStatus, skeletonFollowsVideo, snapshotsExportStatus, snapshotsSwitchText,
-  toGrey, trackedFraction, untrackedIntervals, withAnalysisPoseLoop, type FollowStep, type Rect, type VideoBox,
+  toGrey, trackedFraction, untrackedIntervals, type FollowStep, type Rect, type VideoBox,
 } from '@/lib/exportOverlay';
 import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
 
@@ -85,12 +85,6 @@ export interface MetricsExportPanelProps {
     analyzeRange: (start: number, end: number) => Promise<number>;
     /** Stops a running analyzeRange pass. */
     cancelAnalysis: () => void;
-    /**
-     * The analysis video's pose loop (Canvas skeleton on, drawing off). The
-     * analysis runs with it on, as the toolbar AI Track always does, and turns
-     * it back off afterwards (KNOWN_ISSUES 061).
-     */
-    poseLoop?: { isOn: () => boolean; setOn: (on: boolean) => void; isReady: () => boolean };
     /** SNAPSHOT mode: the canvas drawings belong to a snapshot and are not exported. */
     snapshotMode: boolean;
     getBakedPoseAt: CanvasHandle['getBakedPoseAt'];
@@ -113,8 +107,6 @@ export interface MetricsExportPanelProps {
 type Phase = 'idle' | 'analyzing' | 'reading' | 'exporting' | 'done' | 'error';
 
 const NO_SNAPSHOT_MESSAGE = 'Create a snapshot first (Create Snapshot or AI Detect)';
-/** The analysis waits at most this long for the pose loop's model before it runs. */
-const POSE_LOOP_WAIT_MS = 15000;
 /** No render progress for this long (tab visible) → show the stalled state. */
 const STALL_MS = 3000;
 /** Shown (disabled) until the preview has read the video's size. */
@@ -423,33 +415,11 @@ export default function MetricsExportPanel({
         hadTrackBefore = overlay.hasBakedTrack();
         let kept = 0;
         let cancelled = false;
-        const passes = async () => {
+        try {
           for (let i = 0; i < intervals.length; i++) {
-            if (ac.signal.aborted) { cancelled = true; break; }
-            analysisRef.current = { intervals, startedAt: analysisRef.current?.startedAt ?? performance.now(), index: i };
+            analysisRef.current = { ...analysisRef.current, index: i };
             kept += await overlay.analyzeRange(intervals[i].start, intervals[i].end);
             if (ac.signal.aborted) { cancelled = true; break; }
-          }
-        };
-        const pl = overlay.poseLoop;
-        try {
-          if (!pl) await passes();
-          else {
-            await withAnalysisPoseLoop({
-              isOn: pl.isOn,
-              setOn: pl.setOn,
-              // Until the loop has its model (it then reads every frame the pass
-              // seeks to); 15 s at most, then the pass runs anyway and the
-              // self-check below judges the result.
-              waitReady: () => new Promise<void>((resolve) => {
-                const t0 = performance.now();
-                const tick = () => {
-                  if (ac.signal.aborted || pl.isReady() || performance.now() - t0 > POSE_LOOP_WAIT_MS) { resolve(); return; }
-                  setTimeout(tick, 100);
-                };
-                tick();
-              }),
-            }, passes);
           }
         } finally {
           // The pass has settled (finished, cancelled or thrown): no longer "stopping".
@@ -992,7 +962,7 @@ export default function MetricsExportPanel({
                 {analysisBlock ? <span data-testid="export-zoom-block" style={{ fontSize: 13, color: 'var(--cl-destructive-text)' }}>{analysisBlock}</span> : null}
                 {needsAnalysis ? (
                   <span data-testid="export-analysis-note" style={muted}>
-                    Skeleton will be analyzed first, this adds time. Then the {formatClock(spanSec)} range{holdTotalSec > 0 ? ` (+ ${formatClock(holdTotalSec)} of holds)` : ''} is exported in real time.
+                    Skeleton will be analyzed first with AI Track (this turns Skeleton on), this adds time. Then the {formatClock(spanSec)} range{holdTotalSec > 0 ? ` (+ ${formatClock(holdTotalSec)} of holds)` : ''} is exported in real time.
                   </span>
                 ) : null}
                 {error ? <span style={{ fontSize: 13, color: 'var(--cl-destructive-text)' }}>{error}</span> : null}

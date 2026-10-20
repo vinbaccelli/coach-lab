@@ -851,29 +851,30 @@ zoom) where the bug cancels out. Read the return statement; test at the device
 settings the users have.
 
 
-## 020 — "It calls the same function" is not "it runs under the same conditions"
+## 020 — A simulation built from the hypothesis cannot confirm it
 
 **Symptom.** The Metrics export's skeleton analysis gave a 100%-repeated pose
-on an iPhone while the toolbar AI Track worked on the same video and phone
-(KNOWN_ISSUES 061). Two earlier rounds compared the panel's and the toolbar's
-tracks in Chromium, found them equal, and looked for the cause in snapshot mode
-and page zoom.
+on an iPhone, while the toolbar AI Track worked on the same video and phone
+(KNOWN_ISSUES 061).
 
-**Verified root cause.** Both call `runPrecisionPass`, but the toolbar refuses
-to run unless Skeleton is on, and Skeleton on adds a second reader of every
-seeked frame (the pose loop's `createImageBitmap`). The panel reused the pass
-without its caller's precondition. In Chromium the precondition changes
-nothing (WebGL uploads are never stale there), so every comparison passed.
+**What went wrong.** Round 3 named a cause: the panel lacked the Skeleton pose
+loop's second read of each seeked frame. I "confirmed" it with a Chromium mock
+whose WebGL upload returned the last 2D read. That mock was the hypothesis
+written as code, so of course it produced the phone's numbers before the fix
+and not after. On the iPhone the round-3 fix changed nothing ("91 poses in
+3.1 s · repeated 100%"), and the export got slower. The real cause is still
+unmeasured.
 
-**Fix.** The panel's analysis now runs with the pose loop on (turned on and
-restored around the pass). A Chromium mock of the suspected iOS behaviour (a
-video's WebGL upload returns its last 2D read) reproduces the phone's exact
-numbers before the fix.
+**What changed.** The panel now calls the toolbar's own AI Track handler, with
+the real Skeleton switch on, so there is no second code path to differ. It
+also writes an on-device frame log (currentTime, presented mediaTime, wall
+time) so the next iPhone run measures instead of guessing.
 
-**Class of mistake.** Reusing a function and assuming its callers' guards
-("Enable Skeleton first") are UX only. When reusing a path, list what the
-original caller requires or turns on before it calls it, and reproduce under
-a model of the failing platform, not only in the browser where it works.
+**Class of mistake.** Treating a reproduction as evidence when the mock was
+derived from the theory it was meant to test, and reporting it as "confirmed".
+A mock can show the code reacts as intended to an assumed platform behaviour.
+Only the platform can show that behaviour exists. When the platform is not
+available, say "unverified" and ship instrumentation that measures it there.
 
 ## 021 — A fallback that still depends on the thing that failed
 

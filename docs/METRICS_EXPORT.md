@@ -68,7 +68,7 @@ the file will contain ("Includes: video + skeleton + drawings").
   frame-step the video behind it and leave SNAPSHOT mode, KNOWN_ISSUES 056).
 - **Skeleton** is the AI Track pose for each frame's own time (the stored
   track; nothing is detected while rendering). The switch is never dead and
-  does not depend on the on-screen Skeleton switch:
+  can be on with the on-screen Skeleton off (an analysis then turns that on):
   - range fully tracked → "Skeleton ready." — Export renders straight away;
   - range untracked or partly tracked → "Not analyzed yet…" / "Skeleton covers
     X% of this range…", and Export becomes **Analyze skeleton + export** with
@@ -82,19 +82,20 @@ the file will contain ("Includes: video + skeleton + drawings").
   analysis seeks, and iOS then analyzes a stale frame (frozen skeleton).
 - **Analysis before export.** The untracked parts of the range
   (`lib/exportOverlay.ts untrackedIntervals`) are tracked with the existing AI
-  Track pass, unchanged: `runPrecisionPass(start, end, 'fast')` (wired in
-  `app/analysis/page.tsx`, with the toolbar's running/ready bookkeeping). Each
+  Track pass, unchanged: `runPrecisionPass(start, end, 'fast')`, the toolbar's
+  0.5× (wired in `app/analysis/page.tsx`). Each
   part is pulled 0.05 s in from its neighbours so the pass never replaces a
   track the coach already made (it drops tracks within 0.05 s of its range).
-  **It runs under the toolbar's conditions.** The toolbar AI Track only runs
-  with Skeleton on, which adds a second reader of every frame the pass seeks to
-  (the pose loop's `createImageBitmap`). Without it iOS fed the detector one
-  picture again and again (KNOWN_ISSUES 061). So with Skeleton off, the analysis
-  turns the analysis canvas's pose loop on, with drawing off. It waits up to
-  15 s for the loop's model, runs the pass, and turns the loop off again: done,
-  cancelled or failed (`withAnalysisPoseLoop`). The page's Skeleton switch, the
-  data column and the metrics section are not touched. With Skeleton already on,
-  nothing changes.
+  **It is the toolbar AI Track.** Each part goes through the toolbar's own
+  handler (`runAiTrackRange`, also called by `handlePrecisionTrack`), with the
+  same status lines. If Skeleton is off, it is first turned on the way the
+  toolbar's Skeleton button does, and left on: the panel's note says
+  "Skeleton will be analyzed first with AI Track (this turns Skeleton on)…".
+  With ?vdebug=1 the analysis writes "analysis" lines: every 10th seek, the
+  video's currentTime, the presented frame's mediaTime
+  (requestVideoFrameCallback) and the wall time (`lib/analysisFrameLog.ts`,
+  KNOWN_ISSUES 061). These lines have their own quota in the log (60, apart
+  from the other 80).
   **While it analyzes, the panel is a compact bar** (progress, "Analyzing
   skeleton… X% · about N s left", Cancel) docked outside the analysis video's
   picture (`lib/exportOverlay.ts dockAnalysisBar`: below, above, right or left

@@ -52,6 +52,8 @@ const GenerateWorkspace = React.lazy(() => import('@/components/metrics/Generate
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
 import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoStateText } from '@/lib/firstFrame';
+import { watchPassFrames } from '@/lib/analysisFrameLog';
+import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
@@ -1030,6 +1032,9 @@ function Home() {
   // toolbar button (or tool changes) must never make the skeleton disappear.
   const [skeletonOn, setSkeletonOn] = useState(false);
   const skeletonEnabled  = skeletonOn;
+  /** Skeleton as last committed (set after the Canvas has its new props). */
+  const skeletonEnabledRef = useRef(false);
+  useEffect(() => { skeletonEnabledRef.current = skeletonOn; }, [skeletonOn]);
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const [skeletonConfirmOpen, setSkeletonConfirmOpen] = useState(false);
   /**
@@ -1501,12 +1506,6 @@ function Home() {
   // frame-exact — strictly more precise than any slow-playback pass, because
   // samples land ON frames instead of at arbitrary wall-clock times.
   const [precisionTrackState, setPrecisionTrackState] = useState<'idle' | 'running' | 'ready'>('idle');
-  /**
-   * The Metrics export's skeleton analysis with Skeleton off: Canvas A's pose
-   * loop runs for the pass (drawing stays off), as it always does under the
-   * toolbar AI Track. KNOWN_ISSUES 061.
-   */
-  const [exportAnalysisPoseLoop, setExportAnalysisPoseLoop] = useState(false);
   const precisionAbortRef = useRef(false);
   /** Locked-player pass: its own final status (ready / stopped), replacing the generic one. */
   const passFinalRef = useRef<string | null>(null);
@@ -1684,17 +1683,12 @@ function Home() {
     }
   }, [seekVideoTo]);
 
-  const handlePrecisionTrack = useCallback(async (scope: 'all' | 'section', quality: TrackQuality = 'balanced') => {
-    const v = videoRef.current;
-    if (!v || !videoSrc) { setProcessingStatus('Load a video first'); return; }
-    if (!skeletonEnabled) { setProcessingStatus('Enable Skeleton first, then run AI Track'); return; }
-    if (precisionTrackState === 'running') { precisionAbortRef.current = true; return; } // second tap cancels
-    const dur = isFinite(v.duration) ? v.duration : 0;
-    if (dur <= 0) { setProcessingStatus('Video not ready yet — try again'); return; }
-    const start = scope === 'section' && metricsSectionStart != null ? Math.max(0, metricsSectionStart) : 0;
-    const end = scope === 'section' && metricsSectionEnd != null ? Math.min(dur, metricsSectionEnd) : dur;
-    if (end - start < 0.2) { setProcessingStatus('Selected section is too short to track'); return; }
-
+  /**
+   * The AI Track handler's run on [start, end]: the toolbar's AI Track and the
+   * Metrics export's skeleton analysis both go through here (KNOWN_ISSUES 061).
+   * Resolves to the poses kept (0 when cancelled or none were found).
+   */
+  const runAiTrackRange = useCallback(async (start: number, end: number, quality: TrackQuality): Promise<number> => {
     precisionAbortRef.current = false;
     setPrecisionTrackState('running');
     try {
@@ -1709,12 +1703,26 @@ function Home() {
       } else {
         setProcessingStatus(`AI Track ready — ${kept} frame-exact poses locked. Play at any speed.${note}`);
       }
+      return precisionAbortRef.current ? 0 : kept;
     } finally {
       // Earlier sections survive a failed/cancelled pass — reflect reality.
       setPrecisionTrackState(canvasRef.current?.getBakedTrackInfo?.() ? 'ready' : 'idle');
       void seekVideoTo(start);
     }
-  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsSectionStart, metricsSectionEnd, seekVideoTo, runPrecisionPass]);
+  }, [seekVideoTo, runPrecisionPass]);
+
+  const handlePrecisionTrack = useCallback(async (scope: 'all' | 'section', quality: TrackQuality = 'balanced') => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) { setProcessingStatus('Load a video first'); return; }
+    if (!skeletonEnabled) { setProcessingStatus('Enable Skeleton first, then run AI Track'); return; }
+    if (precisionTrackState === 'running') { precisionAbortRef.current = true; return; } // second tap cancels
+    const dur = isFinite(v.duration) ? v.duration : 0;
+    if (dur <= 0) { setProcessingStatus('Video not ready yet — try again'); return; }
+    const start = scope === 'section' && metricsSectionStart != null ? Math.max(0, metricsSectionStart) : 0;
+    const end = scope === 'section' && metricsSectionEnd != null ? Math.min(dur, metricsSectionEnd) : dur;
+    if (end - start < 0.2) { setProcessingStatus('Selected section is too short to track'); return; }
+    await runAiTrackRange(start, end, quality);
+  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsSectionStart, metricsSectionEnd, runAiTrackRange]);
 
   const handlePrecisionTrackClear = useCallback(() => {
     canvasRef.current?.clearBakedTrack?.();
@@ -7540,8 +7548,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   containerWidth={canvasSize.width}
                   containerHeight={canvasSize.height}
                   ballTrailMode={ballTrailMode}
-                  // The export's analysis runs the pose loop only (no display, no angles): KNOWN_ISSUES 061.
-                  skeletonEnabled={(skeletonEnabled && markupTarget === 'A') || exportAnalysisPoseLoop}
+                  skeletonEnabled={skeletonEnabled && markupTarget === 'A'}
                   skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
@@ -9817,25 +9824,29 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             trackRunning: precisionTrackState === 'running',
             passStatus: processingStatus,
             // The export's skeleton analysis IS the existing AI Track pass, unchanged
-            // ('fast', any range), with the same running/ready bookkeeping as the toolbar.
-            analyzeRange: async (a, b) => {
-              precisionAbortRef.current = false;
-              setPrecisionTrackState('running');
-              try {
-                const kept = await runPrecisionPass(a, b, 'fast');
-                if (precisionAbortRef.current) { setProcessingStatus('Skeleton analysis cancelled'); return 0; }
-                setProcessingStatus(kept >= 2 ? `Skeleton analyzed for the export — ${kept} frame-exact poses.` : 'Skeleton analysis found no player in that range');
-                return kept;
-              } finally {
-                setPrecisionTrackState(canvasRef.current?.getBakedTrackInfo?.() ? 'ready' : 'idle');
-              }
-            },
+            // ('fast' = the toolbar's 0.5×) through the toolbar AI Track's own handler
+            // (runAiTrackRange), with the real Skeleton switch on: turned on the way the
+            // toolbar's Skeleton button does, and left on. KNOWN_ISSUES 061.
+            analyzeRange: (a, b) => analyzeForExport({
+              skeletonOn: () => skeletonEnabledRef.current,
+              turnSkeletonOn: () => {
+                firstFrameLog('analysis', 'Skeleton was off: turned on (as the toolbar Skeleton button does)');
+                setSkeletonOverlayPaused(false);
+                setSkeletonOn(true);
+              },
+              skeletonCommitted: () => new Promise<void>((resolve) => {
+                const t0 = performance.now();
+                const tick = () => (skeletonEnabledRef.current || performance.now() - t0 > 2000 ? resolve() : requestAnimationFrame(tick));
+                tick();
+              }),
+              track: (start, end) => runAiTrackRange(start, end, 'fast'),
+              watch: () => {
+                const v = videoRef.current;
+                firstFrameLog('analysis', `start ${a.toFixed(3)}–${b.toFixed(3)} s (AI Track handler, 'fast')`);
+                return v ? watchPassFrames(v, (line) => firstFrameLog('analysis', line)) : () => {};
+              },
+            }, a, b),
             cancelAnalysis: () => { precisionAbortRef.current = true; },
-            poseLoop: {
-              isOn: () => skeletonEnabled && markupTarget === 'A',
-              setOn: setExportAnalysisPoseLoop,
-              isReady: () => !!canvasRef.current?.isPoseLoopReady?.(),
-            },
             snapshotMode: analysisMode.kind === 'snapshot',
             getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,
             isRangeBaked: (a, b) => canvasRef.current?.isRangeBaked?.(a, b) ?? false,

@@ -74,10 +74,22 @@ const logLines: FirstFrameLogLine[] = [];
 const logListeners = new Set<() => void>();
 let logT0 = 0;
 
+/** Lines kept in the log, other than the export analysis' own. */
+const MAX_LOG_LINES = 80;
+/** Slots with their own quota (the export's skeleton analysis, KNOWN_ISSUES 061). */
+const KEPT_SLOTS = new Set(['analysis']);
+const MAX_KEPT_LINES = 60;
+
 export function firstFrameLog(slot: string, text: string): void {
   if (!logT0) logT0 = performance.now();
   logLines.push({ t: Math.round(performance.now() - logT0), slot, text });
-  if (logLines.length > 80) logLines.splice(0, logLines.length - 80);
+  // The export analysis' own lines have their own quota: the per-seek 'seeked'
+  // event lines above would otherwise push them out (KNOWN_ISSUES 061).
+  const kept = KEPT_SLOTS.has(slot);
+  const same = logLines.filter((l) => KEPT_SLOTS.has(l.slot) === kept).length;
+  if (same > (kept ? MAX_KEPT_LINES : MAX_LOG_LINES)) {
+    logLines.splice(logLines.findIndex((l) => KEPT_SLOTS.has(l.slot) === kept), 1);
+  }
   logListeners.forEach((fn) => fn());
 }
 export function firstFrameLogLines(): readonly FirstFrameLogLine[] { return logLines; }

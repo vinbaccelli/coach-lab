@@ -2035,7 +2035,7 @@ new — x 292–507, y 292–307.
 
 **Class of mistake:** see LESSONS_LEARNED 019. **Severity:** high (every iPhone).
 
-## 061 — Frozen skeleton in the export (Vin, iPhone) — ROOT CAUSE FOUND, FIX IN PR #97 round 3, to confirm on the device
+## 061 — Frozen skeleton in the export (Vin, iPhone) — OPEN: round-3 hypothesis disproved on device; round 4 = the toolbar's own handler + on-device frame log
 
 See the PR #97 round 2 report for measurements. Code read: outside holds the
 skeleton is always the baked track by media time (`lookupBakedPose`, mode-free);
@@ -2054,52 +2054,40 @@ repeated 100%", while the toolbar AI Track at 0.5× (the same `'fast'` pass) on
 the same video and phone worked. So the snapshot and zoom paths above were not
 the cause.
 
-*Root cause (code read).* Both call the same `runPrecisionPass`
-(`app/analysis/page.tsx`), with the same model, frame rate, seek-and-wait and
-video element. The difference is the condition around it: the toolbar refuses
-to start unless Skeleton is on (`handlePrecisionTrack`, "Enable Skeleton
-first"), and the panel's Include-skeleton switch never required it. With
-Skeleton on, Canvas's pose loop listens to 'seeked' and, during a pass
-(`bakingRef`), sends each seeked frame to the MoveNet bridge at once
-(`components/Canvas.tsx` `onSeeked` → `detectStaticFrame` → `bridge.sendFrame`
-→ `createImageBitmap(video)`, `lib/poseWorkerBridge.ts`). With Skeleton off,
-nothing reads the paused video except MediaPipe's `detect(video)`, a WebGL
-upload. On iOS that upload then keeps returning one picture, consistent with
-052, where a hidden or covered video also froze. The 2D read of the toolbar
-condition is what keeps the frame current.
+*Round 3 hypothesis — DISPROVED on the device.* It was that the panel lacked
+the toolbar's second reader of each seeked frame (the Skeleton pose loop's
+`createImageBitmap`). Round 3 turned that pose loop on for the panel's
+analysis, with a 15 s model wait. On Vin's iPhone (commit 0c937011) the panel
+still gave "91 poses in 3.1 s · motion 0.0% · repeated 100%". It finished
+faster than real time, and the export got slower. The Chromium mock had
+"reproduced" the phone's numbers only because it was built from that same
+hypothesis (LESSONS_LEARNED 020), so it proved nothing about WebKit. Round 3's
+override and wait are removed.
 
-*Simulated in Chromium* (`stale.mjs`, 4 s clip, CPU ×2): the WebGL upload of a
-video returns the picture of that video's last 2D read (createImageBitmap or a
-2D drawImage). Before the fix:
-- the toolbar: 106 samples, 67 different poses, exported;
-- the panel (Skeleton off): 114 samples, 1 pose, stopped with "114 poses in
-  3.9 s (29.2/s) · motion 0.0% · repeated 100%". This is the same failure at
-  the same rate as on Vin's phone (129 in 4.4 s = 29.3/s).
+*Round 4 (this change).*
+- **Same handler.** The panel's analysis calls the toolbar AI Track's own
+  handler: `runAiTrackRange`, which `handlePrecisionTrack` now calls with its
+  own range. It runs `'fast'` (the toolbar's 0.5×) on each untracked part of
+  the trim range. Toolbar behaviour and AI Track scope are unchanged.
+- **Real Skeleton switch.** If Skeleton is off, it is turned on the way the
+  toolbar's Skeleton button does (`setSkeletonOverlayPaused(false)` +
+  `setSkeletonOn(true)`) and left on. The analysis starts once the page has
+  rendered with it on; there is no model wait.
+  (`lib/exportOverlay.ts analyzeForExport`, unit-tested.)
+- Progress, Cancel and the frozen-track guard are unchanged.
+- **On-device log (?vdebug=1, "analysis" lines, `lib/analysisFrameLog.ts`),**
+  written by the panel's call from outside the pass. Every 10th seek it logs
+  the video's currentTime, the mediaTime of the next frame the browser
+  presents (requestVideoFrameCallback), and the wall time. It ends with
+  "analysis end: N seeks in M ms". The log keeps up to 60 of these lines
+  apart from its 80 others: with ?vdebug=1, the per-seek 'seeked' event lines
+  of the first-frame diagnostics would otherwise push them out.
+  - currentTime advancing while mediaTime stays put: the browser is not
+    presenting the seeked frames.
+  - Steps much shorter than a frame decode: the seek did not wait for a frame.
 
-*Fix.* With Skeleton off, the panel's analysis turns Canvas A's pose loop on
-for the pass and off afterwards: done, cancelled, failed or thrown
-(`lib/exportOverlay.ts withAnalysisPoseLoop`, unit-tested). It waits up to 15 s
-for the loop's model (`isPoseLoopReady`) before the pass, as the toolbar's loop
-is already loaded. Only the loop runs; drawing stays off. The page's Skeleton
-switch is not used, because turning it on also opens the data column, sets the
-metrics section and pins the foot line, which a restore would not undo. Drawing
-would also send joint angles into the data column. The guard stays as it was.
+*Chromium (a functional check only, not evidence about WebKit):* see the PR
+#97 round 4 report.
 
-*After the fix* (same mock, clip and throttling):
-- the panel (Skeleton off): 112 samples, 108 different poses, exported, and
-  the pose loop off again afterwards;
-- with every frame stale (`STALE=all`), the guard still stops it ("105 poses
-  in 3.9 s · motion 0.0% · repeated 100%");
-- the toolbar is unchanged (101 samples, 65 poses), and its Skeleton stays on;
-- Cancel during the model wait or 22 samples into the pass leaves the loop off.
-
-Cost, without the mock: the analysis took 311 s instead of 231 s (+34%). That
-is +22 s waiting for the pose model before the first frame, and +27% per frame
-because MoveNet now runs on each frame too. This is the toolbar AI Track's own
-cost, measured in Chromium at CPU ×2.
-
-**Needs the iPhone.** The cause is consistent with every observation but was
-not measured on WebKit (no WebKit here). Confirm with a panel analysis with
-Skeleton off on the clip that failed: the export must finish, and the vdebug
-pose lines must show the wrist moving.
-
+**Needs the iPhone.** Whether the panel's export now has a moving skeleton.
+If not, the "analysis" vdebug lines from that run.
