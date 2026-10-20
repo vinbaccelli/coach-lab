@@ -2035,7 +2035,7 @@ new — x 292–507, y 292–307.
 
 **Class of mistake:** see LESSONS_LEARNED 019. **Severity:** high (every iPhone).
 
-## 061 — Frozen skeleton in the export (Vin, iPhone) — OPEN: round-3 hypothesis disproved on device; round 4 = the toolbar's own handler + on-device frame log
+## 061 — Frozen skeleton in the export (Vin, iPhone) — OPEN: panel analysis DISABLED for the release (workaround: AI Track from the toolbar)
 
 See the PR #97 round 2 report for measurements. Code read: outside holds the
 skeleton is always the baked track by media time (`lookupBakedPose`, mode-free);
@@ -2091,3 +2091,24 @@ override and wait are removed.
 
 **Needs the iPhone.** Whether the panel's export now has a moving skeleton.
 If not, the "analysis" vdebug lines from that run.
+
+**Round 4 on the iPhone — still frozen; panel analysis disabled for the release.**
+With the panel calling the toolbar's own handler and Skeleton on, the panel's
+analysis took ~118 s on the phone and then failed the guard: "64 poses in 2.1 s
+· motion 0.0% · repeated 100%". The vdebug line read "analysis end: 0 seeks in
+118357 ms": the 'seeked' event the log listens to never fired on the phone,
+while the toolbar AI Track on the same phone and video works. The cause is
+unknown (the log shows only that the panel's pass saw no 'seeked' on that
+element).
+
+*Workaround (release).* `PANEL_SKELETON_ANALYSIS = false`
+(`lib/exportOverlay.ts`; comment "V2/Saturday: panel analysis frozen on
+iPhone"). The panel never starts its own analysis:
+- a baked track covers the whole export range: "Include skeleton" is available
+  and on by default, and the export uses the track (unchanged);
+- otherwise (none, or only part of the range): the switch is off and disabled
+  with "Run AI Track from the toolbar first, then the skeleton can be
+  included.", and Export is plain "Export", producing a video without skeleton.
+
+The analysis code (`analyzeRange` wiring, `runAiTrackRange`, the frozen-track
+guard, the vdebug "analysis" lines) is kept, behind the constant, for V2.

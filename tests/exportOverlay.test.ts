@@ -5,7 +5,7 @@ import {
   dockAnalysisBar, meanAbsDiff, poseRegion, poseShift, skeletonFollowsVideo, toGrey, includesLabel, mapPoint, overlayTransform, parsePassProgress, skeletonExportStatus,
   trackedFraction, untrackedIntervals,
   clampHoldSec, formatHoldSec, holdSchedule, drawingsDefaultOn, analysisBlockedReason, pageZoomed, includesLabelWithHolds, outputProgress, snapshotsExportStatus, snapshotsSwitchText,
-  HOLD_DEFAULT_SEC, HOLD_FRAME_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC,
+  HOLD_DEFAULT_SEC, HOLD_FRAME_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC, PANEL_SKELETON_ANALYSIS,
   holdSeekLanded, holdResumeSeek, resumeAction, emptyExportError, RESUME_GIVE_UP_MS, RESUME_RETRY_MS,
 } from '@/lib/exportOverlay';
 
@@ -66,16 +66,16 @@ test('trackedFraction caps the number of samples on a long range', () => {
   assert.equal(calls, 20);
 });
 
-test('skeleton switch is never dead: untracked or partly tracked ranges are analyzed first', () => {
+test('with the panel analysis enabled (PANEL_SKELETON_ANALYSIS), untracked or partly tracked ranges are analyzed first', () => {
   assert.deepEqual(skeletonExportStatus(false, 1), { state: 'ready', text: 'Skeleton ready.' });
-  assert.deepEqual(skeletonExportStatus(false, 0), {
+  assert.deepEqual(skeletonExportStatus(false, 0, false, false, true), {
     state: 'analyze', text: 'Not analyzed yet. The skeleton will be analyzed first when you export, which adds time.',
   });
-  assert.equal(skeletonExportStatus(false, 0.42).text, 'Skeleton covers 42% of this range. The rest will be analyzed first when you export, which adds time.');
-  assert.equal(skeletonExportStatus(false, 0.42).state, 'analyze');
+  assert.equal(skeletonExportStatus(false, 0.42, false, false, true).text, 'Skeleton covers 42% of this range. The rest will be analyzed first when you export, which adds time.');
+  assert.equal(skeletonExportStatus(false, 0.42, false, false, true).state, 'analyze');
   // Partial never reads 0% or 100%.
-  assert.match(skeletonExportStatus(false, 0.001).text, /covers 1% /);
-  assert.match(skeletonExportStatus(false, 0.996).text, /covers 99% /);
+  assert.match(skeletonExportStatus(false, 0.001, false, false, true).text, /covers 1% /);
+  assert.match(skeletonExportStatus(false, 0.996, false, false, true).text, /covers 99% /);
 });
 
 test('skeleton switch waits only for an AI Track already running', () => {
@@ -340,7 +340,7 @@ test('054: while our own cancelled pass winds down the switch says "Stopping the
   assert.deepEqual(skeletonExportStatus(true, 0, false, true), { state: 'stopping', text: 'Stopping the analysis…' });
   assert.deepEqual(skeletonExportStatus(true, 1, true, true), { state: 'stopping', text: 'Stopping the analysis…' });
   // Settled: back to normal.
-  assert.equal(skeletonExportStatus(false, 0, false, false).state, 'analyze');
+  assert.equal(skeletonExportStatus(false, 0, false, false, true).state, 'analyze');
   assert.equal(skeletonExportStatus(false, 1, false, false).state, 'ready');
   // Someone else's pass (the toolbar) still reads as busy.
   assert.equal(skeletonExportStatus(true, 0.5, false, false).state, 'busy');
@@ -491,4 +491,17 @@ test('an export with no frame or no bytes is an error, never an empty file', () 
   assert.match(emptyExportError(0, 1_000_000, 2)!, /no video frames were recorded.*turn Snapshots off/);
   assert.match(emptyExportError(300, 0, 0)!, /no video frames were recorded/);
   assert.doesNotMatch(emptyExportError(300, 0, 0)!, /Snapshots/);
+});
+
+test('panel analysis is off for the release: skeleton only when a track covers the range', () => {
+  assert.equal(PANEL_SKELETON_ANALYSIS, false);
+  assert.deepEqual(skeletonExportStatus(false, 1), { state: 'ready', text: 'Skeleton ready.' });
+  for (const f of [0, 0.4]) {
+    assert.deepEqual(skeletonExportStatus(false, f), { state: 'unavailable', text: 'Run AI Track from the toolbar first, then the skeleton can be included.' });
+  }
+  // The analysis states are still there behind the constant.
+  assert.equal(skeletonExportStatus(false, 0, false, false, true).state, 'analyze');
+  assert.equal(skeletonExportStatus(false, 0.4, false, false, true).state, 'analyze');
+  // A toolbar AI Track running still says to wait.
+  assert.equal(skeletonExportStatus(true, 0).state, 'busy');
 });

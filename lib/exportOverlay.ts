@@ -48,7 +48,18 @@ export function trackedFraction(
   return hit / n;
 }
 
-export type SkeletonExportState = 'ready' | 'analyze' | 'busy' | 'failed' | 'stopping';
+export type SkeletonExportState = 'ready' | 'analyze' | 'busy' | 'failed' | 'stopping' | 'unavailable';
+
+/**
+ * Whether the export panel may run its own skeleton analysis. OFF for the
+ * release: V2/Saturday: panel analysis frozen on iPhone, see KNOWN_ISSUES 061.
+ * With it off, the skeleton can only be included when an AI Track (run from
+ * the toolbar) already covers the range. The analysis code stays, unused.
+ */
+export const PANEL_SKELETON_ANALYSIS = false;
+
+/** Under "Include skeleton" when no AI Track covers the range and the panel does not analyze. */
+export const SKELETON_NEEDS_TOOLBAR_TRACK_TEXT = 'Run AI Track from the toolbar first, then the skeleton can be included.';
 
 /** Shown when the export's own analysis fails its self-check (checkAnalyzedTrack). */
 export const ANALYSIS_FAILED_TEXT = 'Skeleton could not be analyzed on this video';
@@ -65,6 +76,7 @@ export function skeletonExportStatus(
   fraction: number,
   analysisFailed = false,
   stopping = false,
+  analysisEnabled = PANEL_SKELETON_ANALYSIS,
 ): { state: SkeletonExportState; text: string } {
   // The export's own pass, cancelled, still finishing the frame it is on (it
   // checks the abort between frames): it is ours, not "an AI Track running"
@@ -75,6 +87,7 @@ export function skeletonExportStatus(
   if (analysisFailed) return { state: 'failed', text: `${ANALYSIS_FAILED_TEXT}.` };
   if (trackRunning) return { state: 'busy', text: 'AI Track is running. Wait for it to finish, then export.' };
   if (fraction >= 0.999) return { state: 'ready', text: 'Skeleton ready.' };
+  if (!analysisEnabled) return { state: 'unavailable', text: SKELETON_NEEDS_TOOLBAR_TRACK_TEXT };
   if (fraction <= 0) return { state: 'analyze', text: 'Not analyzed yet. The skeleton will be analyzed first when you export, which adds time.' };
   const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
   return { state: 'analyze', text: `Skeleton covers ${pct}% of this range. The rest will be analyzed first when you export, which adds time.` };

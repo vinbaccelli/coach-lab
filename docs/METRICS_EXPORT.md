@@ -69,6 +69,12 @@ the file will contain ("Includes: video + skeleton + drawings").
 - **Skeleton** is the AI Track pose for each frame's own time (the stored
   track; nothing is detected while rendering). The switch is never dead and
   can be on with the on-screen Skeleton off (an analysis then turns that on):
+  - **Release state (`PANEL_SKELETON_ANALYSIS = false`, KNOWN_ISSUES 061):** the
+    panel does not analyze. Range fully tracked → "Skeleton ready." (on by
+    default); otherwise the switch is off and disabled: "Run AI Track from the
+    toolbar first, then the skeleton can be included." and Export is plain
+    "Export". The analysis bullets below describe the code kept behind the
+    constant, not what runs.
   - range fully tracked → "Skeleton ready." — Export renders straight away;
   - range untracked or partly tracked → "Not analyzed yet…" / "Skeleton covers
     X% of this range…", and Export becomes **Analyze skeleton + export** with

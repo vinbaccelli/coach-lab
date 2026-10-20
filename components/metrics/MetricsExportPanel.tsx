@@ -259,7 +259,7 @@ export default function MetricsExportPanel({
   const skStatus = skeletonExportStatus(Boolean(overlay?.trackRunning) && phase !== 'analyzing', trackedFrac, analysisFailed, stopping);
   const snapshotMode = Boolean(overlay?.snapshotMode);
   const drStatus = drawingsExportStatus(snapshotMode, drawingCount, includeSnapshots);
-  const skAvailable = skStatus.state !== 'busy' && skStatus.state !== 'failed' && skStatus.state !== 'stopping';
+  const skAvailable = skStatus.state !== 'busy' && skStatus.state !== 'failed' && skStatus.state !== 'stopping' && skStatus.state !== 'unavailable';
   const drAvailable = drStatus.state === 'ready';
   // Unset until the coach flips it: on by default when some of the range is tracked.
   const [skeletonChoice, setSkeletonChoice] = useState<boolean | null>(null);
@@ -270,6 +270,10 @@ export default function MetricsExportPanel({
   const drawingsWanted = drawingsChoice ?? drawingsDefaultOn(snapshotMode);
   const setDrawingsWanted = (v: boolean) => setDrawingsChoice(v);
   const includeSkeleton = Boolean(overlay) && skAvailable && skeletonWanted;
+  // V2/Saturday: panel analysis frozen on iPhone, see KNOWN_ISSUES 061. While
+  // PANEL_SKELETON_ANALYSIS is false the status is never 'analyze', so this is
+  // always false and the analysis code below (analyzeRange wiring, guard, vdebug
+  // lines) stays in place but does not run.
   const needsAnalysis = includeSkeleton && skStatus.state === 'analyze';
 
   // Page pinch-zoom (iOS): the skeleton analysis is not started on a zoomed page.
