@@ -13,7 +13,39 @@ import { firstFrameLogLines, firstFrameState, srcKind, subscribeFirstFrameLog } 
  * top, below the iPhone status bar (`safe-area-inset-top`; the page draws under
  * it with viewport-fit=cover).
  */
-export default function VideoDebugBox({ videoRef, inline = false }: { videoRef: React.RefObject<HTMLVideoElement | null>; inline?: boolean }) {
+/** Touch / gesture / pointer counters for the zoom diagnosis (window capture phase, passive). */
+type TouchStats = { touchstart: number; maxTouches: number; lastTouches: number; gesturestart: number; gesturechange: number; lastPointerdown: string };
+function describe(el: EventTarget | null): string {
+  if (!(el instanceof Element)) return '?';
+  const tag = el.tagName.toLowerCase();
+  const id = el.id ? `#${el.id}` : '';
+  const label = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('data-testid') || el.getAttribute('data-tour-id') || '';
+  return `${tag}${id}${label ? `[${label.slice(0, 28)}]` : ''}`;
+}
+
+export default function VideoDebugBox({ videoRef, inline = false, getAppZoom }: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  inline?: boolean;
+  /** The canvas zoom (1 = 100%), the one with the ⌂ reset. */
+  getAppZoom?: () => number | null;
+}) {
+  const [stats, setStats] = useState<TouchStats>({ touchstart: 0, maxTouches: 0, lastTouches: 0, gesturestart: 0, gesturechange: 0, lastPointerdown: '—' });
+  useEffect(() => {
+    const onTouch = (e: TouchEvent) => setStats((s) => ({ ...s, touchstart: s.touchstart + 1, maxTouches: Math.max(s.maxTouches, e.touches.length), lastTouches: e.touches.length }));
+    const onGS = () => setStats((s) => ({ ...s, gesturestart: s.gesturestart + 1 }));
+    const onGC = () => setStats((s) => ({ ...s, gesturechange: s.gesturechange + 1 }));
+    const onPD = (e: PointerEvent) => setStats((s) => ({ ...s, lastPointerdown: `${e.pointerType} → ${describe(e.target)}` }));
+    window.addEventListener('touchstart', onTouch, { capture: true, passive: true });
+    window.addEventListener('gesturestart', onGS, { capture: true, passive: true });
+    window.addEventListener('gesturechange', onGC, { capture: true, passive: true });
+    window.addEventListener('pointerdown', onPD, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener('touchstart', onTouch, { capture: true });
+      window.removeEventListener('gesturestart', onGS, { capture: true });
+      window.removeEventListener('gesturechange', onGC, { capture: true });
+      window.removeEventListener('pointerdown', onPD, { capture: true });
+    };
+  }, []);
   const [, setTick] = useState(0);
   // Read on the client only (the page is server-rendered too).
   const [ua, setUa] = useState('');
@@ -41,6 +73,8 @@ export default function VideoDebugBox({ videoRef, inline = false }: { videoRef: 
   }, [videoRef]);
   const v = videoRef.current;
   const st = v ? firstFrameState(v) : null;
+  const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+  const appZoom = getAppZoom?.() ?? null;
   const lines = firstFrameLogLines();
   const row = (label: string, value: string, color = '#FFD86B') => (
     <div><span style={{ color: '#9AA4B2' }}>{label} </span><span style={{ color }}>{value}</span></div>
@@ -66,6 +100,15 @@ export default function VideoDebugBox({ videoRef, inline = false }: { videoRef: 
           {row('strategy', st ? `${st.last} (touched=${st.touched} metadata=${st.reachedMetadata})` : 'none for this video')}
         </>
       ) : row('video', 'no video element')}
+      {typeof window !== 'undefined' ? (
+        <>
+          {row('page zoom', `visualViewport.scale=${vv ? vv.scale.toFixed(2) : 'n/a'} innerWidth=${window.innerWidth} vv.width=${vv ? Math.round(vv.width) : 'n/a'} ratio=${vv ? (window.innerWidth / vv.width).toFixed(2) : 'n/a'}`,
+            vv && Math.abs(vv.scale - 1) > 0.01 ? '#FF8A80' : '#FFD86B')}
+          {row('app zoom', appZoom == null ? 'n/a' : `${Math.round(appZoom * 100)}% (⌂ resets)`, appZoom != null && appZoom > 1.001 ? '#FF8A80' : '#FFD86B')}
+          {row('touch', `touchstart×${stats.touchstart} touches now=${stats.lastTouches} max=${stats.maxTouches} gesturestart×${stats.gesturestart} gesturechange×${stats.gesturechange}`)}
+          {row('pointerdown', stats.lastPointerdown)}
+        </>
+      ) : null}
       {[...lines].reverse().map((l, i) => <div key={i}>{`${l.t}ms ${l.slot} ${l.text}`}</div>)}
     </div>
   );

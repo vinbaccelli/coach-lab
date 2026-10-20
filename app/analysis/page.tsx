@@ -52,6 +52,8 @@ const GenerateWorkspace = React.lazy(() => import('@/components/metrics/Generate
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
 import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoStateText } from '@/lib/firstFrame';
+import { watchPassFrames } from '@/lib/analysisFrameLog';
+import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
@@ -67,7 +69,7 @@ import {
   normalizeSubjectBox,
   subjectBoxFromRegion,
 } from '@/lib/stroMotion';
-import { makeSnapshot, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
+import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
@@ -365,6 +367,18 @@ function ReelsDesktopShell({
 type AnalysisMode =
   | { kind: 'live' }
   | { kind: 'snapshot'; snapshotId: string };
+
+/**
+ * The video box strokes are stored against: logical canvas px, without the
+ * canvas zoom/pan (Canvas videoBoundsRef, read through drawExportOverlay's
+ * capture — read-only). NOT getVideoBounds(): that is backing-store px (× the
+ * device pixel ratio) with the zoom applied, for frame capture — 2× too big on
+ * an iPhone, which put snapshot drawings in the wrong place in export holds.
+ */
+function strokesBoxOf(c: CanvasHandle | null | undefined): { dx: number; dy: number; dw: number; dh: number } | undefined {
+  const b = c?.drawExportOverlay?.(null, 0, 1, 1, { skeleton: false, drawings: false })?.box;
+  return b && b.dw > 0 && b.dh > 0 ? { dx: b.dx, dy: b.dy, dw: b.dw, dh: b.dh } : undefined;
+}
 
 function Home() {
   // Tours switch (lib/toursSwitch.ts): the ? in the zoom cluster follows it.
@@ -1018,6 +1032,9 @@ function Home() {
   // toolbar button (or tool changes) must never make the skeleton disappear.
   const [skeletonOn, setSkeletonOn] = useState(false);
   const skeletonEnabled  = skeletonOn;
+  /** Skeleton as last committed (set after the Canvas has its new props). */
+  const skeletonEnabledRef = useRef(false);
+  useEffect(() => { skeletonEnabledRef.current = skeletonOn; }, [skeletonOn]);
   const [skeletonOverlayPaused, setSkeletonOverlayPaused] = useState(false);
   const [skeletonConfirmOpen, setSkeletonConfirmOpen] = useState(false);
   /**
@@ -1149,6 +1166,7 @@ function Home() {
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
     const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
+    const box = strokesBoxOf(canvasRef.current);
     const col = measurementColumnRef.current;
     setSnapshots(prev => prev.map(s => s.id === id ? {
       ...s,
@@ -1157,6 +1175,9 @@ function Home() {
       overlayAdjustments,
       drawingsJson,
       ...(skeleton ? { skeleton } : {}),
+      // The box these strokes are in: the canvas re-fits its strokes to every
+      // resize, so they match today's box until they are stored here.
+      ...(box ? { drawingsBox: box } : {}),
     } : s));
   }, []);
 
@@ -1232,6 +1253,8 @@ function Home() {
     snap.drawingsJson = drawingsJson;
     snap.overlayAdjustments = overlayAdjustments;
     if (skeleton) snap.skeleton = skeleton;
+    const box = strokesBoxOf(canvasRef.current);
+    if (box) snap.drawingsBox = box;
     snap.column = liveColumn;
     snap.overlaysOn = showMeasurementOverlays;
     if (screenshot) snap.screenshot = screenshot;
@@ -1266,7 +1289,7 @@ function Home() {
   // (order, selection, title, notes) across close/reopen within the session.
   const [generateWorkspaceMounted, setGenerateWorkspaceMounted] = useState(false);
   // Metrics → Generate opens the video-export panel; the snapshot flow above
-  // is reached from its "Snapshot report" button.
+  // is reached from its "Snapshot images & report" button.
   const [metricsExportOpen, setMetricsExportOpen] = useState(false);
   const [generateReplayRate, setGenerateReplayRate] = useState(0.25);
   /** Seconds each snapshot stays frozen during the replay/recorded video. */
@@ -1660,17 +1683,12 @@ function Home() {
     }
   }, [seekVideoTo]);
 
-  const handlePrecisionTrack = useCallback(async (scope: 'all' | 'section', quality: TrackQuality = 'balanced') => {
-    const v = videoRef.current;
-    if (!v || !videoSrc) { setProcessingStatus('Load a video first'); return; }
-    if (!skeletonEnabled) { setProcessingStatus('Enable Skeleton first, then run AI Track'); return; }
-    if (precisionTrackState === 'running') { precisionAbortRef.current = true; return; } // second tap cancels
-    const dur = isFinite(v.duration) ? v.duration : 0;
-    if (dur <= 0) { setProcessingStatus('Video not ready yet — try again'); return; }
-    const start = scope === 'section' && metricsSectionStart != null ? Math.max(0, metricsSectionStart) : 0;
-    const end = scope === 'section' && metricsSectionEnd != null ? Math.min(dur, metricsSectionEnd) : dur;
-    if (end - start < 0.2) { setProcessingStatus('Selected section is too short to track'); return; }
-
+  /**
+   * The AI Track handler's run on [start, end]: the toolbar's AI Track and the
+   * Metrics export's skeleton analysis both go through here (KNOWN_ISSUES 061).
+   * Resolves to the poses kept (0 when cancelled or none were found).
+   */
+  const runAiTrackRange = useCallback(async (start: number, end: number, quality: TrackQuality): Promise<number> => {
     precisionAbortRef.current = false;
     setPrecisionTrackState('running');
     try {
@@ -1685,12 +1703,26 @@ function Home() {
       } else {
         setProcessingStatus(`AI Track ready — ${kept} frame-exact poses locked. Play at any speed.${note}`);
       }
+      return precisionAbortRef.current ? 0 : kept;
     } finally {
       // Earlier sections survive a failed/cancelled pass — reflect reality.
       setPrecisionTrackState(canvasRef.current?.getBakedTrackInfo?.() ? 'ready' : 'idle');
       void seekVideoTo(start);
     }
-  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsSectionStart, metricsSectionEnd, seekVideoTo, runPrecisionPass]);
+  }, [seekVideoTo, runPrecisionPass]);
+
+  const handlePrecisionTrack = useCallback(async (scope: 'all' | 'section', quality: TrackQuality = 'balanced') => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) { setProcessingStatus('Load a video first'); return; }
+    if (!skeletonEnabled) { setProcessingStatus('Enable Skeleton first, then run AI Track'); return; }
+    if (precisionTrackState === 'running') { precisionAbortRef.current = true; return; } // second tap cancels
+    const dur = isFinite(v.duration) ? v.duration : 0;
+    if (dur <= 0) { setProcessingStatus('Video not ready yet — try again'); return; }
+    const start = scope === 'section' && metricsSectionStart != null ? Math.max(0, metricsSectionStart) : 0;
+    const end = scope === 'section' && metricsSectionEnd != null ? Math.min(dur, metricsSectionEnd) : dur;
+    if (end - start < 0.2) { setProcessingStatus('Selected section is too short to track'); return; }
+    await runAiTrackRange(start, end, quality);
+  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsSectionStart, metricsSectionEnd, runAiTrackRange]);
 
   const handlePrecisionTrackClear = useCallback(() => {
     canvasRef.current?.clearBakedTrack?.();
@@ -9744,7 +9776,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         </React.Suspense>
       )}
 
-      {vdebug ? <VideoDebugBox videoRef={videoRef} /> : null}
+      {vdebug ? <VideoDebugBox videoRef={videoRef} getAppZoom={() => canvasRef.current?.getZoom?.() ?? null} /> : null}
 
       {/* Mounted only while open: closing it frees its preview and export URLs. */}
       {metricsExportOpen && (
@@ -9756,6 +9788,31 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           sectionStart={metricsSectionStart}
           sectionEnd={metricsSectionEnd}
           snapshotCount={snapshots.length}
+          // This video's snapshots, for the hold count and the trim bar's ticks.
+          snapshotMarks={sortSnapshots(snapshots)
+            .filter(s => !s.mediaId || !currentMediaIdRef.current || s.mediaId === currentMediaIdRef.current)
+            .map(s => ({ id: s.id, timeSec: s.timeSec }))}
+          // At export start: each snapshot's strokes, box and frozen pose. The
+          // ACTIVE snapshot is read from the canvas (its latest strokes and pose,
+          // edits not yet saved into `snapshots` included). Read-only.
+          getSnapshotsForExport={() => {
+            const activeId = biomechSelectedPhaseIdRef.current;
+            const media = currentMediaIdRef.current;
+            return sortSnapshots(snapshots)
+              .filter(s => !s.mediaId || !media || s.mediaId === media)
+              .map(s => {
+                const active = s.id === activeId;
+                let strokes: unknown[] = [];
+                try {
+                  const parsed = JSON.parse((active ? canvasRef.current?.exportStrokes?.() : null) ?? (s.drawingsJson || '[]'));
+                  if (Array.isArray(parsed)) strokes = parsed;
+                } catch { /* unreadable drawings: hold the frame without them */ }
+                const skeleton = (active ? canvasRef.current?.getSkeletonKeypoints?.() : null) ?? s.skeleton ?? null;
+                // On-canvas strokes follow resizes, so the active one is in today's box.
+                const box = (active ? strokesBoxOf(canvasRef.current) : null) ?? s.drawingsBox ?? null;
+                return { id: s.id, timeSec: s.timeSec, strokes, box, skeleton };
+              });
+          }}
           onSnapshotReport={() => {
             if (snapshots.length > 0) setMetricsExportOpen(false);
             void handleGenerateSnapshots();
@@ -9767,19 +9824,28 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             trackRunning: precisionTrackState === 'running',
             passStatus: processingStatus,
             // The export's skeleton analysis IS the existing AI Track pass, unchanged
-            // ('fast', any range), with the same running/ready bookkeeping as the toolbar.
-            analyzeRange: async (a, b) => {
-              precisionAbortRef.current = false;
-              setPrecisionTrackState('running');
-              try {
-                const kept = await runPrecisionPass(a, b, 'fast');
-                if (precisionAbortRef.current) { setProcessingStatus('Skeleton analysis cancelled'); return 0; }
-                setProcessingStatus(kept >= 2 ? `Skeleton analyzed for the export — ${kept} frame-exact poses.` : 'Skeleton analysis found no player in that range');
-                return kept;
-              } finally {
-                setPrecisionTrackState(canvasRef.current?.getBakedTrackInfo?.() ? 'ready' : 'idle');
-              }
-            },
+            // ('fast' = the toolbar's 0.5×) through the toolbar AI Track's own handler
+            // (runAiTrackRange), with the real Skeleton switch on: turned on the way the
+            // toolbar's Skeleton button does, and left on. KNOWN_ISSUES 061.
+            analyzeRange: (a, b) => analyzeForExport({
+              skeletonOn: () => skeletonEnabledRef.current,
+              turnSkeletonOn: () => {
+                firstFrameLog('analysis', 'Skeleton was off: turned on (as the toolbar Skeleton button does)');
+                setSkeletonOverlayPaused(false);
+                setSkeletonOn(true);
+              },
+              skeletonCommitted: () => new Promise<void>((resolve) => {
+                const t0 = performance.now();
+                const tick = () => (skeletonEnabledRef.current || performance.now() - t0 > 2000 ? resolve() : requestAnimationFrame(tick));
+                tick();
+              }),
+              track: (start, end) => runAiTrackRange(start, end, 'fast'),
+              watch: () => {
+                const v = videoRef.current;
+                firstFrameLog('analysis', `start ${a.toFixed(3)}–${b.toFixed(3)} s (AI Track handler, 'fast')`);
+                return v ? watchPassFrames(v, (line) => firstFrameLog('analysis', line)) : () => {};
+              },
+            }, a, b),
             cancelAnalysis: () => { precisionAbortRef.current = true; },
             snapshotMode: analysisMode.kind === 'snapshot',
             getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,

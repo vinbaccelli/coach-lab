@@ -770,6 +770,47 @@ manufactured. List the ways the failure can look before choosing the measure,
 and prefer a measure tied to ground truth (here the video frames) over a
 threshold on the output alone.
 
+## 016 — "Audio length equals video length" is not "audio in sync"
+
+**Symptom.** The first snapshot-hold export had a 13.25 s video and a 13.2 s
+audio track, which looked right. A test clip with a beep at every whole second
+showed the beeps playing DURING the holds and arriving up to 2.2 s before
+their frames afterwards.
+
+**Verified root cause.** During a hold the source `<video>` is paused, so its
+captured audio track sends no samples; the recorder does not leave a gap, it
+packs the following audio straight after. (The track lengths still matched
+because the audio simply ended early with silence padding.)
+
+**Fix.** With holds, the audio goes through Web Audio, whose destination track
+runs in real time and sends silence while the source is paused. Measured:
+silent holds (RMS 0.0000) and a constant beep-to-frame offset before and after
+each hold (−92 to −148 ms; main's own path measures −175 to −208 ms).
+
+**Class of mistake.** Checking a sync property by comparing lengths. Encode a
+signal you can find in both streams (here: frame numbers in the picture, beeps
+in the sound) and compare them event by event.
+
+## 017 — Picking the moment a stored coordinate is valid without reading who mutates it
+
+**Symptom.** The first `drawingsBox` rule kept the box from the snapshot's
+creation, because stored strokes do not move on resize. A snapshot resized
+while active and then saved would have been exported with the wrong box.
+
+**Verified root cause.** The CANVAS re-fits its own strokes on every resize
+(`components/Canvas.tsx` letterbox remap, KNOWN_ISSUES 010); only the stored
+JSON stops moving, at the moment it is saved. The live green test stroke still
+lined up after a resize, which gave it away.
+
+**Fix.** The box is recorded at every save (the strokes being stored are in
+today's box), and the active snapshot is exported with today's box. Verified
+with a resize while the snapshot was active and an unsaved edit on the active
+one.
+
+**Class of mistake.** Deciding when data is "fixed" from one place that stores
+it, without reading every place that changes it. Before choosing a capture
+point, list the writers.
+
 ## 018 — A display fix that changed how the file loads
 
 **Symptom.** PR #94 round 2 (first frame on iPhone) made Vin's camera-roll
@@ -791,3 +832,68 @@ ones that can break the primary path (here: loading) from the ones that cannot.
 On a platform you cannot run, never change the inputs of the thing that already
 works; add only steps that act after it succeeded, and make each fail closed.
 
+## 019 — A coordinate helper's units, assumed from its name
+
+**Symptom.** PR #97 snapshot drawings in export holds were in the right place in
+every Chromium test and nowhere on an iPhone-sized 2× screen (KNOWN_ISSUES 060).
+
+**Verified root cause.** `getVideoBounds()` reads like "the video box" but
+returns backing-store px with the zoom applied, for frame capture. My tests ran
+at devicePixelRatio 1 with no zoom, where it equals the logical box, AND built
+their test strokes with the same function, so a wrong box could not show.
+
+**Fix.** Use the box the strokes are actually stored in; test strokes are built
+from that box too, at dpr 2 (phone) as well as 1.
+
+**Class of mistake.** Taking a function's units from its name, then testing it
+with fixtures derived from the same function at the one setting (dpr 1, no
+zoom) where the bug cancels out. Read the return statement; test at the device
+settings the users have.
+
+
+## 020 — A simulation built from the hypothesis cannot confirm it
+
+**Symptom.** The Metrics export's skeleton analysis gave a 100%-repeated pose
+on an iPhone, while the toolbar AI Track worked on the same video and phone
+(KNOWN_ISSUES 061).
+
+**What went wrong.** Round 3 named a cause: the panel lacked the Skeleton pose
+loop's second read of each seeked frame. I "confirmed" it with a Chromium mock
+whose WebGL upload returned the last 2D read. That mock was the hypothesis
+written as code, so of course it produced the phone's numbers before the fix
+and not after. On the iPhone the round-3 fix changed nothing ("91 poses in
+3.1 s · repeated 100%"), and the export got slower. The real cause is still
+unmeasured.
+
+**What changed.** The panel now calls the toolbar's own AI Track handler, with
+the real Skeleton switch on, so there is no second code path to differ. It
+also writes an on-device frame log (currentTime, presented mediaTime, wall
+time) so the next iPhone run measures instead of guessing.
+
+**Class of mistake.** Treating a reproduction as evidence when the mock was
+derived from the theory it was meant to test, and reporting it as "confirmed".
+A mock can show the code reacts as intended to an assumed platform behaviour.
+Only the platform can show that behaviour exists. When the platform is not
+available, say "unverified" and ship instrumentation that measures it there.
+
+## 021 — A fallback that still depends on the thing that failed
+
+**Symptom.** PR #97 snapshot holds on an iPhone: media time stuck at 0.000
+during a hold, audio drifting −1.21 s, and once "Export produced an empty
+file" (KNOWN_ISSUES 057).
+
+**Verified root cause (code read + Chromium mock of the iOS behaviour).** The
+"seek did not land" fallback went on painting from the same paused hidden
+video whose seek had failed, and painted nothing when it had no frame. The
+`play()` after the hold was called once and only logged, so a rejected call
+left the video paused for the rest of the render. Only a 0-byte file counted
+as empty.
+
+**Fix.** The hold paints a copy taken before the risky step (pause + seek);
+`play()` is retried until media time actually moves, with a clear error after
+4 s; a render with no painted frame is an error, not a file.
+
+**Class of mistake.** A fallback that leans on the component that just failed,
+and a call whose outcome is logged but never acted on. A fallback must not
+depend on what failed; "called play()" is not "it plays", so check the effect
+(time moves) and act on its absence.

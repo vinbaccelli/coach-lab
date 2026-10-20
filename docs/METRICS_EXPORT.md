@@ -4,12 +4,13 @@ Metrics → **Generate** opens the export panel
 (`components/metrics/MetricsExportPanel.tsx`, wired in `app/analysis/page.tsx`
 `onMetricsGenerate`). It exports the loaded video, whole or a trimmed section,
 with the coach's **drawings** and the **AI-tracked skeleton** drawn on when they
-are included (see *Skeleton and drawings* below).
+are included (see *Skeleton and drawings* below), and each **snapshot** in the
+range as a hold (see *Snapshots (holds)*).
 
 ## What it does
 
 - **Opens instantly.** Opening only pauses the analysis video. No seek, no frame
-  capture, no snapshot writes; snapshots and angle data are not needed.
+  capture, no snapshot writes; snapshots are only read, at export start.
 - **Range.** Defaults to the whole video. *Use section* copies the Metrics
   section handles (`metricsSectionStart/End`, read only). *Whole video* resets.
 - **Trim.** `components/TrimRangeBar.tsx`: two handles on one track (pointer
@@ -22,12 +23,15 @@ are included (see *Skeleton and drawings* below).
   clip at 720p is 720×1280. Presets larger than the source are disabled. Video
   bitrate: 720p 4 Mbps, 1080p 8 Mbps; Original uses the tier of its short side
   (≤720 → 4, ≤1080 → 8, larger → 16 Mbps). Audio 128 kbps.
-- **Estimate.** `estimateExportBytes` = (video + audio bits/s) × trimmed
-  duration ÷ 8, shown as "≈ X MB (approximate)" and updated live. It is the
-  recorder's *target*; see KNOWN_ISSUES 042 for how far real files land from it.
+- **Estimate.** `estimateExportBytes` = (video + audio bits/s) × output
+  duration ÷ 8 (the trimmed range plus every hold), shown as "≈ X MB
+  (approximate)" with the duration as "0:09.0 + 0:04.0 holds", updated live. It
+  is the recorder's *target*; see KNOWN_ISSUES 042 for how far real files land
+  from it.
 - **Export.** `lib/cropExport.ts` `exportEditedVideo` with the Metrics-only
   options `maxHeight`, `videoBitsPerSecond`, `signal`, `pauseWhenHidden`,
-  `onRenderProgress`. Real time: a 20 s range takes about 20 s. Progress bar,
+  `onRenderProgress`, `holds`. Real time: a 20 s range takes about 20 s, plus
+  the holds. Progress bar (on the output timeline, so it moves during holds),
   **Cancel** (the UI returns to idle at once), then Download, Share (when the
   browser can share files) and the real file size.
 - **One decoder.** During the export the analysis video and the preview are
@@ -40,9 +44,10 @@ are included (see *Skeleton and drawings* below).
   state.
 - **YouTube / embedded sources** cannot be read as a file: Export is replaced by
   a message. With no video loaded, the panel says "Load a video first."
-- **Snapshot report** (bottom of the panel) runs the previous Generate flow
-  unchanged (`handleGenerateSnapshots` → GenerateWorkspace: images, report,
-  Replay, Record video). With no snapshots it shows the existing message.
+- **Snapshot images & report** (bottom of the panel) runs the previous
+  Generate flow unchanged (`handleGenerateSnapshots` → GenerateWorkspace:
+  images, report, Replay, Record video). With no snapshots it shows the
+  existing message.
 - Closing the panel unmounts it and frees its object URLs.
 
 ## Skeleton and drawings
@@ -50,13 +55,26 @@ are included (see *Skeleton and drawings* below).
 Two switches in the panel's **Include** section; the quality panel names what
 the file will contain ("Includes: video + skeleton + drawings").
 
-- **Drawings** (lines, shapes, text, angle measurements) are the LIVE-mode
-  drawings on the analysis canvas. In SNAPSHOT mode the canvas drawings belong
-  to the snapshot and are not exported ("Snapshot drawings aren't exported.
-  Use Snapshot report."). With none: "No drawings on the video".
+- **Drawings** (lines, shapes, text, angle measurements) are the drawings on
+  screen now, drawn on EVERY frame outside snapshot holds: the live drawings, or
+  in SNAPSHOT mode the selected snapshot's (the canvas holds exactly those). The
+  line says which: "3 drawings on the video, shown on every frame" / "This
+  snapshot's 1 drawing, shown on every frame except snapshot holds". On by
+  default in LIVE mode, off in SNAPSHOT mode (its hold already shows them).
+  Disabled only when there is nothing to draw, with the reason ("No drawings on
+  the video / on this snapshot. Draw on … to include them."). Each Include row
+  is one ≥ 44 px touch target (the text toggles too, not only the switch).
+  Keys typed in the panel never reach the page's shortcuts (they used to
+  frame-step the video behind it and leave SNAPSHOT mode, KNOWN_ISSUES 056).
 - **Skeleton** is the AI Track pose for each frame's own time (the stored
   track; nothing is detected while rendering). The switch is never dead and
-  does not depend on the on-screen Skeleton switch:
+  can be on with the on-screen Skeleton off (an analysis then turns that on):
+  - **Release state (`PANEL_SKELETON_ANALYSIS = false`, KNOWN_ISSUES 061):** the
+    panel does not analyze. Range fully tracked → "Skeleton ready." (on by
+    default); otherwise the switch is off and disabled: "Run AI Track from the
+    toolbar first, then the skeleton can be included." and Export is plain
+    "Export". The analysis bullets below describe the code kept behind the
+    constant, not what runs.
   - range fully tracked → "Skeleton ready." — Export renders straight away;
   - range untracked or partly tracked → "Not analyzed yet…" / "Skeleton covers
     X% of this range…", and Export becomes **Analyze skeleton + export** with
@@ -64,12 +82,26 @@ the file will contain ("Includes: video + skeleton + drawings").
   - an AI Track already running from the toolbar → "AI Track is running. Wait
     for it to finish, then export." (the only state that disables it).
   It is on by default when part of the range is tracked, off otherwise.
+- **Not on a zoomed page.** While the page is pinch-zoomed (visualViewport.scale
+  > 1.02) "Analyze skeleton + export" is disabled with "The page is zoomed in
+  (N%). Pinch out to 100% first…": a zoomed page can hide the video the
+  analysis seeks, and iOS then analyzes a stale frame (frozen skeleton).
 - **Analysis before export.** The untracked parts of the range
   (`lib/exportOverlay.ts untrackedIntervals`) are tracked with the existing AI
-  Track pass, unchanged: `runPrecisionPass(start, end, 'fast')` (wired in
-  `app/analysis/page.tsx`, with the toolbar's running/ready bookkeeping). Each
+  Track pass, unchanged: `runPrecisionPass(start, end, 'fast')`, the toolbar's
+  0.5× (wired in `app/analysis/page.tsx`). Each
   part is pulled 0.05 s in from its neighbours so the pass never replaces a
   track the coach already made (it drops tracks within 0.05 s of its range).
+  **It is the toolbar AI Track.** Each part goes through the toolbar's own
+  handler (`runAiTrackRange`, also called by `handlePrecisionTrack`), with the
+  same status lines. If Skeleton is off, it is first turned on the way the
+  toolbar's Skeleton button does, and left on: the panel's note says
+  "Skeleton will be analyzed first with AI Track (this turns Skeleton on)…".
+  With ?vdebug=1 the analysis writes "analysis" lines: every 10th seek, the
+  video's currentTime, the presented frame's mediaTime
+  (requestVideoFrameCallback) and the wall time (`lib/analysisFrameLog.ts`,
+  KNOWN_ISSUES 061). These lines have their own quota in the log (60, apart
+  from the other 80).
   **While it analyzes, the panel is a compact bar** (progress, "Analyzing
   skeleton… X% · about N s left", Cancel) docked outside the analysis video's
   picture (`lib/exportOverlay.ts dockAnalysisBar`: below, above, right or left
@@ -106,6 +138,107 @@ the file will contain ("Includes: video + skeleton + drawings").
 - **Not exported in V1:** AI measurement overlays, the data column, the ball
   trail, the zoom (the file is always the full, unzoomed frame).
 
+## Snapshots (holds)
+
+A third switch, **Snapshots**. With it on, every snapshot inside the trimmed
+range is a HOLD: the video plays, freezes on the snapshot's frame for the hold
+length showing THAT snapshot's strokes and frozen pose, then continues.
+
+- **Hold length:** 0.5–5 s in 0.5 s steps, default 2 s (− / + under the switch).
+- **States.** No snapshots: switch disabled, "No snapshots yet. Create one
+  (Create Snapshot or AI Detect) to hold on it in the video." None in the range:
+  disabled, "No snapshot in this range." Otherwise on by default, "The video
+  freezes 2 s on each, with its drawings and pose."
+- **Trim bar.** A tick per snapshot (green inside the range, grey outside) and
+  the line "2 of 3 snapshots are in this range · +4 s of holds" under "Keeping…".
+- **Which snapshots** (`lib/exportOverlay.ts holdSchedule`): start ≤ time ≤ end
+  (1 ms tolerance). One at the very start is held at the in-point (before
+  playback starts); one at the very end is held one frame (1/30 s) before the
+  out-point, where the render stops. Close or identical times are NOT merged:
+  each snapshot keeps its own hold with its own drawings, and two on the same
+  frame are held one after the other on the same picture.
+- **Hold contents:** the snapshot's strokes (not angle measurements, not AI
+  measurement overlays) and its frozen pose. Nothing else: no live drawings and
+  no AI Track skeleton during a hold.
+- **Which drawings.** Read at export start (`getSnapshotsForExport` in
+  `app/analysis/page.tsx`): stored snapshots from `snapshots`; the ACTIVE
+  snapshot from the canvas (its latest strokes and pose, unsaved edits
+  included).
+- **Alignment.** Stored strokes are in canvas pixels of the moment they were
+  saved, while the canvas re-fits its own strokes on every resize (KNOWN_ISSUES
+  010). Each snapshot therefore stores `drawingsBox`, the video box when its
+  drawings were saved (`saveActiveSnapshot`, `createSnapshotFromLive`), and the
+  export maps its strokes from that box. The box is the LOGICAL, unzoomed one
+  the canvas and the export use (`strokesBoxOf` in the page, read through
+  `drawExportOverlay`'s capture), never `getVideoBounds()`, which is
+  backing-store px with the zoom applied (2× on an iPhone, KNOWN_ISSUES 060). The active snapshot uses today's box
+  (its strokes are on the canvas). Snapshots saved before this change have no
+  box and use today's box, as the screen does.
+- **Audio.** Silent during a hold, in sync after it (see *How*). Safari already
+  exports no audio on this path.
+
+## How (holds)
+
+`exportEditedVideo(…, { holds: [{ at, seconds }] })` (`lib/cropExport.ts`).
+When the paint loop sees `currentTime ≥ at`, it first copies the video's
+current frame (the first at or after `at`) into a hold frame. If the video has
+no decodable frame then, it copies the last frame drawn to the output instead.
+Then it pauses the hidden video and seeks it exactly to `at`. From the first
+paint of the hold, the copy is shown with the hold's overlay. Only if there is
+no copy at all does the canvas keep the last good frame until the seek lands
+or 300 ms pass.
+
+A seek has landed when 'seeked' came, there is a decodable frame, and the
+time is within 0.1 s of `at` (`holdSeekLanded`). Then the exact frame replaces
+the copy, even if it comes after the 300 ms fallback. If it never lands, the
+copy stays and the seek is never retried.
+For the hold's length, every paint draws the hold frame, at the hold's own
+time, with `drawOverlay(…, hold)`, so the canvas stream keeps feeding the
+recorder even if the paused hidden video loses its frame or its clock (seen on
+iOS: t=0.000, KNOWN_ISSUES 057).
+
+After the hold, if the video is more than 0.25 s from `at` it is put back
+there (`holdResumeSeek`). Then `play()` is called, and called again every
+0.5 s until media time moves (`resumeAction`). After 4 s without moving, the
+export stops with "Export stopped: the video did not start playing again
+after a snapshot hold…" instead of finishing short. A last-frame hold at the
+clip's end ends the render.
+
+The hold timer counts running time only: a hidden tab pauses it with the
+recorder. The stall guard adds the total hold time. Progress = (media seconds
++ hold seconds done) ÷ (range + holds) (`outputProgress`). During a hold, and
+until playback moves again, media seconds are taken from the hold's time, not
+the paused video's clock, so the bar never jumps back.
+
+**Never an empty file.** A render that has painted no frame after 4 s of
+running time stops right away (`NO_FRAME_GIVE_UP_MS`). A render that painted
+no frame, or whose recording has no bytes, ends with "Export failed: no video frames were recorded. Keep
+this app in front with the screen on and try again (, or turn Snapshots off)."
+(`emptyExportError`; before, only a 0-byte file was caught). Only the
+Metrics export (which always passes `drawOverlay`) gets this; the
+post-recording crop keeps its 0-byte check as before.
+
+Audio: a paused element sends no audio, and the recorder closes that gap, so
+everything after a hold would play early by its length (measured −2 s after
+two 2 s holds). With holds, the source track goes through Web Audio
+(`MediaStreamAudioSourceNode` → `MediaStreamAudioDestinationNode`), which runs
+in real time: silence during a hold, in sync after. If Web Audio cannot start
+(no user activation, within 0.5 s) the source track is used as before. Without
+holds nothing changes (the Recording Hub never passes any).
+
+**Diagnostics (?vdebug=1).** The export writes to the vdebug log: render
+start, each hold's seek (seeked / seeked but not there / fallback, and "holding
+the last drawn frame"), the `play()` result after each hold and each retry,
+"continuing from …" when the video lost its place, "playing again", "nothing
+recorded", the media time once a second (a video whose time stops shows here), and
+once a second which pose the frame draws ("AI Track" by media time / "HOLD
+(snapshot pose)" / none) with the left wrist's position.
+
+The panel passes `drawExportOverlay(…, { hold: { strokes, box, skeleton } })`
+for hold frames: Canvas draws only those strokes (mapped from `box`) and the
+frozen pose with `drawSkeletonOverlay`, read-only. The render-time skeleton
+check skips hold frames. The watermark is still the last draw call.
+
 **How.** `lib/cropExport.ts` calls an optional `drawOverlay(ctx, mediaTime, ow,
 oh)` right after drawing each video frame. The panel passes Canvas
 `drawExportOverlay` (`components/Canvas.tsx`), a read-only handle method that
@@ -125,8 +258,8 @@ conversion, no cancel, no pausing).
 ## V2 (not built)
 
 Out of scope for V1 and not started: AI measurement overlays and the data
-column in the export, snapshot drawings in the export (would need holds or
-time-bound drawings), ball tracking,
+column in the export, angle measurements and AI measurement overlays in
+snapshot holds, a playback-speed option, ball tracking,
 effects, a WebCodecs encoder (faster than real time), and a JPEG change to the
 snapshot report's per-snapshot PNG capture (the main cost of the old Generate:
 2.7 s to open with 6 snapshots of a 1080p clip).

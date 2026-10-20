@@ -458,6 +458,15 @@ own SVG and was not audited for the same class of bug.
 persisted case, because it silently corrupts saved work rather than merely
 looking wrong.
 
+**Export only (2026-10-19, snapshot holds).** Each snapshot now stores
+`drawingsBox`, the video box when its drawings were saved (`lib/snapshots.ts`),
+and the Metrics export maps its strokes from that box, so a snapshot exported
+after a resize lines up (measured: drawn at 1200 px, resized while active,
+exported at 860 and 940 px: strokes within 0.5 px of where they were drawn). The
+SCREEN is unchanged: re-entering a snapshot after a resize still restores its
+strokes misaligned. Snapshots saved before this change have no box and use
+today's box.
+
 ---
 
 ## 011 — A single joint-chain node can never be selected with the Select tool — FIXED (awaiting device test)
@@ -1472,6 +1481,12 @@ Chrome; if they also undershoot, scale the estimate per encoder (or show it as
 **Severity:** low (the estimate is high, never low: files are smaller than
 announced).
 
+**Holds (2026-10-19).** The estimate counts hold seconds at the full bitrate. A
+held frame does not change, so it costs far less: on a 9 s real clip with three
+5 s holds the file was 4.29 MB vs 2.71 MB without (the 15 s of holds added
+1.57 MB, ≈ 0.84 Mbps against ≈ 2.4 Mbps while playing), estimate 12.4 MB. Same
+direction as above (high, never low).
+
 ## 043 — Crop/trim export: `webmFixDuration` parses MP4 output on the main thread — OPEN (pre-existing)
 
 **Symptom.** At the end of every `exportEditedVideo` render (Recording Hub
@@ -1493,12 +1508,13 @@ Touches the Recording Hub path, so it needs approval.
 `components/ToolPalette.tsx` (the Generate row's tooltip: "Capture every phase
 and replay the stroke in slow motion") and `components/tours/playersTour.ts`
 ("Metrics → Generate builds a report"). The report is now one tap further:
-Generate → Snapshot report.
+Generate → Snapshot images & report (renamed from "Snapshot report" with the
+snapshot holds).
 
 **Root cause.** Out of the file list allowed for the export-panel change.
 
 **Proposed fix.** Tooltip: "Export the video or a section"; tour step:
-"Metrics → Generate → Snapshot report builds a report".
+"Metrics → Generate → Snapshot images & report builds a report".
 
 **Severity:** low (wording).
 
@@ -1872,3 +1888,227 @@ message as main (rs 0, code 4), with the diagnostic in the panel. iOS
 simulations as in round 2: S1 / S4 / tap still give the frame; muted restored,
 pose worker not started (0 messages), video B not started. Upload, re-upload,
 play/pause/seek/frame-step and the skeleton behave as on main.
+
+## 056 — Arrow keys on the export trim bar also frame-step the analysis video — FIXED (PR #97 round 2)
+
+**Found:** 2026-10-19, testing snapshot holds (Chromium, production build).
+
+**Symptom.** With a trim handle focused in Metrics → Generate, each ArrowLeft /
+ArrowRight moves the handle AND steps the analysis video behind the panel one
+frame (10 presses: 5.5 s → 5.83 s). In SNAPSHOT mode that takes the playhead off
+the snapshot, so the page leaves the snapshot (its edits are saved first, so
+nothing is lost) and the Drawings switch changes from the snapshot line to "No
+drawings on the video" while the panel is open.
+
+**Root cause.** `components/TrimRangeBar.tsx` `onKey` calls `preventDefault()`
+but not `stopPropagation()`. The frame-step shortcuts listen on `window`
+(`components/PlaybackControls.tsx:100-114`, `components/PreciseTimeline.tsx:868-874`)
+and only skip INPUT/TEXTAREA targets, not a `role="slider"` div or an open modal.
+
+**Fault assessment.** Pre-existing since the trim bar (PR #92); not caused by
+the holds. Pointer/touch trimming is not affected (phones are unaffected).
+
+**Proposed fix.** In `TrimRangeBar` `onKey`, call `e.stopPropagation()` when a
+key is handled (one line; the shortcuts are bubble-phase `window` listeners).
+Needs approval (outside this task).
+
+**Severity:** low (keyboard only; desktop).
+
+**Fixed (PR #97 round 2).** The export dialog stops every key except Escape from
+propagating (`onKeyDown` on the dialog root), so neither the trim arrows nor
+Space on a focused button reach the page's window shortcuts. Measured: 10 arrow
+presses on the trim start, main video stayed at 2.500 s, SNAPSHOT mode kept.
+
+## 057 — Snapshot holds on iPhone: "Export produced an empty file", media t stuck at 0.000, drift — FIX IN PR #97 round 3, to confirm on the device
+
+**What.** A hold pauses the detached, hidden export `<video>` and seeks it to
+the snapshot's time (`lib/cropExport.ts startHold`). On Vin's iPhone (vdebug
+log), the media time read 0.000 during the hold, the audio drifted −1.21 s,
+and one export ended with "Export produced an empty file".
+
+**Root cause (code read + Chromium mock; the iPhone itself not measured).**
+Three gaps in the pre-fix code:
+- the hold was painted only from the paused video (`paint` needs
+  `readyState ≥ 2`), so a video that drops its frame paints nothing for the
+  whole hold;
+- `play()` after the hold was called once and never checked, so a rejected or
+  ignored `play()` left the video paused for the rest of the render, with
+  audio running on (the drift);
+- only a 0-byte file was refused, so a render that painted nothing could
+  "succeed".
+
+`holds.mjs IOS=seek` makes the hidden video in Chromium ignore seeks while
+paused, read t=0.000 with no decodable frame while paused, and reject the
+first `play()` after each pause. On the pre-fix build the file has 1.55 s of
+video (48 frames, stopping just before hold 1) under 18 s of audio, with no
+holds. `IOS=dead` (never a decodable frame) gave a 124 KB "successful" file
+with 0 painted frames.
+
+**Fix.**
+- The hold paints a copy of the frame taken when it starts, or the last frame
+  drawn. It is replaced by the exact frame only if the seek lands
+  (`holdSeekLanded`), and the seek is never retried.
+- After the hold, a video that lost its place goes back to the hold's time
+  (`holdResumeSeek`). `play()` is retried every 0.5 s until media time moves
+  (`resumeAction`), and after 4 s the export stops with a clear message.
+- The Metrics export refuses a render with no painted frame (after 4 s, or at
+  the end) with "Export failed: no video frames were recorded…"
+  (`emptyExportError`).
+- Progress uses the hold's time while the video's clock is not trusted.
+
+Measured on the fixed build: see the PR #97 round 3 report.
+
+**Check on a phone.** Export with two snapshots and ?vdebug=1:
+- each hold shows the snapshot's frame (or one frame from it) with its
+  drawings and pose;
+- the video continues after each hold;
+- the log shows "seeked" or "holding the last drawn frame", then "playing
+  again";
+- no empty file.
+
+**Severity:** medium until checked on an iPhone.
+
+## 058 — iPhone: "the app zoomed in and became unusable" — FIX IN PR #97 round 2, to confirm on the device
+
+**Found:** 2026-10-20, Vin, PR #97 preview, Chrome for iOS, after drawing on a snapshot.
+
+**Causes found in code (which one Vin hit is unknown until the ?vdebug=1 box is read):**
+1. *Browser pinch on the video.* Only the precision tool blocked WebKit's page
+   pinch on the canvas (`gesture*` / two-finger `touchmove`, components/Canvas.tsx
+   precision effect); with any other tool a two-finger touch on the video zoomed
+   the canvas AND could zoom the whole page. The viewport had no maximum-scale.
+2. *Text tool focus zoom.* The label textareas used the label's own font size
+   (often < 16 px at phone scale); iOS zooms the page on focusing such a field
+   and does not zoom back.
+3. *Canvas zoom jump.* The canvas pinch multiplies by finger distance ratio; two
+   fingers landing 10 px apart (a drawing finger plus an accidental touch)
+   reached the 500% cap with a small spread (measured 10→110 px: 500%).
+4. *No reachable way back.* At 375 px with the iOS "Add to Home Screen" banner
+   showing, the bottom-right − and ⌂ were under the banner (measured: tap on ⌂
+   did nothing).
+
+**Fixed.** (1) every tool: two-finger `touchmove` on the canvas and `gesture*`
+started on the canvas are prevented (non-passive), /analysis gets
+`maximum-scale=1, user-scalable=no` (other pages unchanged) and
+`touch-action: manipulation` (no double-tap zoom); (2) the textareas render with
+a ≥ 16 px font scaled down to the same size; (3) pinch distances below 60 px count
+as 60 px (10→110 px now gives 183%; normal pinches unchanged); (4) while the
+canvas is zoomed a "⌂ Reset zoom" pill shows top-left under the top bar (one
+tap, measured on top and working at 375 px). The ?vdebug=1 box now shows the page
+zoom (visualViewport.scale, innerWidth / vv.width), the canvas zoom %, touch /
+gesture counts and the last pointerdown target.
+
+**Not verifiable here:** a real WebKit page pinch (Chromium's emulated pinch did
+not zoom the page on either build). **Severity:** high on iPhone.
+
+## 059 — Metrics export: the Drawings switch was dead in SNAPSHOT mode — FIXED (PR #97 round 2)
+
+**Symptom (Vin, iPhone).** With a snapshot selected and drawn on, only Skeleton
+could be switched on; Drawings did nothing.
+
+**Root cause.** By design in round 1: in SNAPSHOT mode the switch was disabled
+("The drawings on screen belong to a snapshot…"), and its 28 px switch was the
+only touch target.
+
+**Fix.** Rule: Drawings = the drawings on screen (live, or the selected
+snapshot's), on every frame outside holds; Snapshots = each snapshot's own
+drawings + pose in its hold. Usable whenever there are drawings; disabled only
+with none, saying so; the line states what is exported. Default on in LIVE, off
+in SNAPSHOT. The whole row (≥ 44 px) toggles. Measured at 375 px: SNAPSHOT +
+Drawings on → the snapshot's line in 100% of frames outside and inside the hold.
+
+## 060 — Snapshot drawings in export holds misplaced on iPhone (drawingsBox from getVideoBounds) — FIXED (PR #97 round 2)
+
+**Found while testing 059** at 375 px, device pixel ratio 2.
+
+**Root cause.** PR #97 stored `drawingsBox` from Canvas `getVideoBounds()`, which
+is BACKING-STORE px (× devicePixelRatio) with the canvas zoom/pan applied — it
+exists for `captureFrame`'s crop. Strokes live in logical, unzoomed px
+(videoBoundsRef). On a 1× desktop with no zoom the two agree, which is all round
+1 measured. On an iPhone (2×/3×) the box was 2–3× too big: measured at 375 px,
+dpr 2: getVideoBounds (0, 634.8, 630×354.4) vs the picture (0, 317.4, 315×177.2).
+
+**Fix.** The page takes the box from `drawExportOverlay`'s capture (the box the
+canvas and the export use; `strokesBoxOf`). Measured at 375 px, dpr 2, snapshot
+line drawn at video px 300–500 / y 300: old build — not in the hold frame at all;
+new — x 292–507, y 292–307.
+
+**Class of mistake:** see LESSONS_LEARNED 019. **Severity:** high (every iPhone).
+
+## 061 — Frozen skeleton in the export (Vin, iPhone) — OPEN: panel analysis DISABLED for the release (workaround: AI Track from the toolbar)
+
+See the PR #97 round 2 report for measurements. Code read: outside holds the
+skeleton is always the baked track by media time (`lookupBakedPose`, mode-free);
+only the AI Track pass writes tracks and it detects from video frames. Chromium,
+snapshot selected: the exported skeleton follows the stored track (with and
+without a prior AI Track). Most likely iPhone path: the page zoom of 058 hid or
+covered the analysis video while it was analyzed (the 052 mechanism: iOS hands
+the detector a stale frame). Now: the analysis is not started on a zoomed page
+(message), 058 prevents the zoom, and ?vdebug=1 logs, during the export, each
+hold's seek and `play()` result, the media time once a second, and which pose
+each second draws.
+
+**Round 3 (Vin, iPhone, plain LIVE mode, Snapshots and Drawings off).** The
+guard stopped the panel's analysis with "129 poses in 4.4 s · motion 0.0% ·
+repeated 100%", while the toolbar AI Track at 0.5× (the same `'fast'` pass) on
+the same video and phone worked. So the snapshot and zoom paths above were not
+the cause.
+
+*Round 3 hypothesis — DISPROVED on the device.* It was that the panel lacked
+the toolbar's second reader of each seeked frame (the Skeleton pose loop's
+`createImageBitmap`). Round 3 turned that pose loop on for the panel's
+analysis, with a 15 s model wait. On Vin's iPhone (commit 0c937011) the panel
+still gave "91 poses in 3.1 s · motion 0.0% · repeated 100%". It finished
+faster than real time, and the export got slower. The Chromium mock had
+"reproduced" the phone's numbers only because it was built from that same
+hypothesis (LESSONS_LEARNED 020), so it proved nothing about WebKit. Round 3's
+override and wait are removed.
+
+*Round 4 (this change).*
+- **Same handler.** The panel's analysis calls the toolbar AI Track's own
+  handler: `runAiTrackRange`, which `handlePrecisionTrack` now calls with its
+  own range. It runs `'fast'` (the toolbar's 0.5×) on each untracked part of
+  the trim range. Toolbar behaviour and AI Track scope are unchanged.
+- **Real Skeleton switch.** If Skeleton is off, it is turned on the way the
+  toolbar's Skeleton button does (`setSkeletonOverlayPaused(false)` +
+  `setSkeletonOn(true)`) and left on. The analysis starts once the page has
+  rendered with it on; there is no model wait.
+  (`lib/exportOverlay.ts analyzeForExport`, unit-tested.)
+- Progress, Cancel and the frozen-track guard are unchanged.
+- **On-device log (?vdebug=1, "analysis" lines, `lib/analysisFrameLog.ts`),**
+  written by the panel's call from outside the pass. Every 10th seek it logs
+  the video's currentTime, the mediaTime of the next frame the browser
+  presents (requestVideoFrameCallback), and the wall time. It ends with
+  "analysis end: N seeks in M ms". The log keeps up to 60 of these lines
+  apart from its 80 others: with ?vdebug=1, the per-seek 'seeked' event lines
+  of the first-frame diagnostics would otherwise push them out.
+  - currentTime advancing while mediaTime stays put: the browser is not
+    presenting the seeked frames.
+  - Steps much shorter than a frame decode: the seek did not wait for a frame.
+
+*Chromium (a functional check only, not evidence about WebKit):* see the PR
+#97 round 4 report.
+
+**Needs the iPhone.** Whether the panel's export now has a moving skeleton.
+If not, the "analysis" vdebug lines from that run.
+
+**Round 4 on the iPhone — still frozen; panel analysis disabled for the release.**
+With the panel calling the toolbar's own handler and Skeleton on, the panel's
+analysis took ~118 s on the phone and then failed the guard: "64 poses in 2.1 s
+· motion 0.0% · repeated 100%". The vdebug line read "analysis end: 0 seeks in
+118357 ms": the 'seeked' event the log listens to never fired on the phone,
+while the toolbar AI Track on the same phone and video works. The cause is
+unknown (the log shows only that the panel's pass saw no 'seeked' on that
+element).
+
+*Workaround (release).* `PANEL_SKELETON_ANALYSIS = false`
+(`lib/exportOverlay.ts`; comment "V2/Saturday: panel analysis frozen on
+iPhone"). The panel never starts its own analysis:
+- a baked track covers the whole export range: "Include skeleton" is available
+  and on by default, and the export uses the track (unchanged);
+- otherwise (none, or only part of the range): the switch is off and disabled
+  with "Run AI Track from the toolbar first, then the skeleton can be
+  included.", and Export is plain "Export", producing a video without skeleton.
+
+The analysis code (`analyzeRange` wiring, `runAiTrackRange`, the frozen-track
+guard, the vdebug "analysis" lines) is kept, behind the constant, for V2.

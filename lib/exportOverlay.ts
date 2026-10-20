@@ -48,7 +48,18 @@ export function trackedFraction(
   return hit / n;
 }
 
-export type SkeletonExportState = 'ready' | 'analyze' | 'busy' | 'failed' | 'stopping';
+export type SkeletonExportState = 'ready' | 'analyze' | 'busy' | 'failed' | 'stopping' | 'unavailable';
+
+/**
+ * Whether the export panel may run its own skeleton analysis. OFF for the
+ * release: V2/Saturday: panel analysis frozen on iPhone, see KNOWN_ISSUES 061.
+ * With it off, the skeleton can only be included when an AI Track (run from
+ * the toolbar) already covers the range. The analysis code stays, unused.
+ */
+export const PANEL_SKELETON_ANALYSIS = false;
+
+/** Under "Include skeleton" when no AI Track covers the range and the panel does not analyze. */
+export const SKELETON_NEEDS_TOOLBAR_TRACK_TEXT = 'Run AI Track from the toolbar first, then the skeleton can be included.';
 
 /** Shown when the export's own analysis fails its self-check (checkAnalyzedTrack). */
 export const ANALYSIS_FAILED_TEXT = 'Skeleton could not be analyzed on this video';
@@ -65,6 +76,7 @@ export function skeletonExportStatus(
   fraction: number,
   analysisFailed = false,
   stopping = false,
+  analysisEnabled = PANEL_SKELETON_ANALYSIS,
 ): { state: SkeletonExportState; text: string } {
   // The export's own pass, cancelled, still finishing the frame it is on (it
   // checks the abort between frames): it is ours, not "an AI Track running"
@@ -75,6 +87,7 @@ export function skeletonExportStatus(
   if (analysisFailed) return { state: 'failed', text: `${ANALYSIS_FAILED_TEXT}.` };
   if (trackRunning) return { state: 'busy', text: 'AI Track is running. Wait for it to finish, then export.' };
   if (fraction >= 0.999) return { state: 'ready', text: 'Skeleton ready.' };
+  if (!analysisEnabled) return { state: 'unavailable', text: SKELETON_NEEDS_TOOLBAR_TRACK_TEXT };
   if (fraction <= 0) return { state: 'analyze', text: 'Not analyzed yet. The skeleton will be analyzed first when you export, which adds time.' };
   const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
   return { state: 'analyze', text: `Skeleton covers ${pct}% of this range. The rest will be analyzed first when you export, which adds time.` };
@@ -365,16 +378,233 @@ export function dockAnalysisBar(
   return { ...edge, side: 'edge', overlap: Math.round(ox * oy) };
 }
 
-export type DrawingsExportState = 'ready' | 'none' | 'snapshot';
+export type DrawingsExportState = 'ready' | 'none';
 
-/** The drawings toggle's state and status line. Snapshot-mode drawings are never exported. */
-export function drawingsExportStatus(snapshotMode: boolean, drawingCount: number): { state: DrawingsExportState; text: string } {
-  if (snapshotMode) return { state: 'snapshot', text: 'Snapshot drawings aren’t exported. Use Snapshot report.' };
-  if (drawingCount <= 0) return { state: 'none', text: 'No drawings on the video' };
-  return { state: 'ready', text: `${drawingCount} drawing${drawingCount === 1 ? '' : 's'} on the video.` };
+/**
+ * The drawings switch's state and status line. "Drawings" are the drawings on
+ * screen now — the live ones, or in SNAPSHOT mode the selected snapshot's (the
+ * canvas holds exactly those) — drawn on EVERY frame outside snapshot holds.
+ * A hold shows only its own snapshot's drawings (Snapshots switch). Never a dead
+ * switch: it is off only when there is nothing to draw, and says so.
+ */
+export function drawingsExportStatus(snapshotMode: boolean, drawingCount: number, holdsOn = false): { state: DrawingsExportState; text: string } {
+  if (drawingCount <= 0) {
+    return {
+      state: 'none',
+      text: snapshotMode
+        ? 'No drawings on this snapshot. Draw on it to include them.'
+        : 'No drawings on the video. Draw on the video to include them.',
+    };
+  }
+  const n = `${drawingCount} drawing${drawingCount === 1 ? '' : 's'}`;
+  const where = holdsOn ? 'on every frame except snapshot holds' : 'on every frame';
+  return {
+    state: 'ready',
+    text: snapshotMode ? `This snapshot's ${n}, shown ${where}.` : `${n} on the video, shown ${where}.`,
+  };
+}
+
+/** Drawings switch default: on in LIVE mode; off in SNAPSHOT mode (its drawings already show in its hold). */
+export function drawingsDefaultOn(snapshotMode: boolean): boolean {
+  return !snapshotMode;
+}
+
+/** The page is pinch-zoomed (visualViewport.scale), beyond rounding. */
+export function pageZoomed(scale: number | null | undefined): boolean {
+  return typeof scale === 'number' && Number.isFinite(scale) && scale > 1.02;
+}
+
+/**
+ * Why the export's skeleton analysis must not start now, or null. A zoomed page
+ * can leave the analysis video covered or off screen, and iOS then hands the
+ * detector the same stale frame: a frozen skeleton (KNOWN_ISSUES 052).
+ */
+export function analysisBlockedReason(pageScale: number | null | undefined): string | null {
+  if (!pageZoomed(pageScale)) return null;
+  return `The page is zoomed in (${Math.round((pageScale as number) * 100)}%). Pinch out to 100% first: a zoomed page can hide the video while its skeleton is analyzed, which freezes the skeleton.`;
 }
 
 /** "Includes: video + skeleton + drawings" for the quality panel. */
 export function includesLabel(skeleton: boolean, drawings: boolean): string {
   return ['Includes: video', skeleton ? 'skeleton' : null, drawings ? 'drawings' : null].filter(Boolean).join(' + ');
+}
+
+// ── Snapshot holds ──────────────────────────────────────────────────────────
+//
+// With Snapshots on, each snapshot inside the trimmed range becomes a HOLD in
+// the exported video: the video plays, freezes on the snapshot's frame for
+// `seconds` with that snapshot's drawings and frozen pose, then continues
+// (lib/cropExport.ts `holds`, Canvas drawExportOverlay `hold`).
+
+/** Hold length setting (seconds): range, step and default. */
+export const HOLD_MIN_SEC = 0.5;
+export const HOLD_MAX_SEC = 5;
+export const HOLD_STEP_SEC = 0.5;
+export const HOLD_DEFAULT_SEC = 2;
+/** One video frame at 30 fps: a snapshot at the out-point is held this much before it. */
+export const HOLD_FRAME_SEC = 1 / 30;
+
+/** A hold length clamped to the setting's range and step. */
+export function clampHoldSec(sec: number): number {
+  if (!Number.isFinite(sec)) return HOLD_DEFAULT_SEC;
+  const stepped = Math.round(sec / HOLD_STEP_SEC) * HOLD_STEP_SEC;
+  return Math.min(HOLD_MAX_SEC, Math.max(HOLD_MIN_SEC, stepped));
+}
+
+export type HoldPlan = {
+  /** One per snapshot in the range, in time order: `at` = source seconds to freeze on. */
+  holds: Array<{ at: number; seconds: number; id: string }>;
+  inRange: number;
+  total: number;
+  totalHoldSec: number;
+};
+
+/**
+ * Which snapshots become holds for the range [start, end], and where.
+ * - In range: start ≤ timeSec ≤ end (1 ms tolerance). Outside: no hold.
+ * - Very start: held at `start` (before playback begins).
+ * - Very end: clamped to one frame before `end` (the render stops AT `end`,
+ *   so a hold there would never be reached).
+ * - Close or identical times are NOT merged: every snapshot keeps its own hold
+ *   with its own drawings; two on the same frame are held one after the other
+ *   on the same picture. Ties keep the snapshots' order.
+ */
+export function holdSchedule(
+  snapshots: ReadonlyArray<{ id: string; timeSec: number }>,
+  start: number,
+  end: number,
+  holdSec: number,
+): HoldPlan {
+  const eps = 1e-3;
+  const seconds = clampHoldSec(holdSec);
+  const valid = snapshots.filter((s) => Number.isFinite(s.timeSec));
+  if (!(end > start)) return { holds: [], inRange: 0, total: valid.length, totalHoldSec: 0 };
+  const last = Math.max(start, end - HOLD_FRAME_SEC);
+  const holds = valid
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => s.timeSec >= start - eps && s.timeSec <= end + eps)
+    .sort((a, b) => a.s.timeSec - b.s.timeSec || a.i - b.i)
+    .map(({ s }) => ({ at: Math.min(last, Math.max(start, s.timeSec)), seconds, id: s.id }));
+  return { holds, inRange: holds.length, total: valid.length, totalHoldSec: holds.length * seconds };
+}
+
+/** "2 s", "1.5 s" */
+export function formatHoldSec(sec: number): string {
+  const r = Math.round(sec * 10) / 10;
+  return `${Number.isInteger(r) ? r.toFixed(0) : r.toFixed(1)} s`;
+}
+
+export type SnapshotsExportState = 'ready' | 'none' | 'outside';
+
+/** The Snapshots switch's state and status line. */
+export function snapshotsExportStatus(plan: HoldPlan, on: boolean): { state: SnapshotsExportState; text: string } {
+  if (plan.total <= 0) return { state: 'none', text: 'No snapshots yet. Create one (Create Snapshot or AI Detect) to hold on it in the video.' };
+  const of = `${plan.inRange} of ${plan.total} snapshot${plan.total === 1 ? '' : 's'}`;
+  if (plan.inRange <= 0) return { state: 'outside', text: `None of your ${plan.total} snapshot${plan.total === 1 ? ' is' : 's are'} in this range. Move the trim to include one.` };
+  const verb = plan.inRange === 1 ? 'is' : 'are';
+  return {
+    state: 'ready',
+    text: on
+      ? `${of} ${verb} in this range · +${formatHoldSec(plan.totalHoldSec)} of holds`
+      : `${of} ${verb} in this range. Turn on to hold on each with its drawings and pose.`,
+  };
+}
+
+/** The Snapshots switch's own line (the range line under the trim bar is `snapshotsExportStatus`). */
+export function snapshotsSwitchText(state: SnapshotsExportState, on: boolean, holdSec: number): string {
+  if (state === 'none') return 'No snapshots yet. Create one (Create Snapshot or AI Detect) to hold on it in the video.';
+  if (state === 'outside') return 'No snapshot in this range.';
+  return on
+    ? `The video freezes ${formatHoldSec(clampHoldSec(holdSec))} on each, with its drawings and pose.`
+    : 'Off: the video plays straight through.';
+}
+
+/**
+ * Render progress (0..1) on the OUTPUT timeline: media seconds rendered plus
+ * hold seconds shown, over the range plus all holds. The video stands still
+ * during a hold while this keeps moving, so a hold never reads as a stall.
+ */
+export function outputProgress(mediaDoneSec: number, holdDoneSec: number, spanSec: number, totalHoldSec: number): number {
+  const total = Math.max(0, spanSec) + Math.max(0, totalHoldSec);
+  if (!(total > 0)) return 0;
+  const done = Math.max(0, Math.min(spanSec, mediaDoneSec)) + Math.max(0, Math.min(totalHoldSec, holdDoneSec));
+  return Math.max(0, Math.min(1, done / total));
+}
+
+/** "Includes: video + skeleton + drawings + 2 snapshot holds" */
+export function includesLabelWithHolds(skeleton: boolean, drawings: boolean, holds: number): string {
+  const base = includesLabel(skeleton, drawings);
+  return holds > 0 ? `${base} + ${holds} snapshot hold${holds === 1 ? '' : 's'}` : base;
+}
+
+// ── Holds on a device whose hidden video does not seek (iOS, KNOWN_ISSUES 057) ──
+
+/** How far from the hold's time the paused video may be and still count as there. */
+export const HOLD_LAND_TOLERANCE_SEC = 0.1;
+/** After a hold, further than this from the hold's time: the video lost its place. */
+export const HOLD_RESUME_TOLERANCE_SEC = 0.25;
+/** After a hold, play() is called again this often until media time moves. */
+export const RESUME_RETRY_MS = 500;
+/** After a hold, media time standing still this long ends the export with an error. */
+export const RESUME_GIVE_UP_MS = 4000;
+/** No frame painted after this much running render time: the export stops (no file). */
+export const NO_FRAME_GIVE_UP_MS = 4000;
+
+/** A hold's seek landed: it reported 'seeked', left a decodable frame, and is at the hold's time. */
+export function holdSeekLanded(seeked: boolean, readyState: number, mediaT: number, at: number): boolean {
+  return seeked && readyState >= 2 && Number.isFinite(mediaT) && Math.abs(mediaT - at) <= HOLD_LAND_TOLERANCE_SEC;
+}
+
+/** After a hold: the time to continue from when the video lost its place, else null (play on). */
+export function holdResumeSeek(mediaT: number, at: number): number | null {
+  return Number.isFinite(mediaT) && Math.abs(mediaT - at) <= HOLD_RESUME_TOLERANCE_SEC ? null : at;
+}
+
+/** After a hold, media time has stood still `stillMs` (running time): wait, call play() again, or give up. */
+export function resumeAction(stillMs: number, sinceLastPlayMs: number): 'wait' | 'retry' | 'fail' {
+  if (stillMs >= RESUME_GIVE_UP_MS) return 'fail';
+  return sinceLastPlayMs >= RESUME_RETRY_MS ? 'retry' : 'wait';
+}
+
+export const RESUME_FAILED_TEXT =
+  'Export stopped: the video did not start playing again after a snapshot hold. Keep this app in front with the screen on and try again, or turn Snapshots off.';
+
+/** Nothing was recorded (no frame painted, or no bytes): the error to show instead of a file. */
+export function emptyExportError(framesPainted: number, bytes: number, holds: number): string | null {
+  if (framesPainted > 0 && bytes > 0) return null;
+  return `Export failed: no video frames were recorded. Keep this app in front with the screen on and try again${holds > 0 ? ', or turn Snapshots off' : ''}.`;
+}
+
+// ── The export's skeleton analysis = the toolbar AI Track ───────────────────
+
+export type ExportAnalysisDeps = {
+  /** The page's Skeleton switch. */
+  skeletonOn: () => boolean;
+  /** Turns Skeleton on the way the toolbar does. It is left on afterwards. */
+  turnSkeletonOn: () => void;
+  /** Resolves once the page has rendered with Skeleton on. */
+  skeletonCommitted: () => Promise<void>;
+  /** The toolbar AI Track's own handler, on [start, end]; resolves to the poses kept (0: cancelled / none). */
+  track: (start: number, end: number) => Promise<number>;
+  /** Starts the on-device frame log; returns stop(). */
+  watch: () => () => void;
+};
+
+/**
+ * One part of the export's skeleton analysis: Skeleton on (as a coach would
+ * turn it on for AI Track, and left on), then the toolbar AI Track handler on
+ * the range. The frame log always stops, also on Cancel and on error.
+ * KNOWN_ISSUES 061.
+ */
+export async function analyzeForExport(d: ExportAnalysisDeps, start: number, end: number): Promise<number> {
+  if (!d.skeletonOn()) {
+    d.turnSkeletonOn();
+    await d.skeletonCommitted();
+  }
+  const stop = d.watch();
+  try {
+    return await d.track(start, end);
+  } finally {
+    stop();
+  }
 }

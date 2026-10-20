@@ -33,12 +33,16 @@ export interface TrimRangeBarProps {
   disabled?: boolean;
   /** Shortest span that can be kept, in seconds. */
   minGap?: number;
+  /** Ticks on the track (Metrics export: snapshots), green when inside the kept range. */
+  marks?: ReadonlyArray<{ t: number; inRange: boolean }>;
+  /** A line under "Keeping…" (Metrics export: the snapshot holds). */
+  holdLine?: string | null;
 }
 
 const HIT = 44;
 
 export default function TrimRangeBar({
-  duration, start, end, onChange, getPlayhead, disabled = false, minGap = 0.1,
+  duration, start, end, onChange, getPlayhead, disabled = false, minGap = 0.1, marks, holdLine,
 }: TrimRangeBarProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<Handle | null>(null);
@@ -161,6 +165,19 @@ export default function TrimRangeBar({
           position: 'absolute', left: pct(start), width: `calc(${pct(end)} - ${pct(start)})`, top: HIT / 2 - 4, height: 8,
           borderRadius: 4, background: usable ? 'var(--cl-accent)' : 'rgba(255,255,255,0.35)',
         }} />
+        {marks?.map((m, i) => (
+          <span
+            key={i}
+            data-testid="trim-mark"
+            data-in-range={m.inRange || undefined}
+            aria-hidden="true"
+            style={{
+              position: 'absolute', left: pct(m.t), top: HIT / 2 - 11, width: 4, height: 22, marginLeft: -2, borderRadius: 2,
+              background: m.inRange ? '#22C55E' : 'rgba(255,255,255,0.4)', boxShadow: '0 0 0 1px rgba(0,0,0,0.55)',
+              pointerEvents: 'none', zIndex: 1,
+            }}
+          />
+        ))}
         {handle('start')}
         {handle('end')}
       </div>
@@ -178,6 +195,7 @@ export default function TrimRangeBar({
           ? `Keeping ${formatClock(Math.max(0, end - start))} of ${formatClock(duration)}`
           : 'Reading clip length…'}
       </div>
+      {holdLine ? <div data-testid="trim-hold-line" style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: -4 }}>{holdLine}</div> : null}
     </div>
   );
 }

@@ -21,6 +21,9 @@
 import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 import { scaledExportSize } from '@/lib/exportEstimate';
+import {
+  emptyExportError, holdResumeSeek, holdSeekLanded, NO_FRAME_GIVE_UP_MS, outputProgress, resumeAction, RESUME_FAILED_TEXT,
+} from '@/lib/exportOverlay';
 
 export type ExportRegion = { x: number; y: number; w: number; h: number };
 /** In/out points in seconds on the SOURCE timeline. */
@@ -50,14 +53,29 @@ export interface EditExportOptions {
    * would otherwise be lost while the source keeps playing.
    */
   pauseWhenHidden?: boolean;
-  /** Fraction of the range rendered so far (0..1), reported from the paint loop. */
+  /**
+   * Fraction rendered so far (0..1), reported from the paint loop. With `holds`
+   * it is on the OUTPUT timeline: (media seconds + hold seconds done) ÷ (range +
+   * all holds), so it keeps moving while a hold stands still.
+   */
   onRenderProgress?: (fraction: number) => void;
   /**
    * Draws on top of each video frame, right after it is drawn: `mediaTime` is
    * the source video's time, `ow`×`oh` the output size (Metrics export:
-   * skeleton + drawings). Omitted, nothing else is drawn.
+   * skeleton + drawings). `hold` is the index into `holds` while one is shown,
+   * else null. Omitted, nothing else is drawn.
    */
-  drawOverlay?: (ctx: CanvasRenderingContext2D, mediaTime: number, ow: number, oh: number) => void;
+  drawOverlay?: (ctx: CanvasRenderingContext2D, mediaTime: number, ow: number, oh: number, hold: number | null) => void;
+  /**
+   * Freeze points (Metrics export snapshot holds), in source seconds. At each
+   * `at` the video is paused and seeked exactly to `at`, and that frame is drawn
+   * on every paint for `seconds` (the recorder keeps receiving frames), then
+   * playback continues. Audio is silent during a hold. Omitted or empty: the
+   * render is exactly as before (the Recording Hub never passes any).
+   */
+  holds?: ReadonlyArray<{ at: number; seconds: number }>;
+  /** Diagnostic lines (render start, each hold's seek / end / play() result, media time once a second). */
+  onDiag?: (msg: string) => void;
 }
 
 export type EditExportResult =
@@ -65,6 +83,14 @@ export type EditExportResult =
   | { ok: false; error: string; cancelled?: true };
 
 const CANCELLED: EditExportResult = { ok: false, error: 'Export cancelled.', cancelled: true };
+
+/**
+ * A hold's exact seek that has not landed by then (holdSeekLanded) is given
+ * up on, never retried: the hold shows the frame copied when it started, the
+ * first one painted at or after `at` (within one frame of it). iOS does not
+ * reliably seek a detached, hidden, paused video (KNOWN_ISSUES 057).
+ */
+const HOLD_SEEK_TIMEOUT_MS = 300;
 
 function even(n: number): number {
   const v = Math.max(0, Math.round(n));
@@ -94,7 +120,7 @@ export async function exportEditedVideo(
   srcBlob: Blob,
   {
     region = null, trim = null, onProgress,
-    maxHeight = null, videoBitsPerSecond, signal, pauseWhenHidden = false, onRenderProgress, drawOverlay,
+    maxHeight = null, videoBitsPerSecond, signal, pauseWhenHidden = false, onRenderProgress, drawOverlay, holds, onDiag,
   }: EditExportOptions = {},
 ): Promise<EditExportResult> {
   if (typeof MediaRecorder === 'undefined') {
@@ -103,6 +129,9 @@ export async function exportEditedVideo(
   if (signal?.aborted) return CANCELLED;
 
   const url = URL.createObjectURL(srcBlob);
+  // Holds only: the Web Audio route for the audio track (closed on every exit).
+  let audioCtx: AudioContext | null = null;
+  const closeAudio = () => { try { void audioCtx?.close(); } catch { /* noop */ } audioCtx = null; };
   const video = document.createElement('video');
   video.src = url;
   video.playsInline = true;
@@ -179,6 +208,13 @@ export async function exportEditedVideo(
       }
     }
 
+    // Holds inside the range, in time order (`index` = position in `holds`).
+    const holdList = (holds ?? [])
+      .map((h, index) => ({ at: h.at, ms: h.seconds * 1000, index }))
+      .filter((h) => Number.isFinite(h.at) && h.ms > 0 && h.at >= inPoint - 1e-3 && h.at < outPoint)
+      .sort((a, b) => a.at - b.at || a.index - b.index);
+    const totalHoldMs = holdList.reduce((sum, h) => sum + h.ms, 0);
+
     const canvasStream = (canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(30);
     const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
 
@@ -189,7 +225,15 @@ export async function exportEditedVideo(
         mozCaptureStream?: () => MediaStream;
       };
       const srcStream = vAny.captureStream?.() ?? vAny.mozCaptureStream?.();
-      srcStream?.getAudioTracks().forEach((t) => tracks.push(t));
+      const srcAudio = srcStream?.getAudioTracks() ?? [];
+      // With holds: a paused element sends no audio at all, and the recorder
+      // closes that gap — everything after a hold would play early by the
+      // hold's length (measured: −2 s after two 2 s holds). Through Web Audio
+      // the track runs on in real time: silence during a hold, in sync after.
+      // Without holds the element's track goes in directly, as before.
+      const holdAudio = holdList.length && srcAudio.length ? await realTimeAudio(srcAudio, signal) : null;
+      if (holdAudio) { audioCtx = holdAudio.ctx; tracks.push(holdAudio.track); }
+      else srcAudio.forEach((t) => tracks.push(t));
     } catch {
       /* audio optional */
     }
@@ -208,6 +252,7 @@ export async function exportEditedVideo(
         audioBitsPerSecond: 128_000,
       });
     } catch {
+      closeAudio();
       URL.revokeObjectURL(url);
       return { ok: false, error: 'MediaRecorder could not be created.' };
     }
@@ -221,15 +266,166 @@ export async function exportEditedVideo(
     const progressSpan = Number.isFinite(outPoint)
       ? outPoint - inPoint
       : (Number.isFinite(video.duration) ? video.duration - inPoint : 0);
-    const draw = () => {
+    // Time spent paused in a hidden tab (pauseWhenHidden) — not part of the clip.
+    let pausedMs = 0;
+    let pausedAt = 0;
+
+    let nextHold = 0;
+    let holdDoneMs = 0;
+    let hold: { k: number; startedAt: number; pausedMs0: number; ready: boolean; timer: ReturnType<typeof setTimeout> | null; onSeeked: (() => void) | null } | null = null;
+    // The picture a hold shows: copied from the video when the hold starts,
+    // replaced by the exact frame if the seek lands. Painted from this copy, so
+    // a paused hidden video that drops its frame cannot blank the hold.
+    let holdFrame: HTMLCanvasElement | null = null;
+    let holdFrameOk = false;
+    let framesPainted = 0;
+    // After a hold: playback must move again (play() retried, then a clear error).
+    let resume: { from: number; since: number; lastPlay: number; pausedMs0: number; k: number } | null = null;
+    let failure: string | null = null;
+    // The video's frame; with `orLastDrawn`, else the last frame drawn to the output.
+    const copyToHoldFrame = (orLastDrawn = false): boolean => {
+      const fromVideo = video.readyState >= 2;
+      if (!fromVideo && !(orLastDrawn && framesPainted > 0)) return false;
+      if (!holdFrame) { holdFrame = document.createElement('canvas'); holdFrame.width = ow; holdFrame.height = oh; }
+      const hctx = holdFrame.getContext('2d');
+      if (!hctx) return false;
+      if (fromVideo) hctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
+      else hctx.drawImage(canvas, 0, 0);
+      return true;
+    };
+    // Hold time shown so far: running time only (a hidden tab pauses it with the recorder).
+    const holdElapsedMs = () => (hold
+      ? Date.now() - hold.startedAt - (pausedMs - hold.pausedMs0) - (pausedAt ? Date.now() - pausedAt : 0)
+      : 0);
+    const startHold = (k: number) => {
+      const h = holdList[k];
+      // The frame on screen now (at or just past `at`), before anything can lose it.
+      const copied = copyToHoldFrame(true);
+      holdFrameOk = copied;
+      try { video.pause(); } catch { /* noop */ }
+      const st = { k, startedAt: Date.now(), pausedMs0: pausedMs, ready: false, timer: null as ReturnType<typeof setTimeout> | null, onSeeked: null as (() => void) | null };
+      hold = st;
+      resume = null;
+      onDiag?.(`hold ${k + 1} start at t=${video.currentTime.toFixed(3)} → seek ${h.at.toFixed(3)}${copied ? '' : ' (no frame to copy)'}`);
+      // Until the seek lands or is given up on, the copy is shown (none: the canvas keeps the last good frame).
+      const settle = (seeked: boolean) => {
+        const late = st.ready;
+        st.ready = true;
+        if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+        const landed = holdSeekLanded(seeked, video.readyState, video.currentTime, h.at) && copyToHoldFrame();
+        if (landed) holdFrameOk = true;
+        // A 'seeked' after the 300 ms fallback still counts if it lands (no new seek is made).
+        if (seeked || landed) { video.removeEventListener('seeked', onSeeked); st.onSeeked = null; }
+        if (late && !landed) return;
+        onDiag?.(`hold ${k + 1} ${landed ? (late ? 'seeked late' : 'seeked') : seeked ? "seeked but not there" : `seek fallback (no 'seeked' in ${HOLD_SEEK_TIMEOUT_MS} ms)`} t=${video.currentTime.toFixed(3)} rs=${video.readyState}${landed ? '' : ' → holding the last drawn frame'}`);
+      };
+      const onSeeked = () => settle(true);
+      st.onSeeked = onSeeked;
+      video.addEventListener('seeked', onSeeked);
+      st.timer = setTimeout(() => settle(false), HOLD_SEEK_TIMEOUT_MS);
+      try { video.currentTime = h.at; } catch { settle(false); }
+    };
+    const fail = (msg: string) => { if (!failure) failure = msg; reachedOutPoint?.(); };
+    /** play() after a hold; the paint loop calls it again until media time moves. */
+    const playAfterHold = (k: number, why: string) => {
+      if (resume) resume.lastPlay = Date.now();
+      video.play().then(
+        () => onDiag?.(`hold ${k} ${why} → play() ok, t=${video.currentTime.toFixed(3)}`),
+        (e) => onDiag?.(`hold ${k} ${why} → play() REJECTED: ${e instanceof Error ? `${e.name} ${e.message}` : String(e)}`.slice(0, 140)),
+      );
+    };
+    const reportProgress = () => {
+      if (!onRenderProgress || !(progressSpan > 0)) return;
+      if (!holdList.length) { onRenderProgress((video.currentTime - inPoint) / progressSpan); return; }
+      // During a hold and until playback moves again, the paused video's clock is not trusted (iOS: 0.000).
+      const mediaT = hold ? holdList[hold.k].at : resume ? Math.max(resume.from, video.currentTime) : video.currentTime;
+      onRenderProgress(outputProgress(mediaT - inPoint, (holdDoneMs + holdElapsedMs()) / 1000, progressSpan, totalHoldMs / 1000));
+    };
+    const paint = (holdIndex: number | null) => {
       // Always the video's CURRENT frame: a slow frame is dropped, never caught up.
       if (video.readyState >= 2) {
         ctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
+        framesPainted++;
         if (drawOverlay) {
-          try { drawOverlay(ctx, video.currentTime, ow, oh); } catch { /* the frame itself is already drawn */ }
+          try { drawOverlay(ctx, video.currentTime, ow, oh, holdIndex); } catch { /* the frame itself is already drawn */ }
         }
       }
-      if (onRenderProgress && progressSpan > 0) onRenderProgress((video.currentTime - inPoint) / progressSpan);
+    };
+    /** A hold's frame: the copy, at the hold's own time (the paused video's clock is not trusted). */
+    const paintHold = (h: { at: number; index: number }) => {
+      if (!holdFrame || !holdFrameOk) { paint(h.index); return; }
+      ctx.drawImage(holdFrame, 0, 0);
+      framesPainted++;
+      if (drawOverlay) {
+        try { drawOverlay(ctx, h.at, ow, oh, h.index); } catch { /* the frame itself is already drawn */ }
+      }
+    };
+    // Media time once a second (a video whose time stops advancing shows here).
+    let diagAt = 0;
+    let diagT = -1;
+    const diagTick = () => {
+      if (!onDiag) return;
+      const now = performance.now();
+      if (now - diagAt < 1000) return;
+      const t = video.currentTime;
+      onDiag(`media t=${t.toFixed(3)}${diagT >= 0 ? ` (+${(t - diagT).toFixed(2)} s)` : ''} ${hold ? 'HOLD' : video.paused ? 'PAUSED' : 'playing'} rs=${video.readyState}`);
+      diagAt = now; diagT = t;
+    };
+    const draw = () => {
+      diagTick();
+      // Metrics export: nothing could be drawn for a while — stop now rather than record nothing.
+      if (drawOverlay && framesPainted === 0 && !pausedAt && Date.now() - startedAt - pausedMs >= NO_FRAME_GIVE_UP_MS) {
+        onDiag?.(`no frame painted in ${NO_FRAME_GIVE_UP_MS} ms (t=${video.currentTime.toFixed(3)} rs=${video.readyState})`);
+        fail(emptyExportError(0, 0, holdList.length) ?? 'Export failed.');
+        return;
+      }
+      if (hold) {
+        // Holding: the paused frame is drawn again on every paint so the
+        // canvas stream keeps feeding the recorder; then playback continues.
+        const h = holdList[hold.k];
+        if (hold.ready || holdFrameOk) paintHold(h);
+        reportProgress();
+        if (holdElapsedMs() >= h.ms) {
+          if (hold.timer) clearTimeout(hold.timer);
+          if (hold.onSeeked) video.removeEventListener('seeked', hold.onSeeked);
+          holdDoneMs += h.ms;
+          hold = null;
+          nextHold++;
+          const k = nextHold;
+          // A last-frame hold at the clip's end: nothing left to play.
+          if (video.ended && nextHold >= holdList.length) { onDiag?.(`hold ${k} end at the clip's end`); reachedOutPoint?.(); return; }
+          // Continue from the hold's time if the video lost its place (seen: t=0.000).
+          const back = holdResumeSeek(video.currentTime, h.at);
+          if (back !== null) {
+            onDiag?.(`hold ${k} end: video at t=${video.currentTime.toFixed(3)}, continuing from ${back.toFixed(3)}`);
+            try { video.currentTime = back; } catch { /* play() below still runs */ }
+          }
+          resume = { from: back ?? video.currentTime, since: Date.now(), lastPlay: 0, pausedMs0: pausedMs, k };
+          playAfterHold(k, 'end');
+        }
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      if (resume) {
+        // Playing again once media time moves; else play() again, then give up clearly.
+        if (video.currentTime > resume.from + 0.05 && !video.paused) {
+          onDiag?.(`hold ${resume.k}: playing again at t=${video.currentTime.toFixed(3)}`);
+          resume = null;
+        } else if (!pausedAt) {
+          const now = Date.now();
+          const action = resumeAction(now - resume.since - (pausedMs - resume.pausedMs0), now - resume.lastPlay);
+          if (action === 'fail') { onDiag?.(`hold ${resume.k}: video did not play again (t=${video.currentTime.toFixed(3)} rs=${video.readyState})`); fail(RESUME_FAILED_TEXT); return; }
+          if (action === 'retry') playAfterHold(resume.k, 'retry');
+        }
+      }
+      if (nextHold < holdList.length && video.currentTime >= holdList[nextHold].at) {
+        startHold(nextHold);
+        reportProgress();
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      paint(null);
+      reportProgress();
       // Out-point is checked on the paint loop (not `timeupdate`, which fires
       // only ~4x/second and would overshoot the cut by up to a quarter second).
       if (video.currentTime >= outPoint) {
@@ -240,35 +436,38 @@ export async function exportEditedVideo(
     };
 
     onProgress?.(trim ? 'Rendering edit…' : 'Rendering crop…');
+    onDiag?.(`render start: in=${inPoint.toFixed(3)} out=${Number.isFinite(outPoint) ? outPoint.toFixed(3) : 'end'} holds=${holdList.length} ${ow}x${oh}`);
     const startedAt = Date.now();
     recorder.start(250);
     draw();
-    await video.play().catch(() => {});
+    // A hold at the in-point has already paused the video: it plays when the hold ends.
+    if (!hold) await video.play().catch(() => {});
 
-    // Time spent paused in a hidden tab (pauseWhenHidden) — not part of the clip.
-    let pausedMs = 0;
-    let pausedAt = 0;
     let onVisibility: (() => void) | null = null;
     let guardTimer: ReturnType<typeof setTimeout> | null = null;
     await new Promise<void>((resolve) => {
       let settled = false;
       const done = () => { if (!settled) { settled = true; resolve(); } };
       reachedOutPoint = done;
-      video.onended = done;
+      // The clip's end with a hold still to show (a last-frame hold the paint
+      // loop had not reached): the loop holds it, seeking back, and the video
+      // ends again after it.
+      video.onended = () => { if (!hold && nextHold >= holdList.length) done(); };
       signal?.addEventListener('abort', done, { once: true });
-      // Failsafe: stop if the video stalls past the length we expect to render.
+      // Failsafe: stop if the video stalls past the length we expect to render
+      // (the range plus every hold).
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
       const spanS = Number.isFinite(outPoint) ? outPoint - inPoint : Math.max(0, dur - inPoint);
-      const guardMs = spanS * 1000 + 5000;
+      const guardMs = spanS > 0 ? spanS * 1000 + 5000 + totalHoldMs : 0;
       if (!pauseWhenHidden) {
-        if (guardMs > 5000) setTimeout(done, guardMs);
+        if (guardMs > 0) setTimeout(done, guardMs);
         return;
       }
       // Same failsafe, counting only the time the render was running.
       const activeMs = () => Date.now() - startedAt - pausedMs - (pausedAt ? Date.now() - pausedAt : 0);
       const guard = () => {
         if (settled) return;
-        if (guardMs > 5000 && !pausedAt && activeMs() >= guardMs) { done(); return; }
+        if (guardMs > 0 && !pausedAt && activeMs() >= guardMs) { done(); return; }
         guardTimer = setTimeout(guard, 1000);
       };
       guardTimer = setTimeout(guard, 1000);
@@ -282,7 +481,8 @@ export async function exportEditedVideo(
           pausedMs += Date.now() - pausedAt;
           pausedAt = 0;
           try { if (recorder.state === 'paused') recorder.resume(); } catch { /* noop */ }
-          void video.play().catch(() => {});
+          // During a hold the video stays paused; the paint loop plays it when the hold ends.
+          if (!hold) void video.play().catch(() => {});
           cancelAnimationFrame(raf);
           raf = requestAnimationFrame(draw);
         }
@@ -295,13 +495,17 @@ export async function exportEditedVideo(
     if (pausedAt) { pausedMs += Date.now() - pausedAt; pausedAt = 0; }
 
     cancelAnimationFrame(raf);
+    const lastHold = hold as { timer: ReturnType<typeof setTimeout> | null; onSeeked: (() => void) | null } | null;
+    if (lastHold?.timer) clearTimeout(lastHold.timer);
+    if (lastHold?.onSeeked) video.removeEventListener('seeked', lastHold.onSeeked);
     try { video.pause(); } catch { /* noop */ }
 
-    if (signal?.aborted) {
+    if (signal?.aborted || failure) {
       try { recorder.stop(); } catch { /* noop */ }
       canvasStream.getTracks().forEach((t) => t.stop());
+      closeAudio();
       URL.revokeObjectURL(url);
-      return CANCELLED;
+      return failure ? { ok: false, error: failure } : CANCELLED;
     }
 
     const duration = Date.now() - startedAt - pausedMs;
@@ -312,10 +516,16 @@ export async function exportEditedVideo(
     });
 
     canvasStream.getTracks().forEach((t) => t.stop());
+    closeAudio();
     URL.revokeObjectURL(url);
 
     let result = new Blob(chunks, { type: mime || 'video/webm' });
-    if (result.size === 0) return { ok: false, error: 'Export produced an empty file.' };
+    // The Metrics export (it always draws an overlay) also refuses a render that
+    // painted no frame; other callers (post-recording crop) keep the 0-byte check.
+    const empty = drawOverlay
+      ? emptyExportError(framesPainted, result.size, holdList.length)
+      : (result.size === 0 ? 'Export produced an empty file.' : null);
+    if (empty) { onDiag?.(`nothing recorded: ${framesPainted} frames painted, ${result.size} bytes`); return { ok: false, error: empty }; }
     try {
       result = await webmFixDuration(result, duration, mime || 'video/webm');
     } catch { /* noop */ }
@@ -332,9 +542,37 @@ export async function exportEditedVideo(
     if (conv.ok) return { ok: true, blob: conv.blob, ext: 'mp4' };
     return { ok: false, error: 'Could not convert the edited recording to MP4.' };
   } catch (e) {
+    closeAudio();
     try { URL.revokeObjectURL(url); } catch { /* noop */ }
     return { ok: false, error: e instanceof Error ? e.message : 'Export failed.' };
   }
+}
+
+/**
+ * The source's audio as a real-time Web Audio track: it keeps producing samples
+ * (silence) while the source element is paused. Null when Web Audio is missing
+ * or cannot start (no user activation) — the caller then uses the source track.
+ */
+async function realTimeAudio(srcAudio: MediaStreamTrack[], signal?: AbortSignal): Promise<{ ctx: AudioContext; track: MediaStreamTrack } | null> {
+  const AC = window.AudioContext
+    ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AC) return null;
+  let ctx: AudioContext | null = null;
+  try {
+    ctx = new AC();
+    if (ctx.state !== 'running') {
+      // resume() can wait forever without a user gesture: give it half a second.
+      await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 500))]);
+    }
+    const track = ctx.state === 'running' && !signal?.aborted ? (() => {
+      const dest = ctx!.createMediaStreamDestination();
+      ctx!.createMediaStreamSource(new MediaStream(srcAudio)).connect(dest);
+      return dest.stream.getAudioTracks()[0] ?? null;
+    })() : null;
+    if (track) return { ctx, track };
+  } catch { /* fall through */ }
+  try { void ctx?.close(); } catch { /* noop */ }
+  return null;
 }
 
 /**

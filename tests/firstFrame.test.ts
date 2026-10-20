@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { ensureFirstFrame, firstFrameState, ignoreLoadError, srcKind } from '@/lib/firstFrame';
+import { ensureFirstFrame, firstFrameLog, firstFrameLogLines, firstFrameState, ignoreLoadError, srcKind } from '@/lib/firstFrame';
 
 test('error safety net: ignored only after a strategy touched a video that had loaded metadata', () => {
   assert.equal(ignoreLoadError({ touched: true, reachedMetadata: true }), true);
@@ -98,4 +98,18 @@ test('the analysis videos set src exactly once, to the raw URL (as on main)', ()
   assert.ok(page.includes('src={videoSrcB ?? undefined}'), 'slot B video src is the raw state');
   assert.ok(!/#t=0\.001/.test(page), 'no media fragment appended anywhere');
   assert.ok(!page.includes('withFirstFrameFragment'), 'fragment helper gone');
+});
+
+test('vdebug log: per-seek lines never push out the export analysis lines', () => {
+  firstFrameLog('analysis', 'start 0.050–3.950 s');
+  for (let k = 0; k < 500; k++) firstFrameLog('main', `event seeked #${k}`);
+  firstFrameLog('analysis', 'analysis end');
+  const lines = firstFrameLogLines();
+  const analysis = lines.filter((l) => l.slot === 'analysis').map((l) => l.text);
+  assert.deepEqual(analysis.slice(-2), ['start 0.050–3.950 s', 'analysis end']);
+  assert.equal(lines.filter((l) => l.slot !== 'analysis').length, 80);
+  assert.equal(lines.at(-1)?.text, 'analysis end'); // still in time order
+  // The analysis lines have their own cap.
+  for (let k = 0; k < 100; k++) firstFrameLog('analysis', `seek #${k}`);
+  assert.equal(firstFrameLogLines().filter((l) => l.slot === 'analysis').length, 60);
 });

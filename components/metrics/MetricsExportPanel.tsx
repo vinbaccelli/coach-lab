@@ -4,21 +4,26 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import TrimRangeBar, { formatClock } from '@/components/TrimRangeBar';
 import { exportEditedVideo } from '@/lib/cropExport';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
+import { firstFrameLog } from '@/lib/firstFrame';
 import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, type ExportQuality,
 } from '@/lib/exportEstimate';
 import {
-  analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, dockAnalysisBar, drawingsExportStatus,
-  FOLLOW_STEP_SEC, includesLabel, meanAbsDiff, parsePassProgress, poseRegion, poseShift, skeletonExportStatus,
-  skeletonFollowsVideo, toGrey, trackedFraction, untrackedIntervals, type FollowStep, type Rect,
+  analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, clampHoldSec, dockAnalysisBar, drawingsDefaultOn, drawingsExportStatus, analysisBlockedReason,
+  FOLLOW_STEP_SEC, formatHoldSec, HOLD_DEFAULT_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC, HOLD_STEP_SEC, holdSchedule, includesLabelWithHolds, meanAbsDiff,
+  parsePassProgress, poseRegion, poseShift, skeletonExportStatus, skeletonFollowsVideo, snapshotsExportStatus, snapshotsSwitchText,
+  toGrey, trackedFraction, untrackedIntervals, type FollowStep, type Rect, type VideoBox,
 } from '@/lib/exportOverlay';
 import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
 
 /**
  * Metrics → Generate: export the loaded video (whole or a trimmed section),
  * with the LIVE drawings and the AI-tracked skeleton drawn on when the coach
- * includes them (Canvas drawExportOverlay, called from the export loop). AI
- * measurement overlays, the data column and snapshot drawings are never
+ * includes them (Canvas drawExportOverlay, called from the export loop). With
+ * Snapshots on, every snapshot inside the range is a HOLD: the video freezes on
+ * its frame for the hold length showing that snapshot's strokes and frozen pose
+ * (not the live drawings), then continues (lib/cropExport.ts `holds`). AI
+ * measurement overlays, angle measurements and the data column are never
  * exported. The skeleton is drawn from the stored AI Track: when the coach
  * includes it and part of the range is untracked, Export first runs the
  * existing AI Track pass (runPrecisionPass, 'fast', unchanged) on the untracked
@@ -26,8 +31,8 @@ import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
  * while rendering.
  *
  * Opening does no work: no seek of the analysis video, no frame capture, no
- * snapshot writes. Snapshots and angle data are not needed and never touched;
- * the old snapshot flow stays one tap away behind "Snapshot report".
+ * snapshot writes. Snapshots are only read (at export start); the old snapshot
+ * flow stays one tap away behind "Snapshot images & report".
  *
  * The preview is this panel's OWN <video> on the same source. The export
  * renders through lib/cropExport.ts exportEditedVideo (one hidden video →
@@ -35,6 +40,18 @@ import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
  * the preview are paused and the preview's source is unloaded, so only one
  * video decodes (iOS decoder limit). No pose work is started here.
  */
+
+/** One snapshot as the export reads it at export start (page getSnapshotsForExport). */
+export type ExportSnapshot = {
+  id: string;
+  timeSec: number;
+  /** Its strokes (Canvas stroke objects, logical canvas px). */
+  strokes: unknown[];
+  /** The video box the strokes were drawn in; null → today's box. */
+  box: VideoBox | null;
+  /** Its frozen pose (video px), or null. */
+  skeleton: Array<{ x: number; y: number; score: number; name: string }> | null;
+};
 
 export interface MetricsExportPanelProps {
   /** The analysis video's source (blob: URL for an upload, or a file URL). */
@@ -45,6 +62,10 @@ export interface MetricsExportPanelProps {
   sectionStart: number | null;
   sectionEnd: number | null;
   snapshotCount: number;
+  /** This video's snapshots in time order (hold count, trim bar ticks). */
+  snapshotMarks?: ReadonlyArray<{ id: string; timeSec: number }>;
+  /** Read once at export start: each snapshot's strokes, box and frozen pose. */
+  getSnapshotsForExport?: () => ExportSnapshot[];
   /** Runs the existing snapshot Generate flow (handleGenerateSnapshots). */
   onSnapshotReport: () => void;
   /** Pauses the analysis video (called on open and when an export starts). */
@@ -94,7 +115,7 @@ const PLACEHOLDER_OPTIONS: Array<{ id: ExportQuality; label: string; width?: num
 ];
 
 export default function MetricsExportPanel({
-  videoSrc, exportBlockedReason, sectionStart, sectionEnd, snapshotCount,
+  videoSrc, exportBlockedReason, sectionStart, sectionEnd, snapshotCount, snapshotMarks, getSnapshotsForExport,
   onSnapshotReport, pauseAnalysisVideo, onClose, isMobile = false, overlay = null,
 }: MetricsExportPanelProps) {
   const previewRef = useRef<HTMLVideoElement | null>(null);
@@ -201,7 +222,20 @@ export default function MetricsExportPanel({
   }, [options, quality]);
   const selected = options.find((o) => o.id === quality) ?? null;
   const spanSec = Math.max(0, range.end - range.start);
-  const estimateBytes = selected ? estimateExportBytes(spanSec, selected.videoBitsPerSecond, EXPORT_AUDIO_BPS) : 0;
+
+  // ── Snapshot holds ──
+  const [holdSec, setHoldSec] = useState(HOLD_DEFAULT_SEC);
+  // Unset until the coach flips it: on when a snapshot is in the range.
+  const [snapshotsChoice, setSnapshotsChoice] = useState<boolean | null>(null);
+  const marks = snapshotMarks ?? [];
+  const holdPlan = holdSchedule(marks, range.start, range.end, holdSec);
+  const snAvailable = Boolean(overlay) && Boolean(getSnapshotsForExport) && holdPlan.inRange > 0;
+  const includeSnapshots = snAvailable && (snapshotsChoice ?? true);
+  const snStatus = snapshotsExportStatus(holdPlan, includeSnapshots);
+  const holdTotalSec = includeSnapshots ? holdPlan.totalHoldSec : 0;
+  // The file's length: the range plus every hold. Estimate and progress use it.
+  const outputSec = spanSec + holdTotalSec;
+  const estimateBytes = selected ? estimateExportBytes(outputSec, selected.videoBitsPerSecond, EXPORT_AUDIO_BPS) : 0;
 
   // ── Skeleton + drawings (read-only probes; nothing is drawn until Export) ──
   // Drawings cannot change while this modal is open, so count them once.
@@ -223,16 +257,36 @@ export default function MetricsExportPanel({
   // the frame it is on: from Cancel until analyzeRange settles (KNOWN_ISSUES 054).
   const [stopping, setStopping] = useState(false);
   const skStatus = skeletonExportStatus(Boolean(overlay?.trackRunning) && phase !== 'analyzing', trackedFrac, analysisFailed, stopping);
-  const drStatus = drawingsExportStatus(Boolean(overlay?.snapshotMode), drawingCount);
-  const skAvailable = skStatus.state !== 'busy' && skStatus.state !== 'failed' && skStatus.state !== 'stopping';
+  const snapshotMode = Boolean(overlay?.snapshotMode);
+  const drStatus = drawingsExportStatus(snapshotMode, drawingCount, includeSnapshots);
+  const skAvailable = skStatus.state !== 'busy' && skStatus.state !== 'failed' && skStatus.state !== 'stopping' && skStatus.state !== 'unavailable';
   const drAvailable = drStatus.state === 'ready';
   // Unset until the coach flips it: on by default when some of the range is tracked.
   const [skeletonChoice, setSkeletonChoice] = useState<boolean | null>(null);
   const skeletonWanted = skeletonChoice ?? trackedFrac > 0;
   const setSkeletonWanted = (v: boolean) => setSkeletonChoice(v);
-  const [drawingsWanted, setDrawingsWanted] = useState(true);
+  // Unset until the coach flips it: on in LIVE mode, off in SNAPSHOT mode (drawingsDefaultOn).
+  const [drawingsChoice, setDrawingsChoice] = useState<boolean | null>(null);
+  const drawingsWanted = drawingsChoice ?? drawingsDefaultOn(snapshotMode);
+  const setDrawingsWanted = (v: boolean) => setDrawingsChoice(v);
   const includeSkeleton = Boolean(overlay) && skAvailable && skeletonWanted;
+  // V2/Saturday: panel analysis frozen on iPhone, see KNOWN_ISSUES 061. While
+  // PANEL_SKELETON_ANALYSIS is false the status is never 'analyze', so this is
+  // always false and the analysis code below (analyzeRange wiring, guard, vdebug
+  // lines) stays in place but does not run.
   const needsAnalysis = includeSkeleton && skStatus.state === 'analyze';
+
+  // Page pinch-zoom (iOS): the skeleton analysis is not started on a zoomed page.
+  const [pageScale, setPageScale] = useState<number | null>(null);
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    if (!vv) return;
+    const read = () => setPageScale(vv.scale);
+    read();
+    vv.addEventListener('resize', read);
+    return () => vv.removeEventListener('resize', read);
+  }, []);
+  const analysisBlock = needsAnalysis ? analysisBlockedReason(pageScale) : null;
 
   // Analysis progress (0..1 over all untracked parts) and a remaining-time
   // estimate MEASURED from this run's own progress (shown once it is reliable).
@@ -308,7 +362,7 @@ export default function MetricsExportPanel({
 
   // ── Export ───────────────────────────────────────────────────────────────
   const startExport = useCallback(async () => {
-    if (!videoSrc || !meta || !selected || selected.disabled || busy || stopping) return;
+    if (!videoSrc || !meta || !selected || selected.disabled || busy || stopping || analysisBlock) return;
     clearResult();
     setError(null);
     setNotice(null);
@@ -411,7 +465,20 @@ export default function MetricsExportPanel({
       const whole = range.start <= 0.01 && range.end >= meta.duration - 0.01;
       // Overlays: capture the video box, strokes and angles NOW (export start),
       // then reuse that capture for every frame so a resize cannot move them.
-      let drawOverlays: ((ctx: CanvasRenderingContext2D, t: number, w: number, h: number) => void) | undefined;
+      let drawOverlays: ((ctx: CanvasRenderingContext2D, t: number, w: number, h: number, hold: number | null) => void) | undefined;
+      // Snapshot holds, read NOW (the active snapshot's latest strokes and pose).
+      const holdSnaps: ExportSnapshot[] = [];
+      const holds: Array<{ at: number; seconds: number }> = [];
+      if (overlay && includeSnapshots && getSnapshotsForExport) {
+        const all = getSnapshotsForExport();
+        const byId = new Map(all.map((sn) => [sn.id, sn]));
+        for (const h of holdSchedule(all, range.start, range.end, holdSec).holds) {
+          const sn = byId.get(h.id);
+          if (!sn) continue;
+          holdSnaps.push(sn);
+          holds.push({ at: h.at, seconds: h.seconds });
+        }
+      }
       // Render-time check (skeleton only): every FOLLOW_STEP_SEC of media time,
       // compare the picture around the skeleton with the previous step's (same
       // region) and the skeleton's own move. Read BEFORE the overlay is drawn, so
@@ -424,7 +491,7 @@ export default function MetricsExportPanel({
         last: null as FollowLast | null,
         verdict: null as { moved: number; still: number } | null,
       };
-      if (overlay && (includeSkeleton || includeDrawings)) {
+      if (overlay && (includeSkeleton || includeDrawings || holds.length)) {
         const flags = { skeleton: includeSkeleton, drawings: includeDrawings };
         const frozen: ExportOverlayFrozen = overlay.drawExportOverlay(null, range.start, 1, 1, flags);
         const thumb = includeSkeleton ? document.createElement('canvas') : null;
@@ -449,7 +516,22 @@ export default function MetricsExportPanel({
           }
           follow.last = { kps, region, grey: grab(ctx, region) };
         };
-        drawOverlays = (ctx, t, w, h) => {
+        let poseDiagAt = 0;
+        drawOverlays = (ctx, t, w, h, hold) => {
+          // A hold shows only its snapshot's strokes and pose (no live drawings,
+          // no AI Track skeleton) and is not part of the render check.
+          const sn = hold != null ? holdSnaps[hold] : undefined;
+          // ?vdebug=1: once a second, which pose this frame draws (baked track by media time, or the hold's).
+          if (performance.now() - poseDiagAt > 1000) {
+            poseDiagAt = performance.now();
+            const kps = sn ? sn.skeleton : includeSkeleton ? overlay.getBakedPoseAt(t) : null;
+            const lw = kps?.[9];
+            firstFrameLog('export', `pose @${t.toFixed(2)}: ${sn ? 'HOLD (snapshot pose)' : includeSkeleton ? (kps ? 'AI Track' : 'none at this time') : 'skeleton off'}${lw ? ` lwrist=${Math.round(lw.x)},${Math.round(lw.y)}` : ''}`);
+          }
+          if (sn) {
+            overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen, hold: { strokes: sn.strokes, box: sn.box, skeleton: sn.skeleton } });
+            return;
+          }
           if (tctx) { try { probe(ctx, t, w, h); } catch { /* the check must never stop the export */ } }
           overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen });
         };
@@ -457,8 +539,8 @@ export default function MetricsExportPanel({
       // Every export carries the AngleMotion watermark (lib/videoWatermark.ts),
       // bottom-left of the frame, LAST: after the render check has read the bare
       // frame and after the skeleton and drawings (KNOWN_ISSUES 046).
-      const drawOverlay = (ctx: CanvasRenderingContext2D, t: number, w: number, h: number) => {
-        drawOverlays?.(ctx, t, w, h);
+      const drawOverlay = (ctx: CanvasRenderingContext2D, t: number, w: number, h: number, hold: number | null) => {
+        drawOverlays?.(ctx, t, w, h, hold);
         drawVideoWatermark(ctx, w, h);
       };
       const res = await exportEditedVideo(src, {
@@ -468,6 +550,9 @@ export default function MetricsExportPanel({
         signal: ac.signal,
         pauseWhenHidden: true,
         drawOverlay,
+        // Omitted when there are none: the render is then exactly the no-hold one.
+        holds: holds.length ? holds : undefined,
+        onDiag: (m) => firstFrameLog('export', m),
         onProgress: (msg) => {
           if (ac.signal.aborted) return;
           lastProgressAtRef.current = performance.now();
@@ -518,7 +603,8 @@ export default function MetricsExportPanel({
       restorePreview();
       if (restoreRef.current === restorePreview) restoreRef.current = null;
     }
-  }, [videoSrc, meta, selected, busy, stopping, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton]);
+  }, [videoSrc, meta, selected, busy, stopping, analysisBlock, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton,
+    includeSnapshots, getSnapshotsForExport, holdSec]);
 
   const cancelExport = useCallback(() => {
     const ac = abortRef.current;
@@ -658,6 +744,11 @@ export default function MetricsExportPanel({
       aria-modal="true"
       aria-label="Export video"
       aria-hidden={collapsed || undefined}
+      // Keys typed in the panel (trim arrows, Space on a button) must not reach the
+      // page's window shortcuts: they frame-stepped / played the analysis video
+      // behind the modal, which also left SNAPSHOT mode and cleared the drawings
+      // the panel had just counted (KNOWN_ISSUES 056). Escape still closes.
+      onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
       onPointerDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}
       style={{
         position: 'fixed', inset: 0, zIndex: 10050, background: 'rgba(0,0,0,0.85)',
@@ -720,6 +811,8 @@ export default function MetricsExportPanel({
                 onChange={onTrimChange}
                 getPlayhead={() => previewRef.current?.currentTime ?? null}
                 disabled={busy || !meta}
+                marks={marks.map((m) => ({ t: m.timeSec, inRange: m.timeSec >= range.start - 1e-3 && m.timeSec <= range.end + 1e-3 }))}
+                holdLine={overlay && snStatus.state !== 'none' ? snStatus.text : null}
               />
             </section>
 
@@ -729,17 +822,24 @@ export default function MetricsExportPanel({
                 {([
                   { key: 'drawings', title: 'Drawings', label: 'Include drawings', on: includeDrawings, avail: drAvailable, text: drStatus.text, set: setDrawingsWanted },
                   { key: 'skeleton', title: 'Skeleton', label: 'Include skeleton', on: includeSkeleton, avail: skAvailable, text: skStatus.text, set: setSkeletonWanted },
+                  {
+                    key: 'snapshots', title: 'Snapshots', label: 'Include snapshots', on: includeSnapshots, avail: snAvailable,
+                    text: snapshotsSwitchText(snStatus.state, includeSnapshots, holdSec), set: (v: boolean) => setSnapshotsChoice(v),
+                  },
                 ] as const).map((row) => {
                   const off = !row.avail || busy;
+                  const toggle = () => { if (!off) { row.set(!row.on); clearResult(); } };
                   return (
-                    <div key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 44 }}>
+                    // The whole row is the touch target (≥ 44 px tall), not only the 28 px switch.
+                    <div key={row.key} data-testid={`export-${row.key}-row`} onClick={toggle}
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 44, cursor: off ? 'default' : 'pointer' }}>
                       <button
                         type="button"
                         role="switch"
                         aria-checked={row.on}
                         aria-label={row.label}
                         disabled={off}
-                        onClick={() => { row.set(!row.on); clearResult(); }}
+                        onClick={(e) => { e.stopPropagation(); toggle(); }}
                         style={{
                           flex: '0 0 auto', width: 48, height: 28, borderRadius: 14, padding: 2, border: 'none',
                           background: row.on ? 'var(--cl-accent)' : 'rgba(255,255,255,0.22)',
@@ -756,12 +856,35 @@ export default function MetricsExportPanel({
                     </div>
                   );
                 })}
+                {includeSnapshots ? (
+                  <div role="group" aria-label="Hold length" style={{ display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 60 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>Hold</span>
+                    <button
+                      type="button"
+                      aria-label="Shorter hold"
+                      disabled={busy || holdSec <= HOLD_MIN_SEC}
+                      onClick={() => { setHoldSec((v) => clampHoldSec(v - HOLD_STEP_SEC)); clearResult(); }}
+                      style={{ ...btn(false, busy || holdSec <= HOLD_MIN_SEC), minWidth: 44, padding: '8px 0' }}
+                    >−</button>
+                    <span data-testid="export-hold-seconds" aria-live="polite" style={{ fontSize: 14, fontWeight: 700, minWidth: 44, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
+                      {formatHoldSec(holdSec)}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Longer hold"
+                      disabled={busy || holdSec >= HOLD_MAX_SEC}
+                      onClick={() => { setHoldSec((v) => clampHoldSec(v + HOLD_STEP_SEC)); clearResult(); }}
+                      style={{ ...btn(false, busy || holdSec >= HOLD_MAX_SEC), minWidth: 44, padding: '8px 0' }}
+                    >+</button>
+                    <span style={muted}>per snapshot</span>
+                  </div>
+                ) : null}
               </section>
             ) : null}
 
             <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <span style={{ fontSize: 14, fontWeight: 700 }}>Quality</span>
-              <span data-testid="export-includes" style={muted}>{includesLabel(includeSkeleton, includeDrawings)}</span>
+              <span data-testid="export-includes" style={muted}>{includesLabelWithHolds(includeSkeleton, includeDrawings, includeSnapshots ? holdPlan.inRange : 0)}</span>
               <div role="radiogroup" aria-label="Quality" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
                 {(options.length ? options : PLACEHOLDER_OPTIONS).map((o) => {
                   const on = o.id === quality;
@@ -798,7 +921,7 @@ export default function MetricsExportPanel({
               </span>
               <span style={muted}>
                 {selected
-                  ? `${formatClock(spanSec)} · ${selected.width}×${selected.height} · ${(selected.videoBitsPerSecond / 1_000_000).toFixed(0)} Mbps`
+                  ? `${formatClock(spanSec)}${holdTotalSec > 0 ? ` + ${formatClock(holdTotalSec)} holds` : ''} · ${selected.width}×${selected.height} · ${(selected.videoBitsPerSecond / 1_000_000).toFixed(0)} Mbps`
                   : 'Reading video…'}
               </span>
             </div>
@@ -813,7 +936,11 @@ export default function MetricsExportPanel({
                   <span data-testid="export-status" style={{ fontSize: 13, flex: 1, minWidth: 0 }}>{status}{phase === 'exporting' && !tabHidden ? ` ${pct}%` : ''}</span>
                   <button type="button" style={btn(false)} onClick={cancelExport}>Cancel</button>
                 </div>
-                <span style={muted}>Exports in real time: a {formatClock(spanSec)} range takes about that long.</span>
+                <span style={muted}>
+                  {holdTotalSec > 0
+                    ? `Exports in real time: the ${formatClock(spanSec)} range plus ${formatClock(holdTotalSec)} of holds takes about ${formatClock(outputSec)}.`
+                    : `Exports in real time: a ${formatClock(spanSec)} range takes about that long.`}
+                </span>
               </div>
             ) : result ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -830,15 +957,16 @@ export default function MetricsExportPanel({
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <button
                   type="button"
-                  style={btn(true, !selected || selected.disabled || stopping)}
-                  disabled={!selected || selected.disabled || stopping}
+                  style={btn(true, !selected || selected.disabled || stopping || Boolean(analysisBlock))}
+                  disabled={!selected || selected.disabled || stopping || Boolean(analysisBlock)}
                   onClick={() => { void startExport(); }}
                 >
                   {needsAnalysis ? 'Analyze skeleton + export' : 'Export'}
                 </button>
+                {analysisBlock ? <span data-testid="export-zoom-block" style={{ fontSize: 13, color: 'var(--cl-destructive-text)' }}>{analysisBlock}</span> : null}
                 {needsAnalysis ? (
                   <span data-testid="export-analysis-note" style={muted}>
-                    Skeleton will be analyzed first, this adds time. Then the {formatClock(spanSec)} range is exported in real time.
+                    Skeleton will be analyzed first with AI Track (this turns Skeleton on), this adds time. Then the {formatClock(spanSec)} range{holdTotalSec > 0 ? ` (+ ${formatClock(holdTotalSec)} of holds)` : ''} is exported in real time.
                   </span>
                 ) : null}
                 {error ? <span style={{ fontSize: 13, color: 'var(--cl-destructive-text)' }}>{error}</span> : null}
@@ -849,7 +977,7 @@ export default function MetricsExportPanel({
         )}
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.10)', paddingTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <button type="button" style={btn(false, busy)} disabled={busy} onClick={snapshotReport}>Snapshot report</button>
+          <button type="button" style={btn(false, busy)} disabled={busy} onClick={snapshotReport}>Snapshot images &amp; report</button>
           <span style={{ ...muted, flex: 1, minWidth: 160 }}>
             {snapshotMsg ?? (snapshotCount > 0
               ? `Images and report from your ${snapshotCount} snapshot${snapshotCount === 1 ? '' : 's'}.`

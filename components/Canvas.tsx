@@ -346,13 +346,26 @@ export interface CanvasHandle {
    * or pose state. The first call (pass `frozen` = undefined) captures the video
    * box, strokes and angles and returns them; pass that back on every later call
    * so a resize mid-export cannot move anything. `ctx` = null only captures.
+   *
+   * `hold` (a snapshot hold): draw THAT snapshot's strokes, mapped from the
+   * video box they were drawn in (`box`; null = today's box), and its frozen
+   * pose — and nothing else: no live drawings, no AI Track skeleton.
    */
   drawExportOverlay: (
     ctx: CanvasRenderingContext2D | null,
     mediaTime: number,
     outW: number,
     outH: number,
-    opts: { skeleton: boolean; drawings: boolean; frozen?: ExportOverlayFrozen },
+    opts: {
+      skeleton: boolean;
+      drawings: boolean;
+      frozen?: ExportOverlayFrozen;
+      hold?: {
+        strokes: readonly unknown[];
+        box: VideoBox | null;
+        skeleton: ReadonlyArray<{ x: number; y: number; score: number; name: string }> | null;
+      } | null;
+    },
   ) => ExportOverlayFrozen;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
   startStroMotionRegionSelect: (cb: (region: { x: number; y: number; w: number; h: number } | null) => void) => void;
@@ -367,6 +380,8 @@ export interface CanvasHandle {
   zoomIn: () => void;
   zoomOut: () => void;
   resetZoomPan: () => void;
+  /** The canvas zoom (1 = 100%) — read-only, for the ?vdebug=1 box. */
+  getZoom: () => number;
   startObjMultiplierRegionSelect: () => void;
   getObjMultiplierRegion: () => { x: number; y: number; w: number; h: number } | null;
   runObjMultiplierCapture: (frameCount: number, onProgress?: (done: number, total: number) => void) => Promise<number>;
@@ -1381,6 +1396,23 @@ const DEFAULT_CONTEXTUAL_SNAPSHOT: ContextualStyleSnapshot = {
 
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 5;
+/**
+ * iOS zooms the whole page when it focuses a text field under 16 px and does
+ * not zoom back. The text-tool boxes keep their on-screen size but render with
+ * a ≥ 16 px font, scaled down; `k` converts the box's own px sizes to match.
+ */
+function iosSafeTextStyle(fontSize: number): { style: React.CSSProperties; k: number } {
+  if (!(fontSize < 16)) return { style: { fontSize }, k: 1 };
+  const k = 16 / Math.max(1, fontSize);
+  return { style: { fontSize: 16, transform: `scale(${1 / k})`, transformOrigin: '0 0' }, k };
+}
+/**
+ * Pinch distances below this (CSS px) count as this: two fingers that land close
+ * together (a drawing finger plus an accidental second touch) start from a tiny
+ * distance, and a small spread multiplied the zoom straight to the 500% cap.
+ * Normal pinches (fingers further apart) are unchanged.
+ */
+const PINCH_MIN_DIST = 60;
 /** Trackpad-friendly wheel zoom gain (exp(delta * gain)). */
 const ZOOM_WHEEL_GAIN = 0.0011;
 const ZOOM_BUTTON_STEP = 0.2;
@@ -2532,6 +2564,42 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
     }, [precisionTouchDraw]);
 
+    /**
+     * EVERY TOOL: a two-finger gesture on the canvas is the app's own pinch zoom
+     * (or the PiP pinch), never the browser's. Without this, on iOS a pinch on
+     * the video zoomed the canvas AND the whole page (the precision effect above
+     * blocks it only while that tool is on). Same mechanism, narrower place:
+     * `touchmove` with 2+ touches on the canvas, and WebKit `gesture*` events
+     * only when they start on the canvas. One-finger scrolling and gestures
+     * elsewhere (toolbar, panels) are untouched.
+     */
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas || typeof document === 'undefined') return;
+      let gestureOnCanvas = false;
+      const onTouchStart = (ev: TouchEvent) => { gestureOnCanvas = ev.touches.length >= 1; };
+      const onTouchEnd = (ev: TouchEvent) => { if (ev.touches.length === 0) gestureOnCanvas = false; };
+      const stopMultiTouch = (ev: TouchEvent) => {
+        if (ev.touches.length > 1 && ev.cancelable) ev.preventDefault();
+      };
+      const stopGesture = (ev: Event) => {
+        if ((gestureOnCanvas || (ev.target instanceof Node && canvas.contains(ev.target))) && ev.cancelable) ev.preventDefault();
+      };
+      const GESTURES = ['gesturestart', 'gesturechange', 'gestureend'];
+      canvas.addEventListener('touchstart', onTouchStart, { passive: true });
+      canvas.addEventListener('touchend', onTouchEnd, { passive: true });
+      canvas.addEventListener('touchcancel', onTouchEnd, { passive: true });
+      canvas.addEventListener('touchmove', stopMultiTouch, { passive: false });
+      GESTURES.forEach((t) => document.addEventListener(t, stopGesture, { passive: false }));
+      return () => {
+        canvas.removeEventListener('touchstart', onTouchStart);
+        canvas.removeEventListener('touchend', onTouchEnd);
+        canvas.removeEventListener('touchcancel', onTouchEnd);
+        canvas.removeEventListener('touchmove', stopMultiTouch);
+        GESTURES.forEach((t) => document.removeEventListener(t, stopGesture));
+      };
+    }, []);
+
     /** Live ref to the activation callback so the timer never closes over a stale prop. */
     const onPrecisionHoldActivateRef = useRef(onPrecisionHoldActivate);
     useEffect(() => { onPrecisionHoldActivateRef.current = onPrecisionHoldActivate; }, [onPrecisionHoldActivate]);
@@ -2845,6 +2913,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const activePointersRef = useRef<Map<number, { clientX: number; clientY: number; pointerType: string }>>(new Map());
     // Canvas-zoom pinch consumer; non-null only while a 2-finger zoom owns the gesture.
     const canvasPinchRef = useRef<{ lastDist: number; focalX: number; focalY: number } | null>(null);
+    // True while the canvas is zoomed or panned: shows the one-tap reset pill.
+    const zoomedUiRef = useRef(false);
+    const [zoomedUi, setZoomedUi] = useState(false);
     const applyZoomAtRef = useRef<(nextZoom: number, focalX: number, focalY: number) => void>(() => {});
     applyZoomAtRef.current = (nextZoom, focalX, focalY) => {
       const canvas = canvasRef.current;
@@ -3788,6 +3859,36 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           strokes: [...strokesRef.current],
           angles: [...angleMeasRef.current],
         };
+        if (ctx && opts.hold) {
+          // Snapshot hold: its own strokes in its own box, its frozen pose. Read-only.
+          const hold = opts.hold;
+          const box = hold.box && hold.box.dw > 0 && hold.box.dh > 0 ? hold.box : frozen.box;
+          const htf = overlayTransform(box, outW, outH);
+          if (!htf) return frozen;
+          ctx.save();
+          try {
+            ctx.setTransform(htf.sx, 0, 0, htf.sy, htf.tx, htf.ty);
+            const tick = Math.round(mediaTime * 60);
+            const jointBallR = jointNodeRadius(box.dw, box.dh);
+            for (const st of hold.strokes as Stroke[]) drawStroke(ctx, st, tick, jointBallR);
+            if (hold.skeleton && hold.skeleton.length && frozen.videoW > 0 && frozen.videoH > 0) {
+              ctx.translate(box.dx, box.dy);
+              drawSkeletonOverlay(ctx, [...hold.skeleton], frozen.videoW, frozen.videoH, box.dw, box.dh, {
+                showAngles: false,
+                showHeadLine: skeletonShowHeadLineRef.current,
+                showHeadDirection: skeletonShowHeadDirectionRef.current,
+                showFootLine: skeletonShowFootLineRef.current,
+                classicColors: skeletonClassicColorsRef.current,
+                parts: skeletonPartsRef.current,
+              });
+            }
+          } catch (e) {
+            if (process.env.NODE_ENV !== 'production') console.warn('[Canvas] export hold overlay skipped:', e);
+          } finally {
+            ctx.restore();
+          }
+          return frozen;
+        }
         const tf = overlayTransform(frozen.box, outW, outH);
         if (!ctx || !tf) return frozen;
         const { dx, dy, dw, dh } = frozen.box;
@@ -3904,6 +4005,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         panYRef.current = 0;
         renderDirtyRef.current = true;
       },
+      getZoom: () => zoomRef.current,
       startObjMultiplierRegionSelect: () => {
         isSelectingObjMultRegionRef.current = true;
         objMultRegionStartRef.current = null;
@@ -6908,6 +7010,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // ── Undo zoom/pan transform ───────────────────────────────────────
         ctx.restore();
 
+        // The DOM reset pill (below) appears only while zoomed: flip its state on change only.
+        const zoomedNow = zoomRef.current !== 1.0 || panXRef.current !== 0 || panYRef.current !== 0;
+        if (zoomedNow !== zoomedUiRef.current) {
+          zoomedUiRef.current = zoomedNow;
+          setZoomedUi(zoomedNow);
+        }
         // Draw zoom level indicator (outside transform, fixed in corner)
         if (zoomRef.current !== 1.0 || panXRef.current !== 0 || panYRef.current !== 0) {
           const label = `${Math.round(zoomRef.current * 100)}%`;
@@ -9034,7 +9142,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const focalX = (midClientX - rect.left) * (cssW(canvas) / rect.width);
           const focalY = (midClientY - rect.top) * (cssH(canvas) / rect.height);
           if (last > 0) {
-            applyZoomAtRef.current(zoomRef.current * (dist / last), focalX, focalY);
+            const step = Math.max(dist, PINCH_MIN_DIST) / Math.max(last, PINCH_MIN_DIST);
+            applyZoomAtRef.current(zoomRef.current * step, focalX, focalY);
           }
           canvasPinchRef.current = { lastDist: dist, focalX, focalY };
         }
@@ -10262,7 +10371,32 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ⌂
           </button>
         </div>
-        {newTextDraft && (
+        {/* One-tap way back from any canvas zoom, top-left under the top bar:
+            the bottom-right ⌂ can be under a fixed banner (iOS "Add to Home
+            Screen") at 375 px. */}
+        {zoomedUi ? (
+          <button
+            type="button"
+            data-testid="zoom-reset-pill"
+            onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+            onClick={() => {
+              zoomRef.current = ZOOM_MIN;
+              panXRef.current = 0;
+              panYRef.current = 0;
+              renderDirtyRef.current = true;
+            }}
+            style={{
+              // Below the top bar's buttons (trash / +B, z 110), above everything on the canvas.
+              position: 'absolute', top: 52, left: 6, zIndex: 115, minHeight: 36, padding: '6px 12px',
+              borderRadius: 18, border: '1px solid rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.78)',
+              color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', touchAction: 'manipulation',
+            }}
+            aria-label="Reset zoom"
+          >
+            ⌂ Reset zoom
+          </button>
+        ) : null}
+        {newTextDraft && (() => { const tf = iosSafeTextStyle(newTextDraft.fontSize); return (
           <textarea
             ref={newTextInputRef}
             autoFocus
@@ -10271,9 +10405,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               position: 'absolute',
               left: newTextDraft.left,
               top: newTextDraft.top,
-              minWidth: 120,
-              minHeight: newTextDraft.fontSize * 1.4,
-              fontSize: newTextDraft.fontSize,
+              minWidth: 120 * tf.k,
+              minHeight: newTextDraft.fontSize * 1.4 * tf.k,
+              ...tf.style,
               fontWeight: 'bold',
               fontFamily: 'Inter, sans-serif',
               color: newTextDraft.color,
@@ -10305,9 +10439,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               commitNewTextDraft();
             }}
           />
-        )}
+        ); })()}
 
-        {textEditing && (
+        {textEditing && (() => { const tf = iosSafeTextStyle(textEditing.fontSize); return (
           <textarea
             ref={textEditInputRef}
             autoFocus
@@ -10316,9 +10450,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               position: 'absolute',
               left: textEditing.left,
               top: textEditing.top,
-              width: textEditing.width,
-              minHeight: textEditing.fontSize * 1.4,
-              fontSize: textEditing.fontSize,
+              width: textEditing.width * tf.k,
+              minHeight: textEditing.fontSize * 1.4 * tf.k,
+              ...tf.style,
               fontWeight: 'bold',
               fontFamily: 'Inter, sans-serif',
               color: textEditing.color,
@@ -10341,7 +10475,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }}
             onBlur={commitTextEdit}
           />
-        )}
+        ); })()}
 
       </div>
     );
