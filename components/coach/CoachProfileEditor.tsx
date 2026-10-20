@@ -549,7 +549,7 @@ export default function CoachProfileEditor() {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, marginBottom: 8 }}>
               <input style={inputStyle} value={svc.title} onChange={e => updateService(svc.id, 'title', e.target.value)} placeholder="Service title" />
-              <input style={{ ...inputStyle, width: 100 }} value={svc.price} onChange={e => updateService(svc.id, 'price', e.target.value)} placeholder="$79" />
+              <input style={{ ...inputStyle, width: 100 }} value={svc.price} onChange={e => updateService(svc.id, 'price', e.target.value)} placeholder="€79" />
             </div>
             <textarea
               style={{ ...inputStyle, minHeight: 50, resize: 'vertical', fontFamily: 'inherit', marginBottom: 8 }}

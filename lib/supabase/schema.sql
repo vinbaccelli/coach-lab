@@ -232,7 +232,7 @@ create table if not exists coach_services (
   profile_id   uuid not null references coach_profiles(id) on delete cascade,
   title        text not null,
   description  text,
-  price        text,        -- FREE TEXT, not numeric: "€20", "$249 / month"
+  price        text,        -- FREE TEXT, not numeric: "€20", "€249 / month"
   cta_label    text default 'Book Now',
   cta_url      text,        -- Stripe, WhatsApp, coachlife.com — any destination
   sort_order   int default 0,
