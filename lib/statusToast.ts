@@ -3,7 +3,8 @@
  * Nothing used to clear most of its ~90 messages, so "AI Track ready…", "Loading
  * precision tracking model…" and the like stayed over the video for good.
  *   info / success  → gone after INFO_MS
- *   error           → close (X) button, and gone after ERROR_MS
+ *   error           → close (X) button, and gone after ERROR_MS (also any message
+ *                     that matches neither the info nor the progress patterns)
  *   progress        → stays while its task runs; once nothing is running it goes
  *                     after INFO_MS (a task that ended without a closing message)
  */
@@ -24,7 +25,9 @@ export function statusKind(text: string): StatusKind {
   // Finished messages say so; "…" or "42%" alone means still going.
   if (/\b(ready|done|complete(d)?|saved|cleared|cancelled|canceled|locked)\b/i.test(text)) return 'info';
   if (PROGRESS_RE.test(text)) return 'progress';
-  return 'info';
+  // Matches neither a finished nor a progress pattern: unknown, so it is shown
+  // as an error (close button, 10 s) rather than vanishing unread.
+  return 'error';
 }
 
 /** How long (ms) a message stays, or null to leave it (a progress message while its task runs). */

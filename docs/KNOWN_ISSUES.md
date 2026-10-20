@@ -2129,7 +2129,9 @@ message replaced them, taking space over the video.
   with none running it goes after 8 s;
 - a 0.4 s fade before removal.
 The kind is read from the message text (`statusKind`), so a new message needs
-no change; an error worded without a listed word is shown as info (4 s).
+no change; a message that matches neither the finished nor the progress
+patterns is treated as an error (close button, 10 s), so it cannot vanish
+unread.
 
 **Not changed (own lifetime, task-bound with their own Cancel/OK):** StroMotion
 processing and region-select toast, the angle-differential prompt, the

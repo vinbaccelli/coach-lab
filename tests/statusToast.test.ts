@@ -8,7 +8,6 @@ test('finished messages are info and go after 4 s', () => {
     'AI Track cancelled',
     'AI Track cleared — live tracking resumed',
     'Skeleton ready — press play',
-    'Skeleton analyzed for the export — 120 frame-exact poses.',
   ]) {
     assert.equal(statusKind(m), 'info', m);
     assert.equal(statusLifetimeMs('info', false), INFO_MS);
@@ -35,7 +34,14 @@ test('progress messages stay while their task runs and go after the task ends', 
   assert.equal(statusLifetimeMs('progress', false), UNTRACKED_PROGRESS_MS);
 });
 
-test('an unrecognised plain message is info', () => {
-  assert.equal(statusKind('Load a video first'), 'info');
-  assert.equal(statusKind('Enable Skeleton first, then run AI Track'), 'info');
+test('a message matching neither the info nor the progress patterns is an error (close button, 10 s)', () => {
+  for (const m of [
+    'Load a video first',
+    'Enable Skeleton first, then run AI Track',
+    'Skeleton analyzed for the export — 120 frame-exact poses.',
+    'Something unexpected happened',
+  ]) {
+    assert.equal(statusKind(m), 'error', m);
+    assert.equal(statusLifetimeMs(statusKind(m), false), ERROR_MS);
+  }
 });
