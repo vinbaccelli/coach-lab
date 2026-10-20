@@ -138,6 +138,38 @@ the file will contain ("Includes: video + skeleton + drawings").
 - **Not exported in V1:** AI measurement overlays, the data column, the ball
   trail, the zoom (the file is always the full, unzoomed frame).
 
+## Speed and sound (slow motion)
+
+A **Speed** row in the panel: 1×, 0.5×, 0.25×, 0.1×. It starts at the timeline's
+current rate (the analysis video's playbackRate when the panel opens, snapped to
+the nearest of the four; faster than 1× gives 1×).
+
+- **How.** `exportEditedVideo(…, { playbackRate })` (`lib/cropExport.ts`) plays
+  the hidden video at that rate while the canvas is recorded in real time, so
+  the file lasts range ÷ speed (plus the holds). Overlays (skeleton, drawings,
+  holds, watermark) are drawn from the video's media time, so they stay on the
+  right frame. Hold lengths are output seconds and do not change with the speed.
+  Every `play()` sets the rate first.
+- **Numbers.** Size estimate, the "takes about X" text and the progress bar use
+  the output length (`lib/exportSpeed.ts exportOutputSeconds`; progress counts
+  media seconds ÷ speed plus hold seconds over the same total). With holds the
+  bar moves on that timeline; without them it is the media fraction, which is
+  the same thing.
+- **Fallback.** Before recording, at a speed other than 1×, the hidden video
+  plays for 1.2 s at the chosen rate (`rateWorked`: media time must move at
+  0.6–1.6× of the asked rate, and the browser must report that rate back). If
+  not, the next faster export speed is tried, down to 1×. The file then says
+  "This device could not play at 0.1× while exporting, so the video was exported
+  at 0.5×." (next to "Ready"). The existing no-empty-file checks still apply.
+  A range at the very end of the clip counts as working if it moved before the
+  video ended.
+- **Sound.** An "Include sound" switch: on at 1× (the recording's audio, as
+  before), off and disabled at any slower speed with "Sound is off in slow
+  motion: it would be distorted." When off, no audio track is recorded and the
+  estimate drops the audio bitrate. There is no volume control in the player.
+- **Not changed:** holds, drawings, skeleton, watermark, trim, the Recording Hub
+  (it passes no rate: 1×, sound as before), Motion layer generate.
+
 ## Snapshots (holds)
 
 A third switch, **Snapshots**. With it on, every snapshot inside the trimmed

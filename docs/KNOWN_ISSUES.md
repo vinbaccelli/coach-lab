@@ -2139,3 +2139,16 @@ recording pill and "Processing your video" banner, the embed-capture error
 (`captureError`, with Retry), the foot-line "OK" notice, the on-video
 "Preparing the skeleton…" hint (disappears when the model is ready), and the
 export panel's own messages.
+
+## 063 — Slow-motion export: not checked on an iPhone — OPEN (risk)
+
+The Speed row (METRICS_EXPORT.md, "Speed and sound") records the hidden export
+video at playbackRate 0.5 / 0.25 / 0.1. Unit-tested (speed snapping, output
+length, estimate, progress, sound rule, fallback order, probe rule); not run in
+a browser and never on iOS. Unknown on iOS Safari: whether a detached hidden
+video honors rates below 0.5 (the probe is meant to catch a clamped or ignored
+rate), whether the rate survives pause/seek around holds (every `play()` sets
+it again), and whether the 1.2 s probe is long enough to tell. A wrong guess
+costs a fallback to a faster speed with a note, not an empty file. Also not
+measured: render time at 0.1× (real time: a 10 s range takes about 100 s) and
+the phone's memory for a long slow export.

@@ -6,6 +6,9 @@ import { exportEditedVideo } from '@/lib/cropExport';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { firstFrameLog } from '@/lib/firstFrame';
 import {
+  EXPORT_SPEEDS, exportOutputSeconds, nearestExportSpeed, rateFallbackText, SOUND_SLOW_REASON, soundAvailable, soundIncluded, speedLabel,
+} from '@/lib/exportSpeed';
+import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, type ExportQuality,
 } from '@/lib/exportEstimate';
 import {
@@ -68,6 +71,8 @@ export interface MetricsExportPanelProps {
   getSnapshotsForExport?: () => ExportSnapshot[];
   /** Runs the existing snapshot Generate flow (handleGenerateSnapshots). */
   onSnapshotReport: () => void;
+  /** The timeline's current playback rate: the export's default speed (nearest of 1×, 0.5×, 0.25×, 0.1×). */
+  timelineRate?: () => number | null;
   /** Pauses the analysis video (called on open and when an export starts). */
   pauseAnalysisVideo: () => void;
   onClose: () => void;
@@ -116,7 +121,7 @@ const PLACEHOLDER_OPTIONS: Array<{ id: ExportQuality; label: string; width?: num
 
 export default function MetricsExportPanel({
   videoSrc, exportBlockedReason, sectionStart, sectionEnd, snapshotCount, snapshotMarks, getSnapshotsForExport,
-  onSnapshotReport, pauseAnalysisVideo, onClose, isMobile = false, overlay = null,
+  onSnapshotReport, timelineRate, pauseAnalysisVideo, onClose, isMobile = false, overlay = null,
 }: MetricsExportPanelProps) {
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const [meta, setMeta] = useState<{ w: number; h: number; duration: number } | null>(null);
@@ -128,6 +133,12 @@ export default function MetricsExportPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [result, setResult] = useState<{ url: string; blob: Blob; ext: string; name: string } | null>(null);
+  // Slow motion: the speed starts at the timeline's current rate; sound is on at 1× only.
+  const [speed, setSpeed] = useState<number>(() => nearestExportSpeed(timelineRate?.()));
+  const [soundChoice, setSoundChoice] = useState(true);
+  const soundOn = soundIncluded(soundChoice, speed);
+  // Set when the device could not play at the chosen speed and the nearest working one was used.
+  const [rateNote, setRateNote] = useState<string | null>(null);
   const [tabHidden, setTabHidden] = useState(false);
   const [stalled, setStalled] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -162,6 +173,7 @@ export default function MetricsExportPanel({
     if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
     resultUrlRef.current = null;
     setResult(null);
+    setRateNote(null);
   }, []);
 
   // ── Preview: own <video>, latest-seek-wins scrubbing ────────────────────
@@ -234,8 +246,8 @@ export default function MetricsExportPanel({
   const snStatus = snapshotsExportStatus(holdPlan, includeSnapshots);
   const holdTotalSec = includeSnapshots ? holdPlan.totalHoldSec : 0;
   // The file's length: the range plus every hold. Estimate and progress use it.
-  const outputSec = spanSec + holdTotalSec;
-  const estimateBytes = selected ? estimateExportBytes(outputSec, selected.videoBitsPerSecond, EXPORT_AUDIO_BPS) : 0;
+  const outputSec = exportOutputSeconds(spanSec, speed, holdTotalSec);
+  const estimateBytes = selected ? estimateExportBytes(outputSec, selected.videoBitsPerSecond, soundOn ? EXPORT_AUDIO_BPS : 0) : 0;
 
   // ── Skeleton + drawings (read-only probes; nothing is drawn until Export) ──
   // Drawings cannot change while this modal is open, so count them once.
@@ -552,6 +564,8 @@ export default function MetricsExportPanel({
         drawOverlay,
         // Omitted when there are none: the render is then exactly the no-hold one.
         holds: holds.length ? holds : undefined,
+        playbackRate: speed,
+        includeAudio: soundOn,
         onDiag: (m) => firstFrameLog('export', m),
         onProgress: (msg) => {
           if (ac.signal.aborted) return;
@@ -585,6 +599,7 @@ export default function MetricsExportPanel({
       if (res.ok) {
         const url = URL.createObjectURL(res.blob);
         resultUrlRef.current = url;
+        setRateNote(res.rate !== undefined && res.rate !== speed ? rateFallbackText(speed, res.rate) : null);
         setResult({ url, blob: res.blob, ext: res.ext, name: `anglemotion-export-${selected.id}-${Date.now()}.${res.ext}` });
         setPhase('done');
       } else {
@@ -604,7 +619,7 @@ export default function MetricsExportPanel({
       if (restoreRef.current === restorePreview) restoreRef.current = null;
     }
   }, [videoSrc, meta, selected, busy, stopping, analysisBlock, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton,
-    includeSnapshots, getSnapshotsForExport, holdSec]);
+    includeSnapshots, getSnapshotsForExport, holdSec, speed, soundOn]);
 
   const cancelExport = useCallback(() => {
     const ac = abortRef.current;
@@ -882,6 +897,66 @@ export default function MetricsExportPanel({
               </section>
             ) : null}
 
+            <section aria-label="Speed" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <span style={{ fontSize: 14, fontWeight: 700 }}>Speed</span>
+              <div role="radiogroup" aria-label="Speed" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
+                {EXPORT_SPEEDS.map((r) => {
+                  const on = r === speed;
+                  return (
+                    <button
+                      key={r}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      aria-label={`Speed ${speedLabel(r)}`}
+                      data-testid={`export-speed-${r}`}
+                      disabled={busy}
+                      onClick={() => { setSpeed(r); clearResult(); }}
+                      style={{
+                        ...btn(false, busy), padding: '10px 6px', minHeight: 44,
+                        border: on ? '2px solid var(--cl-accent)' : '1px solid rgba(255,255,255,0.22)',
+                        background: on ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.06)',
+                      }}
+                    >
+                      {speedLabel(r)}
+                    </button>
+                  );
+                })}
+              </div>
+              {(() => {
+                const avail = soundAvailable(speed);
+                const off = busy || !avail;
+                const toggle = () => { if (!off) { setSoundChoice((v) => !v); clearResult(); } };
+                return (
+                  <div data-testid="export-sound-row" onClick={toggle}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 44, cursor: off ? 'default' : 'pointer' }}>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={soundOn}
+                      aria-label="Include sound"
+                      disabled={off}
+                      onClick={(e) => { e.stopPropagation(); toggle(); }}
+                      style={{
+                        flex: '0 0 auto', width: 48, height: 28, borderRadius: 14, padding: 2, border: 'none',
+                        background: soundOn ? 'var(--cl-accent)' : 'rgba(255,255,255,0.22)',
+                        cursor: off ? 'default' : 'pointer', opacity: off ? 0.45 : 1,
+                        display: 'flex', justifyContent: soundOn ? 'flex-end' : 'flex-start',
+                      }}
+                    >
+                      <span style={{ width: 24, height: 24, borderRadius: 12, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.4)' }} />
+                    </button>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>Sound</span>
+                      <span data-testid="export-sound-status" style={muted}>
+                        {avail ? (soundOn ? 'The recording’s sound is kept.' : 'Off: the video is silent.') : SOUND_SLOW_REASON}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </section>
+
             <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <span style={{ fontSize: 14, fontWeight: 700 }}>Quality</span>
               <span data-testid="export-includes" style={muted}>{includesLabelWithHolds(includeSkeleton, includeDrawings, includeSnapshots ? holdPlan.inRange : 0)}</span>
@@ -921,7 +996,7 @@ export default function MetricsExportPanel({
               </span>
               <span style={muted}>
                 {selected
-                  ? `${formatClock(spanSec)}${holdTotalSec > 0 ? ` + ${formatClock(holdTotalSec)} holds` : ''} · ${selected.width}×${selected.height} · ${(selected.videoBitsPerSecond / 1_000_000).toFixed(0)} Mbps`
+                  ? `${formatClock(speed === 1 ? spanSec : outputSec - holdTotalSec)}${speed !== 1 ? ` at ${speedLabel(speed)}` : ''}${holdTotalSec > 0 ? ` + ${formatClock(holdTotalSec)} holds` : ''} · ${selected.width}×${selected.height} · ${(selected.videoBitsPerSecond / 1_000_000).toFixed(0)} Mbps`
                   : 'Reading video…'}
               </span>
             </div>
@@ -937,9 +1012,11 @@ export default function MetricsExportPanel({
                   <button type="button" style={btn(false)} onClick={cancelExport}>Cancel</button>
                 </div>
                 <span style={muted}>
-                  {holdTotalSec > 0
-                    ? `Exports in real time: the ${formatClock(spanSec)} range plus ${formatClock(holdTotalSec)} of holds takes about ${formatClock(outputSec)}.`
-                    : `Exports in real time: a ${formatClock(spanSec)} range takes about that long.`}
+                  {speed !== 1
+                    ? `Exports in real time, in slow motion (${speedLabel(speed)}): the ${formatClock(spanSec)} range${holdTotalSec > 0 ? ` plus ${formatClock(holdTotalSec)} of holds` : ''} takes about ${formatClock(outputSec)}.`
+                    : holdTotalSec > 0
+                      ? `Exports in real time: the ${formatClock(spanSec)} range plus ${formatClock(holdTotalSec)} of holds takes about ${formatClock(outputSec)}.`
+                      : `Exports in real time: a ${formatClock(spanSec)} range takes about that long.`}
                 </span>
               </div>
             ) : result ? (
@@ -947,6 +1024,7 @@ export default function MetricsExportPanel({
                 <span data-testid="export-final-size" style={{ fontSize: 14, fontWeight: 700, color: '#34D399' }}>
                   Ready — {formatMegabytes(result.blob.size)} ({result.ext.toUpperCase()})
                 </span>
+                {rateNote ? <span data-testid="export-rate-note" style={{ fontSize: 13, color: '#FBBF24' }}>{rateNote}</span> : null}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button type="button" style={btn(true)} onClick={download}>Download</button>
                   {shareFile ? <button type="button" style={btn(false)} onClick={() => { void share(); }}>Share</button> : null}
