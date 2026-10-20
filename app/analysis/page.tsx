@@ -53,6 +53,7 @@ import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
 import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoStateText } from '@/lib/firstFrame';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
+import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
 import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
@@ -1723,6 +1724,23 @@ function Home() {
     if (end - start < 0.2) { setProcessingStatus('Selected section is too short to track'); return; }
     await runAiTrackRange(start, end, quality);
   }, [videoSrc, skeletonEnabled, precisionTrackState, metricsSectionStart, metricsSectionEnd, runAiTrackRange]);
+
+  // The top status toast no longer stays over the video for good (lib/statusToast.ts):
+  // info/success go after 4 s, errors after 10 s (and have a close button), progress
+  // stays while its task runs and goes once nothing is running. StroMotion's and the
+  // angle-differential prompts own their lifetime (a task with its own Cancel), as before.
+  const [statusFading, setStatusFading] = useState(false);
+  useEffect(() => {
+    setStatusFading(false);
+    if (!processingStatus || stroMotionProcessing || angleDiffState) return;
+    const ms = statusLifetimeMs(statusKind(processingStatus), precisionTrackState === 'running' || generateRecording);
+    if (ms === null) return;
+    const text = processingStatus;
+    const fade = setTimeout(() => setStatusFading(true), Math.max(0, ms - FADE_MS));
+    const clear = setTimeout(() => setProcessingStatus((cur) => (cur === text ? null : cur)), ms);
+    return () => { clearTimeout(fade); clearTimeout(clear); };
+  }, [processingStatus, precisionTrackState, generateRecording, stroMotionProcessing, angleDiffState]);
+  const showStatusClose = Boolean(processingStatus) && !stroMotionProcessing && !angleDiffState && statusKind(processingStatus ?? '') === 'error';
 
   const handlePrecisionTrackClear = useCallback(() => {
     canvasRef.current?.clearBakedTrack?.();
@@ -9630,6 +9648,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
 
       {(processingStatus || stroMotionProcessing || angleDiffState) && (
         <div
+          data-testid="status-toast"
           role="status"
           aria-live="polite"
           style={{
@@ -9648,11 +9667,13 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             fontWeight: 600,
             lineHeight: 1.45,
             boxShadow: '0 12px 36px rgba(0,0,0,0.12)',
-            pointerEvents: stroSelectingObject || angleDiffState ? 'auto' : 'none',
+            pointerEvents: stroSelectingObject || angleDiffState || showStatusClose ? 'auto' : 'none',
             textAlign: 'center',
             display: 'flex',
             alignItems: 'center',
             gap: 10,
+            opacity: statusFading ? 0 : 1,
+            transition: `opacity ${FADE_MS}ms ease`,
           }}
         >
           <span style={{ flex: 1 }}>
@@ -9685,6 +9706,28 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               }}
             >
               Cancel
+            </button>
+          ) : null}
+          {showStatusClose ? (
+            <button
+              type="button"
+              aria-label="Close message"
+              data-testid="status-close"
+              onClick={() => setProcessingStatus(null)}
+              style={{
+                flexShrink: 0,
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                border: '1px solid #D1D1D6',
+                background: 'transparent',
+                color: '#1D1D1F',
+                fontSize: 14,
+                lineHeight: 1,
+                cursor: 'pointer',
+              }}
+            >
+              ✕
             </button>
           ) : null}
           {stroSelectingObject ? (
