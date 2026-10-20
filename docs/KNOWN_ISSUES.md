@@ -2112,3 +2112,30 @@ iPhone"). The panel never starts its own analysis:
 
 The analysis code (`analyzeRange` wiring, `runAiTrackRange`, the frozen-track
 guard, the vdebug "analysis" lines) is kept, behind the constant, for V2.
+
+## 062 — Status messages stayed over the video for good (PC and iPhone) — FIXED (status toast lifetimes)
+
+**What.** The top status toast (`processingStatus` in `app/analysis/page.tsx`,
+about 90 `setProcessingStatus` sites) only ever cleared "Skeleton ready…".
+"AI Track ready…", "Loading precision tracking model…", "AI Track found no
+skeleton…", "Skeleton analysis cancelled" and the rest stayed until another
+message replaced them, taking space over the video.
+
+**Fix (`lib/statusToast.ts`, one effect, no change to what the messages say).**
+- info / success (ready, cancelled, cleared, plain guidance): gone after 4 s;
+- errors (failed, could not, found no skeleton, stopped…): a ✕ close button,
+  and gone after 10 s;
+- progress ("…", "42%"): stays while an AI Track or a recording task runs;
+  with none running it goes after 8 s;
+- a 0.4 s fade before removal.
+The kind is read from the message text (`statusKind`), so a new message needs
+no change; a message that matches neither the finished nor the progress
+patterns is treated as an error (close button, 10 s), so it cannot vanish
+unread.
+
+**Not changed (own lifetime, task-bound with their own Cancel/OK):** StroMotion
+processing and region-select toast, the angle-differential prompt, the
+recording pill and "Processing your video" banner, the embed-capture error
+(`captureError`, with Retry), the foot-line "OK" notice, the on-video
+"Preparing the skeleton…" hint (disappears when the model is ready), and the
+export panel's own messages.
