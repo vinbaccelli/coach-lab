@@ -831,3 +831,22 @@ before.
 ones that can break the primary path (here: loading) from the ones that cannot.
 On a platform you cannot run, never change the inputs of the thing that already
 works; add only steps that act after it succeeded, and make each fail closed.
+
+## 019 — A coordinate helper's units, assumed from its name
+
+**Symptom.** PR #97 snapshot drawings in export holds were in the right place in
+every Chromium test and nowhere on an iPhone-sized 2× screen (KNOWN_ISSUES 060).
+
+**Verified root cause.** `getVideoBounds()` reads like "the video box" but
+returns backing-store px with the zoom applied, for frame capture. My tests ran
+at devicePixelRatio 1 with no zoom, where it equals the logical box, AND built
+their test strokes with the same function, so a wrong box could not show.
+
+**Fix.** Use the box the strokes are actually stored in; test strokes are built
+from that box too, at dpr 2 (phone) as well as 1.
+
+**Class of mistake.** Taking a function's units from its name, then testing it
+with fixtures derived from the same function at the one setting (dpr 1, no
+zoom) where the bug cancels out. Read the return statement; test at the device
+settings the users have.
+

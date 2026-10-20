@@ -52,7 +52,9 @@ export interface Snapshot {
   /** Derived joint angles keyed by joint label. */
   jointAngles?: Record<string, number>;
   /**
-   * The on-screen video box (logical canvas px, Canvas getVideoBounds) when
+   * The on-screen video box (logical canvas px, without the canvas zoom — the
+   * box drawExportOverlay captures; NOT getVideoBounds, which is backing-store
+   * px with the zoom applied) when
    * `drawingsJson` was stored. The canvas re-fits its strokes on every resize,
    * but stored strokes stay in canvas px of that moment, so the Metrics export
    * maps them from THIS box onto the frame. Without it (snapshots made before

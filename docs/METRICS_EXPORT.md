@@ -55,11 +55,17 @@ range as a hold (see *Snapshots (holds)*).
 Two switches in the panel's **Include** section; the quality panel names what
 the file will contain ("Includes: video + skeleton + drawings").
 
-- **Drawings** (lines, shapes, text, angle measurements) are the LIVE-mode
-  drawings on the analysis canvas. In SNAPSHOT mode the canvas drawings belong
-  to the snapshot: the switch is off with "The drawings on screen belong to a
-  snapshot. Turn on Snapshots to show them in its hold." With none: "No
-  drawings on the video".
+- **Drawings** (lines, shapes, text, angle measurements) are the drawings on
+  screen now, drawn on EVERY frame outside snapshot holds: the live drawings, or
+  in SNAPSHOT mode the selected snapshot's (the canvas holds exactly those). The
+  line says which: "3 drawings on the video, shown on every frame" / "This
+  snapshot's 1 drawing, shown on every frame except snapshot holds". On by
+  default in LIVE mode, off in SNAPSHOT mode (its hold already shows them).
+  Disabled only when there is nothing to draw, with the reason ("No drawings on
+  the video / on this snapshot. Draw on … to include them."). Each Include row
+  is one ≥ 44 px touch target (the text toggles too, not only the switch).
+  Keys typed in the panel never reach the page's shortcuts (they used to
+  frame-step the video behind it and leave SNAPSHOT mode, KNOWN_ISSUES 056).
 - **Skeleton** is the AI Track pose for each frame's own time (the stored
   track; nothing is detected while rendering). The switch is never dead and
   does not depend on the on-screen Skeleton switch:
@@ -70,6 +76,10 @@ the file will contain ("Includes: video + skeleton + drawings").
   - an AI Track already running from the toolbar → "AI Track is running. Wait
     for it to finish, then export." (the only state that disables it).
   It is on by default when part of the range is tracked, off otherwise.
+- **Not on a zoomed page.** While the page is pinch-zoomed (visualViewport.scale
+  > 1.02) "Analyze skeleton + export" is disabled with "The page is zoomed in
+  (N%). Pinch out to 100% first…": a zoomed page can hide the video the
+  analysis seeks, and iOS then analyzes a stale frame (frozen skeleton).
 - **Analysis before export.** The untracked parts of the range
   (`lib/exportOverlay.ts untrackedIntervals`) are tracked with the existing AI
   Track pass, unchanged: `runPrecisionPass(start, end, 'fast')` (wired in
@@ -142,7 +152,10 @@ length showing THAT snapshot's strokes and frozen pose, then continues.
   saved, while the canvas re-fits its own strokes on every resize (KNOWN_ISSUES
   010). Each snapshot therefore stores `drawingsBox`, the video box when its
   drawings were saved (`saveActiveSnapshot`, `createSnapshotFromLive`), and the
-  export maps its strokes from that box. The active snapshot uses today's box
+  export maps its strokes from that box. The box is the LOGICAL, unzoomed one
+  the canvas and the export use (`strokesBoxOf` in the page, read through
+  `drawExportOverlay`'s capture), never `getVideoBounds()`, which is
+  backing-store px with the zoom applied (2× on an iPhone, KNOWN_ISSUES 060). The active snapshot uses today's box
   (its strokes are on the canvas). Snapshots saved before this change have no
   box and use today's box, as the screen does.
 - **Audio.** Silent during a hold, in sync after it (see *How*). Safari already
@@ -170,6 +183,12 @@ two 2 s holds). With holds, the source track goes through Web Audio
 in real time: silence during a hold, in sync after. If Web Audio cannot start
 (no user activation, within 0.5 s) the source track is used as before. Without
 holds nothing changes (the Recording Hub never passes any).
+
+**Diagnostics (?vdebug=1).** The export writes to the vdebug log: render
+start, each hold's seek (seeked / fallback), the `play()` result after each
+hold, the media time once a second (a video whose time stops shows here), and
+once a second which pose the frame draws ("AI Track" by media time / "HOLD
+(snapshot pose)" / none) with the left wrist's position.
 
 The panel passes `drawExportOverlay(…, { hold: { strokes, box, skeleton } })`
 for hold frames: Canvas draws only those strokes (mapped from `box`) and the

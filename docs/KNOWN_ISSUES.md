@@ -1889,7 +1889,7 @@ simulations as in round 2: S1 / S4 / tap still give the frame; muted restored,
 pose worker not started (0 messages), video B not started. Upload, re-upload,
 play/pause/seek/frame-step and the skeleton behave as on main.
 
-## 056 — Arrow keys on the export trim bar also frame-step the analysis video — OPEN (pre-existing, PR #92)
+## 056 — Arrow keys on the export trim bar also frame-step the analysis video — FIXED (PR #97 round 2)
 
 **Found:** 2026-10-19, testing snapshot holds (Chromium, production build).
 
@@ -1914,6 +1914,11 @@ Needs approval (outside this task).
 
 **Severity:** low (keyboard only; desktop).
 
+**Fixed (PR #97 round 2).** The export dialog stops every key except Escape from
+propagating (`onKeyDown` on the dialog root), so neither the trim arrows nor
+Space on a focused button reach the page's window shortcuts. Measured: 10 arrow
+presses on the trim start, main video stayed at 2.500 s, SNAPSHOT mode kept.
+
 ## 057 — Snapshot holds: the exact seek of the hidden export video is not verified on iOS — OPEN (risk)
 
 **What.** A hold pauses the detached, hidden export `<video>` and seeks it to the
@@ -1932,3 +1937,84 @@ snapshot's).
 be the snapshot's frame, with its drawings and pose.
 
 **Severity:** medium until checked on an iPhone.
+
+## 058 — iPhone: "the app zoomed in and became unusable" — FIX IN PR #97 round 2, to confirm on the device
+
+**Found:** 2026-10-20, Vin, PR #97 preview, Chrome for iOS, after drawing on a snapshot.
+
+**Causes found in code (which one Vin hit is unknown until the ?vdebug=1 box is read):**
+1. *Browser pinch on the video.* Only the precision tool blocked WebKit's page
+   pinch on the canvas (`gesture*` / two-finger `touchmove`, components/Canvas.tsx
+   precision effect); with any other tool a two-finger touch on the video zoomed
+   the canvas AND could zoom the whole page. The viewport had no maximum-scale.
+2. *Text tool focus zoom.* The label textareas used the label's own font size
+   (often < 16 px at phone scale); iOS zooms the page on focusing such a field
+   and does not zoom back.
+3. *Canvas zoom jump.* The canvas pinch multiplies by finger distance ratio; two
+   fingers landing 10 px apart (a drawing finger plus an accidental touch)
+   reached the 500% cap with a small spread (measured 10→110 px: 500%).
+4. *No reachable way back.* At 375 px with the iOS "Add to Home Screen" banner
+   showing, the bottom-right − and ⌂ were under the banner (measured: tap on ⌂
+   did nothing).
+
+**Fixed.** (1) every tool: two-finger `touchmove` on the canvas and `gesture*`
+started on the canvas are prevented (non-passive), /analysis gets
+`maximum-scale=1, user-scalable=no` (other pages unchanged) and
+`touch-action: manipulation` (no double-tap zoom); (2) the textareas render with
+a ≥ 16 px font scaled down to the same size; (3) pinch distances below 60 px count
+as 60 px (10→110 px now gives 183%; normal pinches unchanged); (4) while the
+canvas is zoomed a "⌂ Reset zoom" pill shows top-left under the top bar (one
+tap, measured on top and working at 375 px). The ?vdebug=1 box now shows the page
+zoom (visualViewport.scale, innerWidth / vv.width), the canvas zoom %, touch /
+gesture counts and the last pointerdown target.
+
+**Not verifiable here:** a real WebKit page pinch (Chromium's emulated pinch did
+not zoom the page on either build). **Severity:** high on iPhone.
+
+## 059 — Metrics export: the Drawings switch was dead in SNAPSHOT mode — FIXED (PR #97 round 2)
+
+**Symptom (Vin, iPhone).** With a snapshot selected and drawn on, only Skeleton
+could be switched on; Drawings did nothing.
+
+**Root cause.** By design in round 1: in SNAPSHOT mode the switch was disabled
+("The drawings on screen belong to a snapshot…"), and its 28 px switch was the
+only touch target.
+
+**Fix.** Rule: Drawings = the drawings on screen (live, or the selected
+snapshot's), on every frame outside holds; Snapshots = each snapshot's own
+drawings + pose in its hold. Usable whenever there are drawings; disabled only
+with none, saying so; the line states what is exported. Default on in LIVE, off
+in SNAPSHOT. The whole row (≥ 44 px) toggles. Measured at 375 px: SNAPSHOT +
+Drawings on → the snapshot's line in 100% of frames outside and inside the hold.
+
+## 060 — Snapshot drawings in export holds misplaced on iPhone (drawingsBox from getVideoBounds) — FIXED (PR #97 round 2)
+
+**Found while testing 059** at 375 px, device pixel ratio 2.
+
+**Root cause.** PR #97 stored `drawingsBox` from Canvas `getVideoBounds()`, which
+is BACKING-STORE px (× devicePixelRatio) with the canvas zoom/pan applied — it
+exists for `captureFrame`'s crop. Strokes live in logical, unzoomed px
+(videoBoundsRef). On a 1× desktop with no zoom the two agree, which is all round
+1 measured. On an iPhone (2×/3×) the box was 2–3× too big: measured at 375 px,
+dpr 2: getVideoBounds (0, 634.8, 630×354.4) vs the picture (0, 317.4, 315×177.2).
+
+**Fix.** The page takes the box from `drawExportOverlay`'s capture (the box the
+canvas and the export use; `strokesBoxOf`). Measured at 375 px, dpr 2, snapshot
+line drawn at video px 300–500 / y 300: old build — not in the hold frame at all;
+new — x 292–507, y 292–307.
+
+**Class of mistake:** see LESSONS_LEARNED 019. **Severity:** high (every iPhone).
+
+## 061 — Frozen skeleton in the export (Vin, iPhone, snapshot selected) — NOT REPRODUCED; guarded + diagnosable
+
+See the PR #97 round 2 report for measurements. Code read: outside holds the
+skeleton is always the baked track by media time (`lookupBakedPose`, mode-free);
+only the AI Track pass writes tracks and it detects from video frames. Chromium,
+snapshot selected: the exported skeleton follows the stored track (with and
+without a prior AI Track). Most likely iPhone path: the page zoom of 058 hid or
+covered the analysis video while it was analyzed (the 052 mechanism: iOS hands
+the detector a stale frame). Now: the analysis is not started on a zoomed page
+(message), 058 prevents the zoom, and ?vdebug=1 logs, during the export, each
+hold's seek and `play()` result, the media time once a second, and which pose
+each second draws.
+

@@ -365,17 +365,50 @@ export function dockAnalysisBar(
   return { ...edge, side: 'edge', overlap: Math.round(ox * oy) };
 }
 
-export type DrawingsExportState = 'ready' | 'none' | 'snapshot';
+export type DrawingsExportState = 'ready' | 'none';
 
 /**
- * The drawings toggle's state and status line. In SNAPSHOT mode the drawings on
- * the canvas are the snapshot's: they go into the video with that snapshot's
- * hold (Snapshots switch), never as running drawings.
+ * The drawings switch's state and status line. "Drawings" are the drawings on
+ * screen now — the live ones, or in SNAPSHOT mode the selected snapshot's (the
+ * canvas holds exactly those) — drawn on EVERY frame outside snapshot holds.
+ * A hold shows only its own snapshot's drawings (Snapshots switch). Never a dead
+ * switch: it is off only when there is nothing to draw, and says so.
  */
-export function drawingsExportStatus(snapshotMode: boolean, drawingCount: number): { state: DrawingsExportState; text: string } {
-  if (snapshotMode) return { state: 'snapshot', text: 'The drawings on screen belong to a snapshot. Turn on Snapshots to show them in its hold.' };
-  if (drawingCount <= 0) return { state: 'none', text: 'No drawings on the video' };
-  return { state: 'ready', text: `${drawingCount} drawing${drawingCount === 1 ? '' : 's'} on the video.` };
+export function drawingsExportStatus(snapshotMode: boolean, drawingCount: number, holdsOn = false): { state: DrawingsExportState; text: string } {
+  if (drawingCount <= 0) {
+    return {
+      state: 'none',
+      text: snapshotMode
+        ? 'No drawings on this snapshot. Draw on it to include them.'
+        : 'No drawings on the video. Draw on the video to include them.',
+    };
+  }
+  const n = `${drawingCount} drawing${drawingCount === 1 ? '' : 's'}`;
+  const where = holdsOn ? 'on every frame except snapshot holds' : 'on every frame';
+  return {
+    state: 'ready',
+    text: snapshotMode ? `This snapshot's ${n}, shown ${where}.` : `${n} on the video, shown ${where}.`,
+  };
+}
+
+/** Drawings switch default: on in LIVE mode; off in SNAPSHOT mode (its drawings already show in its hold). */
+export function drawingsDefaultOn(snapshotMode: boolean): boolean {
+  return !snapshotMode;
+}
+
+/** The page is pinch-zoomed (visualViewport.scale), beyond rounding. */
+export function pageZoomed(scale: number | null | undefined): boolean {
+  return typeof scale === 'number' && Number.isFinite(scale) && scale > 1.02;
+}
+
+/**
+ * Why the export's skeleton analysis must not start now, or null. A zoomed page
+ * can leave the analysis video covered or off screen, and iOS then hands the
+ * detector the same stale frame: a frozen skeleton (KNOWN_ISSUES 052).
+ */
+export function analysisBlockedReason(pageScale: number | null | undefined): string | null {
+  if (!pageZoomed(pageScale)) return null;
+  return `The page is zoomed in (${Math.round((pageScale as number) * 100)}%). Pinch out to 100% first: a zoomed page can hide the video while its skeleton is analyzed, which freezes the skeleton.`;
 }
 
 /** "Includes: video + skeleton + drawings" for the quality panel. */

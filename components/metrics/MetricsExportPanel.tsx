@@ -4,11 +4,12 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import TrimRangeBar, { formatClock } from '@/components/TrimRangeBar';
 import { exportEditedVideo } from '@/lib/cropExport';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
+import { firstFrameLog } from '@/lib/firstFrame';
 import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, type ExportQuality,
 } from '@/lib/exportEstimate';
 import {
-  analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, clampHoldSec, dockAnalysisBar, drawingsExportStatus,
+  analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, clampHoldSec, dockAnalysisBar, drawingsDefaultOn, drawingsExportStatus, analysisBlockedReason,
   FOLLOW_STEP_SEC, formatHoldSec, HOLD_DEFAULT_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC, HOLD_STEP_SEC, holdSchedule, includesLabelWithHolds, meanAbsDiff,
   parsePassProgress, poseRegion, poseShift, skeletonExportStatus, skeletonFollowsVideo, snapshotsExportStatus, snapshotsSwitchText,
   toGrey, trackedFraction, untrackedIntervals, type FollowStep, type Rect, type VideoBox,
@@ -256,16 +257,32 @@ export default function MetricsExportPanel({
   // the frame it is on: from Cancel until analyzeRange settles (KNOWN_ISSUES 054).
   const [stopping, setStopping] = useState(false);
   const skStatus = skeletonExportStatus(Boolean(overlay?.trackRunning) && phase !== 'analyzing', trackedFrac, analysisFailed, stopping);
-  const drStatus = drawingsExportStatus(Boolean(overlay?.snapshotMode), drawingCount);
+  const snapshotMode = Boolean(overlay?.snapshotMode);
+  const drStatus = drawingsExportStatus(snapshotMode, drawingCount, includeSnapshots);
   const skAvailable = skStatus.state !== 'busy' && skStatus.state !== 'failed' && skStatus.state !== 'stopping';
   const drAvailable = drStatus.state === 'ready';
   // Unset until the coach flips it: on by default when some of the range is tracked.
   const [skeletonChoice, setSkeletonChoice] = useState<boolean | null>(null);
   const skeletonWanted = skeletonChoice ?? trackedFrac > 0;
   const setSkeletonWanted = (v: boolean) => setSkeletonChoice(v);
-  const [drawingsWanted, setDrawingsWanted] = useState(true);
+  // Unset until the coach flips it: on in LIVE mode, off in SNAPSHOT mode (drawingsDefaultOn).
+  const [drawingsChoice, setDrawingsChoice] = useState<boolean | null>(null);
+  const drawingsWanted = drawingsChoice ?? drawingsDefaultOn(snapshotMode);
+  const setDrawingsWanted = (v: boolean) => setDrawingsChoice(v);
   const includeSkeleton = Boolean(overlay) && skAvailable && skeletonWanted;
   const needsAnalysis = includeSkeleton && skStatus.state === 'analyze';
+
+  // Page pinch-zoom (iOS): the skeleton analysis is not started on a zoomed page.
+  const [pageScale, setPageScale] = useState<number | null>(null);
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    if (!vv) return;
+    const read = () => setPageScale(vv.scale);
+    read();
+    vv.addEventListener('resize', read);
+    return () => vv.removeEventListener('resize', read);
+  }, []);
+  const analysisBlock = needsAnalysis ? analysisBlockedReason(pageScale) : null;
 
   // Analysis progress (0..1 over all untracked parts) and a remaining-time
   // estimate MEASURED from this run's own progress (shown once it is reliable).
@@ -341,7 +358,7 @@ export default function MetricsExportPanel({
 
   // ── Export ───────────────────────────────────────────────────────────────
   const startExport = useCallback(async () => {
-    if (!videoSrc || !meta || !selected || selected.disabled || busy || stopping) return;
+    if (!videoSrc || !meta || !selected || selected.disabled || busy || stopping || analysisBlock) return;
     clearResult();
     setError(null);
     setNotice(null);
@@ -495,10 +512,18 @@ export default function MetricsExportPanel({
           }
           follow.last = { kps, region, grey: grab(ctx, region) };
         };
+        let poseDiagAt = 0;
         drawOverlays = (ctx, t, w, h, hold) => {
           // A hold shows only its snapshot's strokes and pose (no live drawings,
           // no AI Track skeleton) and is not part of the render check.
           const sn = hold != null ? holdSnaps[hold] : undefined;
+          // ?vdebug=1: once a second, which pose this frame draws (baked track by media time, or the hold's).
+          if (performance.now() - poseDiagAt > 1000) {
+            poseDiagAt = performance.now();
+            const kps = sn ? sn.skeleton : includeSkeleton ? overlay.getBakedPoseAt(t) : null;
+            const lw = kps?.[9];
+            firstFrameLog('export', `pose @${t.toFixed(2)}: ${sn ? 'HOLD (snapshot pose)' : includeSkeleton ? (kps ? 'AI Track' : 'none at this time') : 'skeleton off'}${lw ? ` lwrist=${Math.round(lw.x)},${Math.round(lw.y)}` : ''}`);
+          }
           if (sn) {
             overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen, hold: { strokes: sn.strokes, box: sn.box, skeleton: sn.skeleton } });
             return;
@@ -523,6 +548,7 @@ export default function MetricsExportPanel({
         drawOverlay,
         // Omitted when there are none: the render is then exactly the no-hold one.
         holds: holds.length ? holds : undefined,
+        onDiag: (m) => firstFrameLog('export', m),
         onProgress: (msg) => {
           if (ac.signal.aborted) return;
           lastProgressAtRef.current = performance.now();
@@ -573,7 +599,7 @@ export default function MetricsExportPanel({
       restorePreview();
       if (restoreRef.current === restorePreview) restoreRef.current = null;
     }
-  }, [videoSrc, meta, selected, busy, stopping, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton,
+  }, [videoSrc, meta, selected, busy, stopping, analysisBlock, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton,
     includeSnapshots, getSnapshotsForExport, holdSec]);
 
   const cancelExport = useCallback(() => {
@@ -714,6 +740,11 @@ export default function MetricsExportPanel({
       aria-modal="true"
       aria-label="Export video"
       aria-hidden={collapsed || undefined}
+      // Keys typed in the panel (trim arrows, Space on a button) must not reach the
+      // page's window shortcuts: they frame-stepped / played the analysis video
+      // behind the modal, which also left SNAPSHOT mode and cleared the drawings
+      // the panel had just counted (KNOWN_ISSUES 056). Escape still closes.
+      onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
       onPointerDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}
       style={{
         position: 'fixed', inset: 0, zIndex: 10050, background: 'rgba(0,0,0,0.85)',
@@ -793,15 +824,18 @@ export default function MetricsExportPanel({
                   },
                 ] as const).map((row) => {
                   const off = !row.avail || busy;
+                  const toggle = () => { if (!off) { row.set(!row.on); clearResult(); } };
                   return (
-                    <div key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 44 }}>
+                    // The whole row is the touch target (≥ 44 px tall), not only the 28 px switch.
+                    <div key={row.key} data-testid={`export-${row.key}-row`} onClick={toggle}
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 44, cursor: off ? 'default' : 'pointer' }}>
                       <button
                         type="button"
                         role="switch"
                         aria-checked={row.on}
                         aria-label={row.label}
                         disabled={off}
-                        onClick={() => { row.set(!row.on); clearResult(); }}
+                        onClick={(e) => { e.stopPropagation(); toggle(); }}
                         style={{
                           flex: '0 0 auto', width: 48, height: 28, borderRadius: 14, padding: 2, border: 'none',
                           background: row.on ? 'var(--cl-accent)' : 'rgba(255,255,255,0.22)',
@@ -919,12 +953,13 @@ export default function MetricsExportPanel({
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <button
                   type="button"
-                  style={btn(true, !selected || selected.disabled || stopping)}
-                  disabled={!selected || selected.disabled || stopping}
+                  style={btn(true, !selected || selected.disabled || stopping || Boolean(analysisBlock))}
+                  disabled={!selected || selected.disabled || stopping || Boolean(analysisBlock)}
                   onClick={() => { void startExport(); }}
                 >
                   {needsAnalysis ? 'Analyze skeleton + export' : 'Export'}
                 </button>
+                {analysisBlock ? <span data-testid="export-zoom-block" style={{ fontSize: 13, color: 'var(--cl-destructive-text)' }}>{analysisBlock}</span> : null}
                 {needsAnalysis ? (
                   <span data-testid="export-analysis-note" style={muted}>
                     Skeleton will be analyzed first, this adds time. Then the {formatClock(spanSec)} range{holdTotalSec > 0 ? ` (+ ${formatClock(holdTotalSec)} of holds)` : ''} is exported in real time.

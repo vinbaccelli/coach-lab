@@ -4,7 +4,7 @@ import {
   ANALYSIS_FAILED_TEXT, analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, drawingsExportStatus,
   dockAnalysisBar, meanAbsDiff, poseRegion, poseShift, skeletonFollowsVideo, toGrey, includesLabel, mapPoint, overlayTransform, parsePassProgress, skeletonExportStatus,
   trackedFraction, untrackedIntervals,
-  clampHoldSec, formatHoldSec, holdSchedule, includesLabelWithHolds, outputProgress, snapshotsExportStatus, snapshotsSwitchText,
+  clampHoldSec, formatHoldSec, holdSchedule, drawingsDefaultOn, analysisBlockedReason, pageZoomed, includesLabelWithHolds, outputProgress, snapshotsExportStatus, snapshotsSwitchText,
   HOLD_DEFAULT_SEC, HOLD_FRAME_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC,
 } from '@/lib/exportOverlay';
 
@@ -128,15 +128,31 @@ test('analysisProgress spans several intervals by their length', () => {
   assert.equal(analysisProgress([], 0, 0.5), 0);
 });
 
-test('drawings status lines', () => {
-  // SNAPSHOT mode: the canvas drawings are the snapshot's; they go out with its hold, never as running drawings.
+test('drawings switch: never dead — usable whenever there are drawings, LIVE or SNAPSHOT; says what is exported', () => {
+  // SNAPSHOT mode with strokes: usable (it was a disabled 'snapshot' state before — the dead switch).
   const snap = drawingsExportStatus(true, 4);
-  assert.equal(snap.state, 'snapshot');
-  assert.doesNotMatch(snap.text, /aren’t exported/);
-  assert.match(snap.text, /Turn on Snapshots/);
-  assert.deepEqual(drawingsExportStatus(false, 0), { state: 'none', text: 'No drawings on the video' });
-  assert.equal(drawingsExportStatus(false, 1).text, '1 drawing on the video.');
-  assert.equal(drawingsExportStatus(false, 3).text, '3 drawings on the video.');
+  assert.equal(snap.state, 'ready');
+  assert.equal(snap.text, "This snapshot's 4 drawings, shown on every frame.");
+  assert.equal(drawingsExportStatus(true, 1, true).text, "This snapshot's 1 drawing, shown on every frame except snapshot holds.");
+  // LIVE mode.
+  assert.equal(drawingsExportStatus(false, 1).text, '1 drawing on the video, shown on every frame.');
+  assert.equal(drawingsExportStatus(false, 3, true).text, '3 drawings on the video, shown on every frame except snapshot holds.');
+  // Disabled only with nothing to draw, and it says why.
+  assert.deepEqual(drawingsExportStatus(false, 0), { state: 'none', text: 'No drawings on the video. Draw on the video to include them.' });
+  assert.deepEqual(drawingsExportStatus(true, 0), { state: 'none', text: 'No drawings on this snapshot. Draw on it to include them.' });
+  // Default: on in LIVE, off in SNAPSHOT (that snapshot's hold already shows them).
+  assert.equal(drawingsDefaultOn(false), true);
+  assert.equal(drawingsDefaultOn(true), false);
+});
+
+test('skeleton analysis is not started on a zoomed page', () => {
+  assert.equal(analysisBlockedReason(1), null);
+  assert.equal(analysisBlockedReason(1.01), null);
+  assert.equal(analysisBlockedReason(null), null);
+  assert.equal(analysisBlockedReason(undefined), null);
+  assert.match(analysisBlockedReason(1.5)!, /^The page is zoomed in \(150%\)\. Pinch out to 100% first/);
+  assert.equal(pageZoomed(2), true);
+  assert.equal(pageZoomed(Number.NaN), false);
 });
 
 test('includes label', () => {

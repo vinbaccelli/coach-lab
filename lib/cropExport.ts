@@ -72,6 +72,8 @@ export interface EditExportOptions {
    * render is exactly as before (the Recording Hub never passes any).
    */
   holds?: ReadonlyArray<{ at: number; seconds: number }>;
+  /** Diagnostic lines (render start, each hold's seek / end / play() result, media time once a second). */
+  onDiag?: (msg: string) => void;
 }
 
 export type EditExportResult =
@@ -117,7 +119,7 @@ export async function exportEditedVideo(
   srcBlob: Blob,
   {
     region = null, trim = null, onProgress,
-    maxHeight = null, videoBitsPerSecond, signal, pauseWhenHidden = false, onRenderProgress, drawOverlay, holds,
+    maxHeight = null, videoBitsPerSecond, signal, pauseWhenHidden = false, onRenderProgress, drawOverlay, holds, onDiag,
   }: EditExportOptions = {},
 ): Promise<EditExportResult> {
   if (typeof MediaRecorder === 'undefined') {
@@ -279,10 +281,14 @@ export async function exportEditedVideo(
       try { video.pause(); } catch { /* noop */ }
       const st = { k, startedAt: Date.now(), pausedMs0: pausedMs, ready: false, timer: null as ReturnType<typeof setTimeout> | null };
       hold = st;
+      onDiag?.(`hold ${k + 1} start at t=${video.currentTime.toFixed(3)} → seek ${h.at.toFixed(3)}`);
       // Until the exact frame is decoded nothing is drawn: the canvas keeps the last good frame.
-      const onSeeked = () => { st.ready = true; if (st.timer) clearTimeout(st.timer); };
+      const onSeeked = () => { st.ready = true; if (st.timer) clearTimeout(st.timer); onDiag?.(`hold ${k + 1} seeked t=${video.currentTime.toFixed(3)} rs=${video.readyState}`); };
       video.addEventListener('seeked', onSeeked, { once: true });
-      st.timer = setTimeout(() => { video.removeEventListener('seeked', onSeeked); st.ready = true; }, HOLD_SEEK_TIMEOUT_MS);
+      st.timer = setTimeout(() => {
+        video.removeEventListener('seeked', onSeeked); st.ready = true;
+        onDiag?.(`hold ${k + 1} seek fallback (no 'seeked' in ${HOLD_SEEK_TIMEOUT_MS} ms) t=${video.currentTime.toFixed(3)} rs=${video.readyState}`);
+      }, HOLD_SEEK_TIMEOUT_MS);
       try { video.currentTime = h.at; } catch { onSeeked(); }
     };
     const reportProgress = () => {
@@ -299,7 +305,19 @@ export async function exportEditedVideo(
         }
       }
     };
+    // Media time once a second (a video whose time stops advancing shows here).
+    let diagAt = 0;
+    let diagT = -1;
+    const diagTick = () => {
+      if (!onDiag) return;
+      const now = performance.now();
+      if (now - diagAt < 1000) return;
+      const t = video.currentTime;
+      onDiag(`media t=${t.toFixed(3)}${diagT >= 0 ? ` (+${(t - diagT).toFixed(2)} s)` : ''} ${hold ? 'HOLD' : video.paused ? 'PAUSED' : 'playing'} rs=${video.readyState}`);
+      diagAt = now; diagT = t;
+    };
     const draw = () => {
+      diagTick();
       if (hold) {
         // Holding: the paused frame is drawn again on every paint so the
         // canvas stream keeps feeding the recorder; then playback continues.
@@ -311,7 +329,11 @@ export async function exportEditedVideo(
           holdDoneMs += h.ms;
           hold = null;
           nextHold++;
-          void video.play().catch(() => {});
+          const k = nextHold;
+          video.play().then(
+            () => onDiag?.(`hold ${k} end → play() ok, t=${video.currentTime.toFixed(3)}`),
+            (e) => onDiag?.(`hold ${k} end → play() REJECTED: ${e instanceof Error ? `${e.name} ${e.message}` : String(e)}`.slice(0, 140)),
+          );
         }
         raf = requestAnimationFrame(draw);
         return;
@@ -334,6 +356,7 @@ export async function exportEditedVideo(
     };
 
     onProgress?.(trim ? 'Rendering edit…' : 'Rendering crop…');
+    onDiag?.(`render start: in=${inPoint.toFixed(3)} out=${Number.isFinite(outPoint) ? outPoint.toFixed(3) : 'end'} holds=${holdList.length} ${ow}x${oh}`);
     const startedAt = Date.now();
     recorder.start(250);
     draw();

@@ -366,6 +366,18 @@ type AnalysisMode =
   | { kind: 'live' }
   | { kind: 'snapshot'; snapshotId: string };
 
+/**
+ * The video box strokes are stored against: logical canvas px, without the
+ * canvas zoom/pan (Canvas videoBoundsRef, read through drawExportOverlay's
+ * capture — read-only). NOT getVideoBounds(): that is backing-store px (× the
+ * device pixel ratio) with the zoom applied, for frame capture — 2× too big on
+ * an iPhone, which put snapshot drawings in the wrong place in export holds.
+ */
+function strokesBoxOf(c: CanvasHandle | null | undefined): { dx: number; dy: number; dw: number; dh: number } | undefined {
+  const b = c?.drawExportOverlay?.(null, 0, 1, 1, { skeleton: false, drawings: false })?.box;
+  return b && b.dw > 0 && b.dh > 0 ? { dx: b.dx, dy: b.dy, dw: b.dw, dh: b.dh } : undefined;
+}
+
 function Home() {
   // Tours switch (lib/toursSwitch.ts): the ? in the zoom cluster follows it.
   const toursEnabled = useToursEnabled();
@@ -1149,7 +1161,7 @@ function Home() {
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
     const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
-    const box = canvasRef.current?.getVideoBounds?.() ?? undefined;
+    const box = strokesBoxOf(canvasRef.current);
     const col = measurementColumnRef.current;
     setSnapshots(prev => prev.map(s => s.id === id ? {
       ...s,
@@ -1236,7 +1248,7 @@ function Home() {
     snap.drawingsJson = drawingsJson;
     snap.overlayAdjustments = overlayAdjustments;
     if (skeleton) snap.skeleton = skeleton;
-    const box = canvasRef.current?.getVideoBounds?.();
+    const box = strokesBoxOf(canvasRef.current);
     if (box) snap.drawingsBox = box;
     snap.column = liveColumn;
     snap.overlaysOn = showMeasurementOverlays;
@@ -9750,7 +9762,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         </React.Suspense>
       )}
 
-      {vdebug ? <VideoDebugBox videoRef={videoRef} /> : null}
+      {vdebug ? <VideoDebugBox videoRef={videoRef} getAppZoom={() => canvasRef.current?.getZoom?.() ?? null} /> : null}
 
       {/* Mounted only while open: closing it frees its preview and export URLs. */}
       {metricsExportOpen && (
@@ -9783,7 +9795,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 } catch { /* unreadable drawings: hold the frame without them */ }
                 const skeleton = (active ? canvasRef.current?.getSkeletonKeypoints?.() : null) ?? s.skeleton ?? null;
                 // On-canvas strokes follow resizes, so the active one is in today's box.
-                const box = (active ? canvasRef.current?.getVideoBounds?.() : null) ?? s.drawingsBox ?? null;
+                const box = (active ? strokesBoxOf(canvasRef.current) : null) ?? s.drawingsBox ?? null;
                 return { id: s.id, timeSec: s.timeSec, strokes, box, skeleton };
               });
           }}
