@@ -523,3 +523,68 @@ export function includesLabelWithHolds(skeleton: boolean, drawings: boolean, hol
   const base = includesLabel(skeleton, drawings);
   return holds > 0 ? `${base} + ${holds} snapshot hold${holds === 1 ? '' : 's'}` : base;
 }
+
+// ── Skeleton analysis under the toolbar AI Track's conditions ───────────────
+
+/** The analysis video's pose loop (Canvas skeleton on), as the export's analysis drives it. */
+export type AnalysisPoseLoop = {
+  isOn: () => boolean;
+  setOn: (on: boolean) => void;
+  /** Resolves once the loop can read frames (or gives up waiting); rejects to stop. */
+  waitReady: () => Promise<void>;
+};
+
+/**
+ * Runs the export's skeleton analysis with the analysis video's pose loop ON,
+ * the condition the toolbar AI Track always runs under (it refuses to start
+ * with Skeleton off). Turns it on only if it was off and turns it back off
+ * afterwards whatever happens: done, cancelled or failed. KNOWN_ISSUES 061.
+ */
+export async function withAnalysisPoseLoop<T>(loop: AnalysisPoseLoop, run: () => Promise<T>): Promise<T> {
+  const turnedOn = !loop.isOn();
+  if (turnedOn) loop.setOn(true);
+  try {
+    if (turnedOn) await loop.waitReady();
+    return await run();
+  } finally {
+    if (turnedOn) loop.setOn(false);
+  }
+}
+
+// ── Holds on a device whose hidden video does not seek (iOS, KNOWN_ISSUES 057) ──
+
+/** How far from the hold's time the paused video may be and still count as there. */
+export const HOLD_LAND_TOLERANCE_SEC = 0.1;
+/** After a hold, further than this from the hold's time: the video lost its place. */
+export const HOLD_RESUME_TOLERANCE_SEC = 0.25;
+/** After a hold, play() is called again this often until media time moves. */
+export const RESUME_RETRY_MS = 500;
+/** After a hold, media time standing still this long ends the export with an error. */
+export const RESUME_GIVE_UP_MS = 4000;
+/** No frame painted after this much running render time: the export stops (no file). */
+export const NO_FRAME_GIVE_UP_MS = 4000;
+
+/** A hold's seek landed: it reported 'seeked', left a decodable frame, and is at the hold's time. */
+export function holdSeekLanded(seeked: boolean, readyState: number, mediaT: number, at: number): boolean {
+  return seeked && readyState >= 2 && Number.isFinite(mediaT) && Math.abs(mediaT - at) <= HOLD_LAND_TOLERANCE_SEC;
+}
+
+/** After a hold: the time to continue from when the video lost its place, else null (play on). */
+export function holdResumeSeek(mediaT: number, at: number): number | null {
+  return Number.isFinite(mediaT) && Math.abs(mediaT - at) <= HOLD_RESUME_TOLERANCE_SEC ? null : at;
+}
+
+/** After a hold, media time has stood still `stillMs` (running time): wait, call play() again, or give up. */
+export function resumeAction(stillMs: number, sinceLastPlayMs: number): 'wait' | 'retry' | 'fail' {
+  if (stillMs >= RESUME_GIVE_UP_MS) return 'fail';
+  return sinceLastPlayMs >= RESUME_RETRY_MS ? 'retry' : 'wait';
+}
+
+export const RESUME_FAILED_TEXT =
+  'Export stopped: the video did not start playing again after a snapshot hold. Keep this app in front with the screen on and try again, or turn Snapshots off.';
+
+/** Nothing was recorded (no frame painted, or no bytes): the error to show instead of a file. */
+export function emptyExportError(framesPainted: number, bytes: number, holds: number): string | null {
+  if (framesPainted > 0 && bytes > 0) return null;
+  return `Export failed: no video frames were recorded. Keep this app in front with the screen on and try again${holds > 0 ? ', or turn Snapshots off' : ''}.`;
+}

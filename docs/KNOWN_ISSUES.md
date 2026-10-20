@@ -1919,22 +1919,52 @@ propagating (`onKeyDown` on the dialog root), so neither the trim arrows nor
 Space on a focused button reach the page's window shortcuts. Measured: 10 arrow
 presses on the trim start, main video stayed at 2.500 s, SNAPSHOT mode kept.
 
-## 057 — Snapshot holds: the exact seek of the hidden export video is not verified on iOS — OPEN (risk)
+## 057 — Snapshot holds on iPhone: "Export produced an empty file", media t stuck at 0.000, drift — FIX IN PR #97 round 3, to confirm on the device
 
-**What.** A hold pauses the detached, hidden export `<video>` and seeks it to the
-snapshot's time (`lib/cropExport.ts startHold`). Verified in Chromium (both
-holds on the snapshot's own frame, 75 and 165). Not verified on iOS Safari,
-where seeking a detached element may never report 'seeked'.
+**What.** A hold pauses the detached, hidden export `<video>` and seeks it to
+the snapshot's time (`lib/cropExport.ts startHold`). On Vin's iPhone (vdebug
+log), the media time read 0.000 during the hold, the audio drifted −1.21 s,
+and one export ended with "Export produced an empty file".
 
-**Fallback (implemented, labelled in code).** After 300 ms without 'seeked'
-the hold goes on with the frame the paused video shows: the first frame painted
-at or after the snapshot's time, i.e. within one frame of it. While the video
-has no decodable frame, nothing is redrawn and the canvas keeps the last good
-frame (which then still carries the running overlays instead of the
-snapshot's).
+**Root cause (code read + Chromium mock; the iPhone itself not measured).**
+Three gaps in the pre-fix code:
+- the hold was painted only from the paused video (`paint` needs
+  `readyState ≥ 2`), so a video that drops its frame paints nothing for the
+  whole hold;
+- `play()` after the hold was called once and never checked, so a rejected or
+  ignored `play()` left the video paused for the rest of the render, with
+  audio running on (the drift);
+- only a 0-byte file was refused, so a render that painted nothing could
+  "succeed".
 
-**Check on a phone.** Export with two snapshots; in each hold the picture must
-be the snapshot's frame, with its drawings and pose.
+`holds.mjs IOS=seek` makes the hidden video in Chromium ignore seeks while
+paused, read t=0.000 with no decodable frame while paused, and reject the
+first `play()` after each pause. On the pre-fix build the file has 1.55 s of
+video (48 frames, stopping just before hold 1) under 18 s of audio, with no
+holds. `IOS=dead` (never a decodable frame) gave a 124 KB "successful" file
+with 0 painted frames.
+
+**Fix.**
+- The hold paints a copy of the frame taken when it starts, or the last frame
+  drawn. It is replaced by the exact frame only if the seek lands
+  (`holdSeekLanded`), and the seek is never retried.
+- After the hold, a video that lost its place goes back to the hold's time
+  (`holdResumeSeek`). `play()` is retried every 0.5 s until media time moves
+  (`resumeAction`), and after 4 s the export stops with a clear message.
+- The Metrics export refuses a render with no painted frame (after 4 s, or at
+  the end) with "Export failed: no video frames were recorded…"
+  (`emptyExportError`).
+- Progress uses the hold's time while the video's clock is not trusted.
+
+Measured on the fixed build: see the PR #97 round 3 report.
+
+**Check on a phone.** Export with two snapshots and ?vdebug=1:
+- each hold shows the snapshot's frame (or one frame from it) with its
+  drawings and pose;
+- the video continues after each hold;
+- the log shows "seeked" or "holding the last drawn frame", then "playing
+  again";
+- no empty file.
 
 **Severity:** medium until checked on an iPhone.
 
@@ -2005,7 +2035,7 @@ new — x 292–507, y 292–307.
 
 **Class of mistake:** see LESSONS_LEARNED 019. **Severity:** high (every iPhone).
 
-## 061 — Frozen skeleton in the export (Vin, iPhone, snapshot selected) — NOT REPRODUCED; guarded + diagnosable
+## 061 — Frozen skeleton in the export (Vin, iPhone) — ROOT CAUSE FOUND, FIX IN PR #97 round 3, to confirm on the device
 
 See the PR #97 round 2 report for measurements. Code read: outside holds the
 skeleton is always the baked track by media time (`lookupBakedPose`, mode-free);
@@ -2017,4 +2047,59 @@ the detector a stale frame). Now: the analysis is not started on a zoomed page
 (message), 058 prevents the zoom, and ?vdebug=1 logs, during the export, each
 hold's seek and `play()` result, the media time once a second, and which pose
 each second draws.
+
+**Round 3 (Vin, iPhone, plain LIVE mode, Snapshots and Drawings off).** The
+guard stopped the panel's analysis with "129 poses in 4.4 s · motion 0.0% ·
+repeated 100%", while the toolbar AI Track at 0.5× (the same `'fast'` pass) on
+the same video and phone worked. So the snapshot and zoom paths above were not
+the cause.
+
+*Root cause (code read).* Both call the same `runPrecisionPass`
+(`app/analysis/page.tsx`), with the same model, frame rate, seek-and-wait and
+video element. The difference is the condition around it: the toolbar refuses
+to start unless Skeleton is on (`handlePrecisionTrack`, "Enable Skeleton
+first"), and the panel's Include-skeleton switch never required it. With
+Skeleton on, Canvas's pose loop listens to 'seeked' and, during a pass
+(`bakingRef`), sends each seeked frame to the MoveNet bridge at once
+(`components/Canvas.tsx` `onSeeked` → `detectStaticFrame` → `bridge.sendFrame`
+→ `createImageBitmap(video)`, `lib/poseWorkerBridge.ts`). With Skeleton off,
+nothing reads the paused video except MediaPipe's `detect(video)`, a WebGL
+upload. On iOS that upload then keeps returning one picture, consistent with
+052, where a hidden or covered video also froze. The 2D read of the toolbar
+condition is what keeps the frame current.
+
+*Simulated in Chromium* (`stale.mjs`, 4 s clip, CPU ×2): the WebGL upload of a
+video returns the picture of that video's last 2D read (createImageBitmap or a
+2D drawImage). Before the fix:
+- the toolbar: 106 samples, 67 different poses, exported;
+- the panel (Skeleton off): 114 samples, 1 pose, stopped with "114 poses in
+  3.9 s (29.2/s) · motion 0.0% · repeated 100%". This is the same failure at
+  the same rate as on Vin's phone (129 in 4.4 s = 29.3/s).
+
+*Fix.* With Skeleton off, the panel's analysis turns Canvas A's pose loop on
+for the pass and off afterwards: done, cancelled, failed or thrown
+(`lib/exportOverlay.ts withAnalysisPoseLoop`, unit-tested). It waits up to 15 s
+for the loop's model (`isPoseLoopReady`) before the pass, as the toolbar's loop
+is already loaded. Only the loop runs; drawing stays off. The page's Skeleton
+switch is not used, because turning it on also opens the data column, sets the
+metrics section and pins the foot line, which a restore would not undo. Drawing
+would also send joint angles into the data column. The guard stays as it was.
+
+*After the fix* (same mock, clip and throttling):
+- the panel (Skeleton off): 112 samples, 108 different poses, exported, and
+  the pose loop off again afterwards;
+- with every frame stale (`STALE=all`), the guard still stops it ("105 poses
+  in 3.9 s · motion 0.0% · repeated 100%");
+- the toolbar is unchanged (101 samples, 65 poses), and its Skeleton stays on;
+- Cancel during the model wait or 22 samples into the pass leaves the loop off.
+
+Cost, without the mock: the analysis took 311 s instead of 231 s (+34%). That
+is +22 s waiting for the pose model before the first frame, and +27% per frame
+because MoveNet now runs on each frame too. This is the toolbar AI Track's own
+cost, measured in Chromium at CPU ×2.
+
+**Needs the iPhone.** The cause is consistent with every observation but was
+not measured on WebKit (no WebKit here). Confirm with a panel analysis with
+Skeleton off on the clip that failed: the export must finish, and the vdebug
+pose lines must show the wrist moving.
 

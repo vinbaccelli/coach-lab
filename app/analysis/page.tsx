@@ -1501,6 +1501,12 @@ function Home() {
   // frame-exact — strictly more precise than any slow-playback pass, because
   // samples land ON frames instead of at arbitrary wall-clock times.
   const [precisionTrackState, setPrecisionTrackState] = useState<'idle' | 'running' | 'ready'>('idle');
+  /**
+   * The Metrics export's skeleton analysis with Skeleton off: Canvas A's pose
+   * loop runs for the pass (drawing stays off), as it always does under the
+   * toolbar AI Track. KNOWN_ISSUES 061.
+   */
+  const [exportAnalysisPoseLoop, setExportAnalysisPoseLoop] = useState(false);
   const precisionAbortRef = useRef(false);
   /** Locked-player pass: its own final status (ready / stopped), replacing the generic one. */
   const passFinalRef = useRef<string | null>(null);
@@ -7534,7 +7540,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   containerWidth={canvasSize.width}
                   containerHeight={canvasSize.height}
                   ballTrailMode={ballTrailMode}
-                  skeletonEnabled={skeletonEnabled && markupTarget === 'A'}
+                  // The export's analysis runs the pose loop only (no display, no angles): KNOWN_ISSUES 061.
+                  skeletonEnabled={(skeletonEnabled && markupTarget === 'A') || exportAnalysisPoseLoop}
                   skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
@@ -9824,6 +9831,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               }
             },
             cancelAnalysis: () => { precisionAbortRef.current = true; },
+            poseLoop: {
+              isOn: () => skeletonEnabled && markupTarget === 'A',
+              setOn: setExportAnalysisPoseLoop,
+              isReady: () => !!canvasRef.current?.isPoseLoopReady?.(),
+            },
             snapshotMode: analysisMode.kind === 'snapshot',
             getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,
             isRangeBaked: (a, b) => canvasRef.current?.isRangeBaked?.(a, b) ?? false,

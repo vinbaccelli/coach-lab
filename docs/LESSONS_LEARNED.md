@@ -850,3 +850,49 @@ with fixtures derived from the same function at the one setting (dpr 1, no
 zoom) where the bug cancels out. Read the return statement; test at the device
 settings the users have.
 
+
+## 020 — "It calls the same function" is not "it runs under the same conditions"
+
+**Symptom.** The Metrics export's skeleton analysis gave a 100%-repeated pose
+on an iPhone while the toolbar AI Track worked on the same video and phone
+(KNOWN_ISSUES 061). Two earlier rounds compared the panel's and the toolbar's
+tracks in Chromium, found them equal, and looked for the cause in snapshot mode
+and page zoom.
+
+**Verified root cause.** Both call `runPrecisionPass`, but the toolbar refuses
+to run unless Skeleton is on, and Skeleton on adds a second reader of every
+seeked frame (the pose loop's `createImageBitmap`). The panel reused the pass
+without its caller's precondition. In Chromium the precondition changes
+nothing (WebGL uploads are never stale there), so every comparison passed.
+
+**Fix.** The panel's analysis now runs with the pose loop on (turned on and
+restored around the pass). A Chromium mock of the suspected iOS behaviour (a
+video's WebGL upload returns its last 2D read) reproduces the phone's exact
+numbers before the fix.
+
+**Class of mistake.** Reusing a function and assuming its callers' guards
+("Enable Skeleton first") are UX only. When reusing a path, list what the
+original caller requires or turns on before it calls it, and reproduce under
+a model of the failing platform, not only in the browser where it works.
+
+## 021 — A fallback that still depends on the thing that failed
+
+**Symptom.** PR #97 snapshot holds on an iPhone: media time stuck at 0.000
+during a hold, audio drifting −1.21 s, and once "Export produced an empty
+file" (KNOWN_ISSUES 057).
+
+**Verified root cause (code read + Chromium mock of the iOS behaviour).** The
+"seek did not land" fallback went on painting from the same paused hidden
+video whose seek had failed, and painted nothing when it had no frame. The
+`play()` after the hold was called once and only logged, so a rejected call
+left the video paused for the rest of the render. Only a 0-byte file counted
+as empty.
+
+**Fix.** The hold paints a copy taken before the risky step (pause + seek);
+`play()` is retried until media time actually moves, with a clear error after
+4 s; a render with no painted frame is an error, not a file.
+
+**Class of mistake.** A fallback that leans on the component that just failed,
+and a call whose outcome is logged but never acted on. A fallback must not
+depend on what failed; "called play()" is not "it plays", so check the effect
+(time moves) and act on its absence.

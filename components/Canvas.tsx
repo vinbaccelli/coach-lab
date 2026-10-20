@@ -382,6 +382,8 @@ export interface CanvasHandle {
   resetZoomPan: () => void;
   /** The canvas zoom (1 = 100%) — read-only, for the ?vdebug=1 box. */
   getZoom: () => number;
+  /** The skeleton's pose loop is running with its model loaded (it reads each paused frame) — read-only. */
+  isPoseLoopReady?: () => boolean;
   startObjMultiplierRegionSelect: () => void;
   getObjMultiplierRegion: () => { x: number; y: number; w: number; h: number } | null;
   runObjMultiplierCapture: (frameCount: number, onProgress?: (done: number, total: number) => void) => Promise<number>;
@@ -4006,6 +4008,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderDirtyRef.current = true;
       },
       getZoom: () => zoomRef.current,
+      isPoseLoopReady: () => poseLoopActiveRef.current && !!poseBridgeRef.current?.isReady,
       startObjMultiplierRegionSelect: () => {
         isSelectingObjMultRegionRef.current = true;
         objMultRegionStartRef.current = null;

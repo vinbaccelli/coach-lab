@@ -86,6 +86,15 @@ the file will contain ("Includes: video + skeleton + drawings").
   `app/analysis/page.tsx`, with the toolbar's running/ready bookkeeping). Each
   part is pulled 0.05 s in from its neighbours so the pass never replaces a
   track the coach already made (it drops tracks within 0.05 s of its range).
+  **It runs under the toolbar's conditions.** The toolbar AI Track only runs
+  with Skeleton on, which adds a second reader of every frame the pass seeks to
+  (the pose loop's `createImageBitmap`). Without it iOS fed the detector one
+  picture again and again (KNOWN_ISSUES 061). So with Skeleton off, the analysis
+  turns the analysis canvas's pose loop on, with drawing off. It waits up to
+  15 s for the loop's model, runs the pass, and turns the loop off again: done,
+  cancelled or failed (`withAnalysisPoseLoop`). The page's Skeleton switch, the
+  data column and the metrics section are not touched. With Skeleton already on,
+  nothing changes.
   **While it analyzes, the panel is a compact bar** (progress, "Analyzing
   skeleton… X% · about N s left", Cancel) docked outside the analysis video's
   picture (`lib/exportOverlay.ts dockAnalysisBar`: below, above, right or left
@@ -164,17 +173,43 @@ length showing THAT snapshot's strokes and frozen pose, then continues.
 ## How (holds)
 
 `exportEditedVideo(…, { holds: [{ at, seconds }] })` (`lib/cropExport.ts`).
-When the paint loop sees `currentTime ≥ at` it pauses the hidden video and
-seeks it exactly to `at`; until 'seeked' nothing is redrawn (the canvas keeps
-the last good frame). After 'seeked' it draws the paused frame on every paint
-(so the canvas stream keeps feeding the recorder) with `drawOverlay(…, hold)`,
-then plays on after `seconds`. If 'seeked' does not arrive within 300 ms the
-hold goes on with the frame the paused video shows, the first painted at or
-after `at` (within one frame; the fallback for a browser that will not seek a
-detached hidden video; not verified on iOS). The hold timer counts running time
-only: a hidden tab pauses it with the recorder. The stall guard adds the total
-hold time. Progress = (media seconds + hold seconds done) ÷ (range + holds)
-(`outputProgress`).
+When the paint loop sees `currentTime ≥ at`, it first copies the video's
+current frame (the first at or after `at`) into a hold frame. If the video has
+no decodable frame then, it copies the last frame drawn to the output instead.
+Then it pauses the hidden video and seeks it exactly to `at`. From the first
+paint of the hold, the copy is shown with the hold's overlay. Only if there is
+no copy at all does the canvas keep the last good frame until the seek lands
+or 300 ms pass.
+
+A seek has landed when 'seeked' came, there is a decodable frame, and the
+time is within 0.1 s of `at` (`holdSeekLanded`). Then the exact frame replaces
+the copy, even if it comes after the 300 ms fallback. If it never lands, the
+copy stays and the seek is never retried.
+For the hold's length, every paint draws the hold frame, at the hold's own
+time, with `drawOverlay(…, hold)`, so the canvas stream keeps feeding the
+recorder even if the paused hidden video loses its frame or its clock (seen on
+iOS: t=0.000, KNOWN_ISSUES 057).
+
+After the hold, if the video is more than 0.25 s from `at` it is put back
+there (`holdResumeSeek`). Then `play()` is called, and called again every
+0.5 s until media time moves (`resumeAction`). After 4 s without moving, the
+export stops with "Export stopped: the video did not start playing again
+after a snapshot hold…" instead of finishing short. A last-frame hold at the
+clip's end ends the render.
+
+The hold timer counts running time only: a hidden tab pauses it with the
+recorder. The stall guard adds the total hold time. Progress = (media seconds
++ hold seconds done) ÷ (range + holds) (`outputProgress`). During a hold, and
+until playback moves again, media seconds are taken from the hold's time, not
+the paused video's clock, so the bar never jumps back.
+
+**Never an empty file.** A render that has painted no frame after 4 s of
+running time stops right away (`NO_FRAME_GIVE_UP_MS`). A render that painted
+no frame, or whose recording has no bytes, ends with "Export failed: no video frames were recorded. Keep
+this app in front with the screen on and try again (, or turn Snapshots off)."
+(`emptyExportError`; before, only a 0-byte file was caught). Only the
+Metrics export (which always passes `drawOverlay`) gets this; the
+post-recording crop keeps its 0-byte check as before.
 
 Audio: a paused element sends no audio, and the recorder closes that gap, so
 everything after a hold would play early by its length (measured −2 s after
@@ -185,8 +220,10 @@ in real time: silence during a hold, in sync after. If Web Audio cannot start
 holds nothing changes (the Recording Hub never passes any).
 
 **Diagnostics (?vdebug=1).** The export writes to the vdebug log: render
-start, each hold's seek (seeked / fallback), the `play()` result after each
-hold, the media time once a second (a video whose time stops shows here), and
+start, each hold's seek (seeked / seeked but not there / fallback, and "holding
+the last drawn frame"), the `play()` result after each hold and each retry,
+"continuing from …" when the video lost its place, "playing again", "nothing
+recorded", the media time once a second (a video whose time stops shows here), and
 once a second which pose the frame draws ("AI Track" by media time / "HOLD
 (snapshot pose)" / none) with the left wrist's position.
 

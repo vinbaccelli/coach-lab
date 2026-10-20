@@ -21,7 +21,9 @@
 import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 import { scaledExportSize } from '@/lib/exportEstimate';
-import { outputProgress } from '@/lib/exportOverlay';
+import {
+  emptyExportError, holdResumeSeek, holdSeekLanded, NO_FRAME_GIVE_UP_MS, outputProgress, resumeAction, RESUME_FAILED_TEXT,
+} from '@/lib/exportOverlay';
 
 export type ExportRegion = { x: number; y: number; w: number; h: number };
 /** In/out points in seconds on the SOURCE timeline. */
@@ -83,11 +85,10 @@ export type EditExportResult =
 const CANCELLED: EditExportResult = { ok: false, error: 'Export cancelled.', cancelled: true };
 
 /**
- * A hold's exact seek that has not reported 'seeked' by then is given up on:
- * the hold goes on with the frame the paused video shows, which is the first
- * frame painted at or after `at` — within one frame of it. (Fallback for
- * browsers that do not finish seeking a detached, hidden video — iOS Safari is
- * not verified; nothing is drawn over the canvas until a frame is decodable.)
+ * A hold's exact seek that has not landed by then (holdSeekLanded) is given
+ * up on, never retried: the hold shows the frame copied when it started, the
+ * first one painted at or after `at` (within one frame of it). iOS does not
+ * reliably seek a detached, hidden, paused video (KNOWN_ISSUES 057).
  */
 const HOLD_SEEK_TIMEOUT_MS = 300;
 
@@ -271,38 +272,92 @@ export async function exportEditedVideo(
 
     let nextHold = 0;
     let holdDoneMs = 0;
-    let hold: { k: number; startedAt: number; pausedMs0: number; ready: boolean; timer: ReturnType<typeof setTimeout> | null } | null = null;
+    let hold: { k: number; startedAt: number; pausedMs0: number; ready: boolean; timer: ReturnType<typeof setTimeout> | null; onSeeked: (() => void) | null } | null = null;
+    // The picture a hold shows: copied from the video when the hold starts,
+    // replaced by the exact frame if the seek lands. Painted from this copy, so
+    // a paused hidden video that drops its frame cannot blank the hold.
+    let holdFrame: HTMLCanvasElement | null = null;
+    let holdFrameOk = false;
+    let framesPainted = 0;
+    // After a hold: playback must move again (play() retried, then a clear error).
+    let resume: { from: number; since: number; lastPlay: number; pausedMs0: number; k: number } | null = null;
+    let failure: string | null = null;
+    // The video's frame; with `orLastDrawn`, else the last frame drawn to the output.
+    const copyToHoldFrame = (orLastDrawn = false): boolean => {
+      const fromVideo = video.readyState >= 2;
+      if (!fromVideo && !(orLastDrawn && framesPainted > 0)) return false;
+      if (!holdFrame) { holdFrame = document.createElement('canvas'); holdFrame.width = ow; holdFrame.height = oh; }
+      const hctx = holdFrame.getContext('2d');
+      if (!hctx) return false;
+      if (fromVideo) hctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
+      else hctx.drawImage(canvas, 0, 0);
+      return true;
+    };
     // Hold time shown so far: running time only (a hidden tab pauses it with the recorder).
     const holdElapsedMs = () => (hold
       ? Date.now() - hold.startedAt - (pausedMs - hold.pausedMs0) - (pausedAt ? Date.now() - pausedAt : 0)
       : 0);
     const startHold = (k: number) => {
       const h = holdList[k];
+      // The frame on screen now (at or just past `at`), before anything can lose it.
+      const copied = copyToHoldFrame(true);
+      holdFrameOk = copied;
       try { video.pause(); } catch { /* noop */ }
-      const st = { k, startedAt: Date.now(), pausedMs0: pausedMs, ready: false, timer: null as ReturnType<typeof setTimeout> | null };
+      const st = { k, startedAt: Date.now(), pausedMs0: pausedMs, ready: false, timer: null as ReturnType<typeof setTimeout> | null, onSeeked: null as (() => void) | null };
       hold = st;
-      onDiag?.(`hold ${k + 1} start at t=${video.currentTime.toFixed(3)} → seek ${h.at.toFixed(3)}`);
-      // Until the exact frame is decoded nothing is drawn: the canvas keeps the last good frame.
-      const onSeeked = () => { st.ready = true; if (st.timer) clearTimeout(st.timer); onDiag?.(`hold ${k + 1} seeked t=${video.currentTime.toFixed(3)} rs=${video.readyState}`); };
-      video.addEventListener('seeked', onSeeked, { once: true });
-      st.timer = setTimeout(() => {
-        video.removeEventListener('seeked', onSeeked); st.ready = true;
-        onDiag?.(`hold ${k + 1} seek fallback (no 'seeked' in ${HOLD_SEEK_TIMEOUT_MS} ms) t=${video.currentTime.toFixed(3)} rs=${video.readyState}`);
-      }, HOLD_SEEK_TIMEOUT_MS);
-      try { video.currentTime = h.at; } catch { onSeeked(); }
+      resume = null;
+      onDiag?.(`hold ${k + 1} start at t=${video.currentTime.toFixed(3)} → seek ${h.at.toFixed(3)}${copied ? '' : ' (no frame to copy)'}`);
+      // Until the seek lands or is given up on, the copy is shown (none: the canvas keeps the last good frame).
+      const settle = (seeked: boolean) => {
+        const late = st.ready;
+        st.ready = true;
+        if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+        const landed = holdSeekLanded(seeked, video.readyState, video.currentTime, h.at) && copyToHoldFrame();
+        if (landed) holdFrameOk = true;
+        // A 'seeked' after the 300 ms fallback still counts if it lands (no new seek is made).
+        if (seeked || landed) { video.removeEventListener('seeked', onSeeked); st.onSeeked = null; }
+        if (late && !landed) return;
+        onDiag?.(`hold ${k + 1} ${landed ? (late ? 'seeked late' : 'seeked') : seeked ? "seeked but not there" : `seek fallback (no 'seeked' in ${HOLD_SEEK_TIMEOUT_MS} ms)`} t=${video.currentTime.toFixed(3)} rs=${video.readyState}${landed ? '' : ' → holding the last drawn frame'}`);
+      };
+      const onSeeked = () => settle(true);
+      st.onSeeked = onSeeked;
+      video.addEventListener('seeked', onSeeked);
+      st.timer = setTimeout(() => settle(false), HOLD_SEEK_TIMEOUT_MS);
+      try { video.currentTime = h.at; } catch { settle(false); }
+    };
+    const fail = (msg: string) => { if (!failure) failure = msg; reachedOutPoint?.(); };
+    /** play() after a hold; the paint loop calls it again until media time moves. */
+    const playAfterHold = (k: number, why: string) => {
+      if (resume) resume.lastPlay = Date.now();
+      video.play().then(
+        () => onDiag?.(`hold ${k} ${why} → play() ok, t=${video.currentTime.toFixed(3)}`),
+        (e) => onDiag?.(`hold ${k} ${why} → play() REJECTED: ${e instanceof Error ? `${e.name} ${e.message}` : String(e)}`.slice(0, 140)),
+      );
     };
     const reportProgress = () => {
       if (!onRenderProgress || !(progressSpan > 0)) return;
       if (!holdList.length) { onRenderProgress((video.currentTime - inPoint) / progressSpan); return; }
-      onRenderProgress(outputProgress(video.currentTime - inPoint, (holdDoneMs + holdElapsedMs()) / 1000, progressSpan, totalHoldMs / 1000));
+      // During a hold and until playback moves again, the paused video's clock is not trusted (iOS: 0.000).
+      const mediaT = hold ? holdList[hold.k].at : resume ? Math.max(resume.from, video.currentTime) : video.currentTime;
+      onRenderProgress(outputProgress(mediaT - inPoint, (holdDoneMs + holdElapsedMs()) / 1000, progressSpan, totalHoldMs / 1000));
     };
     const paint = (holdIndex: number | null) => {
       // Always the video's CURRENT frame: a slow frame is dropped, never caught up.
       if (video.readyState >= 2) {
         ctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
+        framesPainted++;
         if (drawOverlay) {
           try { drawOverlay(ctx, video.currentTime, ow, oh, holdIndex); } catch { /* the frame itself is already drawn */ }
         }
+      }
+    };
+    /** A hold's frame: the copy, at the hold's own time (the paused video's clock is not trusted). */
+    const paintHold = (h: { at: number; index: number }) => {
+      if (!holdFrame || !holdFrameOk) { paint(h.index); return; }
+      ctx.drawImage(holdFrame, 0, 0);
+      framesPainted++;
+      if (drawOverlay) {
+        try { drawOverlay(ctx, h.at, ow, oh, h.index); } catch { /* the frame itself is already drawn */ }
       }
     };
     // Media time once a second (a video whose time stops advancing shows here).
@@ -318,25 +373,50 @@ export async function exportEditedVideo(
     };
     const draw = () => {
       diagTick();
+      // Metrics export: nothing could be drawn for a while — stop now rather than record nothing.
+      if (drawOverlay && framesPainted === 0 && !pausedAt && Date.now() - startedAt - pausedMs >= NO_FRAME_GIVE_UP_MS) {
+        onDiag?.(`no frame painted in ${NO_FRAME_GIVE_UP_MS} ms (t=${video.currentTime.toFixed(3)} rs=${video.readyState})`);
+        fail(emptyExportError(0, 0, holdList.length) ?? 'Export failed.');
+        return;
+      }
       if (hold) {
         // Holding: the paused frame is drawn again on every paint so the
         // canvas stream keeps feeding the recorder; then playback continues.
         const h = holdList[hold.k];
-        if (hold.ready) paint(h.index);
+        if (hold.ready || holdFrameOk) paintHold(h);
         reportProgress();
         if (holdElapsedMs() >= h.ms) {
           if (hold.timer) clearTimeout(hold.timer);
+          if (hold.onSeeked) video.removeEventListener('seeked', hold.onSeeked);
           holdDoneMs += h.ms;
           hold = null;
           nextHold++;
           const k = nextHold;
-          video.play().then(
-            () => onDiag?.(`hold ${k} end → play() ok, t=${video.currentTime.toFixed(3)}`),
-            (e) => onDiag?.(`hold ${k} end → play() REJECTED: ${e instanceof Error ? `${e.name} ${e.message}` : String(e)}`.slice(0, 140)),
-          );
+          // A last-frame hold at the clip's end: nothing left to play.
+          if (video.ended && nextHold >= holdList.length) { onDiag?.(`hold ${k} end at the clip's end`); reachedOutPoint?.(); return; }
+          // Continue from the hold's time if the video lost its place (seen: t=0.000).
+          const back = holdResumeSeek(video.currentTime, h.at);
+          if (back !== null) {
+            onDiag?.(`hold ${k} end: video at t=${video.currentTime.toFixed(3)}, continuing from ${back.toFixed(3)}`);
+            try { video.currentTime = back; } catch { /* play() below still runs */ }
+          }
+          resume = { from: back ?? video.currentTime, since: Date.now(), lastPlay: 0, pausedMs0: pausedMs, k };
+          playAfterHold(k, 'end');
         }
         raf = requestAnimationFrame(draw);
         return;
+      }
+      if (resume) {
+        // Playing again once media time moves; else play() again, then give up clearly.
+        if (video.currentTime > resume.from + 0.05 && !video.paused) {
+          onDiag?.(`hold ${resume.k}: playing again at t=${video.currentTime.toFixed(3)}`);
+          resume = null;
+        } else if (!pausedAt) {
+          const now = Date.now();
+          const action = resumeAction(now - resume.since - (pausedMs - resume.pausedMs0), now - resume.lastPlay);
+          if (action === 'fail') { onDiag?.(`hold ${resume.k}: video did not play again (t=${video.currentTime.toFixed(3)} rs=${video.readyState})`); fail(RESUME_FAILED_TEXT); return; }
+          if (action === 'retry') playAfterHold(resume.k, 'retry');
+        }
       }
       if (nextHold < holdList.length && video.currentTime >= holdList[nextHold].at) {
         startHold(nextHold);
@@ -415,16 +495,17 @@ export async function exportEditedVideo(
     if (pausedAt) { pausedMs += Date.now() - pausedAt; pausedAt = 0; }
 
     cancelAnimationFrame(raf);
-    const lastHold = hold as { timer: ReturnType<typeof setTimeout> | null } | null;
+    const lastHold = hold as { timer: ReturnType<typeof setTimeout> | null; onSeeked: (() => void) | null } | null;
     if (lastHold?.timer) clearTimeout(lastHold.timer);
+    if (lastHold?.onSeeked) video.removeEventListener('seeked', lastHold.onSeeked);
     try { video.pause(); } catch { /* noop */ }
 
-    if (signal?.aborted) {
+    if (signal?.aborted || failure) {
       try { recorder.stop(); } catch { /* noop */ }
       canvasStream.getTracks().forEach((t) => t.stop());
       closeAudio();
       URL.revokeObjectURL(url);
-      return CANCELLED;
+      return failure ? { ok: false, error: failure } : CANCELLED;
     }
 
     const duration = Date.now() - startedAt - pausedMs;
@@ -439,7 +520,12 @@ export async function exportEditedVideo(
     URL.revokeObjectURL(url);
 
     let result = new Blob(chunks, { type: mime || 'video/webm' });
-    if (result.size === 0) return { ok: false, error: 'Export produced an empty file.' };
+    // The Metrics export (it always draws an overlay) also refuses a render that
+    // painted no frame; other callers (post-recording crop) keep the 0-byte check.
+    const empty = drawOverlay
+      ? emptyExportError(framesPainted, result.size, holdList.length)
+      : (result.size === 0 ? 'Export produced an empty file.' : null);
+    if (empty) { onDiag?.(`nothing recorded: ${framesPainted} frames painted, ${result.size} bytes`); return { ok: false, error: empty }; }
     try {
       result = await webmFixDuration(result, duration, mime || 'video/webm');
     } catch { /* noop */ }

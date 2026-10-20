@@ -6,7 +6,9 @@ import {
   trackedFraction, untrackedIntervals,
   clampHoldSec, formatHoldSec, holdSchedule, drawingsDefaultOn, analysisBlockedReason, pageZoomed, includesLabelWithHolds, outputProgress, snapshotsExportStatus, snapshotsSwitchText,
   HOLD_DEFAULT_SEC, HOLD_FRAME_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC,
+  withAnalysisPoseLoop, holdSeekLanded, holdResumeSeek, resumeAction, emptyExportError, RESUME_GIVE_UP_MS, RESUME_RETRY_MS,
 } from '@/lib/exportOverlay';
+import type { AnalysisPoseLoop } from '@/lib/exportOverlay';
 
 const close = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} ≈ ${b}`);
 
@@ -459,4 +461,85 @@ test('includes label with holds', () => {
   assert.equal(includesLabelWithHolds(true, false, 2), 'Includes: video + skeleton + 2 snapshot holds');
   assert.equal(includesLabelWithHolds(false, false, 1), 'Includes: video + 1 snapshot hold');
   assert.equal(includesLabelWithHolds(false, true, 0), 'Includes: video + drawings');
+});
+
+// A pose loop that records every call, in order.
+function fakeLoop(on: boolean, waitReady: () => Promise<void> = async () => {}) {
+  const calls: string[] = [];
+  let state = on;
+  const loop: AnalysisPoseLoop = {
+    isOn: () => state,
+    setOn: (v) => { state = v; calls.push(v ? 'on' : 'off'); },
+    waitReady: async () => { calls.push('wait'); await waitReady(); },
+  };
+  return { loop, calls, state: () => state };
+}
+
+test('analysis turns the pose loop on, waits for it, and turns it off after a finished pass', async () => {
+  const f = fakeLoop(false);
+  const kept = await withAnalysisPoseLoop(f.loop, async () => { f.calls.push('run'); return 120; });
+  assert.equal(kept, 120);
+  assert.deepEqual(f.calls, ['on', 'wait', 'run', 'off']);
+  assert.equal(f.state(), false);
+});
+
+test('analysis restores the pose loop when the pass throws', async () => {
+  const f = fakeLoop(false);
+  await assert.rejects(withAnalysisPoseLoop(f.loop, async () => { f.calls.push('run'); throw new Error('model failed'); }), /model failed/);
+  assert.deepEqual(f.calls, ['on', 'wait', 'run', 'off']);
+  assert.equal(f.state(), false);
+});
+
+test('analysis restores the pose loop on Cancel, during the pass or while waiting for it', async () => {
+  // Cancel during the pass: it resolves with 0 poses (runPrecisionPass's cancelled result).
+  const a = fakeLoop(false);
+  assert.equal(await withAnalysisPoseLoop(a.loop, async () => 0), 0);
+  assert.equal(a.state(), false);
+  assert.deepEqual(a.calls, ['on', 'wait', 'off']);
+  // Cancel while waiting for the loop: the pass never runs, the loop is still turned off.
+  const b = fakeLoop(false, async () => { throw new DOMException('Aborted', 'AbortError'); });
+  let ran = false;
+  await assert.rejects(withAnalysisPoseLoop(b.loop, async () => { ran = true; return 1; }), /Aborted/);
+  assert.equal(ran, false);
+  assert.equal(b.state(), false);
+  assert.deepEqual(b.calls, ['on', 'wait', 'off']);
+});
+
+test('analysis leaves an already-on Skeleton alone (no wait, never turned off)', async () => {
+  const f = fakeLoop(true);
+  assert.equal(await withAnalysisPoseLoop(f.loop, async () => 7), 7);
+  await assert.rejects(withAnalysisPoseLoop(f.loop, async () => { throw new Error('x'); }));
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.state(), true);
+});
+
+test('a hold seek counts only when it reported seeked, has a frame, and is at the hold time', () => {
+  assert.equal(holdSeekLanded(true, 4, 2.5, 2.5), true);
+  assert.equal(holdSeekLanded(true, 2, 2.56, 2.5), true);
+  // iOS: no 'seeked' at all, no decodable frame, or the element reads 0.000.
+  assert.equal(holdSeekLanded(false, 4, 2.5, 2.5), false);
+  assert.equal(holdSeekLanded(true, 1, 2.5, 2.5), false);
+  assert.equal(holdSeekLanded(true, 4, 0, 2.5), false);
+  assert.equal(holdSeekLanded(true, 4, NaN, 2.5), false);
+});
+
+test('after a hold, playback continues in place, or from the hold time when the video lost its place', () => {
+  assert.equal(holdResumeSeek(2.5, 2.5), null);
+  assert.equal(holdResumeSeek(2.6, 2.5), null); // the frame the hold started on, just past it
+  assert.equal(holdResumeSeek(0, 2.5), 2.5);   // "media t stuck at 0.000"
+  assert.equal(holdResumeSeek(NaN, 2.5), 2.5);
+});
+
+test('after a hold, play() is retried until media time moves, then the export fails clearly', () => {
+  assert.equal(resumeAction(100, 100), 'wait');
+  assert.equal(resumeAction(RESUME_RETRY_MS, RESUME_RETRY_MS), 'retry');
+  assert.equal(resumeAction(2000, RESUME_RETRY_MS - 1), 'wait');
+  assert.equal(resumeAction(RESUME_GIVE_UP_MS, 0), 'fail');
+});
+
+test('an export with no frame or no bytes is an error, never an empty file', () => {
+  assert.equal(emptyExportError(300, 1_000_000, 2), null);
+  assert.match(emptyExportError(0, 1_000_000, 2)!, /no video frames were recorded.*turn Snapshots off/);
+  assert.match(emptyExportError(300, 0, 0)!, /no video frames were recorded/);
+  assert.doesNotMatch(emptyExportError(300, 0, 0)!, /Snapshots/);
 });
