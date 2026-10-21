@@ -24,6 +24,7 @@ import { scaledExportSize } from '@/lib/exportEstimate';
 import {
   emptyExportError, holdResumeSeek, holdSeekLanded, NO_FRAME_GIVE_UP_MS, outputProgress, resumeAction, RESUME_FAILED_TEXT,
 } from '@/lib/exportOverlay';
+import { rateCandidates, rateWorked, RATE_PROBE_MS } from '@/lib/exportSpeed';
 
 export type ExportRegion = { x: number; y: number; w: number; h: number };
 /** In/out points in seconds on the SOURCE timeline. */
@@ -74,12 +75,22 @@ export interface EditExportOptions {
    * render is exactly as before (the Recording Hub never passes any).
    */
   holds?: ReadonlyArray<{ at: number; seconds: number }>;
+  /**
+   * Slow motion (Metrics export): the hidden video plays at this playbackRate, so
+   * the file lasts range ÷ rate. Overlays still get the video's media time and
+   * holds keep their own seconds. Default 1. A rate the device cannot play (a
+   * short probe before recording checks) falls back to the nearest faster one;
+   * the result says which was used.
+   */
+  playbackRate?: number;
+  /** false: no sound track at all (slow motion would distort it). Default true. */
+  includeAudio?: boolean;
   /** Diagnostic lines (render start, each hold's seek / end / play() result, media time once a second). */
   onDiag?: (msg: string) => void;
 }
 
 export type EditExportResult =
-  | { ok: true; blob: Blob; ext: string }
+  | { ok: true; blob: Blob; ext: string; /** The playbackRate actually used (differs from the asked one after a fallback). */ rate?: number }
   | { ok: false; error: string; cancelled?: true };
 
 const CANCELLED: EditExportResult = { ok: false, error: 'Export cancelled.', cancelled: true };
@@ -121,6 +132,7 @@ export async function exportEditedVideo(
   {
     region = null, trim = null, onProgress,
     maxHeight = null, videoBitsPerSecond, signal, pauseWhenHidden = false, onRenderProgress, drawOverlay, holds, onDiag,
+    playbackRate: wantedRate = 1, includeAudio = true,
   }: EditExportOptions = {},
 ): Promise<EditExportResult> {
   if (typeof MediaRecorder === 'undefined') {
@@ -191,8 +203,8 @@ export async function exportEditedVideo(
     // Seek to the in-point BEFORE the recorder starts, so the trimmed head is
     // never encoded. Seeking a just-loaded element can resolve instantly or not
     // at all on a malformed file — time out rather than hang the export.
-    if (inPoint > 0) {
-      onProgress?.('Seeking…');
+    const seekToInPoint = async () => {
+      if (!(inPoint > 0) && video.currentTime === 0) return;
       await new Promise<void>((resolve) => {
         let settled = false;
         const done = () => { if (!settled) { settled = true; resolve(); } };
@@ -202,11 +214,52 @@ export async function exportEditedVideo(
         try { video.currentTime = inPoint; } catch { done(); }
       });
       video.onseeked = null;
+    };
+    if (inPoint > 0) {
+      onProgress?.('Seeking…');
+      await seekToInPoint();
       if (signal?.aborted) {
         URL.revokeObjectURL(url);
         return CANCELLED;
       }
     }
+
+    // Slow motion: find a playbackRate this device really plays at. Each
+    // candidate (the asked rate, then each faster export speed) plays for a
+    // moment; the media time must move at about that rate. Then back to the
+    // in-point. Rate 1 needs no probe.
+    let rate = 1;
+    if (wantedRate !== 1) {
+      onProgress?.('Checking playback speed…');
+      rate = 1;
+      for (const cand of rateCandidates(wantedRate)) {
+        if (cand === 1) { rate = 1; break; }
+        if (signal?.aborted) break;
+        const t0 = video.currentTime;
+        const w0 = performance.now();
+        let worked = false;
+        try {
+          video.playbackRate = cand;
+          if (video.playbackRate === cand) {
+            await video.play();
+            await new Promise<void>((r) => setTimeout(r, RATE_PROBE_MS));
+            // A range at the very end of the clip can run out during the probe: it still moved.
+            worked = video.ended ? video.currentTime - t0 > 0 : rateWorked(cand, video.currentTime - t0, (performance.now() - w0) / 1000);
+          }
+        } catch { worked = false; }
+        try { video.pause(); } catch { /* noop */ }
+        onDiag?.(`speed probe ${cand}× → ${worked ? 'ok' : 'failed'} (moved ${(video.currentTime - t0).toFixed(3)} s in ${((performance.now() - w0) / 1000).toFixed(2)} s, rate reads ${video.playbackRate})`);
+        if (worked) { rate = cand; break; }
+      }
+      video.playbackRate = rate;
+      await seekToInPoint();
+      if (signal?.aborted) {
+        URL.revokeObjectURL(url);
+        return CANCELLED;
+      }
+    }
+    /** Every play() sets the rate first: some browsers reset it on pause or seek. */
+    const playRated = () => { video.playbackRate = rate; return video.play(); };
 
     // Holds inside the range, in time order (`index` = position in `holds`).
     const holdList = (holds ?? [])
@@ -218,8 +271,9 @@ export async function exportEditedVideo(
     const canvasStream = (canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(30);
     const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
 
-    // Carry the recording's audio (mic/webcam) through, if any.
-    try {
+    // Carry the recording's audio (mic/webcam) through, if any (not when the
+    // caller turned sound off, as the Metrics export does in slow motion).
+    if (includeAudio) try {
       const vAny = video as HTMLVideoElement & {
         captureStream?: () => MediaStream;
         mozCaptureStream?: () => MediaStream;
@@ -329,17 +383,18 @@ export async function exportEditedVideo(
     /** play() after a hold; the paint loop calls it again until media time moves. */
     const playAfterHold = (k: number, why: string) => {
       if (resume) resume.lastPlay = Date.now();
-      video.play().then(
+      playRated().then(
         () => onDiag?.(`hold ${k} ${why} → play() ok, t=${video.currentTime.toFixed(3)}`),
         (e) => onDiag?.(`hold ${k} ${why} → play() REJECTED: ${e instanceof Error ? `${e.name} ${e.message}` : String(e)}`.slice(0, 140)),
       );
     };
     const reportProgress = () => {
       if (!onRenderProgress || !(progressSpan > 0)) return;
+      // Output timeline: slow motion stretches the media part by 1 / rate.
       if (!holdList.length) { onRenderProgress((video.currentTime - inPoint) / progressSpan); return; }
       // During a hold and until playback moves again, the paused video's clock is not trusted (iOS: 0.000).
       const mediaT = hold ? holdList[hold.k].at : resume ? Math.max(resume.from, video.currentTime) : video.currentTime;
-      onRenderProgress(outputProgress(mediaT - inPoint, (holdDoneMs + holdElapsedMs()) / 1000, progressSpan, totalHoldMs / 1000));
+      onRenderProgress(outputProgress((mediaT - inPoint) / rate, (holdDoneMs + holdElapsedMs()) / 1000, progressSpan / rate, totalHoldMs / 1000));
     };
     const paint = (holdIndex: number | null) => {
       // Always the video's CURRENT frame: a slow frame is dropped, never caught up.
@@ -408,7 +463,7 @@ export async function exportEditedVideo(
       }
       if (resume) {
         // Playing again once media time moves; else play() again, then give up clearly.
-        if (video.currentTime > resume.from + 0.05 && !video.paused) {
+        if (video.currentTime > resume.from + 0.05 * rate && !video.paused) {
           onDiag?.(`hold ${resume.k}: playing again at t=${video.currentTime.toFixed(3)}`);
           resume = null;
         } else if (!pausedAt) {
@@ -436,12 +491,12 @@ export async function exportEditedVideo(
     };
 
     onProgress?.(trim ? 'Rendering edit…' : 'Rendering crop…');
-    onDiag?.(`render start: in=${inPoint.toFixed(3)} out=${Number.isFinite(outPoint) ? outPoint.toFixed(3) : 'end'} holds=${holdList.length} ${ow}x${oh}`);
+    onDiag?.(`render start: in=${inPoint.toFixed(3)} out=${Number.isFinite(outPoint) ? outPoint.toFixed(3) : 'end'} holds=${holdList.length} ${ow}x${oh} rate=${rate}${rate !== wantedRate ? ` (asked ${wantedRate})` : ''}`);
     const startedAt = Date.now();
     recorder.start(250);
     draw();
     // A hold at the in-point has already paused the video: it plays when the hold ends.
-    if (!hold) await video.play().catch(() => {});
+    if (!hold) await playRated().catch(() => {});
 
     let onVisibility: (() => void) | null = null;
     let guardTimer: ReturnType<typeof setTimeout> | null = null;
@@ -458,7 +513,7 @@ export async function exportEditedVideo(
       // (the range plus every hold).
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
       const spanS = Number.isFinite(outPoint) ? outPoint - inPoint : Math.max(0, dur - inPoint);
-      const guardMs = spanS > 0 ? spanS * 1000 + 5000 + totalHoldMs : 0;
+      const guardMs = spanS > 0 ? (spanS / rate) * 1000 + 5000 + totalHoldMs : 0;
       if (!pauseWhenHidden) {
         if (guardMs > 0) setTimeout(done, guardMs);
         return;
@@ -482,7 +537,7 @@ export async function exportEditedVideo(
           pausedAt = 0;
           try { if (recorder.state === 'paused') recorder.resume(); } catch { /* noop */ }
           // During a hold the video stays paused; the paint loop plays it when the hold ends.
-          if (!hold) void video.play().catch(() => {});
+          if (!hold) void playRated().catch(() => {});
           cancelAnimationFrame(raf);
           raf = requestAnimationFrame(draw);
         }
@@ -530,7 +585,7 @@ export async function exportEditedVideo(
       result = await webmFixDuration(result, duration, mime || 'video/webm');
     } catch { /* noop */ }
 
-    if (/mp4/i.test(mime)) return { ok: true, blob: result, ext: 'mp4' };
+    if (/mp4/i.test(mime)) return { ok: true, blob: result, ext: 'mp4', rate };
 
     if (signal?.aborted) return CANCELLED;
     onProgress?.('Converting to MP4…');
@@ -539,7 +594,7 @@ export async function exportEditedVideo(
       videoBitsPerSecond !== undefined ? { videoBitsPerSecond } : undefined,
     );
     if (signal?.aborted) return CANCELLED;
-    if (conv.ok) return { ok: true, blob: conv.blob, ext: 'mp4' };
+    if (conv.ok) return { ok: true, blob: conv.blob, ext: 'mp4', rate };
     return { ok: false, error: 'Could not convert the edited recording to MP4.' };
   } catch (e) {
     closeAudio();

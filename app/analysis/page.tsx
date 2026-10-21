@@ -9860,6 +9860,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             if (snapshots.length > 0) setMetricsExportOpen(false);
             void handleGenerateSnapshots();
           }}
+          timelineRate={() => videoRef.current?.playbackRate ?? null}
           pauseAnalysisVideo={() => { const v = videoRef.current; if (v && !v.paused) v.pause(); }}
           onClose={() => setMetricsExportOpen(false)}
           isMobile={isMobile}
