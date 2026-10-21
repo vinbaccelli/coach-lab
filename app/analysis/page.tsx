@@ -53,6 +53,7 @@ import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
 import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoStateText } from '@/lib/firstFrame';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
+import { selectedSection, type TrackScope } from '@/lib/aiTrackScope';
 import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
 import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
@@ -1754,7 +1755,7 @@ function Home() {
 
   // AI Track popup: opening computes the scope (a coach-dragged timeline section,
   // else the whole video) so the dialog can show it and ask for a tracking speed.
-  const [precisionDialog, setPrecisionDialog] = useState<{ scope: 'all' | 'section'; lengthSec: number } | null>(null);
+  const [precisionDialog, setPrecisionDialog] = useState<{ sectionSec: number | null; wholeSec: number } | null>(null);
 
   const handleOpenPrecisionTrack = useCallback(() => {
     const v = videoRef.current;
@@ -1763,21 +1764,16 @@ function Home() {
     if (precisionTrackState === 'running') return;
     const dur = isFinite(v.duration) ? v.duration : 0;
     if (dur <= 0) { setProcessingStatus('Video not ready yet — try again'); return; }
-    const hasSection =
-      metricsTrimUserAdjusted &&
-      metricsSectionStart != null && metricsSectionEnd != null &&
-      (metricsSectionStart > 0.05 || metricsSectionEnd < dur - 0.05);
-    const scope: 'all' | 'section' = hasSection ? 'section' : 'all';
-    const start = scope === 'section' ? Math.max(0, metricsSectionStart!) : 0;
-    const end = scope === 'section' ? Math.min(dur, metricsSectionEnd!) : dur;
-    setPrecisionDialog({ scope, lengthSec: Math.max(0, end - start) });
-  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsTrimUserAdjusted, metricsSectionStart, metricsSectionEnd]);
+    // The timeline's green section (the same one the Metrics export panel uses), when it is
+    // shorter than the video: the dialog then offers it (default) or the whole video.
+    const sec = selectedSection(metricsSectionStart, metricsSectionEnd, dur);
+    setPrecisionDialog({ sectionSec: sec ? sec.end - sec.start : null, wholeSec: dur });
+  }, [videoSrc, skeletonEnabled, precisionTrackState, metricsSectionStart, metricsSectionEnd]);
 
-  const handleConfirmPrecisionTrack = useCallback((quality: TrackQuality) => {
-    const scope = precisionDialog?.scope ?? 'all';
+  const handleConfirmPrecisionTrack = useCallback((quality: TrackQuality, scope: TrackScope) => {
     setPrecisionDialog(null);
     void handlePrecisionTrack(scope, quality);
-  }, [precisionDialog, handlePrecisionTrack]);
+  }, [handlePrecisionTrack]);
 
   // The baked track dies with its video (Canvas clears it too) — reset the UI,
   // and forget any manual section selection so the next video starts as "whole".
@@ -7337,8 +7333,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     >
       {precisionDialog && (
         <PrecisionTrackDialog
-          scope={precisionDialog.scope}
-          lengthSec={precisionDialog.lengthSec}
+          sectionSec={precisionDialog.sectionSec}
+          wholeSec={precisionDialog.wholeSec}
           onConfirm={handleConfirmPrecisionTrack}
           onCancel={() => setPrecisionDialog(null)}
         />

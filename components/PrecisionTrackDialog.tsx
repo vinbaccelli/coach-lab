@@ -2,11 +2,14 @@
 
 import React, { useState } from 'react';
 import type { TrackQuality } from '@/lib/mediapipePose';
+import { defaultScope, scopeChoiceLabels, type TrackScope } from '@/lib/aiTrackScope';
 
 interface Props {
-  scope: 'all' | 'section';
-  lengthSec: number;
-  onConfirm: (quality: TrackQuality) => void;
+  /** Length of the selected timeline section, or null when none is selected (or it is the whole video). */
+  sectionSec: number | null;
+  /** Length of the whole video. */
+  wholeSec: number;
+  onConfirm: (quality: TrackQuality, scope: TrackScope) => void;
   onCancel: () => void;
 }
 
@@ -21,9 +24,12 @@ const OPTIONS: Array<{ q: TrackQuality; speed: string; tag: string; desc: string
  * denser sampling + bigger model + refinement = more precise. One button opens
  * this; the chosen speed drives the pass.
  */
-export default function PrecisionTrackDialog({ scope, lengthSec, onConfirm, onCancel }: Props) {
+export default function PrecisionTrackDialog({ sectionSec, wholeSec, onConfirm, onCancel }: Props) {
   const [quality, setQuality] = useState<TrackQuality>('balanced');
-  const secs = Math.max(0, Math.round(lengthSec));
+  // Starts on the section when there is one; nothing is remembered between runs.
+  const [scope, setScope] = useState<TrackScope>(defaultScope(sectionSec));
+  const secs = Math.max(0, Math.round(scope === 'section' && sectionSec != null ? sectionSec : wholeSec));
+  const labels = sectionSec != null ? scopeChoiceLabels(sectionSec) : null;
 
   return (
     <div
@@ -48,9 +54,35 @@ export default function PrecisionTrackDialog({ scope, lengthSec, onConfirm, onCa
           Records one perfect skeleton track over your video, then plays it back flawlessly
           aligned at <b>any</b> speed. Runs once now — the slower the pass, the more precise the result.
         </p>
-        <div style={{ margin: '10px 0 14px', fontSize: 12.5, fontWeight: 700, color: 'var(--cl-accent)' }}>
-          {scope === 'section' ? `Tracking your selected section · ${secs}s` : `Tracking the whole video · ${secs}s`}
-        </div>
+        {labels ? (
+          <div role="radiogroup" aria-label="What to track" data-testid="track-scope" style={{ display: 'flex', gap: 8, margin: '10px 0 14px' }}>
+            {([['section', labels.section], ['all', labels.all]] as const).map(([k, text]) => {
+              const on = scope === k;
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  data-testid={`track-scope-${k}`}
+                  onClick={() => setScope(k)}
+                  style={{
+                    flex: 1, minHeight: 44, padding: '8px 10px', borderRadius: 10, cursor: 'pointer',
+                    fontSize: 13, fontWeight: 700, color: 'var(--cl-text-primary)',
+                    border: on ? '2px solid var(--cl-accent)' : '1px solid var(--cl-border)',
+                    background: on ? 'rgba(0,122,255,0.06)' : 'var(--cl-bg-panel)',
+                  }}
+                >
+                  {text}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ margin: '10px 0 14px', fontSize: 12.5, fontWeight: 700, color: 'var(--cl-accent)' }}>
+            {`Tracking the whole video · ${secs}s`}
+          </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {OPTIONS.map((o) => {
@@ -93,7 +125,7 @@ export default function PrecisionTrackDialog({ scope, lengthSec, onConfirm, onCa
           </button>
           <button
             type="button"
-            onClick={() => onConfirm(quality)}
+            onClick={() => onConfirm(quality, scope)}
             style={{
               flex: 1, padding: '11px 18px', borderRadius: 11, border: 'none',
               background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontSize: 14, fontWeight: 800, cursor: 'pointer',

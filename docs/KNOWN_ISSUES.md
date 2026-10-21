@@ -2152,3 +2152,24 @@ it again), and whether the 1.2 s probe is long enough to tell. A wrong guess
 costs a fallback to a faster speed with a note, not an empty file. Also not
 measured: render time at 0.1× (real time: a 10 s range takes about 100 s) and
 the phone's memory for a long slow export.
+
+## 064 — Toolbar AI Track analyzed the whole video even with a section selected — FIXED (AI Track section choice)
+
+**What.** `handleOpenPrecisionTrack` offered the timeline section only when
+`metricsTrimUserAdjusted` was set (a handle drag). A section that came from
+the snapshots' default span, or any case where that flag was not set, ran on the
+whole video, which is slow, while the export needs only the section.
+
+**Fix (`lib/aiTrackScope.ts`, `components/PrecisionTrackDialog.tsx`, the page's
+open/confirm handlers).** The section is the timeline's `metricsSectionStart/End`
+(the same range the Metrics export panel's "Use section" and its Skeleton
+coverage check use, tolerance 0.05 s). When it is shorter than the video the
+AI Track dialog shows "Selected section (0:SS)" (default) and "Whole video";
+with no section, or one that spans the clip, it shows "Tracking the whole video"
+as before. The choice is not remembered between runs. `handlePrecisionTrack`,
+`runAiTrackRange` and `runPrecisionPass` are unchanged.
+
+**Needs the iPhone.** Dragging the handles, running AI Track on the section,
+then opening Generate: the Skeleton row should read "Skeleton ready." for the
+panel's "Use section" range.
+
