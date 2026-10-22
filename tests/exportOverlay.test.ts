@@ -496,9 +496,12 @@ test('an export with no frame or no bytes is an error, never an empty file', () 
 test('panel analysis is off for the release: skeleton only when a track covers the range', () => {
   assert.equal(PANEL_SKELETON_ANALYSIS, false);
   assert.deepEqual(skeletonExportStatus(false, 1), { state: 'ready', text: 'Skeleton ready.' });
-  for (const f of [0, 0.4]) {
-    assert.deepEqual(skeletonExportStatus(false, f), { state: 'unavailable', text: 'Run AI Track from the toolbar first, then the skeleton can be included.' });
-  }
+  assert.deepEqual(skeletonExportStatus(false, 0), { state: 'unavailable', text: 'Run AI Track from the toolbar first, then the skeleton can be included.' });
+  // A track for part of the range: say so (KNOWN_ISSUES 065), still unavailable.
+  assert.deepEqual(skeletonExportStatus(false, 0.4), {
+    state: 'unavailable',
+    text: 'AI Track covers 40% of this range. Choose “Use section” if you tracked a section, or run AI Track on this range, then the skeleton can be included.',
+  });
   // The analysis states are still there behind the constant.
   assert.equal(skeletonExportStatus(false, 0, false, false, true).state, 'analyze');
   assert.equal(skeletonExportStatus(false, 0.4, false, false, true).state, 'analyze');
