@@ -2195,3 +2195,19 @@ track that is already there.
 to the end of the selected area".** Not reproduced with both handles moved: the
 pass visited only the section. See the PR comment for the case with only the
 end handle moved.
+
+**Round 2 (Vin, PR #100 previews, iPhone): "AI Track started from the beginning
+again", the live skeleton "going crazy" during the pass, and on the second
+preview "the page reloaded when I tried to generate".** Not reproduced.
+Chromium at 375×812 with real touch events: both trim tabs drag, the dialog
+offers "Selected section (0:02)" and "Whole video", and (desktop size) the pass
+visits only the section. So the section reaches the dialog and the pass; what
+differs on the phone is unknown. Added for the next phone run (`?vdebug=1`,
+"analysis" lines): the range the run was asked for and the timeline section the
+page held ("AI Track asked: section 2.587–6.021 s (balanced; timeline section
+…)"), then every 10th seek of the pass (video time, presented frame time, wall
+time). The live skeleton during a pass is the live pose detector reading each
+stepped frame (not changed by these PRs); the reload is unexplained (iOS reloads
+a tab that runs out of memory; the Generate render itself was not changed by
+PR #100).
+

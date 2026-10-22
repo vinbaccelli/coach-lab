@@ -1772,8 +1772,14 @@ function Home() {
 
   const handleConfirmPrecisionTrack = useCallback((quality: TrackQuality, scope: TrackScope) => {
     setPrecisionDialog(null);
-    void handlePrecisionTrack(scope, quality);
-  }, [handlePrecisionTrack]);
+    // ?vdebug=1: which range this run was asked for, and every 10th seek of the pass
+    // (video time, presented frame time, wall time), written from outside the pass.
+    const v = videoRef.current;
+    const sec = selectedSection(metricsSectionStart, metricsSectionEnd, v && isFinite(v.duration) ? v.duration : 0);
+    firstFrameLog('analysis', `AI Track asked: ${scope === 'section' && sec ? `section ${sec.start.toFixed(3)}–${sec.end.toFixed(3)} s` : 'whole video'} (${quality}; timeline section ${metricsSectionStart?.toFixed(3) ?? '—'}–${metricsSectionEnd?.toFixed(3) ?? '—'})`);
+    const stop = v ? watchPassFrames(v, (line) => firstFrameLog('analysis', line)) : () => {};
+    void handlePrecisionTrack(scope, quality).finally(stop);
+  }, [handlePrecisionTrack, metricsSectionStart, metricsSectionEnd]);
 
   // The baked track dies with its video (Canvas clears it too) — reset the UI,
   // and forget any manual section selection so the next video starts as "whole".
