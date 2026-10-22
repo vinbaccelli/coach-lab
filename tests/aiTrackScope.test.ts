@@ -35,3 +35,14 @@ test('choice labels and defaults', () => {
   assert.equal(defaultScope(7), 'section');
   assert.equal(defaultScope(null), 'all');
 });
+
+test('the export panel starts on the section only when AI Track covered it but not the whole video', async () => {
+  const { defaultExportRange } = await import('@/lib/aiTrackScope');
+  const sec = { start: 2.6, end: 6 };
+  assert.deepEqual(defaultExportRange(9, sec, true, false), { start: 2.6, end: 6 });
+  // Whole video tracked, section not tracked, or no section: whole video, as before.
+  assert.deepEqual(defaultExportRange(9, sec, true, true), { start: 0, end: 9 });
+  assert.deepEqual(defaultExportRange(9, sec, false, false), { start: 0, end: 9 });
+  assert.deepEqual(defaultExportRange(9, null, false, false), { start: 0, end: 9 });
+  assert.deepEqual(defaultExportRange(9, null, true, false), { start: 0, end: 9 });
+});

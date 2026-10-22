@@ -87,7 +87,12 @@ export function skeletonExportStatus(
   if (analysisFailed) return { state: 'failed', text: `${ANALYSIS_FAILED_TEXT}.` };
   if (trackRunning) return { state: 'busy', text: 'AI Track is running. Wait for it to finish, then export.' };
   if (fraction >= 0.999) return { state: 'ready', text: 'Skeleton ready.' };
-  if (!analysisEnabled) return { state: 'unavailable', text: SKELETON_NEEDS_TOOLBAR_TRACK_TEXT };
+  if (!analysisEnabled) {
+    if (fraction <= 0) return { state: 'unavailable', text: SKELETON_NEEDS_TOOLBAR_TRACK_TEXT };
+    // A track exists but not for this whole range: say so, instead of asking for one that is already there.
+    const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
+    return { state: 'unavailable', text: `AI Track covers ${pct}% of this range. Choose “Use section” if you tracked a section, or run AI Track on this range, then the skeleton can be included.` };
+  }
   if (fraction <= 0) return { state: 'analyze', text: 'Not analyzed yet. The skeleton will be analyzed first when you export, which adds time.' };
   const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
   return { state: 'analyze', text: `Skeleton covers ${pct}% of this range. The rest will be analyzed first when you export, which adds time.` };

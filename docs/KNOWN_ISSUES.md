@@ -2173,3 +2173,25 @@ as before. The choice is not remembered between runs. `handlePrecisionTrack`,
 then opening Generate: the Skeleton row should read "Skeleton ready." for the
 panel's "Use section" range.
 
+
+## 065 — After AI Track on a section, the export panel's "Include skeleton" could not be turned on — FIXED (PR #100 follow-up)
+
+**What (Vin, preview of PR #100).** The panel started on the whole video. A
+track made for the timeline section does not cover the whole video, so with the
+panel analysis switched off (KNOWN_ISSUES 061) the Skeleton row was disabled
+("Run AI Track from the toolbar first…") although AI Track had just been run.
+The coach had to know to press "Use section". Reproduced in Chromium: after a
+section track (2.59–6.02 s of a 9 s clip) the panel read 0:00–0:09, Skeleton off
+and disabled; after "Use section" it read 0:02.6–0:06.0, "Skeleton ready."
+
+**Fix.** The panel starts on the section when AI Track covered it and not the
+whole video (`defaultExportRange`, `lib/aiTrackScope.ts`); otherwise it starts
+on the whole video as before. And when a track covers only part of the range,
+the row says so ("AI Track covers 40% of this range. Choose “Use section” if
+you tracked a section, or run AI Track on this range…") instead of asking for a
+track that is already there.
+
+**Second report, same test: "AI Track went over the beginning of the video up
+to the end of the selected area".** Not reproduced with both handles moved: the
+pass visited only the section. See the PR comment for the case with only the
+end handle moved.

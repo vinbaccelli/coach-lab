@@ -77,7 +77,9 @@ the file will contain ("Includes: video + skeleton + drawings").
     constant, not what runs.
   - (A track made by the toolbar's AI Track for the selected timeline section
     covers the panel's "Use section" range; the AI Track dialog offers that
-    section by default, KNOWN_ISSUES 064.)
+    section by default, KNOWN_ISSUES 064. The panel then also starts on the
+    section, not the whole video, when the section is tracked and the whole
+    video is not, KNOWN_ISSUES 065.)
   - range fully tracked → "Skeleton ready." — Export renders straight away;
   - range untracked or partly tracked → "Not analyzed yet…" / "Skeleton covers
     X% of this range…", and Export becomes **Analyze skeleton + export** with

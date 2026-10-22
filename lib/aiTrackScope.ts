@@ -42,3 +42,19 @@ export function scopeChoiceLabels(sectionSec: number): { section: string; all: s
 export function defaultScope(sectionSec: number | null): TrackScope {
   return sectionSec != null ? 'section' : 'all';
 }
+
+/**
+ * The Metrics export panel's starting range. Whole video, as always, unless the
+ * coach ran AI Track on the timeline section: then the section is a tracked
+ * range and the whole video is not, so starting on the section lets "Include
+ * skeleton" work straight away (KNOWN_ISSUES 065).
+ */
+export function defaultExportRange(
+  duration: number,
+  section: { start: number; end: number } | null,
+  sectionTracked: boolean,
+  wholeTracked: boolean,
+): { start: number; end: number } {
+  if (section && sectionTracked && !wholeTracked) return { start: section.start, end: section.end };
+  return { start: 0, end: duration };
+}
