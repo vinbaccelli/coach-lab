@@ -51,7 +51,9 @@ const GenerateWorkspace = React.lazy(() => import('@/components/metrics/Generate
 // Static (not lazy): Generate must open with no chunk fetch on the click.
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
-import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoStateText } from '@/lib/firstFrame';
+import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, swallowMediaEvents, videoStateText } from '@/lib/firstFrame';
+import { domProbeDeps, PROBE_CHECKING_TEXT, PROBE_DEAD_TEXT, probeFrames, SEEK_STALL_TEXT, slowEstimateSec, slowNoteText } from '@/lib/frameProbe';
+import { waitForSeek, type SeekWaitVideo } from '@/lib/seekWait';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
 import { selectedSection, type TrackScope } from '@/lib/aiTrackScope';
 import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
@@ -1509,6 +1511,8 @@ function Home() {
   // samples land ON frames instead of at arbitrary wall-clock times.
   const [precisionTrackState, setPrecisionTrackState] = useState<'idle' | 'running' | 'ready'>('idle');
   const precisionAbortRef = useRef(false);
+  /** Why runAiTrackRange stopped without a track (probe dead / a seek stalled); null otherwise. The panel shows it as its error. */
+  const blockedTextRef = useRef<string | null>(null);
   /** Locked-player pass: its own final status (ready / stopped), replacing the generic one. */
   const passFinalRef = useRef<string | null>(null);
   /** Appended to the final status, e.g. "the lock was not used". */
@@ -1528,7 +1532,9 @@ function Home() {
       setProcessingStatus('Loading precision tracking model…');
       const mp = await import('@/lib/mediapipePose');
       const params = mp.TRACK_QUALITY[quality];
-      await seekVideoTo(start);
+      // Wait for the start seek like the per-frame seeks below; a seek that never completes stops the pass.
+      let seekStalled = (await waitForSeek(v as unknown as SeekWaitVideo, start)).stalled;
+      if (seekStalled) { passFinalRef.current = SEEK_STALL_TEXT; return 0; }
       // Probe once: cold model init + first inference. Decides the engine for
       // the whole pass so MoveNet and MediaPipe coords never mix in one track.
       const probe = await mp.detectPosePrecise(v, params).catch(() => null);
@@ -1552,19 +1558,14 @@ function Home() {
       // Exact-frame seek: set time → await 'seeked' → await one
       // requestVideoFrameCallback so the seeked frame is actually PAINTED before
       // we detect (kills stale-frame sampling on the fast-motion frames that
-      // matter most). 300 ms safety net + rVFC fallback for older browsers.
-      const seekTo = (t: number) => new Promise<void>((resolve) => {
+      // matter most). Fast clips: unchanged (lib/seekWait.ts). A seek that does not
+      // complete is waited for (up to 4 s); if it never does, the pass stops
+      // instead of detecting on the old picture (KNOWN_ISSUES 067).
+      const seekTo = async (t: number) => {
         const vv = videoRef.current;
-        if (!vv) { resolve(); return; }
-        if (Math.abs(vv.currentTime - t) < 0.0005 && !vv.seeking) { resolve(); return; }
-        let done = false;
-        const fin = () => { if (!done) { done = true; vv.removeEventListener('seeked', onSeeked); resolve(); } };
-        const rvfc = (vv as unknown as { requestVideoFrameCallback?: (cb: () => void) => number }).requestVideoFrameCallback;
-        const onSeeked = () => { if (rvfc) rvfc.call(vv, () => fin()); else fin(); };
-        vv.addEventListener('seeked', onSeeked, { once: true });
-        vv.currentTime = t;
-        window.setTimeout(fin, 300);
-      });
+        if (!vv) return;
+        if ((await waitForSeek(vv as unknown as SeekWaitVideo, t)).stalled) seekStalled = true;
+      };
 
       if (lock) {
         // Start AT the lock frame, find the locked player there (or stop), then
@@ -1582,6 +1583,12 @@ function Home() {
         canvasRef.current?.startBakeCapture?.(false);
         setProcessingStatus('AI Track: finding your locked player…');
         await seekTo(lock.t);
+        if (seekStalled) {
+          canvasRef.current?.discardBakeCapture?.();
+          canvasRef.current?.setAiTrackFollow?.(null);
+          passFinalRef.current = SEEK_STALL_TEXT;
+          return 0;
+        }
         const lockFrameT = v.currentTime;
         // Everyone else on the lock frame is a known "other" from the start.
         let seedOthers: NonNullable<ReturnType<typeof poseBox>>[] = [];
@@ -1605,8 +1612,9 @@ function Home() {
           let st: FollowState = startFollow(seedBox, lockFrameT, seedOthers);
           let inGap = false;
           for (const t of times) {
-            if (precisionAbortRef.current) return;
+            if (precisionAbortRef.current || seekStalled) return;
             await seekTo(t);
+            if (seekStalled) return;
             const ft = v.currentTime;
             let next = st;
             const r = await detectLocked((c) => {
@@ -1632,8 +1640,9 @@ function Home() {
         await walk(forward);
         await walk(backward);
         canvasRef.current?.setAiTrackFollow?.(null);
-        if (precisionAbortRef.current) {
+        if (precisionAbortRef.current || seekStalled) {
           canvasRef.current?.discardBakeCapture?.();
+          if (seekStalled) passFinalRef.current = SEEK_STALL_TEXT;
           return 0;
         }
         const kept = canvasRef.current?.finishBakeCapture?.(
@@ -1654,9 +1663,10 @@ function Home() {
       const total = Math.max(1, Math.ceil((end - start) / step));
       const passT0 = performance.now();
       for (let k = 1; k <= total; k++) {
-        if (precisionAbortRef.current) break;
+        if (precisionAbortRef.current || seekStalled) break;
         const t = Math.min(end, start + k * step);
         await seekTo(t);
+        if (seekStalled) break;
         if (useMediaPipe) {
           const kps = await mp.detectPosePrecise(v, params).catch(() => null);
           if (kps) canvasRef.current?.addBakeSample?.(v.currentTime, kps);
@@ -1670,8 +1680,9 @@ function Home() {
         }
       }
 
-      if (precisionAbortRef.current) {
+      if (precisionAbortRef.current || seekStalled) {
         canvasRef.current?.discardBakeCapture?.();
+        if (seekStalled) passFinalRef.current = SEEK_STALL_TEXT;
         return 0;
       }
       const kept = canvasRef.current?.finishBakeCapture?.({ start, end }) ?? 0;
@@ -1692,9 +1703,41 @@ function Home() {
    */
   const runAiTrackRange = useCallback(async (start: number, end: number, quality: TrackQuality): Promise<number> => {
     precisionAbortRef.current = false;
+    blockedTextRef.current = null;
     setPrecisionTrackState('running');
     try {
+      // Before the pass: does this video present a new picture after a seek? If not,
+      // stop here — no pass, no track (KNOWN_ISSUES 066).
+      const pv = videoRef.current;
+      if (pv) {
+        setProcessingStatus(PROBE_CHECKING_TEXT);
+        const label = `strategy=${firstFrameState(pv)?.strategy ?? 'n/a'} ${pv.videoWidth}x${pv.videoHeight}`;
+        const probe = await probeFrames(
+          domProbeDeps(pv, (line) => firstFrameLog('probe', line), () => precisionAbortRef.current, swallowMediaEvents),
+          start, end, label,
+        );
+        if (probe.aborted || precisionAbortRef.current) {
+          setProcessingStatus('AI Track cancelled');
+          return 0;
+        }
+        if (!probe.ok) {
+          blockedTextRef.current = PROBE_DEAD_TEXT;
+          setProcessingStatus(PROBE_DEAD_TEXT);
+          return 0;
+        }
+        if (probe.slowMs !== null) {
+          // Slow but working: say so, and give the note a moment before the pass's own status replaces it.
+          const fps = (await import('@/lib/mediapipePose')).TRACK_QUALITY[quality].fps;
+          const est = slowEstimateSec(probe.slowMs, end - start, fps);
+          firstFrameLog('probe', `${label} slow clip: ${probe.slowMs} ms per seek, about ${est} s for ${(end - start).toFixed(1)} s at ${fps} fps`);
+          setProcessingStatus(slowNoteText(est));
+          const until = performance.now() + 2500;
+          while (performance.now() < until && !precisionAbortRef.current) await new Promise((r) => setTimeout(r, 100));
+          if (precisionAbortRef.current) { setProcessingStatus('AI Track cancelled'); return 0; }
+        }
+      }
       const kept = await runPrecisionPass(start, end, quality);
+      if (passFinalRef.current === SEEK_STALL_TEXT) blockedTextRef.current = SEEK_STALL_TEXT;
       const note = lockNoteRef.current ? ` ${lockNoteRef.current}` : '';
       if (precisionAbortRef.current) {
         setProcessingStatus('AI Track cancelled');
@@ -9885,7 +9928,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 const tick = () => (skeletonEnabledRef.current || performance.now() - t0 > 2000 ? resolve() : requestAnimationFrame(tick));
                 tick();
               }),
-              track: (start, end) => runAiTrackRange(start, end, 'fast'),
+              track: async (start, end) => {
+                const kept = await runAiTrackRange(start, end, 'fast');
+                if (blockedTextRef.current) throw new Error(blockedTextRef.current);
+                return kept;
+              },
               watch: () => {
                 const v = videoRef.current;
                 firstFrameLog('analysis', `start ${a.toFixed(3)}–${b.toFixed(3)} s (AI Track handler, 'fast')`);
