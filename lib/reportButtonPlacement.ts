@@ -1,29 +1,51 @@
 /**
- * Where the "Report a problem" button sits (components/ReportProblemButton.tsx).
- * Bottom-right, directly above the zoom +/- / help stack that /analysis puts
- * there (above the timeline controls), so it never covers the left toolbar, the
- * zoom buttons or the timeline. On a page without that stack it sits near the
- * bottom edge, above the dock clearance the analysis page publishes.
+ * Where the round "Report a problem" icon button sits (components/ReportProblemButton.tsx).
+ * Right edge, in the column of the zoom stack, directly BELOW the top-right
+ * slot-action row (recording / remove / +B) and above the zoom stack. That gap
+ * is free in portrait and in a phone's landscape; if the screen is too short
+ * for it, the button moves to the left of the zoom stack instead, so it is
+ * always on screen and never over the left toolbar, the zoom/help buttons, the
+ * +B/trash row or the timeline. All numbers are in layout-viewport px (what
+ * getBoundingClientRect and `position: fixed` use).
  */
 
-/** Gap between the button and what is under it. */
-export const REPORT_BUTTON_GAP_PX = 8;
+export const REPORT_BUTTON_SIZE_PX = 34;
+const MARGIN_PX = 8;
+const GAP_PX = 6;
+/** The zoom stack sits this far from the right edge (Canvas.tsx, tour-zoom). */
+const STACK_RIGHT_PX = 12;
 
-/**
- * The button's `bottom` in px, from the zoom stack's top edge, or null when
- * there is no (visible) stack. `viewportHeight` is the layout viewport height
- * (window.innerHeight): a fixed element's bottom is measured from it.
- */
-export function reportButtonBottomPx(
-  viewportHeight: number,
-  stack: { top: number; width: number; height: number } | null,
-): number | null {
-  if (!stack || !(stack.width > 0) || !(stack.height > 0)) return null;
-  if (!Number.isFinite(stack.top) || !(viewportHeight > 0)) return null;
-  // A stack scrolled off the bottom must not push the button off screen: keep it on screen.
-  return Math.max(REPORT_BUTTON_GAP_PX, Math.round(viewportHeight - stack.top + REPORT_BUTTON_GAP_PX));
+export type Box = { top: number; left: number; width: number; height: number };
+/** The visual viewport, in layout-viewport coordinates (pinch-zoom and the browser bar move it). */
+export type Viewport = { offsetTop: number; offsetLeft: number; width: number; height: number };
+export type Insets = { top: number; right: number; bottom: number; left: number };
+
+const usable = (b: Box | null): b is Box =>
+  !!b && b.width > 0 && b.height > 0 && [b.top, b.left, b.width, b.height].every(Number.isFinite);
+
+/** `top` / `left` for the button. `row` = the top-right action row, `stack` = the zoom stack (either may be absent). */
+export function reportButtonPosition(
+  vp: Viewport, insets: Insets, row: Box | null, stack: Box | null,
+): { top: number; left: number } {
+  const s = REPORT_BUTTON_SIZE_PX;
+  const minTop = vp.offsetTop + insets.top + MARGIN_PX;
+  const maxTop = vp.offsetTop + vp.height - insets.bottom - MARGIN_PX - s;
+  const minLeft = vp.offsetLeft + insets.left + MARGIN_PX;
+  const maxLeft = vp.offsetLeft + vp.width - insets.right - MARGIN_PX - s;
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+
+  // Column: right-aligned with the zoom stack when there is one, else at the right edge.
+  const col = usable(stack)
+    ? stack.left + stack.width / 2 - s / 2
+    : vp.offsetLeft + vp.width - STACK_RIGHT_PX - insets.right - s;
+  const top = usable(row) ? row.top + row.height + GAP_PX : minTop;
+
+  if (usable(stack) && top + s + GAP_PX > stack.top) {
+    // No room between the row and the stack: beside the stack (left of it), at its top.
+    return {
+      top: clamp(stack.top, minTop, maxTop),
+      left: clamp(stack.left - GAP_PX - s, minLeft, maxLeft),
+    };
+  }
+  return { top: clamp(top, minTop, maxTop), left: clamp(col, minLeft, maxLeft) };
 }
-
-/** CSS `bottom` when there is no zoom stack: above the dock clearance (0 on pages that publish none). */
-export const REPORT_BUTTON_FALLBACK_BOTTOM =
-  'calc(var(--anglemotion-banner-bottom, 0px) + 8px + env(safe-area-inset-bottom, 0px))';

@@ -42,8 +42,12 @@ e-mail or screenshot field and asks not to include personal details).
 ## Open
 - The privacy policy (`app/privacy/page.tsx`) does not mention Sentry as a
   processor yet; it should before the DSN is set in production.
-- The button sits bottom-right, directly above the zoom stack
-  (`[data-tour-id="tour-zoom"]`, measured every 0.5 s and on resize;
-  `lib/reportButtonPlacement.ts`), so it clears the left toolbar, the zoom
-  buttons and the timeline. It was first bottom-left and was hidden behind the
-  left toolbar on phones. Its position at 390 px was not checked in a browser.
+- The button is a small round icon-only speech bubble (34 px, aria-label
+  "Report a problem"). It sits on the right edge, below the top-right
+  +B/trash row (`[data-tour-id="tour-video-ab"]`) and above the zoom stack
+  (`[data-tour-id="tour-zoom"]`), measured every 0.5 s and on resize /
+  visualViewport changes, inside the safe-area insets; if there is no room it
+  moves to the left of the zoom stack (`lib/reportButtonPlacement.ts`). It was
+  first a text pill bottom-left (hidden behind the toolbar), then bottom-right
+  (on the video in portrait, not visible in landscape). Not checked in a
+  browser or on a phone.
