@@ -9893,6 +9893,18 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               },
             }, a, b),
             cancelAnalysis: () => { precisionAbortRef.current = true; },
+            // The export's analysis by playing (lib/playbackAnalysis.ts) hands its poses here: stored as an
+            // AI Track section through the same bake storage (centred smoothing), so the render and any
+            // later export read them like any AI Track. Returns the poses kept.
+            storeTrack: (samples, range) => {
+              const c = canvasRef.current;
+              if (!c) return 0;
+              c.startBakeCapture?.(false);
+              for (const smp of samples) c.addBakeSample?.(smp.t, smp.kps);
+              const kept = c.finishBakeCapture?.(range) ?? 0;
+              setPrecisionTrackState(c.getBakedTrackInfo?.() ? 'ready' : 'idle');
+              return kept;
+            },
             snapshotMode: analysisMode.kind === 'snapshot',
             getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,
             isRangeBaked: (a, b) => canvasRef.current?.isRangeBaked?.(a, b) ?? false,

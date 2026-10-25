@@ -2244,3 +2244,13 @@ live landmarker also loaded. At 1× the pose lags by up to the detection time
 (about 2 frames); the vdebug `export pose:` lines give detections, median ms,
 frames that reused the last pose and the speed. Angle numbers and the data
 column are still never exported.
+
+## 069 — In-render skeleton detection froze the exported video and lagged (iPhone) — replaced by analysis by playing
+
+**Symptom (PR #107 first version, 720×1280 S4 clip).** At 1× the skeleton did not follow the player; at 0.1× it followed but the exported video froze and stopped very often.
+
+**Cause (from the design, not yet measured on the phone).** MediaPipe's `detect` is synchronous on the main thread; the export paints and records on the same thread, so every detection stalled the picture, and at 1× the pose was a detection late and sparse (068).
+
+**Change.** The in-render detection (`LIVE_EXPORT_POSE`, `lib/exportPose.ts`, `Canvas` `opts.livePose`) is kept but OFF. Where no AI Track covers the range, `EXPORT_ANALYZE_BY_PLAYBACK`: a first pass (`lib/playbackAnalysis.ts`) plays the clip muted in a hidden element at 0.25× (stepping down to 0.15×/0.1× when more than a quarter of the frames find the detector busy), detects every presented frame (stateless MediaPipe full on a ≤1024 px copy) at the frame's own media time (requestVideoFrameCallback), and stores the poses through the existing bake storage (`finishBakeCapture`: centred, zero-lag smoothing, like an AI Track). The existing self-check (`checkAnalyzedTrack`) runs on it. The export then renders as it always did, with no detection in the render. No seeks except one to the start, so it does not depend on paused seeks. The result is an AI Track section: later exports and the on-screen skeleton use it. After the analysis the panel shows "Skeleton analyzed: N poses over X s in Y s (played at R×)" and vdebug has `export pose:` lines.
+
+**Costs and limits.** Adds about 4× the range's length (plus start-up) to Generate. The playback analysis needs the tab visible (it pauses when hidden). Cancel keeps parts already analyzed. Not measured on a phone: detection time per frame, whether 0.25× holds, quality against AI Track.

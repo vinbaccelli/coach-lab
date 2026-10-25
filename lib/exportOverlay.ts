@@ -48,7 +48,7 @@ export function trackedFraction(
   return hit / n;
 }
 
-export type SkeletonExportState = 'ready' | 'analyze' | 'live' | 'busy' | 'failed' | 'stopping' | 'unavailable';
+export type SkeletonExportState = 'ready' | 'analyze' | 'playback' | 'live' | 'busy' | 'failed' | 'stopping' | 'unavailable';
 
 /**
  * Whether the export panel may run its own skeleton analysis. OFF for the
@@ -63,7 +63,16 @@ export const PANEL_SKELETON_ANALYSIS = false;
  * AI Track covers the range, so Generate does not need an AI Track
  * (KNOWN_ISSUES 068). A covering AI Track is still used as it is.
  */
-export const LIVE_EXPORT_POSE = true;
+export const LIVE_EXPORT_POSE = false;
+
+/**
+ * The skeleton is analyzed FIRST by playing the video slowly in a hidden player
+ * (lib/playbackAnalysis.ts), then the export renders from the stored track
+ * (KNOWN_ISSUES 069). Needs no seeks (so it works where AI Track cannot) and
+ * leaves the render free of detection. Replaces the in-render detection of 068,
+ * which froze the exported video (LIVE_EXPORT_POSE, kept, off).
+ */
+export const EXPORT_ANALYZE_BY_PLAYBACK = true;
 
 /** Under "Include skeleton" when no AI Track covers the range and the panel does not analyze. */
 export const SKELETON_NEEDS_TOOLBAR_TRACK_TEXT = 'Run AI Track from the toolbar first, then the skeleton can be included.';
@@ -85,6 +94,7 @@ export function skeletonExportStatus(
   stopping = false,
   analysisEnabled = PANEL_SKELETON_ANALYSIS,
   liveEnabled = LIVE_EXPORT_POSE,
+  playbackEnabled = EXPORT_ANALYZE_BY_PLAYBACK,
 ): { state: SkeletonExportState; text: string } {
   // The export's own pass, cancelled, still finishing the frame it is on (it
   // checks the abort between frames): it is ours, not "an AI Track running"
@@ -95,6 +105,11 @@ export function skeletonExportStatus(
   if (analysisFailed) return { state: 'failed', text: `${ANALYSIS_FAILED_TEXT}.` };
   if (trackRunning) return { state: 'busy', text: 'AI Track is running. Wait for it to finish, then export.' };
   if (fraction >= 0.999) return { state: 'ready', text: 'Skeleton ready.' };
+  if (!analysisEnabled && playbackEnabled) {
+    if (fraction <= 0) return { state: 'playback', text: 'The skeleton is analyzed first by playing the video slowly (it adds time), then exported. No AI Track needed.' };
+    const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
+    return { state: 'playback', text: `AI Track covers ${pct}% of this range; the rest is analyzed first by playing the video slowly (it adds time).` };
+  }
   if (!analysisEnabled && liveEnabled) {
     if (fraction <= 0) return { state: 'live', text: 'The skeleton is detected while the video is exported. No AI Track needed.' };
     const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
