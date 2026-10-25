@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Sentry from '@sentry/nextjs';
 import { MessageCircle } from 'lucide-react';
-import { REPORT_BUTTON_SIZE_PX, reportButtonPosition } from '@/lib/reportButtonPlacement';
+import { isLandscape, REPORT_BUTTON_SIZE_PX, reportButtonPosition, reportButtonPositionLandscape } from '@/lib/reportButtonPlacement';
 
 /**
  * Small "Report a problem" button (Sentry User Feedback, docs/SENTRY.md). It is
@@ -38,6 +38,15 @@ export default function ReportProblemButton() {
       const r = document.querySelector(sel)?.getBoundingClientRect();
       return r ? { top: r.top, left: r.left, width: r.width, height: r.height } : null;
     };
+    // Every element in a container, plus the container: their real rects (landscape placement).
+    const boxes = (sel: string) => {
+      const root = document.querySelector(sel);
+      if (!root) return [];
+      return [root, ...Array.from(root.querySelectorAll('*'))]
+        .map((el) => el.getBoundingClientRect())
+        .filter((r) => r.width > 0 && r.height > 0)
+        .map((r) => ({ top: r.top, left: r.left, width: r.width, height: r.height }));
+    };
     // Safe-area insets in px: read from a probe, since env() is CSS only.
     const probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;top:0;left:0;'
@@ -53,7 +62,9 @@ export default function ReportProblemButton() {
         top: parseFloat(cs.paddingTop) || 0, right: parseFloat(cs.paddingRight) || 0,
         bottom: parseFloat(cs.paddingBottom) || 0, left: parseFloat(cs.paddingLeft) || 0,
       };
-      const next = reportButtonPosition(vp, insets, box('[data-tour-id="tour-video-ab"]'), box('[data-tour-id="tour-zoom"]'));
+      const next = isLandscape(vp)
+        ? reportButtonPositionLandscape(vp, insets, boxes('[data-tour-id="tour-video-ab"]'), boxes('[data-tour-id="tour-zoom"]'))
+        : reportButtonPosition(vp, insets, box('[data-tour-id="tour-video-ab"]'), box('[data-tour-id="tour-zoom"]'));
       setPos((p) => (p.top === next.top && p.left === next.left ? p : next));
     };
     measure();

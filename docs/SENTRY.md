@@ -49,5 +49,8 @@ e-mail or screenshot field and asks not to include personal details).
   visualViewport changes, inside the safe-area insets; if there is no room it
   moves to the left of the zoom stack (`lib/reportButtonPlacement.ts`). It was
   first a text pill bottom-left (hidden behind the toolbar), then bottom-right
-  (on the video in portrait, not visible in landscape). Not checked in a
-  browser or on a phone.
+  (on the video in portrait, not visible in landscape). In landscape (width > height) it is placed from the measured
+  `getBoundingClientRect` of every element in the +B/trash row and the zoom stack,
+  ≥ 12 px from each: left of the row's leftmost button, else on the right edge
+  below the home button. Portrait is unchanged. Not checked in a browser or on a
+  phone.
