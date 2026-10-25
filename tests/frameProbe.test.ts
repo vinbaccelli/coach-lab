@@ -45,7 +45,7 @@ const live = (t: number) => px(Math.round(t * 100));
 test('healthy video: ok, no prime, logs every signal and the label', async () => {
   const f = fake({ pic: live });
   const r = await probeFrames(f.deps, 2, 8, 'strategy=S1 720x404');
-  assert.deepEqual(r, { ok: true, primed: false, aborted: false });
+  assert.deepEqual(r, { ok: true, primed: false, aborted: false, slowMs: null, tooSlow: false });
   const text = f.log.join('\n');
   assert.match(text, /strategy=S1 720x404/);
   assert.match(text, /seeked fired=yes/);
@@ -70,7 +70,7 @@ test('dead video that a prime fixes: ok after prime', async () => {
 test('dead after the prime: not ok, says so', async () => {
   const f = fake({ pic: () => px(7), shown: () => 0.04 });
   const r = await probeFrames(f.deps, 0, 10, 'strategy=S5 720x1280');
-  assert.deepEqual(r, { ok: false, primed: true, aborted: false });
+  assert.deepEqual(r, { ok: false, primed: true, aborted: false, slowMs: null, tooSlow: false });
   assert.match(f.log.join('\n'), /DEAD after prime: no pass, no track/);
   assert.match(f.log.join('\n'), /strategy=S5 720x1280/);
 });
@@ -135,4 +135,66 @@ test('the "cannot analyze" message shows as a closable error', async () => {
   const { statusKind } = await import('../lib/statusToast');
   const { PROBE_DEAD_TEXT } = await import('../lib/frameProbe');
   assert.equal(statusKind(PROBE_DEAD_TEXT), 'error');
+});
+
+import { SEEK_STALL_TEXT, seekClass, slowEstimateSec, slowNoteText } from '../lib/frameProbe';
+
+test('seek latency classes: fast < 300 ms ≤ slow ≤ 4 s < too slow; no seeked = dead', () => {
+  assert.equal(seekClass(true, 40), 'fast');
+  assert.equal(seekClass(true, 300), 'slow');
+  assert.equal(seekClass(true, 4000), 'slow');
+  assert.equal(seekClass(true, 4001), 'too slow');
+  assert.equal(seekClass(false, 5000), 'dead');
+});
+
+test('a slow but working clip passes the probe with its latency, and logs it', async () => {
+  const slow = (t: number) => px(Math.round(t * 100));
+  const log: string[] = [];
+  let cur = 0;
+  const deps: ProbeDeps = {
+    async seek(t) { cur = t; return { seeked: true, presented: t, hasRvfc: true, ms: 1800 }; },
+    sample: () => slow(cur),
+    async prime() { return 'x'; },
+    log: (l) => log.push(l),
+    aborted: () => false,
+  };
+  const r = await probeFrames(deps, 0, 10, 'strategy=S4 720x1280');
+  assert.equal(r.ok, true);
+  assert.equal(r.primed, false);
+  assert.equal(r.slowMs, 1800);
+  assert.match(log.join('\n'), /1800 ms: slow/);
+  assert.match(log.join('\n'), /slow: 1800 ms per seek/);
+});
+
+test('a fast clip reports no slow note', async () => {
+  const f = fake({ pic: live });
+  const r = await probeFrames(f.deps, 0, 10, 'x');
+  assert.equal(r.slowMs, null);
+  assert.equal(r.tooSlow, false);
+});
+
+test('seeks that complete only after the pass cap are not ok (too slow), with a clear log', async () => {
+  let cur = 0;
+  const log: string[] = [];
+  const deps: ProbeDeps = {
+    async seek(t) { cur = t; return { seeked: true, presented: t, hasRvfc: true, ms: 4500 }; },
+    sample: () => live(cur),
+    async prime() { return 'x'; },
+    log: (l) => log.push(l),
+    aborted: () => false,
+  };
+  const r = await probeFrames(deps, 0, 10, 'x');
+  assert.equal(r.ok, false);
+  assert.equal(r.tooSlow, true);
+  assert.match(log.join('\n'), /4500 ms: too slow/);
+});
+
+test('slow estimate and the one-line note', async () => {
+  // 20 s at 30 fps = 600 frames × (1000 + 500) ms = 900 s.
+  assert.equal(slowEstimateSec(1000, 20, 30), 900);
+  assert.equal(slowNoteText(90), 'This video seeks slowly: analysis may take about 90 s…');
+  assert.equal(slowNoteText(900), 'This video seeks slowly: analysis may take about 15 min…');
+  const { statusKind } = await import('../lib/statusToast');
+  assert.equal(statusKind(slowNoteText(90)), 'progress');
+  assert.equal(statusKind(SEEK_STALL_TEXT), 'error');
 });

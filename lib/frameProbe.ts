@@ -15,6 +15,7 @@
  * adapts a real <video>.
  */
 import { meanAbsDiff, toGrey } from '@/lib/exportOverlay';
+import { SEEK_CAP_MS } from '@/lib/seekWait';
 
 export type SeekResult = {
   /** 'seeked' fired within the wait. */
@@ -37,7 +38,37 @@ export type ProbeDeps = {
   aborted: () => boolean;
 };
 
-export type ProbeOutcome = { ok: boolean; primed: boolean; aborted: boolean };
+/**
+ * `slowMs`: the slowest seek that completed (ms) when it was 300 ms or more —
+ * "slow but working" — else null. `tooSlow`: a seek completed but took longer
+ * than the pass will wait (SEEK_CAP_MS), so the pass would stop on it.
+ */
+export type ProbeOutcome = { ok: boolean; primed: boolean; aborted: boolean; slowMs: number | null; tooSlow: boolean };
+
+/** A seek that takes this long or more is "slow" (still working). */
+export const SLOW_SEEK_MS = 300;
+/** Rough cost of one detection in the pass (ms), for the slow-clip estimate. */
+export const DETECT_MS_GUESS = 500;
+
+export type SeekClass = 'fast' | 'slow' | 'too slow' | 'dead';
+/** fast < 300 ms ≤ slow ≤ 4000 ms < too slow (completed, but beyond what the pass waits); dead = no 'seeked'. */
+export function seekClass(seeked: boolean, ms: number): SeekClass {
+  if (!seeked) return 'dead';
+  if (ms > SEEK_CAP_MS) return 'too slow';
+  return ms >= SLOW_SEEK_MS ? 'slow' : 'fast';
+}
+
+/** Seconds the pass is expected to take at this seek latency: every frame pays one seek and one detection. */
+export function slowEstimateSec(seekMs: number, spanSec: number, fps: number): number {
+  const frames = Math.max(1, Math.ceil(Math.max(0, spanSec) * fps));
+  return Math.round((frames * (seekMs + DETECT_MS_GUESS)) / 1000);
+}
+
+/** The one-line note for a slow-but-working clip. Ends with "…" so the status toast treats it as progress. */
+export function slowNoteText(seconds: number): string {
+  const x = seconds >= 120 ? `${Math.round(seconds / 60)} min` : `${seconds} s`;
+  return `This video seeks slowly: analysis may take about ${x}…`;
+}
 
 /** Mean grey-level change (0..255) from which two pictures count as different. */
 export const PIXEL_CHANGE_MIN = 0.05;
@@ -76,7 +107,9 @@ export function probeVerdict(seeked: boolean, moved: boolean | null, changed: bo
 
 const yn = (v: boolean | null) => (v === null ? 'n/a' : v ? 'yes' : 'NO');
 
-async function attempt(deps: ProbeDeps, start: number, end: number, n: number, label: string): Promise<boolean | 'aborted'> {
+type Attempt = { ok: boolean; slowMs: number | null; tooSlow: boolean };
+
+async function attempt(deps: ProbeDeps, start: number, end: number, n: number, label: string): Promise<Attempt | 'aborted'> {
   const { a, b, c } = probeTimes(start, end);
   const sa = await deps.seek(a);
   if (deps.aborted()) return 'aborted';
@@ -84,7 +117,8 @@ async function attempt(deps: ProbeDeps, start: number, end: number, n: number, l
   const sb = await deps.seek(b);
   if (deps.aborted()) return 'aborted';
   const pb = deps.sample();
-  const seeked = sa.seeked && sb.seeked;
+  const fired = sa.seeked && sb.seeked;
+  let worst = Math.max(sa.seeked ? sa.ms : 0, sb.seeked ? sb.ms : 0);
   const moved = frameTimeMoved(sb.hasRvfc, sa.presented, sb.presented, b - a);
   let changed = pixelsDiffer(pa, pb);
   let extra = '';
@@ -96,38 +130,47 @@ async function attempt(deps: ProbeDeps, start: number, end: number, n: number, l
     const later = pixelsDiffer(pa, pc);
     extra = ` | again at ${c.toFixed(2)} s: ${yn(later)}`;
     if (later !== false) changed = later;
-    if (!sc.seeked) extra += ' (no seeked)';
+    if (!sc.seeked) extra += ' (no seeked)'; else worst = Math.max(worst, sc.ms);
   }
+  const cls = seekClass(fired, worst);
+  const seeked = fired && cls !== 'too slow';
   const ok = probeVerdict(seeked, moved, changed);
   deps.log(
-    `${label} attempt ${n}: seek ${a.toFixed(2)}→${b.toFixed(2)} s | seeked fired=${yn(seeked)} (${sa.ms} ms, ${sb.ms} ms)`
+    `${label} attempt ${n}: seek ${a.toFixed(2)}→${b.toFixed(2)} s | seeked fired=${yn(fired)} (${sa.ms} ms, ${sb.ms} ms: ${cls})`
     + ` | frame time moved=${yn(moved)} (${sa.presented?.toFixed(3) ?? '—'}→${sb.presented?.toFixed(3) ?? '—'})`
     + ` | pixels changed=${yn(changed)}${extra} → ${ok ? 'ok' : 'DEAD'}`,
   );
-  return ok;
+  return { ok, slowMs: ok && worst >= SLOW_SEEK_MS ? worst : null, tooSlow: cls === 'too slow' };
 }
 
 /** Probes, primes once if dead, probes again. `label` (strategy, size) is on every log line. */
 export async function probeFrames(deps: ProbeDeps, start: number, end: number, label: string): Promise<ProbeOutcome> {
   const first = await attempt(deps, start, end, 1, label);
-  if (first === 'aborted') return { ok: false, primed: false, aborted: true };
-  if (first) { deps.log(`${label} result: ok, primed=no`); return { ok: true, primed: false, aborted: false }; }
+  if (first === 'aborted') return { ok: false, primed: false, aborted: true, slowMs: null, tooSlow: false };
+  if (first.ok) {
+    deps.log(`${label} result: ok${first.slowMs !== null ? ` (slow: ${first.slowMs} ms per seek)` : ''}, primed=no`);
+    return { ok: true, primed: false, aborted: false, slowMs: first.slowMs, tooSlow: false };
+  }
   const primeText = await deps.prime();
   deps.log(`${label} primed once: ${primeText}`);
-  if (deps.aborted()) return { ok: false, primed: true, aborted: true };
+  if (deps.aborted()) return { ok: false, primed: true, aborted: true, slowMs: null, tooSlow: false };
   const second = await attempt(deps, start, end, 2, label);
-  if (second === 'aborted') return { ok: false, primed: true, aborted: true };
-  deps.log(`${label} result: ${second ? 'ok after prime' : 'DEAD after prime: no pass, no track'}, primed=yes`);
-  return { ok: second, primed: true, aborted: false };
+  if (second === 'aborted') return { ok: false, primed: true, aborted: true, slowMs: null, tooSlow: false };
+  deps.log(
+    `${label} result: ${second.ok ? `ok after prime${second.slowMs !== null ? ` (slow: ${second.slowMs} ms per seek)` : ''}` : `DEAD after prime${second.tooSlow ? ' (seeks take longer than the pass waits)' : ''}: no pass, no track`}, primed=yes`,
+  );
+  return { ok: second.ok, primed: true, aborted: false, slowMs: second.slowMs, tooSlow: second.tooSlow };
 }
 
 export const PROBE_DEAD_TEXT = 'This video can’t be analyzed on this device yet; try a re-exported copy.';
+/** The pass stopped because one seek never completed (a stale picture would give a frozen track). Reads as an error (closable). */
+export const SEEK_STALL_TEXT = 'AI Track stopped: this video stopped answering seeks, so no skeleton was made (it would be frozen). Try a re-exported copy.';
 export const PROBE_CHECKING_TEXT = 'Checking the video…';
 
 // ── Browser adapter ─────────────────────────────────────────────────────────
 
 const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
-const SEEK_WAIT_MS = 1000;
+const SEEK_WAIT_MS = 5000;
 const PRESENT_WAIT_MS = 400;
 const THUMB = 32;
 
@@ -146,33 +189,42 @@ export function domProbeDeps(
   const v = video as RvfcVideo;
   const hasRvfc = typeof v.requestVideoFrameCallback === 'function';
   let canvas: HTMLCanvasElement | null = null;
+  const seekOnce = (t: number) => new Promise<SeekResult>((resolve) => {
+    const t0 = performance.now();
+    let presented: number | null = null;
+    let handle: number | null = null;
+    if (hasRvfc) handle = v.requestVideoFrameCallback!((_n, meta) => { presented = typeof meta?.mediaTime === 'number' ? meta.mediaTime : v.currentTime; });
+    let done = false;
+    const finish = async (seeked: boolean) => {
+      if (done) return;
+      done = true;
+      v.removeEventListener('seeked', onSeeked);
+      const ms = Math.round(performance.now() - t0);
+      // After 'seeked', give the browser a moment to present the frame.
+      if (hasRvfc && seeked) {
+        const until = performance.now() + PRESENT_WAIT_MS;
+        while (presented === null && performance.now() < until) await wait(20);
+      }
+      if (hasRvfc && presented === null && handle !== null) { try { v.cancelVideoFrameCallback?.(handle); } catch { /* noop */ } }
+      resolve({ seeked, presented, hasRvfc, ms });
+    };
+    const onSeeked = () => { void finish(true); };
+    v.addEventListener('seeked', onSeeked);
+    window.setTimeout(() => { void finish(false); }, SEEK_WAIT_MS);
+    try { v.pause(); v.currentTime = t; } catch { void finish(false); }
+  });
   return {
     log,
     aborted,
-    seek: (t) => new Promise<SeekResult>((resolve) => {
-      const t0 = performance.now();
-      let presented: number | null = null;
-      let handle: number | null = null;
-      if (hasRvfc) handle = v.requestVideoFrameCallback!((_n, meta) => { presented = typeof meta?.mediaTime === 'number' ? meta.mediaTime : v.currentTime; });
-      let done = false;
-      const finish = async (seeked: boolean) => {
-        if (done) return;
-        done = true;
-        v.removeEventListener('seeked', onSeeked);
-        const ms = Math.round(performance.now() - t0);
-        // After 'seeked', give the browser a moment to present the frame.
-        if (hasRvfc && seeked) {
-          const until = performance.now() + PRESENT_WAIT_MS;
-          while (presented === null && performance.now() < until) await wait(20);
-        }
-        if (hasRvfc && presented === null && handle !== null) { try { v.cancelVideoFrameCallback?.(handle); } catch { /* noop */ } }
-        resolve({ seeked, presented, hasRvfc, ms });
-      };
-      const onSeeked = () => { void finish(true); };
-      v.addEventListener('seeked', onSeeked);
-      window.setTimeout(() => { void finish(false); }, SEEK_WAIT_MS);
-      try { v.pause(); v.currentTime = t; } catch { void finish(false); }
-    }),
+    seek: async (t) => {
+      // Never start a second seek while one is pending: it would cancel the first.
+      if (v.seeking) {
+        const until = performance.now() + SEEK_WAIT_MS;
+        while (v.seeking && performance.now() < until) await wait(25);
+        if (v.seeking) return { seeked: false, presented: null, hasRvfc, ms: SEEK_WAIT_MS };
+      }
+      return seekOnce(t);
+    },
     sample: () => {
       try {
         if (v.readyState < 2 || !(v.videoWidth > 0)) return null;

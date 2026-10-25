@@ -2239,3 +2239,39 @@ unchanged.
 **Needs the real iPhone.** (1) The S4/S5 clip: do the "probe" lines show
 DEAD, and does the prime fix it? (2) The S1 clip still passes the probe
 without a prime. (3) The message appears and closes. Not testable in Chromium.
+
+## 067 — Slow-seeking clips: the pass cut each seek at 300 ms and detected on a stale picture (iPhone)
+
+**Symptom.** The 720×1280 re-exported clip (first-frame strategy S4): the probe
+of 066 saw no 'seeked' within ~1 s, and the earlier pass took 112 s for 144
+poses (about 0.8 s per sample) with "0 seeks" and a frozen track.
+
+**Root cause (read from code, not yet measured on the phone).** The pass waited
+at most 300 ms per seek (`seekTo`, page.tsx) and then detected on whatever the
+element showed; the next `currentTime =` cancelled the pending seek, and a
+cancelled seek never fires 'seeked'. A clip whose seeks take longer than ~300
+ms (long keyframe interval) therefore never completed one seek: 300 ms + about
+480 ms of detection per frame ≈ the 0.8 s per sample seen. The start seek had
+the same shape (1500 ms cap, then detect). The probe's own 1 s wait was too
+short to tell "slow" from "dead".
+
+**Fix.** `lib/seekWait.ts` (`waitForSeek`): fast clips end exactly as before
+('seeked' + one frame callback, or 300 ms after the seek started when the frame
+callback never comes; a unit test compares it against the old wait,
+millisecond for millisecond). A seek that has not completed after 300 ms is
+now waited for, up to 4 s; a seek still pending is never followed by another;
+a seek that never completes stops the pass with a closable message and no
+track. The pass's start seek uses the same wait (only inside `runPrecisionPass`;
+`seekVideoTo` and its other callers are unchanged). The probe waits up to 5 s,
+logs every seek's latency and class (fast < 300 ms, slow 300 ms–4 s, too slow
+> 4 s, dead = no 'seeked' within 5 s) and shows a one-line note for a slow
+clip ("This video seeks slowly: analysis may take about X s…") instead of
+stopping. Dead or too-slow clips stop before the pass as in 066.
+
+**Side effects.** Cancel on a slow clip can take up to 4 s to take effect (the
+pass checks for cancel between seeks). The estimate assumes about 500 ms per
+detection.
+
+**Needs the real iPhone.** The S4 clip: probe log lines (latencies), the note
+and estimate against the real duration, whether the track is no longer frozen;
+a fast clip's pass time unchanged; a stall (if any) shows the closable message.
