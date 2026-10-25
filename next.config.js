@@ -1,11 +1,19 @@
 'use strict';
 
+const { withSentryConfig } = require('@sentry/nextjs/config');
 const withBundleAnalyzer = require('@next/bundle-analyzer')({
   enabled: process.env.ANALYZE === 'true',
 });
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Sentry (docs/SENTRY.md): the release is the git commit SHA and the
+  // environment is Vercel's, both read at build time (Vercel sets them for every
+  // build). Inlined into the bundles; empty / 'development' locally.
+  env: {
+    NEXT_PUBLIC_SENTRY_RELEASE: process.env.VERCEL_GIT_COMMIT_SHA || '',
+    NEXT_PUBLIC_SENTRY_ENVIRONMENT: process.env.VERCEL_ENV || 'development',
+  },
   // Verification builds set NEXT_DIST_DIR so they never clobber the dev
   // server's .next (which caused recurring "Internal Server Error" locally).
   distDir: process.env.NEXT_DIST_DIR || '.next',
@@ -66,4 +74,12 @@ const nextConfig = {
   },
 };
 
-module.exports = withBundleAnalyzer(nextConfig);
+module.exports = withSentryConfig(withBundleAnalyzer(nextConfig), {
+  // Source maps are uploaded only when SENTRY_AUTH_TOKEN (with SENTRY_ORG and
+  // SENTRY_PROJECT) is set in the build environment; without them the plugin
+  // does nothing. EU region: set SENTRY_URL=https://de.sentry.io for uploads.
+  silent: true,
+  telemetry: false,
+  disableLogger: true,
+  release: { name: process.env.VERCEL_GIT_COMMIT_SHA || undefined },
+});
