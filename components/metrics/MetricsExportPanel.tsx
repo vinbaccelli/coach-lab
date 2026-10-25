@@ -5,6 +5,7 @@ import TrimRangeBar, { formatClock } from '@/components/TrimRangeBar';
 import { exportEditedVideo } from '@/lib/cropExport';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { firstFrameLog } from '@/lib/firstFrame';
+import { createDomExportPose, EXPORT_POSE_FAILED_TEXT, EXPORT_POSE_MODEL_TEXT, type ExportPose } from '@/lib/exportPose';
 import { defaultExportRange, selectedSection } from '@/lib/aiTrackScope';
 import {
   EXPORT_SPEEDS, exportOutputSeconds, nearestExportSpeed, rateFallbackText, SOUND_SLOW_REASON, soundAvailable, soundIncluded, speedLabel,
@@ -15,7 +16,7 @@ import {
 import {
   analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, clampHoldSec, dockAnalysisBar, drawingsDefaultOn, drawingsExportStatus, analysisBlockedReason,
   FOLLOW_STEP_SEC, formatHoldSec, HOLD_DEFAULT_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC, HOLD_STEP_SEC, holdSchedule, includesLabelWithHolds, meanAbsDiff,
-  parsePassProgress, poseRegion, poseShift, skeletonExportStatus, skeletonFollowsVideo, snapshotsExportStatus, snapshotsSwitchText,
+  LIVE_EXPORT_POSE, PANEL_SKELETON_ANALYSIS, parsePassProgress, poseRegion, poseShift, skeletonExportStatus, skeletonFollowsVideo, snapshotsExportStatus, snapshotsSwitchText,
   toGrey, trackedFraction, untrackedIntervals, type FollowStep, type Rect, type VideoBox,
 } from '@/lib/exportOverlay';
 import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
@@ -480,6 +481,31 @@ export default function MetricsExportPanel({
         }
         analyzed = { check, kept, span };
       }
+      // Where no AI Track covers the range, the skeleton is detected while the
+      // video is exported (lib/exportPose.ts): load the model first, so the
+      // 4 s "no pose" limit counts detection, not the download.
+      const needsLive = LIVE_EXPORT_POSE && !PANEL_SKELETON_ANALYSIS && Boolean(overlay) && includeSkeleton
+        && !overlay!.isRangeBaked(range.start, range.end)
+        && trackedFraction(range.start, range.end, (t) => overlay!.getBakedPoseAt(t) !== null) < 0.999;
+      if (needsLive) {
+        setPhase('reading');
+        setStage('Loading skeleton model…');
+        const warm = await Promise.race([
+          import('@/lib/mediapipePose').then((m) => m.warmFullLandmarker()).catch(() => false),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20000)),
+        ]);
+        firstFrameLog('export', `export pose: model ${warm ? 'ready' : 'NOT available'}`);
+        if (ac.signal.aborted) return;
+        if (!warm) { setPhase('error'); setError(EXPORT_POSE_MODEL_TEXT); return; }
+      }
+      let poseFailed = false;
+      const livePoseEngine: ExportPose | null = needsLive
+        ? createDomExportPose({
+          rate: speed,
+          log: (l) => firstFrameLog('export', l),
+          onFail: () => { poseFailed = true; ac.abort(); },
+        })
+        : null;
       setPhase('reading');
       setStage('Reading video…');
       const src = await (await fetch(videoSrc, { signal: ac.signal })).blob();
@@ -488,7 +514,7 @@ export default function MetricsExportPanel({
       const whole = range.start <= 0.01 && range.end >= meta.duration - 0.01;
       // Overlays: capture the video box, strokes and angles NOW (export start),
       // then reuse that capture for every frame so a resize cannot move them.
-      let drawOverlays: ((ctx: CanvasRenderingContext2D, t: number, w: number, h: number, hold: number | null) => void) | undefined;
+      let drawOverlays: ((ctx: CanvasRenderingContext2D, t: number, w: number, h: number, hold: number | null, video?: HTMLVideoElement) => void) | undefined;
       // Snapshot holds, read NOW (the active snapshot's latest strokes and pose).
       const holdSnaps: ExportSnapshot[] = [];
       const holds: Array<{ at: number; seconds: number }> = [];
@@ -540,7 +566,7 @@ export default function MetricsExportPanel({
           follow.last = { kps, region, grey: grab(ctx, region) };
         };
         let poseDiagAt = 0;
-        drawOverlays = (ctx, t, w, h, hold) => {
+        drawOverlays = (ctx, t, w, h, hold, video) => {
           // A hold shows only its snapshot's strokes and pose (no live drawings,
           // no AI Track skeleton) and is not part of the render check.
           const sn = hold != null ? holdSnaps[hold] : undefined;
@@ -549,21 +575,23 @@ export default function MetricsExportPanel({
             poseDiagAt = performance.now();
             const kps = sn ? sn.skeleton : includeSkeleton ? overlay.getBakedPoseAt(t) : null;
             const lw = kps?.[9];
-            firstFrameLog('export', `pose @${t.toFixed(2)}: ${sn ? 'HOLD (snapshot pose)' : includeSkeleton ? (kps ? 'AI Track' : 'none at this time') : 'skeleton off'}${lw ? ` lwrist=${Math.round(lw.x)},${Math.round(lw.y)}` : ''}`);
+            firstFrameLog('export', `pose @${t.toFixed(2)}: ${sn ? 'HOLD (snapshot pose)' : includeSkeleton ? (kps ? 'AI Track' : livePoseEngine ? (livePoseEngine.poseAt(t) ? 'live (detected while exporting)' : 'live: none yet') : 'none at this time') : 'skeleton off'}${lw ? ` lwrist=${Math.round(lw.x)},${Math.round(lw.y)}` : ''}`);
           }
           if (sn) {
             overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen, hold: { strokes: sn.strokes, box: sn.box, skeleton: sn.skeleton } });
             return;
           }
           if (tctx) { try { probe(ctx, t, w, h); } catch { /* the check must never stop the export */ } }
-          overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen });
+          // No AI Track at this time: detect on this frame (rate limited, never waits) and draw the latest live pose.
+          if (livePoseEngine && video && overlay.getBakedPoseAt(t) === null) livePoseEngine.onFrame(t, video);
+          overlay.drawExportOverlay(ctx, t, w, h, livePoseEngine ? { ...flags, frozen, livePose: (tt) => livePoseEngine.poseAt(tt) } : { ...flags, frozen });
         };
       }
       // Every export carries the AngleMotion watermark (lib/videoWatermark.ts),
       // bottom-left of the frame, LAST: after the render check has read the bare
       // frame and after the skeleton and drawings (KNOWN_ISSUES 046).
-      const drawOverlay = (ctx: CanvasRenderingContext2D, t: number, w: number, h: number, hold: number | null) => {
-        drawOverlays?.(ctx, t, w, h, hold);
+      const drawOverlay = (ctx: CanvasRenderingContext2D, t: number, w: number, h: number, hold: number | null, video?: HTMLVideoElement) => {
+        drawOverlays?.(ctx, t, w, h, hold, video);
         drawVideoWatermark(ctx, w, h);
       };
       const res = await exportEditedVideo(src, {
@@ -591,6 +619,13 @@ export default function MetricsExportPanel({
           if (p !== pctRef.current) { pctRef.current = p; setPct(p); }
         },
       });
+      livePoseEngine?.finish();
+      // No pose was detected in ~4 s (lib/exportPose.ts): no skeleton-less file when one was asked for.
+      if (poseFailed && abortRef.current === ac) {
+        setPhase('error');
+        setError(EXPORT_POSE_FAILED_TEXT);
+        return;
+      }
       // The render check stopped it, or it finished frozen: no file with a frozen skeleton.
       const finalFollow = follow.verdict ?? (() => {
         const v = skeletonFollowsVideo(follow.steps);

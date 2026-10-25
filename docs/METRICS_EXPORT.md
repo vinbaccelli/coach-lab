@@ -66,6 +66,13 @@ the file will contain ("Includes: video + skeleton + drawings").
   is one ≥ 44 px touch target (the text toggles too, not only the switch).
   Keys typed in the panel never reach the page's shortcuts (they used to
   frame-step the video behind it and leave SNAPSHOT mode, KNOWN_ISSUES 056).
+- **Live skeleton while exporting (`LIVE_EXPORT_POSE`, KNOWN_ISSUES 068):** where no
+  AI Track covers the range, the skeleton is detected on the exported frames
+  themselves (`lib/exportPose.ts`: MediaPipe on a ≤512 px copy of the painted
+  frame, one detection at a time, ≥3× its own duration apart, the latest pose
+  reused in between). A covering AI Track is still used as is. No pose in ~4 s
+  stops the export with a closable message. vdebug lines: `export pose: …`.
+  The text below describes the AI Track path, which stays.
 - **Skeleton** is the AI Track pose for each frame's own time (the stored
   track; nothing is detected while rendering). The switch is never dead and
   can be on with the on-screen Skeleton off (an analysis then turns that on):

@@ -2211,3 +2211,36 @@ stepped frame (not changed by these PRs); the reload is unexplained (iOS reloads
 a tab that runs out of memory; the Generate render itself was not changed by
 PR #100).
 
+
+## 068 — Generate needed an AI Track, which cannot run on clips whose paused seeks are dead (iPhone)
+
+**Symptom.** 720×1280 clip (first-frame strategy S4): paused seeks never fire
+'seeked' (5 s, before and after the prime), so AI Track and the panel analysis
+cannot work; live playback does, and the export itself plays the hidden video
+in real time and draws frames. Generate still required an AI Track for the
+skeleton.
+
+**Change.** `lib/exportPose.ts`: while the export plays, the frame just painted
+is copied to a scratch canvas (long side ≤ 512 px) and `detectFullPoseOnBitmap`
+(stateless MediaPipe full, feet included — the AI Track bake's model) runs on
+it. Detection is synchronous on the main thread, so: one at a time, the next
+no sooner than 3× the median detection time (≥ 30 ms), the latest pose drawn
+in between (moved on by its own velocity ≤ 80 ms, dropped after 0.6 s of media
+time). Smoothing is causal (One Euro), so numbers are close to, not identical
+with, an AI Track's centred smoothing. Hybrid: a covering AI Track is used as is
+(`Canvas.drawExportOverlay` `opts.livePose` only fills where the baked track has
+nothing). Snapshot holds are unchanged (their stored pose). The model is loaded
+before the render starts (20 s limit, clear message); no pose in ~4 s of
+rendering stops the export with a closable message. The paint loop passes the
+export video as an optional 6th argument to `drawOverlay` (`runOverlay`);
+exports without an overlay (Recording Hub) call nothing, as before.
+`PANEL_SKELETON_ANALYSIS` stays false, the baked-track path and the panel
+analysis code are untouched.
+
+**Not measured (iPhone only).** Detection time and main-thread duty on the
+device, the output frame rate with the skeleton on, how the live pose looks at
+1×/0.5×/0.25×/0.1×, MediaPipe on a canvas copy from this export, memory with the
+live landmarker also loaded. At 1× the pose lags by up to the detection time
+(about 2 frames); the vdebug `export pose:` lines give detections, median ms,
+frames that reused the last pose and the speed. Angle numbers and the data
+column are still never exported.

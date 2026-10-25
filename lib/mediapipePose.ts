@@ -78,6 +78,11 @@ export function preloadFeetDetector(): void {
   void getLandmarker('full');
 }
 
+/** Loads (or finds loaded) the IMAGE-mode full landmarker; false when it is unavailable. For the export's live skeleton. */
+export async function warmFullLandmarker(): Promise<boolean> {
+  return (await getLandmarker('full')) !== null;
+}
+
 async function getLandmarker(model: PoseModel = 'full'): Promise<PoseLandmarkerT | null> {
   if (!landmarkerPromises[model]) {
     landmarkerPromises[model] = (async () => {
