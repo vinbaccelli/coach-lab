@@ -2152,3 +2152,62 @@ it again), and whether the 1.2 s probe is long enough to tell. A wrong guess
 costs a fallback to a faster speed with a note, not an empty file. Also not
 measured: render time at 0.1× (real time: a 10 s range takes about 100 s) and
 the phone's memory for a long slow export.
+
+## 064 — Toolbar AI Track analyzed the whole video even with a section selected — FIXED (AI Track section choice)
+
+**What.** `handleOpenPrecisionTrack` offered the timeline section only when
+`metricsTrimUserAdjusted` was set (a handle drag). A section that came from
+the snapshots' default span, or any case where that flag was not set, ran on the
+whole video, which is slow, while the export needs only the section.
+
+**Fix (`lib/aiTrackScope.ts`, `components/PrecisionTrackDialog.tsx`, the page's
+open/confirm handlers).** The section is the timeline's `metricsSectionStart/End`
+(the same range the Metrics export panel's "Use section" and its Skeleton
+coverage check use, tolerance 0.05 s). When it is shorter than the video the
+AI Track dialog shows "Selected section (0:SS)" (default) and "Whole video";
+with no section, or one that spans the clip, it shows "Tracking the whole video"
+as before. The choice is not remembered between runs. `handlePrecisionTrack`,
+`runAiTrackRange` and `runPrecisionPass` are unchanged.
+
+**Needs the iPhone.** Dragging the handles, running AI Track on the section,
+then opening Generate: the Skeleton row should read "Skeleton ready." for the
+panel's "Use section" range.
+
+
+## 065 — After AI Track on a section, the export panel's "Include skeleton" could not be turned on — FIXED (PR #100 follow-up)
+
+**What (Vin, preview of PR #100).** The panel started on the whole video. A
+track made for the timeline section does not cover the whole video, so with the
+panel analysis switched off (KNOWN_ISSUES 061) the Skeleton row was disabled
+("Run AI Track from the toolbar first…") although AI Track had just been run.
+The coach had to know to press "Use section". Reproduced in Chromium: after a
+section track (2.59–6.02 s of a 9 s clip) the panel read 0:00–0:09, Skeleton off
+and disabled; after "Use section" it read 0:02.6–0:06.0, "Skeleton ready."
+
+**Fix.** The panel starts on the section when AI Track covered it and not the
+whole video (`defaultExportRange`, `lib/aiTrackScope.ts`); otherwise it starts
+on the whole video as before. And when a track covers only part of the range,
+the row says so ("AI Track covers 40% of this range. Choose “Use section” if
+you tracked a section, or run AI Track on this range…") instead of asking for a
+track that is already there.
+
+**Second report, same test: "AI Track went over the beginning of the video up
+to the end of the selected area".** Not reproduced with both handles moved: the
+pass visited only the section. See the PR comment for the case with only the
+end handle moved.
+
+**Round 2 (Vin, PR #100 previews, iPhone): "AI Track started from the beginning
+again", the live skeleton "going crazy" during the pass, and on the second
+preview "the page reloaded when I tried to generate".** Not reproduced.
+Chromium at 375×812 with real touch events: both trim tabs drag, the dialog
+offers "Selected section (0:02)" and "Whole video", and (desktop size) the pass
+visits only the section. So the section reaches the dialog and the pass; what
+differs on the phone is unknown. Added for the next phone run (`?vdebug=1`,
+"analysis" lines): the range the run was asked for and the timeline section the
+page held ("AI Track asked: section 2.587–6.021 s (balanced; timeline section
+…)"), then every 10th seek of the pass (video time, presented frame time, wall
+time). The live skeleton during a pass is the live pose detector reading each
+stepped frame (not changed by these PRs); the reload is unexplained (iOS reloads
+a tab that runs out of memory; the Generate render itself was not changed by
+PR #100).
+

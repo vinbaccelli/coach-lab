@@ -5,6 +5,7 @@ import TrimRangeBar, { formatClock } from '@/components/TrimRangeBar';
 import { exportEditedVideo } from '@/lib/cropExport';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { firstFrameLog } from '@/lib/firstFrame';
+import { defaultExportRange, selectedSection } from '@/lib/aiTrackScope';
 import {
   EXPORT_SPEEDS, exportOutputSeconds, nearestExportSpeed, rateFallbackText, SOUND_SLOW_REASON, soundAvailable, soundIncluded, speedLabel,
 } from '@/lib/exportSpeed';
@@ -124,6 +125,9 @@ export default function MetricsExportPanel({
   onSnapshotReport, timelineRate, pauseAnalysisVideo, onClose, isMobile = false, overlay = null,
 }: MetricsExportPanelProps) {
   const previewRef = useRef<HTMLVideoElement | null>(null);
+  // Read by the (stable) metadata callback: the props as of the latest render.
+  const latestPropsRef = useRef({ overlay, sectionStart, sectionEnd });
+  latestPropsRef.current = { overlay, sectionStart, sectionEnd };
   const [meta, setMeta] = useState<{ w: number; h: number; duration: number } | null>(null);
   const [range, setRange] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
   const [quality, setQuality] = useState<ExportQuality | null>(null);
@@ -223,7 +227,14 @@ export default function MetricsExportPanel({
     if (metaReadRef.current) return; // a reload after an export keeps the coach's trim
     metaReadRef.current = true;
     setMeta({ w: v.videoWidth, h: v.videoHeight, duration: v.duration });
-    setRange({ start: 0, end: v.duration });
+    // Whole video, unless AI Track was run on the timeline section (then the section).
+    const { overlay: ov, sectionStart: ss, sectionEnd: se } = latestPropsRef.current;
+    const sec = selectedSection(ss, se, v.duration);
+    setRange(defaultExportRange(
+      v.duration, sec,
+      Boolean(sec && ov?.isRangeBaked(sec.start, sec.end)),
+      Boolean(ov?.isRangeBaked(0, v.duration)),
+    ));
   }, []);
 
   const options = useMemo(() => (meta ? exportQualityOptions(meta.w, meta.h) : []), [meta]);
