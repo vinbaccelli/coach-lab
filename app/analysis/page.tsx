@@ -51,7 +51,8 @@ const GenerateWorkspace = React.lazy(() => import('@/components/metrics/Generate
 // Static (not lazy): Generate must open with no chunk fetch on the click.
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
-import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoStateText } from '@/lib/firstFrame';
+import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, swallowMediaEvents, videoStateText } from '@/lib/firstFrame';
+import { domProbeDeps, PROBE_CHECKING_TEXT, PROBE_DEAD_TEXT, probeFrames } from '@/lib/frameProbe';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
 import { selectedSection, type TrackScope } from '@/lib/aiTrackScope';
 import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
@@ -1509,6 +1510,7 @@ function Home() {
   // samples land ON frames instead of at arbitrary wall-clock times.
   const [precisionTrackState, setPrecisionTrackState] = useState<'idle' | 'running' | 'ready'>('idle');
   const precisionAbortRef = useRef(false);
+  const probeFailedRef = useRef(false); // runAiTrackRange stopped before the pass: the video shows no new picture after a seek
   /** Locked-player pass: its own final status (ready / stopped), replacing the generic one. */
   const passFinalRef = useRef<string | null>(null);
   /** Appended to the final status, e.g. "the lock was not used". */
@@ -1692,8 +1694,29 @@ function Home() {
    */
   const runAiTrackRange = useCallback(async (start: number, end: number, quality: TrackQuality): Promise<number> => {
     precisionAbortRef.current = false;
+    probeFailedRef.current = false;
     setPrecisionTrackState('running');
     try {
+      // Before the pass: does this video present a new picture after a seek? If not,
+      // stop here — no pass, no track (KNOWN_ISSUES 066).
+      const pv = videoRef.current;
+      if (pv) {
+        setProcessingStatus(PROBE_CHECKING_TEXT);
+        const label = `strategy=${firstFrameState(pv)?.strategy ?? 'n/a'} ${pv.videoWidth}x${pv.videoHeight}`;
+        const probe = await probeFrames(
+          domProbeDeps(pv, (line) => firstFrameLog('probe', line), () => precisionAbortRef.current, swallowMediaEvents),
+          start, end, label,
+        );
+        if (probe.aborted || precisionAbortRef.current) {
+          setProcessingStatus('AI Track cancelled');
+          return 0;
+        }
+        if (!probe.ok) {
+          probeFailedRef.current = true;
+          setProcessingStatus(PROBE_DEAD_TEXT);
+          return 0;
+        }
+      }
       const kept = await runPrecisionPass(start, end, quality);
       const note = lockNoteRef.current ? ` ${lockNoteRef.current}` : '';
       if (precisionAbortRef.current) {
@@ -9885,7 +9908,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 const tick = () => (skeletonEnabledRef.current || performance.now() - t0 > 2000 ? resolve() : requestAnimationFrame(tick));
                 tick();
               }),
-              track: (start, end) => runAiTrackRange(start, end, 'fast'),
+              track: async (start, end) => {
+                const kept = await runAiTrackRange(start, end, 'fast');
+                if (probeFailedRef.current) throw new Error(PROBE_DEAD_TEXT);
+                return kept;
+              },
               watch: () => {
                 const v = videoRef.current;
                 firstFrameLog('analysis', `start ${a.toFixed(3)}–${b.toFixed(3)} s (AI Track handler, 'fast')`);

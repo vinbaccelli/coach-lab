@@ -33,6 +33,8 @@ export type FirstFrameState = {
   reachedMetadata: boolean;
   /** The last strategy step that ran, for the diagnostic. */
   last: string;
+  /** Which strategy produced the first frame ('already' = none was needed); null until one did. */
+  strategy: 'already' | 'S1' | 'S4' | 'S5' | null;
 };
 const states = new WeakMap<HTMLVideoElement, FirstFrameState>();
 export function firstFrameState(v: HTMLVideoElement): FirstFrameState | null {
@@ -77,7 +79,7 @@ let logT0 = 0;
 /** Lines kept in the log, other than the export analysis' own. */
 const MAX_LOG_LINES = 80;
 /** Slots with their own quota (the export's skeleton analysis, KNOWN_ISSUES 061). */
-const KEPT_SLOTS = new Set(['analysis']);
+const KEPT_SLOTS = new Set(['analysis', 'probe']);
 const MAX_KEPT_LINES = 60;
 
 export function firstFrameLog(slot: string, text: string): void {
@@ -120,7 +122,7 @@ const PRIME_EVENTS = ['play', 'playing', 'pause', 'timeupdate', 'waiting', 'rate
  * i.e. before any listener on the element (the app's pose loop, playback UI,
  * A/B sync, timeline) runs. Returns the off switch.
  */
-function swallowMediaEvents(video: HTMLVideoElement): () => void {
+export function swallowMediaEvents(video: HTMLVideoElement): () => void {
   const stop = (e: Event) => { if (e.target === video) e.stopImmediatePropagation(); };
   for (const type of PRIME_EVENTS) window.addEventListener(type, stop, true);
   return () => { for (const type of PRIME_EVENTS) window.removeEventListener(type, stop, true); };
@@ -183,7 +185,7 @@ export function ensureFirstFrame(
   let running = false;
   let finished = false;
   // One state per load: the page's effect calls this again for each new src.
-  const state: FirstFrameState = { touched: false, reachedMetadata: v.readyState >= 1, last: 'waiting for metadata' };
+  const state: FirstFrameState = { touched: false, reachedMetadata: v.readyState >= 1, last: 'waiting for metadata', strategy: null };
   states.set(v, state);
   const log = (s: string) => {
     state.last = s;
@@ -206,6 +208,7 @@ export function ensureFirstFrame(
   const succeed = (by: string) => {
     if (finished) return;
     finished = true;
+    state.strategy = by === 'already' || by === 'S1' || by === 'S4' || by === 'S5' ? by : state.strategy;
     log(`frame decoded (${by})`);
     onFrame?.();
   };

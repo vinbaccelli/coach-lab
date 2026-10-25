@@ -2211,3 +2211,31 @@ stepped frame (not changed by these PRs); the reload is unexplained (iOS reloads
 a tab that runs out of memory; the Generate render itself was not changed by
 PR #100).
 
+
+## 066 — AI Track on a video that presents no new picture after a seek (iPhone)
+
+**Symptom (iPhone, `?vdebug=1`).** AI Track and the panel analysis produced a
+frozen track (same left wrist at different times; the guard said "video moved
+6×, skeleton still 6×"; "analysis end: 0 seeks in 112183 ms") on clips whose
+first-frame strategy was S4 (1920×1080) or S5 (720×1280, an Instagram-style
+re-encode). The S1 clip (720×404) worked.
+
+**Hypothesis (not proven).** The strategy label is a symptom: S4/S5 only run
+when S1's paused seek left no decoded frame, so these clips are the ones whose
+paused seeks do not present frames. The pass is paused seeks plus detect, with
+no check that the picture changed.
+
+**Fix (option A).** Before the pass, `runAiTrackRange` probes the video
+(`lib/frameProbe.ts`): seek to the range start, then a few frames later, and
+check that 'seeked' fired, the presented frame time moved and the pixels
+changed (a still scene gets a second look about a second later). If not, it
+primes once (muted play, pause, seek back) and probes again. If still dead it
+stops before the pass with a closable message and writes no track. Every step
+is in vdebug under "probe", with the first-frame strategy and size. The panel's
+analysis goes through the same function and shows the message as its error.
+`runPrecisionPass`, the overlay, worker, foot line, StroMotion and export are
+unchanged.
+
+**Needs the real iPhone.** (1) The S4/S5 clip: do the "probe" lines show
+DEAD, and does the prime fix it? (2) The S1 clip still passes the probe
+without a prime. (3) The message appears and closes. Not testable in Chromium.
