@@ -49,3 +49,80 @@ export function reportButtonPosition(
   }
   return { top: clamp(top, minTop, maxTop), left: clamp(col, minLeft, maxLeft) };
 }
+
+// ── Landscape ───────────────────────────────────────────────────────────────
+// In a phone's landscape the top-right slot-action row and the zoom stack are
+// close together and the row's container rect does not describe where its
+// buttons are, so the button is placed from the MEASURED rects of every
+// element in the row and in the zoom stack, and kept at least
+// LANDSCAPE_CLEARANCE_PX away from each of them. Portrait keeps reportButtonPosition().
+
+export const LANDSCAPE_CLEARANCE_PX = 12;
+
+export const isLandscape = (vp: Viewport): boolean => vp.width > vp.height;
+
+/** Separation between two boxes along their best axis (negative = they overlap). */
+export function boxGap(a: Box, b: Box): number {
+  const dx = Math.max(a.left - (b.left + b.width), b.left - (a.left + a.width));
+  const dy = Math.max(a.top - (b.top + b.height), b.top - (a.top + a.height));
+  return Math.max(dx, dy);
+}
+
+/**
+ * `row`: the bounding rects of the +B/trash row and every element in it;
+ * `stack`: the zoom stack and every button in it (all from getBoundingClientRect).
+ * Tries, in order: left of the row's leftmost button; on the right edge below the
+ * zoom stack's last (home) button; below the row in the stack's column; left of
+ * the stack. The first spot that is on screen and ≥ 12 px from every measured box
+ * wins; if none is, the spot with the most clearance, clamped on screen.
+ */
+export function reportButtonPositionLandscape(
+  vp: Viewport, insets: Insets, row: Box[], stack: Box[],
+): { top: number; left: number } {
+  const s = REPORT_BUTTON_SIZE_PX;
+  const rects = [...row, ...stack].filter(usable);
+  const rowBoxes = row.filter(usable);
+  const stackBoxes = stack.filter(usable);
+  const minTop = vp.offsetTop + insets.top + MARGIN_PX;
+  const maxTop = vp.offsetTop + vp.height - insets.bottom - MARGIN_PX - s;
+  const minLeft = vp.offsetLeft + insets.left + MARGIN_PX;
+  const maxLeft = vp.offsetLeft + vp.width - insets.right - MARGIN_PX - s;
+  const onScreen = (p: { top: number; left: number }) =>
+    p.top >= minTop && p.top <= maxTop && p.left >= minLeft && p.left <= maxLeft;
+  const clearance = (p: { top: number; left: number }) =>
+    rects.reduce((m, r) => Math.min(m, boxGap({ top: p.top, left: p.left, width: s, height: s }, r)), Infinity);
+  const clampTo = (p: { top: number; left: number }) => ({
+    top: Math.min(Math.max(p.top, minTop), Math.max(minTop, maxTop)),
+    left: Math.min(Math.max(p.left, minLeft), Math.max(minLeft, maxLeft)),
+  });
+
+  const candidates: Array<{ top: number; left: number }> = [];
+  if (rowBoxes.length) {
+    const rowTop = Math.min(...rowBoxes.map((b) => b.top));
+    const rowBottom = Math.max(...rowBoxes.map((b) => b.top + b.height));
+    const rowLeft = Math.min(...rowBoxes.map((b) => b.left));
+    // Centred on the row, kept inside the top inset (the row sits 8 px from the top, the button is taller than it).
+    candidates.push({ top: Math.min(Math.max(rowTop + (rowBottom - rowTop - s) / 2, minTop), Math.max(minTop, maxTop)), left: rowLeft - LANDSCAPE_CLEARANCE_PX - s });
+  }
+  if (stackBoxes.length) {
+    const sTop = Math.min(...stackBoxes.map((b) => b.top));
+    const sBottom = Math.max(...stackBoxes.map((b) => b.top + b.height));
+    const sLeft = Math.min(...stackBoxes.map((b) => b.left));
+    const sRight = Math.max(...stackBoxes.map((b) => b.left + b.width));
+    const col = (sLeft + sRight) / 2 - s / 2;
+    candidates.push({ top: sBottom + LANDSCAPE_CLEARANCE_PX, left: col });
+    if (rowBoxes.length) {
+      candidates.push({ top: Math.max(...rowBoxes.map((b) => b.top + b.height)) + LANDSCAPE_CLEARANCE_PX, left: col });
+    }
+    candidates.push({ top: sTop, left: sLeft - LANDSCAPE_CLEARANCE_PX - s });
+  }
+  if (!candidates.length) {
+    return clampTo({ top: minTop, left: vp.offsetLeft + vp.width - STACK_RIGHT_PX - insets.right - s });
+  }
+  const good = candidates.find((c) => onScreen(c) && clearance(c) >= LANDSCAPE_CLEARANCE_PX);
+  if (good) return good;
+  // Nothing fits cleanly: the on-screen spot that is furthest from everything.
+  return candidates
+    .map(clampTo)
+    .reduce((best, c) => (clearance(c) > clearance(best) ? c : best));
+}
