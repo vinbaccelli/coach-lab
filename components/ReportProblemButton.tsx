@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as Sentry from '@sentry/nextjs';
+import { REPORT_BUTTON_FALLBACK_BOTTOM, reportButtonBottomPx } from '@/lib/reportButtonPlacement';
 
 /**
  * Small "Report a problem" button (Sentry User Feedback, docs/SENTRY.md). It is
@@ -9,10 +10,15 @@ import * as Sentry from '@sentry/nextjs';
  * integration is added in instrumentation-client.ts only then, so with no DSN
  * this renders nothing. It sends the typed message only (no name, e-mail or
  * screenshot field). Unrelated to any e-mail bug link already in the app.
+ *
+ * Bottom-right, above the zoom stack (lib/reportButtonPlacement.ts), never over
+ * the left toolbar, the zoom buttons or the timeline.
  */
 export default function ReportProblemButton() {
   const ref = useRef<HTMLButtonElement | null>(null);
   const [available, setAvailable] = useState(false);
+  // Measured `bottom` (px) above the zoom stack; null = no stack on this page.
+  const [bottomPx, setBottomPx] = useState<number | null>(null);
 
   useEffect(() => {
     setAvailable(Boolean(Sentry.getFeedback()));
@@ -25,6 +31,25 @@ export default function ReportProblemButton() {
     return feedback.attachTo(el);
   }, [available]);
 
+  useEffect(() => {
+    if (!available) return;
+    const measure = () => {
+      const stack = document.querySelector('[data-tour-id="tour-zoom"]');
+      const r = stack ? stack.getBoundingClientRect() : null;
+      setBottomPx(reportButtonBottomPx(window.innerHeight, r ? { top: r.top, width: r.width, height: r.height } : null));
+    };
+    measure();
+    // The stack appears with the video and moves with the dock / install banner / rotation.
+    const timer = window.setInterval(measure, 500);
+    window.addEventListener('resize', measure);
+    window.addEventListener('orientationchange', measure);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('orientationchange', measure);
+    };
+  }, [available]);
+
   if (!available) return null;
   return (
     <button
@@ -33,8 +58,8 @@ export default function ReportProblemButton() {
       data-testid="report-problem"
       style={{
         position: 'fixed',
-        left: 'max(8px, env(safe-area-inset-left))',
-        bottom: 'max(8px, env(safe-area-inset-bottom))',
+        right: 'calc(12px + env(safe-area-inset-right, 0px))',
+        bottom: bottomPx != null ? `${bottomPx}px` : REPORT_BUTTON_FALLBACK_BOTTOM,
         zIndex: 60,
         padding: '5px 9px',
         borderRadius: 999,

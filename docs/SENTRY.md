@@ -42,4 +42,8 @@ e-mail or screenshot field and asks not to include personal details).
 ## Open
 - The privacy policy (`app/privacy/page.tsx`) does not mention Sentry as a
   processor yet; it should before the DSN is set in production.
-- The button's position (bottom-left, small) was not checked on a phone.
+- The button sits bottom-right, directly above the zoom stack
+  (`[data-tour-id="tour-zoom"]`, measured every 0.5 s and on resize;
+  `lib/reportButtonPlacement.ts`), so it clears the left toolbar, the zoom
+  buttons and the timeline. It was first bottom-left and was hidden behind the
+  left toolbar on phones. Its position at 390 px was not checked in a browser.
