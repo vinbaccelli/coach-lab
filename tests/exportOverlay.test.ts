@@ -496,9 +496,9 @@ test('an export with no frame or no bytes is an error, never an empty file', () 
 test('panel analysis is off for the release: skeleton only when a track covers the range', () => {
   assert.equal(PANEL_SKELETON_ANALYSIS, false);
   assert.deepEqual(skeletonExportStatus(false, 1), { state: 'ready', text: 'Skeleton ready.' });
-  assert.deepEqual(skeletonExportStatus(false, 0), { state: 'unavailable', text: 'Run AI Track from the toolbar first, then the skeleton can be included.' });
+  assert.deepEqual(skeletonExportStatus(false, 0, false, false, false, false, false), { state: 'unavailable', text: 'Run AI Track from the toolbar first, then the skeleton can be included.' });
   // A track for part of the range: say so (KNOWN_ISSUES 065), still unavailable.
-  assert.deepEqual(skeletonExportStatus(false, 0.4), {
+  assert.deepEqual(skeletonExportStatus(false, 0.4, false, false, false, false, false), {
     state: 'unavailable',
     text: 'AI Track covers 40% of this range. Choose “Use section” if you tracked a section, or run AI Track on this range, then the skeleton can be included.',
   });
@@ -507,4 +507,44 @@ test('panel analysis is off for the release: skeleton only when a track covers t
   assert.equal(skeletonExportStatus(false, 0.4, false, false, true).state, 'analyze');
   // A toolbar AI Track running still says to wait.
   assert.equal(skeletonExportStatus(true, 0).state, 'busy');
+});
+
+import { EXPORT_ANALYZE_BY_PLAYBACK, LIVE_EXPORT_POSE, runOverlay } from '../lib/exportOverlay';
+
+test('runOverlay: no overlay (the Recording Hub) does nothing; a hold call has exactly the five arguments it always had', () => {
+  const ctx = {} as CanvasRenderingContext2D;
+  assert.doesNotThrow(() => runOverlay(undefined, ctx, 1, 2, 3, null));
+  const calls: unknown[][] = [];
+  const fn = (...a: unknown[]) => { calls.push(a); };
+  runOverlay(fn as never, ctx, 1.5, 720, 1280, 2);
+  assert.equal(calls[0].length, 5);
+  assert.deepEqual(calls[0].slice(1), [1.5, 720, 1280, 2]);
+});
+
+test('runOverlay: a live frame also gets the export video; an overlay that throws never stops the frame', () => {
+  const ctx = {} as CanvasRenderingContext2D;
+  const video = { tag: 'v' } as unknown as HTMLVideoElement;
+  let got: unknown[] = [];
+  runOverlay(((...a: unknown[]) => { got = a; }) as never, ctx, 0.5, 10, 20, null, video);
+  assert.equal(got.length, 6);
+  assert.equal(got[5], video);
+  assert.doesNotThrow(() => runOverlay((() => { throw new Error('boom'); }) as never, ctx, 0, 1, 1, null, video));
+});
+
+test('live export skeleton (LIVE_EXPORT_POSE, off): the in-render detection stays behind its flag', () => {
+  assert.equal(LIVE_EXPORT_POSE, false);
+  assert.deepEqual(skeletonExportStatus(false, 0, false, false, false, true, false), { state: 'live', text: 'The skeleton is detected while the video is exported. No AI Track needed.' });
+  assert.equal(skeletonExportStatus(false, 0.4, false, false, false, true, false).text, 'AI Track covers 40% of this range; the rest is detected while the video is exported.');
+});
+
+test('analysis by playing (EXPORT_ANALYZE_BY_PLAYBACK): no AI Track needed, a partial track says what is left', () => {
+  assert.equal(EXPORT_ANALYZE_BY_PLAYBACK, true);
+  assert.deepEqual(skeletonExportStatus(false, 1), { state: 'ready', text: 'Skeleton ready.' });
+  assert.equal(skeletonExportStatus(false, 0).state, 'playback');
+  assert.match(skeletonExportStatus(false, 0).text, /analyzed first by playing the video slowly/);
+  assert.match(skeletonExportStatus(false, 0.4).text, /AI Track covers 40% of this range; the rest is analyzed first/);
+  // An AI Track running from the toolbar, or a failed/stopping analysis, still wins.
+  assert.equal(skeletonExportStatus(true, 0).state, 'busy');
+  assert.equal(skeletonExportStatus(false, 0, true).state, 'failed');
+  assert.equal(skeletonExportStatus(false, 0, false, true).state, 'stopping');
 });

@@ -22,7 +22,7 @@ import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 import { scaledExportSize } from '@/lib/exportEstimate';
 import {
-  emptyExportError, holdResumeSeek, holdSeekLanded, NO_FRAME_GIVE_UP_MS, outputProgress, resumeAction, RESUME_FAILED_TEXT,
+  emptyExportError, holdResumeSeek, holdSeekLanded, NO_FRAME_GIVE_UP_MS, outputProgress, resumeAction, RESUME_FAILED_TEXT, runOverlay, type OverlayFn,
 } from '@/lib/exportOverlay';
 import { rateCandidates, rateWorked, RATE_PROBE_MS } from '@/lib/exportSpeed';
 
@@ -66,7 +66,7 @@ export interface EditExportOptions {
    * skeleton + drawings). `hold` is the index into `holds` while one is shown,
    * else null. Omitted, nothing else is drawn.
    */
-  drawOverlay?: (ctx: CanvasRenderingContext2D, mediaTime: number, ow: number, oh: number, hold: number | null) => void;
+  drawOverlay?: OverlayFn;
   /**
    * Freeze points (Metrics export snapshot holds), in source seconds. At each
    * `at` the video is paused and seeked exactly to `at`, and that frame is drawn
@@ -401,9 +401,8 @@ export async function exportEditedVideo(
       if (video.readyState >= 2) {
         ctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
         framesPainted++;
-        if (drawOverlay) {
-          try { drawOverlay(ctx, video.currentTime, ow, oh, holdIndex); } catch { /* the frame itself is already drawn */ }
-        }
+        // The video is passed along for a live frame (not a hold's copy): the Metrics export detects the skeleton on it.
+        runOverlay(drawOverlay, ctx, video.currentTime, ow, oh, holdIndex, video);
       }
     };
     /** A hold's frame: the copy, at the hold's own time (the paused video's clock is not trusted). */
@@ -411,9 +410,7 @@ export async function exportEditedVideo(
       if (!holdFrame || !holdFrameOk) { paint(h.index); return; }
       ctx.drawImage(holdFrame, 0, 0);
       framesPainted++;
-      if (drawOverlay) {
-        try { drawOverlay(ctx, h.at, ow, oh, h.index); } catch { /* the frame itself is already drawn */ }
-      }
+      runOverlay(drawOverlay, ctx, h.at, ow, oh, h.index);
     };
     // Media time once a second (a video whose time stops advancing shows here).
     let diagAt = 0;

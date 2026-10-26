@@ -48,7 +48,7 @@ export function trackedFraction(
   return hit / n;
 }
 
-export type SkeletonExportState = 'ready' | 'analyze' | 'busy' | 'failed' | 'stopping' | 'unavailable';
+export type SkeletonExportState = 'ready' | 'analyze' | 'playback' | 'live' | 'busy' | 'failed' | 'stopping' | 'unavailable';
 
 /**
  * Whether the export panel may run its own skeleton analysis. OFF for the
@@ -57,6 +57,22 @@ export type SkeletonExportState = 'ready' | 'analyze' | 'busy' | 'failed' | 'sto
  * the toolbar) already covers the range. The analysis code stays, unused.
  */
 export const PANEL_SKELETON_ANALYSIS = false;
+
+/**
+ * The skeleton is detected WHILE the export plays (lib/exportPose.ts) where no
+ * AI Track covers the range, so Generate does not need an AI Track
+ * (KNOWN_ISSUES 068). A covering AI Track is still used as it is.
+ */
+export const LIVE_EXPORT_POSE = false;
+
+/**
+ * The skeleton is analyzed FIRST by playing the video slowly in a hidden player
+ * (lib/playbackAnalysis.ts), then the export renders from the stored track
+ * (KNOWN_ISSUES 069). Needs no seeks (so it works where AI Track cannot) and
+ * leaves the render free of detection. Replaces the in-render detection of 068,
+ * which froze the exported video (LIVE_EXPORT_POSE, kept, off).
+ */
+export const EXPORT_ANALYZE_BY_PLAYBACK = true;
 
 /** Under "Include skeleton" when no AI Track covers the range and the panel does not analyze. */
 export const SKELETON_NEEDS_TOOLBAR_TRACK_TEXT = 'Run AI Track from the toolbar first, then the skeleton can be included.';
@@ -77,6 +93,8 @@ export function skeletonExportStatus(
   analysisFailed = false,
   stopping = false,
   analysisEnabled = PANEL_SKELETON_ANALYSIS,
+  liveEnabled = LIVE_EXPORT_POSE,
+  playbackEnabled = EXPORT_ANALYZE_BY_PLAYBACK,
 ): { state: SkeletonExportState; text: string } {
   // The export's own pass, cancelled, still finishing the frame it is on (it
   // checks the abort between frames): it is ours, not "an AI Track running"
@@ -87,6 +105,16 @@ export function skeletonExportStatus(
   if (analysisFailed) return { state: 'failed', text: `${ANALYSIS_FAILED_TEXT}.` };
   if (trackRunning) return { state: 'busy', text: 'AI Track is running. Wait for it to finish, then export.' };
   if (fraction >= 0.999) return { state: 'ready', text: 'Skeleton ready.' };
+  if (!analysisEnabled && playbackEnabled) {
+    if (fraction <= 0) return { state: 'playback', text: 'The skeleton is analyzed first by playing the video slowly (it adds time), then exported. No AI Track needed.' };
+    const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
+    return { state: 'playback', text: `AI Track covers ${pct}% of this range; the rest is analyzed first by playing the video slowly (it adds time).` };
+  }
+  if (!analysisEnabled && liveEnabled) {
+    if (fraction <= 0) return { state: 'live', text: 'The skeleton is detected while the video is exported. No AI Track needed.' };
+    const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
+    return { state: 'live', text: `AI Track covers ${pct}% of this range; the rest is detected while the video is exported.` };
+  }
   if (!analysisEnabled) {
     if (fraction <= 0) return { state: 'unavailable', text: SKELETON_NEEDS_TOOLBAR_TRACK_TEXT };
     // A track exists but not for this whole range: say so, instead of asking for one that is already there.
@@ -612,4 +640,41 @@ export async function analyzeForExport(d: ExportAnalysisDeps, start: number, end
   } finally {
     stop();
   }
+}
+
+/** The overlay callback of exportEditedVideo (lib/cropExport.ts). `video` is the export's hidden video, passed for live frames only. */
+export type OverlayFn = (
+  ctx: CanvasRenderingContext2D, mediaTime: number, ow: number, oh: number, hold: number | null, video?: HTMLVideoElement,
+) => void;
+
+/**
+ * Calls the overlay for one painted frame (never throws: the frame itself is
+ * already drawn). Without an overlay nothing happens, which is every Recording
+ * Hub export. `video` is added as a sixth argument only when given (a live
+ * frame), so every other call has exactly the five arguments it always had.
+ */
+export function runOverlay(
+  fn: OverlayFn | undefined,
+  ctx: CanvasRenderingContext2D, mediaTime: number, ow: number, oh: number, hold: number | null, video?: HTMLVideoElement,
+): void {
+  if (!fn) return;
+  try {
+    if (video) fn(ctx, mediaTime, ow, oh, hold, video);
+    else fn(ctx, mediaTime, ow, oh, hold);
+  } catch { /* the frame itself is already drawn */ }
+}
+
+/**
+ * The main button's label. After a refused play() (iOS plays only inside a tap)
+ * it asks for another tap; with the skeleton still to be analyzed by playing,
+ * the first tap analyzes and the next one exports (KNOWN_ISSUES 069).
+ */
+export function exportButtonLabel(o: {
+  retry: 'analysis' | 'export' | null; panelAnalysis: boolean; includeSkeleton: boolean; skeletonState: SkeletonExportState; trackedFraction: number;
+}): string {
+  if (o.retry === 'analysis') return 'Tap to start the analysis';
+  if (o.retry === 'export') return 'Tap to retry the export';
+  if (o.panelAnalysis) return 'Analyze skeleton + export';
+  if (o.includeSkeleton && o.skeletonState === 'playback' && o.trackedFraction < 0.999) return 'Analyze skeleton';
+  return 'Export';
 }

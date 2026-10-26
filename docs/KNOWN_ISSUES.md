@@ -2211,3 +2211,56 @@ stepped frame (not changed by these PRs); the reload is unexplained (iOS reloads
 a tab that runs out of memory; the Generate render itself was not changed by
 PR #100).
 
+
+## 068 — Generate needed an AI Track, which cannot run on clips whose paused seeks are dead (iPhone)
+
+**Symptom.** 720×1280 clip (first-frame strategy S4): paused seeks never fire
+'seeked' (5 s, before and after the prime), so AI Track and the panel analysis
+cannot work; live playback does, and the export itself plays the hidden video
+in real time and draws frames. Generate still required an AI Track for the
+skeleton.
+
+**Change.** `lib/exportPose.ts`: while the export plays, the frame just painted
+is copied to a scratch canvas (long side ≤ 512 px) and `detectFullPoseOnBitmap`
+(stateless MediaPipe full, feet included — the AI Track bake's model) runs on
+it. Detection is synchronous on the main thread, so: one at a time, the next
+no sooner than 3× the median detection time (≥ 30 ms), the latest pose drawn
+in between (moved on by its own velocity ≤ 80 ms, dropped after 0.6 s of media
+time). Smoothing is causal (One Euro), so numbers are close to, not identical
+with, an AI Track's centred smoothing. Hybrid: a covering AI Track is used as is
+(`Canvas.drawExportOverlay` `opts.livePose` only fills where the baked track has
+nothing). Snapshot holds are unchanged (their stored pose). The model is loaded
+before the render starts (20 s limit, clear message); no pose in ~4 s of
+rendering stops the export with a closable message. The paint loop passes the
+export video as an optional 6th argument to `drawOverlay` (`runOverlay`);
+exports without an overlay (Recording Hub) call nothing, as before.
+`PANEL_SKELETON_ANALYSIS` stays false, the baked-track path and the panel
+analysis code are untouched.
+
+**Not measured (iPhone only).** Detection time and main-thread duty on the
+device, the output frame rate with the skeleton on, how the live pose looks at
+1×/0.5×/0.25×/0.1×, MediaPipe on a canvas copy from this export, memory with the
+live landmarker also loaded. At 1× the pose lags by up to the detection time
+(about 2 frames); the vdebug `export pose:` lines give detections, median ms,
+frames that reused the last pose and the speed. Angle numbers and the data
+column are still never exported.
+
+## 069 — In-render skeleton detection froze the exported video and lagged (iPhone) — replaced by analysis by playing
+
+**Symptom (PR #107 first version, 720×1280 S4 clip).** At 1× the skeleton did not follow the player; at 0.1× it followed but the exported video froze and stopped very often.
+
+**Cause (from the design, not yet measured on the phone).** MediaPipe's `detect` is synchronous on the main thread; the export paints and records on the same thread, so every detection stalled the picture, and at 1× the pose was a detection late and sparse (068).
+
+**Change.** The in-render detection (`LIVE_EXPORT_POSE`, `lib/exportPose.ts`, `Canvas` `opts.livePose`) is kept but OFF. Where no AI Track covers the range, `EXPORT_ANALYZE_BY_PLAYBACK`: a first pass (`lib/playbackAnalysis.ts`) plays the clip muted in a hidden element at 0.25× (stepping down to 0.15×/0.1× when more than a quarter of the frames find the detector busy), detects every presented frame (stateless MediaPipe full on a ≤1024 px copy) at the frame's own media time (requestVideoFrameCallback), and stores the poses through the existing bake storage (`finishBakeCapture`: centred, zero-lag smoothing, like an AI Track). The existing self-check (`checkAnalyzedTrack`) runs on it. The export then renders as it always did, with no detection in the render. No seeks except one to the start, so it does not depend on paused seeks. The result is an AI Track section: later exports and the on-screen skeleton use it. After the analysis the panel shows "Skeleton analyzed: N poses over X s in Y s (played at R×)" and vdebug has `export pose:` lines.
+
+**Costs and limits.** Adds about 4× the range's length (plus start-up) to Generate. The playback analysis needs the tab visible (it pauses when hidden). Cancel keeps parts already analyzed. Not measured on a phone: detection time per frame, whether 0.25× holds, quality against AI Track.
+
+**Open (069 follow-up): the exported skeleton was FROZEN on the iPhone (S4 clip).** Measured on the mp4: the torso centre stayed at one point (±0.3 px) over 8.5 s. Candidates (read from the code, not yet decided): (1) the detector was fed the same picture each time (slow-rate playback of a hidden element presenting no new frames; the export probes its rate, the analysis does not), (2) wrong timestamps in the stored track, (3) the export's own `video.currentTime` stuck during the render. Note: the self-check `checkAnalyzedTrack` runs on the analysis path and would fail a frozen stored track as 'static'; it did not stop this export, so either it did not run or the stored track moves and the freeze is in the render.
+
+**Diagnostic added (no fix).** Log slot `trace` (own quota of 100 lines in the vdebug box): the rate set/read and rVFC support; per analyzed sample (first 5, every 15th, last 3) index, `meta.mediaTime`, `video.currentTime`, `presentedFrames`, a hash of the 32×32 grey scratch canvas the detector gets, a hash of a direct read of the video, a hash of six landmarks, the observed playback rate; a summary (samples, first/last time, distinct times/pixel/keypoint hashes); the stored track (samples, start–end); whether the frozen-track guard ran and what it returned (ok, reason, posesPerSec, motion, repeatShare); the stored lookup of the left wrist at 5 times; in the render, once a second the export `video.currentTime`, the lookup time and the left wrist from `lookupBakedPose`; and the render-time guard's steps/verdict. The panel shows one line after the export: "trace: pixel hashes N, keypoint hashes M, stored samples K, render clock moved yes/no". How to read it: pixel hashes ≈ 1 with distinct times → frozen input (1); pixel hashes vary but keypoint hashes ≈ 1 → detector/canvas upload; both vary but the stored lookups are constant → storage/timestamps (2); render clock "no" → (3).
+
+**069 follow-up — iOS play() permission (iPhone, PR #107 with trace).** Analysis by slow playback WORKS on the S4 clip (101 poses, 101 distinct pixel and keypoint hashes; the frozen skeleton of the earlier run was not reproduced with the trace build). The failures were iOS refusing play() outside a tap: run 1 the analysis' play() threw NotAllowedError (0 samples); run 2 the analysis ran but the export started ~15 s later without a tap (export video paused, "no frame painted in 4000 ms"); run 3 (track already stored, export started straight from the tap) worked (clock moved, 233 frames, guard ok).
+
+**Fix.** (1) When the skeleton must be analyzed, the analysis player is created and `play()` is called as the first thing in the Export tap, before anything is awaited (`openAnalysisSession`, `lib/playbackAnalysis.ts`; it uses the page's own video URL, so no fetch comes first, and it loops until the analysis takes over, so waiting for the model does not run it to the end). It is not paused between ranges. If play() is refused (`NotAllowedError`) the button reads "Tap to start the analysis" and the next tap starts it again (no failure message). (2) After the analysis the track is stored and the panel says "Skeleton ready - tap Export."; the render starts from the next tap (the first tap only analyzes; its button reads "Analyze skeleton"). (3) If the render's play() is refused (no frame painted in 4 s), the panel shows "Tap to retry the export" and the next tap renders again instead of a failure message. Detection, smoothing, the frozen-track guard, the trace lines, runPrecisionPass, drawSkeletonOverlay, the foot line, StroMotion and the Recording Hub are unchanged.
+
+**Not measured.** Whether iOS keeps allowing the analysis player (started inside the tap) to keep playing for the whole analysis, and whether a refused play() always shows as NotAllowedError.

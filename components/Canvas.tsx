@@ -360,6 +360,8 @@ export interface CanvasHandle {
       skeleton: boolean;
       drawings: boolean;
       frozen?: ExportOverlayFrozen;
+      /** Where no AI Track covers the time: the pose detected while exporting (lib/exportPose.ts). */
+      livePose?: (mediaTime: number) => Array<{ x: number; y: number; score: number; name: string }> | null;
       hold?: {
         strokes: readonly unknown[];
         box: VideoBox | null;
@@ -3904,13 +3906,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             for (const st of frozen.strokes as Stroke[]) drawStroke(ctx, st, tick, jointBallR);
             for (const m of frozen.angles as AngleMeas[]) drawAngleMeas(ctx, m);
           }
-          // Skeleton: only the AI-tracked pose for this media time (the screen's
-          // track-scope rule — untracked time draws nothing), never mid-bake.
+          // Skeleton: the AI-tracked pose for this media time (the screen's
+          // track-scope rule), else the pose detected while exporting when the
+          // caller passes one (opts.livePose); never mid-bake.
           // Included on request whatever the on-screen Skeleton switch says (the
           // panel decides); the display options still follow the screen. No live
           // pose, no pose worker: lookupBakedPose is a pure read of the stored track.
           if (opts.skeleton && !bakingRef.current && frozen.videoW > 0 && frozen.videoH > 0) {
-            const kps = lookupBakedPose(mediaTime);
+            const kps = lookupBakedPose(mediaTime) ?? opts.livePose?.(mediaTime) ?? null;
             if (kps && kps.length) {
               ctx.translate(dx, dy);
               drawSkeletonOverlay(ctx, kps, frozen.videoW, frozen.videoH, dw, dh, {
