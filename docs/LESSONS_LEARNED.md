@@ -897,3 +897,13 @@ as empty.
 and a call whose outcome is logged but never acted on. A fallback must not
 depend on what failed; "called play()" is not "it plays", so check the effect
 (time moves) and act on its absence.
+
+## 022 — Doing heavy work on the thread that records, and asking iOS for permission too late
+
+**Symptoms.** (a) PR #107, first version: detecting the skeleton inside the export render froze the exported video (0.1×) and lagged the pose (1×). (b) Second version, iPhone: `play()` of the analysis player threw `NotAllowedError`, or the render started ~15 s after the tap on its own and painted no frame.
+
+**Verified causes.** (a) MediaPipe's `detect` is synchronous on the main thread, the same thread that paints and records the export (read from the code; the iPhone confirmed the freezing). (b) iOS only allows `play()` inside the tap; the analysis had awaited a fetch and a model download before calling it, and the render started after a 15 s analysis (iPhone trace: run 1 refused, run 2 paused with "no frame painted in 4000 ms", run 3 straight from the tap worked).
+
+**Fix.** Analysis and render are separate steps with separate taps; the analysis player is opened and `play()` called first thing in the tap; a refused `play()` or an unpainted render asks for a tap instead of showing a failure (KNOWN_ISSUES 069).
+
+**Class of mistake.** (1) Putting blocking work on the thread that must keep a real-time pipeline fed: move it to its own pass. (2) Treating "needs a user gesture" as a detail: anything that starts media must be the first call in the handler, and a long job must not be followed by media start without a new tap. Both were found only by measuring on the device (trace lines), not by reading.
