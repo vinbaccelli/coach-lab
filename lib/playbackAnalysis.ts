@@ -58,15 +58,36 @@ export class PlaybackCollector {
   private winFrames = 0;
   private winSkipped = 0;
   private out: PlaybackSample[] = [];
+  private lastPresented: number | null = null;
+  private lastMediaT: number | null = null;
+  /** The shortest gap between two callbacks seen: one video frame (used when the browser reports no frame counter). */
+  private frameInterval = 1 / 30;
 
   constructor(private range: { start: number; end: number }) {}
 
-  /** A frame was presented at media time `mediaT`; `busy` = the previous detection is still running. */
-  onFrame(mediaT: number, busy: boolean): FrameDecision {
+  /**
+   * A frame was presented at media time `mediaT`; `busy` = the previous detection is still running.
+   * `presented` = the browser's presented-frame counter, when it has one. A detection blocks the page
+   * for tens of ms and the frames shown meanwhile get no callback at all: they are counted from the
+   * counter's jump (or, without it, from the media-time gap), so slow detection slows the playback down.
+   */
+  onFrame(mediaT: number, busy: boolean, presented: number | null = null): FrameDecision {
     if (mediaT >= this.range.end) return 'done';
     if (mediaT < this.range.start - 0.05) return 'skip'; // before the range (the seek did not land yet): not counted
-    this.frames++;
-    this.winFrames++;
+    let missed = 0;
+    if (presented !== null && this.lastPresented !== null) {
+      missed = Math.max(0, presented - this.lastPresented - 1);
+    } else if (this.lastMediaT !== null && mediaT > this.lastMediaT) {
+      const d = mediaT - this.lastMediaT;
+      this.frameInterval = Math.max(1 / 120, Math.min(this.frameInterval, d));
+      missed = Math.max(0, Math.round(d / this.frameInterval) - 1);
+    }
+    this.lastPresented = presented;
+    this.lastMediaT = mediaT;
+    this.frames += 1 + missed;
+    this.winFrames += 1 + missed;
+    this.skipped += missed;
+    this.winSkipped += missed;
     if (busy) { this.skipped++; this.winSkipped++; return 'skip'; }
     this.detections++;
     return 'detect';
@@ -250,7 +271,7 @@ export async function analyzeByPlaying(
       lastFrameAt = performance.now();
       if (firstWall === null && mediaT >= range.start - 0.05) { firstWall = performance.now(); firstMedia = mediaT; }
       else if (firstWall !== null && performance.now() - firstWall > 500) observedRate = (mediaT - firstMedia) / ((performance.now() - firstWall) / 1000);
-      const decision = col.onFrame(mediaT, busy);
+      const decision = col.onFrame(mediaT, busy, presented);
       if (decision === 'done') { finishNow(); return; }
       if (decision === 'detect') {
         const g = grab();
