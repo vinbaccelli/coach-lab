@@ -16,6 +16,8 @@
  * unit-tested; `analyzeByPlaying` drives a real <video>.
  */
 import { scratchSize, type Kp } from '@/lib/exportPose';
+import { toGrey } from '@/lib/exportOverlay';
+import { hashBytes, hashKps, sampleLine, shouldLogSample, summaryLine, TraceStats, type TraceSummary } from '@/lib/traceDiag';
 
 export const ANALYSIS_START_RATE = 0.25;
 export const ANALYSIS_RATES = [0.25, 0.15, 0.1] as const;
@@ -106,7 +108,7 @@ export class PlaybackCollector {
 }
 
 export type PlaybackAnalysisResult =
-  | { ok: true; samples: PlaybackSample[]; rate: number; seconds: number }
+  | { ok: true; samples: PlaybackSample[]; rate: number; seconds: number; trace: TraceSummary & { observedRate: number | null } }
   | { ok: false; aborted?: boolean; error: string };
 
 type RvfcVideo = HTMLVideoElement & {
@@ -121,9 +123,10 @@ type RvfcVideo = HTMLVideoElement & {
 export async function analyzeByPlaying(
   blob: Blob,
   range: { start: number; end: number },
-  o: { signal?: AbortSignal; onProgress?: (fraction: number) => void; log?: (line: string) => void },
+  o: { signal?: AbortSignal; onProgress?: (fraction: number) => void; log?: (line: string) => void; trace?: (line: string) => void },
 ): Promise<PlaybackAnalysisResult> {
   const log = o.log ?? (() => {});
+  const trace = o.trace ?? (() => {});
   const url = URL.createObjectURL(blob);
   const video = document.createElement('video') as RvfcVideo;
   video.muted = true;
@@ -155,7 +158,28 @@ export async function analyzeByPlaying(
     const { detectPoseAttemptOnBitmap } = await import('@/lib/mediapipePose');
     let rate = ANALYSIS_START_RATE;
     video.playbackRate = rate;
+    trace(`trace: playbackRate set ${rate}×, reads ${video.playbackRate}×, rVFC ${typeof video.requestVideoFrameCallback === 'function' ? 'yes' : 'NO'}, video ${video.videoWidth}x${video.videoHeight}`);
     let canvas: HTMLCanvasElement | null = null;
+    // Diagnostic (KNOWN_ISSUES 069): what the detector was fed and what it returned.
+    let tiny: HTMLCanvasElement | null = null;
+    const stats = new TraceStats();
+    const lastLines: string[] = [];
+    let ordinal = 0;
+    let firstWall: number | null = null;
+    let firstMedia = 0;
+    let observedRate: number | null = null;
+    const hashOf = (source: CanvasImageSource): string => {
+      try {
+        tiny = tiny ?? document.createElement('canvas');
+        tiny.width = 32; tiny.height = 32;
+        const c = tiny.getContext('2d', { willReadFrequently: true });
+        if (!c) return 'noctx';
+        c.drawImage(source, 0, 0, 32, 32);
+        return hashBytes(toGrey(c.getImageData(0, 0, 32, 32).data), 3);
+      } catch {
+        return 'unreadable';
+      }
+    };
     let busy = false;
     let finished = false;
     let lastFrameAt = performance.now();
@@ -176,18 +200,35 @@ export async function analyzeByPlaying(
       return { src: canvas, vw: video.videoWidth, vh: video.videoHeight };
     };
 
-    const handle = (mediaT: number) => {
+    const handle = (mediaT: number, presented: number | null = null) => {
       if (finished || mediaT === lastT) return;
       lastT = mediaT;
       lastFrameAt = performance.now();
+      if (firstWall === null && mediaT >= range.start - 0.05) { firstWall = performance.now(); firstMedia = mediaT; }
+      else if (firstWall !== null && performance.now() - firstWall > 500) observedRate = (mediaT - firstMedia) / ((performance.now() - firstWall) / 1000);
       const decision = col.onFrame(mediaT, busy);
       if (decision === 'done') { finishNow(); return; }
       if (decision === 'detect') {
         const g = grab();
         if (g) {
           busy = true;
+          // What exactly the detector is fed: the scratch canvas (hashed), and the video itself for comparison.
+          const pixHash = hashOf(g.src);
+          const vidHash = hashOf(video);
+          const currentTime = video.currentTime;
           detectPoseAttemptOnBitmap(g.src, g.vw, g.vh, { model: 'full' })
-            .then((kps) => col.record(mediaT, kps as Kp[] | null), () => col.record(mediaT, null))
+            .then((kps) => {
+              col.record(mediaT, kps as Kp[] | null);
+              if (kps && kps.length) {
+                const kpHash = hashKps(kps);
+                stats.add(mediaT, pixHash, vidHash, kpHash);
+                const line = sampleLine({ index: ordinal, mediaT, currentTime, presented, pix: pixHash, vid: vidHash, kp: kpHash, observedRate, rateSet: rate });
+                if (shouldLogSample(ordinal)) trace(line);
+                lastLines.push(line);
+                if (lastLines.length > 3) lastLines.shift();
+                ordinal++;
+              }
+            }, () => col.record(mediaT, null))
             .finally(() => {
               busy = false;
               o.onProgress?.(col.progress(mediaT));
@@ -216,7 +257,7 @@ export async function analyzeByPlaying(
       if (typeof video.requestVideoFrameCallback === 'function') {
         rvfcHandle = video.requestVideoFrameCallback((_n, meta) => {
           arm();
-          handle(typeof meta?.mediaTime === 'number' ? meta.mediaTime : video.currentTime);
+          handle(typeof meta?.mediaTime === 'number' ? meta.mediaTime : video.currentTime, typeof (meta as { presentedFrames?: number })?.presentedFrames === 'number' ? (meta as { presentedFrames?: number }).presentedFrames! : null);
         });
       }
     };
@@ -260,9 +301,13 @@ export async function analyzeByPlaying(
     const seconds = (performance.now() - t0) / 1000;
     log(`export pose: analysis done: ${s.detections} detections (${s.withPose} with a pose) of ${s.frames} frames, ${s.skipped} skipped, `
       + `last rate ${rate}×, ${seconds.toFixed(1)} s${failure ? `, stopped: ${failure}` : ''}`);
+    // The last three sample lines (they were not on the every-15th schedule), then the totals.
+    for (const l of lastLines) trace(`${l} (last)`);
+    const summary = stats.summary();
+    trace(summaryLine(summary, null, observedRate));
     if (failure) return { ok: false, error: failure };
     if (samples.length < 2) return { ok: false, error: ANALYSIS_NO_PLAYER_TEXT };
-    return { ok: true, samples, rate, seconds };
+    return { ok: true, samples, rate, seconds, trace: { ...summary, observedRate } };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'The skeleton analysis failed.' };
   } finally {

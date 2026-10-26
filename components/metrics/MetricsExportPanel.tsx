@@ -7,6 +7,7 @@ import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { firstFrameLog } from '@/lib/firstFrame';
 import { EXPORT_POSE_MODEL_TEXT } from '@/lib/exportPose';
 import { analyzeByPlaying } from '@/lib/playbackAnalysis';
+import { clockMoved, verdictText } from '@/lib/traceDiag';
 import { defaultExportRange, selectedSection } from '@/lib/aiTrackScope';
 import {
   EXPORT_SPEEDS, exportOutputSeconds, nearestExportSpeed, rateFallbackText, SOUND_SLOW_REASON, soundAvailable, soundIncluded, speedLabel,
@@ -91,6 +92,8 @@ export interface MetricsExportPanelProps {
     passStatus: string | null;
     /** Runs the existing AI Track pass on [start, end] ('fast'); resolves to the poses kept (0 if cancelled). */
     analyzeRange: (start: number, end: number) => Promise<number>;
+    /** The stored AI Track's size and span (Canvas getBakedTrackInfo), or null; diagnostics only. */
+    trackInfo?: () => { samples: number; start: number; end: number } | null;
     /** Stores poses from the analysis by playing as an AI Track section over `range`; returns the poses kept. */
     storeTrack: (samples: Array<{ t: number; kps: Array<{ x: number; y: number; score: number; name: string }> }>, range: { start: number; end: number }) => number;
     /** Stops a running analyzeRange pass. */
@@ -490,6 +493,12 @@ export default function MetricsExportPanel({
       const analysisIntervals = EXPORT_ANALYZE_BY_PLAYBACK && !PANEL_SKELETON_ANALYSIS && overlay && includeSkeleton
         ? untrackedIntervals(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null)
         : [];
+      // Diagnostic (KNOWN_ISSUES 069): totals for the one-line verdict, and the render clock.
+      const diag = { pix: 0, kp: 0, stored: null as number | null, ran: false };
+      const renderClock = { min: Infinity, max: -Infinity, n: 0 };
+      if (includeSkeleton && !analysisIntervals.length) {
+        firstFrameLog('trace', `trace: no analysis ran (${overlay?.isRangeBaked(range.start, range.end) ? 'range already covered by an AI Track' : 'nothing to analyze'}); the frozen-track guard (checkAnalyzedTrack) did NOT run`);
+      }
       if (analysisIntervals.length) {
         setPhase('reading');
         setStage('Loading skeleton model…');
@@ -519,6 +528,7 @@ export default function MetricsExportPanel({
           const res = await analyzeByPlaying(src, iv, {
             signal: ac.signal,
             log: (l) => firstFrameLog('export', l),
+            trace: (l) => firstFrameLog('trace', l),
             onProgress: (f) => {
               if (ac.signal.aborted) return;
               lastProgressAtRef.current = performance.now();
@@ -536,9 +546,26 @@ export default function MetricsExportPanel({
           keptAll += overlay.storeTrack(res.samples, iv);
           analysisSec += res.seconds;
           lastRate = res.rate;
+          diag.ran = true;
+          diag.pix += res.trace.distinctPix;
+          diag.kp += res.trace.distinctKp;
         }
         setTrackVersion((v) => v + 1);
-        const check = checkAnalyzedTrack(keptAll, totalLen, analysisSampleTimes(analysisIntervals, 1 / 30, 3600).map((t) => overlay.getBakedPoseAt(t)));
+        const checkPoses = analysisSampleTimes(analysisIntervals, 1 / 30, 3600).map((t) => overlay.getBakedPoseAt(t));
+        const check = checkAnalyzedTrack(keptAll, totalLen, checkPoses);
+        // Diagnostic (KNOWN_ISSUES 069): the stored track, the self-check and a few lookups across the range.
+        const info = overlay.trackInfo?.() ?? null;
+        diag.stored = info ? info.samples : null;
+        firstFrameLog('trace', `trace: stored track ${info ? `${info.samples} samples ${info.start.toFixed(3)}–${info.end.toFixed(3)}` : 'none'}; kept ${keptAll} poses over ${totalLen.toFixed(2)} s`);
+        firstFrameLog('trace', `trace: frozen-track guard (checkAnalyzedTrack) RAN on this path: ok=${check.ok} reason=${check.reason ?? 'none'} posesPerSec=${check.posesPerSec.toFixed(2)} motion=${check.motion.toFixed(4)} repeatShare=${check.repeatShare.toFixed(3)} (${checkPoses.filter(Boolean).length}/${checkPoses.length} lookups found a pose)`);
+        const lookups: string[] = [];
+        for (let k = 0; k < 5; k++) {
+          const lt = range.start + ((range.end - range.start) * k) / 4;
+          const lp = overlay.getBakedPoseAt(lt);
+          const lw = lp?.find((q) => q.name === 'left_wrist') ?? lp?.[9];
+          lookups.push(`${lt.toFixed(2)}s→${lw ? `${Math.round(lw.x)},${Math.round(lw.y)}` : 'none'}`);
+        }
+        firstFrameLog('trace', `trace: lookupBakedPose left wrist at 5 times: ${lookups.join('  ')}`);
         if (!check.ok) {
           failSkeleton(analysisFailedText(check, keptAll, totalLen, null), cleanUpAnalysis());
           return;
@@ -606,6 +633,7 @@ export default function MetricsExportPanel({
           follow.last = { kps, region, grey: grab(ctx, region) };
         };
         let poseDiagAt = 0;
+        let traceAt = 0;
         drawOverlays = (ctx, t, w, h, hold, video) => {
           // A hold shows only its snapshot's strokes and pose (no live drawings,
           // no AI Track skeleton) and is not part of the render check.
@@ -616,6 +644,17 @@ export default function MetricsExportPanel({
             const kps = sn ? sn.skeleton : includeSkeleton ? overlay.getBakedPoseAt(t) : null;
             const lw = kps?.[9];
             firstFrameLog('export', `pose @${t.toFixed(2)}: ${sn ? 'HOLD (snapshot pose)' : includeSkeleton ? (kps ? 'AI Track' : 'none at this time') : 'skeleton off'}${lw ? ` lwrist=${Math.round(lw.x)},${Math.round(lw.y)}` : ''}`);
+          }
+          if (!sn && video && includeSkeleton) {
+            renderClock.n++;
+            renderClock.min = Math.min(renderClock.min, video.currentTime);
+            renderClock.max = Math.max(renderClock.max, video.currentTime);
+            if (performance.now() - traceAt > 1000) {
+              traceAt = performance.now();
+              const rp = overlay.getBakedPoseAt(t);
+              const rw = rp?.find((q) => q.name === 'left_wrist') ?? rp?.[9];
+              firstFrameLog('trace', `trace render: export video.currentTime=${video.currentTime.toFixed(3)} lookup t=${t.toFixed(3)} lookupBakedPose left wrist=${rw ? `${Math.round(rw.x)},${Math.round(rw.y)}` : 'none'}`);
+            }
           }
           if (sn) {
             overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen, hold: { strokes: sn.strokes, box: sn.box, skeleton: sn.skeleton } });
@@ -657,6 +696,14 @@ export default function MetricsExportPanel({
           if (p !== pctRef.current) { pctRef.current = p; setPct(p); }
         },
       });
+      // Diagnostic verdict (KNOWN_ISSUES 069): one line in the panel, the details in the 'trace' log.
+      if (includeSkeleton) {
+        const moved = renderClock.n > 0 ? clockMoved(renderClock.min, renderClock.max, range.end - range.start) : null;
+        const verdict = verdictText({ pix: diag.ran ? diag.pix : null, kp: diag.ran ? diag.kp : null, stored: diag.stored, clockMoved: moved });
+        const rg = skeletonFollowsVideo(follow.steps);
+        firstFrameLog('trace', `${verdict}; render clock ${renderClock.n} frames ${Number.isFinite(renderClock.min) ? `${renderClock.min.toFixed(3)}–${renderClock.max.toFixed(3)}` : 'none'}; render guard: ${follow.steps.length} steps, moved ${rg.moved}, still ${rg.still}, ok=${String(rg.ok)}${follow.verdict ? ' (it stopped the export)' : ''}`);
+        setNotice((prev) => `${prev ? `${prev} ` : ''}${verdict}`);
+      }
       // The render check stopped it, or it finished frozen: no file with a frozen skeleton.
       const finalFollow = follow.verdict ?? (() => {
         const v = skeletonFollowsVideo(follow.steps);

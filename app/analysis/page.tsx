@@ -9896,6 +9896,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             // The export's analysis by playing (lib/playbackAnalysis.ts) hands its poses here: stored as an
             // AI Track section through the same bake storage (centred smoothing), so the render and any
             // later export read them like any AI Track. Returns the poses kept.
+            trackInfo: () => canvasRef.current?.getBakedTrackInfo?.() ?? null,
             storeTrack: (samples, range) => {
               const c = canvasRef.current;
               if (!c) return 0;

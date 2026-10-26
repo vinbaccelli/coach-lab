@@ -80,15 +80,21 @@ const MAX_LOG_LINES = 80;
 const KEPT_SLOTS = new Set(['analysis']);
 const MAX_KEPT_LINES = 60;
 
+/** Slot 'trace' (the export's diagnostic, KNOWN_ISSUES 069) has a third quota of its own, so it neither pushes out nor is pushed out by the others. */
+const TRACE_SLOT = 'trace';
+const MAX_TRACE_LINES = 100;
+const bucketOf = (slot: string): 0 | 1 | 2 => (slot === TRACE_SLOT ? 2 : KEPT_SLOTS.has(slot) ? 1 : 0);
+const bucketMax = [MAX_LOG_LINES, MAX_KEPT_LINES, MAX_TRACE_LINES] as const;
+
 export function firstFrameLog(slot: string, text: string): void {
   if (!logT0) logT0 = performance.now();
   logLines.push({ t: Math.round(performance.now() - logT0), slot, text });
   // The export analysis' own lines have their own quota: the per-seek 'seeked'
   // event lines above would otherwise push them out (KNOWN_ISSUES 061).
-  const kept = KEPT_SLOTS.has(slot);
-  const same = logLines.filter((l) => KEPT_SLOTS.has(l.slot) === kept).length;
-  if (same > (kept ? MAX_KEPT_LINES : MAX_LOG_LINES)) {
-    logLines.splice(logLines.findIndex((l) => KEPT_SLOTS.has(l.slot) === kept), 1);
+  const b = bucketOf(slot);
+  const same = logLines.filter((l) => bucketOf(l.slot) === b).length;
+  if (same > bucketMax[b]) {
+    logLines.splice(logLines.findIndex((l) => bucketOf(l.slot) === b), 1);
   }
   logListeners.forEach((fn) => fn());
 }
