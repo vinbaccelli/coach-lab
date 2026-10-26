@@ -6,7 +6,7 @@ import { exportEditedVideo } from '@/lib/cropExport';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { firstFrameLog } from '@/lib/firstFrame';
 import { EXPORT_POSE_MODEL_TEXT } from '@/lib/exportPose';
-import { analyzeByPlaying } from '@/lib/playbackAnalysis';
+import { analyzeByPlaying, openAnalysisSession } from '@/lib/playbackAnalysis';
 import { clockMoved, verdictText } from '@/lib/traceDiag';
 import { defaultExportRange, selectedSection } from '@/lib/aiTrackScope';
 import {
@@ -18,7 +18,7 @@ import {
 import {
   analysisCleanup, analysisFailedText, analysisProgress, analysisSampleTimes, checkAnalyzedTrack, clampHoldSec, dockAnalysisBar, drawingsDefaultOn, drawingsExportStatus, analysisBlockedReason,
   FOLLOW_STEP_SEC, formatHoldSec, HOLD_DEFAULT_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC, HOLD_STEP_SEC, holdSchedule, includesLabelWithHolds, meanAbsDiff,
-  EXPORT_ANALYZE_BY_PLAYBACK, PANEL_SKELETON_ANALYSIS, parsePassProgress, poseRegion, poseShift, skeletonExportStatus, skeletonFollowsVideo, snapshotsExportStatus, snapshotsSwitchText,
+  EXPORT_ANALYZE_BY_PLAYBACK, exportButtonLabel, PANEL_SKELETON_ANALYSIS, parsePassProgress, poseRegion, poseShift, skeletonExportStatus, skeletonFollowsVideo, snapshotsExportStatus, snapshotsSwitchText,
   toGrey, trackedFraction, untrackedIntervals, type FollowStep, type Rect, type VideoBox,
 } from '@/lib/exportOverlay';
 import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
@@ -143,6 +143,10 @@ export default function MetricsExportPanel({
   const [pct, setPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // iOS plays video only inside a tap: after a refused play() the Export button asks for another tap (KNOWN_ISSUES 069).
+  const [retry, setRetry] = useState<null | 'analysis' | 'export'>(null);
+  // The analysis' own trace numbers, kept for the verdict line after the render (a later tap).
+  const lastAnalysisDiagRef = useRef<{ pix: number; kp: number; stored: number | null } | null>(null);
   const [result, setResult] = useState<{ url: string; blob: Blob; ext: string; name: string } | null>(null);
   // Slow motion: the speed starts at the timeline's current rate; sound is on at 1× only.
   const [speed, setSpeed] = useState<number>(() => nearestExportSpeed(timelineRate?.()));
@@ -185,6 +189,7 @@ export default function MetricsExportPanel({
     resultUrlRef.current = null;
     setResult(null);
     setRateNote(null);
+    setRetry(null);
   }, []);
 
   // ── Preview: own <video>, latest-seek-wins scrubbing ────────────────────
@@ -393,9 +398,16 @@ export default function MetricsExportPanel({
   // ── Export ───────────────────────────────────────────────────────────────
   const startExport = useCallback(async () => {
     if (!videoSrc || !meta || !selected || selected.disabled || busy || stopping || analysisBlock) return;
+    // iOS only lets play() run inside this tap, so when the skeleton has to be analyzed
+    // its player starts playing HERE, before anything is awaited or set (KNOWN_ISSUES 069).
+    const analysisIntervals = EXPORT_ANALYZE_BY_PLAYBACK && !PANEL_SKELETON_ANALYSIS && overlay && includeSkeleton
+      ? untrackedIntervals(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null)
+      : [];
+    const session = analysisIntervals.length ? openAnalysisSession(videoSrc) : null;
     clearResult();
     setError(null);
     setNotice(null);
+    setRetry(null);
     pauseAnalysisVideo();
     const ac = new AbortController();
     abortRef.current = ac;
@@ -487,20 +499,28 @@ export default function MetricsExportPanel({
         }
         analyzed = { check, kept, span };
       }
-      // Where no AI Track covers the range, the skeleton is analyzed first by
-      // playing the video slowly (lib/playbackAnalysis.ts): load the model first,
-      // so the analysis time is detection, not the download.
-      const analysisIntervals = EXPORT_ANALYZE_BY_PLAYBACK && !PANEL_SKELETON_ANALYSIS && overlay && includeSkeleton
-        ? untrackedIntervals(range.start, range.end, (t) => overlay.getBakedPoseAt(t) !== null)
-        : [];
       // Diagnostic (KNOWN_ISSUES 069): totals for the one-line verdict, and the render clock.
       const diag = { pix: 0, kp: 0, stored: null as number | null, ran: false };
       const renderClock = { min: Infinity, max: -Infinity, n: 0 };
       if (includeSkeleton && !analysisIntervals.length) {
         firstFrameLog('trace', `trace: no analysis ran (${overlay?.isRangeBaked(range.start, range.end) ? 'range already covered by an AI Track' : 'nothing to analyze'}); the frozen-track guard (checkAnalyzedTrack) did NOT run`);
       }
-      if (analysisIntervals.length) {
-        setPhase('reading');
+      // ── Skeleton analysis by playing (only the parts with no AI Track) ──
+      // Its own tap: the track is stored and the render starts from the NEXT tap, because iOS
+      // refuses play() after a long wait (KNOWN_ISSUES 069).
+      if (session && overlay && analysisIntervals.length) {
+        setPhase('exporting');
+        setStage('Starting the analysis…');
+        const outcome = await session.playOutcome;
+        if (ac.signal.aborted) return;
+        if (outcome === 'blocked') {
+          firstFrameLog('trace', 'trace: analysis play() was refused (NotAllowedError): asking for a tap');
+          setRetry('analysis');
+          setPhase('idle');
+          setNotice('Tap to start the analysis.');
+          return;
+        }
+        if (outcome === 'error') { setPhase('error'); setError('The video could not be played for the skeleton analysis. Try again.'); return; }
         setStage('Loading skeleton model…');
         const warm = await Promise.race([
           import('@/lib/mediapipePose').then((m) => m.warmFullLandmarker()).catch(() => false),
@@ -509,14 +529,6 @@ export default function MetricsExportPanel({
         firstFrameLog('export', `export pose: model ${warm ? 'ready' : 'NOT available'}`);
         if (ac.signal.aborted) return;
         if (!warm) { setPhase('error'); setError(EXPORT_POSE_MODEL_TEXT); return; }
-      }
-      setPhase('reading');
-      setStage('Reading video…');
-      const src = await (await fetch(videoSrc, { signal: ac.signal })).blob();
-      if (ac.signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      // ── Skeleton analysis by playing (only the parts with no AI Track) ──
-      if (overlay && analysisIntervals.length) {
-        setPhase('exporting');
         setStage('Analyzing skeleton…');
         hadTrackBefore = overlay.hasBakedTrack();
         const totalLen = analysisIntervals.reduce((n, r) => n + (r.end - r.start), 0);
@@ -525,7 +537,7 @@ export default function MetricsExportPanel({
         let lastRate = 0;
         for (let i = 0; i < analysisIntervals.length; i++) {
           const iv = analysisIntervals[i];
-          const res = await analyzeByPlaying(src, iv, {
+          const res = await analyzeByPlaying(session, iv, {
             signal: ac.signal,
             log: (l) => firstFrameLog('export', l),
             trace: (l) => firstFrameLog('trace', l),
@@ -538,6 +550,12 @@ export default function MetricsExportPanel({
           });
           if (ac.signal.aborted) return;
           if (!res.ok) {
+            if (res.needsTap) {
+              setRetry('analysis');
+              setPhase('idle');
+              setNotice('Tap to start the analysis.');
+              return;
+            }
             setPhase('error');
             setError(`${res.error}${keptAll ? ' The parts already analyzed were kept as an AI Track.' : ''}`);
             if (keptAll) setTrackVersion((v) => v + 1);
@@ -556,6 +574,7 @@ export default function MetricsExportPanel({
         // Diagnostic (KNOWN_ISSUES 069): the stored track, the self-check and a few lookups across the range.
         const info = overlay.trackInfo?.() ?? null;
         diag.stored = info ? info.samples : null;
+        lastAnalysisDiagRef.current = { pix: diag.pix, kp: diag.kp, stored: diag.stored };
         firstFrameLog('trace', `trace: stored track ${info ? `${info.samples} samples ${info.start.toFixed(3)}–${info.end.toFixed(3)}` : 'none'}; kept ${keptAll} poses over ${totalLen.toFixed(2)} s`);
         firstFrameLog('trace', `trace: frozen-track guard (checkAnalyzedTrack) RAN on this path: ok=${check.ok} reason=${check.reason ?? 'none'} posesPerSec=${check.posesPerSec.toFixed(2)} motion=${check.motion.toFixed(4)} repeatShare=${check.repeatShare.toFixed(3)} (${checkPoses.filter(Boolean).length}/${checkPoses.length} lookups found a pose)`);
         const lookups: string[] = [];
@@ -571,12 +590,16 @@ export default function MetricsExportPanel({
           return;
         }
         analyzed = { check, kept: keptAll, span: totalLen };
-        // Readable without the debug box: what the analysis did.
-        setNotice(`Skeleton analyzed: ${keptAll} poses over ${totalLen.toFixed(1)} s in ${Math.round(analysisSec)} s (played at ${lastRate}×).`);
         pctRef.current = 0;
         setPct(0);
-        setStage('Exporting…');
+        setNotice(`Skeleton ready - tap Export. (${keptAll} poses over ${totalLen.toFixed(1)} s, analyzed in ${Math.round(analysisSec)} s at ${lastRate}×)`);
+        setPhase('idle');
+        return;
       }
+      setPhase('reading');
+      setStage('Reading video…');
+      const src = await (await fetch(videoSrc, { signal: ac.signal })).blob();
+      if (ac.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       setPhase('exporting');
       const whole = range.start <= 0.01 && range.end >= meta.duration - 0.01;
       // Overlays: capture the video box, strokes and angles NOW (export start),
@@ -671,6 +694,8 @@ export default function MetricsExportPanel({
         drawOverlays?.(ctx, t, w, h, hold, video);
         drawVideoWatermark(ctx, w, h);
       };
+      // iOS refuses the render's play() when the tap is too old: no frame is painted (cropExport gives up after 4 s).
+      let noFrame = false;
       const res = await exportEditedVideo(src, {
         trim: whole ? null : { start: range.start, end: range.end },
         maxHeight: selected.maxHeight,
@@ -682,7 +707,7 @@ export default function MetricsExportPanel({
         holds: holds.length ? holds : undefined,
         playbackRate: speed,
         includeAudio: soundOn,
-        onDiag: (m) => firstFrameLog('export', m),
+        onDiag: (m) => { firstFrameLog('export', m); if (m.startsWith('no frame painted')) noFrame = true; },
         onProgress: (msg) => {
           if (ac.signal.aborted) return;
           lastProgressAtRef.current = performance.now();
@@ -699,10 +724,19 @@ export default function MetricsExportPanel({
       // Diagnostic verdict (KNOWN_ISSUES 069): one line in the panel, the details in the 'trace' log.
       if (includeSkeleton) {
         const moved = renderClock.n > 0 ? clockMoved(renderClock.min, renderClock.max, range.end - range.start) : null;
-        const verdict = verdictText({ pix: diag.ran ? diag.pix : null, kp: diag.ran ? diag.kp : null, stored: diag.stored, clockMoved: moved });
+        const ad = diag.ran ? { pix: diag.pix, kp: diag.kp, stored: diag.stored } : lastAnalysisDiagRef.current;
+        const verdict = verdictText({ pix: ad ? ad.pix : null, kp: ad ? ad.kp : null, stored: ad ? ad.stored : null, clockMoved: moved });
         const rg = skeletonFollowsVideo(follow.steps);
         firstFrameLog('trace', `${verdict}; render clock ${renderClock.n} frames ${Number.isFinite(renderClock.min) ? `${renderClock.min.toFixed(3)}–${renderClock.max.toFixed(3)}` : 'none'}; render guard: ${follow.steps.length} steps, moved ${rg.moved}, still ${rg.still}, ok=${String(rg.ok)}${follow.verdict ? ' (it stopped the export)' : ''}`);
         setNotice((prev) => `${prev ? `${prev} ` : ''}${verdict}`);
+      }
+      // The render could not start (play() refused, no frame in 4 s): ask for a tap instead of showing a failure.
+      if (!res.ok && noFrame && abortRef.current === ac) {
+        firstFrameLog('trace', 'trace: the render painted no frame (play() refused?): asking for a tap');
+        setRetry('export');
+        setPhase('idle');
+        setNotice('Tap to retry the export.');
+        return;
       }
       // The render check stopped it, or it finished frozen: no file with a frozen skeleton.
       const finalFollow = follow.verdict ?? (() => {
@@ -735,6 +769,7 @@ export default function MetricsExportPanel({
       setPhase('error');
       setError(e instanceof Error ? e.message : 'Export failed.');
     } finally {
+      session?.close();
       if (abortRef.current === ac) {
         abortRef.current = null;
         setStage(null);
@@ -1163,7 +1198,7 @@ export default function MetricsExportPanel({
                   disabled={!selected || selected.disabled || stopping || Boolean(analysisBlock)}
                   onClick={() => { void startExport(); }}
                 >
-                  {needsAnalysis ? 'Analyze skeleton + export' : 'Export'}
+                  {exportButtonLabel({ retry, panelAnalysis: needsAnalysis, includeSkeleton, skeletonState: skStatus.state, trackedFraction: trackedFrac })}
                 </button>
                 {analysisBlock ? <span data-testid="export-zoom-block" style={{ fontSize: 13, color: 'var(--cl-destructive-text)' }}>{analysisBlock}</span> : null}
                 {needsAnalysis ? (

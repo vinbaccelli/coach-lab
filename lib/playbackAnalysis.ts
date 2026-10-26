@@ -109,38 +109,82 @@ export class PlaybackCollector {
 
 export type PlaybackAnalysisResult =
   | { ok: true; samples: PlaybackSample[]; rate: number; seconds: number; trace: TraceSummary & { observedRate: number | null } }
-  | { ok: false; aborted?: boolean; error: string };
+  | { ok: false; aborted?: boolean; error: string; /** play() was refused (iOS: not inside a tap): ask for a tap and start again. */ needsTap?: boolean };
 
 type RvfcVideo = HTMLVideoElement & {
   requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime?: number }) => void) => number;
   cancelVideoFrameCallback?: (h: number) => void;
 };
 
+export type AnalysisSession = {
+  video: RvfcVideo;
+  /** How the play() that was started inside the tap ended. */
+  playOutcome: Promise<'ok' | 'blocked' | 'error'>;
+  /** Pauses and unloads the element (call once, when every range is analyzed or the run is over). */
+  close: () => void;
+};
+
 /**
- * Plays `blob` muted in a hidden element over [range.start, range.end], detecting every frame it can.
- * Never seeks except once to the start (like the export itself). Cancelable with `signal`.
+ * Opens the analysis player and calls play() IMMEDIATELY and synchronously, so
+ * it is the first thing the tap's handler does (iOS only allows play() inside
+ * the tap; anything awaited before it, such as a fetch or a model download,
+ * ends that permission: KNOWN_ISSUES 069). The element loops until the
+ * analysis takes over, so waiting for the model does not run it off the end,
+ * and it is NOT paused between ranges (a second play() would need another tap).
+ * `src` is used as it is (the page's own video URL); a non-blob URL is read
+ * with CORS so the canvas copy stays readable.
+ */
+export function openAnalysisSession(src: string): AnalysisSession {
+  const video = document.createElement('video') as RvfcVideo;
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  video.loop = true;
+  if (!src.startsWith('blob:')) video.crossOrigin = 'anonymous';
+  video.src = src;
+  video.playbackRate = ANALYSIS_START_RATE;
+  let played: Promise<void>;
+  try { played = video.play(); } catch (e) { played = Promise.reject(e); }
+  const playOutcome = played.then(
+    () => 'ok' as const,
+    (e: unknown) => (e instanceof Error && e.name === 'NotAllowedError' ? 'blocked' as const : 'error' as const),
+  );
+  return {
+    video,
+    playOutcome,
+    close: () => {
+      try { video.pause(); } catch { /* noop */ }
+      video.removeAttribute('src');
+      try { video.load(); } catch { /* noop */ }
+    },
+  };
+}
+
+/**
+ * Analyzes [range.start, range.end] on an open session: the player (already
+ * playing, muted) is moved to the start and plays that range slowly, detecting
+ * every frame it can. One seek to the start (bounded), no other seeks.
+ * Cancelable with `signal`. The session is closed by the caller.
  */
 export async function analyzeByPlaying(
-  blob: Blob,
+  session: AnalysisSession,
   range: { start: number; end: number },
   o: { signal?: AbortSignal; onProgress?: (fraction: number) => void; log?: (line: string) => void; trace?: (line: string) => void },
 ): Promise<PlaybackAnalysisResult> {
   const log = o.log ?? (() => {});
   const trace = o.trace ?? (() => {});
-  const url = URL.createObjectURL(blob);
-  const video = document.createElement('video') as RvfcVideo;
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = 'auto';
-  video.src = url;
+  const video = session.video;
   const t0 = performance.now();
   try {
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () => resolve();
-      video.onerror = () => reject(new Error('Could not load the video for the skeleton analysis.'));
-      o.signal?.addEventListener('abort', () => resolve(), { once: true });
-    });
+    if (video.readyState < 1) {
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => resolve();
+        video.onerror = () => reject(new Error('Could not load the video for the skeleton analysis.'));
+        o.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+    }
     if (o.signal?.aborted) return { ok: false, aborted: true, error: 'Cancelled.' };
+    video.loop = false;
 
     // One seek to the start of the range, bounded: a clip that cannot seek still plays (frames before the range are ignored).
     if (range.start > 0.01) {
@@ -275,7 +319,9 @@ export async function analyzeByPlaying(
         if (pollTimer) clearInterval(pollTimer);
         if (rvfcHandle !== null) { try { video.cancelVideoFrameCallback?.(rvfcHandle); } catch { /* noop */ } }
         document.removeEventListener('visibilitychange', onVisibility);
-        try { video.pause(); } catch { /* noop */ }
+        // Keep playing (looping): a second play() for the next range would need another tap.
+        video.loop = true;
+        video.onended = null;
         resolve();
       };
       o.signal?.addEventListener('abort', () => finishNow(), { once: true });
@@ -287,10 +333,12 @@ export async function analyzeByPlaying(
         if (document.visibilityState === 'hidden') { lastFrameAt = performance.now(); return; }
         if (performance.now() - lastFrameAt > ANALYSIS_STALL_MS) { failure = ANALYSIS_STALLED_TEXT; finishNow(); }
       }, 1000);
-      video.play().catch((e) => {
-        failure = `The video could not be played for the skeleton analysis (${e instanceof Error ? e.name : 'error'}).`;
-        finishNow();
-      });
+      if (video.paused) {
+        video.play().catch((e) => {
+          failure = `The video could not be played for the skeleton analysis (${e instanceof Error ? e.name : 'error'}).`;
+          finishNow();
+        });
+      }
     });
 
     if (o.signal?.aborted) return { ok: false, aborted: true, error: 'Cancelled.' };
@@ -310,10 +358,5 @@ export async function analyzeByPlaying(
     return { ok: true, samples, rate, seconds, trace: { ...summary, observedRate } };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'The skeleton analysis failed.' };
-  } finally {
-    try { video.pause(); } catch { /* noop */ }
-    video.removeAttribute('src');
-    try { video.load(); } catch { /* noop */ }
-    URL.revokeObjectURL(url);
   }
 }

@@ -663,3 +663,18 @@ export function runOverlay(
     else fn(ctx, mediaTime, ow, oh, hold);
   } catch { /* the frame itself is already drawn */ }
 }
+
+/**
+ * The main button's label. After a refused play() (iOS plays only inside a tap)
+ * it asks for another tap; with the skeleton still to be analyzed by playing,
+ * the first tap analyzes and the next one exports (KNOWN_ISSUES 069).
+ */
+export function exportButtonLabel(o: {
+  retry: 'analysis' | 'export' | null; panelAnalysis: boolean; includeSkeleton: boolean; skeletonState: SkeletonExportState; trackedFraction: number;
+}): string {
+  if (o.retry === 'analysis') return 'Tap to start the analysis';
+  if (o.retry === 'export') return 'Tap to retry the export';
+  if (o.panelAnalysis) return 'Analyze skeleton + export';
+  if (o.includeSkeleton && o.skeletonState === 'playback' && o.trackedFraction < 0.999) return 'Analyze skeleton';
+  return 'Export';
+}
