@@ -38,6 +38,12 @@ export const chipStyle = (kind: ReportKind): CSSProperties => ({
   whiteSpace: 'nowrap',
 });
 
+/** Keyboard focus for everything inside a reports page (inline styles cannot carry :focus-visible). */
+export const FOCUS_CSS = `.rpt a:focus-visible,.rpt button:focus-visible,.rpt input:focus-visible{outline:2px solid var(--cl-accent);outline-offset:2px;border-radius:8px}.rpt ::selection{background:var(--cl-accent-soft)}`;
+
+/** Reading measure for running text: about 66 characters, not the full column. */
+export const measure: CSSProperties = { maxWidth: '66ch', textWrap: 'pretty' as never };
+
 export const mutedText: CSSProperties = { color: 'var(--cl-text-secondary)', fontSize: 13, lineHeight: 1.45 };
 
 /** "Oct 27, 2026" from a YYYY-MM-DD key, in the viewer's locale. */

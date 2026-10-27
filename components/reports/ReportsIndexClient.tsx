@@ -5,13 +5,19 @@ import { useMemo, useState } from 'react';
 import { ArrowLeft, Camera, Play } from 'lucide-react';
 import { filterReports, groupByMonth, type Report, type ReportKind } from '@/lib/reports/deriveBlocks';
 import { usePlayerReports } from '@/components/reports/usePlayerReports';
-import { backLink, chipStyle, formatDateKey, KIND_CHIP, mutedText, wrap } from '@/components/reports/reportStyles';
+import { backLink, chipStyle, FOCUS_CSS, formatDateKey, KIND_CHIP, measure, mutedText, wrap } from '@/components/reports/reportStyles';
 
 const FILTERS: Array<{ key: ReportKind | 'all'; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'technical', label: 'Technical' },
   { key: 'match', label: 'Match' },
 ];
+
+/** The row headline in the index: a technical day is named by its date (the chip already says what it is). */
+function rowTitle(r: Report): string {
+  if (r.kind === 'technical') return formatDateKey(r.dateKey, { weekday: 'long', day: 'numeric', month: 'long' });
+  return reportTitle(r);
+}
 
 export function reportTitle(r: Report): string {
   if (r.kind === 'technical') return `Technical analysis, ${formatDateKey(r.dateKey)}`;
@@ -27,7 +33,8 @@ export default function ReportsIndexClient({ playerId }: { playerId: string }) {
   const filtering = kind !== 'all' || query.trim() !== '';
 
   return (
-    <div style={wrap}>
+    <div className="rpt" style={wrap}>
+      <style>{FOCUS_CSS}</style>
       <Link href={`/players/${playerId}`} style={backLink}>
         <ArrowLeft size={16} aria-hidden /> {playerName || 'Player'}
       </Link>
@@ -95,10 +102,10 @@ export default function ReportsIndexClient({ playerId }: { playerId: string }) {
           <p style={{ margin: '0 0 6px', fontSize: 16, fontWeight: 700 }}>
             {filtering ? 'No reports match' : 'No reports yet'}
           </p>
-          <p style={{ ...mutedText, margin: 0, maxWidth: 360, marginInline: 'auto' }}>
+          <p style={{ ...mutedText, ...measure, margin: 0, marginInline: 'auto' }}>
             {filtering
               ? 'Try another word, or show All reports.'
-              : 'Save a screenshot from Video Analysis to start the Technical analysis report. Match Decoder and Manual match stats add Match analysis reports.'}
+              : 'Save a screenshot from the analysis app to start a report. Match Decoder and Manual match stats add Match analysis reports.'}
           </p>
         </div>
       ) : (
@@ -114,9 +121,11 @@ export default function ReportsIndexClient({ playerId }: { playerId: string }) {
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={chipStyle(r.kind)}>{KIND_CHIP[r.kind].label}</span>
-                      <span style={{ ...mutedText, fontSize: 12 }}>{formatDateKey(r.dateKey, { day: 'numeric', month: 'short' })}</span>
+                      {r.kind === 'match' ? (
+                        <span style={{ ...mutedText, fontSize: 12 }}>{formatDateKey(r.dateKey, { day: 'numeric', month: 'short' })}</span>
+                      ) : null}
                     </div>
-                    <div style={{ marginTop: 6, fontSize: 16, fontWeight: 700, lineHeight: 1.3 }}>{reportTitle(r)}</div>
+                    <div style={{ marginTop: 6, fontSize: 16, fontWeight: 700, lineHeight: 1.3 }}>{rowTitle(r)}</div>
                     {r.opponent && r.title ? <div style={{ ...mutedText, marginTop: 2 }}>vs {r.opponent}</div> : null}
                     {r.screenshotCount > 0 || r.hasVideo ? (
                       <div style={{ ...mutedText, fontSize: 12, marginTop: 6, display: 'flex', gap: 14 }}>

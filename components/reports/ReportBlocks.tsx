@@ -3,10 +3,10 @@
 import DriveImage from '@/components/reports/DriveImage';
 import ManualMatchBlock from '@/components/reports/ManualMatchBlock';
 import VideoBlock from '@/components/reports/VideoBlock';
-import { formatClock, formatDateKey, mutedText } from '@/components/reports/reportStyles';
+import { formatClock, formatDateKey, measure, mutedText } from '@/components/reports/reportStyles';
 import type { ReportBlock } from '@/lib/reports/deriveBlocks';
 
-const body = { fontSize: 15, lineHeight: 1.6, margin: '0 0 12px' } as const;
+const body = { fontSize: 15, lineHeight: 1.6, margin: '0 0 12px', ...measure } as const;
 const blockHeading = { margin: '0 0 12px', fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: '-0.01em' } as const;
 
 function localDay(iso: string): string {
@@ -16,7 +16,12 @@ function localDay(iso: string): string {
 
 export default function ReportBlocks({ blocks, fallbackText }: { blocks: ReportBlock[]; fallbackText: string }) {
   if (blocks.length === 0) {
-    return <p style={mutedText}>This report has no content yet.</p>;
+    return (
+      <div style={{ padding: '8px 0' }}>
+        <p style={{ margin: '0 0 6px', fontSize: 16, fontWeight: 700 }}>This report is empty</p>
+        <p style={{ ...mutedText, ...measure, margin: 0 }}>Save a screenshot from the analysis app to start a report.</p>
+      </div>
+    );
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 36 }}>
@@ -94,7 +99,7 @@ export default function ReportBlocks({ blocks, fallbackText }: { blocks: ReportB
                       )
                     ) : null}
                     {s.lines.length ? (
-                      <ul style={{ margin: '0 0 12px', paddingLeft: 20 }}>
+                      <ul style={{ margin: '0 0 12px', paddingLeft: 20, ...measure }}>
                         {s.lines.map((l, j) => (
                           <li key={j} style={{ fontSize: 15, lineHeight: 1.55, marginBottom: 4 }}>{l}</li>
                         ))}

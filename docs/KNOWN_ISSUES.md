@@ -2264,3 +2264,30 @@ column are still never exported.
 **Fix.** (1) When the skeleton must be analyzed, the analysis player is created and `play()` is called as the first thing in the Export tap, before anything is awaited (`openAnalysisSession`, `lib/playbackAnalysis.ts`; it uses the page's own video URL, so no fetch comes first, and it loops until the analysis takes over, so waiting for the model does not run it to the end). It is not paused between ranges. If play() is refused (`NotAllowedError`) the button reads "Tap to start the analysis" and the next tap starts it again (no failure message). (2) After the analysis the track is stored and the panel says "Skeleton ready - tap Export."; the render starts from the next tap (the first tap only analyzes; its button reads "Analyze skeleton"). (3) If the render's play() is refused (no frame painted in 4 s), the panel shows "Tap to retry the export" and the next tap renders again instead of a failure message. Detection, smoothing, the frozen-track guard, the trace lines, runPrecisionPass, drawSkeletonOverlay, the foot line, StroMotion and the Recording Hub are unchanged.
 
 **Not measured.** Whether iOS keeps allowing the analysis player (started inside the tap) to keep playing for the whole analysis, and whether a refused play() always shows as NotAllowedError.
+
+---
+
+## 070 — In-app Reports (`REPORTS_IN_APP`): how it works and what is not covered yet
+
+**Found:** 2026-10-27, while building the in-app Reports pages. Recorded as a feature note, not a defect.
+
+**The switch.** `REPORTS_IN_APP` in `lib/featureFlags.ts` (currently `true`). On: saving a report writes only to the app, the Google Docs write is skipped, labels say "Save to report", the player profile opens `/players/[id]/reports` and hides the two Google Doc buttons. Off: every save writes the Google Doc exactly as before, with the old labels and tour texts. Nothing of the Docs flow was deleted: `app/api/players/[id]/google-doc`, `app/api/google/report`, `create-document`, `upload-image`, `ensurePlayerDoc` / `insertSessionAtTop` in `app/api/players/[id]/entries/route.ts`, and `lib/export/exportService.ts` all remain. The Generate and Motion Layer "Export Google Docs report" buttons are not behind the switch and still write Docs.
+
+**Where things are stored.**
+- Report text and structure: Supabase `player_entries` (`category` `technique` or `match`, `body_text`, `youtube_url`, `screenshots`, `metadata`). Decoder `sections` are stored in `metadata.sections`; a manual match in `metadata.manualMatch` (every logged point, board, notes); measurements in `metadata.measurements`. The entries route stores `sections` always, whatever the switch (`lib/reports/entrySections.ts`).
+- Screenshots: the coach's own Google Drive (`/api/google/upload-image`, anyone-with-link). If the Drive upload fails for any reason the image goes to the public Supabase bucket `player-assets` (`<uid>/screenshots/…`) and the save message says why. Images are never copied between the two.
+- Videos: the coach's YouTube channel; the report embeds them and always shows a "Watch on YouTube" link.
+- The report pages (`lib/reports/deriveBlocks.ts`) are built at read time: all `technique` entries of one player on one local day form one "Technical analysis" report, screenshots in the order taken; each `match` entry is its own report. No new table, no migration.
+- Report images load from Drive, then Drive's image host, then the entry's Supabase copy, then an "Image unavailable" tile with an open link.
+
+**Not covered yet.**
+- Share links (a report can only be read by the signed-in coach; players and parents cannot open it).
+- Editing blocks (reports are read-only; notes cannot be added or changed in the page).
+- Report types beyond Technical and Match, and coach-created types.
+- The full profile layout (age, height, UTR, diet, exercise plan).
+- Comments and a Docs-free export (the PDF download exists only for manual matches).
+- Entries saved before this change have no `metadata.sections`; a decoder entry from then shows its plain-text summary only.
+- Not measured on real devices: Drive image loading from the report page, the YouTube embed under the app's `Cross-Origin-Embedder-Policy: credentialless` header, and real Supabase/Drive saves (the save flows are unit-tested against a mocked fetch, Drive and Supabase in `tests/saveScreenshot.test.ts`).
+- The static tour screenshots (`public/tour/*`) still show the old Google Doc buttons; only the tour text follows the switch.
+
+**Severity.** None (scope note).
