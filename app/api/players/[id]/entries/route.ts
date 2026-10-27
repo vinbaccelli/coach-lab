@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { getRouteSession } from '@/lib/auth/routeSession';
 import { requireFeature } from '@/lib/entitlements.server';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import {
   ensurePlayerDoc,
   insertSessionAtTop,
@@ -35,6 +36,32 @@ export type EntryDocStatus = { ok: true; documentId: string } | { ok: false; rea
  */
 export const runtime = 'nodejs';
 export const maxDuration = 60;
+
+/**
+ * The decoder's structured sections, as stored on the entry so the in-app report
+ * can show the full report. Whitelisted fields only (the Docs-only image sizing
+ * is dropped) and size-capped. Best-effort by construction: any problem here
+ * returns the metadata unchanged — it must never fail the save.
+ */
+function withSections(
+  metadata: Record<string, unknown>,
+  sections: Array<Record<string, unknown>> | undefined,
+): Record<string, unknown> {
+  try {
+    if (!Array.isArray(sections) || sections.length === 0) return metadata;
+    const kept = sections.map((s) => ({
+      ...(typeof s.heading === 'string' ? { heading: s.heading } : {}),
+      ...(s.headingLevel === 'h2' || s.headingLevel === 'h3' ? { headingLevel: s.headingLevel } : {}),
+      ...(Array.isArray(s.lines) ? { lines: s.lines.filter((l) => typeof l === 'string') } : {}),
+      ...(typeof s.notes === 'string' ? { notes: s.notes } : {}),
+      ...(typeof s.imageUrl === 'string' ? { imageUrl: s.imageUrl } : {}),
+    }));
+    if (JSON.stringify(kept).length > 400_000) return metadata;
+    return { ...metadata, sections: kept };
+  } catch {
+    return metadata;
+  }
+}
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await getRouteSession();
@@ -88,7 +115,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       match_date: body.match_date ?? null,
       screenshots: body.screenshots ?? [],
       source: body.source ?? 'app',
-      metadata: body.metadata ?? {},
+      metadata: withSections(body.metadata ?? {}, body.sections),
     })
     .select('*')
     .single();
@@ -100,7 +127,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   // never fail the entry save — but it IS reported back, see EntryDocStatus.
   let doc: EntryDocStatus | undefined;
 
-  if (body.category === 'match') {
+  // With REPORTS_IN_APP the report is read in the app, so the Google Doc write is skipped
+  // (kept below as the backup path for when the switch is off).
+  if (body.category === 'match' && !REPORTS_IN_APP) {
     if (!session.googleAccessToken) {
       // Same actionable wording as the screenshot route: a session created
       // without the Docs/Drive grant needs a fresh sign-in, and "nothing

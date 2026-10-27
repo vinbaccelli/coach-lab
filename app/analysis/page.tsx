@@ -41,7 +41,7 @@ import YouTubeEmbed from '@/components/YouTubeEmbed';
 import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
-import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
+import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD, REPORTS_IN_APP } from '@/lib/featureFlags';
 import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
 import { uploadVideoToYouTube } from '@/lib/export/exportService';
 import { useStroMotion } from '@/hooks/useStroMotion';
@@ -3551,11 +3551,23 @@ function Home() {
           setProcessingStatus('Failed to save screenshot — try again');
           return;
         }
+        if (REPORTS_IN_APP) {
+          // The screenshot is in the coach's Drive (or the Supabase fallback) and
+          // the entry is saved: it shows up in the player's Technical analysis
+          // report. No Google Doc write — hand the coach the in-app report link.
+          const saved = (await res.json().catch(() => ({}))) as { entry?: { id?: string } };
+          setProcessingStatus(`Saved to report — ${playerName}`);
+          if (saved.entry?.id) {
+            savedDocUrl = `/players/${playerId}/reports/${saved.entry.id}`;
+            setScreenshotDocUrl(savedDocUrl);
+            setScreenshotSavedTo(playerName);
+          }
+        }
         // Best-effort: append to the player's Google Doc (AngleMotion/Players/<Name>).
         // A Docs failure must not fail the screenshot save. Gated on the same
         // flag as the upload above — both run together now that exports are
         // enabled (ENABLE_GOOGLE_EXPORTS = true as of 399b3b2, 2026-08-03).
-        if (ENABLE_GOOGLE_EXPORTS) {
+        if (ENABLE_GOOGLE_EXPORTS && !REPORTS_IN_APP) {
           try {
             const docRes = await fetch(`/api/players/${playerId}/google-doc`, {
               method: 'POST',
@@ -3579,7 +3591,7 @@ function Home() {
           } catch {
             setProcessingStatus(`Saved to ${playerName} (Google Doc skipped)`);
           }
-        } else {
+        } else if (!REPORTS_IN_APP) {
           setProcessingStatus(`Saved to ${playerName}`);
         }
       } else {
@@ -9243,7 +9255,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 borderRadius: 10, background: 'rgba(52,199,89,0.08)', border: '1px solid rgba(52,199,89,0.35)',
               }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F' }}>
-                  {screenshotSavedTo ? `Saved to ${screenshotSavedTo}` : 'Saved'}
+                  {REPORTS_IN_APP
+                    ? 'Saved to report'
+                    : screenshotSavedTo ? `Saved to ${screenshotSavedTo}` : 'Saved'}
                 </span>
                 <a
                   href={screenshotDocUrl}
@@ -9251,7 +9265,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   rel="noopener noreferrer"
                   style={{ fontSize: 13, fontWeight: 600, color: '#007AFF', textDecoration: 'none' }}
                 >
-                  Open in Google Doc →
+                  {REPORTS_IN_APP ? `Open ${screenshotSavedTo ?? 'player'}’s report →` : 'Open in Google Doc →'}
                 </a>
               </div>
             )}
@@ -9266,14 +9280,16 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 }} />
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#007AFF' }}>
                   {ENABLE_GOOGLE_EXPORTS
-                    ? 'Saving… this takes a few seconds (upload + player record + Google Doc).'
+                    ? `Saving… this takes a few seconds (upload + player record${REPORTS_IN_APP ? '' : ' + Google Doc'}).`
                     : 'Saving… this takes a few seconds.'}
                 </span>
               </div>
             ) : (
               <p style={{ margin: 0, fontSize: 13, color: '#6E6E73' }}>
                 {ENABLE_GOOGLE_EXPORTS
-                  ? "Save to a player's docs, create a new player, or download directly."
+                  ? (REPORTS_IN_APP
+                    ? "Save to a player's report, create a new player, or download directly."
+                    : "Save to a player's docs, create a new player, or download directly.")
                   : "Save to a player, create a new player, or download directly."}
               </p>
             )}

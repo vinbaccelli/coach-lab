@@ -203,6 +203,8 @@ export interface SaveOutcome {
    * success — the same silent failure the manual recorder hit.
    */
   docWarning?: string;
+  /** In-app report for the saved entry (`/players/<id>/reports/<entryId>`), when the server returned the entry. */
+  reportUrl?: string;
 }
 
 /**
@@ -237,6 +239,7 @@ export async function saveReportToPlayers(
       });
       const data = (await res.json()) as {
         error?: string;
+        entry?: { id?: string };
         doc?: { ok?: boolean; reason?: string };
       };
       if (!res.ok) throw new Error(data.error ?? 'Save failed');
@@ -244,6 +247,7 @@ export async function saveReportToPlayers(
         playerId: target.playerId,
         displayName: target.displayName,
         ok: true,
+        ...(data.entry?.id ? { reportUrl: `/players/${target.playerId}/reports/${data.entry.id}` } : {}),
         ...(data.doc && data.doc.ok === false && data.doc.reason
           ? { docWarning: data.doc.reason }
           : {}),
