@@ -9,6 +9,7 @@ import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
 import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 
 type Player = {
@@ -483,7 +484,19 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Reports</h2>
           <div data-tour-id="player-doc-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {player.google_doc_id ? (
+            {REPORTS_IN_APP ? (
+              <Link
+                href={`/players/${playerId}/reports`}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 36,
+                  padding: '8px 14px', borderRadius: 10, background: 'var(--cl-accent)',
+                  color: 'var(--cl-text-on-fill)', fontSize: 12, fontWeight: 700, textDecoration: 'none',
+                }}
+              >
+                Open reports →
+              </Link>
+            ) : null}
+            {!REPORTS_IN_APP && player.google_doc_id ? (
               <a
                 href={`https://docs.google.com/document/d/${player.google_doc_id}/edit`}
                 target="_blank"
@@ -497,7 +510,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 Technical Analysis Doc ↗
               </a>
             ) : null}
-            {player.google_match_doc_id ? (
+            {!REPORTS_IN_APP && player.google_match_doc_id ? (
               <a
                 href={`https://docs.google.com/document/d/${player.google_match_doc_id}/edit`}
                 target="_blank"
@@ -538,7 +551,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 seen live on Azaliya, 5 saved entries but no Doc ever exported.
                 "No reports yet" read as "nothing saved" and looked like data
                 loss even though her entries were sitting right below it. */}
-            {!player.google_doc_id && !player.google_match_doc_id && !player.google_folder_id
+            {!REPORTS_IN_APP && !player.google_doc_id && !player.google_match_doc_id && !player.google_folder_id
               && !entries.some((e) => e.metadata?.doc_url) ? (
               <span style={{ fontSize: 12, color: 'var(--cl-text-secondary)', fontWeight: 600 }}>
                 No Google Doc yet — use Save Report to create one.
@@ -548,7 +561,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
         <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
           Match and technique reports — newest first.
-          {player.google_doc_id ? ' Click an entry to open it in the player’s Google Doc.' : ''}
+          {REPORTS_IN_APP
+            ? ' Tap an entry to open its report.'
+            : player.google_doc_id ? ' Click an entry to open it in the player’s Google Doc.' : ''}
         </p>
         <div data-tour-id="player-report-tabs" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
           {([['all', 'All'], ['technique', 'Technical Analysis'], ['match', 'Match Analysis']] as const).map(([key, label]) => (
@@ -582,7 +597,20 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             {timelineEntries.map((e) => (
               <article
                 key={e.id}
+                {...(REPORTS_IN_APP
+                  ? {
+                      role: 'link',
+                      tabIndex: 0,
+                      onKeyDown: (ev: React.KeyboardEvent) => {
+                        if (ev.key === 'Enter') router.push(`/players/${playerId}/reports/${e.id}`);
+                      },
+                    }
+                  : {})}
                 onClick={() => {
+                  if (REPORTS_IN_APP) {
+                    router.push(`/players/${playerId}/reports/${e.id}`);
+                    return;
+                  }
                   // Prefer the entry's own doc link; fall back to the doc for its category.
                   const fallbackId = e.category === 'match'
                     ? player.google_match_doc_id ?? player.google_doc_id
@@ -596,7 +624,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                   borderRadius: 12,
                   background: 'var(--cl-bg-panel)',
                   border: '1px solid #E7E5E4',
-                  cursor: (e.metadata?.doc_url || player.google_doc_id) ? 'pointer' : 'default',
+                  cursor: (REPORTS_IN_APP || e.metadata?.doc_url || player.google_doc_id) ? 'pointer' : 'default',
                 }}
               >
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
