@@ -2288,6 +2288,6 @@ column are still never exported.
 - Comments and a Docs-free export (the PDF download exists only for manual matches).
 - Entries saved before this change have no `metadata.sections`; a decoder entry from then shows its plain-text summary only.
 - Not measured on real devices: Drive image loading from the report page, the YouTube embed under the app's `Cross-Origin-Embedder-Policy: credentialless` header, and real Supabase/Drive saves (the save flows are unit-tested against a mocked fetch, Drive and Supabase in `tests/saveScreenshot.test.ts`).
-- The static tour screenshots (`public/tour/*`) still show the old Google Doc buttons; only the tour text follows the switch.
+- The static tour screenshots (`public/tours/*`) still show the old Google Doc buttons; only the tour text follows the switch.
 
 **Severity.** None (scope note).
