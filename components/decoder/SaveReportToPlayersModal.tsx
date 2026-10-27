@@ -28,6 +28,7 @@ import {
   uploadReportCharts,
 } from '@/lib/matchAnalysis/exportToDocs';
 import type { SideReport } from '@/lib/matchAnalysis/reportModel';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 
 interface DbPlayer {
   id: string;
@@ -174,10 +175,12 @@ export default function SaveReportToPlayersModal({
     <div style={backdrop} onClick={busy ? undefined : onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 4px', letterSpacing: -0.2 }}>
-          Save to Google Docs
+          {REPORTS_IN_APP ? 'Save to report' : 'Save to Google Docs'}
         </h2>
         <p style={{ fontSize: 12, color: 'var(--cl-text-secondary)', lineHeight: 1.55, margin: '0 0 20px' }}>
-          The report is added to the top of each player&apos;s <b>Match Analysis</b> doc, newest first.
+          {REPORTS_IN_APP
+            ? <>The report is saved to each player&apos;s <b>Match analysis</b> reports.</>
+            : <>The report is added to the top of each player&apos;s <b>Match Analysis</b> doc, newest first.</>}
         </p>
 
         {error && <p style={{ color: 'var(--cl-destructive-text)', fontSize: 12, marginBottom: 12 }}>{error}</p>}
@@ -210,13 +213,13 @@ export default function SaveReportToPlayersModal({
             </div>
 
             {/* 2 — where it goes */}
-            <div style={stepLabel}>2 · Save into which player&apos;s doc</div>
+            <div style={stepLabel}>2 · Save into which player&apos;s {REPORTS_IN_APP ? 'report' : 'doc'}</div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
               {slotSelect('A', slotA, 'Player', '— choose a player —')}
               {slotSelect('B', slotB, 'And also (optional)', '— nobody —')}
             </div>
             <p style={{ fontSize: 11, color: 'var(--cl-text-muted)', lineHeight: 1.5, margin: '0 0 20px' }}>
-              Leave the second empty to save to one player. Both filled saves the same report into both docs.
+              Leave the second empty to save to one player. Both filled saves the same report into both {REPORTS_IN_APP ? 'reports' : 'docs'}.
             </p>
 
             {players.length === 0 && (
@@ -233,7 +236,9 @@ export default function SaveReportToPlayersModal({
             <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
               <button type="button" onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
               <button type="button" onClick={() => void save()} disabled={busy || !targets.length} style={btnPrimary}>
-                {busy ? progress || 'Saving…' : `Save to ${targets.length || 0} doc${targets.length === 1 ? '' : 's'}`}
+                {busy ? progress || 'Saving…' : REPORTS_IN_APP
+                  ? 'Save to report'
+                  : `Save to ${targets.length || 0} doc${targets.length === 1 ? '' : 's'}`}
               </button>
             </div>
           </>
@@ -254,6 +259,18 @@ export default function SaveReportToPlayersModal({
                     <div style={{ color: 'var(--cl-warning-text)', marginTop: 4, lineHeight: 1.45 }}>
                       Google Doc not updated: {o.docWarning}
                     </div>
+                  </>
+                ) : REPORTS_IN_APP ? (
+                  <>
+                    <span style={{ color: '#2F7D32' }}>Saved to report</span>
+                    {o.reportUrl ? (
+                      <>
+                        {' · '}
+                        <a href={o.reportUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--cl-accent)', fontWeight: 600 }}>
+                          View report
+                        </a>
+                      </>
+                    ) : null}
                   </>
                 ) : (
                   <span style={{ color: '#2F7D32' }}>saved to their Match Analysis doc</span>

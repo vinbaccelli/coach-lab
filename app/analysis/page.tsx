@@ -42,6 +42,7 @@ import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
 import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD, REPORTS_IN_APP } from '@/lib/featureFlags';
+import { saveScreenshotToPlayer } from '@/lib/reports/saveScreenshot';
 import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
 import { uploadVideoToYouTube } from '@/lib/export/exportService';
 import { useStroMotion } from '@/hooks/useStroMotion';
@@ -3490,120 +3491,59 @@ function Home() {
       return;
     }
     setScreenshotSaving(true);
-    let savedDocUrl: string | null = null;
     try {
       // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive.
-      // Supabase storage is the fallback — used whenever the Drive upload
-      // fails, and was the ONLY path while ENABLE_GOOGLE_EXPORTS was off
-      // pending Google's OAuth verification (approved 2026-07-28; the flag
-      // flipped true in 399b3b2 on 2026-08-03). Screenshots saved before that
-      // date are Supabase-only and have no Drive folder — expected for their
-      // era, not a bug.
-      let imageUrl: string | null = null;
-      if (ENABLE_GOOGLE_EXPORTS) {
-        try {
-          const driveRes = await fetch('/api/google/upload-image', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dataUrl: screenshotDataUrl, name: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png`, playerId }),
-          });
-          if (driveRes.ok) {
-            const body = await driveRes.json() as { url?: string };
-            imageUrl = body.url ?? null;
-          }
-        } catch { /* fall back to Supabase */ }
-      }
-
-      if (!imageUrl) {
-        // Fallback bucket is `player-assets`, NOT `analysis-screenshots`: the
-        // latter is created by no migration (only player-assets is, in
-        // 20260615140000_player_sessions.sql), so every upload here failed and
-        // left imageUrl null — which is why the save could fail even when Drive
-        // was not the problem.
-        //
-        // player-assets is public=true, so getPublicUrl yields a permanent,
-        // anonymously-fetchable URL — exactly what the Docs API needs to pull
-        // the image server-side, and it cannot expire out from under the doc
-        // the way a signed URL would. Its RLS requires the first path segment to
-        // be the caller's uid.
-        const filename = `${userId}/screenshots/${Date.now()}.png`;
-        const path = await uploadDataUrl('player-assets', filename, screenshotDataUrl);
-        if (path) {
-          const { data: pub } = supabase.storage.from('player-assets').getPublicUrl(path);
-          imageUrl = pub?.publicUrl ?? null;
-        }
-      }
-
-      if (imageUrl) {
-        const signed = { signedUrl: imageUrl };
-        const res = await fetch(`/api/players/${playerId}/entries`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            category: 'technique',
-            folder_label: `Analysis ${localDateTimeForFolder()}`,
-            body_text: 'Screenshot from analysis session.',
-            screenshots: [signed.signedUrl],
-            source: 'analysis-screenshot',
-          }),
-        });
-        if (!res.ok) {
-          setProcessingStatus('Failed to save screenshot — try again');
-          return;
-        }
-        if (REPORTS_IN_APP) {
-          // The screenshot is in the coach's Drive (or the Supabase fallback) and
-          // the entry is saved: it shows up in the player's Technical analysis
-          // report. No Google Doc write — hand the coach the in-app report link.
-          const saved = (await res.json().catch(() => ({}))) as { entry?: { id?: string } };
-          setProcessingStatus(`Saved to report — ${playerName}`);
-          if (saved.entry?.id) {
-            savedDocUrl = `/players/${playerId}/reports/${saved.entry.id}`;
-            setScreenshotDocUrl(savedDocUrl);
-            setScreenshotSavedTo(playerName);
-          }
-        }
-        // Best-effort: append to the player's Google Doc (AngleMotion/Players/<Name>).
-        // A Docs failure must not fail the screenshot save. Gated on the same
-        // flag as the upload above — both run together now that exports are
-        // enabled (ENABLE_GOOGLE_EXPORTS = true as of 399b3b2, 2026-08-03).
-        if (ENABLE_GOOGLE_EXPORTS && !REPORTS_IN_APP) {
-          try {
-            const docRes = await fetch(`/api/players/${playerId}/google-doc`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ imageUrl: signed.signedUrl, timestampLabel: localDateTimeForFolder() }),
-            });
-            if (docRes.ok) {
-              // The route returns { documentId, url }; the url used to be
-              // thrown away, so the coach had no way to reach the doc.
-              const docBody = (await docRes.json().catch(() => ({}))) as { url?: string };
-              if (docBody.url) {
-                savedDocUrl = docBody.url;
-                setScreenshotDocUrl(docBody.url);
-                setScreenshotSavedTo(playerName);
-              }
-              setProcessingStatus(`Saved to ${playerName} + Google Doc`);
-            } else {
-              const docErr = (await docRes.json().catch(() => ({}))) as { error?: string };
-              setProcessingStatus(`Saved to ${playerName} — Google Doc failed: ${docErr.error ?? `HTTP ${docRes.status}`}`);
-            }
-          } catch {
-            setProcessingStatus(`Saved to ${playerName} (Google Doc skipped)`);
-          }
-        } else if (!REPORTS_IN_APP) {
-          setProcessingStatus(`Saved to ${playerName}`);
-        }
+      // Supabase storage is the fallback — used whenever the Drive upload fails,
+      // and was the ONLY path while ENABLE_GOOGLE_EXPORTS was off pending Google's
+      // OAuth verification (approved 2026-07-28; the flag flipped true in 399b3b2
+      // on 2026-08-03). Screenshots saved before that date are Supabase-only and
+      // have no Drive folder — expected for their era, not a bug.
+      //
+      // The save itself lives in lib/reports/saveScreenshot.ts (tested against a
+      // mocked Drive/Supabase). With REPORTS_IN_APP the entry is all that is
+      // written and the coach gets a link to the in-app report; with it off the
+      // player's Google Doc is appended to, as before.
+      const result = await saveScreenshotToPlayer(
+        {
+          playerId,
+          playerName,
+          dataUrl: screenshotDataUrl,
+          googleExports: ENABLE_GOOGLE_EXPORTS,
+          inApp: REPORTS_IN_APP,
+          folderLabel: `Analysis ${localDateTimeForFolder()}`,
+          timestampLabel: localDateTimeForFolder(),
+          fileName: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png`,
+        },
+        {
+          fetchFn: (input, init) => fetch(input, init),
+          // Fallback bucket is `player-assets`, NOT `analysis-screenshots`: the
+          // latter is created by no migration (only player-assets is, in
+          // 20260615140000_player_sessions.sql), so every upload there failed.
+          // player-assets is public=true, so getPublicUrl yields a permanent,
+          // anonymously-fetchable URL that cannot expire out from under a report
+          // the way a signed URL would. Its RLS requires the first path segment
+          // to be the caller's uid.
+          uploadFallback: async (dataUrl) => {
+            const path = await uploadDataUrl('player-assets', `${userId}/screenshots/${Date.now()}.png`, dataUrl);
+            if (!path) return null;
+            const { data: pub } = supabase.storage.from('player-assets').getPublicUrl(path);
+            return pub?.publicUrl ?? null;
+          },
+        },
+      );
+      setProcessingStatus(result.message);
+      if (!result.ok) return;
+      if (result.linkUrl) {
+        // Keep the panel open so the link is reachable; otherwise close as before.
+        setScreenshotDocUrl(result.linkUrl);
+        setScreenshotSavedTo(playerName);
       } else {
-        setProcessingStatus('Upload failed — try again');
-        return;
-      }
-      // Keep the panel open when there's a doc to open, so the link is
-      // reachable; otherwise close as before.
-      if (!savedDocUrl) {
         setScreenshotPickerOpen(false);
         setScreenshotDataUrl(null);
       }
+    } catch (e) {
+      // A network error used to escape this handler unreported.
+      setProcessingStatus(`Failed to save screenshot — ${e instanceof Error ? e.message : 'try again'}`);
     } finally {
       setScreenshotSaving(false);
     }
@@ -9265,7 +9205,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   rel="noopener noreferrer"
                   style={{ fontSize: 13, fontWeight: 600, color: '#007AFF', textDecoration: 'none' }}
                 >
-                  {REPORTS_IN_APP ? `Open ${screenshotSavedTo ?? 'player'}’s report →` : 'Open in Google Doc →'}
+                  {REPORTS_IN_APP ? 'View report →' : 'Open in Google Doc →'}
                 </a>
               </div>
             )}

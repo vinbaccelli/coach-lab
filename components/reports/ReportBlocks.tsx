@@ -42,7 +42,7 @@ export default function ReportBlocks({ blocks, fallbackText }: { blocks: ReportB
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                   {b.images.map((img, i) => (
                     <figure key={`${img.entryId}-${i}`} style={{ margin: 0 }}>
-                      <DriveImage url={img.url} alt={`Screenshot ${i + 1} of ${b.images.length}`} />
+                      <DriveImage url={img.url} fallbackUrl={img.fallbackUrl} alt={`Screenshot ${i + 1} of ${b.images.length}`} />
                       <figcaption style={{ ...mutedText, fontSize: 12, marginTop: 6 }}>
                         {i + 1} of {b.images.length} · {formatDateKey(localDay(img.takenAt), { day: 'numeric', month: 'short' })}, {formatClock(img.takenAt)}
                       </figcaption>

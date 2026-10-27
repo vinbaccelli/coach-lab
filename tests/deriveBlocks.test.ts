@@ -172,3 +172,20 @@ test('month groups, newest first, and search / type filters', () => {
   assert.equal(filterReports(reports, 'all', 'luca')[0].kind, 'match');
   assert.equal(filterReports(reports, 'technical', 'luca').length, 0);
 });
+
+test('a Supabase player-assets copy becomes the fallback of the Drive image, not an extra image', () => {
+  const sb = 'https://x.supabase.co/storage/v1/object/public/player-assets/u1/screenshots/1.png';
+  const drive = 'https://drive.google.com/uc?export=view&id=ABCDEFGHIJKL';
+  const both = shot('a', at(2026, 10, 27), drive, { screenshots: [drive, sb] });
+  const [g] = deriveBlocks([both], 'technical').filter((b) => b.type === 'screenshots');
+  assert.ok(g && g.type === 'screenshots');
+  assert.equal(g.images.length, 1);
+  assert.equal(g.images[0].url, drive);
+  assert.equal(g.images[0].fallbackUrl, sb);
+
+  // Supabase-only and Drive-only entries are untouched.
+  const sbOnly = deriveBlocks([shot('b', at(2026, 10, 27), sb)], 'technical').find((b) => b.type === 'screenshots');
+  assert.ok(sbOnly && sbOnly.type === 'screenshots');
+  assert.equal(sbOnly.images[0].fallbackUrl, undefined);
+  assert.equal(sbOnly.images.length, 1);
+});

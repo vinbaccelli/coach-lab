@@ -25,7 +25,7 @@ import { autoAssignSides, swapAssignment } from '@/lib/matchAnalysis/autoAssign'
 import { buildFullReport } from '@/lib/matchAnalysis/reportModel';
 import type { MatchSetup, SideId } from '@/lib/matchAnalysis/types';
 import type { MatchDecodeResult } from '@/lib/matchDecoder/types';
-import { ENABLE_GOOGLE_EXPORTS } from '@/lib/featureFlags';
+import { ENABLE_GOOGLE_EXPORTS, REPORTS_IN_APP } from '@/lib/featureFlags';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
 import MatchSetupPanel from '@/components/decoder/MatchSetupPanel';
 import MatchReportView from '@/components/decoder/MatchReportView';
@@ -261,7 +261,7 @@ export default function MatchDecoderClient() {
 
           {ENABLE_GOOGLE_EXPORTS && (
             <button type="button" data-tour-id="dec-save" onClick={() => setSaveOpen(true)} style={{ ...btnPrimary, width: '100%', marginTop: 12 }}>
-              Save to Google Docs
+              {REPORTS_IN_APP ? 'Save to report' : 'Save to Google Docs'}
             </button>
           )}
         </div>

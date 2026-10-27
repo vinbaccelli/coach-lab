@@ -1,5 +1,6 @@
 import type { TourDef } from './types';
 import { shot } from './shot';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 
 const id = (k: string) => `[data-tour-id="${k}"]`;
 const pic = (name: string, h: number, alt: string) => shot('decoder', name, h, alt);
@@ -66,11 +67,13 @@ export const DECODER_TOUR: TourDef = {
     },
     {
       id: 'save',
-      title: 'Save to Google Docs',
-      body: 'Choose whose stats to include — one side or both — and which player’s doc they go into. You can add a new player right there.',
+      title: REPORTS_IN_APP ? 'Save to report' : 'Save to Google Docs',
+      body: REPORTS_IN_APP
+        ? 'Choose whose stats to include — one side or both — and which player’s report they go into. You can add a new player right there.'
+        : 'Choose whose stats to include — one side or both — and which player’s doc they go into. You can add a new player right there.',
       target: 'dec-save',
       advance: { kind: 'next' },
-      image: pic('save', 103, 'The Save to Google Docs button under the Coach’s summary.'),
+      image: pic('save', 103, REPORTS_IN_APP ? 'The Save to report button under the Coach’s summary.' : 'The Save to Google Docs button under the Coach’s summary.'),
     },
   ],
 };

@@ -1,5 +1,6 @@
 import type { TourDef } from './types';
 import { shot } from './shot';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 
 /**
  * App overview — from the Control Panel. What AngleMotion is and where each
@@ -29,7 +30,9 @@ export const OVERVIEW_TOUR: TourDef = {
     {
       id: 'players',
       title: 'Player database',
-      body: 'One profile per player: their analysis sessions, screenshots and video links, and two Google Docs that grow all season, Technical Analysis and Match Analysis. Part of Pro and Academy.',
+      body: REPORTS_IN_APP
+        ? 'One profile per player: their analysis sessions, screenshots and video links, and two reports that grow all season, Technical analysis and Match analysis. Part of Pro and Academy.'
+        : 'One profile per player: their analysis sessions, screenshots and video links, and two Google Docs that grow all season, Technical Analysis and Match Analysis. Part of Pro and Academy.',
       target: 'cp-players',
       advance: { kind: 'next' },
       image: shot('overview', 'players', 300, 'The Players screen: a New player box with an Add button, and a grid of player cards.'),

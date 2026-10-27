@@ -2,19 +2,9 @@
 
 import { useMemo } from 'react';
 import MatchReportView from '@/components/decoder/MatchReportView';
-import { buildManualReport, type ManualReportInput } from '@/lib/tennis/manualReportModel';
-import { describeStartingScore } from '@/lib/tennis/startingScore';
+import { buildManualReport } from '@/lib/tennis/manualReportModel';
+import { manualMatchToReportInput } from '@/lib/reports/manualMatchInput';
 import type { ManualMatchData } from '@/lib/reports/deriveBlocks';
-
-function startingScoreNote(m: ManualMatchData): string | null {
-  const s = m.startingScore as Record<string, unknown> | undefined;
-  if (!s || typeof s.gamesPlayer !== 'number' || typeof s.gamesOpponent !== 'number') return null;
-  try {
-    return describeStartingScore(s as unknown as Parameters<typeof describeStartingScore>[0], { player: m.playerName, opponent: m.opponentName });
-  } catch {
-    return null;
-  }
-}
 
 /**
  * The manual-match report, rebuilt from the logged points exactly as the recorder
@@ -24,15 +14,7 @@ function startingScoreNote(m: ManualMatchData): string | null {
 export default function ManualMatchBlock({ match, fallbackText }: { match: ManualMatchData; fallbackText: string }) {
   const reports = useMemo(() => {
     try {
-      return buildManualReport({
-        playerName: match.playerName,
-        opponentName: match.opponentName,
-        points: match.points as ManualReportInput['points'],
-        board: match.board as ManualReportInput['board'],
-        startingScoreNote: startingScoreNote(match),
-        finish: match.finish as ManualReportInput['finish'],
-        gameNotes: match.gameNotes,
-      });
+      return buildManualReport(manualMatchToReportInput(match));
     } catch (e) {
       console.error('[reports] manual match could not be rebuilt:', e instanceof Error ? e.message : e);
       return null;

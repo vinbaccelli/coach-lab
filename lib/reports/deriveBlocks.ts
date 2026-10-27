@@ -35,6 +35,8 @@ export interface ReportImage {
   entryId: string;
   /** ISO timestamp of the entry the image came from — the order it was taken in. */
   takenAt: string;
+  /** A Supabase `player-assets` copy of the same image, shown if `url` (Drive) won't load. */
+  fallbackUrl?: string;
 }
 
 export interface MeasurementRow {
@@ -133,6 +135,32 @@ export function readScreenshotUrls(raw: unknown): string[] {
     if (isHttpUrl(url)) out.push(url.trim());
   }
   return out;
+}
+
+const isSupabaseAsset = (url: string) => /\/storage\/v1\/object\/public\/player-assets\//.test(url);
+
+/**
+ * An entry's images. When one entry lists both Drive URLs and Supabase
+ * `player-assets` URLs for the same screenshots, the Supabase ones are not shown
+ * as extra images: each becomes the `fallbackUrl` of the Drive image in the same
+ * position. (Nothing copies images between the two; this only reads what is stored.)
+ */
+export function entryImages(e: EntryLike): ReportImage[] {
+  const urls = readScreenshotUrls(e.screenshots);
+  const supabase = urls.filter(isSupabaseAsset);
+  const other = urls.filter((u) => !isSupabaseAsset(u));
+  if (other.length === 0 || supabase.length === 0) {
+    return urls.map((url) => ({ url, entryId: e.id, takenAt: e.created_at }));
+  }
+  const images: ReportImage[] = other.map((url, i) => ({
+    url,
+    entryId: e.id,
+    takenAt: e.created_at,
+    ...(supabase[i] ? { fallbackUrl: supabase[i] } : {}),
+  }));
+  // Supabase URLs beyond the Drive ones are images in their own right.
+  for (const url of supabase.slice(other.length)) images.push({ url, entryId: e.id, takenAt: e.created_at });
+  return images;
 }
 
 function readMeasurements(metadata: Record<string, unknown> | null): MeasurementRow[] {
@@ -248,10 +276,7 @@ function technicalBlocks(entries: EntryLike[]): ReportBlock[] {
   }
   if (notes.length) blocks.push({ type: 'text', id: 'notes', heading: 'Notes', paragraphs: notes });
 
-  const images: ReportImage[] = [];
-  for (const e of entries) {
-    for (const url of readScreenshotUrls(e.screenshots)) images.push({ url, entryId: e.id, takenAt: e.created_at });
-  }
+  const images: ReportImage[] = entries.flatMap((e) => entryImages(e));
   if (images.length) blocks.push({ type: 'screenshots', id: 'screenshots', images });
 
   const rows = entries.flatMap((e) => readMeasurements(asRecord(e.metadata)));
@@ -277,7 +302,7 @@ function matchBlocks(e: EntryLike): ReportBlock[] {
     if (text) blocks.push({ type: 'text', id: 'body', paragraphs: paragraphs(text) });
   }
 
-  const images = readScreenshotUrls(e.screenshots).map((url) => ({ url, entryId: e.id, takenAt: e.created_at }));
+  const images = entryImages(e);
   if (images.length) blocks.push({ type: 'screenshots', id: 'screenshots', images });
 
   const rows = readMeasurements(metadata);

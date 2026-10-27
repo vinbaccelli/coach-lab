@@ -416,7 +416,7 @@ export default function SaveReportModal({
                 {...(REPORTS_IN_APP ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
                 style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block' }}
               >
-                {REPORTS_IN_APP ? 'Open report' : 'Open Google Doc'}
+                {REPORTS_IN_APP ? 'View report' : 'Open Google Doc'}
               </a>
               <button type="button" onClick={onClose} style={btnGhost}>
                 Done
