@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { namesLikelyMatch } from '@/lib/players/opponent';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
+import SavingNotice from '@/components/reports/SavingNotice';
 
 export type DbPlayer = {
   id: string;
@@ -584,6 +585,12 @@ export default function SaveReportModal({
 
             {err ? (
               <p style={{ color: 'var(--cl-destructive)', fontSize: 13, marginTop: 12 }}>{err}</p>
+            ) : null}
+
+            {REPORTS_IN_APP && busy ? (
+              <div style={{ marginTop: 14 }}>
+                <SavingNotice />
+              </div>
             ) : null}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>

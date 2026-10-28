@@ -2,6 +2,7 @@
 
 import DriveImage from '@/components/reports/DriveImage';
 import ManualMatchBlock from '@/components/reports/ManualMatchBlock';
+import MatchReportView from '@/components/decoder/MatchReportView';
 import VideoBlock from '@/components/reports/VideoBlock';
 import { formatClock, formatDateKey, measure, mutedText } from '@/components/reports/reportStyles';
 import type { ReportBlock } from '@/lib/reports/deriveBlocks';
@@ -111,6 +112,10 @@ export default function ReportBlocks({ blocks, fallbackText }: { blocks: ReportB
                 ))}
               </div>
             );
+
+          case 'decoderReport':
+            // The same renderer the manual match uses, so both match reports look alike.
+            return <MatchReportView key={b.id} reports={b.reports} integrityWarnings={b.integrityWarnings} />;
 
           case 'manualMatch':
             return <ManualMatchBlock key={b.id} match={b.match} fallbackText={fallbackText} />;

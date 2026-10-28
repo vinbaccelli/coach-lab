@@ -430,6 +430,11 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
       </div>
 
+      {/* V2: the "Analysis Sessions" block is hidden while REPORTS_IN_APP is on — reports are
+          the player's record now, and a coach saves to any player from the analysis app
+          without a session. The code (and player_sessions, its routes and pages) is kept:
+          REPORTS_IN_APP = false brings it back unchanged. */}
+      {!REPORTS_IN_APP ? (
       <section
         style={{
           background: 'rgba(250, 249, 247, 0.96)',
@@ -471,6 +476,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </button>
         <PlayerSessionTimeline playerId={playerId} sessions={sessions} />
       </section>
+      ) : null}
 
       <section
         style={{

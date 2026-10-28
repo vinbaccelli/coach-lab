@@ -220,6 +220,8 @@ export async function saveReportToPlayers(
   folderLabel: string,
   summaryText: string,
   onProgress?: (done: number, total: number, name: string) => void,
+  /** Extra structured data for the entry's `metadata` jsonb (e.g. the decoder's full report). */
+  metadata?: Record<string, unknown>,
 ): Promise<SaveOutcome[]> {
   const results: SaveOutcome[] = [];
   for (let i = 0; i < targets.length; i++) {
@@ -235,6 +237,7 @@ export async function saveReportToPlayers(
           body_text: summaryText,
           source: 'match_decoder',
           sections,
+          ...(metadata ? { metadata } : {}),
         }),
       });
       const data = (await res.json()) as {

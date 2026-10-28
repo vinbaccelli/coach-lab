@@ -43,6 +43,7 @@ import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
 import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD, REPORTS_IN_APP } from '@/lib/featureFlags';
 import { saveScreenshotToPlayer } from '@/lib/reports/saveScreenshot';
+import SavingNotice from '@/components/reports/SavingNotice';
 import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
 import { uploadVideoToYouTube } from '@/lib/export/exportService';
 import { useStroMotion } from '@/hooks/useStroMotion';
@@ -3432,6 +3433,8 @@ function Home() {
   /** Set on a successful Docs export so the picker can offer "Open in Google Doc". */
   const [screenshotDocUrl, setScreenshotDocUrl] = useState<string | null>(null);
   const [screenshotSavedTo, setScreenshotSavedTo] = useState<string | null>(null);
+  const [screenshotStage, setScreenshotStage] = useState<'uploading' | 'saving'>('uploading');
+  const screenshotSaveBusyRef = useRef(false);
 
   /** Capture the current frame into state and open the player picker */
   const handleScreenshotSave = useCallback(async () => {
@@ -3482,6 +3485,10 @@ function Home() {
   const handleScreenshotSaveToPlayer = useCallback(async (playerId: string, playerName: string) => {
     if (!screenshotDataUrl) return;
     if (!canUseFeature('saveToPlayer')) { setUpgradeFeature('saveToPlayer'); return; }
+    // One save at a time: a second tap while the first is still running would
+    // upload the image and create the entry twice. A ref (not `screenshotSaving`):
+    // "Create new player" sets that state and then calls this.
+    if (screenshotSaveBusyRef.current) return;
     const supabase = createSupabaseBrowserClient();
     const userRes = await supabase?.auth.getUser();
     const userId = userRes?.data?.user?.id;
@@ -3490,6 +3497,7 @@ function Home() {
       handleScreenshotDownload(playerName);
       return;
     }
+    screenshotSaveBusyRef.current = true;
     setScreenshotSaving(true);
     try {
       // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive.
@@ -3516,6 +3524,7 @@ function Home() {
         },
         {
           fetchFn: (input, init) => fetch(input, init),
+          onStage: setScreenshotStage,
           // Fallback bucket is `player-assets`, NOT `analysis-screenshots`: the
           // latter is created by no migration (only player-assets is, in
           // 20260615140000_player_sessions.sql), so every upload there failed.
@@ -3545,6 +3554,7 @@ function Home() {
       // A network error used to escape this handler unreported.
       setProcessingStatus(`Failed to save screenshot — ${e instanceof Error ? e.message : 'try again'}`);
     } finally {
+      screenshotSaveBusyRef.current = false;
       setScreenshotSaving(false);
     }
   }, [screenshotDataUrl, handleScreenshotDownload, canUseFeature]);
@@ -9209,7 +9219,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 </a>
               </div>
             )}
-            {screenshotSaving ? (
+            {screenshotSaving && REPORTS_IN_APP ? (
+              <SavingNotice label={screenshotStage === 'uploading' ? 'Saving… uploading the image' : 'Saving… adding it to the report'} />
+            ) : screenshotSaving ? (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px',
                 borderRadius: 10, background: 'rgba(0,122,255,0.08)', border: '1px solid rgba(0,122,255,0.3)',

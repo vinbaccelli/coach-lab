@@ -35,6 +35,8 @@ export interface SaveScreenshotDeps {
   fetchFn: typeof fetch;
   /** Supabase `player-assets` upload; resolves a public URL, or null when it failed. */
   uploadFallback: (dataUrl: string) => Promise<string | null>;
+  /** Called as each step starts, so the UI can say what it is doing during a slow save. */
+  onStage?: (stage: 'uploading' | 'saving') => void;
 }
 
 export type SaveScreenshotResult =
@@ -66,6 +68,7 @@ export async function saveScreenshotToPlayer(
   const { playerId, playerName, inApp } = input;
 
   // 1 — Drive
+  deps.onStage?.('uploading');
   let imageUrl: string | null = null;
   let storage: 'drive' | 'supabase' = 'drive';
   let driveError: string | undefined;
@@ -108,6 +111,7 @@ export async function saveScreenshotToPlayer(
   }
 
   // 3 — the entry
+  deps.onStage?.('saving');
   const entryRes = await fetchFn(`/api/players/${playerId}/entries`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -2286,8 +2286,27 @@ column are still never exported.
 - Report types beyond Technical and Match, and coach-created types.
 - The full profile layout (age, height, UTR, diet, exercise plan).
 - Comments and a Docs-free export (the PDF download exists only for manual matches).
-- Entries saved before this change have no `metadata.sections`; a decoder entry from then shows its plain-text summary only.
+- Entries saved before this change have no `metadata.sections` and no `metadata.decoderReport`; a decoder entry from then shows its plain-text summary only.
+- Decoder reports saved with the switch on store the full structured report (`metadata.decoderReport`: the chosen sides' `SideReport[]` including the SVG charts, plus the consistency warnings) and render through the same component as a manual match. The chart PNG upload to Drive is skipped in that mode (only the Google Doc needed it).
+- The "Analysis Sessions" block is hidden on the player profile while the switch is on (code, `player_sessions` and the session routes/pages are kept).
 - Not measured on real devices: Drive image loading from the report page, the YouTube embed under the app's `Cross-Origin-Embedder-Policy: credentialless` header, and real Supabase/Drive saves (the save flows are unit-tested against a mocked fetch, Drive and Supabase in `tests/saveScreenshot.test.ts`).
 - The static tour screenshots (`public/tours/*`) still show the old Google Doc buttons; only the tour text follows the switch.
 
 **Severity.** None (scope note).
+
+---
+
+## 071 — The first screenshot save for a brand-new player is slow
+
+**Found:** 2026-10-28, reported by a coach (closed the page, retried; the second try worked).
+
+**Symptom.** Saving a screenshot to a player with no Drive folders yet took far longer than later saves, with no feedback beyond a spinner.
+
+**Verified root cause (read from the code; timings not measured).** `POST /api/google/upload-image` (`app/api/google/upload-image/route.ts`) resolves the destination on EVERY call, one Drive request after another: a `players` lookup, then `playerFolderChain` (`lib/google/drive.ts`: AngleMotion → Players → <Name>) and `Screenshots`, each a `files.list` search plus, when missing, a `files.create`. For a new player that is four searches and four folder creations, then `files.create` (the image), `permissions.create`, and a `players` update; on a cold serverless start the `googleapis` import adds to it. For an existing player the folders are found, so there are no creations. The client waits on that one request with no timeout or stage text. After an abandoned first try the folders already exist (the server finishes the request), which is why the retry was fast.
+
+**What the abandoned attempt can leave.** The entry is created only after the upload response arrives in the same page, so closing the tab during the upload leaves an orphan image in Drive (and the folders), not a duplicate entry. A duplicate entry needs two saves to run: now blocked in the analysis app by a busy guard (`screenshotSaveBusyRef`). Folder duplicates are possible in theory: Drive's search can lag a fresh folder (`findOrCreateFolder` is check-then-create).
+
+**Fix applied (client only).** A visible "Saving…" state with the current step (uploading, adding to the report), and after 20 s "Still saving, please keep this page open" plus a browser confirm before the tab is closed (`components/reports/SavingNotice.tsx`), in the analysis picker and the two report save modals. The analysis app ignores a second save while one is running.
+
+**Not fixed (outside the allowed files).** The upload route should read `players.google_folder_id` (the route already stores it) instead of re-resolving the chain, and create the Screenshots folder once. Severity: medium (looks broken on a coach's first save).
+

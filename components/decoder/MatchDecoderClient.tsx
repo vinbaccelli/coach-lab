@@ -274,6 +274,7 @@ export default function MatchDecoderClient() {
           reports={reports}
           folderLabel={folderLabel}
           summaryText={summaryText}
+          integrityWarnings={analysis?.integrityWarnings}
         />
       )}
     </div>

@@ -189,3 +189,39 @@ test('a Supabase player-assets copy becomes the fallback of the Drive image, not
   assert.equal(sbOnly.images[0].fallbackUrl, undefined);
   assert.equal(sbOnly.images.length, 1);
 });
+
+test('a decoder entry with a stored decoderReport renders from it; older entries keep their sections/text', async () => {
+  const { buildManualReport } = await import('../lib/tennis/manualReportModel');
+  const { emptyFormattedBoard } = await import('../lib/tennis/matchFormat');
+  // Any SideReport[] has the stored shape; the manual model is a ready source of a real one.
+  const reports = buildManualReport({
+    playerName: 'A',
+    opponentName: 'B',
+    points: [
+      { winner: 'player', outcome: { kind: 'winner', stroke: 'Forehand' } },
+      { winner: 'opponent', outcome: { kind: 'ue', stroke: 'Backhand' } },
+    ] as never,
+    board: emptyFormattedBoard(),
+  });
+  const stored = JSON.parse(JSON.stringify({ decoderReport: { version: 1, scope: 'both', reports, integrityWarnings: ['Check 1', 7] } }));
+  const entry: EntryLike = { id: 'd1', category: 'match', folder_label: 'Decoder', body_text: 'summary', created_at: at(2026, 10, 2), source: 'match_decoder', metadata: stored };
+  const [b] = deriveBlocks([entry], 'match');
+  assert.ok(b.type === 'decoderReport');
+  assert.equal(b.reports.length, 2);
+  assert.deepEqual(b.integrityWarnings, ['Check 1']);
+  assert.equal(b.reports[0].sections.length, reports[0].sections.length);
+  assert.ok(b.reports[0].sections.some((s) => s.charts.length > 0), 'charts survive');
+
+  // An unsafe chart is dropped, the rest of the report stays.
+  const evil = JSON.parse(JSON.stringify(stored));
+  evil.decoderReport.reports[0].sections[0].charts = ['<svg><script>alert(1)</script></svg>', '<svg onload="x()"></svg>', '<svg width="1"></svg>'];
+  const [e] = deriveBlocks([{ ...entry, metadata: evil }], 'match');
+  assert.ok(e.type === 'decoderReport');
+  assert.deepEqual(e.reports[0].sections[0].charts, ['<svg width="1"></svg>']);
+
+  // Malformed decoderReport falls back to stored sections, then to text.
+  const withSections = { ...entry, metadata: { decoderReport: { reports: 'nope' }, sections: [{ heading: 'Serve', lines: ['x'] }] } };
+  assert.ok(deriveBlocks([withSections], 'match')[0].type === 'sections');
+  const textOnly = { ...entry, metadata: { decoderReport: {} } };
+  assert.ok(deriveBlocks([textOnly], 'match')[0].type === 'text');
+});

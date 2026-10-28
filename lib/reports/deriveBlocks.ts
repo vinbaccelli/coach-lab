@@ -12,6 +12,7 @@
  */
 
 import { extractYoutubeVideoId } from '@/lib/youtubeId';
+import type { ReportSection, SideReport } from '@/lib/matchAnalysis/reportModel';
 
 export type ReportKind = 'technical' | 'match';
 
@@ -61,7 +62,8 @@ export type ReportBlock =
   | { type: 'screenshots'; id: string; images: ReportImage[] }
   | { type: 'measurements'; id: string; rows: MeasurementRow[] }
   | { type: 'sections'; id: string; sections: ReportSectionBlock[] }
-  | { type: 'manualMatch'; id: string; match: ManualMatchData };
+  | { type: 'manualMatch'; id: string; match: ManualMatchData }
+  | { type: 'decoderReport'; id: string; reports: SideReport[]; integrityWarnings: string[] };
 
 /** What the manual recorder stores under `metadata.manualMatch` (v1 and v2 share these keys). */
 export interface ManualMatchData {
@@ -220,6 +222,49 @@ function readManualMatch(metadata: Record<string, unknown> | null): ManualMatchD
   };
 }
 
+/** A chart is inline SVG markup we generated; refuse anything that is not plain SVG. */
+function safeChart(svg: unknown): svg is string {
+  return typeof svg === 'string' && /^\s*<svg[\s>]/i.test(svg) && !/<script|\son\w+\s*=|javascript:|<foreignObject/i.test(svg);
+}
+
+/**
+ * The decoder's full structured report, as stored in `metadata.decoderReport` at
+ * save time: the same `SideReport[]` the live decoder renders, so a saved decoder
+ * report renders through the very component the manual match uses. Anything that
+ * does not look like it is dropped (and the entry falls back to `sections` / text).
+ */
+function readDecoderReport(metadata: Record<string, unknown> | null): { reports: SideReport[]; integrityWarnings: string[] } | null {
+  const d = asRecord(metadata?.decoderReport);
+  if (!d || !Array.isArray(d.reports)) return null;
+  const reports: SideReport[] = [];
+  for (const r of d.reports) {
+    const rec = asRecord(r);
+    if (!rec || (rec.sideId !== 'A' && rec.sideId !== 'B') || !Array.isArray(rec.sections)) continue;
+    const sections: ReportSection[] = [];
+    for (const s of rec.sections) {
+      const sec = asRecord(s);
+      if (!sec || typeof sec.heading !== 'string' || !Array.isArray(sec.rows)) continue;
+      sections.push({
+        id: str(sec.id) || `s${sections.length + 1}`,
+        number: typeof sec.number === 'number' ? sec.number : sections.length + 1,
+        heading: sec.heading,
+        explanation: str(sec.explanation),
+        rows: sec.rows.filter((row): row is ReportSection['rows'][number] => !!asRecord(row) && typeof asRecord(row)!.label === 'string'),
+        charts: Array.isArray(sec.charts) ? sec.charts.filter(safeChart) : [],
+        notes: Array.isArray(sec.notes) ? sec.notes.filter((n): n is string => typeof n === 'string') : [],
+        present: sec.present !== false,
+        ...(typeof sec.coverage === 'string' ? { coverage: sec.coverage } : {}),
+      });
+    }
+    if (sections.length) reports.push({ sideId: rec.sideId, label: str(rec.label) || `Side ${rec.sideId}`, sections });
+  }
+  if (!reports.length) return null;
+  return {
+    reports,
+    integrityWarnings: Array.isArray(d.integrityWarnings) ? d.integrityWarnings.filter((w): w is string => typeof w === 'string') : [],
+  };
+}
+
 function paragraphs(text: string): string[] {
   return text
     .split(/\n{2,}/)
@@ -290,10 +335,13 @@ function matchBlocks(e: EntryLike): ReportBlock[] {
   const blocks: ReportBlock[] = [...videoBlocks([e])];
 
   const manual = readManualMatch(metadata);
+  const decoder = manual ? null : readDecoderReport(metadata);
   const sections = readSections(metadata);
 
   if (manual) {
     blocks.push({ type: 'manualMatch', id: 'manual-match', match: manual });
+  } else if (decoder) {
+    blocks.push({ type: 'decoderReport', id: 'decoder-report', reports: decoder.reports, integrityWarnings: decoder.integrityWarnings });
   } else if (sections.length) {
     blocks.push({ type: 'sections', id: 'sections', sections });
   } else {

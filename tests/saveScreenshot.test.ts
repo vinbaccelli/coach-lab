@@ -180,3 +180,29 @@ test('decoder save: each outcome carries the in-app report link; a failure carri
     globalThis.fetch = realFetch;
   }
 });
+
+test('the decoder save sends the structured report in metadata; the stage callback reports progress', async () => {
+  const realFetch = globalThis.fetch;
+  let sent: Record<string, unknown> | null = null;
+  globalThis.fetch = (async (_i: string | URL | Request, init?: RequestInit) => {
+    sent = JSON.parse(String(init?.body));
+    return json(200, { entry: { id: 'eZ' } });
+  }) as typeof fetch;
+  try {
+    const md = { decoderReport: { version: 1, scope: 'A', reports: [], integrityWarnings: [] } };
+    await saveReportToPlayers([{ playerId: 'p1', displayName: 'Ana' }], [], 'Decoder', 'summary', undefined, md);
+    assert.deepEqual((sent as unknown as { metadata: unknown }).metadata, md);
+    await saveReportToPlayers([{ playerId: 'p1', displayName: 'Ana' }], [], 'Decoder', 'summary');
+    assert.equal('metadata' in ((sent as unknown) as object), false, 'no metadata key when none is given');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  const stages: string[] = [];
+  const { fn } = fakeFetch({
+    '/api/google/upload-image': () => json(200, { url: DRIVE }),
+    '/entries': () => json(200, { entry: { id: 'e1' } }),
+  });
+  await saveScreenshotToPlayer(base, { fetchFn: fn, uploadFallback: async () => SUPABASE, onStage: (s) => stages.push(s) });
+  assert.deepEqual(stages, ['uploading', 'saving']);
+});

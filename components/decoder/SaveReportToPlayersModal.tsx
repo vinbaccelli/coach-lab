@@ -29,6 +29,7 @@ import {
 } from '@/lib/matchAnalysis/exportToDocs';
 import type { SideReport } from '@/lib/matchAnalysis/reportModel';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
+import SavingNotice from '@/components/reports/SavingNotice';
 
 interface DbPlayer {
   id: string;
@@ -43,12 +44,15 @@ export default function SaveReportToPlayersModal({
   reports,
   folderLabel,
   summaryText,
+  integrityWarnings,
 }: {
   open: boolean;
   onClose: () => void;
   reports: SideReport[];
   folderLabel: string;
   summaryText: string;
+  /** The decoder's consistency warnings, saved with the report so the in-app copy shows them too. */
+  integrityWarnings?: string[];
 }) {
   const [players, setPlayers] = useState<DbPlayer[]>([]);
   const [scope, setScope] = useState<DocsScope>('both');
@@ -132,15 +136,34 @@ export default function SaveReportToPlayersModal({
     setError(null);
     setOutcomes(null);
     try {
-      setProgress('Rendering charts…');
-      const chartUrls = await uploadReportCharts(
-        reports,
-        (done, total) => setProgress(`Uploading charts ${done}/${total}…`),
-        scope,
-      );
+      // In-app reports draw the charts from the stored report itself, so the PNG
+      // upload to Drive (only the Google Doc needed it, and it needs a Google grant)
+      // is skipped. Switch off: unchanged.
+      let chartUrls = new Map<string, string>();
+      if (!REPORTS_IN_APP) {
+        setProgress('Rendering charts…');
+        chartUrls = await uploadReportCharts(
+          reports,
+          (done, total) => setProgress(`Uploading charts ${done}/${total}…`),
+          scope,
+        );
+      }
       const sections: DocsSectionPayload[] = buildDocsSections(reports, chartUrls, scope);
-      const results = await saveReportToPlayers(targets, sections, folderLabel, summaryText, (done, total, name) =>
-        setProgress(name ? `Saving to ${name} (${done + 1}/${total})…` : 'Finishing…'),
+
+      // The full structured report, stored additively in the entry's `metadata`
+      // (no migration): exactly the sides the coach chose, rendered later by the
+      // same component as a manual match. Skipped if it is implausibly large.
+      const chosen = reports.filter((r) => scope === 'both' || r.sideId === scope);
+      const decoderReport = { version: 1, scope, reports: chosen, integrityWarnings: integrityWarnings ?? [] };
+      const metadata = JSON.stringify(decoderReport).length <= 2_000_000 ? { decoderReport } : undefined;
+
+      const results = await saveReportToPlayers(
+        targets,
+        sections,
+        folderLabel,
+        summaryText,
+        (done, total, name) => setProgress(name ? `Saving to ${name} (${done + 1}/${total})…` : 'Finishing…'),
+        metadata,
       );
       setOutcomes(results);
     } catch (e) {
@@ -149,7 +172,7 @@ export default function SaveReportToPlayersModal({
       setBusy(false);
       setProgress('');
     }
-  }, [targets, reports, scope, folderLabel, summaryText]);
+  }, [targets, reports, scope, folderLabel, summaryText, integrityWarnings]);
 
   if (!open) return null;
 
@@ -232,6 +255,12 @@ export default function SaveReportToPlayersModal({
               Saving <b>{scopeLabel}</b> to{' '}
               <b>{targets.length ? targets.map((t) => t.displayName).join(' and ') : 'nobody yet'}</b>
             </div>
+
+            {REPORTS_IN_APP && busy ? (
+              <div style={{ marginTop: 14 }}>
+                <SavingNotice label={progress || 'Saving…'} />
+              </div>
+            ) : null}
 
             <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
               <button type="button" onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
