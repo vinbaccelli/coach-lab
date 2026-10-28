@@ -2310,3 +2310,17 @@ column are still never exported.
 
 **Not fixed (outside the allowed files).** The upload route should read `players.google_folder_id` (the route already stores it) instead of re-resolving the chain, and create the Screenshots folder once. Severity: medium (looks broken on a coach's first save).
 
+
+---
+
+## 072 — Screenshot saved to a brand-new player: no link, no report (phone test, PR #111)
+
+**Found:** 2026-10-28, phone test. A coach created a player from the analysis app's picker and saved a screenshot; no "Saved to report" link appeared and the player's page listed no reports.
+
+**What was checked (code + tests with a mocked fetch).** The id of the new player flows correctly: `handleScreenshotCreateAndSave` → `POST /api/players` → `{ player }` → `handleScreenshotSaveToPlayer(player.id, …)` → upload-image `playerId` and `/api/players/<id>/entries` use that id (`tests/saveScreenshot.test.ts`, "new player" cases). The plan gate is the same for creating and saving (`players` and `saveToPlayer` are both Pro, server-enforced). A logic error in that path was NOT found.
+
+**What was found instead (silent endings, any player).** (1) Before saving, the handler called `supabase.auth.getUser()` (a network request); if that came back without a user (weak connection, expired token) the code fell back to DOWNLOADING the image and closing the picker: nothing saved, no message — and for "Create new player" the player had already been created. (2) Every other failure was reported only by a transient status toast. (3) A plan block (`canUseFeature`) only opened the upgrade sheet. (4) The picker card could not scroll, so on a short (landscape) phone screen the confirmation could sit outside the visible area. (5) The reports list treated the service worker's `{"error":"Offline"}` reply (HTTP 200) as "no reports". Which of these happened on the coach's phone is NOT proven.
+
+**Fix (with `REPORTS_IN_APP` on; off keeps the old behaviour).** No network sign-in check before saving (the routes check it and a real error is shown); every failure and the "Not confirmed" case (2xx without a saved entry) is shown in a red message INSIDE the picker; a plan block is checked before a player is created; the new player is added to the picker list so a retry picks them instead of creating a duplicate; the picker scrolls; the reports list and profile read `no-store` and show an offline/error state instead of "no reports". The back bar is now `position: fixed` under the header (measured), not `position: sticky`.
+
+**Severity.** High (a save that looks like nothing happened).

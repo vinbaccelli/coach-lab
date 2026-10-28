@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { saveScreenshotToPlayer, type SaveScreenshotInput } from '../lib/reports/saveScreenshot';
+import { createPlayer, saveScreenshotToPlayer, type SaveScreenshotInput } from '../lib/reports/saveScreenshot';
 import { saveReportToPlayers } from '../lib/matchAnalysis/exportToDocs';
 
 type Call = { url: string; body: unknown };
@@ -14,7 +14,8 @@ function fakeFetch(routes: Record<string, () => Response | Promise<Response>>) {
   const fn = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    const key = Object.keys(routes).find((k) => url.includes(k));
+    // A route that matches the END of the URL wins ('/api/players' also appears inside '/api/players/<id>/entries').
+    const key = Object.keys(routes).find((k) => url.endsWith(k)) ?? Object.keys(routes).find((k) => url.includes(k));
     if (!key) throw new Error(`unexpected fetch ${url}`);
     return routes[key]();
   }) as typeof fetch;
@@ -205,4 +206,100 @@ test('the decoder save sends the structured report in metadata; the stage callba
   });
   await saveScreenshotToPlayer(base, { fetchFn: fn, uploadFallback: async () => SUPABASE, onStage: (s) => stages.push(s) });
   assert.deepEqual(stages, ['uploading', 'saving']);
+});
+
+// ── New player created inline in the analysis picker, then the screenshot saved to it ──────────
+
+/** What the picker does for "Create new player" + Save: create, then save to the id that came back. */
+async function createAndSave(fetchFn: typeof fetch, name: string, fallback: () => Promise<string | null> = async () => SUPABASE) {
+  const created = await createPlayer(fetchFn, name);
+  if (!created.ok) return { created, result: null };
+  const result = await saveScreenshotToPlayer(
+    { ...base, playerId: created.player.id, playerName: created.player.display_name },
+    { fetchFn, uploadFallback: fallback },
+  );
+  return { created, result };
+}
+
+test('new player: the real id from the create reply is the one the upload and the entry use; link points at it', async () => {
+  const { fn, calls } = fakeFetch({
+    '/api/players': () => json(200, { player: { id: 'NEW-123', display_name: 'Zed Newcomer' } }),
+    '/api/google/upload-image': () => json(200, { url: DRIVE }),
+    '/entries': () => json(200, { entry: { id: 'E-1' } }),
+  });
+  const { created, result } = await createAndSave(fn, '  Zed Newcomer ');
+  assert.ok(created.ok);
+  assert.deepEqual((calls[0].body as { display_name: string }), { display_name: 'Zed Newcomer' });
+  const upload = calls.find((c) => c.url.includes('upload-image'))!.body as { playerId: string };
+  assert.equal(upload.playerId, 'NEW-123');
+  assert.ok(calls.some((c) => c.url === '/api/players/NEW-123/entries'), 'entry is inserted under the new player');
+  assert.ok(result && result.ok);
+  if (result && result.ok) {
+    assert.equal(result.linkUrl, '/players/NEW-123/reports/E-1');
+    assert.equal(result.message, 'Saved to report — Zed Newcomer');
+  }
+});
+
+test('new player: a create reply without a usable id is an error and nothing is saved', async () => {
+  for (const reply of [
+    () => json(200, { error: 'Offline' }), // the service worker's offline stand-in
+    () => json(200, {}),
+    () => json(200, { player: {} }),
+    () => json(200, { player: { id: '' } }),
+    () => json(200, { player: { id: 42 } }),
+  ]) {
+    const { fn, calls } = fakeFetch({ '/api/players': reply });
+    const { created, result } = await createAndSave(fn, 'Zed');
+    assert.equal(created.ok, false);
+    assert.match((created as { message: string }).message, /Could not create the player/);
+    assert.equal(result, null);
+    assert.equal(calls.length, 1, 'no upload and no entry after a failed create');
+  }
+});
+
+test('new player: plan block, server error and network failure on create show the real reason', async () => {
+  const plan = await createPlayer(fakeFetch({ '/api/players': () => json(403, { error: 'plan_required', message: 'Player database is part of the Pro plan.' }) }).fn, 'Zed');
+  assert.deepEqual(plan, { ok: false, message: 'Could not create the player — plan_required' });
+  const boom = await createPlayer(fakeFetch({ '/api/players': () => json(500, { error: 'duplicate key value' }) }).fn, 'Zed');
+  assert.match((boom as { message: string }).message, /duplicate key value/);
+  const net = await createPlayer(fakeFetch({ '/api/players': () => { throw new TypeError('Load failed'); } }).fn, 'Zed');
+  assert.deepEqual(net, { ok: false, message: 'Could not create the player — Load failed' });
+  assert.deepEqual(await createPlayer(fakeFetch({}).fn, '   '), { ok: false, message: 'Enter a player name' });
+});
+
+test('new player: created but the save fails -> the failure carries the reason and the player id is kept for a retry', async () => {
+  const { fn } = fakeFetch({
+    '/api/players': () => json(200, { player: { id: 'NEW-9', display_name: 'Zed' } }),
+    '/api/google/upload-image': () => json(200, { url: DRIVE }),
+    '/entries': () => json(500, { error: 'insert failed: RLS' }),
+  });
+  const { created, result } = await createAndSave(fn, 'Zed');
+  assert.ok(created.ok && created.player.id === 'NEW-9');
+  assert.ok(result && !result.ok);
+  assert.match((result as { message: string }).message, /insert failed: RLS/);
+});
+
+test('new player: a 2xx entry reply with no entry is NOT shown as saved', async () => {
+  for (const reply of [() => json(200, {}), () => json(200, { entry: {} }), () => new Response('<html>gateway</html>', { status: 200 })]) {
+    const { fn } = fakeFetch({
+      '/api/google/upload-image': () => json(200, { url: DRIVE }),
+      '/entries': reply,
+    });
+    const r = await saveScreenshotToPlayer({ ...base, playerId: 'NEW-1' }, { fetchFn: fn, uploadFallback: async () => SUPABASE });
+    assert.equal(r.ok, false);
+    assert.match(r.message, /Not confirmed/);
+  }
+});
+
+test('new player: slow Drive (folders being created) still ends in a confirmed save', async () => {
+  const { fn } = fakeFetch({
+    '/api/players': () => json(200, { player: { id: 'NEW-5', display_name: 'Zed' } }),
+    '/api/google/upload-image': async () => {
+      await new Promise((r) => setTimeout(r, 60));
+      return json(200, { url: DRIVE });
+    },
+    '/entries': () => json(200, { entry: { id: 'E-5' } }),
+  });
+  const { result } = await createAndSave(fn, 'Zed');
+  assert.ok(result && result.ok && result.linkUrl === '/players/NEW-5/reports/E-5');
 });

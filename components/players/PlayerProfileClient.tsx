@@ -101,9 +101,11 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
     setLoading(true);
     setErr(null);
     try {
-      const res = await fetch(`/api/players/${playerId}`);
+      // no-store: the entries list must be the database's, not a cached copy (a report saved
+      // a moment ago has to be there).
+      const res = await fetch(`/api/players/${playerId}`, { cache: 'no-store' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Not found');
+      if (!res.ok || (REPORTS_IN_APP && (data.error || !data.player))) throw new Error(data.error === 'Offline' ? 'You appear to be offline.' : data.error ?? 'Not found');
       setPlayer(data.player);
       setEntries(data.entries ?? []);
       const sessRes = await fetch(`/api/players/${playerId}/sessions`);

@@ -26,9 +26,13 @@ export function usePlayerReports(playerId: string) {
           player?: { display_name?: string };
           entries?: EntryLike[];
         };
-        if (!res.ok) throw new Error(data.error ?? 'Could not load reports');
+        // A 200 that is not a player (the service worker answers `{error:'Offline'}` with 200
+        // when the network is down) must not read as "no reports yet".
+        if (!res.ok || data.error || !Array.isArray(data.entries)) {
+          throw new Error(data.error === 'Offline' ? 'You appear to be offline — reports could not be loaded.' : data.error ?? 'Could not load reports');
+        }
         setPlayerName(data.player?.display_name ?? '');
-        setEntries(Array.isArray(data.entries) ? data.entries : []);
+        setEntries(data.entries);
         setError(null);
       } catch (e) {
         // A quiet refresh failing must not blank a page the coach is reading.

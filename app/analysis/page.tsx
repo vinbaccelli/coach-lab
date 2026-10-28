@@ -42,7 +42,7 @@ import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
 import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD, REPORTS_IN_APP } from '@/lib/featureFlags';
-import { saveScreenshotToPlayer } from '@/lib/reports/saveScreenshot';
+import { createPlayer, saveScreenshotToPlayer } from '@/lib/reports/saveScreenshot';
 import SavingNotice from '@/components/reports/SavingNotice';
 import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
 import { uploadVideoToYouTube } from '@/lib/export/exportService';
@@ -3435,6 +3435,8 @@ function Home() {
   const [screenshotSavedTo, setScreenshotSavedTo] = useState<string | null>(null);
   const [screenshotStage, setScreenshotStage] = useState<'uploading' | 'saving'>('uploading');
   const screenshotSaveBusyRef = useRef(false);
+  /** The outcome of the last save/create, shown INSIDE the picker (a toast alone can be missed). */
+  const [screenshotMessage, setScreenshotMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
 
   /** Capture the current frame into state and open the player picker */
   const handleScreenshotSave = useCallback(async () => {
@@ -3458,6 +3460,7 @@ function Home() {
       // A fresh capture must not inherit the previous save's doc link.
       setScreenshotDocUrl(null);
       setScreenshotSavedTo(null);
+      setScreenshotMessage(null);
       // Fetch player list for picker
       try {
         const res = await fetch('/api/players');
@@ -3484,19 +3487,36 @@ function Home() {
 
   const handleScreenshotSaveToPlayer = useCallback(async (playerId: string, playerName: string) => {
     if (!screenshotDataUrl) return;
-    if (!canUseFeature('saveToPlayer')) { setUpgradeFeature('saveToPlayer'); return; }
+    if (!canUseFeature('saveToPlayer')) {
+      setUpgradeFeature('saveToPlayer');
+      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — the image was not saved.' });
+      return;
+    }
     // One save at a time: a second tap while the first is still running would
     // upload the image and create the entry twice. A ref (not `screenshotSaving`):
     // "Create new player" sets that state and then calls this.
     if (screenshotSaveBusyRef.current) return;
     const supabase = createSupabaseBrowserClient();
-    const userRes = await supabase?.auth.getUser();
-    const userId = userRes?.data?.user?.id;
-    if (!supabase || !userId) {
-      // Fallback to download if not authenticated
-      handleScreenshotDownload(playerName);
+    let userId: string | undefined;
+    if (!REPORTS_IN_APP) {
+      const userRes = await supabase?.auth.getUser();
+      userId = userRes?.data?.user?.id;
+      if (!supabase || !userId) {
+        // Fallback to download if not authenticated
+        handleScreenshotDownload(playerName);
+        return;
+      }
+    } else if (!supabase) {
+      // No Supabase client at all (not configured): nothing can be saved to a player.
+      setScreenshotMessage({ kind: 'error', text: 'Saving to a player is not available here — the image was not saved. Use Download.' });
       return;
     }
+    // In-app mode does NOT ask Supabase "who am I" over the network before saving. That
+    // call could fail on a weak connection and used to end in a silent download with
+    // nothing saved. The server routes check the sign-in themselves and answer with a
+    // real error (401 Unauthorized), which is shown; the user id is only needed for
+    // the backup upload and is resolved there.
+    setScreenshotMessage(null);
     screenshotSaveBusyRef.current = true;
     setScreenshotSaving(true);
     try {
@@ -3533,7 +3553,13 @@ function Home() {
           // the way a signed URL would. Its RLS requires the first path segment
           // to be the caller's uid.
           uploadFallback: async (dataUrl) => {
-            const path = await uploadDataUrl('player-assets', `${userId}/screenshots/${Date.now()}.png`, dataUrl);
+            let uid = userId;
+            if (!uid) {
+              const sess = await supabase.auth.getSession();
+              uid = sess.data.session?.user?.id ?? (await supabase.auth.getUser()).data.user?.id;
+            }
+            if (!uid) return null;
+            const path = await uploadDataUrl('player-assets', `${uid}/screenshots/${Date.now()}.png`, dataUrl);
             if (!path) return null;
             const { data: pub } = supabase.storage.from('player-assets').getPublicUrl(path);
             return pub?.publicUrl ?? null;
@@ -3541,7 +3567,10 @@ function Home() {
         },
       );
       setProcessingStatus(result.message);
-      if (!result.ok) return;
+      if (!result.ok) {
+        if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: result.message });
+        return;
+      }
       if (result.linkUrl) {
         // Keep the panel open so the link is reachable; otherwise close as before.
         setScreenshotDocUrl(result.linkUrl);
@@ -3552,7 +3581,9 @@ function Home() {
       }
     } catch (e) {
       // A network error used to escape this handler unreported.
-      setProcessingStatus(`Failed to save screenshot — ${e instanceof Error ? e.message : 'try again'}`);
+      const text = `Failed to save screenshot — ${e instanceof Error ? e.message : 'try again'}`;
+      setProcessingStatus(text);
+      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text });
     } finally {
       screenshotSaveBusyRef.current = false;
       setScreenshotSaving(false);
@@ -3561,6 +3592,34 @@ function Home() {
 
   const handleScreenshotCreateAndSave = useCallback(async () => {
     if (!screenshotNewPlayerName?.trim() || !screenshotDataUrl) return;
+    if (REPORTS_IN_APP) {
+      // The new player's REAL id (checked by createPlayer) goes straight to the save; the
+      // player is also put in the picker's list, so if the save fails the coach picks
+      // that player and retries instead of creating a duplicate.
+      if (screenshotSaveBusyRef.current) return;
+      // Checked BEFORE creating, so a plan block does not leave a new empty player behind.
+      if (!canUseFeature('saveToPlayer')) {
+        setUpgradeFeature('saveToPlayer');
+        setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — no player was created and the image was not saved.' });
+        return;
+      }
+      setScreenshotSaving(true);
+      setScreenshotMessage(null);
+      try {
+        const created = await createPlayer((input, init) => fetch(input, init), screenshotNewPlayerName);
+        if (!created.ok) {
+          setProcessingStatus(created.message);
+          setScreenshotMessage({ kind: 'error', text: created.message });
+          return;
+        }
+        setScreenshotPlayerList((list) => [...list.filter((p) => p.id !== created.player.id), created.player].sort((a, b) => a.display_name.localeCompare(b.display_name)));
+        setScreenshotNewPlayerName(null);
+        await handleScreenshotSaveToPlayer(created.player.id, created.player.display_name);
+      } finally {
+        setScreenshotSaving(false);
+      }
+      return;
+    }
     setScreenshotSaving(true);
     try {
       const res = await fetch('/api/players', {
@@ -3575,7 +3634,7 @@ function Home() {
     } finally {
       setScreenshotSaving(false);
     }
-  }, [screenshotNewPlayerName, screenshotDataUrl, handleScreenshotSaveToPlayer]);
+  }, [screenshotNewPlayerName, screenshotDataUrl, handleScreenshotSaveToPlayer, canUseFeature]);
 
   /** Open report modal: requires at least one captured frame */
   // ── Container size measurement ────────────────────────────────────────────
@@ -9187,6 +9246,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               background: '#fff', borderRadius: 18, padding: 24,
               width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
               display: 'flex', flexDirection: 'column', gap: 16,
+              ...(REPORTS_IN_APP ? { maxHeight: 'calc(100dvh - 40px)', overflowY: 'auto' as const } : {}),
             }}
             onClick={e => e.stopPropagation()}
           >
@@ -9199,6 +9259,14 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               >×</button>
             </div>
             <img src={screenshotDataUrl} alt="Screenshot preview" style={{ width: '100%', borderRadius: 10, objectFit: 'cover', maxHeight: 180 }} />
+            {REPORTS_IN_APP && screenshotMessage?.kind === 'error' && !screenshotSaving && (
+              <div role="alert" style={{
+                padding: '12px 14px', borderRadius: 10, background: 'rgba(255,59,48,0.08)',
+                border: '1px solid rgba(255,59,48,0.4)', color: '#B91C1C', fontSize: 13, fontWeight: 600, lineHeight: 1.4,
+              }}>
+                {screenshotMessage.text}
+              </div>
+            )}
             {screenshotDocUrl && (
               <div style={{
                 display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px',

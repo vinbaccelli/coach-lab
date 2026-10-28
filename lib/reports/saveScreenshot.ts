@@ -55,6 +55,41 @@ export type SaveScreenshotResult =
     }
   | { ok: false; message: string };
 
+export interface PlayerRef {
+  id: string;
+  display_name: string;
+}
+
+export type CreatePlayerResult = { ok: true; player: PlayerRef } | { ok: false; message: string };
+
+/**
+ * Create a player from the analysis app's picker. The id that comes back is the one
+ * the save must use, so it is checked here: a reply without a real id (an error body
+ * with a 200, e.g. the service worker's offline stand-in, or a malformed row) is a
+ * failure with its reason, never an empty `playerId` handed on to the save.
+ */
+export async function createPlayer(fetchFn: typeof fetch, displayName: string): Promise<CreatePlayerResult> {
+  const name = displayName.trim();
+  if (!name) return { ok: false, message: 'Enter a player name' };
+  let res: Response;
+  try {
+    res = await fetchFn('/api/players', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ display_name: name }),
+    });
+  } catch (e) {
+    return { ok: false, message: `Could not create the player — ${e instanceof Error ? e.message : 'network error'}` };
+  }
+  const body = (await res.json().catch(() => ({}))) as { player?: { id?: unknown; display_name?: unknown }; error?: string; message?: string };
+  if (!res.ok) return { ok: false, message: `Could not create the player — ${body.error ?? body.message ?? `HTTP ${res.status}`}` };
+  const id = body.player?.id;
+  if (typeof id !== 'string' || !id.trim()) {
+    return { ok: false, message: `Could not create the player — ${body.error ?? 'the server did not return the new player'}` };
+  }
+  return { ok: true, player: { id, display_name: typeof body.player?.display_name === 'string' && body.player.display_name ? body.player.display_name : name } };
+}
+
 async function readError(res: Response): Promise<string> {
   const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
   return body.error ?? body.message ?? `HTTP ${res.status}`;
@@ -132,6 +167,10 @@ export async function saveScreenshotToPlayer(
   if (inApp) {
     const saved = (await entryRes.json().catch(() => ({}))) as { entry?: { id?: string } };
     const entryId = saved.entry?.id;
+    if (!entryId) {
+      // A 2xx with no entry is not a confirmed save; never show it as one.
+      return { ok: false, message: 'Not confirmed — the server did not return the saved report. Check the player’s reports before saving again.' };
+    }
     const where = storage === 'drive' ? '' : ` (kept in AngleMotion — Drive unavailable${driveError ? `: ${driveError}` : ''})`;
     return {
       ok: true,
@@ -139,7 +178,8 @@ export async function saveScreenshotToPlayer(
       imageUrl,
       storage,
       ...(driveError ? { driveError } : {}),
-      ...(entryId ? { entryId, linkUrl: `/players/${playerId}/reports/${entryId}` } : {}),
+      entryId,
+      linkUrl: `/players/${playerId}/reports/${entryId}`,
     };
   }
 
