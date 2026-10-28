@@ -222,9 +222,12 @@ function readManualMatch(metadata: Record<string, unknown> | null): ManualMatchD
   };
 }
 
-/** A chart is inline SVG markup we generated; refuse anything that is not plain SVG. */
+/**
+ * Shape check only: a chart is a string of SVG markup. It is NOT sanitised here —
+ * the allowlist sanitizer (components/reports/sanitizeSvg.ts) runs where the markup is drawn.
+ */
 function safeChart(svg: unknown): svg is string {
-  return typeof svg === 'string' && /^\s*<svg[\s>]/i.test(svg) && !/<script|\son\w+\s*=|javascript:|<foreignObject/i.test(svg);
+  return typeof svg === 'string' && /^\s*<svg[\s>]/i.test(svg);
 }
 
 /**

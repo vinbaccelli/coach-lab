@@ -212,10 +212,11 @@ test('a decoder entry with a stored decoderReport renders from it; older entries
   assert.equal(b.reports[0].sections.length, reports[0].sections.length);
   assert.ok(b.reports[0].sections.some((s) => s.charts.length > 0), 'charts survive');
 
-  // An unsafe chart is dropped, the rest of the report stays.
-  const evil = JSON.parse(JSON.stringify(stored));
-  evil.decoderReport.reports[0].sections[0].charts = ['<svg><script>alert(1)</script></svg>', '<svg onload="x()"></svg>', '<svg width="1"></svg>'];
-  const [e] = deriveBlocks([{ ...entry, metadata: evil }], 'match');
+  // Only a shape check here (a chart is an SVG string); sanitising happens where it is drawn
+  // (components/reports/sanitizeSvg.ts, tests/sanitizeSvg.test.ts).
+  const odd = JSON.parse(JSON.stringify(stored));
+  odd.decoderReport.reports[0].sections[0].charts = ['not svg', 42, '<svg width="1"></svg>'];
+  const [e] = deriveBlocks([{ ...entry, metadata: odd }], 'match');
   assert.ok(e.type === 'decoderReport');
   assert.deepEqual(e.reports[0].sections[0].charts, ['<svg width="1"></svg>']);
 
