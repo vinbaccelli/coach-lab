@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
+import { google } from 'googleapis';
 import { requireFeature } from '@/lib/entitlements.server';
+import { trashDriveFile } from '@/lib/google/drive';
+import { deletePlayer, supabaseDeleteStore } from '@/lib/players/deletePlayer';
+
+// googleapis (Drive trash on DELETE) needs the Node runtime; a delete touches Drive and Storage.
+export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await getRouteSession();
@@ -55,14 +62,38 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   return NextResponse.json({ player: data });
 }
 
-export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+/**
+ * Delete a player, their reports, their Drive folder (to the Drive TRASH) and stored images.
+ * Body: { confirm_name } — the player's name, checked here too. See lib/players/deletePlayer.ts
+ * for the order of operations and the result shape.
+ *
+ * NOT gated by the Pro plan, on purpose: a coach who stopped paying must still be able to
+ * delete their players. (The previous handler required the 'players' feature and did neither
+ * the name check nor any Drive / Storage cleanup; nothing in the app called it.)
+ */
+export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'players');
-  if (denied) return denied;
   const { id } = await ctx.params;
+  const body = (await req.json().catch(() => ({}))) as { confirm_name?: unknown };
 
-  const { error } = await session.supabase.from('players').delete().eq('id', id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true });
+  const googleToken = session.googleAccessToken;
+  const result = await deletePlayer(
+    { playerId: id, typedName: body.confirm_name },
+    {
+      store: supabaseDeleteStore(session.supabase, session.userId),
+      coachId: session.userId,
+      hasGoogleAccess: Boolean(googleToken),
+      trashDriveItem: async (fileId) => {
+        const oauth2 = new google.auth.OAuth2();
+        oauth2.setCredentials({ access_token: googleToken });
+        await trashDriveFile(google.drive({ version: 'v3', auth: oauth2 }), fileId);
+      },
+      removeStorageObjects: async (paths) => {
+        const { error } = await session.supabase.storage.from('player-assets').remove(paths);
+        if (error) throw new Error(error.message);
+      },
+    },
+  );
+  return NextResponse.json(result.body, { status: result.status });
 }
