@@ -22,6 +22,7 @@ import {
 } from '@/lib/tennis/compileManualReport';
 import { derivePointSignificance, significanceLabel, type PointSignificance } from '@/lib/tennis/pointSignificance';
 import SaveReportModal from '@/components/shared/SaveReportModal';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import MatchReportView from '@/components/decoder/MatchReportView';
 import { buildManualReport } from '@/lib/tennis/manualReportModel';
 import type { DocsSectionPayload } from '@/lib/matchAnalysis/exportToDocs';
@@ -371,6 +372,14 @@ export default function ManualMatchRecorder() {
   }, [playerName, opponentName]);
 
   const openSaveModal = useCallback(async () => {
+    if (REPORTS_IN_APP) {
+      // The in-app report is rebuilt from `matchMetadata` (every logged point), so
+      // there is no picture to capture or upload for a Doc: skip straight to saving.
+      setSaveSections(undefined);
+      setSaveImageWarning(null);
+      setSaveOpen(true);
+      return;
+    }
     setPreparingSave(true);
     setSaveImageWarning(null);
     try {
@@ -999,7 +1008,7 @@ export default function ManualMatchRecorder() {
             onClick={openSaveModal}
             style={{ ...btnLight, background: 'var(--cl-action-primary)', color: 'var(--cl-text-on-fill)', borderColor: 'var(--cl-action-primary)' }}
           >
-            {preparingSave ? 'Capturing report…' : 'Save & Export to Google Doc'}
+            {preparingSave ? 'Capturing report…' : REPORTS_IN_APP ? 'Save to report' : 'Save & Export to Google Doc'}
           </button>
           <button
             type="button"

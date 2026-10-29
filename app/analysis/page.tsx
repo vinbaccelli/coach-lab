@@ -41,7 +41,9 @@ import YouTubeEmbed from '@/components/YouTubeEmbed';
 import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
-import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD } from '@/lib/featureFlags';
+import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD, REPORTS_IN_APP } from '@/lib/featureFlags';
+import { createPlayer, saveScreenshotToPlayer } from '@/lib/reports/saveScreenshot';
+import SavingNotice from '@/components/reports/SavingNotice';
 import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
 import { uploadVideoToYouTube } from '@/lib/export/exportService';
 import { useStroMotion } from '@/hooks/useStroMotion';
@@ -3431,6 +3433,10 @@ function Home() {
   /** Set on a successful Docs export so the picker can offer "Open in Google Doc". */
   const [screenshotDocUrl, setScreenshotDocUrl] = useState<string | null>(null);
   const [screenshotSavedTo, setScreenshotSavedTo] = useState<string | null>(null);
+  const [screenshotStage, setScreenshotStage] = useState<'uploading' | 'saving'>('uploading');
+  const screenshotSaveBusyRef = useRef(false);
+  /** The outcome of the last save/create, shown INSIDE the picker (a toast alone can be missed). */
+  const [screenshotMessage, setScreenshotMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
 
   /** Capture the current frame into state and open the player picker */
   const handleScreenshotSave = useCallback(async () => {
@@ -3454,6 +3460,7 @@ function Home() {
       // A fresh capture must not inherit the previous save's doc link.
       setScreenshotDocUrl(null);
       setScreenshotSavedTo(null);
+      setScreenshotMessage(null);
       // Fetch player list for picker
       try {
         const res = await fetch('/api/players');
@@ -3480,125 +3487,139 @@ function Home() {
 
   const handleScreenshotSaveToPlayer = useCallback(async (playerId: string, playerName: string) => {
     if (!screenshotDataUrl) return;
-    if (!canUseFeature('saveToPlayer')) { setUpgradeFeature('saveToPlayer'); return; }
-    const supabase = createSupabaseBrowserClient();
-    const userRes = await supabase?.auth.getUser();
-    const userId = userRes?.data?.user?.id;
-    if (!supabase || !userId) {
-      // Fallback to download if not authenticated
-      handleScreenshotDownload(playerName);
+    if (!canUseFeature('saveToPlayer')) {
+      setUpgradeFeature('saveToPlayer');
+      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — the image was not saved.' });
       return;
     }
-    setScreenshotSaving(true);
-    let savedDocUrl: string | null = null;
-    try {
-      // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive.
-      // Supabase storage is the fallback — used whenever the Drive upload
-      // fails, and was the ONLY path while ENABLE_GOOGLE_EXPORTS was off
-      // pending Google's OAuth verification (approved 2026-07-28; the flag
-      // flipped true in 399b3b2 on 2026-08-03). Screenshots saved before that
-      // date are Supabase-only and have no Drive folder — expected for their
-      // era, not a bug.
-      let imageUrl: string | null = null;
-      if (ENABLE_GOOGLE_EXPORTS) {
-        try {
-          const driveRes = await fetch('/api/google/upload-image', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dataUrl: screenshotDataUrl, name: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png`, playerId }),
-          });
-          if (driveRes.ok) {
-            const body = await driveRes.json() as { url?: string };
-            imageUrl = body.url ?? null;
-          }
-        } catch { /* fall back to Supabase */ }
-      }
-
-      if (!imageUrl) {
-        // Fallback bucket is `player-assets`, NOT `analysis-screenshots`: the
-        // latter is created by no migration (only player-assets is, in
-        // 20260615140000_player_sessions.sql), so every upload here failed and
-        // left imageUrl null — which is why the save could fail even when Drive
-        // was not the problem.
-        //
-        // player-assets is public=true, so getPublicUrl yields a permanent,
-        // anonymously-fetchable URL — exactly what the Docs API needs to pull
-        // the image server-side, and it cannot expire out from under the doc
-        // the way a signed URL would. Its RLS requires the first path segment to
-        // be the caller's uid.
-        const filename = `${userId}/screenshots/${Date.now()}.png`;
-        const path = await uploadDataUrl('player-assets', filename, screenshotDataUrl);
-        if (path) {
-          const { data: pub } = supabase.storage.from('player-assets').getPublicUrl(path);
-          imageUrl = pub?.publicUrl ?? null;
-        }
-      }
-
-      if (imageUrl) {
-        const signed = { signedUrl: imageUrl };
-        const res = await fetch(`/api/players/${playerId}/entries`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            category: 'technique',
-            folder_label: `Analysis ${localDateTimeForFolder()}`,
-            body_text: 'Screenshot from analysis session.',
-            screenshots: [signed.signedUrl],
-            source: 'analysis-screenshot',
-          }),
-        });
-        if (!res.ok) {
-          setProcessingStatus('Failed to save screenshot — try again');
-          return;
-        }
-        // Best-effort: append to the player's Google Doc (AngleMotion/Players/<Name>).
-        // A Docs failure must not fail the screenshot save. Gated on the same
-        // flag as the upload above — both run together now that exports are
-        // enabled (ENABLE_GOOGLE_EXPORTS = true as of 399b3b2, 2026-08-03).
-        if (ENABLE_GOOGLE_EXPORTS) {
-          try {
-            const docRes = await fetch(`/api/players/${playerId}/google-doc`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ imageUrl: signed.signedUrl, timestampLabel: localDateTimeForFolder() }),
-            });
-            if (docRes.ok) {
-              // The route returns { documentId, url }; the url used to be
-              // thrown away, so the coach had no way to reach the doc.
-              const docBody = (await docRes.json().catch(() => ({}))) as { url?: string };
-              if (docBody.url) {
-                savedDocUrl = docBody.url;
-                setScreenshotDocUrl(docBody.url);
-                setScreenshotSavedTo(playerName);
-              }
-              setProcessingStatus(`Saved to ${playerName} + Google Doc`);
-            } else {
-              const docErr = (await docRes.json().catch(() => ({}))) as { error?: string };
-              setProcessingStatus(`Saved to ${playerName} — Google Doc failed: ${docErr.error ?? `HTTP ${docRes.status}`}`);
-            }
-          } catch {
-            setProcessingStatus(`Saved to ${playerName} (Google Doc skipped)`);
-          }
-        } else {
-          setProcessingStatus(`Saved to ${playerName}`);
-        }
-      } else {
-        setProcessingStatus('Upload failed — try again');
+    // One save at a time: a second tap while the first is still running would
+    // upload the image and create the entry twice. A ref (not `screenshotSaving`):
+    // "Create new player" sets that state and then calls this.
+    if (screenshotSaveBusyRef.current) return;
+    const supabase = createSupabaseBrowserClient();
+    let userId: string | undefined;
+    if (!REPORTS_IN_APP) {
+      const userRes = await supabase?.auth.getUser();
+      userId = userRes?.data?.user?.id;
+      if (!supabase || !userId) {
+        // Fallback to download if not authenticated
+        handleScreenshotDownload(playerName);
         return;
       }
-      // Keep the panel open when there's a doc to open, so the link is
-      // reachable; otherwise close as before.
-      if (!savedDocUrl) {
+    } else if (!supabase) {
+      // No Supabase client at all (not configured): nothing can be saved to a player.
+      setScreenshotMessage({ kind: 'error', text: 'Saving to a player is not available here — the image was not saved. Use Download.' });
+      return;
+    }
+    // In-app mode does NOT ask Supabase "who am I" over the network before saving. That
+    // call could fail on a weak connection and used to end in a silent download with
+    // nothing saved. The server routes check the sign-in themselves and answer with a
+    // real error (401 Unauthorized), which is shown; the user id is only needed for
+    // the backup upload and is resolved there.
+    setScreenshotMessage(null);
+    screenshotSaveBusyRef.current = true;
+    setScreenshotSaving(true);
+    try {
+      // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive.
+      // Supabase storage is the fallback — used whenever the Drive upload fails,
+      // and was the ONLY path while ENABLE_GOOGLE_EXPORTS was off pending Google's
+      // OAuth verification (approved 2026-07-28; the flag flipped true in 399b3b2
+      // on 2026-08-03). Screenshots saved before that date are Supabase-only and
+      // have no Drive folder — expected for their era, not a bug.
+      //
+      // The save itself lives in lib/reports/saveScreenshot.ts (tested against a
+      // mocked Drive/Supabase). With REPORTS_IN_APP the entry is all that is
+      // written and the coach gets a link to the in-app report; with it off the
+      // player's Google Doc is appended to, as before.
+      const result = await saveScreenshotToPlayer(
+        {
+          playerId,
+          playerName,
+          dataUrl: screenshotDataUrl,
+          googleExports: ENABLE_GOOGLE_EXPORTS,
+          inApp: REPORTS_IN_APP,
+          folderLabel: `Analysis ${localDateTimeForFolder()}`,
+          timestampLabel: localDateTimeForFolder(),
+          fileName: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png`,
+        },
+        {
+          fetchFn: (input, init) => fetch(input, init),
+          onStage: setScreenshotStage,
+          // Fallback bucket is `player-assets`, NOT `analysis-screenshots`: the
+          // latter is created by no migration (only player-assets is, in
+          // 20260615140000_player_sessions.sql), so every upload there failed.
+          // player-assets is public=true, so getPublicUrl yields a permanent,
+          // anonymously-fetchable URL that cannot expire out from under a report
+          // the way a signed URL would. Its RLS requires the first path segment
+          // to be the caller's uid.
+          uploadFallback: async (dataUrl) => {
+            let uid = userId;
+            if (!uid) {
+              const sess = await supabase.auth.getSession();
+              uid = sess.data.session?.user?.id ?? (await supabase.auth.getUser()).data.user?.id;
+            }
+            if (!uid) return null;
+            const path = await uploadDataUrl('player-assets', `${uid}/screenshots/${Date.now()}.png`, dataUrl);
+            if (!path) return null;
+            const { data: pub } = supabase.storage.from('player-assets').getPublicUrl(path);
+            return pub?.publicUrl ?? null;
+          },
+        },
+      );
+      setProcessingStatus(result.message);
+      if (!result.ok) {
+        if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: result.message });
+        return;
+      }
+      if (result.linkUrl) {
+        // Keep the panel open so the link is reachable; otherwise close as before.
+        setScreenshotDocUrl(result.linkUrl);
+        setScreenshotSavedTo(playerName);
+      } else {
         setScreenshotPickerOpen(false);
         setScreenshotDataUrl(null);
       }
+    } catch (e) {
+      // A network error used to escape this handler unreported.
+      const text = `Failed to save screenshot — ${e instanceof Error ? e.message : 'try again'}`;
+      setProcessingStatus(text);
+      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text });
     } finally {
+      screenshotSaveBusyRef.current = false;
       setScreenshotSaving(false);
     }
   }, [screenshotDataUrl, handleScreenshotDownload, canUseFeature]);
 
   const handleScreenshotCreateAndSave = useCallback(async () => {
     if (!screenshotNewPlayerName?.trim() || !screenshotDataUrl) return;
+    if (REPORTS_IN_APP) {
+      // The new player's REAL id (checked by createPlayer) goes straight to the save; the
+      // player is also put in the picker's list, so if the save fails the coach picks
+      // that player and retries instead of creating a duplicate.
+      if (screenshotSaveBusyRef.current) return;
+      // Checked BEFORE creating, so a plan block does not leave a new empty player behind.
+      if (!canUseFeature('saveToPlayer')) {
+        setUpgradeFeature('saveToPlayer');
+        setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — no player was created and the image was not saved.' });
+        return;
+      }
+      setScreenshotSaving(true);
+      setScreenshotMessage(null);
+      try {
+        const created = await createPlayer((input, init) => fetch(input, init), screenshotNewPlayerName);
+        if (!created.ok) {
+          setProcessingStatus(created.message);
+          setScreenshotMessage({ kind: 'error', text: created.message });
+          return;
+        }
+        setScreenshotPlayerList((list) => [...list.filter((p) => p.id !== created.player.id), created.player].sort((a, b) => a.display_name.localeCompare(b.display_name)));
+        setScreenshotNewPlayerName(null);
+        await handleScreenshotSaveToPlayer(created.player.id, created.player.display_name);
+      } finally {
+        setScreenshotSaving(false);
+      }
+      return;
+    }
     setScreenshotSaving(true);
     try {
       const res = await fetch('/api/players', {
@@ -3613,7 +3634,7 @@ function Home() {
     } finally {
       setScreenshotSaving(false);
     }
-  }, [screenshotNewPlayerName, screenshotDataUrl, handleScreenshotSaveToPlayer]);
+  }, [screenshotNewPlayerName, screenshotDataUrl, handleScreenshotSaveToPlayer, canUseFeature]);
 
   /** Open report modal: requires at least one captured frame */
   // ── Container size measurement ────────────────────────────────────────────
@@ -9225,6 +9246,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               background: '#fff', borderRadius: 18, padding: 24,
               width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
               display: 'flex', flexDirection: 'column', gap: 16,
+              ...(REPORTS_IN_APP ? { maxHeight: 'calc(100dvh - 40px)', overflowY: 'auto' as const } : {}),
             }}
             onClick={e => e.stopPropagation()}
           >
@@ -9237,13 +9259,23 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               >×</button>
             </div>
             <img src={screenshotDataUrl} alt="Screenshot preview" style={{ width: '100%', borderRadius: 10, objectFit: 'cover', maxHeight: 180 }} />
+            {REPORTS_IN_APP && screenshotMessage?.kind === 'error' && !screenshotSaving && (
+              <div role="alert" style={{
+                padding: '12px 14px', borderRadius: 10, background: 'rgba(255,59,48,0.08)',
+                border: '1px solid rgba(255,59,48,0.4)', color: '#B91C1C', fontSize: 13, fontWeight: 600, lineHeight: 1.4,
+              }}>
+                {screenshotMessage.text}
+              </div>
+            )}
             {screenshotDocUrl && (
               <div style={{
                 display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px',
                 borderRadius: 10, background: 'rgba(52,199,89,0.08)', border: '1px solid rgba(52,199,89,0.35)',
               }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F' }}>
-                  {screenshotSavedTo ? `Saved to ${screenshotSavedTo}` : 'Saved'}
+                  {REPORTS_IN_APP
+                    ? 'Saved to report'
+                    : screenshotSavedTo ? `Saved to ${screenshotSavedTo}` : 'Saved'}
                 </span>
                 <a
                   href={screenshotDocUrl}
@@ -9251,11 +9283,13 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   rel="noopener noreferrer"
                   style={{ fontSize: 13, fontWeight: 600, color: '#007AFF', textDecoration: 'none' }}
                 >
-                  Open in Google Doc →
+                  {REPORTS_IN_APP ? 'View report →' : 'Open in Google Doc →'}
                 </a>
               </div>
             )}
-            {screenshotSaving ? (
+            {screenshotSaving && REPORTS_IN_APP ? (
+              <SavingNotice label={screenshotStage === 'uploading' ? 'Saving… uploading the image' : 'Saving… adding it to the report'} />
+            ) : screenshotSaving ? (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px',
                 borderRadius: 10, background: 'rgba(0,122,255,0.08)', border: '1px solid rgba(0,122,255,0.3)',
@@ -9266,14 +9300,16 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 }} />
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#007AFF' }}>
                   {ENABLE_GOOGLE_EXPORTS
-                    ? 'Saving… this takes a few seconds (upload + player record + Google Doc).'
+                    ? `Saving… this takes a few seconds (upload + player record${REPORTS_IN_APP ? '' : ' + Google Doc'}).`
                     : 'Saving… this takes a few seconds.'}
                 </span>
               </div>
             ) : (
               <p style={{ margin: 0, fontSize: 13, color: '#6E6E73' }}>
                 {ENABLE_GOOGLE_EXPORTS
-                  ? "Save to a player's docs, create a new player, or download directly."
+                  ? (REPORTS_IN_APP
+                    ? "Save to a player's report, create a new player, or download directly."
+                    : "Save to a player's docs, create a new player, or download directly.")
                   : "Save to a player, create a new player, or download directly."}
               </p>
             )}

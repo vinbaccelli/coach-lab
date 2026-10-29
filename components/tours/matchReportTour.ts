@@ -1,5 +1,6 @@
 import type { TourDef, TourStep } from './types';
 import { shot } from './shot';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 
 const id = (k: string) => `[data-tour-id="${k}"]`;
 
@@ -128,10 +129,12 @@ export const MATCH_REPORT_TOUR: TourDef = {
     {
       id: 'export',
       title: 'Save it to the player',
-      body: 'Save & Export to Google Doc opens Save to player folder: pick the player and the report goes into their Match Analysis Doc. Download PDF saves a copy; New match starts again.',
+      body: REPORTS_IN_APP
+        ? 'Save to report opens Save to player folder: pick the player and the report goes into their Match analysis reports. Download PDF saves a copy; New match starts again.'
+        : 'Save & Export to Google Doc opens Save to player folder: pick the player and the report goes into their Match Analysis Doc. Download PDF saves a copy; New match starts again.',
       target: 'mr-export',
       advance: { kind: 'next' },
-      image: pic('export', 157, 'Three buttons: Save & Export to Google Doc, Download PDF and New match.'),
+      image: pic('export', 157, REPORTS_IN_APP ? 'Three buttons: Save to report, Download PDF and New match.' : 'Three buttons: Save & Export to Google Doc, Download PDF and New match.'),
     },
   ],
 };

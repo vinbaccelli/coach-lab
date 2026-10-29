@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { namesLikelyMatch } from '@/lib/players/opponent';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
+import SavingNotice from '@/components/reports/SavingNotice';
 
 export type DbPlayer = {
   id: string;
@@ -136,7 +138,14 @@ export default function SaveReportModal({
   }, [open, initialFolder, opponentNameHint]);
 
   /** Record the doc outcome reported by the entries route (see EntryDocStatus). */
-  const noteDocStatus = useCallback((data: unknown) => {
+  const noteDocStatus = useCallback((data: unknown, pid: string) => {
+    if (REPORTS_IN_APP) {
+      // The entries route skips the Google Doc write in this mode, so the link the
+      // coach gets is the in-app report. Keep the FIRST save's (the primary player).
+      const entryId = (data as { entry?: { id?: string } } | null)?.entry?.id;
+      if (entryId && !docSuccessUrlRef.current) docSuccessUrlRef.current = `/players/${pid}/reports/${entryId}`;
+      return;
+    }
     const d = (data as { doc?: { ok?: boolean; reason?: string; documentId?: string } } | null)?.doc;
     if (!d) return;
     if (d.ok === false && d.reason) docWarningsRef.current.push(d.reason);
@@ -212,7 +221,7 @@ export default function SaveReportModal({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? 'Save failed');
-        noteDocStatus(data);
+        noteDocStatus(data, pid);
 
         if (!skipMirror && opponentName.trim() && selectedPlayer) {
           const opp = opponentName.trim();
@@ -290,7 +299,7 @@ export default function SaveReportModal({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? 'Save failed');
-        noteDocStatus(data);
+        noteDocStatus(data, pid);
         setMirrorPrompt(null);
         setPendingPayload(null);
         finishSave();
@@ -400,16 +409,15 @@ export default function SaveReportModal({
              player's folder afterward. */
           <div style={{ marginTop: 18 }}>
             <p style={{ margin: '0 0 14px', fontSize: 14, lineHeight: 1.5, fontWeight: 600 }}>
-              Saved, and the report is in the player&apos;s Google Doc.
+              {REPORTS_IN_APP ? 'Saved to report.' : 'Saved, and the report is in the player’s Google Doc.'}
             </p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
               <a
                 href={docSuccessUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+                {...(REPORTS_IN_APP ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
                 style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-block' }}
               >
-                Open Google Doc
+                {REPORTS_IN_APP ? 'View report' : 'Open Google Doc'}
               </a>
               <button type="button" onClick={onClose} style={btnGhost}>
                 Done
@@ -577,6 +585,12 @@ export default function SaveReportModal({
 
             {err ? (
               <p style={{ color: 'var(--cl-destructive)', fontSize: 13, marginTop: 12 }}>{err}</p>
+            ) : null}
+
+            {REPORTS_IN_APP && busy ? (
+              <div style={{ marginTop: 14 }}>
+                <SavingNotice />
+              </div>
             ) : null}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>

@@ -1,5 +1,6 @@
 import type { TourDef } from './types';
 import { shot } from './shot';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 
 /**
  * Player database — /players, then a profile. Hands-on where the screen can
@@ -77,16 +78,20 @@ export const PLAYERS_TOUR: TourDef = {
     },
     {
       id: 'docs',
-      title: 'The Google Docs and the Drive folder',
-      body: 'Technical Analysis Doc and Match Analysis Doc open the player’s two documents; Open Drive folder opens their folder. The buttons appear once the first report is in.',
+      title: REPORTS_IN_APP ? 'The reports and the Drive folder' : 'The Google Docs and the Drive folder',
+      body: REPORTS_IN_APP
+        ? 'Open reports shows the player’s reports by date, with screenshots, videos and notes; Open Drive folder opens their folder, where the screenshots are kept.'
+        : 'Technical Analysis Doc and Match Analysis Doc open the player’s two documents; Open Drive folder opens their folder. The buttons appear once the first report is in.',
       target: 'player-doc-links',
       advance: { kind: 'next' },
-      image: shot('players', 'docs', 109, 'Three buttons: Technical Analysis Doc, Match Analysis Doc and Open Drive folder.'),
+      image: shot('players', 'docs', 109, REPORTS_IN_APP ? 'Buttons for the player’s reports and Drive folder.' : 'Three buttons: Technical Analysis Doc, Match Analysis Doc and Open Drive folder.'),
     },
     {
       id: 'where',
       title: 'Where your files live',
-      body: 'Videos are on your own YouTube channel, unlisted: anyone with the link can watch. Reports and screenshots go to Google Docs in your own Google Drive, under AngleMotion / Players (if Drive can’t be reached, AngleMotion keeps the screenshot). AngleMotion keeps the links, plus any Motion Layer clip you save with a session. Google’s own account limits apply.',
+      body: REPORTS_IN_APP
+        ? 'Videos are on your own YouTube channel, unlisted: anyone with the link can watch. Screenshots go to your own Google Drive, under AngleMotion / Players (if Drive can’t be reached, AngleMotion keeps the screenshot), and the report text is kept in AngleMotion. AngleMotion keeps the links, plus any Motion Layer clip you save with a session. Google’s own account limits apply.'
+        : 'Videos are on your own YouTube channel, unlisted: anyone with the link can watch. Reports and screenshots go to Google Docs in your own Google Drive, under AngleMotion / Players (if Drive can’t be reached, AngleMotion keeps the screenshot). AngleMotion keeps the links, plus any Motion Layer clip you save with a session. Google’s own account limits apply.',
       placement: 'center',
       advance: { kind: 'next' },
     },

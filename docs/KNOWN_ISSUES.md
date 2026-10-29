@@ -2264,3 +2264,71 @@ column are still never exported.
 **Fix.** (1) When the skeleton must be analyzed, the analysis player is created and `play()` is called as the first thing in the Export tap, before anything is awaited (`openAnalysisSession`, `lib/playbackAnalysis.ts`; it uses the page's own video URL, so no fetch comes first, and it loops until the analysis takes over, so waiting for the model does not run it to the end). It is not paused between ranges. If play() is refused (`NotAllowedError`) the button reads "Tap to start the analysis" and the next tap starts it again (no failure message). (2) After the analysis the track is stored and the panel says "Skeleton ready - tap Export."; the render starts from the next tap (the first tap only analyzes; its button reads "Analyze skeleton"). (3) If the render's play() is refused (no frame painted in 4 s), the panel shows "Tap to retry the export" and the next tap renders again instead of a failure message. Detection, smoothing, the frozen-track guard, the trace lines, runPrecisionPass, drawSkeletonOverlay, the foot line, StroMotion and the Recording Hub are unchanged.
 
 **Not measured.** Whether iOS keeps allowing the analysis player (started inside the tap) to keep playing for the whole analysis, and whether a refused play() always shows as NotAllowedError.
+
+---
+
+## 070 — In-app Reports (`REPORTS_IN_APP`): how it works and what is not covered yet
+
+**Found:** 2026-10-27, while building the in-app Reports pages. Recorded as a feature note, not a defect.
+
+**The switch.** `REPORTS_IN_APP` in `lib/featureFlags.ts` (currently `true`). On: saving a report writes only to the app, the Google Docs write is skipped, labels say "Save to report", the player profile opens `/players/[id]/reports` and hides the two Google Doc buttons. Off: every save writes the Google Doc exactly as before, with the old labels and tour texts. Nothing of the Docs flow was deleted: `app/api/players/[id]/google-doc`, `app/api/google/report`, `create-document`, `upload-image`, `ensurePlayerDoc` / `insertSessionAtTop` in `app/api/players/[id]/entries/route.ts`, and `lib/export/exportService.ts` all remain. The Generate and Motion Layer "Export Google Docs report" buttons are not behind the switch and still write Docs.
+
+**Where things are stored.**
+- Report text and structure: Supabase `player_entries` (`category` `technique` or `match`, `body_text`, `youtube_url`, `screenshots`, `metadata`). Decoder `sections` are stored in `metadata.sections`; a manual match in `metadata.manualMatch` (every logged point, board, notes); measurements in `metadata.measurements`. The entries route stores `sections` always, whatever the switch (`lib/reports/entrySections.ts`).
+- Screenshots: the coach's own Google Drive (`/api/google/upload-image`, anyone-with-link). If the Drive upload fails for any reason the image goes to the public Supabase bucket `player-assets` (`<uid>/screenshots/…`) and the save message says why. Images are never copied between the two.
+- Videos: the coach's YouTube channel; the report embeds them and always shows a "Watch on YouTube" link.
+- The report pages (`lib/reports/deriveBlocks.ts`) are built at read time: all `technique` entries of one player on one local day form one "Technical analysis" report, screenshots in the order taken; each `match` entry is its own report. No new table, no migration.
+- Report images load from Drive, then Drive's image host, then the entry's Supabase copy, then an "Image unavailable" tile with an open link.
+
+**Not covered yet.**
+- Share links (a report can only be read by the signed-in coach; players and parents cannot open it).
+- Editing blocks (reports are read-only; notes cannot be added or changed in the page).
+- Report types beyond Technical and Match, and coach-created types.
+- The full profile layout (age, height, UTR, diet, exercise plan).
+- Comments and a Docs-free export (the PDF download exists only for manual matches).
+- Entries saved before this change have no `metadata.sections` and no `metadata.decoderReport`; a decoder entry from then shows its plain-text summary only.
+- Decoder reports saved with the switch on store the full structured report (`metadata.decoderReport`: the chosen sides' `SideReport[]` including the SVG charts, plus the consistency warnings) and render through the same component as a manual match. The chart PNG upload to Drive is skipped in that mode (only the Google Doc needed it).
+- The "Analysis Sessions" block is hidden on the player profile while the switch is on (code, `player_sessions` and the session routes/pages are kept).
+- Not measured on real devices: Drive image loading from the report page, the YouTube embed under the app's `Cross-Origin-Embedder-Policy: credentialless` header, and real Supabase/Drive saves (the save flows are unit-tested against a mocked fetch, Drive and Supabase in `tests/saveScreenshot.test.ts`).
+- The static tour screenshots (`public/tours/*`) still show the old Google Doc buttons; only the tour text follows the switch.
+
+**Severity.** None (scope note).
+
+---
+
+## 071 — The first screenshot save for a brand-new player is slow
+
+**Found:** 2026-10-28, reported by a coach (closed the page, retried; the second try worked).
+
+**Symptom.** Saving a screenshot to a player with no Drive folders yet took far longer than later saves, with no feedback beyond a spinner.
+
+**Verified root cause (read from the code; timings not measured).** `POST /api/google/upload-image` (`app/api/google/upload-image/route.ts`) resolves the destination on EVERY call, one Drive request after another: a `players` lookup, then `playerFolderChain` (`lib/google/drive.ts`: AngleMotion → Players → <Name>) and `Screenshots`, each a `files.list` search plus, when missing, a `files.create`. For a new player that is four searches and four folder creations, then `files.create` (the image), `permissions.create`, and a `players` update; on a cold serverless start the `googleapis` import adds to it. For an existing player the folders are found, so there are no creations. The client waits on that one request with no timeout or stage text. After an abandoned first try the folders already exist (the server finishes the request), which is why the retry was fast.
+
+**What the abandoned attempt can leave.** The entry is created only after the upload response arrives in the same page, so closing the tab during the upload leaves an orphan image in Drive (and the folders), not a duplicate entry. A duplicate entry needs two saves to run: now blocked in the analysis app by a busy guard (`screenshotSaveBusyRef`). Folder duplicates are possible in theory: Drive's search can lag a fresh folder (`findOrCreateFolder` is check-then-create).
+
+**Fix applied (client only).** A visible "Saving…" state with the current step (uploading, adding to the report), and after 20 s "Still saving, please keep this page open" plus a browser confirm before the tab is closed (`components/reports/SavingNotice.tsx`), in the analysis picker and the two report save modals. The analysis app ignores a second save while one is running.
+
+**Not fixed (outside the allowed files).** The upload route should read `players.google_folder_id` (the route already stores it) instead of re-resolving the chain, and create the Screenshots folder once. Severity: medium (looks broken on a coach's first save).
+
+
+---
+
+## 072 — Screenshot saved to a brand-new player: no link, no report (phone test, PR #111)
+
+**Found:** 2026-10-28, phone test. A coach created a player from the analysis app's picker and saved a screenshot; no "Saved to report" link appeared and the player's page listed no reports.
+
+**What was checked (code + tests with a mocked fetch).** The id of the new player flows correctly: `handleScreenshotCreateAndSave` → `POST /api/players` → `{ player }` → `handleScreenshotSaveToPlayer(player.id, …)` → upload-image `playerId` and `/api/players/<id>/entries` use that id (`tests/saveScreenshot.test.ts`, "new player" cases). The plan gate is the same for creating and saving (`players` and `saveToPlayer` are both Pro, server-enforced). A logic error in that path was NOT found.
+
+**What was found instead (silent endings, any player).** (1) Before saving, the handler called `supabase.auth.getUser()` (a network request); if that came back without a user (weak connection, expired token) the code fell back to DOWNLOADING the image and closing the picker: nothing saved, no message — and for "Create new player" the player had already been created. (2) Every other failure was reported only by a transient status toast. (3) A plan block (`canUseFeature`) only opened the upgrade sheet. (4) The picker card could not scroll, so on a short (landscape) phone screen the confirmation could sit outside the visible area. (5) The reports list treated the service worker's `{"error":"Offline"}` reply (HTTP 200) as "no reports". Which of these happened on the coach's phone is NOT proven.
+
+**Fix (with `REPORTS_IN_APP` on; off keeps the old behaviour).** No network sign-in check before saving (the routes check it and a real error is shown); every failure and the "Not confirmed" case (2xx without a saved entry) is shown in a red message INSIDE the picker; a plan block is checked before a player is created; the new player is added to the picker list so a retry picks them instead of creating a duplicate; the picker scrolls; the reports list and profile read `no-store` and show an offline/error state instead of "no reports". The back bar is now `position: fixed` under the header (measured), not `position: sticky`.
+
+**Severity.** High (a save that looks like nothing happened).
+
+---
+
+## 073 — Delete player: what it removes and what it cannot guarantee
+
+**Added:** 2026-10-29 (PR #111). Feature note. `DELETE /api/players/[id]` + "Danger zone" on the profile (only with `REPORTS_IN_APP`). Not plan-gated. The coach types the player's name (checked again on the server); order: lookup through the session (RLS) → name check → read Drive ids and Storage paths → delete rows (`player_entries`, `player_sessions` cascade; stop on failure) → Drive trash (never permanent) → Storage removal → one result.
+
+**Not guaranteed.** (1) Drive: the folder in `players.google_folder_id` and the two Docs are moved to the trash individually, but a folder created under an OLD player name (after a rename), screenshots uploaded to the shared `AngleMotion/Screenshots` or the Drive root (when the player folder could not be made), and anything the `drive.file` scope cannot see are not covered; a refusal is reported with the folder path to delete by hand. (2) Storage: only objects found through the player's sessions and entry image URLs, inside the coach's own folder and not used by another player's entry. (3) The live database was not inspected: other tables referencing `players` that are not in `supabase/migrations` would be missed. (4) Never run against a real Drive or database in tests; everything is mocked.

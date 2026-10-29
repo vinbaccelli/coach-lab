@@ -43,6 +43,19 @@ export const ENABLE_GOOGLE_EXPORTS = true;
 export const ENABLE_YOUTUBE_UPLOAD = true;
 
 /**
+ * REPORTS_IN_APP — the in-app Reports pages (/players/[id]/reports) are the main
+ * way to read and save player reports. ON.
+ *
+ * With it on, saving a report writes ONLY to the app: report text and structure
+ * live in Supabase (player_entries), images stay in the coach's own Google Drive,
+ * and the Google Docs write is skipped. With it OFF every save flow behaves exactly
+ * as before — the Google Docs code is kept as a backup behind this one switch, not
+ * deleted. The routes /api/players/[id]/google-doc, /api/google/report and
+ * /api/google/create-document are untouched either way.
+ */
+export const REPORTS_IN_APP = true;
+
+/**
  * Sensitive scopes requested at sign-in when exports are enabled. Deliberately
  * NOT including youtube.upload — see the block above for why it cannot share
  * a request with drive.file.

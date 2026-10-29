@@ -337,6 +337,14 @@ shareable lesson archive at near-zero infra cost while letting V1 focus on the
 analysis workflow. It defers — without discarding — the cloud-persistence design
 for when the priority changes.
 
+**Amendment (in-app Reports, `REPORTS_IN_APP`).** "Google Drive is the archive of
+record" still holds for **images**: screenshots and report images stay in the
+coach's own Drive. Report **text and structure** now live in Supabase
+(`player_entries`, including the decoder `sections` in `metadata`), and the
+in-app Reports pages (`/players/[id]/reports`) are where they are read. The
+Google Docs flow is kept as a backup behind the single switch `REPORTS_IN_APP`
+in `lib/featureFlags.ts`; with it off, every save writes the Doc as before.
+
 ---
 
 ## ADR-013 — Toolbar layout defaults, skeleton activation, and the StroMotion flow (V1 freeze)

@@ -28,6 +28,8 @@ import {
   uploadReportCharts,
 } from '@/lib/matchAnalysis/exportToDocs';
 import type { SideReport } from '@/lib/matchAnalysis/reportModel';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
+import SavingNotice from '@/components/reports/SavingNotice';
 
 interface DbPlayer {
   id: string;
@@ -42,12 +44,15 @@ export default function SaveReportToPlayersModal({
   reports,
   folderLabel,
   summaryText,
+  integrityWarnings,
 }: {
   open: boolean;
   onClose: () => void;
   reports: SideReport[];
   folderLabel: string;
   summaryText: string;
+  /** The decoder's consistency warnings, saved with the report so the in-app copy shows them too. */
+  integrityWarnings?: string[];
 }) {
   const [players, setPlayers] = useState<DbPlayer[]>([]);
   const [scope, setScope] = useState<DocsScope>('both');
@@ -131,15 +136,34 @@ export default function SaveReportToPlayersModal({
     setError(null);
     setOutcomes(null);
     try {
-      setProgress('Rendering charts…');
-      const chartUrls = await uploadReportCharts(
-        reports,
-        (done, total) => setProgress(`Uploading charts ${done}/${total}…`),
-        scope,
-      );
+      // In-app reports draw the charts from the stored report itself, so the PNG
+      // upload to Drive (only the Google Doc needed it, and it needs a Google grant)
+      // is skipped. Switch off: unchanged.
+      let chartUrls = new Map<string, string>();
+      if (!REPORTS_IN_APP) {
+        setProgress('Rendering charts…');
+        chartUrls = await uploadReportCharts(
+          reports,
+          (done, total) => setProgress(`Uploading charts ${done}/${total}…`),
+          scope,
+        );
+      }
       const sections: DocsSectionPayload[] = buildDocsSections(reports, chartUrls, scope);
-      const results = await saveReportToPlayers(targets, sections, folderLabel, summaryText, (done, total, name) =>
-        setProgress(name ? `Saving to ${name} (${done + 1}/${total})…` : 'Finishing…'),
+
+      // The full structured report, stored additively in the entry's `metadata`
+      // (no migration): exactly the sides the coach chose, rendered later by the
+      // same component as a manual match. Skipped if it is implausibly large.
+      const chosen = reports.filter((r) => scope === 'both' || r.sideId === scope);
+      const decoderReport = { version: 1, scope, reports: chosen, integrityWarnings: integrityWarnings ?? [] };
+      const metadata = JSON.stringify(decoderReport).length <= 2_000_000 ? { decoderReport } : undefined;
+
+      const results = await saveReportToPlayers(
+        targets,
+        sections,
+        folderLabel,
+        summaryText,
+        (done, total, name) => setProgress(name ? `Saving to ${name} (${done + 1}/${total})…` : 'Finishing…'),
+        metadata,
       );
       setOutcomes(results);
     } catch (e) {
@@ -148,7 +172,7 @@ export default function SaveReportToPlayersModal({
       setBusy(false);
       setProgress('');
     }
-  }, [targets, reports, scope, folderLabel, summaryText]);
+  }, [targets, reports, scope, folderLabel, summaryText, integrityWarnings]);
 
   if (!open) return null;
 
@@ -174,10 +198,12 @@ export default function SaveReportToPlayersModal({
     <div style={backdrop} onClick={busy ? undefined : onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 4px', letterSpacing: -0.2 }}>
-          Save to Google Docs
+          {REPORTS_IN_APP ? 'Save to report' : 'Save to Google Docs'}
         </h2>
         <p style={{ fontSize: 12, color: 'var(--cl-text-secondary)', lineHeight: 1.55, margin: '0 0 20px' }}>
-          The report is added to the top of each player&apos;s <b>Match Analysis</b> doc, newest first.
+          {REPORTS_IN_APP
+            ? <>The report is saved to each player&apos;s <b>Match analysis</b> reports.</>
+            : <>The report is added to the top of each player&apos;s <b>Match Analysis</b> doc, newest first.</>}
         </p>
 
         {error && <p style={{ color: 'var(--cl-destructive-text)', fontSize: 12, marginBottom: 12 }}>{error}</p>}
@@ -210,13 +236,13 @@ export default function SaveReportToPlayersModal({
             </div>
 
             {/* 2 — where it goes */}
-            <div style={stepLabel}>2 · Save into which player&apos;s doc</div>
+            <div style={stepLabel}>2 · Save into which player&apos;s {REPORTS_IN_APP ? 'report' : 'doc'}</div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
               {slotSelect('A', slotA, 'Player', '— choose a player —')}
               {slotSelect('B', slotB, 'And also (optional)', '— nobody —')}
             </div>
             <p style={{ fontSize: 11, color: 'var(--cl-text-muted)', lineHeight: 1.5, margin: '0 0 20px' }}>
-              Leave the second empty to save to one player. Both filled saves the same report into both docs.
+              Leave the second empty to save to one player. Both filled saves the same report into both {REPORTS_IN_APP ? 'reports' : 'docs'}.
             </p>
 
             {players.length === 0 && (
@@ -230,10 +256,18 @@ export default function SaveReportToPlayersModal({
               <b>{targets.length ? targets.map((t) => t.displayName).join(' and ') : 'nobody yet'}</b>
             </div>
 
+            {REPORTS_IN_APP && busy ? (
+              <div style={{ marginTop: 14 }}>
+                <SavingNotice label={progress || 'Saving…'} />
+              </div>
+            ) : null}
+
             <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
               <button type="button" onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
               <button type="button" onClick={() => void save()} disabled={busy || !targets.length} style={btnPrimary}>
-                {busy ? progress || 'Saving…' : `Save to ${targets.length || 0} doc${targets.length === 1 ? '' : 's'}`}
+                {busy ? progress || 'Saving…' : REPORTS_IN_APP
+                  ? 'Save to report'
+                  : `Save to ${targets.length || 0} doc${targets.length === 1 ? '' : 's'}`}
               </button>
             </div>
           </>
@@ -254,6 +288,18 @@ export default function SaveReportToPlayersModal({
                     <div style={{ color: 'var(--cl-warning-text)', marginTop: 4, lineHeight: 1.45 }}>
                       Google Doc not updated: {o.docWarning}
                     </div>
+                  </>
+                ) : REPORTS_IN_APP ? (
+                  <>
+                    <span style={{ color: '#2F7D32' }}>Saved to report</span>
+                    {o.reportUrl ? (
+                      <>
+                        {' · '}
+                        <a href={o.reportUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--cl-accent)', fontWeight: 600 }}>
+                          View report
+                        </a>
+                      </>
+                    ) : null}
                   </>
                 ) : (
                   <span style={{ color: '#2F7D32' }}>saved to their Match Analysis doc</span>

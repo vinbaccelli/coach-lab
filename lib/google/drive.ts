@@ -43,3 +43,20 @@ export async function reportsFolderChain(drive: DriveClient): Promise<string> {
   const rootId = await findOrCreateFolder(drive, 'AngleMotion');
   return findOrCreateFolder(drive, 'Reports', rootId);
 }
+
+/**
+ * Move a Drive file or folder to the Drive TRASH (`trashed: true`), never a permanent
+ * delete: Drive keeps trashed items for 30 days, so a mistake can be undone.
+ *
+ * Under the per-file `drive.file` scope this works for items the app created. For anything
+ * else Drive answers 404/403; that is thrown, not swallowed, because "I could not reach it" must
+ * never read as "it was removed". Also throws if Drive's reply does not say `trashed`.
+ */
+export async function trashDriveFile(drive: DriveClient, fileId: string): Promise<void> {
+  const res = await drive.files.update({
+    fileId,
+    requestBody: { trashed: true },
+    fields: 'id,trashed',
+  });
+  if (res.data.trashed !== true) throw new Error('Drive did not confirm the item was moved to the trash');
+}

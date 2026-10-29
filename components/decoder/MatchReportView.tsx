@@ -21,6 +21,7 @@ import type { MatchAnalysis } from '@/lib/matchAnalysis/types';
 export default function MatchReportView({
   reports,
   analysis,
+  integrityWarnings: warningsOverride,
 }: {
   reports: SideReport[];
   /**
@@ -31,15 +32,21 @@ export default function MatchReportView({
    * entirely by `reports`.
    */
   analysis?: MatchAnalysis;
+  /**
+   * The same warnings without a live `analysis` — a SAVED decoder report (the
+   * in-app report page) has the stored list but not the OCR analysis behind it.
+   */
+  integrityWarnings?: string[];
 }) {
+  const warnings = warningsOverride ?? analysis?.integrityWarnings ?? [];
   return (
     <div>
-      {analysis && analysis.integrityWarnings.length > 0 && (
+      {warnings.length > 0 && (
         <div style={warnBox}>
           <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>
-            {analysis.integrityWarnings.length} consistency check(s) flagged
+            {warnings.length} consistency check(s) flagged
           </div>
-          {analysis.integrityWarnings.map((w, i) => (
+          {warnings.map((w, i) => (
             <div key={i} style={{ fontSize: 11, lineHeight: 1.5, marginBottom: 4 }}>{w}</div>
           ))}
           <div style={{ fontSize: 10, color: 'var(--cl-text-secondary)', marginTop: 6 }}>

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { getRouteSession } from '@/lib/auth/routeSession';
 import { requireFeature } from '@/lib/entitlements.server';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
+import { withSections } from '@/lib/reports/entrySections';
 import {
   ensurePlayerDoc,
   insertSessionAtTop,
@@ -88,7 +90,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       match_date: body.match_date ?? null,
       screenshots: body.screenshots ?? [],
       source: body.source ?? 'app',
-      metadata: body.metadata ?? {},
+      metadata: withSections(body.metadata ?? {}, body.sections),
     })
     .select('*')
     .single();
@@ -100,7 +102,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   // never fail the entry save — but it IS reported back, see EntryDocStatus.
   let doc: EntryDocStatus | undefined;
 
-  if (body.category === 'match') {
+  // With REPORTS_IN_APP the report is read in the app, so the Google Doc write is skipped
+  // (kept below as the backup path for when the switch is off).
+  if (body.category === 'match' && !REPORTS_IN_APP) {
     if (!session.googleAccessToken) {
       // Same actionable wording as the screenshot route: a session created
       // without the Docs/Drive grant needs a fresh sign-in, and "nothing

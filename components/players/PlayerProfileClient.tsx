@@ -5,10 +5,13 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import PlayerSessionTimeline from '@/components/players/PlayerSessionTimeline';
+import PlayerNav from '@/components/reports/PlayerNav';
+import DeletePlayerSection from '@/components/players/DeletePlayerSection';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
 import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 
 type Player = {
@@ -100,9 +103,11 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
     setLoading(true);
     setErr(null);
     try {
-      const res = await fetch(`/api/players/${playerId}`);
+      // no-store: the entries list must be the database's, not a cached copy (a report saved
+      // a moment ago has to be there).
+      const res = await fetch(`/api/players/${playerId}`, { cache: 'no-store' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Not found');
+      if (!res.ok || (REPORTS_IN_APP && (data.error || !data.player))) throw new Error(data.error === 'Offline' ? 'You appear to be offline.' : data.error ?? 'Not found');
       setPlayer(data.player);
       setEntries(data.entries ?? []);
       const sessRes = await fetch(`/api/players/${playerId}/sessions`);
@@ -203,17 +208,36 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   };
 
   if (loading) {
-    return <p style={{ color: 'var(--cl-text-secondary)' }}>Loading profile…</p>;
+    return REPORTS_IN_APP ? (
+      <div style={{ maxWidth: 880, margin: '0 auto' }}>
+        <PlayerNav playerId={playerId} current="profile" maxWidth={880} />
+        <p style={{ color: 'var(--cl-text-secondary)' }}>Loading profile…</p>
+      </div>
+    ) : (
+      <p style={{ color: 'var(--cl-text-secondary)' }}>Loading profile…</p>
+    );
   }
   // Only a genuinely-absent player is fatal (nothing to render). A failed
   // save / new-session sets `err` while the player is still loaded — that is
   // shown as a recoverable inline banner below, NOT a full-page unmount.
   if (!player) {
-    return <p style={{ color: 'var(--cl-destructive-text)' }}>{err || 'Player not found'}</p>;
+    return REPORTS_IN_APP ? (
+      <div style={{ maxWidth: 880, margin: '0 auto' }}>
+        <PlayerNav playerId={playerId} current="profile" maxWidth={880} />
+        <p style={{ color: 'var(--cl-destructive-text)' }}>{REPORTS_IN_APP && (!err || err === 'Not found') ? 'Player not found' : err || 'Player not found'}</p>
+      </div>
+    ) : (
+      <p style={{ color: 'var(--cl-destructive-text)' }}>{REPORTS_IN_APP && (!err || err === 'Not found') ? 'Player not found' : err || 'Player not found'}</p>
+    );
   }
 
   return (
     <div style={{ maxWidth: 880, margin: '0 auto', paddingBottom: 48 }}>
+      {/* REPORTS_IN_APP: one pinned bar (Players / name) that stays in view on this long page.
+          Off: the original plain link, unchanged. */}
+      {REPORTS_IN_APP ? (
+        <PlayerNav playerId={playerId} playerName={player.display_name} current="profile" maxWidth={880} />
+      ) : (
       <Link
         href="/players"
         style={{
@@ -228,6 +252,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       >
         <ArrowLeft size={16} /> Players
       </Link>
+      )}
 
       {!canEdit ? (
         <PlanLockedNotice feature="players">
@@ -429,6 +454,11 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
       </div>
 
+      {/* V2: the "Analysis Sessions" block is hidden while REPORTS_IN_APP is on — reports are
+          the player's record now, and a coach saves to any player from the analysis app
+          without a session. The code (and player_sessions, its routes and pages) is kept:
+          REPORTS_IN_APP = false brings it back unchanged. */}
+      {!REPORTS_IN_APP ? (
       <section
         style={{
           background: 'rgba(250, 249, 247, 0.96)',
@@ -470,6 +500,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </button>
         <PlayerSessionTimeline playerId={playerId} sessions={sessions} />
       </section>
+      ) : null}
 
       <section
         style={{
@@ -483,7 +514,19 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Reports</h2>
           <div data-tour-id="player-doc-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {player.google_doc_id ? (
+            {REPORTS_IN_APP ? (
+              <Link
+                href={`/players/${playerId}/reports`}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 36,
+                  padding: '8px 14px', borderRadius: 10, background: 'var(--cl-accent)',
+                  color: 'var(--cl-text-on-fill)', fontSize: 12, fontWeight: 700, textDecoration: 'none',
+                }}
+              >
+                Open reports →
+              </Link>
+            ) : null}
+            {!REPORTS_IN_APP && player.google_doc_id ? (
               <a
                 href={`https://docs.google.com/document/d/${player.google_doc_id}/edit`}
                 target="_blank"
@@ -497,7 +540,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 Technical Analysis Doc ↗
               </a>
             ) : null}
-            {player.google_match_doc_id ? (
+            {!REPORTS_IN_APP && player.google_match_doc_id ? (
               <a
                 href={`https://docs.google.com/document/d/${player.google_match_doc_id}/edit`}
                 target="_blank"
@@ -538,7 +581,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 seen live on Azaliya, 5 saved entries but no Doc ever exported.
                 "No reports yet" read as "nothing saved" and looked like data
                 loss even though her entries were sitting right below it. */}
-            {!player.google_doc_id && !player.google_match_doc_id && !player.google_folder_id
+            {!REPORTS_IN_APP && !player.google_doc_id && !player.google_match_doc_id && !player.google_folder_id
               && !entries.some((e) => e.metadata?.doc_url) ? (
               <span style={{ fontSize: 12, color: 'var(--cl-text-secondary)', fontWeight: 600 }}>
                 No Google Doc yet — use Save Report to create one.
@@ -548,7 +591,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
         <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
           Match and technique reports — newest first.
-          {player.google_doc_id ? ' Click an entry to open it in the player’s Google Doc.' : ''}
+          {REPORTS_IN_APP
+            ? ' Tap an entry to open its report.'
+            : player.google_doc_id ? ' Click an entry to open it in the player’s Google Doc.' : ''}
         </p>
         <div data-tour-id="player-report-tabs" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
           {([['all', 'All'], ['technique', 'Technical Analysis'], ['match', 'Match Analysis']] as const).map(([key, label]) => (
@@ -582,7 +627,20 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             {timelineEntries.map((e) => (
               <article
                 key={e.id}
+                {...(REPORTS_IN_APP
+                  ? {
+                      role: 'link',
+                      tabIndex: 0,
+                      onKeyDown: (ev: React.KeyboardEvent) => {
+                        if (ev.key === 'Enter') router.push(`/players/${playerId}/reports/${e.id}`);
+                      },
+                    }
+                  : {})}
                 onClick={() => {
+                  if (REPORTS_IN_APP) {
+                    router.push(`/players/${playerId}/reports/${e.id}`);
+                    return;
+                  }
                   // Prefer the entry's own doc link; fall back to the doc for its category.
                   const fallbackId = e.category === 'match'
                     ? player.google_match_doc_id ?? player.google_doc_id
@@ -596,7 +654,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                   borderRadius: 12,
                   background: 'var(--cl-bg-panel)',
                   border: '1px solid #E7E5E4',
-                  cursor: (e.metadata?.doc_url || player.google_doc_id) ? 'pointer' : 'default',
+                  cursor: (REPORTS_IN_APP || e.metadata?.doc_url || player.google_doc_id) ? 'pointer' : 'default',
                 }}
               >
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
@@ -707,6 +765,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           })()}
         </section>
       )}
+      {/* Danger zone: REPORTS_IN_APP only, deliberately not plan-gated, last on the page. */}
+      {REPORTS_IN_APP ? <DeletePlayerSection playerId={playerId} playerName={player.display_name} /> : null}
     </div>
   );
 }
