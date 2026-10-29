@@ -6706,6 +6706,7 @@ function Home() {
                 beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
                 beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
                 onPlayBlocked={handlePlayBlocked}
+                sound={{ forceMute: isRecording }}
                 trimRange={analysisTimelineExtras.trimRange}
 onTrimChange={analysisTimelineExtras.onTrimChange}
                 trimAccent={analysisTimelineExtras.trimAccent}
@@ -6742,6 +6743,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
             beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
             onPlayBlocked={handlePlayBlocked}
+                sound={{ forceMute: isRecording }}
             trimRange={analysisTimelineExtras.trimRange}
 onTrimChange={analysisTimelineExtras.onTrimChange}
             trimAccent={analysisTimelineExtras.trimAccent}

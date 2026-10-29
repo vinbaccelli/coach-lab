@@ -40,16 +40,95 @@ export type SourceAudio = 'yes' | 'no' | 'unknown';
 export const NO_SOUND_NOTICE = 'This clip has no sound.';
 
 /**
- * Whether the source clip has an audio track, from what the browser can tell us.
- * `audioTracks` (Safari), `mozHasAudio` (Firefox) and the number of audio tracks a
- * captureStream() of the element carries (Chrome) are each only trusted when the browser
- * has that feature; nothing available means 'unknown' (the switch is then shown as usual).
+ * What the browser's own element APIs say about the clip's sound: `audioTracks` (Safari),
+ * `mozHasAudio` (Firefox), the audio tracks of a captureStream() of the element (Chrome).
+ *
+ * ONLY A POSITIVE ANSWER IS TRUSTED. A zero or `false` here is NOT proof of silence: on iPhone
+ * `audioTracks` exists but can be empty for a clip that has sound (a detached element that
+ * has only read metadata), which is exactly how a clip with sound was labelled "This clip has
+ * no sound". "No sound" is only ever concluded from the file itself (`sourceAudioVerdict`).
  */
 export function sourceAudioFromProbe(p: { audioTracks?: number | null; mozHasAudio?: boolean | null; captureStreamAudio?: number | null }): SourceAudio {
-  if (typeof p.audioTracks === 'number') return p.audioTracks > 0 ? 'yes' : 'no';
-  if (typeof p.mozHasAudio === 'boolean') return p.mozHasAudio ? 'yes' : 'no';
-  if (typeof p.captureStreamAudio === 'number') return p.captureStreamAudio > 0 ? 'yes' : 'no';
+  if (typeof p.audioTracks === 'number' && p.audioTracks > 0) return 'yes';
+  if (p.mozHasAudio === true) return 'yes';
+  if (typeof p.captureStreamAudio === 'number' && p.captureStreamAudio > 0) return 'yes';
   return 'unknown';
+}
+
+/** What the file's own container says. `certain` only when its track list was actually read. */
+export interface ContainerAudio {
+  kind: 'mp4' | 'webm' | 'unknown';
+  audioTracks: number | null;
+  certain: boolean;
+  reason: string;
+}
+
+const MP4_TOP_LEVEL = new Set(['ftyp', 'moov', 'mdat', 'free', 'skip', 'wide', 'pnot', 'uuid', 'meta', 'moof', 'mfra', 'sidx', 'styp', 'prft', 'emsg', 'pdin']);
+
+const ascii4 = (b: Uint8Array, i: number) => String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]);
+
+/** One MP4/MOV box header at `off`: size in bytes (0 = to end of file), type, header length. */
+export function mp4BoxHeader(bytes: Uint8Array, off = 0): { size: number; type: string; header: number } | null {
+  if (bytes.length < off + 8) return null;
+  const size32 = ((bytes[off] << 24) >>> 0) + (bytes[off + 1] << 16) + (bytes[off + 2] << 8) + bytes[off + 3];
+  const type = ascii4(bytes, off + 4);
+  if (!/^[\x20-\x7e]{4}$/.test(type)) return null;
+  if (size32 === 1) {
+    if (bytes.length < off + 16) return null;
+    let size = 0;
+    for (let k = 0; k < 8; k++) size = size * 256 + bytes[off + 8 + k];
+    return { size, type, header: 16 };
+  }
+  return { size: size32, type, header: 8 };
+}
+
+/** True when these first bytes look like an MP4 / MOV (a known top-level box first). */
+export function looksLikeMp4(head: Uint8Array): boolean {
+  const h = mp4BoxHeader(head, 0);
+  return !!h && MP4_TOP_LEVEL.has(h.type) && (h.size === 0 || h.size >= 8);
+}
+
+/** Audio tracks in a complete `moov` box: one handler of type `soun` per audio track. */
+export function audioTracksInMoov(moov: Uint8Array): number {
+  let n = 0;
+  for (let i = 0; i + 16 <= moov.length; i++) {
+    if (moov[i] === 0x68 && ascii4(moov, i) === 'hdlr' && ascii4(moov, i + 12) === 'soun') { n++; i += 15; }
+  }
+  return n;
+}
+
+/**
+ * A WebM's audio tracks from its first bytes: certain only when the Tracks element
+ * (ID 0x1654AE6B) is in them; then each audio codec id (A_OPUS, A_VORBIS, A_AAC…) is one track.
+ */
+export function webmAudioFromHead(head: Uint8Array): ContainerAudio {
+  let tracksAt = -1;
+  for (let i = 0; i + 4 <= head.length; i++) {
+    if (head[i] === 0x16 && head[i + 1] === 0x54 && head[i + 2] === 0xae && head[i + 3] === 0x6b) { tracksAt = i; break; }
+  }
+  if (tracksAt === -1) return { kind: 'webm', audioTracks: null, certain: false, reason: 'webm: track list not in the first bytes' };
+  let n = 0;
+  for (let i = tracksAt; i + 3 <= head.length; i++) {
+    if (head[i] === 0x41 && head[i + 1] === 0x5f && head[i + 2] >= 0x41 && head[i + 2] <= 0x5a) {
+      // "A_" + an upper-case codec name inside the track list.
+      if (i >= 2 && head[i - 2] === 0x86) { n++; i += 2; }
+    }
+  }
+  return { kind: 'webm', audioTracks: n, certain: true, reason: `webm: ${n} audio track(s) in the track list` };
+}
+
+/**
+ * The final answer for the sound switch: "no sound" ONLY when the file's own track list was
+ * read and has no audio. Anything uncertain shows the switch.
+ */
+export function sourceAudioVerdict(container: ContainerAudio | null, element: SourceAudio): { audio: SourceAudio; reason: string } {
+  if (container?.certain && typeof container.audioTracks === 'number') {
+    return container.audioTracks > 0
+      ? { audio: 'yes', reason: container.reason }
+      : { audio: 'no', reason: container.reason };
+  }
+  if (element === 'yes') return { audio: 'yes', reason: `${container ? `${container.reason}; ` : ''}the browser reports an audio track` };
+  return { audio: 'unknown', reason: `${container ? container.reason : 'file not read'}; the browser cannot tell — the switch is shown` };
 }
 
 export interface ExportAudioPlan {

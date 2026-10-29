@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   exportOutputSeconds, nearestExportSpeed, rateCandidates, rateFallbackText, rateWorked, soundIncluded, speedLabel,
-  exportAudioPlan, sourceAudioFromProbe, countAudioTracksInContainer, NO_SOUND_NOTICE,
+  exportAudioPlan, sourceAudioFromProbe, countAudioTracksInContainer, NO_SOUND_NOTICE, sourceAudioVerdict,
 } from '@/lib/exportSpeed';
 import { estimateExportBytes } from '@/lib/exportEstimate';
 import { outputProgress } from '@/lib/exportOverlay';
@@ -65,15 +65,14 @@ test('a clip without sound: no switch, a notice, never included, at any speed', 
   assert.equal(NO_SOUND_NOTICE, 'This clip has no sound.');
 });
 
-test('source audio is read from whichever signal the browser has (Safari, Firefox, Chrome), else unknown', () => {
+test('the browser element only ever says "yes": a zero or false is NOT proof of silence (iPhone audioTracks can be empty)', () => {
   assert.equal(sourceAudioFromProbe({ audioTracks: 1 }), 'yes');
-  assert.equal(sourceAudioFromProbe({ audioTracks: 0 }), 'no');
+  assert.equal(sourceAudioFromProbe({ audioTracks: 0 }), 'unknown');
   assert.equal(sourceAudioFromProbe({ mozHasAudio: true }), 'yes');
-  assert.equal(sourceAudioFromProbe({ mozHasAudio: false }), 'no');
+  assert.equal(sourceAudioFromProbe({ mozHasAudio: false }), 'unknown');
   assert.equal(sourceAudioFromProbe({ captureStreamAudio: 2 }), 'yes');
-  assert.equal(sourceAudioFromProbe({ captureStreamAudio: 0 }), 'no');
-  // The first signal present wins; none present is unknown (the switch is then shown as usual).
-  assert.equal(sourceAudioFromProbe({ audioTracks: 1, captureStreamAudio: 0 }), 'yes');
+  assert.equal(sourceAudioFromProbe({ captureStreamAudio: 0 }), 'unknown');
+  assert.equal(sourceAudioFromProbe({ audioTracks: 0, captureStreamAudio: 1 }), 'yes');
   assert.equal(sourceAudioFromProbe({ audioTracks: null, mozHasAudio: null, captureStreamAudio: null }), 'unknown');
   assert.equal(sourceAudioFromProbe({}), 'unknown');
 });

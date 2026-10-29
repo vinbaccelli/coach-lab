@@ -154,10 +154,17 @@ export default function MetricsExportPanel({
   const [soundChoice, setSoundChoice] = useState(true);
   // Does the clip have sound? Read from its metadata when the panel has a video; 'unknown' until then.
   const [sourceAudio, setSourceAudio] = useState<SourceAudio>('unknown');
+  const sourceAudioReasonRef = useRef('not checked yet');
   useEffect(() => {
     if (!videoSrc) { setSourceAudio('unknown'); return; }
     let alive = true;
-    void probeSourceAudio(videoSrc).then((a) => { if (alive) setSourceAudio(a); });
+    void probeSourceAudio(videoSrc).then((r) => {
+      if (!alive) return;
+      setSourceAudio(r.audio);
+      sourceAudioReasonRef.current = r.reason;
+      // ?vdebug=1 trace: the sound check's answer and why.
+      firstFrameLog('export', `audio check: ${r.audio} (${r.reason})`);
+    });
     return () => { alive = false; };
   }, [videoSrc]);
   const audioPlan = exportAudioPlan({ wanted: soundChoice, source: sourceAudio, rate: speed });
@@ -706,6 +713,7 @@ export default function MetricsExportPanel({
       };
       // iOS refuses the render's play() when the tap is too old: no frame is painted (cropExport gives up after 4 s).
       let noFrame = false;
+      firstFrameLog('export', `audio decision: switch ${soundChoice ? 'on' : 'off'}, clip sound ${sourceAudio} (${sourceAudioReasonRef.current}) → ${soundOn ? 'sound requested' : 'silent'} at ${speed}×`);
       const res = await exportEditedVideo(src, {
         trim: whole ? null : { start: range.start, end: range.end },
         maxHeight: selected.maxHeight,
@@ -792,7 +800,7 @@ export default function MetricsExportPanel({
       if (restoreRef.current === restorePreview) restoreRef.current = null;
     }
   }, [videoSrc, meta, selected, busy, stopping, analysisBlock, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton,
-    includeSnapshots, getSnapshotsForExport, holdSec, speed, soundOn]);
+    includeSnapshots, getSnapshotsForExport, holdSec, speed, soundOn, soundChoice, sourceAudio]);
 
   const cancelExport = useCallback(() => {
     const ac = abortRef.current;

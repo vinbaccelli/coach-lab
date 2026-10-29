@@ -25,7 +25,8 @@ import {
   emptyExportError, holdResumeSeek, holdSeekLanded, NO_FRAME_GIVE_UP_MS, outputProgress, resumeAction, RESUME_FAILED_TEXT, runOverlay, type OverlayFn,
 } from '@/lib/exportOverlay';
 import {
-  countAudioTracksInContainer, rateCandidates, rateWorked, RATE_PROBE_MS, sourceAudioFromProbe, type SourceAudio,
+  audioTracksInMoov, countAudioTracksInContainer, looksLikeMp4, mp4BoxHeader, rateCandidates, rateWorked, RATE_PROBE_MS,
+  sourceAudioFromProbe, sourceAudioVerdict, webmAudioFromHead, type ContainerAudio, type SourceAudio,
 } from '@/lib/exportSpeed';
 
 export type ExportRegion = { x: number; y: number; w: number; h: number };
@@ -654,11 +655,41 @@ async function containerAudioTracks(blob: Blob): Promise<number | null> {
 }
 
 /**
- * Does this clip have sound? Read from a throwaway element (metadata only), so the answer is
- * known before the coach starts an export. 'unknown' when the browser cannot say or the clip
- * does not load within a few seconds: the sound switch is then shown as normal.
+ * The clip's audio tracks, from the FILE: an MP4/MOV's `moov` (found by walking the top-level
+ * boxes, wherever it sits — iPhone camera files often keep it after the media data) or a
+ * WebM's track list. Reads only box headers and the `moov` itself, never the media.
  */
-export function probeSourceAudio(src: string, timeoutMs = 4000): Promise<SourceAudio> {
+export async function readContainerAudio(blob: Blob): Promise<ContainerAudio> {
+  try {
+    const head = new Uint8Array(await blob.slice(0, 2 * 1024 * 1024).arrayBuffer());
+    if (head.length >= 4 && head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) {
+      return webmAudioFromHead(head);
+    }
+    if (!looksLikeMp4(head)) return { kind: 'unknown', audioTracks: null, certain: false, reason: 'container not recognised' };
+    let off = 0;
+    for (let n = 0; n < 200 && off < blob.size; n++) {
+      const hb = off + 16 <= head.length ? head.subarray(off, off + 16) : new Uint8Array(await blob.slice(off, off + 16).arrayBuffer());
+      const h = mp4BoxHeader(hb, 0);
+      if (!h) break;
+      const size = h.size === 0 ? blob.size - off : h.size;
+      if (size < h.header) break;
+      if (h.type === 'moov') {
+        if (size > 64 * 1024 * 1024) return { kind: 'mp4', audioTracks: null, certain: false, reason: 'mp4: moov too large to read' };
+        const moov = new Uint8Array(await blob.slice(off, off + size).arrayBuffer());
+        if (moov.length < size) return { kind: 'mp4', audioTracks: null, certain: false, reason: 'mp4: moov cut short' };
+        const tracks = audioTracksInMoov(moov);
+        return { kind: 'mp4', audioTracks: tracks, certain: true, reason: `mp4/mov: ${tracks} audio track(s) in moov` };
+      }
+      off += size;
+    }
+    return { kind: 'mp4', audioTracks: null, certain: false, reason: 'mp4: no moov found' };
+  } catch (e) {
+    return { kind: 'unknown', audioTracks: null, certain: false, reason: `file not readable (${e instanceof Error ? e.message : 'error'})` };
+  }
+}
+
+/** What a throwaway element says (positives only count — see sourceAudioFromProbe). */
+function probeElementAudio(src: string, timeoutMs: number): Promise<SourceAudio> {
   return new Promise((resolve) => {
     if (typeof document === 'undefined') { resolve('unknown'); return; }
     const v = document.createElement('video') as HTMLVideoElement & {
@@ -683,8 +714,8 @@ export function probeSourceAudio(src: string, timeoutMs = 4000): Promise<SourceA
     v.onloadedmetadata = () => {
       let captureStreamAudio: number | null = null;
       try {
-        const s = v.captureStream?.() ?? v.mozCaptureStream?.();
-        if (s) captureStreamAudio = s.getAudioTracks().length;
+        const st = v.captureStream?.() ?? v.mozCaptureStream?.();
+        if (st) captureStreamAudio = st.getAudioTracks().length;
       } catch { /* noop */ }
       finish(sourceAudioFromProbe({
         audioTracks: v.audioTracks ? v.audioTracks.length : null,
@@ -694,6 +725,23 @@ export function probeSourceAudio(src: string, timeoutMs = 4000): Promise<SourceA
     };
     v.src = src;
   });
+}
+
+/**
+ * Does this clip have sound? The FILE decides (its track list); the browser's element APIs
+ * can only add a "yes". "No sound" is returned only when the track list was read and holds no
+ * audio track; anything else is 'unknown' and the switch is shown. Never throws.
+ */
+export async function probeSourceAudio(src: string, timeoutMs = 4000): Promise<{ audio: SourceAudio; reason: string }> {
+  let container: ContainerAudio | null = null;
+  try {
+    const blob = await (await fetch(src)).blob();
+    container = await readContainerAudio(blob);
+  } catch (e) {
+    container = { kind: 'unknown', audioTracks: null, certain: false, reason: `file not readable (${e instanceof Error ? e.message : 'error'})` };
+  }
+  const element = container.certain ? 'unknown' : await probeElementAudio(src, timeoutMs);
+  return sourceAudioVerdict(container, element);
 }
 
 /**
