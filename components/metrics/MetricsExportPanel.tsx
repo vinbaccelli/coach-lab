@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import TrimRangeBar, { formatClock } from '@/components/TrimRangeBar';
-import { exportEditedVideo } from '@/lib/cropExport';
+import { exportEditedVideo, probeSourceAudio } from '@/lib/cropExport';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { firstFrameLog } from '@/lib/firstFrame';
 import { EXPORT_POSE_MODEL_TEXT } from '@/lib/exportPose';
@@ -10,7 +10,7 @@ import { analyzeByPlaying, openAnalysisSession } from '@/lib/playbackAnalysis';
 import { clockMoved, verdictText } from '@/lib/traceDiag';
 import { defaultExportRange, selectedSection } from '@/lib/aiTrackScope';
 import {
-  EXPORT_SPEEDS, exportOutputSeconds, nearestExportSpeed, rateFallbackText, SOUND_SLOW_REASON, soundAvailable, soundIncluded, speedLabel,
+  EXPORT_SPEEDS, exportAudioPlan, exportOutputSeconds, nearestExportSpeed, rateFallbackText, speedLabel, type SourceAudio,
 } from '@/lib/exportSpeed';
 import {
   estimateExportBytes, EXPORT_AUDIO_BPS, exportQualityOptions, formatMegabytes, type ExportQuality,
@@ -148,10 +148,20 @@ export default function MetricsExportPanel({
   // The analysis' own trace numbers, kept for the verdict line after the render (a later tap).
   const lastAnalysisDiagRef = useRef<{ pix: number; kp: number; stored: number | null } | null>(null);
   const [result, setResult] = useState<{ url: string; blob: Blob; ext: string; name: string } | null>(null);
-  // Slow motion: the speed starts at the timeline's current rate; sound is on at 1× only.
+  // Slow motion: the speed starts at the timeline's current rate. Sound is kept at every speed
+  // (slow motion plays it slowed and lower); only the switch and the clip's own sound decide.
   const [speed, setSpeed] = useState<number>(() => nearestExportSpeed(timelineRate?.()));
   const [soundChoice, setSoundChoice] = useState(true);
-  const soundOn = soundIncluded(soundChoice, speed);
+  // Does the clip have sound? Read from its metadata when the panel has a video; 'unknown' until then.
+  const [sourceAudio, setSourceAudio] = useState<SourceAudio>('unknown');
+  useEffect(() => {
+    if (!videoSrc) { setSourceAudio('unknown'); return; }
+    let alive = true;
+    void probeSourceAudio(videoSrc).then((a) => { if (alive) setSourceAudio(a); });
+    return () => { alive = false; };
+  }, [videoSrc]);
+  const audioPlan = exportAudioPlan({ wanted: soundChoice, source: sourceAudio, rate: speed });
+  const soundOn = audioPlan.included;
   // Set when the device could not play at the chosen speed and the nearest working one was used.
   const [rateNote, setRateNote] = useState<string | null>(null);
   const [tabHidden, setTabHidden] = useState(false);
@@ -758,6 +768,10 @@ export default function MetricsExportPanel({
         const url = URL.createObjectURL(res.blob);
         resultUrlRef.current = url;
         setRateNote(res.rate !== undefined && res.rate !== speed ? rateFallbackText(speed, res.rate) : null);
+        // Sound was asked for but no audio track reached the recorder: never leave a silent file unexplained.
+        if (soundOn && res.audioCaptured === false) {
+          setNotice((prev) => `${prev ? `${prev} ` : ''}This device could not capture the clip’s sound, so the video is silent.`);
+        }
         setResult({ url, blob: res.blob, ext: res.ext, name: `anglemotion-export-${selected.id}-${Date.now()}.${res.ext}` });
         setPhase('done');
       } else {
@@ -1083,8 +1097,16 @@ export default function MetricsExportPanel({
                 })}
               </div>
               {(() => {
-                const avail = soundAvailable(speed);
-                const off = busy || !avail;
+                if (!audioPlan.showToggle) {
+                  // The clip has no sound: say so instead of showing a switch that could not work.
+                  return (
+                    <div data-testid="export-sound-row" style={{ display: 'flex', flexDirection: 'column', gap: 2, minHeight: 44, justifyContent: 'center' }}>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>Sound</span>
+                      <span data-testid="export-sound-status" role="status" style={muted}>{audioPlan.notice} The video will be exported without sound.</span>
+                    </div>
+                  );
+                }
+                const off = busy;
                 const toggle = () => { if (!off) { setSoundChoice((v) => !v); clearResult(); } };
                 return (
                   <div data-testid="export-sound-row" onClick={toggle}
@@ -1108,7 +1130,9 @@ export default function MetricsExportPanel({
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                       <span style={{ fontSize: 14, fontWeight: 600 }}>Sound</span>
                       <span data-testid="export-sound-status" style={muted}>
-                        {avail ? (soundOn ? 'The recording’s sound is kept.' : 'Off: the video is silent.') : SOUND_SLOW_REASON}
+                        {soundOn
+                          ? (speed < 1 ? 'The recording’s sound is kept. In slow motion it plays slowed down, and lower.' : 'The recording’s sound is kept.')
+                          : 'Off: the video is silent.'}
                       </span>
                     </div>
                   </div>

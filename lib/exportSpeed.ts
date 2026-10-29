@@ -30,16 +30,78 @@ export function exportOutputSeconds(spanSec: number, rate: number, holdTotalSec:
   return Math.max(0, spanSec) / r + Math.max(0, holdTotalSec);
 }
 
-/** Sound is only offered at 1×: slowed audio would be distorted. */
-export function soundAvailable(rate: number): boolean {
-  return rate === 1;
+/**
+ * SOUND. The speed never turns sound off: at 0.5×, 0.25× and 0.1× the recording's sound is
+ * kept and simply plays slowed (and lower), which is what a coach reviewing a stroke expects.
+ * Only two things decide it: the coach's switch, and whether the clip HAS sound.
+ */
+export type SourceAudio = 'yes' | 'no' | 'unknown';
+
+export const NO_SOUND_NOTICE = 'This clip has no sound.';
+
+/**
+ * Whether the source clip has an audio track, from what the browser can tell us.
+ * `audioTracks` (Safari), `mozHasAudio` (Firefox) and the number of audio tracks a
+ * captureStream() of the element carries (Chrome) are each only trusted when the browser
+ * has that feature; nothing available means 'unknown' (the switch is then shown as usual).
+ */
+export function sourceAudioFromProbe(p: { audioTracks?: number | null; mozHasAudio?: boolean | null; captureStreamAudio?: number | null }): SourceAudio {
+  if (typeof p.audioTracks === 'number') return p.audioTracks > 0 ? 'yes' : 'no';
+  if (typeof p.mozHasAudio === 'boolean') return p.mozHasAudio ? 'yes' : 'no';
+  if (typeof p.captureStreamAudio === 'number') return p.captureStreamAudio > 0 ? 'yes' : 'no';
+  return 'unknown';
 }
 
-export const SOUND_SLOW_REASON = 'Sound is off in slow motion: it would be distorted.';
+export interface ExportAudioPlan {
+  /** The file is asked to carry the clip's sound. */
+  included: boolean;
+  /** Show the sound switch (false: the clip has no sound, a notice is shown instead). */
+  showToggle: boolean;
+  notice: string | null;
+  /**
+   * Browsers keep the pitch of slowed audio by default. For the export it is turned off
+   * (the element's `preservesPitch = false`), so slow motion sounds slowed down.
+   */
+  preservesPitch: false;
+}
 
-/** Whether the file carries sound: the switch is on AND the speed allows it. */
-export function soundIncluded(wanted: boolean, rate: number): boolean {
-  return wanted && soundAvailable(rate);
+export function exportAudioPlan(input: { wanted: boolean; source: SourceAudio; rate: number }): ExportAudioPlan {
+  const has = input.source !== 'no';
+  return {
+    included: input.wanted && has,
+    showToggle: has,
+    notice: has ? null : NO_SOUND_NOTICE,
+    preservesPitch: false,
+  };
+}
+
+/** The shorter name the render uses: does this export carry sound? */
+export function soundIncluded(wanted: boolean, source: SourceAudio, rate = 1): boolean {
+  return exportAudioPlan({ wanted, source, rate }).included;
+}
+
+/**
+ * Audio tracks in a recorded file, read from its container bytes (no decoding): an MP4 has one
+ * `hdlr` box of type `soun` per audio track; a WebM names each audio codec (A_OPUS, A_VORBIS…).
+ * `null` when the bytes are neither. Give it the start AND end of the file for big files.
+ */
+export function countAudioTracksInContainer(bytes: Uint8Array): number | null {
+  const tag = (i: number, s: string) => {
+    for (let k = 0; k < s.length; k++) if (bytes[i + k] !== s.charCodeAt(k)) return false;
+    return true;
+  };
+  const isMp4 = bytes.length > 12 && tag(4, 'ftyp');
+  const isWebm = bytes.length > 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+  if (!isMp4 && !isWebm) return null;
+  let n = 0;
+  for (let i = 0; i < bytes.length - 16; i++) {
+    if (isMp4) {
+      if (bytes[i] === 0x68 && tag(i, 'hdlr') && tag(i + 12, 'soun')) { n++; i += 15; }
+    } else if (bytes[i] === 0x41 && bytes[i + 1] === 0x5f) {
+      if (tag(i, 'A_OPUS') || tag(i, 'A_VORBIS') || tag(i, 'A_AAC') || tag(i, 'A_MPEG')) { n++; i += 5; }
+    }
+  }
+  return n;
 }
 
 /** Rates to try, the chosen one first, then each faster export speed down to 1×. */
