@@ -16,7 +16,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
  * Re-measured on resize / rotation and whenever <main> changes size (e.g. a banner
  * appears above it). Side padding honours the landscape safe areas.
  */
-export default function StickyBack({ children }: { children: ReactNode }) {
+export default function StickyBack({ children, maxWidth = 720 }: { children: ReactNode; maxWidth?: number }) {
   const barRef = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(0);
   const [height, setHeight] = useState(48);
@@ -64,7 +64,7 @@ export default function StickyBack({ children }: { children: ReactNode }) {
           borderBottom: '1px solid var(--cl-border-subtle)',
         }}
       >
-        <div style={{ maxWidth: 720, margin: '0 auto' }}>{children}</div>
+        <div style={{ maxWidth, margin: '0 auto' }}>{children}</div>
       </div>
     </>
   );

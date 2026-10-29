@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import PlayerSessionTimeline from '@/components/players/PlayerSessionTimeline';
+import PlayerNav from '@/components/reports/PlayerNav';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
 import { useEntitlement } from '@/lib/useEntitlement';
@@ -206,17 +207,36 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   };
 
   if (loading) {
-    return <p style={{ color: 'var(--cl-text-secondary)' }}>Loading profile…</p>;
+    return REPORTS_IN_APP ? (
+      <div style={{ maxWidth: 880, margin: '0 auto' }}>
+        <PlayerNav playerId={playerId} current="profile" maxWidth={880} />
+        <p style={{ color: 'var(--cl-text-secondary)' }}>Loading profile…</p>
+      </div>
+    ) : (
+      <p style={{ color: 'var(--cl-text-secondary)' }}>Loading profile…</p>
+    );
   }
   // Only a genuinely-absent player is fatal (nothing to render). A failed
   // save / new-session sets `err` while the player is still loaded — that is
   // shown as a recoverable inline banner below, NOT a full-page unmount.
   if (!player) {
-    return <p style={{ color: 'var(--cl-destructive-text)' }}>{err || 'Player not found'}</p>;
+    return REPORTS_IN_APP ? (
+      <div style={{ maxWidth: 880, margin: '0 auto' }}>
+        <PlayerNav playerId={playerId} current="profile" maxWidth={880} />
+        <p style={{ color: 'var(--cl-destructive-text)' }}>{err || 'Player not found'}</p>
+      </div>
+    ) : (
+      <p style={{ color: 'var(--cl-destructive-text)' }}>{err || 'Player not found'}</p>
+    );
   }
 
   return (
     <div style={{ maxWidth: 880, margin: '0 auto', paddingBottom: 48 }}>
+      {/* REPORTS_IN_APP: one pinned bar (Players / name) that stays in view on this long page.
+          Off: the original plain link, unchanged. */}
+      {REPORTS_IN_APP ? (
+        <PlayerNav playerId={playerId} playerName={player.display_name} current="profile" maxWidth={880} />
+      ) : (
       <Link
         href="/players"
         style={{
@@ -231,6 +251,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       >
         <ArrowLeft size={16} /> Players
       </Link>
+      )}
 
       {!canEdit ? (
         <PlanLockedNotice feature="players">

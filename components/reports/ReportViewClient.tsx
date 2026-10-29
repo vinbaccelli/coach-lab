@@ -6,7 +6,7 @@ import { ArrowLeft } from 'lucide-react';
 import { findReportForEntry } from '@/lib/reports/deriveBlocks';
 import { usePlayerReports } from '@/components/reports/usePlayerReports';
 import ReportBlocks from '@/components/reports/ReportBlocks';
-import StickyBack from '@/components/reports/StickyBack';
+import PlayerNav from '@/components/reports/PlayerNav';
 import { reportTitle } from '@/components/reports/ReportsIndexClient';
 import { backLink, chipStyle, FOCUS_CSS, formatDateKey, KIND_CHIP, mutedText, wrap } from '@/components/reports/reportStyles';
 
@@ -28,11 +28,7 @@ export default function ReportViewClient({ playerId, entryId }: { playerId: stri
   const back = (
     <>
       <style>{FOCUS_CSS}</style>
-      <StickyBack>
-        <Link href={`/players/${playerId}/reports`} style={backLink}>
-          <ArrowLeft size={16} aria-hidden /> {playerName ? `${playerName} · Reports` : 'Reports'}
-        </Link>
-      </StickyBack>
+      <PlayerNav playerId={playerId} playerName={playerName} current="report" />
     </>
   );
 

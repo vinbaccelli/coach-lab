@@ -2,11 +2,11 @@
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
-import { ArrowLeft, Camera, Play } from 'lucide-react';
+import { Camera, Play } from 'lucide-react';
 import { filterReports, groupByMonth, type Report, type ReportKind } from '@/lib/reports/deriveBlocks';
 import { usePlayerReports } from '@/components/reports/usePlayerReports';
-import StickyBack from '@/components/reports/StickyBack';
-import { backLink, chipStyle, FOCUS_CSS, formatDateKey, KIND_CHIP, measure, mutedText, wrap } from '@/components/reports/reportStyles';
+import PlayerNav from '@/components/reports/PlayerNav';
+import { chipStyle, FOCUS_CSS, formatDateKey, KIND_CHIP, measure, mutedText, wrap } from '@/components/reports/reportStyles';
 
 const FILTERS: Array<{ key: ReportKind | 'all'; label: string }> = [
   { key: 'all', label: 'All' },
@@ -36,11 +36,7 @@ export default function ReportsIndexClient({ playerId }: { playerId: string }) {
   return (
     <div className="rpt" style={wrap}>
       <style>{FOCUS_CSS}</style>
-      <StickyBack>
-        <Link href={`/players/${playerId}`} style={backLink}>
-          <ArrowLeft size={16} aria-hidden /> {playerName || 'Player'}
-        </Link>
-      </StickyBack>
+      <PlayerNav playerId={playerId} playerName={playerName} current="reports" />
       <h1 style={{ margin: '4px 0 16px', fontSize: 'clamp(24px, 6vw, 32px)', lineHeight: 1.15, fontWeight: 700, letterSpacing: '-0.01em' }}>
         Reports
       </h1>
