@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import PlayerSessionTimeline from '@/components/players/PlayerSessionTimeline';
 import PlayerNav from '@/components/reports/PlayerNav';
+import DeletePlayerSection from '@/components/players/DeletePlayerSection';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
 import { useEntitlement } from '@/lib/useEntitlement';
@@ -223,10 +224,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
     return REPORTS_IN_APP ? (
       <div style={{ maxWidth: 880, margin: '0 auto' }}>
         <PlayerNav playerId={playerId} current="profile" maxWidth={880} />
-        <p style={{ color: 'var(--cl-destructive-text)' }}>{err || 'Player not found'}</p>
+        <p style={{ color: 'var(--cl-destructive-text)' }}>{REPORTS_IN_APP && (!err || err === 'Not found') ? 'Player not found' : err || 'Player not found'}</p>
       </div>
     ) : (
-      <p style={{ color: 'var(--cl-destructive-text)' }}>{err || 'Player not found'}</p>
+      <p style={{ color: 'var(--cl-destructive-text)' }}>{REPORTS_IN_APP && (!err || err === 'Not found') ? 'Player not found' : err || 'Player not found'}</p>
     );
   }
 
@@ -764,6 +765,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           })()}
         </section>
       )}
+      {/* Danger zone: REPORTS_IN_APP only, deliberately not plan-gated, last on the page. */}
+      {REPORTS_IN_APP ? <DeletePlayerSection playerId={playerId} playerName={player.display_name} /> : null}
     </div>
   );
 }

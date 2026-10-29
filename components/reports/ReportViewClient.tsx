@@ -6,24 +6,26 @@ import { ArrowLeft } from 'lucide-react';
 import { findReportForEntry } from '@/lib/reports/deriveBlocks';
 import { usePlayerReports } from '@/components/reports/usePlayerReports';
 import ReportBlocks from '@/components/reports/ReportBlocks';
-import PlayerNav from '@/components/reports/PlayerNav';
+import PlayerNav, { PlayerNotFound } from '@/components/reports/PlayerNav';
 import { reportTitle } from '@/components/reports/ReportsIndexClient';
 import { backLink, chipStyle, FOCUS_CSS, formatDateKey, KIND_CHIP, mutedText, wrap } from '@/components/reports/reportStyles';
 
 export default function ReportViewClient({ playerId, entryId }: { playerId: string; entryId: string }) {
-  const { playerName, reports, loading, error, reload } = usePlayerReports(playerId);
+  const { playerName, reports, loading, error, notFound, reload } = usePlayerReports(playerId);
   const report = useMemo(() => findReportForEntry(reports, entryId), [reports, entryId]);
 
   // Arriving straight from "Saved to report": the row can lag the redirect by a beat, so look once more.
   const [retried, setRetried] = useState(false);
   useEffect(() => {
-    if (loading || report || error || retried) return;
+    if (loading || report || error || retried || notFound) return;
     const t = setTimeout(() => {
       setRetried(true);
       void reload({ quiet: true });
     }, 1500);
     return () => clearTimeout(t);
-  }, [loading, report, error, retried, reload]);
+  }, [loading, report, error, retried, notFound, reload]);
+
+  if (notFound) return <PlayerNotFound />;
 
   const back = (
     <>

@@ -2324,3 +2324,11 @@ column are still never exported.
 **Fix (with `REPORTS_IN_APP` on; off keeps the old behaviour).** No network sign-in check before saving (the routes check it and a real error is shown); every failure and the "Not confirmed" case (2xx without a saved entry) is shown in a red message INSIDE the picker; a plan block is checked before a player is created; the new player is added to the picker list so a retry picks them instead of creating a duplicate; the picker scrolls; the reports list and profile read `no-store` and show an offline/error state instead of "no reports". The back bar is now `position: fixed` under the header (measured), not `position: sticky`.
 
 **Severity.** High (a save that looks like nothing happened).
+
+---
+
+## 073 — Delete player: what it removes and what it cannot guarantee
+
+**Added:** 2026-10-29 (PR #111). Feature note. `DELETE /api/players/[id]` + "Danger zone" on the profile (only with `REPORTS_IN_APP`). Not plan-gated. The coach types the player's name (checked again on the server); order: lookup through the session (RLS) → name check → read Drive ids and Storage paths → delete rows (`player_entries`, `player_sessions` cascade; stop on failure) → Drive trash (never permanent) → Storage removal → one result.
+
+**Not guaranteed.** (1) Drive: the folder in `players.google_folder_id` and the two Docs are moved to the trash individually, but a folder created under an OLD player name (after a rename), screenshots uploaded to the shared `AngleMotion/Screenshots` or the Drive root (when the player folder could not be made), and anything the `drive.file` scope cannot see are not covered; a refusal is reported with the folder path to delete by hand. (2) Storage: only objects found through the player's sessions and entry image URLs, inside the coach's own folder and not used by another player's entry. (3) The live database was not inspected: other tables referencing `players` that are not in `supabase/migrations` would be missed. (4) Never run against a real Drive or database in tests; everything is mocked.

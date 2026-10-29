@@ -15,6 +15,8 @@ export function usePlayerReports(playerId: string) {
   const [entries, setEntries] = useState<EntryLike[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** The player does not exist (deleted, or not this coach's): a page of its own, not an error. */
+  const [notFound, setNotFound] = useState(false);
 
   const load = useCallback(
     async (opts?: { quiet?: boolean }) => {
@@ -28,11 +30,17 @@ export function usePlayerReports(playerId: string) {
         };
         // A 200 that is not a player (the service worker answers `{error:'Offline'}` with 200
         // when the network is down) must not read as "no reports yet".
+        if (res.status === 404) {
+          setNotFound(true);
+          setError(null);
+          return;
+        }
         if (!res.ok || data.error || !Array.isArray(data.entries)) {
           throw new Error(data.error === 'Offline' ? 'You appear to be offline — reports could not be loaded.' : data.error ?? 'Could not load reports');
         }
         setPlayerName(data.player?.display_name ?? '');
         setEntries(data.entries);
+        setNotFound(false);
         setError(null);
       } catch (e) {
         // A quiet refresh failing must not blank a page the coach is reading.
@@ -62,5 +70,5 @@ export function usePlayerReports(playerId: string) {
 
   const reports: Report[] = useMemo(() => groupEntriesIntoReports(entries), [entries]);
 
-  return { playerName, reports, loading, error, reload: load };
+  return { playerName, reports, loading, error, notFound, reload: load };
 }

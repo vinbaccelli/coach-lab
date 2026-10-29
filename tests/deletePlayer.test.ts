@@ -232,3 +232,13 @@ test('the route: signed-in only, NOT behind the Pro plan, never permanent delete
   // GET and PATCH keep their plan behaviour.
   assert.match(src.slice(src.indexOf('export async function PATCH('), src.indexOf('export async function DELETE(')), /requireFeature/);
 });
+
+test('the Danger zone only exists behind REPORTS_IN_APP, and the confirm control mirrors the server check', () => {
+  const profile = readFileSync('components/players/PlayerProfileClient.tsx', 'utf8');
+  assert.match(profile, /REPORTS_IN_APP \? <DeletePlayerSection/);
+  const ui = readFileSync('components/players/DeletePlayerSection.tsx', 'utf8');
+  assert.match(ui, /namesMatch\(typed, playerName\)/);
+  assert.match(ui, /disabled=\{!matches \|\| busy\}/);
+  assert.match(ui, /inFlight\.current/);
+  assert.match(ui, /Deleting…/);
+});

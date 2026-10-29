@@ -15,6 +15,21 @@ import StickyBack from '@/components/reports/StickyBack';
  * 'reports' → Players / name / Reports; 'report' → the same, with Reports as the
  * link back to the list (the report's own title is the page heading).
  */
+/** Shown instead of a report page when the player no longer exists. */
+export function PlayerNotFound() {
+  return (
+    <div style={{ padding: '32px 0', maxWidth: 720, margin: '0 auto' }}>
+      <h1 style={{ margin: '0 0 8px', fontSize: 24, fontWeight: 700 }}>Player not found</h1>
+      <p style={{ margin: '0 0 16px', fontSize: 14, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>
+        This player no longer exists, or isn’t in your list. Their reports are gone with them.
+      </p>
+      <Link href="/players" style={{ display: 'inline-flex', alignItems: 'center', minHeight: 44, padding: '0 16px', borderRadius: 12, background: 'var(--cl-action-primary)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 14, textDecoration: 'none' }}>
+        Back to Players
+      </Link>
+    </div>
+  );
+}
+
 export default function PlayerNav({
   playerId,
   playerName,

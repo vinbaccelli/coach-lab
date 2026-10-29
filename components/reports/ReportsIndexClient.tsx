@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import { Camera, Play } from 'lucide-react';
 import { filterReports, groupByMonth, type Report, type ReportKind } from '@/lib/reports/deriveBlocks';
 import { usePlayerReports } from '@/components/reports/usePlayerReports';
-import PlayerNav from '@/components/reports/PlayerNav';
+import PlayerNav, { PlayerNotFound } from '@/components/reports/PlayerNav';
 import { chipStyle, FOCUS_CSS, formatDateKey, KIND_CHIP, measure, mutedText, wrap } from '@/components/reports/reportStyles';
 
 const FILTERS: Array<{ key: ReportKind | 'all'; label: string }> = [
@@ -26,12 +26,13 @@ export function reportTitle(r: Report): string {
 }
 
 export default function ReportsIndexClient({ playerId }: { playerId: string }) {
-  const { playerName, reports, loading, error, reload } = usePlayerReports(playerId);
+  const { playerName, reports, loading, error, notFound, reload } = usePlayerReports(playerId);
   const [kind, setKind] = useState<ReportKind | 'all'>('all');
   const [query, setQuery] = useState('');
 
   const months = useMemo(() => groupByMonth(filterReports(reports, kind, query)), [reports, kind, query]);
   const filtering = kind !== 'all' || query.trim() !== '';
+  if (notFound) return <PlayerNotFound />;
 
   return (
     <div className="rpt" style={wrap}>
