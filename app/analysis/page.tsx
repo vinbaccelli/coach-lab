@@ -22,6 +22,7 @@ import {
 import { ERASER_SIZE_DEFAULT } from '@/lib/eraser';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
+import { playWithSound, routeFor } from '@/lib/videoSound';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
 import { useRecording, RECORDING_AUDIO_CONSTRAINTS, FLOATING_CAMERA_WINDOW } from '@/contexts/RecordingContext';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
@@ -4171,11 +4172,14 @@ function Home() {
         // Same rule as the timeline's Play: after the end, start from the start.
         else if (shouldRestartFromStart({ ended: v.ended, currentTime: v.currentTime, duration: v.duration })) v.currentTime = 0;
       } catch { /* noop */ }
-      v.muted = true;
-      await v.play();
+      // Same sound behavior as the timeline's play button: the coach's state, applied in this tap.
+      if (target === 'A') {
+        if (!(await playWithSound(v, routeFor(v)))) throw new Error('play() was refused');
+      } else {
+        v.muted = true;
+        await v.play();
+      }
       if (v.paused) throw new Error('Video remained paused after play()');
-      // Unmute after autoplay succeeds — user interaction has happened
-      v.muted = false;
       setShowTapToPlay(false);
       await canvas?.waitForRender?.();
       return true;
@@ -6746,6 +6750,7 @@ function Home() {
                 beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
                 beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
                 onPlayBlocked={handlePlayBlocked}
+                sound
                 trimRange={analysisTimelineExtras.trimRange}
 onTrimChange={analysisTimelineExtras.onTrimChange}
                 trimAccent={analysisTimelineExtras.trimAccent}
@@ -6782,6 +6787,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             beforePlay={playBothEnabled ? syncCompanionBeforePlay : undefined}
             beforePause={playBothEnabled ? syncCompanionBeforePause : undefined}
             onPlayBlocked={handlePlayBlocked}
+                sound
             trimRange={analysisTimelineExtras.trimRange}
 onTrimChange={analysisTimelineExtras.onTrimChange}
             trimAccent={analysisTimelineExtras.trimAccent}

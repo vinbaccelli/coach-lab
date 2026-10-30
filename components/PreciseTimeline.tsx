@@ -3,6 +3,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nearestYoutubePlaybackRate } from '@/lib/videoController';
 import { reportSeekResult, shouldRestartFromStart } from '@/lib/seekWait';
+import { playWithSound, routeFor } from '@/lib/videoSound';
+import { SoundControls, useSharedSound } from '@/components/SoundControls';
 import {
   TRACK_INSET_PX, beginTrimDrag, centerViewOn, dragTrimTo, fitView, followPlayhead, nextFollow, panView, pinchView,
   resolveView, rulerTicks, secondsPerPx, shouldAutoFit, timeAtClientX, zoomAt, zoomView,
@@ -156,6 +158,7 @@ export default function PreciseTimeline({
   onSampleMarkerChange,
   sampleMarkerBounds = null,
   defaultZoomToTrim = false,
+  sound,
 }: {
   source: Source;
   defaultFps?: number;
@@ -188,6 +191,11 @@ export default function PreciseTimeline({
   sampleMarkerBounds?: { start: number; end: number } | null;
   /** When true, zoom the scrub bar to the trim range (with padding) on load */
   defaultZoomToTrim?: boolean;
+  /**
+   * The main video's sound controls (mute + volume; play unmutes on the tap). Omitted for the
+   * hidden slot-B decoder, which stays muted. Always usable: recording does not disable it.
+   */
+  sound?: true;
 }) {
   const STORAGE_MODE_KEY = 'anglemotion.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'anglemotion.timeline.customFps';
@@ -780,6 +788,12 @@ export default function PreciseTimeline({
     return () => v.removeEventListener('ratechange', onRate);
   }, [source]);
 
+  // ── Sound (main video only): the shared, always-usable state (components/SoundControls.tsx) ──
+  const hasSound = !!sound && source.kind === 'html';
+  // The ref object is stable across renders (the `source` object is not).
+  const soundVideoRef = source.kind === 'html' ? source.videoRef : null;
+  const soundCtl = useSharedSound(hasSound ? soundVideoRef : null);
+
   const togglePlay = useCallback(() => {
     if (source.kind === 'html') {
       const v = source.videoRef.current;
@@ -791,7 +805,14 @@ export default function PreciseTimeline({
         if (shouldRestartFromStart({ ended: v.ended, currentTime: v.currentTime, duration: v.duration })) {
           try { v.currentTime = 0; } catch { /* noop */ }
         }
+        // The play TAP is what lets the video play with sound (iOS): the coach's state is applied here, in the gesture.
         void (async () => {
+          if (hasSound) {
+            const ok = await playWithSound(v, routeFor(v));
+            if (ok) setIsPlaying(true);
+            else { setIsPlaying(false); onPlayBlocked?.(); }
+            return;
+          }
           try {
             await v.play();
             setIsPlaying(true);
@@ -827,7 +848,7 @@ export default function PreciseTimeline({
     } catch {
       /* YT player may be mid-destroy during embed → file swap */
     }
-  }, [beforePause, beforePlay, isPlaying, onPlayBlocked, source]);
+  }, [beforePause, beforePlay, hasSound, isPlaying, onPlayBlocked, source]);
 
   const stepFrame = useCallback((dir: 1 | -1, mult = 1) => {
     noteFollow('seek');
@@ -1749,6 +1770,10 @@ export default function PreciseTimeline({
         </button>
         <button onClick={() => stepFrame(-1)} style={btnStyle} title={`Back 1 frame (←) @ ${selectedFps}fps`}>◀</button>
         <button data-tour-id="tour-step-fwd" onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
+
+        {hasSound ? (
+          <SoundControls sound={soundCtl} testIdPrefix="timeline" accent={accent} sliderWidth={phoneChrome || overlay ? 84 : 96} buttonStyle={btnStyle} />
+        ) : null}
 
         <div style={{ minWidth: 130, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
           <div style={{ lineHeight: 1.1 }}>{formatTime(displayT)}</div>
