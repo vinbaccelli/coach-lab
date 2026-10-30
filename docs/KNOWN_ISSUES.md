@@ -2332,3 +2332,17 @@ column are still never exported.
 **Added:** 2026-10-29 (PR #111). Feature note. `DELETE /api/players/[id]` + "Danger zone" on the profile (only with `REPORTS_IN_APP`). Not plan-gated. The coach types the player's name (checked again on the server); order: lookup through the session (RLS) → name check → read Drive ids and Storage paths → delete rows (`player_entries`, `player_sessions` cascade; stop on failure) → Drive trash (never permanent) → Storage removal → one result.
 
 **Not guaranteed.** (1) Drive: the folder in `players.google_folder_id` and the two Docs are moved to the trash individually, but a folder created under an OLD player name (after a rename), screenshots uploaded to the shared `AngleMotion/Screenshots` or the Drive root (when the player folder could not be made), and anything the `drive.file` scope cannot see are not covered; a refusal is reported with the folder path to delete by hand. (2) Storage: only objects found through the player's sessions and entry image URLs, inside the coach's own folder and not used by another player's entry. (3) The live database was not inspected: other tables referencing `players` that are not in `supabase/migrations` would be missed. (4) Never run against a real Drive or database in tests; everything is mocked.
+
+---
+
+## 075 — Arrow line showed through/past the head; swing path stayed on for the whole video
+
+**Found:** 2026-10-30 (coach report). Numbered 075 because 074 is used by PR #113.
+
+**Arrows (fixed).** Arrows are drawn by `drawStroke` in `components/Canvas.tsx`, on the screen and in the generated video (`drawExportOverlay` calls the same `drawStroke`). The line ran to the tip with a round cap, so it showed past the tip (half the line width) and through a translucent head. The head was 14 px whatever the width, so at 12 px it was barely wider than the line. Now the line stops at the head's base, the head's area is clipped out of the line, and the head is `max(14, 2 × width)` long (the 14 px head is unchanged up to 7 px). The swing path's "arrow at end" uses the same geometry with its own size, `max(12, 3 × width)`, which is unchanged (`lib/drawingTools.ts` `arrowHeadGeometry`). The skeleton's own arrows (shoulder/hip/head/foot/racket) are a different function and were not changed.
+
+**Swing path timing (fixed for V1).** Before this change no drawing had a time: strokes were `{tool, pts, color, …}` with screen points only, and the only time link was a snapshot owning its own strokes. Each swing-path click now records the main video's `currentTime` (`times`, parallel to `pts`). A finished path is drawn only between its earliest and latest click time, inclusive, with 1 ms tolerance (`swingPathVisibleAt`). This applies on screen, in the generated video (export media time; a snapshot hold uses the hold's own time, `h.at`), and when tapping to select. A path being drawn is always shown.
+
+**Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
+
+**Severity.** Medium (visual).

@@ -184,3 +184,77 @@ export function downloadDataURL(dataUrl: string, filename: string): void {
   a.download = filename;
   a.click();
 }
+
+// ── Arrowheads (Canvas: Arrow / Arrow+angle tools, swing path "arrow at end") ──
+
+/** Half the angle at an arrowhead's tip. */
+export const ARROW_HEAD_HALF_ANGLE = Math.PI / 7;
+
+/** Head length for a line width: `min`, or `perWidth` × the width once that is larger. */
+export function arrowHeadLength(lineWidth: number, min: number, perWidth: number): number {
+  return Math.max(min, (Number.isFinite(lineWidth) ? lineWidth : 0) * perWidth);
+}
+
+export type ArrowHeadGeometry = {
+  tip: { x: number; y: number };
+  left: { x: number; y: number };
+  right: { x: number; y: number };
+  /** Middle of the head's back edge. */
+  base: { x: number; y: number };
+  /** Where the line must stop: the head's base, or null when the line is not longer than the head. */
+  shaftEnd: { x: number; y: number } | null;
+};
+
+/**
+ * The head of an arrow pointing from `from` to `tip`, `length` long, and where its line
+ * must end (the base) so the line never shows through or past the head. Null when the
+ * two points coincide (no direction).
+ */
+export function arrowHeadGeometry(
+  from: { x: number; y: number },
+  tip: { x: number; y: number },
+  length: number,
+): ArrowHeadGeometry | null {
+  const dx = tip.x - from.x;
+  const dy = tip.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (!(len > 0) || !(length > 0)) return null;
+  const a = Math.atan2(dy, dx);
+  const h = ARROW_HEAD_HALF_ANGLE;
+  const back = length * Math.cos(h);
+  const ux = dx / len;
+  const uy = dy / len;
+  const base = { x: tip.x - ux * back, y: tip.y - uy * back };
+  return {
+    tip: { x: tip.x, y: tip.y },
+    left: { x: tip.x - length * Math.cos(a - h), y: tip.y - length * Math.sin(a - h) },
+    right: { x: tip.x - length * Math.cos(a + h), y: tip.y - length * Math.sin(a + h) },
+    base,
+    shaftEnd: len > back ? base : null,
+  };
+}
+
+// ── Swing path timing ────────────────────────────────────────────────────────
+
+/** Tolerance (s) at both ends of a swing path's time range (the same 1 ms the snapshot holds use). */
+export const SWING_TIME_EPS = 0.001;
+
+/**
+ * Is a finished swing path drawn at video time `t`? From its earliest to its latest
+ * click time (inclusive). A path without click times (drawn before times were stored,
+ * or on a source with no video clock) is always drawn, as before; so is every path when
+ * no time is known for the frame.
+ */
+export function swingPathVisibleAt(times: readonly number[] | undefined, t: number | undefined): boolean {
+  if (t === undefined || !Number.isFinite(t)) return true;
+  if (!times || times.length === 0) return true;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const x of times) {
+    if (!Number.isFinite(x)) continue;
+    if (x < lo) lo = x;
+    if (x > hi) hi = x;
+  }
+  if (lo === Infinity) return true;
+  return t >= lo - SWING_TIME_EPS && t <= hi + SWING_TIME_EPS;
+}
