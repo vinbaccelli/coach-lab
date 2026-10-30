@@ -897,3 +897,12 @@ as empty.
 and a call whose outcome is logged but never acted on. A fallback must not
 depend on what failed; "called play()" is not "it plays", so check the effect
 (time moves) and act on its absence.
+
+---
+
+## Stuck main video (KNOWN_ISSUES 074)
+
+- **Symptom:** ~1 load in 10 on iPhone: "playing" at t=0.000, seeks end at 0.000, no replay after the end; refresh fixes it.
+- **Verified:** the state is the element's own (`paused`/`currentTime` read directly), and no app code resets slot A's time. Root cause not proven without the device.
+- **Fix:** detect (frozen clock while playing; seek that did not land), trace the state that tells the candidate causes apart, recover by reloading the same blob, and make Play after the end start from 0.
+- **Class of mistake:** a workaround that drives the media element (prime/nudge) can leave it in a state the app never notices. Anything that pokes the element needs a watchdog that notices the element stopped obeying.

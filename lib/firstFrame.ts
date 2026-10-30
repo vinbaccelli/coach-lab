@@ -116,6 +116,18 @@ export function videoStateText(v: HTMLVideoElement): string {
     + `${v.paused ? 'paused' : 'playing'} src=${srcKind(v.getAttribute('src') || v.currentSrc)} muted=${v.muted}${err}`;
 }
 
+/** The extra state a stuck video is told apart by (lib/seekWait.ts): seeking, duration, seekable/buffered ranges, rate, ended, strategy. */
+export function videoDetailText(v: HTMLVideoElement): string {
+  const ranges = (r: TimeRanges) => {
+    const out: string[] = [];
+    try { for (let i = 0; i < r.length; i++) out.push(`${r.start(i).toFixed(2)}-${r.end(i).toFixed(2)}`); } catch { /* noop */ }
+    return out.length ? out.join(',') : 'none';
+  };
+  const st = states.get(v);
+  return `seeking=${v.seeking} ended=${v.ended} dur=${Number.isFinite(v.duration) ? v.duration.toFixed(3) : String(v.duration)} `
+    + `rate=${v.playbackRate} seekable=${ranges(v.seekable)} buffered=${ranges(v.buffered)} strategy=${st ? st.last : 'none'}`;
+}
+
 // ── S4: swallow the media events of the prime's own play/pause ──────────────
 
 /** Media events a play() → pause() can fire. */
