@@ -2,10 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nearestYoutubePlaybackRate } from '@/lib/videoController';
-import { Volume1, Volume2, VolumeX } from 'lucide-react';
-import {
-  applySound, DEFAULT_SOUND, ensureGain, isSameOriginMedia, volumeIsWritable, volumeRoute, type SoundState, type VolumeRoute,
-} from '@/lib/videoSound';
+import { playWithSound, routeFor } from '@/lib/videoSound';
+import { SoundControls, useSharedSound } from '@/components/SoundControls';
 import {
   TRACK_INSET_PX, beginTrimDrag, centerViewOn, dragTrimTo, fitView, followPlayhead, nextFollow, panView, pinchView,
   resolveView, rulerTicks, secondsPerPx, shouldAutoFit, timeAtClientX, zoomAt, zoomView,
@@ -194,9 +192,9 @@ export default function PreciseTimeline({
   defaultZoomToTrim?: boolean;
   /**
    * The main video's sound controls (mute + volume; play unmutes on the tap). Omitted for the
-   * hidden slot-B decoder, which stays muted. `forceMute`: recording is running, keep it silent.
+   * hidden slot-B decoder, which stays muted. Always usable: recording does not disable it.
    */
-  sound?: { forceMute: boolean };
+  sound?: true;
 }) {
   const STORAGE_MODE_KEY = 'anglemotion.timeline.fpsMode';
   const STORAGE_CUSTOM_KEY = 'anglemotion.timeline.customFps';
@@ -782,68 +780,11 @@ export default function PreciseTimeline({
     return () => v.removeEventListener('ratechange', onRate);
   }, [source]);
 
-  // ── Sound (main video only) ──────────────────────────────────────────────
+  // ── Sound (main video only): the shared, always-usable state (components/SoundControls.tsx) ──
   const hasSound = !!sound && source.kind === 'html';
-  // The ref object is stable across renders (the `source` object is not): effects key on it,
-  // so the sound setup never re-runs on the frequent time-update renders.
+  // The ref object is stable across renders (the `source` object is not).
   const soundVideoRef = source.kind === 'html' ? source.videoRef : null;
-  const forceMute = !!sound?.forceMute;
-  const [soundState, setSoundState] = useState<SoundState>(DEFAULT_SOUND);
-  const [volumeRouteState, setVolumeRouteState] = useState<VolumeRoute>('none');
-  const soundRef = useRef(soundState);
-  soundRef.current = soundState;
-  const forceMuteRef = useRef(forceMute);
-  forceMuteRef.current = forceMute;
-  const routeRef = useRef(volumeRouteState);
-  routeRef.current = volumeRouteState;
-
-  // How the slider can change loudness on this device and this source.
-  useEffect(() => {
-    if (!hasSound || !soundVideoRef) return;
-    const v = soundVideoRef.current;
-    if (!v) return;
-    const compute = () => {
-      const w = window as unknown as { AudioContext?: unknown; webkitAudioContext?: unknown };
-      setVolumeRouteState(volumeRoute({
-        volumeWritable: volumeIsWritable(v),
-        webAudio: !!(w.AudioContext ?? w.webkitAudioContext),
-        sameOrigin: isSameOriginMedia(v.currentSrc || v.src, window.location.origin),
-      }));
-    };
-    compute();
-    v.addEventListener('loadedmetadata', compute);
-    return () => v.removeEventListener('loadedmetadata', compute);
-  }, [hasSound, soundVideoRef]);
-
-  // Recording starts: silence the video at once (as before: the speaker must not reach the
-  // microphone). When it ends nothing is unmuted until the coach's next tap.
-  useEffect(() => {
-    if (!hasSound || !forceMute || !soundVideoRef) return;
-    const v = soundVideoRef.current;
-    if (v) applySound(v, soundRef.current, true, routeRef.current);
-  }, [hasSound, forceMute, soundVideoRef]);
-
-  const toggleMute = useCallback(() => {
-    if (!hasSound || !soundVideoRef) return;
-    const v = soundVideoRef.current;
-    if (!v) return;
-    const cur = soundRef.current;
-    const unmuting = cur.muted || cur.volume === 0;
-    const next: SoundState = unmuting ? { muted: false, volume: cur.volume === 0 ? 1 : cur.volume } : { ...cur, muted: true };
-    setSoundState(next);
-    applySound(v, next, forceMuteRef.current, routeRef.current);
-  }, [hasSound, soundVideoRef]);
-
-  const changeVolume = useCallback((vol: number) => {
-    if (!hasSound || !soundVideoRef) return;
-    const v = soundVideoRef.current;
-    if (!v) return;
-    const next: SoundState = { muted: false, volume: vol };
-    // iPhone: the gain route is built on the first move below full volume, inside this gesture.
-    if (routeRef.current === 'webaudio' && vol < 1) ensureGain(v);
-    setSoundState(next);
-    applySound(v, next, forceMuteRef.current, routeRef.current);
-  }, [hasSound, soundVideoRef]);
+  const soundCtl = useSharedSound(hasSound ? soundVideoRef : null);
 
   const togglePlay = useCallback(() => {
     if (source.kind === 'html') {
@@ -851,9 +792,14 @@ export default function PreciseTimeline({
       if (!v) return;
       if (v.paused) {
         beforePlay?.();
-        // The play TAP is what lets the video play with sound (iOS): unmute it here, in the gesture.
-        if (hasSound) applySound(v, soundRef.current, forceMuteRef.current, routeRef.current);
+        // The play TAP is what lets the video play with sound (iOS): the coach's state is applied here, in the gesture.
         void (async () => {
+          if (hasSound) {
+            const ok = await playWithSound(v, routeFor(v));
+            if (ok) setIsPlaying(true);
+            else { setIsPlaying(false); onPlayBlocked?.(); }
+            return;
+          }
           try {
             await v.play();
             setIsPlaying(true);
@@ -862,8 +808,6 @@ export default function PreciseTimeline({
               v.muted = true;
               await v.play();
               setIsPlaying(true);
-              // Played, but only silently: show it as muted so the button tells the truth.
-              if (hasSound) setSoundState((s) => ({ ...s, muted: true }));
             } catch {
               setIsPlaying(false);
               onPlayBlocked?.();
@@ -1814,41 +1758,9 @@ export default function PreciseTimeline({
         <button onClick={() => stepFrame(-1)} style={btnStyle} title={`Back 1 frame (←) @ ${selectedFps}fps`}>◀</button>
         <button data-tour-id="tour-step-fwd" onClick={() => stepFrame(1)} style={btnStyle} title={`Forward 1 frame (→) @ ${selectedFps}fps`}>▶</button>
 
-        {hasSound ? (() => {
-          const silent = forceMute || soundState.muted || soundState.volume === 0;
-          const Icon = silent ? VolumeX : soundState.volume < 0.5 ? Volume1 : Volume2;
-          return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-              <button
-                type="button"
-                data-testid="timeline-mute"
-                onClick={toggleMute}
-                disabled={forceMute}
-                aria-pressed={silent}
-                aria-label={forceMute ? 'Sound off while recording' : silent ? 'Unmute' : 'Mute'}
-                title={forceMute ? 'Sound is off while recording' : silent ? 'Unmute' : 'Mute'}
-                style={{ ...btnStyle, opacity: forceMute ? 0.5 : 1, cursor: forceMute ? 'default' : 'pointer' }}
-              >
-                <Icon size={18} aria-hidden />
-              </button>
-              {volumeRouteState !== 'none' ? (
-                <input
-                  type="range"
-                  data-testid="timeline-volume"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={silent && !forceMute ? 0 : soundState.volume}
-                  disabled={forceMute}
-                  onChange={(e) => changeVolume(Number(e.target.value))}
-                  aria-label="Volume"
-                  title="Volume"
-                  style={{ width: phoneChrome || overlay ? 84 : 96, accentColor: accent, cursor: forceMute ? 'default' : 'pointer' }}
-                />
-              ) : null}
-            </div>
-          );
-        })() : null}
+        {hasSound ? (
+          <SoundControls sound={soundCtl} testIdPrefix="timeline" accent={accent} sliderWidth={phoneChrome || overlay ? 84 : 96} buttonStyle={btnStyle} />
+        ) : null}
 
         <div style={{ minWidth: 130, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, opacity: 0.95 }}>
           <div style={{ lineHeight: 1.1 }}>{formatTime(displayT)}</div>

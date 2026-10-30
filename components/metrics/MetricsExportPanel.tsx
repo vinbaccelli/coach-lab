@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import TrimRangeBar, { formatClock } from '@/components/TrimRangeBar';
+import { SoundControls, useSharedSound } from '@/components/SoundControls';
 import { exportEditedVideo, probeSourceAudio } from '@/lib/cropExport';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { firstFrameLog } from '@/lib/firstFrame';
@@ -187,6 +188,7 @@ export default function MetricsExportPanel({
 
   const blockedReason = exportBlockedReason ?? (videoSrc ? null : 'Load a video first.');
   const busy = phase === 'analyzing' || phase === 'reading' || phase === 'exporting';
+  const panelSound = useSharedSound(busy ? null : previewRef, videoSrc);
 
   // Open: pause the analysis video (no seek, nothing else). Pausing here, not
   // at export start, keeps the one pose detection a pause triggers out of the
@@ -974,7 +976,6 @@ export default function MetricsExportPanel({
             <video
               ref={previewRef}
               src={videoSrc ?? undefined}
-              muted
               playsInline
               controls={!busy}
               preload="metadata"
@@ -985,6 +986,14 @@ export default function MetricsExportPanel({
                 borderRadius: 10, objectFit: 'contain', display: 'block',
               }}
             />
+
+            {/* The timeline sits under this panel's scrim, so the panel carries its own sound control:
+                the same shared state (mute + volume), usable at any time. While the export pass runs its
+                own muted playback the choice is kept and applied right after. */}
+            <div data-testid="export-sound-controls" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <SoundControls sound={panelSound} testIdPrefix="export-preview" buttonStyle={{ ...btn(false), minWidth: 44, padding: '8px 12px' }} />
+              <span style={muted}>Preview sound</span>
+            </div>
 
             <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
