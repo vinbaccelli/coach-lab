@@ -2348,6 +2348,9 @@ column are still never exported.
 **Not verified.** That a reload cures the wedge on the iPhone (it is what the refresh does); whether iOS shows a frame after the reload before Play (a 0.001 seek is used, as S1).
 
 **Severity.** High (the coach has to refresh the page).
+
+---
+
 ## 075 — Arrow line showed through/past the head; swing path stayed on for the whole video
 
 **Found:** 2026-10-30 (coach report). Numbered 075 because 074 is used by PR #113.
