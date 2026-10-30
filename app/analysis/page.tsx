@@ -54,7 +54,8 @@ const GenerateWorkspace = React.lazy(() => import('@/components/metrics/Generate
 // Static (not lazy): Generate must open with no chunk fetch on the click.
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
-import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoStateText } from '@/lib/firstFrame';
+import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoDetailText, videoStateText } from '@/lib/firstFrame';
+import { recoveryPlan, reloadSameSource, shouldRestartFromStart, watchStuckPlayback } from '@/lib/seekWait';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
 import { selectedSection, type TrackScope } from '@/lib/aiTrackScope';
 import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
@@ -4168,6 +4169,8 @@ function Home() {
       }
       try {
         if (v.readyState >= 2 && v.currentTime === 0) v.currentTime = 0.001;
+        // Same rule as the timeline's Play: after the end, start from the start.
+        else if (shouldRestartFromStart({ ended: v.ended, currentTime: v.currentTime, duration: v.duration })) v.currentTime = 0;
       } catch { /* noop */ }
       // Same sound behavior as the timeline's play button: the coach's state, applied in this tap.
       if (target === 'A') {
@@ -4515,6 +4518,43 @@ function Home() {
       video.removeEventListener('error', onError);
     };
   }, [requestCanvasPaintAfterVideoLoad, videoSrc, youtubeVideoIdA, genericEmbedSrcA, vdebug]);
+
+  // ── Stuck video (lib/seekWait.ts, KNOWN_ISSUES 074) ─────────────────────────
+  // Playing with the time not advancing, or a coach's seek that ends in the wrong place:
+  // traced, then the same blob is loaded again (the refresh, without the refresh). Never
+  // while recording or an analysis/replay owns the video; a healthy video never triggers it.
+  const stuckRecoveryAllowedRef = useRef(false);
+  stuckRecoveryAllowedRef.current = !isRecording && precisionTrackState !== 'running' && !stroMotionProcessing
+    && !generateRecording && !replayActive && !metricsExportOpen;
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoSrc || youtubeVideoIdA || genericEmbedSrcA) return;
+    const recoveries: number[] = [];
+    let reloading = false;
+    const STUCK_MESSAGE = 'The video is stuck and could not be reset. Load the clip again to continue.';
+    const stop = watchStuckPlayback(video, {
+      onStuck: (reason, resumeAt, detail) => {
+        firstFrameLog('A', `stuck: ${reason} (${detail}) | ${videoStateText(video)} | ${videoDetailText(video)}`);
+        if (reloading) return;
+        const now = performance.now();
+        const plan = recoveryPlan({ allowed: stuckRecoveryAllowedRef.current, recentRecoveries: recoveries, now });
+        firstFrameLog('A', `stuck: ${plan === 'none' ? 'no reset (recording or analysis running)' : plan === 'message' ? 'too many resets: message shown' : `reset, back to ${resumeAt.toFixed(3)}`}`);
+        if (plan === 'none') return;
+        if (plan === 'message') { setProcessingStatus(STUCK_MESSAGE); return; }
+        reloading = true;
+        recoveries.push(now);
+        void reloadSameSource(video, resumeAt).then((ok) => {
+          reloading = false;
+          firstFrameLog('A', `stuck: reset ${ok ? 'done' : 'failed'} | ${videoStateText(video)}`);
+          if (!ok) { setProcessingStatus(STUCK_MESSAGE); return; }
+          requestCanvasPaintAfterVideoLoad('A');
+          void canvasRef.current?.waitForRender?.();
+          setProcessingStatus('Video reset. Ready to play.');
+        });
+      },
+    });
+    return stop;
+  }, [requestCanvasPaintAfterVideoLoad, videoSrc, youtubeVideoIdA, genericEmbedSrcA]);
 
   useEffect(() => {
     const video = videoRefB.current;

@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nearestYoutubePlaybackRate } from '@/lib/videoController';
+import { reportSeekResult, shouldRestartFromStart } from '@/lib/seekWait';
 import { playWithSound, routeFor } from '@/lib/videoSound';
 import { SoundControls, useSharedSound } from '@/components/SoundControls';
 import {
@@ -461,9 +462,11 @@ export default function PreciseTimeline({
     v.pause();
     applyTimeUi(nextClamped);
     if (Math.abs(v.currentTime - nextClamped) > 0.00001 || v.seeking) {
+      const before = v.currentTime;
       v.currentTime = nextClamped;
       const actual = await waitForSeekPresented(v);
       if (Math.abs(actual - nextClamped) > 0.001) applyTimeUi(actual);
+      reportSeekResult(v, before, nextClamped, actual);
     }
     return nextClamped;
   }, [applyTimeUi, source]);
@@ -473,10 +476,12 @@ export default function PreciseTimeline({
     const nextClamped = clamp(next, 0, dur || next);
     const v = source.kind === 'html' ? source.videoRef.current : null;
     if (!v) return nextClamped;
+    const before = v.currentTime;
     v.currentTime = nextClamped;
     if (!updateUi) return nextClamped;
     const actual = await waitForFrameReady(v, nextClamped);
     applyTimeUi(actual);
+    reportSeekResult(v, before, nextClamped, v.currentTime);
     return actual;
   }, [applyTimeUi, source]);
 
@@ -531,9 +536,12 @@ export default function PreciseTimeline({
       if (v) {
         v.pause();
         applyTimeUi(pending);
+        // The scrub's own rAF seeks already moved the element: the start of the drag is not known here,
+        // so only the far-from-asked check applies (before = asked).
         v.currentTime = pending;
         const actual = await waitForSeekPresented(v);
         if (Math.abs(actual - pending) > 0.001) applyTimeUi(actual);
+        reportSeekResult(v, pending, pending, actual);
       }
     } else {
       const p = source.playerRef.current;
@@ -792,6 +800,11 @@ export default function PreciseTimeline({
       if (!v) return;
       if (v.paused) {
         beforePlay?.();
+        // Play after the end starts from the start (lib/seekWait.ts), also when iOS parks the
+        // playhead at the last frame without setting `ended`.
+        if (shouldRestartFromStart({ ended: v.ended, currentTime: v.currentTime, duration: v.duration })) {
+          try { v.currentTime = 0; } catch { /* noop */ }
+        }
         // The play TAP is what lets the video play with sound (iOS): the coach's state is applied here, in the gesture.
         void (async () => {
           if (hasSound) {
