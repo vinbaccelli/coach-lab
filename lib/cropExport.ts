@@ -24,7 +24,10 @@ import { scaledExportSize } from '@/lib/exportEstimate';
 import {
   emptyExportError, holdResumeSeek, holdSeekLanded, NO_FRAME_GIVE_UP_MS, outputProgress, resumeAction, RESUME_FAILED_TEXT, runOverlay, type OverlayFn,
 } from '@/lib/exportOverlay';
-import { rateCandidates, rateWorked, RATE_PROBE_MS } from '@/lib/exportSpeed';
+import {
+  audioTracksInMoov, countAudioTracksInContainer, looksLikeMp4, mp4BoxHeader, rateCandidates, rateWorked, RATE_PROBE_MS,
+  sourceAudioFromProbe, sourceAudioVerdict, webmAudioFromHead, type ContainerAudio, type SourceAudio,
+} from '@/lib/exportSpeed';
 
 export type ExportRegion = { x: number; y: number; w: number; h: number };
 /** In/out points in seconds on the SOURCE timeline. */
@@ -83,14 +86,14 @@ export interface EditExportOptions {
    * the result says which was used.
    */
   playbackRate?: number;
-  /** false: no sound track at all (slow motion would distort it). Default true. */
+  /** false: no sound track at all. Default true. Kept at every speed (slow motion plays the sound slowed, pitch not corrected). */
   includeAudio?: boolean;
   /** Diagnostic lines (render start, each hold's seek / end / play() result, media time once a second). */
   onDiag?: (msg: string) => void;
 }
 
 export type EditExportResult =
-  | { ok: true; blob: Blob; ext: string; /** The playbackRate actually used (differs from the asked one after a fallback). */ rate?: number }
+  | { ok: true; blob: Blob; ext: string; /** The playbackRate actually used (differs from the asked one after a fallback). */ rate?: number; /** Sound was asked for: did an audio track reach the recorder? (false: the file is silent). */ audioCaptured?: boolean }
   | { ok: false; error: string; cancelled?: true };
 
 const CANCELLED: EditExportResult = { ok: false, error: 'Export cancelled.', cancelled: true };
@@ -148,6 +151,14 @@ export async function exportEditedVideo(
   video.src = url;
   video.playsInline = true;
   video.muted = true; // muted so autoplay/play() is allowed; audio is taken from the stream
+  // Slowed sound plays slowed AND lower: pitch correction is off for the exported audio. (Set
+  // before any play(); the vendor names cover older Safari / Firefox.)
+  if (includeAudio) {
+    const pv = video as HTMLVideoElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean; mozPreservesPitch?: boolean };
+    pv.preservesPitch = false;
+    pv.webkitPreservesPitch = false;
+    pv.mozPreservesPitch = false;
+  }
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -271,15 +282,29 @@ export async function exportEditedVideo(
     const canvasStream = (canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(30);
     const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
 
-    // Carry the recording's audio (mic/webcam) through, if any (not when the
-    // caller turned sound off, as the Metrics export does in slow motion).
+    // Carry the recording's audio (mic/webcam) through, if any (not when the caller turned
+    // sound off). The speed does not matter: the element plays at `rate` and its captured
+    // audio follows it.
+    //
+    // DIAGNOSTIC (?vdebug=1 trace): what the source offers, what reached the recorder, what the
+    // finished file holds. Answers "why is there no sound" without a phone-side guess.
+    let audioInRecorder = 0;
+    const audioDiag: string[] = [];
     if (includeAudio) try {
       const vAny = video as HTMLVideoElement & {
         captureStream?: () => MediaStream;
         mozCaptureStream?: () => MediaStream;
+        audioTracks?: { length: number };
+        mozHasAudio?: boolean;
       };
+      const captureFn = vAny.captureStream ?? vAny.mozCaptureStream;
       const srcStream = vAny.captureStream?.() ?? vAny.mozCaptureStream?.();
       const srcAudio = srcStream?.getAudioTracks() ?? [];
+      audioDiag.push(
+        `source: captureStream ${captureFn ? 'yes' : 'NO (this browser cannot capture a video element\'s sound)'}, ` +
+        `captured audio tracks ${srcStream ? srcAudio.length : 'n/a'}, video.audioTracks ${vAny.audioTracks ? vAny.audioTracks.length : 'n/a'}, ` +
+        `mozHasAudio ${typeof vAny.mozHasAudio === 'boolean' ? vAny.mozHasAudio : 'n/a'}, element muted ${video.muted}, rate ${rate}, pitch kept ${String((video as HTMLVideoElement & { preservesPitch?: boolean }).preservesPitch)}`,
+      );
       // With holds: a paused element sends no audio at all, and the recorder
       // closes that gap — everything after a hold would play early by the
       // hold's length (measured: −2 s after two 2 s holds). Through Web Audio
@@ -288,9 +313,13 @@ export async function exportEditedVideo(
       const holdAudio = holdList.length && srcAudio.length ? await realTimeAudio(srcAudio, signal) : null;
       if (holdAudio) { audioCtx = holdAudio.ctx; tracks.push(holdAudio.track); }
       else srcAudio.forEach((t) => tracks.push(t));
-    } catch {
+      audioInRecorder = tracks.filter((t) => t.kind === 'audio').length;
+      audioDiag.push(`recorder: ${audioInRecorder} audio track(s) in the recorded stream (${holdAudio ? 'through Web Audio, holds' : 'direct'})`);
+    } catch (e) {
       /* audio optional */
+      audioDiag.push(`audio setup failed: ${e instanceof Error ? e.message : String(e)}`);
     }
+    onDiag?.(includeAudio ? `audio: ${audioDiag.join(' | ')}` : 'audio: not requested (sound switch off)');
 
     const combined = new MediaStream(tracks);
     const mime = pickMime();
@@ -582,7 +611,10 @@ export async function exportEditedVideo(
       result = await webmFixDuration(result, duration, mime || 'video/webm');
     } catch { /* noop */ }
 
-    if (/mp4/i.test(mime)) return { ok: true, blob: result, ext: 'mp4', rate };
+    const audioCaptured = includeAudio ? audioInRecorder > 0 : undefined;
+    const recordedAudio = await containerAudioTracks(result);
+    onDiag?.(`audio: recorded file ${mime || 'webm'} has ${recordedAudio ?? 'an unreadable number of'} audio track(s)`);
+    if (/mp4/i.test(mime)) return { ok: true, blob: result, ext: 'mp4', rate, audioCaptured };
 
     if (signal?.aborted) return CANCELLED;
     onProgress?.('Converting to MP4…');
@@ -591,13 +623,125 @@ export async function exportEditedVideo(
       videoBitsPerSecond !== undefined ? { videoBitsPerSecond } : undefined,
     );
     if (signal?.aborted) return CANCELLED;
-    if (conv.ok) return { ok: true, blob: conv.blob, ext: 'mp4', rate };
+    if (conv.ok) {
+      onDiag?.(`audio: final mp4 has ${(await containerAudioTracks(conv.blob)) ?? 'an unreadable number of'} audio track(s)`);
+      return { ok: true, blob: conv.blob, ext: 'mp4', rate, audioCaptured };
+    }
     return { ok: false, error: 'Could not convert the edited recording to MP4.' };
   } catch (e) {
     closeAudio();
     try { URL.revokeObjectURL(url); } catch { /* noop */ }
     return { ok: false, error: e instanceof Error ? e.message : 'Export failed.' };
   }
+}
+
+/** Audio tracks in a finished file, from its container bytes (start and end read; no decoding). Null if unreadable. */
+async function containerAudioTracks(blob: Blob): Promise<number | null> {
+  try {
+    const CHUNK = 512 * 1024;
+    const head = new Uint8Array(await blob.slice(0, CHUNK).arrayBuffer());
+    const headCount = countAudioTracksInContainer(head);
+    if (headCount === null || blob.size <= CHUNK) return headCount;
+    // A non-fragmented MP4 keeps its track list (moov) at the end.
+    const tail = new Uint8Array(await blob.slice(Math.max(CHUNK, blob.size - CHUNK)).arrayBuffer());
+    const tailBytes = new Uint8Array(head.length + tail.length);
+    tailBytes.set(head, 0);
+    tailBytes.set(tail, head.length);
+    // The two windows are joined: a track box cannot straddle the join in practice (boxes are small).
+    return Math.max(headCount, countAudioTracksInContainer(tailBytes) ?? 0);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The clip's audio tracks, from the FILE: an MP4/MOV's `moov` (found by walking the top-level
+ * boxes, wherever it sits — iPhone camera files often keep it after the media data) or a
+ * WebM's track list. Reads only box headers and the `moov` itself, never the media.
+ */
+export async function readContainerAudio(blob: Blob): Promise<ContainerAudio> {
+  try {
+    const head = new Uint8Array(await blob.slice(0, 2 * 1024 * 1024).arrayBuffer());
+    if (head.length >= 4 && head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) {
+      return webmAudioFromHead(head);
+    }
+    if (!looksLikeMp4(head)) return { kind: 'unknown', audioTracks: null, certain: false, reason: 'container not recognised' };
+    let off = 0;
+    for (let n = 0; n < 200 && off < blob.size; n++) {
+      const hb = off + 16 <= head.length ? head.subarray(off, off + 16) : new Uint8Array(await blob.slice(off, off + 16).arrayBuffer());
+      const h = mp4BoxHeader(hb, 0);
+      if (!h) break;
+      const size = h.size === 0 ? blob.size - off : h.size;
+      if (size < h.header) break;
+      if (h.type === 'moov') {
+        if (size > 64 * 1024 * 1024) return { kind: 'mp4', audioTracks: null, certain: false, reason: 'mp4: moov too large to read' };
+        const moov = new Uint8Array(await blob.slice(off, off + size).arrayBuffer());
+        if (moov.length < size) return { kind: 'mp4', audioTracks: null, certain: false, reason: 'mp4: moov cut short' };
+        const tracks = audioTracksInMoov(moov);
+        return { kind: 'mp4', audioTracks: tracks, certain: true, reason: `mp4/mov: ${tracks} audio track(s) in moov` };
+      }
+      off += size;
+    }
+    return { kind: 'mp4', audioTracks: null, certain: false, reason: 'mp4: no moov found' };
+  } catch (e) {
+    return { kind: 'unknown', audioTracks: null, certain: false, reason: `file not readable (${e instanceof Error ? e.message : 'error'})` };
+  }
+}
+
+/** What a throwaway element says (positives only count — see sourceAudioFromProbe). */
+function probeElementAudio(src: string, timeoutMs: number): Promise<SourceAudio> {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') { resolve('unknown'); return; }
+    const v = document.createElement('video') as HTMLVideoElement & {
+      audioTracks?: { length: number };
+      mozHasAudio?: boolean;
+      captureStream?: () => MediaStream;
+      mozCaptureStream?: () => MediaStream;
+    };
+    let done = false;
+    const finish = (r: SourceAudio) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { v.removeAttribute('src'); v.load(); } catch { /* noop */ }
+      resolve(r);
+    };
+    const timer = setTimeout(() => finish('unknown'), timeoutMs);
+    v.preload = 'metadata';
+    v.muted = true;
+    v.playsInline = true;
+    v.onerror = () => finish('unknown');
+    v.onloadedmetadata = () => {
+      let captureStreamAudio: number | null = null;
+      try {
+        const st = v.captureStream?.() ?? v.mozCaptureStream?.();
+        if (st) captureStreamAudio = st.getAudioTracks().length;
+      } catch { /* noop */ }
+      finish(sourceAudioFromProbe({
+        audioTracks: v.audioTracks ? v.audioTracks.length : null,
+        mozHasAudio: typeof v.mozHasAudio === 'boolean' ? v.mozHasAudio : null,
+        captureStreamAudio,
+      }));
+    };
+    v.src = src;
+  });
+}
+
+/**
+ * Does this clip have sound? The FILE decides (its track list); the browser's element APIs
+ * can only add a "yes". "No sound" is returned only when the track list was read and holds no
+ * audio track; anything else is 'unknown' and the switch is shown. Never throws.
+ */
+export async function probeSourceAudio(src: string, timeoutMs = 4000): Promise<{ audio: SourceAudio; reason: string }> {
+  let container: ContainerAudio | null = null;
+  try {
+    const blob = await (await fetch(src)).blob();
+    container = await readContainerAudio(blob);
+  } catch (e) {
+    container = { kind: 'unknown', audioTracks: null, certain: false, reason: `file not readable (${e instanceof Error ? e.message : 'error'})` };
+  }
+  const element = container.certain ? 'unknown' : await probeElementAudio(src, timeoutMs);
+  return sourceAudioVerdict(container, element);
 }
 
 /**
