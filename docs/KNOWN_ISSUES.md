@@ -2348,3 +2348,17 @@ column are still never exported.
 **Not verified.** That a reload cures the wedge on the iPhone (it is what the refresh does); whether iOS shows a frame after the reload before Play (a 0.001 seek is used, as S1).
 
 **Severity.** High (the coach has to refresh the page).
+
+---
+
+## 075 — Arrow line showed through/past the head; swing path stayed on for the whole video
+
+**Found:** 2026-10-30 (coach report). Numbered 075 because 074 is used by PR #113.
+
+**Arrows (fixed).** Arrows are drawn by `drawStroke` in `components/Canvas.tsx`, on the screen and in the generated video (`drawExportOverlay` calls the same `drawStroke`). The line ran to the tip with a round cap, so it showed past the tip (half the line width) and through a translucent head. The head was 14 px whatever the width, so at 12 px it was barely wider than the line. Now the line stops at the head's base, the head's area is clipped out of the line, and the head is `max(14, 2 × width)` long (the 14 px head is unchanged up to 7 px). The swing path's "arrow at end" uses the same geometry with its own size, `max(12, 3 × width)`, which is unchanged (`lib/drawingTools.ts` `arrowHeadGeometry`). The skeleton's own arrows (shoulder/hip/head/foot/racket) are a different function and were not changed.
+
+**Swing path timing (fixed for V1).** Before this change no drawing had a time: strokes were `{tool, pts, color, …}` with screen points only, and the only time link was a snapshot owning its own strokes. Each swing-path click now records the main video's `currentTime` (`times`, parallel to `pts`). A finished path is drawn only between its earliest and latest click time, inclusive, with 1 ms tolerance (`swingPathVisibleAt`). This applies on screen, in the generated video (export media time; a snapshot hold uses the hold's own time, `h.at`), and when tapping to select. A path being drawn is always shown.
+
+**Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
+
+**Severity.** Medium (visual).

@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
-import { calcAngleDeg, arrowBearingDeg } from '@/lib/drawingTools';
+import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { emitTourSignal, reportTourState } from '@/lib/tourSignals';
 import type { BallPosition } from '@/lib/ballDetection';
@@ -218,7 +218,12 @@ interface StrokeTriangle {
   spinning?: boolean;
   eraserStrokes?: EraserDot[];
 }
-interface StrokeSwing   { tool: 'swingPath' | 'manualSwing';        pts: Pt[]; color: string; lw: number; dashed?: boolean; arrowAtEnd?: boolean; spinning?: boolean }
+interface StrokeSwing   {
+  tool: 'swingPath' | 'manualSwing';
+  pts: Pt[]; color: string; lw: number; dashed?: boolean; arrowAtEnd?: boolean; spinning?: boolean;
+  /** Video time (s) of each click, parallel to `pts`: the path is drawn only between the first and the last (lib/drawingTools.ts swingPathVisibleAt). Absent on paths drawn before times were stored, and on sources with no video clock: always drawn, as before. */
+  times?: number[];
+}
 interface StrokeJointChain {
   tool: 'jointChain';
   nodes: Pt[];
@@ -1083,14 +1088,29 @@ function findBallInImageData(
 
 // ── Drawing helpers ────────────────────────────────────────────────────────
 
-function drawArrowHead(ctx: CanvasRenderingContext2D, p1: Pt, p2: Pt, size = 14): void {
-  const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+/** Fill an arrowhead (lib/drawingTools.ts arrowHeadGeometry). */
+function fillArrowHead(ctx: CanvasRenderingContext2D, g: ArrowHeadGeometry): void {
   ctx.beginPath();
-  ctx.moveTo(p2.x, p2.y);
-  ctx.lineTo(p2.x - size * Math.cos(angle - Math.PI / 7), p2.y - size * Math.sin(angle - Math.PI / 7));
-  ctx.lineTo(p2.x - size * Math.cos(angle + Math.PI / 7), p2.y - size * Math.sin(angle + Math.PI / 7));
+  ctx.moveTo(g.tip.x, g.tip.y);
+  ctx.lineTo(g.left.x, g.left.y);
+  ctx.lineTo(g.right.x, g.right.y);
   ctx.closePath();
   ctx.fill();
+}
+
+/**
+ * Clip the head's area out of everything drawn until the caller's restore(), so an
+ * arrow's line (its round end cap, a translucent stroke, a dash) never shows through
+ * the head. The caller wraps it in save()/restore().
+ */
+function clipOutArrowHead(ctx: CanvasRenderingContext2D, g: ArrowHeadGeometry): void {
+  ctx.beginPath();
+  ctx.rect(-1e6, -1e6, 2e6, 2e6);
+  ctx.moveTo(g.tip.x, g.tip.y);
+  ctx.lineTo(g.left.x, g.left.y);
+  ctx.lineTo(g.right.x, g.right.y);
+  ctx.closePath();
+  ctx.clip('evenodd');
 }
 
 function labelPill(ctx: CanvasRenderingContext2D, text: string, x: number, y: number): void {
@@ -1152,32 +1172,39 @@ function drawSmoothPath(
   ctx.lineJoin = 'round';
   applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
 
+  const n = points.length;
+  const last = points[n - 1];
+  // Arrow at the end: the head of the last segment's direction (the path's final piece is
+  // straight along it). The line stops at the head's base and the head's area is clipped
+  // out of it, so nothing shows through the head.
+  const head = arrowAtEnd ? arrowHeadGeometry(points[n - 2], last, arrowHeadLength(width, 12, 3)) : null;
+  if (head) { ctx.save(); clipOutArrowHead(ctx, head); }
+
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
 
-  for (let i = 1; i < points.length - 1; i++) {
+  for (let i = 1; i < n - 1; i++) {
     const xMid = (points[i].x + points[i + 1].x) / 2;
     const yMid = (points[i].y + points[i + 1].y) / 2;
     ctx.quadraticCurveTo(points[i].x, points[i].y, xMid, yMid);
   }
-  const last = points[points.length - 1];
-  ctx.lineTo(last.x, last.y);
+  if (!head) {
+    ctx.lineTo(last.x, last.y);
+  } else {
+    // The straight final piece: the whole path for 2 points, else from the last midpoint.
+    const prev = points[n - 2];
+    const straight = Math.hypot(last.x - prev.x, last.y - prev.y) / (n === 2 ? 1 : 2);
+    const back = Math.hypot(head.tip.x - head.base.x, head.tip.y - head.base.y);
+    if (straight > back) ctx.lineTo(head.base.x, head.base.y);
+  }
   ctx.stroke();
+  if (head) ctx.restore();
 
-  if (arrowAtEnd && points.length >= 2) {
-    const p1 = points[points.length - 2];
-    const p2 = points[points.length - 1];
-    const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-    const headLen = Math.max(12, width * 3);
+  if (head) {
     ctx.setLineDash([]);
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(p2.x, p2.y);
-    ctx.lineTo(p2.x - headLen * Math.cos(angle - Math.PI / 7), p2.y - headLen * Math.sin(angle - Math.PI / 7));
-    ctx.lineTo(p2.x - headLen * Math.cos(angle + Math.PI / 7), p2.y - headLen * Math.sin(angle + Math.PI / 7));
-    ctx.closePath();
-    ctx.fill();
+    fillArrowHead(ctx, head);
   }
 
   ctx.restore();
@@ -1756,7 +1783,12 @@ function drawTriangleStroke(
 }
 
 /** `jointBallR`: joint-chain ball radius for this canvas (see jointNodeRadius). */
-function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, jointBallR = 1): void {
+/**
+ * `mediaTime`: the video time the frame shows (screen and export), used only by the swing
+ * path's time range; undefined = no time known, drawn as before.
+ */
+function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, jointBallR = 1, mediaTime?: number): void {
+  if ((s.tool === 'swingPath' || s.tool === 'manualSwing') && !swingPathVisibleAt((s as StrokeSwing).times, mediaTime)) return;
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -1828,10 +1860,20 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, joi
     ctx.strokeStyle = color;
     ctx.lineWidth = lw;
     applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
-    drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
+    // The line stops at the head's base, with the head's area clipped out of it, so it
+    // never shows through or past the head (any width, opacity, dash, angle).
+    const head = arrowHeadGeometry(p1, p2, arrowHeadLength(lw, 14, 2));
+    if (!head) {
+      drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
+    } else if (head.shaftEnd) {
+      ctx.save();
+      clipOutArrowHead(ctx, head);
+      drawThickSegmentWithEraser(ctx, p1.x, p1.y, head.shaftEnd.x, head.shaftEnd.y, eraserStrokes);
+      ctx.restore();
+    }
     ctx.setLineDash([]);
     ctx.fillStyle = color;
-    drawArrowHead(ctx, p1, p2);
+    if (head) fillArrowHead(ctx, head);
     if (s.tool === 'arrowAngle') {
       // Same helper the data-column value uses, so the pill and the column can
       // never disagree about the same arrow again.
@@ -2975,6 +3017,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // Manual swing state
     const manualSwingPtsRef     = useRef<Pt[]>([]);
     const manualSwingActiveRef  = useRef(false);
+    // Video time of each swing-path click, parallel to swingPtsRef / manualSwingPtsRef.
+    const swingTimesRef         = useRef<Array<number | undefined>>([]);
+    const manualSwingTimesRef   = useRef<Array<number | undefined>>([]);
+    /** The main video's clock for drawings: undefined without a loaded HTML video (YouTube/embed). */
+    const drawingVideoTime = (): number | undefined => {
+      const v = videoRef.current;
+      if (!v || !v.getAttribute('src') || v.readyState < 1) return undefined;
+      return Number.isFinite(v.currentTime) ? v.currentTime : undefined;
+    };
+    /** A finished path's click times, only when every click has one. */
+    const clickTimes = (times: Array<number | undefined>, n: number): number[] | undefined =>
+      times.length === n && times.every((t) => typeof t === 'number' && Number.isFinite(t)) ? (times as number[]) : undefined;
     const jointChainPtsRef      = useRef<Pt[]>([]);
     const jointChainActiveRef   = useRef(false);
     const jointChainCursorRef   = useRef<Pt | null>(null);
@@ -3872,7 +3926,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.setTransform(htf.sx, 0, 0, htf.sy, htf.tx, htf.ty);
             const tick = Math.round(mediaTime * 60);
             const jointBallR = jointNodeRadius(box.dw, box.dh);
-            for (const st of hold.strokes as Stroke[]) drawStroke(ctx, st, tick, jointBallR);
+            for (const st of hold.strokes as Stroke[]) drawStroke(ctx, st, tick, jointBallR, mediaTime);
             if (hold.skeleton && hold.skeleton.length && frozen.videoW > 0 && frozen.videoH > 0) {
               ctx.translate(box.dx, box.dy);
               drawSkeletonOverlay(ctx, [...hold.skeleton], frozen.videoW, frozen.videoH, box.dw, box.dh, {
@@ -3903,7 +3957,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             // locked angles). The screen's tick advances once per ~60 Hz frame.
             const tick = Math.round(mediaTime * 60);
             const jointBallR = jointNodeRadius(dw, dh);
-            for (const st of frozen.strokes as Stroke[]) drawStroke(ctx, st, tick, jointBallR);
+            for (const st of frozen.strokes as Stroke[]) drawStroke(ctx, st, tick, jointBallR, mediaTime);
             for (const m of frozen.angles as AngleMeas[]) drawAngleMeas(ctx, m);
           }
           // Skeleton: the AI-tracked pose for this media time (the screen's
@@ -6584,7 +6638,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         // Completed strokes
         const jointBallR = jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh);
-        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current, jointBallR);
+        // The swing path's time range follows the video's clock (undefined without one: drawn as before).
+        const drawingsTime = drawingVideoTime();
+        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current, jointBallR, drawingsTime);
 
         // Active (in-progress) stroke
         if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current, jointBallR);
@@ -7461,11 +7517,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             dashed: opts.dashed ?? false,
             arrowAtEnd: opts.arrowAtEnd === true,
             spinning: circleSpinningRef.current || undefined,
+            times: clickTimes(swingTimesRef.current, pts.length),
           },
         ];
         pushHistory();
       }
       swingPtsRef.current = [];
+      swingTimesRef.current = [];
       swingDrawingRef.current = false;
     }, [pushHistory]);
 
@@ -7483,11 +7541,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             dashed: opts.dashed ?? false,
             arrowAtEnd: opts.arrowAtEnd === true,
             spinning: circleSpinningRef.current || undefined,
+            times: clickTimes(manualSwingTimesRef.current, pts.length),
           },
         ];
         pushHistory();
       }
       manualSwingPtsRef.current = [];
+      manualSwingTimesRef.current = [];
       manualSwingActiveRef.current = false;
       lastClickTimeRef.current = 0;
       lastClickPosRef.current = null;
@@ -7579,6 +7639,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (s.tool === 'pen' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
         const pts = (s as StrokePen | StrokeSwing).pts;
         if (pts.length === 0) return Infinity;
+        // A swing path outside its time range is not on screen: it cannot be picked.
+        if (s.tool !== 'pen' && !swingPathVisibleAt((s as StrokeSwing).times, drawingVideoTime())) return Infinity;
         let best = Infinity;
         for (let i = 0; i < pts.length - 1; i++) best = Math.min(best, distToSegment(pos, pts[i], pts[i + 1]));
         best = Math.min(best, Math.hypot(pos.x - pts[0].x, pos.y - pts[0].y));
@@ -7988,8 +8050,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (!swingDrawingRef.current) {
             swingDrawingRef.current = true;
             swingPtsRef.current = [pos];
+            swingTimesRef.current = [drawingVideoTime()];
           } else {
             swingPtsRef.current = [...swingPtsRef.current, pos];
+            swingTimesRef.current = [...swingTimesRef.current, drawingVideoTime()];
           }
           if (longPressRef.current) clearTimeout(longPressRef.current);
           longPressRef.current = setTimeout(finishSwingPath, 500);
@@ -8008,8 +8072,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             if (!manualSwingActiveRef.current) {
               manualSwingActiveRef.current = true;
               manualSwingPtsRef.current = [pos];
+              manualSwingTimesRef.current = [drawingVideoTime()];
             } else {
               manualSwingPtsRef.current = [...manualSwingPtsRef.current, pos];
+              manualSwingTimesRef.current = [...manualSwingTimesRef.current, drawingVideoTime()];
             }
           }
           lastClickTimeRef.current = now;
