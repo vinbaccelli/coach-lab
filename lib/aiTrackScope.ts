@@ -58,3 +58,31 @@ export function defaultExportRange(
   if (section && sectionTracked && !wholeTracked) return { start: section.start, end: section.end };
   return { start: 0, end: duration };
 }
+
+// ── When the timeline's section handles show ─────────────────────────────────
+
+/**
+ * Metrics' green section handles: shown (outside Motion Layer, on an uploaded video) once
+ * the coach has opened Metrics, or, as before, when snapshots exist or the skeleton is on.
+ */
+export function metricsSectionShown(o: {
+  stroMotionActive: boolean; html5: boolean; snapshots: boolean; skeleton: boolean; metricsOpened: boolean;
+}): boolean {
+  return !o.stroMotionActive && o.html5 && (o.snapshots || o.skeleton || o.metricsOpened);
+}
+
+/** Motion Layer's orange section handles: shown as soon as the section exists (end after start). */
+export function motionSectionShown(start: number, end: number): boolean {
+  return Number.isFinite(start) && Number.isFinite(end) && end > start;
+}
+
+/**
+ * The Metrics section the timeline draws: the stored one, else (Metrics opened, no section
+ * stored yet) the whole clip, shown but not stored. `wholeClipSec` 0 = no fallback.
+ */
+export function displayedSection(
+  start: number | null, end: number | null, wholeClipSec: number,
+): { start: number; end: number } | null {
+  if (start != null && end != null) return { start, end };
+  return wholeClipSec > 0 && Number.isFinite(wholeClipSec) ? { start: 0, end: wholeClipSec } : null;
+}

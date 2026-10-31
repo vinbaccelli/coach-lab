@@ -57,7 +57,7 @@ import VideoDebugBox from '@/components/VideoDebugBox';
 import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoDetailText, videoStateText } from '@/lib/firstFrame';
 import { recoveryPlan, reloadSameSource, shouldRestartFromStart, watchStuckPlayback } from '@/lib/seekWait';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
-import { selectedSection, type TrackScope } from '@/lib/aiTrackScope';
+import { displayedSection, metricsSectionShown, motionSectionShown, selectedSection, type TrackScope } from '@/lib/aiTrackScope';
 import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
 import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
@@ -1312,6 +1312,13 @@ function Home() {
   // section from the auto-defaults (snapshot span / full video). AI Track uses
   // it to decide "whole video" vs "selected section" for the single button.
   const [metricsTrimUserAdjusted, setMetricsTrimUserAdjusted] = useState(false);
+  /**
+   * The coach opened Metrics: the section handles show at once (lib/aiTrackScope.ts
+   * metricsSectionShown). Before, they appeared only once a snapshot existed or the skeleton
+   * was on. With no section set they SHOW the whole clip without storing it (displayedSection),
+   * so the snapshot-span and skeleton defaults below still apply exactly as before.
+   */
+  const [metricsSectionOpened, setMetricsSectionOpened] = useState(false);
 
   /** Seek the video to a time and resolve once the frame is ready. */
   const seekVideoTo = useCallback((t: number): Promise<void> => new Promise((resolve) => {
@@ -1504,6 +1511,7 @@ function Home() {
     setMetricsSectionStart(prev => prev == null ? 0 : prev);
     setMetricsSectionEnd(prev => prev == null ? dur : prev);
   }, [skeletonEnabled, videoSrc]);
+
 
   // ── Precision AI Track (skeleton "bake") ─────────────────────────────────
   // FRAME-STEPPED pass: seek every frame time, detect on the PAUSED frame with
@@ -6611,15 +6619,13 @@ function Home() {
     // Snapshot phase markers (green balls) — shown whenever snapshots exist and
     // we are not in StroMotion mode. Migrated off the removed frame workflow so
     // the Snapshot architecture owns the timeline markers directly.
-    if (!stroMotionActive && stroMotionHtml5Only && (biomechPhaseMarkers || skeletonEnabled)) {
+    if (metricsSectionShown({ stroMotionActive, html5: stroMotionHtml5Only, snapshots: !!biomechPhaseMarkers, skeleton: skeletonEnabled, metricsOpened: metricsSectionOpened })) {
       return {
         // Draggable start/end handles delimiting the section the Metrics replay/
         // recording travels over — and, when the skeleton is on, the range the
         // Precision AI Track pass covers. Each handle moves independently and
         // the timeline does not re-zoom.
-        trimRange: (metricsSectionStart != null && metricsSectionEnd != null)
-          ? { start: metricsSectionStart, end: metricsSectionEnd } as { start: number; end: number }
-          : null,
+        trimRange: displayedSection(metricsSectionStart, metricsSectionEnd, metricsSectionOpened ? stroVideoDuration : 0),
         onTrimChange: (start: number, end: number) => { setMetricsSectionStart(start); setMetricsSectionEnd(end); setMetricsTrimUserAdjusted(true); },
         trimAccent: '#34C759',
         onCurrentTime: undefined as undefined,
@@ -6639,7 +6645,9 @@ function Home() {
     }
     if (stroMotionActive && stroMotionHtml5Only) {
       return {
-        trimRange: stroMotionDraft?.frames.length ? { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number } : null,
+        // Shown as soon as Motion Layer opens (the section is the whole clip from the first
+        // metadata read), not only once the draft's frames exist.
+        trimRange: motionSectionShown(stroStartFrame, stroEndFrame) ? { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number } : null,
         // Coach can drag the section start/end handles on the timeline.
         onTrimChange: (start: number, end: number) => { setStroStartFrame(start); setStroEndFrame(end); },
         trimAccent: '#FF9500',
@@ -6706,6 +6714,8 @@ function Home() {
     metricsSectionStart,
     metricsSectionEnd,
     skeletonEnabled,
+    metricsSectionOpened,
+    stroVideoDuration,
   ]);
 
   const renderTimelineDock = () => (
@@ -6896,6 +6906,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         // runs by itself.
       } else if (screen === 'aimetrics') {
         setStroMotionActive(false);
+        setMetricsSectionOpened(true);
       } else if (screen === 'skeleton') {
         // SPEC: pressing "Skeleton" only OPENS this toolbar (plus first-time
         // activation). It must never reset, relock, or hide a running
