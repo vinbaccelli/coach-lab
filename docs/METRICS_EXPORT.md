@@ -161,8 +161,17 @@ the file will contain ("Includes: video + skeleton + drawings").
     Numbers: steps where the video moved, and where the skeleton stayed still
     (after the export's own analysis, also that analysis's numbers above).
     A still scene gives no verdict, so a player standing still is not refused.
-- **Not exported in V1:** AI measurement overlays, the data column, the ball
-  trail, the zoom (the file is always the full, unzoomed frame).
+- **Data column** (Include switch, off by default; off = the export is exactly as
+  before). Drawn by the screen's own function (`drawDataColumnBox`, Canvas) where
+  the coach placed it, kept inside the video. Playback frames (only with the
+  skeleton): the coach's own live rows plus L/R Elbow and L/R Knee computed from
+  the baked AI Track pose at that time with the shared `computeJointAngles`
+  (`lib/biomechanics/measurements.ts`, unchanged); "—" where there is no pose or a
+  joint is not tracked. Holds: that snapshot's own stored column and name. An
+  empty column is not drawn. Without the skeleton and without a snapshot hold the
+  switch is disabled ("No values to show").
+- **Not exported in V1:** AI measurement overlays, the ball trail, the zoom (the
+  file is always the full, unzoomed frame).
 
 ## Speed and sound (slow motion)
 

@@ -9948,9 +9948,21 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 const skeleton = (active ? canvasRef.current?.getSkeletonKeypoints?.() : null) ?? s.skeleton ?? null;
                 // On-canvas strokes follow resizes, so the active one is in today's box.
                 const box = (active ? strokesBoxOf(canvasRef.current) : null) ?? s.drawingsBox ?? null;
-                return { id: s.id, timeSec: s.timeSec, strokes, box, skeleton };
+                // Its own data column (the active one: as on screen now, edits included), for its hold.
+                const column = active
+                  ? measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle')
+                  : s.column;
+                return { id: s.id, timeSec: s.timeSec, strokes, box, skeleton, column, label: s.label };
               });
           }}
+          // The coach's own LIVE column rows (no skeleton angles: the export computes those per
+          // frame). In SNAPSHOT mode the column on screen is the snapshot's, so none.
+          getLiveColumnForExport={() => ({
+            rows: analysisModeRef.current.kind === 'live'
+              ? measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle')
+              : [],
+            title: 'Data Column',
+          })}
           onSnapshotReport={() => {
             if (snapshots.length > 0) setMetricsExportOpen(false);
             void handleGenerateSnapshots();

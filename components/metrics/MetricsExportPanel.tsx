@@ -21,6 +21,7 @@ import {
   FOLLOW_STEP_SEC, formatHoldSec, HOLD_DEFAULT_SEC, HOLD_MAX_SEC, HOLD_MIN_SEC, HOLD_STEP_SEC, holdSchedule, includesLabelWithHolds, meanAbsDiff,
   EXPORT_ANALYZE_BY_PLAYBACK, exportButtonLabel, PANEL_SKELETON_ANALYSIS, parsePassProgress, poseRegion, poseShift, skeletonExportStatus, skeletonFollowsVideo, snapshotsExportStatus, snapshotsSwitchText,
   toGrey, trackedFraction, untrackedIntervals, type FollowStep, type Rect, type VideoBox,
+  dataColumnExportStatus, holdColumnRows,
 } from '@/lib/exportOverlay';
 import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
 
@@ -31,8 +32,8 @@ import type { CanvasHandle, ExportOverlayFrozen } from '@/components/Canvas';
  * Snapshots on, every snapshot inside the range is a HOLD: the video freezes on
  * its frame for the hold length showing that snapshot's strokes and frozen pose
  * (not the live drawings), then continues (lib/cropExport.ts `holds`). AI
- * measurement overlays, angle measurements and the data column are never
- * exported. The skeleton is drawn from the stored AI Track: when the coach
+ * measurement overlays and angle measurements are never exported; the data
+ * column only when its own switch is on (docs/METRICS_EXPORT.md). The skeleton is drawn from the stored AI Track: when the coach
  * includes it and part of the range is untracked, Export first runs the
  * existing AI Track pass (runPrecisionPass, 'fast', unchanged) on the untracked
  * parts only, with its own progress and Cancel, then renders. No live pose runs
@@ -59,6 +60,9 @@ export type ExportSnapshot = {
   box: VideoBox | null;
   /** Its frozen pose (video px), or null. */
   skeleton: Array<{ x: number; y: number; score: number; name: string }> | null;
+  /** Its own data column rows and its name (the column's title during its hold). */
+  column?: Array<{ label: string; value: number; unit: string }>;
+  label?: string;
 };
 
 export interface MetricsExportPanelProps {
@@ -74,6 +78,8 @@ export interface MetricsExportPanelProps {
   snapshotMarks?: ReadonlyArray<{ id: string; timeSec: number }>;
   /** Read once at export start: each snapshot's strokes, box and frozen pose. */
   getSnapshotsForExport?: () => ExportSnapshot[];
+  /** Read once at export start: the coach's own live data column rows (no skeleton angles) and its title. */
+  getLiveColumnForExport?: () => { rows: Array<{ label: string; value: number; unit: string }>; title: string };
   /** Runs the existing snapshot Generate flow (handleGenerateSnapshots). */
   onSnapshotReport: () => void;
   /** The timeline's current playback rate: the export's default speed (nearest of 1×, 0.5×, 0.25×, 0.1×). */
@@ -129,7 +135,7 @@ const PLACEHOLDER_OPTIONS: Array<{ id: ExportQuality; label: string; width?: num
 ];
 
 export default function MetricsExportPanel({
-  videoSrc, exportBlockedReason, sectionStart, sectionEnd, snapshotCount, snapshotMarks, getSnapshotsForExport,
+  videoSrc, exportBlockedReason, sectionStart, sectionEnd, snapshotCount, snapshotMarks, getSnapshotsForExport, getLiveColumnForExport,
   onSnapshotReport, timelineRate, pauseAnalysisVideo, onClose, isMobile = false, overlay = null,
 }: MetricsExportPanelProps) {
   const previewRef = useRef<HTMLVideoElement | null>(null);
@@ -285,6 +291,8 @@ export default function MetricsExportPanel({
   const holdPlan = holdSchedule(marks, range.start, range.end, holdSec);
   const snAvailable = Boolean(overlay) && Boolean(getSnapshotsForExport) && holdPlan.inRange > 0;
   const includeSnapshots = snAvailable && (snapshotsChoice ?? true);
+  // Data column: off by default (the export is then exactly as before), independent of the skeleton.
+  const [dataColumnWanted, setDataColumnWanted] = useState(false);
   const snStatus = snapshotsExportStatus(holdPlan, includeSnapshots);
   const holdTotalSec = includeSnapshots ? holdPlan.totalHoldSec : 0;
   // The file's length: the range plus every hold. Estimate and progress use it.
@@ -324,6 +332,8 @@ export default function MetricsExportPanel({
   const drawingsWanted = drawingsChoice ?? drawingsDefaultOn(snapshotMode);
   const setDrawingsWanted = (v: boolean) => setDrawingsChoice(v);
   const includeSkeleton = Boolean(overlay) && skAvailable && skeletonWanted;
+  const dcStatus = dataColumnExportStatus({ skeleton: includeSkeleton, holds: includeSnapshots ? holdPlan.inRange : 0, on: dataColumnWanted });
+  const includeDataColumn = Boolean(overlay) && dcStatus.available && dataColumnWanted;
   // V2/Saturday: panel analysis frozen on iPhone, see KNOWN_ISSUES 061. While
   // PANEL_SKELETON_ANALYSIS is false the status is never 'analyze', so this is
   // always false and the analysis code below (analyzeRange wiring, guard, vdebug
@@ -633,7 +643,7 @@ export default function MetricsExportPanel({
         for (const h of holdSchedule(all, range.start, range.end, holdSec).holds) {
           const sn = byId.get(h.id);
           if (!sn) continue;
-          holdSnaps.push(sn);
+          holdSnaps.push(includeDataColumn ? { ...sn, column: sn.column ?? [] } : sn);
           holds.push({ at: h.at, seconds: h.seconds });
         }
       }
@@ -651,6 +661,11 @@ export default function MetricsExportPanel({
       };
       if (overlay && (includeSkeleton || includeDrawings || holds.length)) {
         const flags = { skeleton: includeSkeleton, drawings: includeDrawings };
+        // Data column (off unless switched on): playback frames only with the skeleton (their
+        // values are its joint angles), holds with each snapshot's own column.
+        const liveColumn = includeDataColumn ? getLiveColumnForExport?.() ?? { rows: [], title: 'Data Column' } : null;
+        const liveDc = liveColumn && includeSkeleton ? { ownRows: liveColumn.rows, title: liveColumn.title } : null;
+        const holdDc = liveColumn ? { ownRows: [], title: liveColumn.title } : null;
         const frozen: ExportOverlayFrozen = overlay.drawExportOverlay(null, range.start, 1, 1, flags);
         const thumb = includeSkeleton ? document.createElement('canvas') : null;
         if (thumb) { thumb.width = 32; thumb.height = 32; }
@@ -699,11 +714,18 @@ export default function MetricsExportPanel({
             }
           }
           if (sn) {
-            overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen, hold: { strokes: sn.strokes, box: sn.box, skeleton: sn.skeleton } });
+            overlay.drawExportOverlay(ctx, t, w, h, {
+              ...flags, frozen,
+              ...(holdDc ? { dataColumn: holdDc } : null),
+              hold: {
+                strokes: sn.strokes, box: sn.box, skeleton: sn.skeleton,
+                ...(holdDc ? { column: holdColumnRows(sn.column), columnTitle: sn.label } : null),
+              },
+            });
             return;
           }
           if (tctx) { try { probe(ctx, t, w, h); } catch { /* the check must never stop the export */ } }
-          overlay.drawExportOverlay(ctx, t, w, h, { ...flags, frozen });
+          overlay.drawExportOverlay(ctx, t, w, h, liveDc ? { ...flags, frozen, dataColumn: liveDc } : { ...flags, frozen });
         };
       }
       // Every export carries the AngleMotion watermark (lib/videoWatermark.ts),
@@ -802,7 +824,7 @@ export default function MetricsExportPanel({
       if (restoreRef.current === restorePreview) restoreRef.current = null;
     }
   }, [videoSrc, meta, selected, busy, stopping, analysisBlock, range, clearResult, pauseAnalysisVideo, pumpSeek, overlay, includeSkeleton, includeDrawings, needsAnalysis, failSkeleton,
-    includeSnapshots, getSnapshotsForExport, holdSec, speed, soundOn, soundChoice, sourceAudio]);
+    includeSnapshots, getSnapshotsForExport, includeDataColumn, getLiveColumnForExport, holdSec, speed, soundOn, soundChoice, sourceAudio]);
 
   const cancelExport = useCallback(() => {
     const ac = abortRef.current;
@@ -1037,6 +1059,7 @@ export default function MetricsExportPanel({
                     key: 'snapshots', title: 'Snapshots', label: 'Include snapshots', on: includeSnapshots, avail: snAvailable,
                     text: snapshotsSwitchText(snStatus.state, includeSnapshots, holdSec), set: (v: boolean) => setSnapshotsChoice(v),
                   },
+                  { key: 'datacolumn', title: 'Data column', label: 'Include data column', on: includeDataColumn, avail: dcStatus.available, text: dcStatus.text, set: setDataColumnWanted },
                 ] as const).map((row) => {
                   const off = !row.avail || busy;
                   const toggle = () => { if (!off) { row.set(!row.on); clearResult(); } };
@@ -1168,7 +1191,7 @@ export default function MetricsExportPanel({
 
             <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <span style={{ fontSize: 14, fontWeight: 700 }}>Quality</span>
-              <span data-testid="export-includes" style={muted}>{includesLabelWithHolds(includeSkeleton, includeDrawings, includeSnapshots ? holdPlan.inRange : 0)}</span>
+              <span data-testid="export-includes" style={muted}>{includesLabelWithHolds(includeSkeleton, includeDrawings, includeSnapshots ? holdPlan.inRange : 0, includeDataColumn)}</span>
               <div role="radiogroup" aria-label="Quality" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
                 {(options.length ? options : PLACEHOLDER_OPTIONS).map((o) => {
                   const on = o.id === quality;
