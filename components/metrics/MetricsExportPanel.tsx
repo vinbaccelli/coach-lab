@@ -951,15 +951,21 @@ export default function MetricsExportPanel({
       style={{
         position: 'fixed', inset: 0, zIndex: 10050, background: 'rgba(0,0,0,0.85)',
         // While the skeleton is analyzed the panel is the bar above: nothing covers the video.
-        display: collapsed ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 8 : 16,
+        display: collapsed ? 'none' : 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center', padding: isMobile ? 0 : 16,
       }}
     >
       <div
         data-testid="metrics-export-panel"
         style={{
-          width: isMobile ? 'min(480px, 100%)' : 'min(720px, 100%)', maxHeight: '92vh',
+          // Phone: one full-screen sheet (no floating box over the page), one scrolling
+          // column, the Generate button pinned at the bottom (export-actions below).
+          width: isMobile ? '100%' : 'min(720px, 100%)', maxHeight: isMobile ? '100dvh' : '92vh',
+          height: isMobile ? '100dvh' : undefined,
           overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch',
-          boxSizing: 'border-box', padding: 16, borderRadius: 14,
+          boxSizing: 'border-box', borderRadius: isMobile ? 0 : 14,
+          padding: isMobile
+            ? 'calc(12px + env(safe-area-inset-top, 0px)) calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px))'
+            : 16,
           background: 'rgba(18,18,22,0.98)', border: '1px solid rgba(255,255,255,0.12)',
           color: 'var(--cl-text-on-fill)', display: 'flex', flexDirection: 'column', gap: 14,
         }}
@@ -982,7 +988,7 @@ export default function MetricsExportPanel({
               onLoadedMetadata={onPreviewMeta}
               onSeeked={onPreviewSeeked}
               style={{
-                width: '100%', maxHeight: isMobile ? '30vh' : '34vh', background: '#000',
+                width: '100%', maxHeight: isMobile ? '26vh' : '34vh', flexShrink: 0, background: '#000',
                 borderRadius: 10, objectFit: 'contain', display: 'block',
               }}
             />
@@ -1113,6 +1119,9 @@ export default function MetricsExportPanel({
                   );
                 })}
               </div>
+            </section>
+
+            <section aria-label="Sound" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {(() => {
                 if (!audioPlan.showToggle) {
                   // The clip has no sound: say so instead of showing a switch that could not work.
@@ -1189,6 +1198,12 @@ export default function MetricsExportPanel({
               {options.some((o) => o.disabled) ? <span style={muted}>Sizes larger than the video are off (no upscaling).</span> : null}
             </section>
 
+            <div data-testid="export-actions" style={{
+              // Always reachable: sticks to the bottom of the scrolling sheet.
+              position: 'sticky', bottom: 0, zIndex: 1, display: 'flex', flexDirection: 'column', gap: 10,
+              margin: isMobile ? '0 -12px' : '0 -16px', padding: isMobile ? '10px 12px calc(10px + env(safe-area-inset-bottom, 0px))' : '10px 16px',
+              background: 'rgba(18,18,22,0.98)', borderTop: '1px solid rgba(255,255,255,0.10)',
+            }}>
             <div data-testid="export-estimate" style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,0.06)' }}>
               <span style={{ fontSize: 15, fontWeight: 800 }}>
                 {selected ? `≈ ${formatMegabytes(estimateBytes)}` : '≈ — MB'}
@@ -1251,10 +1266,11 @@ export default function MetricsExportPanel({
                 {notice ? <span style={muted}>{notice}</span> : null}
               </div>
             )}
+            </div>
           </>
         )}
 
-        <div style={{ borderTop: '1px solid rgba(255,255,255,0.10)', paddingTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.10)', paddingTop: 12, paddingBottom: isMobile ? 'calc(12px + env(safe-area-inset-bottom, 0px))' : 0, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <button type="button" style={btn(false, busy)} disabled={busy} onClick={snapshotReport}>Snapshot images &amp; report</button>
           <span style={{ ...muted, flex: 1, minWidth: 160 }}>
             {snapshotMsg ?? (snapshotCount > 0

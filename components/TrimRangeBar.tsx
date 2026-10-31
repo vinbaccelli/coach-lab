@@ -135,7 +135,7 @@ export default function TrimRangeBar({
   };
 
   const smallBtn: React.CSSProperties = {
-    minHeight: 36, padding: '6px 12px', borderRadius: 8,
+    minHeight: 44, padding: '8px 12px', borderRadius: 8,
     border: '1px solid rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.12)',
     color: 'var(--cl-text-on-fill)', fontSize: 12, fontWeight: 600,
     cursor: usable ? 'pointer' : 'default', whiteSpace: 'nowrap', opacity: usable ? 1 : 0.5,
