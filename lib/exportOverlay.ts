@@ -9,6 +9,8 @@
  * position and proportion the coach saw, at any export size.
  */
 
+import { computeJointAngles } from '@/lib/biomechanics/measurements';
+
 export type VideoBox = { dx: number; dy: number; dw: number; dh: number };
 
 /** Logical (x, y) → output (x * sx + tx, y * sy + ty). */
@@ -457,9 +459,9 @@ export function analysisBlockedReason(pageScale: number | null | undefined): str
   return `The page is zoomed in (${Math.round((pageScale as number) * 100)}%). Pinch out to 100% first: a zoomed page can hide the video while its skeleton is analyzed, which freezes the skeleton.`;
 }
 
-/** "Includes: video + skeleton + drawings" for the quality panel. */
-export function includesLabel(skeleton: boolean, drawings: boolean): string {
-  return ['Includes: video', skeleton ? 'skeleton' : null, drawings ? 'drawings' : null].filter(Boolean).join(' + ');
+/** "Includes: video + skeleton + drawings (+ data column)" for the quality panel. */
+export function includesLabel(skeleton: boolean, drawings: boolean, dataColumn = false): string {
+  return ['Includes: video', skeleton ? 'skeleton' : null, drawings ? 'drawings' : null, dataColumn ? 'data column' : null].filter(Boolean).join(' + ');
 }
 
 // ── Snapshot holds ──────────────────────────────────────────────────────────
@@ -565,8 +567,8 @@ export function outputProgress(mediaDoneSec: number, holdDoneSec: number, spanSe
 }
 
 /** "Includes: video + skeleton + drawings + 2 snapshot holds" */
-export function includesLabelWithHolds(skeleton: boolean, drawings: boolean, holds: number): string {
-  const base = includesLabel(skeleton, drawings);
+export function includesLabelWithHolds(skeleton: boolean, drawings: boolean, holds: number, dataColumn = false): string {
+  const base = includesLabel(skeleton, drawings, dataColumn);
   return holds > 0 ? `${base} + ${holds} snapshot hold${holds === 1 ? '' : 's'}` : base;
 }
 
@@ -677,4 +679,64 @@ export function exportButtonLabel(o: {
   if (o.panelAnalysis) return 'Analyze skeleton + export';
   if (o.includeSkeleton && o.skeletonState === 'playback' && o.trackedFraction < 0.999) return 'Analyze skeleton';
   return 'Export';
+}
+
+
+// ── Data column in the generated video ───────────────────────────────────────
+//
+// Off unless the coach turns "Data column" on (the export is then exactly as before).
+// Normal playback: the coach's own rows as on screen, plus the four joint angles the live
+// column shows (L/R Elbow, L/R Knee), computed for each frame from the baked AI Track pose
+// with the shared computeJointAngles (lib/biomechanics/measurements.ts, unchanged). A
+// snapshot hold: that snapshot's own stored column. A value that cannot be computed is
+// null and drawn as "—", never a made-up number.
+
+/** One row of the column; `value` null = not computable for this frame ("—"). */
+export type ColumnRow = { label: string; value: number | null; unit: string };
+
+/** The live column's skeleton rows, in the screen's order (page ALL_ANGLE_LABELS). */
+export const LIVE_ANGLE_ROWS = [
+  ['L Elbow', 'leftElbowDeg'],
+  ['R Elbow', 'rightElbowDeg'],
+  ['L Knee', 'leftKneeDeg'],
+  ['R Knee', 'rightKneeDeg'],
+] as const;
+
+type Kp = { x: number; y: number; score: number; name: string };
+
+/** Rows for a normal-playback frame: the coach's rows, then the joint angles of `pose` (null = no pose here). */
+export function liveColumnRows(own: readonly ColumnRow[], pose: readonly Kp[] | null): ColumnRow[] {
+  const ang = pose && pose.length ? computeJointAngles(pose as Kp[]) : null;
+  return [
+    ...own.map((r) => ({ ...r, value: finiteOrNull(r.value) })),
+    ...LIVE_ANGLE_ROWS.map(([label, key]) => ({ label, value: ang ? finiteOrNull(ang[key]) : null, unit: '°' })),
+  ];
+}
+
+/** Rows for a snapshot hold: its stored column as it was saved. */
+export function holdColumnRows(column: ReadonlyArray<{ label: string; value: number; unit: string }> | null | undefined): ColumnRow[] {
+  return (column ?? []).map((r) => ({ label: r.label, value: finiteOrNull(r.value), unit: r.unit ?? '' }));
+}
+
+function finiteOrNull(v: number | null | undefined): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** How a row's value reads in the column ("—" when unknown). */
+export function columnValueText(r: ColumnRow): string {
+  return r.value == null ? '—' : `${r.value}${r.unit}`;
+}
+
+/**
+ * The panel's "Data column" switch. Usable when there is something to show: a skeleton
+ * (tracked, or to be analyzed) for the playback values, or at least one snapshot hold.
+ */
+export function dataColumnExportStatus(o: { skeleton: boolean; holds: number; on: boolean }): { available: boolean; text: string } {
+  if (!o.skeleton && o.holds === 0) {
+    return { available: false, text: 'No values to show: include the skeleton (joint angles while it plays) or snapshots (their own column).' };
+  }
+  if (!o.on) return { available: true, text: 'Off: no data column in the video.' };
+  if (o.skeleton && o.holds > 0) return { available: true, text: 'Joint angles of each frame while it plays, each snapshot’s own values during its hold.' };
+  if (o.skeleton) return { available: true, text: 'Joint angles of each frame while it plays (— where the skeleton is not tracked).' };
+  return { available: true, text: 'Each snapshot’s own values during its hold.' };
 }
