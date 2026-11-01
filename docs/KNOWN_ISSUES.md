@@ -2362,3 +2362,15 @@ column are still never exported.
 **Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
 
 **Severity.** Medium (visual).
+
+## 079 — YouTube upload: a daily-quota error was shown as "reconnect YouTube"
+
+**Found:** 2026-11-01. Numbered 079 because 076–078 are used by PRs #118–#120.
+
+**Symptom.** `app/api/youtube/upload-session/route.ts` treated every 401/403 from YouTube as a dead grant ("YouTube authorization was rejected — reconnect YouTube and try again", `needsConnect: true`). When AngleMotion's daily YouTube API quota is spent YouTube also answers 403, so coaches were sent to reconnect, which cannot fix it. The browser upload step (`lib/export/youtubeResumableUpload.ts`) showed the raw body for any 4xx.
+
+**Fix.** `isYouTubeQuotaError` reads `error.errors[].reason` of the response body. `quotaExceeded` and `dailyLimitExceeded` give the message "YouTube's daily upload limit for AngleMotion has been reached. Try again tomorrow, or download the video and upload it to YouTube yourself." (HTTP 429, `needsConnect: false`, `quotaExceeded: true`) in both places. Every other 401/403 keeps the reconnect prompt. Deliberately not treated as the daily quota: `rateLimitExceeded`/`userRateLimitExceeded` (short bursts) and `uploadLimitExceeded` (the channel's own cap).
+
+**Not verified.** The reason names come from Google's documented error reasons, not from a live response (the docs host is not reachable from the build environment and the quota cannot be exhausted on purpose). If YouTube sends the quota error with a different `reason`, it still shows the old reconnect prompt. Check the server log line `[youtube/upload-session] init failed 403: …` the first time it happens in production.
+
+**Severity.** Low (wrong message), but it sends coaches in a loop.
