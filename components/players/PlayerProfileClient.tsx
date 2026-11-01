@@ -13,6 +13,7 @@ import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
+import PlayerProfileView from '@/components/players/PlayerProfileView';
 
 type Player = {
   id: string;
@@ -229,6 +230,12 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
     ) : (
       <p style={{ color: 'var(--cl-destructive-text)' }}>{REPORTS_IN_APP && (!err || err === 'Not found') ? 'Player not found' : err || 'Player not found'}</p>
     );
+  }
+
+  // REPORTS_IN_APP: the grouped profile layout (components/players/PlayerProfileView.tsx). With the
+  // flag off, everything below is the original profile, unchanged.
+  if (REPORTS_IN_APP) {
+    return <PlayerProfileView playerId={playerId} player={player} entries={entries} canEdit={canEdit} loadError={err} />;
   }
 
   return (
