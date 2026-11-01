@@ -48,7 +48,7 @@ export const PLAYERS_TOUR: TourDef = {
     {
       id: 'screenshot',
       title: 'Save a screenshot to a player',
-      body: 'In Video analysis, press Screenshot and pick the player in Save Screenshot (or create one there). The frame goes into their Technical Analysis Doc and appears in Reports here.',
+      body: 'In Video analysis, press Screenshot and pick the player in Save Screenshot (or create one there). The frame is saved to their reports (the image itself goes to your own Google Drive) and appears in Reports here.',
       placement: 'center',
       advance: { kind: 'next' },
     },
@@ -63,7 +63,7 @@ export const PLAYERS_TOUR: TourDef = {
     {
       id: 'report',
       title: 'Save a report',
-      body: 'In Video analysis, Metrics → Generate builds a report; choose Attach to the player and it is written into their Technical Analysis Doc. The manual match report and the match decoder add theirs to the Match Analysis Doc.',
+      body: 'In Video analysis, Metrics → Generate builds a report; choose Attach to the player and Export Google Docs report: it is written into their Technical Analysis Google Doc and listed in Reports here. The manual match report and the match decoder save theirs to the player’s Match analysis reports.',
       placement: 'center',
       advance: { kind: 'next' },
       image: shot('players', 'report', 251, 'A Match analysis entry in Reports with the match statistics written out.'),
