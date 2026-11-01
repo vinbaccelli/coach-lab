@@ -58,6 +58,7 @@ import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, vide
 import { recoveryPlan, reloadSameSource, shouldRestartFromStart, watchStuckPlayback } from '@/lib/seekWait';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
 import { selectedSection, type TrackScope } from '@/lib/aiTrackScope';
+import { overlayBottomInset } from '@/lib/timelineView';
 import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
 import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
@@ -3866,12 +3867,36 @@ function Home() {
   // forced — no separate toolbar-scoped derivation needed here.
 
   const toolbarWidthPx = useMemo(() => {
-    if (compactToolbarRail) {
-      return toolbarLabelsExpanded ? TOOLBAR_COMPACT_EXPANDED_W : TOOLBAR_MOBILE_W;
-    }
+    // Phone: the rail keeps its 60 px place in the layout; expanded, the labelled
+    // toolbar OVERLAYS the video (see renderToolbarRail) instead of pushing it,
+    // which halved the video and cut the play controls off on a portrait phone.
+    if (compactToolbarRail) return TOOLBAR_MOBILE_W;
     if (toolbarCollapsed) return TOOLBAR_COLLAPSED_W;
     return TOOLBAR_EXPANDED_W;
   }, [compactToolbarRail, toolbarCollapsed, toolbarLabelsExpanded]);
+
+  // Phone, labels expanded: how far above the rail's bottom the overlay must stop so it
+  // does not cover the timeline and play controls (lib/timelineView.ts overlayBottomInset).
+  const [toolbarOverlayBottom, setToolbarOverlayBottom] = useState(0);
+  useEffect(() => {
+    if (!(compactToolbarRail && toolbarLabelsExpanded)) { setToolbarOverlayBottom(0); return; }
+    const measure = () => {
+      const aside = tempDebugAsideElRef.current;
+      const tl = document.querySelector('[data-tour-id="tour-timeline"]');
+      if (!aside) return;
+      const a = aside.getBoundingClientRect();
+      const t = tl ? tl.getBoundingClientRect() : null;
+      setToolbarOverlayBottom(overlayBottomInset(
+        { left: a.left, bottom: a.bottom },
+        TOOLBAR_COMPACT_EXPANDED_W,
+        t ? { left: t.left, right: t.right, top: t.top } : null,
+      ));
+    };
+    measure();
+    const id = requestAnimationFrame(measure);
+    window.addEventListener('resize', measure);
+    return () => { cancelAnimationFrame(id); window.removeEventListener('resize', measure); };
+  }, [compactToolbarRail, toolbarLabelsExpanded]);
 
   // ─── TEMP-DEBUG (mobile toolbar-expand) — remove after phone verification ───
   // Phone has no console, so surface live values on-screen (gated by ?debug=1).
@@ -7349,6 +7374,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
 
   const renderToolbarRail = () => {
     if (!showToolbarRail) return null;
+    const phoneExpanded = compactToolbarRail && toolbarLabelsExpanded;
     const paletteProps = {
       ...toolPaletteBaseProps,
       mobileChrome: isMobile && showMobileToolStrip,
@@ -7365,7 +7391,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           display: 'flex',
           flexDirection: 'column',
           minHeight: 0,
-          overflow: 'hidden',
+          overflow: phoneExpanded ? 'visible' : 'hidden',
+          position: 'relative',
           zIndex: 80,
           background: '#FFFFFF',
           borderRight: '1px solid #D1D1D6',
@@ -7373,6 +7400,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         }}
       >
         <div
+          data-testid={phoneExpanded ? 'toolbar-expanded-overlay' : undefined}
           style={{
             flex: 1,
             minHeight: 0,
@@ -7380,6 +7408,13 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             display: 'flex',
             flexDirection: 'column',
             padding: isMobile ? '4px 4px' : '6px 4px',
+            ...(phoneExpanded ? {
+              position: 'absolute', left: 0, top: 0, width: TOOLBAR_COMPACT_EXPANDED_W,
+              // Ends above the play controls (measured), never over them.
+              bottom: toolbarOverlayBottom,
+              background: '#FFFFFF', borderRight: '1px solid #D1D1D6', boxSizing: 'border-box',
+              boxShadow: '4px 0 16px rgba(0,0,0,0.25)', borderBottomRightRadius: 12,
+            } : null),
           }}
         >
           <ToolPalette {...paletteProps} />
