@@ -2362,3 +2362,43 @@ column are still never exported.
 **Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
 
 **Severity.** Medium (visual).
+
+## 079 — YouTube upload: a daily-quota error was shown as "reconnect YouTube"
+
+**Found:** 2026-11-01. Numbered 079 because 076–078 are used by PRs #118–#120.
+
+**Symptom.** `app/api/youtube/upload-session/route.ts` treated every 401/403 from YouTube as a dead grant ("YouTube authorization was rejected — reconnect YouTube and try again", `needsConnect: true`). When AngleMotion's daily YouTube API quota is spent YouTube also answers 403, so coaches were sent to reconnect, which cannot fix it. The browser upload step (`lib/export/youtubeResumableUpload.ts`) showed the raw body for any 4xx.
+
+**Fix.** `isYouTubeQuotaError` reads `error.errors[].reason` of the response body. `quotaExceeded` and `dailyLimitExceeded` give the message "YouTube's daily upload limit for AngleMotion has been reached. Try again tomorrow, or download the video and upload it to YouTube yourself." (HTTP 429, `needsConnect: false`, `quotaExceeded: true`) in both places. Every other 401/403 keeps the reconnect prompt. Deliberately not treated as the daily quota: `rateLimitExceeded`/`userRateLimitExceeded` (short bursts) and `uploadLimitExceeded` (the channel's own cap).
+
+**Not verified.** The reason names come from Google's documented error reasons, not from a live response (the docs host is not reachable from the build environment and the quota cannot be exhausted on purpose). If YouTube sends the quota error with a different `reason`, it still shows the old reconnect prompt. Check the server log line `[youtube/upload-session] init failed 403: …` the first time it happens in production.
+
+**Severity.** Low (wrong message), but it sends coaches in a loop.
+
+## 080 — Standalone Google Docs were editable by anyone with the link
+
+**Found:** 2026-11-01.
+
+**Symptom.** `app/api/google/create-document/route.ts` created a Google Doc in the coach's account and then gave it `role: writer, type: anyone` (errors ignored). Anyone who got the URL could read and edit the match report, which can name players.
+
+**Fix.** The sharing step and the unused Drive client are removed; the doc stays private to the coach's own Google account. Its only caller is the match decoder's "Export to Google Doc" button (`components/decoder/AiMatchDecoderClient.tsx`), which opens the returned URL in the coach's browser; no server code reads these docs. The player docs (`lib/google/playerDocs.ts`) and `/api/google/report` never made a public grant and are unchanged. `upload-image` still makes report images public-read on purpose (Docs fetches them by URL) and is untouched.
+
+**Not changed: docs that already exist.** Every standalone doc created before this change is still shared "anyone with the link can edit". This commit does not touch them. To close them, the coach (or Vin, for test accounts) has to set each one to Restricted in Google Drive, or delete it.
+
+**Not verified.** That the doc opens for the owner in a real browser: it opens when the browser is signed into the same Google account the app used; with a different account Google asks for access, which is the intended behaviour. Not run against the real Google API.
+
+**Severity.** Medium (privacy of match reports).
+
+## 081 — Sign-in dropped the query string; `safeRedirectPath` let `/.//host` through
+
+**Found:** 2026-11-01.
+
+**Symptom 1.** A logged-out visit to `/analysis?vdebug=1` came back from sign-in as `/analysis`. `middleware.ts` put only `pathname` into `/login?redirect=`. (The login page, `LoginClient` and `/auth/callback` already carried a full path with its query, as the pricing flow shows.) Fix: the middleware now stores `pathname + search` and clears the stray query from the `/login` URL.
+
+**Symptom 2 (open redirect, found while testing symptom 1).** `safeRedirectPath` (`lib/billing/checkoutIntent.ts`) rejected `//host`, `/\host` and absolute URLs, but returned the *normalised* path. The URL parser removes dot segments, so `/.//evil.com`, `/a/..//evil.com` and `/..//evil.com` came out as `//evil.com`, and `/auth/callback` did `new URL('//evil.com', origin)`, which is `https://evil.com/`. Anyone who could get a coach to open `/login?redirect=/.//evil.com` could send them to another site right after Google sign-in. Fix: a normalised path that starts with `//` is rejected. Nothing else in the function changed.
+
+**Checked.** At runtime against a dev server with dummy Supabase settings (logged-out path, no network): `/analysis?vdebug=1` → `/login?redirect=%2Fanalysis%3Fvdebug%3D1`; `/players?tab=a&b=2` keeps both parameters; `/auth/callback?redirect=` with `/.//evil.com`, `//evil.com` and `https://evil.com` all land on `/`, and `/analysis?vdebug=1` lands on `/analysis?vdebug=1`.
+
+**Not verified.** The complete Google sign-in round trip (needs real Google and Supabase). Whether Supabase's redirect-URL allow-list accepts the callback URL with an encoded query: the pricing flow already uses the same shape (`?redirect=%2Fpricing%3Fplan%3Dpro…`), so it should.
+
+**Severity.** Symptom 1 low. Symptom 2 medium (phishing-grade open redirect after sign-in).

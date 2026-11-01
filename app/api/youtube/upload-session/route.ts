@@ -3,6 +3,7 @@ import { getRouteSession } from '@/lib/auth/routeSession';
 import { requireFeature } from '@/lib/entitlements.server';
 import { getYouTubeAccessToken } from '@/lib/youtube/connection';
 import { selectUploadOrigin, YOUTUBE_UPLOAD_COULD_NOT_START } from '@/lib/youtube/uploadOrigin';
+import { isYouTubeQuotaError, YOUTUBE_QUOTA_MESSAGE } from '@/lib/export/youtubeResumableUpload';
 
 export const runtime = 'nodejs';
 
@@ -98,10 +99,16 @@ export async function POST(req: Request) {
 
   if (!init.ok) {
     const detail = await init.text().catch(() => '');
-    // 401/403 from Google here means the stored grant is dead (revoked, or the
-    // refresh failed) — the same two-click fix as never having connected.
-    const needsConnect = init.status === 401 || init.status === 403;
     console.error(`[youtube/upload-session] init failed ${init.status}: ${detail.slice(0, 500)}`);
+    // The daily quota is also a 403, but reconnecting cannot fix it: say so, and
+    // do not offer the reconnect prompt.
+    if (init.status === 403 && isYouTubeQuotaError(detail)) {
+      return NextResponse.json({ error: YOUTUBE_QUOTA_MESSAGE, quotaExceeded: true, needsConnect: false }, { status: 429 });
+    }
+    // Any other 401/403 from Google here means the stored grant is dead
+    // (revoked, or the refresh failed) — the same two-click fix as never having
+    // connected.
+    const needsConnect = init.status === 401 || init.status === 403;
     return NextResponse.json(
       {
         error: needsConnect

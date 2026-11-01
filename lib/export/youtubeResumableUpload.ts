@@ -26,6 +26,37 @@ import { YOUTUBE_UPLOAD_COULD_NOT_START } from '@/lib/youtube/uploadOrigin';
  * retry expensive on a poor connection.
  */
 const CHUNK_SIZE = 8 * 1024 * 1024;
+
+/**
+ * The daily YouTube API quota is shared by every coach using AngleMotion. When
+ * it runs out YouTube answers 403 (the same status as a revoked grant), but
+ * reconnecting cannot help, so it gets its own message and no reconnect prompt.
+ */
+export const YOUTUBE_QUOTA_MESSAGE =
+  "YouTube's daily upload limit for AngleMotion has been reached. Try again tomorrow, or download the video and upload it to YouTube yourself.";
+
+/**
+ * `error.errors[].reason` values that mean "the daily quota is spent".
+ * `quotaExceeded` is YouTube Data API's own reason; `dailyLimitExceeded` is the
+ * generic Google API one. NOT included on purpose: `rateLimitExceeded` and
+ * `userRateLimitExceeded` (short bursts, "try again tomorrow" would be wrong)
+ * and `uploadLimitExceeded` (the channel's own upload cap, not our quota).
+ * Names are from Google's documented error reasons, not checked against a live
+ * response (KNOWN_ISSUES 079).
+ */
+const QUOTA_REASONS = new Set(['quotaExceeded', 'dailyLimitExceeded']);
+
+/** True when a YouTube/Google error body (JSON text) carries a daily-quota reason. */
+export function isYouTubeQuotaError(body: string | null | undefined): boolean {
+  if (!body) return false;
+  try {
+    const parsed = JSON.parse(body) as { error?: { errors?: Array<{ reason?: unknown }>; status?: unknown } };
+    const reasons = parsed?.error?.errors;
+    return Array.isArray(reasons) && reasons.some((r) => typeof r?.reason === 'string' && QUOTA_REASONS.has(r.reason));
+  } catch {
+    return false;
+  }
+}
 const MAX_RETRIES_PER_CHUNK = 5;
 
 export interface ResumableUploadResult {
@@ -112,6 +143,7 @@ export async function uploadToResumableSession(
         // Server-side trouble is worth retrying; anything else is fatal.
         if (res.status >= 500) throw new Error(`YouTube returned ${res.status}`);
         const detail = await res.text().catch(() => '');
+        if (isYouTubeQuotaError(detail)) return { ok: false, error: YOUTUBE_QUOTA_MESSAGE };
         return {
           ok: false,
           error: `YouTube rejected the upload (${res.status}). ${detail.slice(0, 200)}`.trim(),
