@@ -24,7 +24,6 @@ export async function POST(req: Request) {
   oauth2.setCredentials({ access_token: session.googleAccessToken });
 
   const docs = google.docs({ version: 'v1', auth: oauth2 });
-  const drive = google.drive({ version: 'v3', auth: oauth2 });
 
   const docTitle = title?.trim() || 'AngleMotion — Match report';
 
@@ -42,11 +41,9 @@ export async function POST(req: Request) {
       },
     });
 
-    await drive.permissions.create({
-      fileId: docId,
-      requestBody: { role: 'writer', type: 'anyone' },
-    }).catch(() => {});
-
+    // No sharing step: the doc stays private to the coach's own Google account
+    // (it used to be made editable by anyone with the link). The coach opens it
+    // while signed into that account.
     const url = `https://docs.google.com/document/d/${docId}/edit`;
     return NextResponse.json({ documentId: docId, url });
   } catch (e: unknown) {

@@ -2374,3 +2374,17 @@ column are still never exported.
 **Not verified.** The reason names come from Google's documented error reasons, not from a live response (the docs host is not reachable from the build environment and the quota cannot be exhausted on purpose). If YouTube sends the quota error with a different `reason`, it still shows the old reconnect prompt. Check the server log line `[youtube/upload-session] init failed 403: …` the first time it happens in production.
 
 **Severity.** Low (wrong message), but it sends coaches in a loop.
+
+## 080 — Standalone Google Docs were editable by anyone with the link
+
+**Found:** 2026-11-01.
+
+**Symptom.** `app/api/google/create-document/route.ts` created a Google Doc in the coach's account and then gave it `role: writer, type: anyone` (errors ignored). Anyone who got the URL could read and edit the match report, which can name players.
+
+**Fix.** The sharing step and the unused Drive client are removed; the doc stays private to the coach's own Google account. Its only caller is the match decoder's "Export to Google Doc" button (`components/decoder/AiMatchDecoderClient.tsx`), which opens the returned URL in the coach's browser; no server code reads these docs. The player docs (`lib/google/playerDocs.ts`) and `/api/google/report` never made a public grant and are unchanged. `upload-image` still makes report images public-read on purpose (Docs fetches them by URL) and is untouched.
+
+**Not changed: docs that already exist.** Every standalone doc created before this change is still shared "anyone with the link can edit". This commit does not touch them. To close them, the coach (or Vin, for test accounts) has to set each one to Restricted in Google Drive, or delete it.
+
+**Not verified.** That the doc opens for the owner in a real browser: it opens when the browser is signed into the same Google account the app used; with a different account Google asks for access, which is the intended behaviour. Not run against the real Google API.
+
+**Severity.** Medium (privacy of match reports).
