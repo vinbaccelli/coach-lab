@@ -906,3 +906,12 @@ depend on what failed; "called play()" is not "it plays", so check the effect
 - **Verified:** the state is the element's own (`paused`/`currentTime` read directly), and no app code resets slot A's time. Root cause not proven without the device.
 - **Fix:** detect (frozen clock while playing; seek that did not land), trace the state that tells the candidate causes apart, recover by reloading the same blob, and make Play after the end start from 0.
 - **Class of mistake:** a workaround that drives the media element (prime/nudge) can leave it in a state the app never notices. Anything that pokes the element needs a watchdog that notices the element stopped obeying.
+
+---
+
+## First Drive save for a new player (KNOWN_ISSUES 071)
+
+- **Symptom:** a coach's first screenshot save to a new player took so long they closed the tab.
+- **Verified:** the route re-searched AngleMotion → Players → <Name> → Screenshots on every save, one request after another, though it already stored the player's folder id; then it awaited a database write that changed nothing, before the upload.
+- **Fix:** use the stored id after one existence check, search only what can exist, write the id in parallel with the upload, and fall back to the old path on any doubt. Call counts are pinned in tests on a mocked Drive.
+- **Class of mistake:** storing a result and then never reading it back. When a route saves a derived id, the next call should start from it, with a cheap validity check and the slow path as the fallback.
