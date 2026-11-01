@@ -2388,3 +2388,17 @@ column are still never exported.
 **Not verified.** That the doc opens for the owner in a real browser: it opens when the browser is signed into the same Google account the app used; with a different account Google asks for access, which is the intended behaviour. Not run against the real Google API.
 
 **Severity.** Medium (privacy of match reports).
+
+## 081 — Sign-in dropped the query string; `safeRedirectPath` let `/.//host` through
+
+**Found:** 2026-11-01.
+
+**Symptom 1.** A logged-out visit to `/analysis?vdebug=1` came back from sign-in as `/analysis`. `middleware.ts` put only `pathname` into `/login?redirect=`. (The login page, `LoginClient` and `/auth/callback` already carried a full path with its query, as the pricing flow shows.) Fix: the middleware now stores `pathname + search` and clears the stray query from the `/login` URL.
+
+**Symptom 2 (open redirect, found while testing symptom 1).** `safeRedirectPath` (`lib/billing/checkoutIntent.ts`) rejected `//host`, `/\host` and absolute URLs, but returned the *normalised* path. The URL parser removes dot segments, so `/.//evil.com`, `/a/..//evil.com` and `/..//evil.com` came out as `//evil.com`, and `/auth/callback` did `new URL('//evil.com', origin)`, which is `https://evil.com/`. Anyone who could get a coach to open `/login?redirect=/.//evil.com` could send them to another site right after Google sign-in. Fix: a normalised path that starts with `//` is rejected. Nothing else in the function changed.
+
+**Checked.** At runtime against a dev server with dummy Supabase settings (logged-out path, no network): `/analysis?vdebug=1` → `/login?redirect=%2Fanalysis%3Fvdebug%3D1`; `/players?tab=a&b=2` keeps both parameters; `/auth/callback?redirect=` with `/.//evil.com`, `//evil.com` and `https://evil.com` all land on `/`, and `/analysis?vdebug=1` lands on `/analysis?vdebug=1`.
+
+**Not verified.** The complete Google sign-in round trip (needs real Google and Supabase). Whether Supabase's redirect-URL allow-list accepts the callback URL with an encoded query: the pricing flow already uses the same shape (`?redirect=%2Fpricing%3Fplan%3Dpro…`), so it should.
+
+**Severity.** Symptom 1 low. Symptom 2 medium (phishing-grade open redirect after sign-in).

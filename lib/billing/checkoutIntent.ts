@@ -57,6 +57,10 @@ export function safeRedirectPath(raw: string | null | undefined, fallback = '/')
     const base = 'https://same-origin.invalid';
     const u = new URL(raw, base);
     if (u.origin !== base) return fallback;
+    // Dot segments are removed by the URL parser, so `/.//evil.com` and
+    // `/a/..//evil.com` come out as `//evil.com`, which `new URL(path, origin)`
+    // then reads as another host. Re-check the normalised path.
+    if (u.pathname.startsWith('//')) return fallback;
     return `${u.pathname}${u.search}${u.hash}`;
   } catch {
     return fallback;

@@ -63,7 +63,11 @@ export async function middleware(req: NextRequest) {
     if (!user) {
       const url = req.nextUrl.clone();
       url.pathname = '/login';
-      url.searchParams.set('redirect', pathname);
+      // Keep the query string (e.g. /analysis?vdebug=1) through sign-in. The
+      // login page and /auth/callback both pass this through safeRedirectPath
+      // (lib/billing/checkoutIntent.ts), so only a same-site path is ever used.
+      url.search = '';
+      url.searchParams.set('redirect', pathname + req.nextUrl.search);
       return NextResponse.redirect(url);
     }
 
