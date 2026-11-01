@@ -6883,6 +6883,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onSkeletonShowLeftLegChange:     setSkeletonShowLeftLeg,
     stroMotionPanel: stroMotionPanelEl,
     authContent: <AuthButton iconOnly={compactToolbarRail} />,
+    // Back to the toolbar's home screen: Metrics was left, its green handles hide again
+    // (they still show when snapshots exist or the skeleton is on, as before).
+    onNavigateBack: (screen) => { if (screen === 'home') setMetricsSectionOpened(false); },
     onNavigate: (screen) => {
       if (screen === 'stromotion') {
         setStroMotionActive(true);

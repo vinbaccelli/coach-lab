@@ -65,3 +65,12 @@ test('phone layout: one full-screen sheet with the Generate actions pinned at th
   assert.match(panel, /width: isMobile \? '100%'/);
   assert.match(panel, /<section aria-label="Sound"/);
 });
+
+test('leaving Metrics with the toolbar Back hides the green handles again (onNavigateBack → home)', () => {
+  const page = readFileSync('app/analysis/page.tsx', 'utf8');
+  assert.match(page, /onNavigateBack: \(screen\) => \{ if \(screen === 'home'\) setMetricsSectionOpened\(false\); \}/);
+  const tp = readFileSync('components/ToolPalette.tsx', 'utf8');
+  const pop = tp.slice(tp.indexOf('const pop = useCallback'), tp.indexOf('const push = useCallback'));
+  assert.match(pop, /onNavigateBack\?\.\(next\[next\.length - 1\]\)/);
+  assert.match(tp, /const resetNav = useCallback\(\(\) => \{ setNavStack\(\['home'\]\); onNavigateBack\?\.\('home'\); \}/);
+});

@@ -167,6 +167,8 @@ interface ToolPaletteProps {
   stroMotionPanel?: React.ReactNode;
   /** Called when the user navigates to a toolbar screen. */
   onNavigate?: (screen: 'home' | 'pan' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
+  /** The toolbar went BACK (Back button, or reset to home): the screen now shown. `onNavigate` only reports screens opened. */
+  onNavigateBack?: (screen: 'home' | 'pan' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
   /**
    * Pan/Hand tool controls. The pan screen owns ALL viewport navigation —
    * zoom in, zoom out, the drag toggle and reset — so entering it is the one
@@ -1197,6 +1199,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onToggleToolbarLabels,
     stroMotionPanel,
     onNavigate,
+    onNavigateBack,
     stroMotionEnabled = false,
     onStroMotionToggle,
     authContent,
@@ -1246,9 +1249,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const top = navStack[navStack.length - 1];
   const { pressedKey, fire } = useTapScale();
 
+  const navStackRef = useRef(navStack);
+  navStackRef.current = navStack;
   const pop = useCallback(() => {
-    setNavStack((s) => (s.length > 1 ? s.slice(0, -1) : ['home']));
-  }, []);
+    const s = navStackRef.current;
+    const next: NavScreen[] = s.length > 1 ? s.slice(0, -1) : ['home'];
+    setNavStack(next);
+    onNavigateBack?.(next[next.length - 1]);
+  }, [onNavigateBack]);
   const push = useCallback((x: NavScreen) => {
     setNavStack((s) => [...s, x]);
     onNavigate?.(x);
@@ -1262,7 +1270,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       '@keyframes anglemotionToolbarScreenIn{from{opacity:.92;transform:translateX(8px)}to{opacity:1;transform:none}}';
     document.head.appendChild(el);
   }, []);
-  const resetNav = useCallback(() => setNavStack(['home']), []);
+  const resetNav = useCallback(() => { setNavStack(['home']); onNavigateBack?.('home'); }, [onNavigateBack]);
 
   useEffect(() => {
     if (!drawContextActive) {
