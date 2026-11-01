@@ -2362,3 +2362,19 @@ column are still never exported.
 **Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
 
 **Severity.** Medium (visual).
+
+## 078 — Stripe webhook: failures not reported to Sentry; unknown price fallbacks were silent
+
+**Found:** 2026-11-01 (safety review of the webhook against `docs/PRICING_PLANS_PROPOSAL.md` B3). Numbered 078 because 076 and 077 are used by PRs #118 and #119.
+
+**Already correct on main (verified, unchanged).** Every database write in `app/api/stripe/webhook/route.ts` checks `{ error }` and throws `RetryableError`, and the catch answers 500 so Stripe retries. Status is copied from the subscription re-read from Stripe (`subscriptionFields`, `status: sub.status`). There is no Pro default: a live subscription on an unmapped price throws, so nothing is written and the coach keeps the stored plan. An event id is recorded in `stripe_webhook_events` only after the work succeeds, so a delivery seen twice is acknowledged as `duplicate`. Two concurrent deliveries of the same event can both run, but every write is an upsert keyed by user, invoice or session, so the result is the same.
+
+**Fixed.**
+- The three 500 answers (no service client, live/test key mismatch, sync failure) were logged to the console and to `billing_event_errors`, but never reached Sentry. They are now reported with `Sentry.captureMessage`, tagged with the event type, the Stripe event id, livemode and the stage. The message is scrubbed of user ids (UUIDs), Stripe customer ids, emails and Postgres `Key (…)=(…)` values (`lib/billing/webhookReport.ts`). Reporting is best effort and bounded at 2 s, and it never changes the answer.
+- When the price is not in the plan table and the checkout metadata names a valid plan, that plan is still used, but it is now logged. The same goes for an ended subscription on an unknown price, where the status is written and the stored plan is left alone.
+
+**Price → plan mapping.** `lib/stripe.ts` `tierForPriceId` and `PRICE_ENV` are unchanged. The six launch prices map to the same plan and seats as before (pinned in `tests/webhookSync.test.ts`).
+
+**Not covered.** A route-level test with real HTTP and a database (the route was exercised locally with a locally signed fake event: 500 + report path, 200 for an ignored type, 400 unsigned). Sentry delivery itself, which needs the production EU DSN.
+
+**Severity.** Medium (billing observability).
