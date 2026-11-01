@@ -12,6 +12,7 @@ import {
 } from '@/lib/timelineView';
 import {
   HOLD_TO_GRAB_MS, ballPressHold, ballPressMove, pressOnPlayheadBall, startBallPress, type BallPress,
+  TAB_TRACK_GRAB_PX,
 } from '@/lib/timelinePress';
 import { tempDebugPointer } from '@/lib/tempDebugPointer'; // TEMP-DEBUG-POINTER — remove after phone touch investigation
 
@@ -1380,6 +1381,27 @@ export default function PreciseTimeline({
                     Feeds pointer-x into the SAME timeFromClientX -> onTrimChange
                     path — the clamp bounds and onTrimChange call are byte-identical
                     to the previous in-track handle; only the grab location moved. */}
+                {/* Phone: the tab's grab area continues {TAB_TRACK_GRAB_PX} px down into the
+                    track's top band (above the playhead ball), so a finger landing just
+                    under the tab grabs it instead of scrubbing (lib/timelinePress.ts). */}
+                {phoneChrome ? (
+                  <div
+                    aria-hidden
+                    data-tab-grab="start"
+                    {...trimHandleProps('start')}
+                    style={{
+                      position: 'absolute',
+                      right: trimStartTabRight,
+                      width: trimStartTabWidth,
+                      top: 0,
+                      height: TAB_TRACK_GRAB_PX,
+                      cursor: 'ew-resize',
+                      pointerEvents: 'auto',
+                      touchAction: 'none',
+                      zIndex: 10,
+                    }}
+                  />
+                ) : null}
                 <div
                   aria-label="Trim start — drag to adjust"
                   title="Drag to set trim start"
@@ -1451,6 +1473,27 @@ export default function PreciseTimeline({
                     Feeds pointer-x into the SAME timeFromClientX -> onTrimChange
                     path — the clamp bounds and onTrimChange call are byte-identical
                     to the previous in-track handle; only the grab location moved. */}
+                {/* Phone: the tab's grab area continues {TAB_TRACK_GRAB_PX} px down into the
+                    track's top band (above the playhead ball), so a finger landing just
+                    under the tab grabs it instead of scrubbing (lib/timelinePress.ts). */}
+                {phoneChrome ? (
+                  <div
+                    aria-hidden
+                    data-tab-grab="end"
+                    {...trimHandleProps('end')}
+                    style={{
+                      position: 'absolute',
+                      left: trimEndTabLeft,
+                      width: trimEndTabWidth,
+                      top: 0,
+                      height: TAB_TRACK_GRAB_PX,
+                      cursor: 'ew-resize',
+                      pointerEvents: 'auto',
+                      touchAction: 'none',
+                      zIndex: 10,
+                    }}
+                  />
+                ) : null}
                 <div
                   aria-label="Trim end — drag to adjust"
                   title="Drag to set trim end"

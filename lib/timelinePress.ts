@@ -48,3 +48,24 @@ export function ballPressMove(p: BallPress, clientX: number, nowMs: number): Bal
   if (held.phase !== 'pending') return held;
   return Math.abs(clientX - p.x0) > PRESS_SLOP_PX ? { ...p, phase: 'scrub' } : p;
 }
+
+// ── Selection tabs on a phone ────────────────────────────────────────────────
+//
+// The trim tabs sit just above the track (34 px tall on a phone). A finger aimed at a
+// tab, especially with the playhead ball right under it, often lands a few px LOWER,
+// on the track, and that press scrubs (moves the ball) instead of grabbing the tab.
+// On a phone each tab's grab area extends this far down into the track's top band,
+// which lies above the ball (the ball is centred in the track), so the tab wins there.
+
+/** How far (px) a phone tab's grab area extends down into the track. */
+export const TAB_TRACK_GRAB_PX = 12;
+
+/** Total grab height of a phone tab (tab + the 2 px gap + the extension into the track). */
+export function phoneTabGrabHeight(tabH: number): number {
+  return tabH + 2 + TAB_TRACK_GRAB_PX;
+}
+
+/** The extension stays above the playhead ball (centred in the track) — never steals a press on the ball. */
+export function tabGrabClearsBall(trackH: number, ballSize: number): boolean {
+  return TAB_TRACK_GRAB_PX <= (trackH - ballSize) / 2;
+}

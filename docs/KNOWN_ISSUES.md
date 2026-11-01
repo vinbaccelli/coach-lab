@@ -2362,3 +2362,15 @@ column are still never exported.
 **Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
 
 **Severity.** Medium (visual).
+
+---
+
+## 077 — Phone: right selection tab hard to grab; expanded toolbar broken
+
+**Found:** 2026-11-01 (coach report).
+
+**Selection tabs (fixed).** Measured in Chromium (390×844 and 844×390, touch emulation): the tabs are the top element at every probed point, before and after moving the playhead; nothing covers them. Each tab is 46×34 px and sits 2 px ABOVE the track. A finger aimed at a tab, especially with the ball right under it, lands a few px lower, on the track, and that press scrubs (moves the ball) instead of grabbing the tab. On a phone each tab's grab area now continues 12 px down into the track's top band (`TAB_TRACK_GRAB_PX`, lib/timelinePress.ts), which lies above the ball (centred, 15 px below the track top), so a press there grabs the tab: 48 px tall in total. Scrubbing, the ball and pinch are unchanged elsewhere. Not reproduced: why the RIGHT tab specifically; iOS edge-swipe navigation near the right screen edge is a candidate that cannot be tested here.
+
+**Expanded toolbar (fixed).** Portrait: expanding PUSHED the layout (rail 60 → 196 px), halving the video and cutting the play-controls row off. Landscape: the actions footer (Screenshot … Control Panel, ~330 px) was pinned and the tool list got zero height, so the tools and the close button were squeezed out (no navigation, no close). Now on a phone the rail keeps its 60 px place and the labelled toolbar OVERLAYS the video, ending above the timeline (measured, `overlayBottomInset`, lib/timelineView.ts); tools and footer form one scrolling column; the close button stays pinned at the top and closes it with one tap. Desktop is unchanged.
+
+**Severity.** Medium.
