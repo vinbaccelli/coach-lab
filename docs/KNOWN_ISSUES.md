@@ -2310,6 +2310,20 @@ column are still never exported.
 
 **Not fixed (outside the allowed files).** The upload route should read `players.google_folder_id` (the route already stores it) instead of re-resolving the chain, and create the Screenshots folder once. Severity: medium (looks broken on a coach's first save).
 
+**Fixed on the server (2026-11-01, branch `fix/drive-folder-speed`).** `POST /api/google/upload-image` now calls `storeScreenshotInDrive` (`lib/google/drive.ts`):
+- With a saved `players.google_folder_id`: one `files.get` (exists, not in the trash, still named like the player) in parallel with one search for the `Screenshots` folder under it. Any doubt (Drive error, missing, trashed, renamed player) takes the previous path by name, so renamed players and players without a saved id behave as before. The id is written only when it changed.
+- A folder created a moment ago is not searched for its child (a new folder cannot contain anything).
+- The folder-id write runs in parallel with the upload instead of before it.
+- A timing line `[google/upload-image] timing {path, driveCalls, folderMs, createMs, shareMs, totalMs}` is logged (counts and milliseconds only).
+
+Drive calls per save, measured on a mocked Drive, old algorithm vs new: existing player 6 → 4; new player (coach already has AngleMotion/Players) 8 → 7; brand-new coach 10 → 7. With 100 ms per Drive call modelled: 664 → 303 ms, 865 → 703 ms, 1066 → 706 ms.
+
+**Still slow: the first save for a brand-new player.** AngleMotion → Players → <Name> → Screenshots is a chain (each step needs its parent's id), so it stays sequential. Only a stored per-coach id for AngleMotion/Players (a column, so a migration) would shorten it further; not done here.
+
+**Not in this route (checked).** There is no HTTP 507 "Drive full" handling in `upload-image`: a full Drive makes `files.create` throw and the route answers 500 with Google's message, unchanged. `lib/google/playerDocs.ts` has its own quota check for the Docs path.
+
+**Not verified.** Real Drive latency and behaviour (only a mocked Drive was used); that a real Drive answers `files.get` for a trashed folder with `trashed: true` and lists nothing under it (documented behaviour, not observed).
+
 
 ---
 

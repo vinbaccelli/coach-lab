@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import { Readable } from 'stream';
 import { getRouteSession } from '@/lib/auth/routeSession';
 import { requireFeature } from '@/lib/entitlements.server';
-import { findOrCreateFolder, playerFolderChain } from '@/lib/google/drive';
+import { storeScreenshotInDrive, type ScreenshotPlayer } from '@/lib/google/drive';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -66,71 +65,35 @@ export async function POST(req: Request) {
     //
     // Skipped entirely when the caller already resolved a folder (see
     // `providedFolderId` above) — reused as-is rather than re-resolved.
-    let folderId: string | null = providedFolderId ?? null;
-    if (!folderId && playerId) {
-      const { data: player } = await session.supabase
+    //
+    // The Drive work is storeScreenshotInDrive (lib/google/drive.ts): the saved
+    // players.google_folder_id is used instead of searching every time, and
+    // that id is written in parallel with the upload (KNOWN_ISSUES 071).
+    let player: ScreenshotPlayer | null = null;
+    if (!providedFolderId && playerId) {
+      const { data } = await session.supabase
         .from('players')
-        .select('id, display_name')
+        .select('id, display_name, google_folder_id')
         .eq('id', playerId)
-        .single<{ id: string; display_name: string }>();
-      if (player?.display_name) {
-        try {
-          const playerFolder = await playerFolderChain(drive, player.display_name);
-          folderId = await findOrCreateFolder(drive, 'Screenshots', playerFolder);
-          // Surfaced as the "Open Drive folder" link in PlayerProfileClient.
-          await session.supabase
-            .from('players')
-            .update({ google_folder_id: playerFolder })
-            .eq('id', player.id);
-        } catch (e) {
-          console.error('[google/upload-image] player folder failed, using shared:', e instanceof Error ? e.message : e);
-        }
-      }
-    }
-    if (!folderId) {
-      // Best-effort. findOrCreateFolder SEARCHES Drive, and the app holds the
-      // per-file `drive.file` scope, so it cannot see folders it did not create
-      // and can 403 outright on restricted accounts. Falling back to `null`
-      // uploads to the user's Drive root — a location they always own — which
-      // beats losing the screenshot over a folder we could not resolve.
-      try {
-        const rootId = await findOrCreateFolder(drive, 'AngleMotion');
-        folderId = await findOrCreateFolder(drive, 'Screenshots', rootId);
-      } catch (e) {
-        console.error('[google/upload-image] shared folder failed, using Drive root:', e instanceof Error ? e.message : e);
-        folderId = null;
-      }
+        .single<ScreenshotPlayer>();
+      player = data ?? null;
     }
 
     const ext = mime.includes('png') ? 'png' : mime.includes('jpeg') ? 'jpg' : 'img';
-    const created = await drive.files.create({
-      requestBody: {
-        name: name?.trim() || `anglemotion-${Date.now()}.${ext}`,
-        ...(folderId ? { parents: [folderId] } : {}),
+    const { fileId, folderId } = await storeScreenshotInDrive(
+      drive,
+      { player, providedFolderId, name: name?.trim() || `anglemotion-${Date.now()}.${ext}`, mime, buffer },
+      {
+        async savePlayerFolderId(id, folder) {
+          // Surfaced as the "Open Drive folder" link in PlayerProfileClient.
+          const { error } = await session.supabase.from('players').update({ google_folder_id: folder }).eq('id', id);
+          if (error) throw new Error(error.message);
+        },
+        log: (message, detail) => console.error(message, detail),
+        timing: (fields) => console.info('[google/upload-image] timing', JSON.stringify(fields)),
+        now: () => Date.now(),
       },
-      media: { mimeType: mime, body: Readable.from(buffer) },
-      fields: 'id',
-    });
-    const fileId = created.data.id;
-    if (!fileId) throw new Error('Drive upload failed');
-
-    // Docs' insertInlineImage fetches the URI SERVER-SIDE, so the file has to be
-    // readable without a session. Workspace domains frequently forbid
-    // anyone-with-link sharing and answer "The caller does not have permission"
-    // here. That is not recoverable for a Drive-hosted image, so fail loudly and
-    // let the caller fall back to Supabase storage, whose signed URL Google can
-    // actually fetch — rather than returning a Drive link that silently breaks
-    // the Docs insert later.
-    try {
-      await drive.permissions.create({
-        fileId,
-        requestBody: { role: 'reader', type: 'anyone' },
-      });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[google/upload-image] permissions.create(anyone) failed — Drive image would not be fetchable by Docs:', msg);
-      throw new Error(`permissions.create(anyone): ${msg}`);
-    }
+    );
 
     return NextResponse.json({
       fileId,
