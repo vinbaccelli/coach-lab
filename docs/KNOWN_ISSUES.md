@@ -2362,3 +2362,17 @@ column are still never exported.
 **Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
 
 **Severity.** Medium (visual).
+
+---
+
+## 076 — Drawing tools on a phone: precision blocked selecting, data column hard to move, text box vanished
+
+**Found:** 2026-11-01 (coach report).
+
+**Precision blocked selecting (fixed).** With precision on, `onPointerDown` (components/Canvas.tsx, "rule 3: precision anchor acquisition") took EVERY single-finger touch as the precision anchor for any tool except Zoom and Object Multiplier, and returned before the Select tool's hit-testing ran, so nothing could be tapped, selected or moved, and the data column could not be dragged either. Now the Select tool is exempt (it does not draw), and the data column's header/corner are checked before the anchor. Drawing tools still use precision exactly as before; desktop is unaffected (precision is touch-only).
+
+**Data column on a phone (fixed).** Header band and resize corner were 26 px and ~28 px. On a finger the header band is at least 44 px and the corner a 44 px square (`dataColumnHit`, lib/drawingTools.ts). Pressing the header selects the column: only then the drag dots and a round resize knob show, and only then the corner resizes; any other press deselects. A drag keeps the column inside the video picture (`clampColumnPos`); the size limits (0.6×–2.5×) are unchanged. The column's press returns before any drawing or pan, as before. Not changed: the column's first position (it can start in the letterbox until it is dragged) and the zoom ≠ 1 hit-test mismatch noted in Canvas.
+
+**Text box vanished on a finger (fixed).** Reproduced in Chromium with a 180 ms touch (CDP): pointerdown → the new text box takes focus → pointerup → the browser's compatibility mousedown on the canvas → the box blurs, commits empty and unmounts. The draft's focus guard only covered the first animation frame, and a real finger lifts later. A finger/pen pointerdown with the Text tool is now cancelled (`preventDefault`), which suppresses those compatibility mouse events. A quick synthetic tap (the earlier test) never showed it. Toolbar: Text is now right after Style in the Draw list, and Text size is the first option in Style when Text is active (still hidden in the icon-only rail, as before).
+
+**Severity.** High (core drawing on the phone).

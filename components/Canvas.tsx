@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
-import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
+import { calcAngleDeg, arrowBearingDeg, clampColumnPos, dataColumnHit, arrowHeadGeometry, arrowHeadLength, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { emitTourSignal, reportTourState } from '@/lib/tourSignals';
 import type { BallPosition } from '@/lib/ballDetection';
@@ -2433,6 +2433,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // bottom-right corner to resize; in-session only.
     const mcScaleRef = useRef<number>(1);
     const mcResizingRef = useRef<{ startX: number; startY: number; origScale: number } | null>(null);
+    /** The column was pressed (its header): drag dots + resize grip show, and the corner resizes. Any other press clears it. */
+    const mcSelectedRef = useRef(false);
     const lastMcRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
     const columnDeleteModeRef = useRef(columnDeleteMode);
     useEffect(() => { columnDeleteModeRef.current = columnDeleteMode; }, [columnDeleteMode]);
@@ -7114,9 +7116,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const mcTitle = (mcTitleRef.current || 'DATA COLUMN').toUpperCase();
           ctx.fillText(mcTitle.length > 22 ? mcTitle.slice(0, 21) + '…' : mcTitle, mcX + pad, mcY + Math.round(14 * s));
 
-          // Drag handle dots
-          ctx.fillStyle = 'rgba(255,255,255,0.25)';
-          for (let d = 0; d < 3; d++) ctx.fillRect(mcX + mcW - Math.round(18 * s) + d * Math.round(5 * s), mcY + Math.round(10 * s), 2, 2);
+          // Drag handle dots + resize grip: only while the column is selected (pressed).
+          const mcSel = mcSelectedRef.current;
+          if (mcSel) {
+            ctx.fillStyle = 'rgba(255,255,255,0.25)';
+            for (let d = 0; d < 3; d++) ctx.fillRect(mcX + mcW - Math.round(18 * s) + d * Math.round(5 * s), mcY + Math.round(10 * s), 2, 2);
+          }
 
           if (hasItems) {
             for (let i = 0; i < mcItems.length; i++) {
@@ -7149,15 +7154,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             ctx.fillText('Draw to add measurements', mcX + pad, mcY + Math.round(34 * s));
           }
 
-          // Resize handle — bottom-right corner (diagonal grip lines).
-          ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-          ctx.lineWidth = 1.5;
-          for (let g = 0; g < 3; g++) {
-            const off = 4 + g * 4;
+          // Resize handle — bottom-right corner: a round knob (its touch area is 44 px,
+          // lib/drawingTools.ts dataColumnHit) with the diagonal grip lines.
+          if (mcSel) {
+            ctx.fillStyle = 'rgba(255,255,255,0.9)';
             ctx.beginPath();
-            ctx.moveTo(mcX + mcW - off, mcY + mcH - 4);
-            ctx.lineTo(mcX + mcW - 4, mcY + mcH - off);
-            ctx.stroke();
+            ctx.arc(mcX + mcW, mcY + mcH, 9, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+            ctx.lineWidth = 1.5;
+            for (let g = 0; g < 2; g++) {
+              const off = 3 + g * 4;
+              ctx.beginPath();
+              ctx.moveTo(mcX + mcW - off, mcY + mcH + 3);
+              ctx.lineTo(mcX + mcW + 3, mcY + mcH - off);
+              ctx.stroke();
+            }
           }
 
           ctx.restore();
@@ -8387,12 +8399,49 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // ── Data column header drag / corner resize ──────────────────────────
+      // Checked BEFORE the precision anchor (rule 3), which used to claim every
+      // single-finger touch: with precision on the column could not be moved.
+      // Touch gets 44 px targets (lib/drawingTools.ts dataColumnHit).
+      {
+        const mcItemsEarly = measurementColumnRef.current;
+        const canvasEarly = canvasRef.current;
+        if (mcItemsEarly !== null && canvasEarly && (e.pointerType !== 'mouse' || e.button === 0)) {
+          const posEarly = getPos(e);
+          const cW = cssW(canvasEarly), cH = cssH(canvasEarly);
+          const sc = mcScaleRef.current;
+          const mW = Math.round(MC_BASE_W * sc);
+          const rowH = Math.round(22 * sc);
+          const mH = mcItemsEarly.length > 0 ? mcItemsEarly.length * rowH + Math.round(28 * sc) : Math.round(48 * sc);
+          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
+          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
+          const hit = dataColumnHit(posEarly, { x: mX, y: mY, w: mW, h: mH }, {
+            headerH: Math.round(26 * sc), touch: e.pointerType === 'touch', selected: mcSelectedRef.current,
+          });
+          if (hit) {
+            canvasEl.setPointerCapture(e.pointerId);
+            mcSelectedRef.current = true;
+            if (hit === 'resize') mcResizingRef.current = { startX: posEarly.x, startY: posEarly.y, origScale: sc };
+            else mcDraggingRef.current = { startX: posEarly.x, startY: posEarly.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
+            isDraggingRef.current = true;
+            renderDirtyRef.current = true;
+            e.preventDefault();
+            return;
+          }
+        }
+        // A press anywhere else deselects the column (its handles hide).
+        if (mcSelectedRef.current) { mcSelectedRef.current = false; renderDirtyRef.current = true; }
+      }
+
       // ── Priority router (rule 3): precision anchor acquisition ────────────
+      // Not for the Select tool: it does not draw, and the anchor used to swallow
+      // its tap, so with precision on nothing could be selected or moved.
       const precisionTouchEligible =
         precisionTouchDrawRef.current &&
         e.pointerType === 'touch' &&
         toolEarly !== 'zoom' &&
-        toolEarly !== 'objectMultiplier';
+        toolEarly !== 'objectMultiplier' &&
+        toolEarly !== 'select';
 
       if (precisionTouchEligible && precisionAnchorPointerIdRef.current === null) {
         precisionAnchorPointerIdRef.current = e.pointerId;
@@ -8690,47 +8739,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
-      // ── Data column HEADER drag + RESIZE corner (BEFORE pan) ─────────────
-      // Must run before shouldPan for exactly the reason the overlay endpoint
-      // drag above does. `panModeEnabledRef` makes shouldPan true at ANY zoom
-      // level, so with pan mode on the pan branch swallowed every pointer-down
-      // and the column could not be moved or resized at all — it was the LAST
-      // consumer in this handler, behind five earlier `return`s.
-      //
-      // Only the header and the resize corner are claimed here. The column ROW
-      // hit-testing deliberately stays below pan: rows cover the column BODY,
-      // and claiming that area early would steal pan drags that merely start
-      // over the column.
-      {
-        const mcItemsEarly = measurementColumnRef.current;
-        const canvasEarly = canvasRef.current;
-        if (mcItemsEarly !== null && canvasEarly) {
-          const cW = cssW(canvasEarly), cH = cssH(canvasEarly);
-          const s = mcScaleRef.current;
-          const mW = Math.round(MC_BASE_W * s);
-          const rowH = Math.round(22 * s);
-          const mH = mcItemsEarly.length > 0
-            ? mcItemsEarly.length * rowH + Math.round(28 * s)
-            : Math.round(48 * s);
-          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
-          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
-          // Resize corner (bottom-right ~22px box) — checked first.
-          const rc = 22;
-          if (pos.x >= mX + mW - rc && pos.x <= mX + mW + 6 && pos.y >= mY + mH - rc && pos.y <= mY + mH + 6) {
-            mcResizingRef.current = { startX: pos.x, startY: pos.y, origScale: s };
-            isDraggingRef.current = true;
-            e.preventDefault();
-            return;
-          }
-          const headerH = Math.round(26 * s);
-          if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + headerH) {
-            mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
-            isDraggingRef.current = true;
-            e.preventDefault();
-            return;
-          }
-        }
-      }
+      // (Data column header drag + corner resize: handled at the top of this
+      // handler, before the precision anchor and before pan.)
 
       // If the pointer lands on the webcam PiP, preserve PiP drag/resize even
       // when pan mode is active.  We pre-check here so the PiP hit can veto
@@ -9129,6 +9139,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         };
       }
 
+      // Text on a finger: the browser's compatibility mousedown arrives after the
+      // finger LIFTS (100–200 ms on a phone), after the draft's focus guard, and its
+      // default moves focus to the canvas: the box blurred, committed empty and
+      // vanished. Cancelling the pointerdown suppresses those mouse events.
+      if (tool === 'text' && e.pointerType !== 'mouse') e.preventDefault();
       beginDrawToolAt(pos, lw);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [beginDrawToolAt, eraseAt, videoRef, webcamPipHitTest, beginWebcamPipDragAt, getPosFromPointerEvent, tryStartWebcamPinch, rollbackTentativeGesture, cancelPrecisionHold]);
@@ -9180,10 +9195,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (canvas) {
           const dx = pos.x - mcDraggingRef.current.startX;
           const dy = pos.y - mcDraggingRef.current.startY;
-          mcPosRef.current = {
-            x: Math.max(0, Math.min(0.9, mcDraggingRef.current.origX + dx / cssW(canvas))),
-            y: Math.max(0, Math.min(0.9, mcDraggingRef.current.origY + dy / cssH(canvas))),
-          };
+          // Kept inside the video picture (lib/drawingTools.ts clampColumnPos).
+          const cW = cssW(canvas), cH = cssH(canvas);
+          const n = measurementColumnRef.current?.length ?? 0;
+          const sc = mcScaleRef.current;
+          const mW = Math.round(MC_BASE_W * sc);
+          const mH = n > 0 ? n * Math.round(22 * sc) + Math.round(28 * sc) : Math.round(48 * sc);
+          mcPosRef.current = clampColumnPos(
+            { x: mcDraggingRef.current.origX + dx / cW, y: mcDraggingRef.current.origY + dy / cH },
+            { w: mW, h: mH }, { w: cW, h: cH }, videoBoundsRef.current,
+          );
           renderDirtyRef.current = true;
         }
         return;

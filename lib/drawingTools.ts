@@ -258,3 +258,51 @@ export function swingPathVisibleAt(times: readonly number[] | undefined, t: numb
   if (lo === Infinity) return true;
   return t >= lo - SWING_TIME_EPS && t <= hi + SWING_TIME_EPS;
 }
+
+// ── Data column: touch targets and placement (Canvas) ────────────────────────
+
+/** Smallest touch target (px), Apple HIG. */
+export const TOUCH_TARGET_PX = 44;
+
+type Box = { x: number; y: number; w: number; h: number };
+
+/**
+ * What a press at `p` grabs on the data column at `r`: its resize corner (only while the
+ * column is selected, as only then the grip shows), its header (drag), or nothing. On a
+ * finger both targets are at least TOUCH_TARGET_PX: the header band is extended downward
+ * into the column, the corner is a 44 px square centred on it.
+ */
+export function dataColumnHit(
+  p: { x: number; y: number },
+  r: Box,
+  o: { headerH: number; touch: boolean; selected: boolean },
+): 'resize' | 'header' | null {
+  // Mouse: the original box (22 px in, 6 px out). Finger: a 44 px square centred on the corner.
+  const inside = o.touch ? TOUCH_TARGET_PX / 2 : 22;
+  const outside = o.touch ? TOUCH_TARGET_PX / 2 : 6;
+  const cx = r.x + r.w;
+  const cy = r.y + r.h;
+  if (o.selected && p.x >= cx - inside && p.x <= cx + outside && p.y >= cy - inside && p.y <= cy + outside) return 'resize';
+  const headerH = Math.min(r.h, o.touch ? Math.max(o.headerH, TOUCH_TARGET_PX) : o.headerH);
+  if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + headerH) return 'header';
+  return null;
+}
+
+/**
+ * The column's top-left as fractions of the canvas, kept fully inside the video picture
+ * `video` (dx, dy, dw, dh; falls back to the canvas when the column is larger than it).
+ */
+export function clampColumnPos(
+  frac: { x: number; y: number },
+  size: { w: number; h: number },
+  canvas: { w: number; h: number },
+  video: { dx: number; dy: number; dw: number; dh: number } | null | undefined,
+): { x: number; y: number } {
+  if (!(canvas.w > 0) || !(canvas.h > 0)) return frac;
+  const area = video && video.dw >= size.w && video.dh >= size.h
+    ? { x: video.dx, y: video.dy, w: video.dw, h: video.dh }
+    : { x: 0, y: 0, w: canvas.w, h: canvas.h };
+  const px = Math.max(area.x, Math.min(area.x + area.w - size.w, frac.x * canvas.w));
+  const py = Math.max(area.y, Math.min(area.y + area.h - size.h, frac.y * canvas.h));
+  return { x: px / canvas.w, y: py / canvas.h };
+}
