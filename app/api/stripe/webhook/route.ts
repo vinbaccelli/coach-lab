@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import type Stripe from 'stripe';
 import { stripe, tierForPriceId } from '@/lib/stripe';
 import { createSupabaseServiceClient } from '@/lib/supabase/service';
 import { processStripeEvent, HANDLED_EVENTS, RetryableError, type SyncDeps } from '@/lib/billing/webhookSync';
 import type { DraftProductType } from '@/lib/billing/invoicing/draft';
 import { recordAffiliateCommission } from '@/lib/affiliates.server';
+import { webhookFailureReport } from '@/lib/billing/webhookReport';
 
 const idOf = (v: unknown): string | null =>
   typeof v === 'string' ? v : v && typeof (v as { id?: unknown }).id === 'string' ? (v as { id: string }).id : null;
@@ -40,6 +42,7 @@ export async function POST(req: Request) {
   const db = createSupabaseServiceClient();
   if (!db) {
     console.error('[stripe/webhook] SUPABASE_SERVICE_ROLE_KEY not configured; event', event.id, 'will be retried');
+    await reportFailure(event, 'config', 'SUPABASE_SERVICE_ROLE_KEY not configured');
     return NextResponse.json({ error: 'Service client not configured' }, { status: 500 });
   }
 
@@ -121,6 +124,7 @@ export async function POST(req: Request) {
     const msg = `${event.livemode ? 'Live' : 'Test'}-mode event received by a deployment whose STRIPE_SECRET_KEY is ${keyIsLive ? 'live' : 'test'}: set the matching key (docs/STRIPE_LAUNCH_SETUP.md)`;
     await recordEventError(db, event, msg);
     console.error('[stripe/webhook]', event.id, msg);
+    await reportFailure(event, 'config', msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
@@ -146,7 +150,24 @@ export async function POST(req: Request) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[stripe/webhook]', event.type, event.id, 'failed — returning 500 so Stripe retries:', msg);
     await recordEventError(db, event, msg);
+    await reportFailure(event, 'sync', msg);
     return NextResponse.json({ error: 'Sync failed' }, { status: 500 });
+  }
+}
+
+/**
+ * Tell Sentry the webhook answered 500, without personal data
+ * (lib/billing/webhookReport.ts; Sentry's own beforeSend scrubs again). Best
+ * effort and bounded: reporting must never change the answer or hang it.
+ * A no-op when Sentry is off (no EU DSN).
+ */
+async function reportFailure(event: Stripe.Event, stage: 'config' | 'sync', error: string) {
+  try {
+    const r = webhookFailureReport(event, stage, error);
+    Sentry.captureMessage(r.message, { level: 'error', tags: r.tags });
+    await Sentry.flush(2000);
+  } catch (e) {
+    console.error('[stripe/webhook] could not report the failure of', event.id, e instanceof Error ? e.message : e);
   }
 }
 

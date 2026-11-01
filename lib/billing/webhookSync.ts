@@ -100,10 +100,15 @@ const iso = (unixSeconds: number | null | undefined) =>
   unixSeconds ? new Date(unixSeconds * 1000).toISOString() : null;
 
 function resolveTier(sub: Stripe.Subscription, deps: SyncDeps): PlanId | null {
-  const fromPrice = deps.tierForPriceId(sub.items?.data?.[0]?.price?.id);
+  const priceId = sub.items?.data?.[0]?.price?.id;
+  const fromPrice = deps.tierForPriceId(priceId);
   if (fromPrice) return fromPrice;
   const meta = sub.metadata?.plan;
-  return isValidPlanId(meta) ? meta : null;
+  if (!isValidPlanId(meta)) return null;
+  // The plan the coach chose at checkout (app/api/stripe/checkout writes it):
+  // kept as before, but said out loud — the price table no longer knows this price.
+  deps.log('[stripe/webhook] price not in the plan table; plan taken from the checkout metadata:', priceId ?? '(none)', sub.id, meta);
+  return meta;
 }
 
 /** The cached fields, re-derived from the live subscription. */
@@ -127,7 +132,10 @@ export function subscriptionFields(sub: Stripe.Subscription, deps: SyncDeps): Om
   if (tier) {
     fields.tier = tier;
     fields.seats = getPlan(tier)?.seats ?? 1;
-  } else if (sub.status !== 'canceled' && sub.status !== 'incomplete_expired') {
+  } else if (sub.status === 'canceled' || sub.status === 'incomplete_expired') {
+    // Ended: the status is written, the stored plan is left as it is.
+    deps.log('[stripe/webhook] ended subscription on an unknown price; plan left unchanged:', item?.price?.id ?? '(none)', sub.id);
+  } else {
     // A live subscription on a price we cannot map is a configuration error
     // (env var missing or pointing elsewhere): retry once it is fixed rather
     // than store a guessed plan.

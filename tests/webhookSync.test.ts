@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import type Stripe from 'stripe';
 import { processStripeEvent, RetryableError, type SyncDeps, type SubscriptionRow } from '@/lib/billing/webhookSync';
 import type { DraftProductType, FiscalInvoiceDraft } from '@/lib/billing/invoicing/draft';
@@ -276,4 +277,116 @@ test('a retried event after success creates no second record (event-level idempo
   await processStripeEvent(ev('checkout.session.completed', oneOff(), 'evt_same'), deps);
   assert.equal(await processStripeEvent(ev('checkout.session.completed', oneOff(), 'evt_same'), deps), 'duplicate');
   assert.equal(calls.fiscal.length, 1);
+});
+
+// ── fix/stripe-webhook-safety (KNOWN_ISSUES 078) ─────────────────────────────
+
+test('renewal: invoice.paid on a new period writes status active and the new period, plan unchanged', async () => {
+  const nextStart = PERIOD_END;
+  const nextEnd = Math.floor(Date.parse('2028-10-05T12:00:00Z') / 1000);
+  const renewed = sub({
+    items: { data: [{ price: { id: 'price_pro_y', recurring: { interval: 'year' } }, current_period_start: nextStart, current_period_end: nextEnd }] },
+  } as unknown as Partial<Stripe.Subscription>);
+  const { deps, calls } = harness({ subscription: renewed });
+  const out = await processStripeEvent(ev('invoice.paid', paidInvoice(), 'evt_renew'), deps);
+  assert.equal(out, 'processed');
+  assert.equal(calls.upserts.length, 1);
+  assert.equal(calls.upserts[0].status, 'active');
+  assert.equal(calls.upserts[0].tier, 'pro');
+  assert.equal(calls.upserts[0].current_period_start, '2027-10-05T12:00:00.000Z');
+  assert.equal(calls.upserts[0].current_period_end, '2028-10-05T12:00:00.000Z');
+  assert.equal(calls.fiscal.length, 1);
+  assert.deepEqual(calls.recorded, ['evt_renew']);
+});
+
+test('cancellation: customer.subscription.deleted writes canceled from Stripe; the plan stays what was bought', async () => {
+  const canceledAt = Math.floor(NOW.getTime() / 1000);
+  const { deps, calls } = harness({ subscription: sub({ status: 'canceled', canceled_at: canceledAt } as Partial<Stripe.Subscription>) });
+  // The payload says active; the row follows the subscription re-read from Stripe.
+  await processStripeEvent(ev('customer.subscription.deleted', { id: 'sub_1', status: 'active' }), deps);
+  assert.equal(calls.upserts[0].status, 'canceled');
+  assert.equal(calls.upserts[0].tier, 'pro');
+  assert.equal(calls.upserts[0].canceled_at, NOW.toISOString());
+});
+
+test('unknown price on a live subscription: nothing written (the coach keeps the current plan), never Pro, logged by the 500', async () => {
+  const { deps, calls } = harness({ subscription: sub({ price: 'price_unknown', metadata: { userId: 'user_1' } } as Partial<Stripe.Subscription> & { price: string }) });
+  await assert.rejects(processStripeEvent(ev('customer.subscription.updated', { id: 'sub_1' }), deps), /no plan for price price_unknown on sub_1/);
+  assert.equal(calls.upserts.length + calls.updates.length + calls.recorded.length, 0);
+});
+
+test('unknown price, checkout metadata names the plan: that plan (not a default), and it is logged', async () => {
+  const { deps, calls } = harness({ subscription: sub({ price: 'price_unknown', metadata: { userId: 'user_1', plan: 'light' } } as Partial<Stripe.Subscription> & { price: string }) });
+  await processStripeEvent(ev('customer.subscription.updated', { id: 'sub_1' }), deps);
+  assert.equal(calls.upserts[0].tier, 'light');
+  assert.equal(calls.logs.length, 1);
+  assert.match(String(calls.logs[0][0]), /price not in the plan table/);
+  const bad = harness({ subscription: sub({ price: 'price_unknown', metadata: { userId: 'user_1', plan: 'enterprise' } } as Partial<Stripe.Subscription> & { price: string }) });
+  await assert.rejects(processStripeEvent(ev('customer.subscription.updated', { id: 'sub_1' }), bad.deps), RetryableError);
+  assert.equal(bad.calls.upserts.length, 0, 'an invalid metadata plan is not a plan');
+});
+
+test('unknown price on an ended subscription: the status is written, the stored plan is not touched, logged', async () => {
+  const { deps, calls } = harness({ subscription: sub({ status: 'canceled', price: 'price_unknown', metadata: { userId: 'user_1' } } as Partial<Stripe.Subscription> & { price: string }) });
+  await processStripeEvent(ev('customer.subscription.deleted', { id: 'sub_1' }), deps);
+  assert.equal(calls.upserts[0].status, 'canceled');
+  assert.equal('tier' in calls.upserts[0], false);
+  assert.equal('seats' in calls.upserts[0], false);
+  assert.match(String(calls.logs[0][0]), /plan left unchanged/);
+});
+
+test('same subscription event twice: written once, the second delivery is a no-op', async () => {
+  const { deps, calls } = harness();
+  const e = ev('customer.subscription.updated', { id: 'sub_1' }, 'evt_twice');
+  assert.equal(await processStripeEvent(e, deps), 'processed');
+  assert.equal(await processStripeEvent(e, deps), 'duplicate');
+  assert.equal(calls.upserts.length, 1);
+  assert.equal(calls.retrieved.length, 1);
+  assert.deepEqual(calls.recorded, ['evt_twice']);
+});
+
+test('price → plan table through the webhook: the six launch prices, unchanged', async () => {
+  const { tierForPriceId } = await import('@/lib/stripe');
+  const table: Array<[string, 'light' | 'pro' | 'academy', number]> = [
+    ['STRIPE_PRICE_LIGHT_MONTHLY', 'light', 1], ['STRIPE_PRICE_LIGHT_YEARLY', 'light', 1],
+    ['STRIPE_PRICE_PRO_MONTHLY', 'pro', 1], ['STRIPE_PRICE_PRO_YEARLY', 'pro', 1],
+    ['STRIPE_PRICE_ACADEMY_MONTHLY', 'academy', 4], ['STRIPE_PRICE_ACADEMY_YEARLY', 'academy', 4],
+  ];
+  const saved = Object.fromEntries(table.map(([k]) => [k, process.env[k]]));
+  try {
+    for (const [k] of table) process.env[k] = `price_${k.toLowerCase()}`;
+    for (const [k, tier, seats] of table) {
+      const { deps, calls } = harness({ subscription: sub({ price: `price_${k.toLowerCase()}`, metadata: { userId: 'user_1' } } as Partial<Stripe.Subscription> & { price: string }) });
+      deps.tierForPriceId = tierForPriceId;
+      await processStripeEvent(ev('customer.subscription.updated', { id: 'sub_1' }, 'evt_' + k), deps);
+      assert.equal(calls.upserts[0].tier, tier, k);
+      assert.equal(calls.upserts[0].seats, seats, k);
+      assert.equal(calls.logs.length, 0, k);
+    }
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
+
+test('Sentry report of a failed webhook: event type and id, no personal data', async () => {
+  const { webhookFailureReport } = await import('@/lib/billing/webhookReport');
+  const r = webhookFailureReport(
+    { id: 'evt_9', type: 'invoice.paid', livemode: true }, 'sync',
+    'subscriptions upsert failed for 3f2b8c1e-1a2b-4c3d-9e8f-0a1b2c3d4e5f: duplicate key, Key (user_id)=(3f2b8c1e-1a2b-4c3d-9e8f-0a1b2c3d4e5f) mario@example.it cus_Q1w2E3',
+  );
+  assert.deepEqual(r.tags, { area: 'stripe_webhook', stage: 'sync', event_type: 'invoice.paid', event_id: 'evt_9', livemode: 'true' });
+  assert.match(r.message, /invoice\.paid failed \(sync\)/);
+  for (const leak of ['3f2b8c1e', 'mario', 'example.it', 'Q1w2E3']) assert.equal(r.message.includes(leak), false, leak);
+  assert.match(r.message, /\[id\].*\(user_id\)=\(\[removed\]\).*\[email\].*cus_\[id\]/);
+});
+
+test('wiring: every 500 of the webhook is reported to Sentry; the report never changes the answer', () => {
+  const route = readFileSync('app/api/stripe/webhook/route.ts', 'utf8');
+  const posts = route.slice(route.indexOf('export async function POST'), route.indexOf('async function reportFailure'));
+  assert.equal((posts.match(/status: 500/g) ?? []).length, 3, 'no service client, livemode mismatch, sync failure');
+  assert.equal((posts.match(/await reportFailure\(event, '(config|sync)'/g) ?? []).length, 3);
+  const report = route.slice(route.indexOf('async function reportFailure'), route.indexOf('async function recordEventError'));
+  assert.ok(report.includes('webhookFailureReport(') && report.includes('Sentry.captureMessage(r.message'));
+  assert.ok(report.includes('try {') && report.includes('catch'), 'best effort');
+  assert.equal(/user_id|customer|email/i.test(report.replace(/\/\*\*[\s\S]*?\*\//g, '')), false, 'nothing personal passed to Sentry');
 });
