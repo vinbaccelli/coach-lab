@@ -1431,6 +1431,22 @@ export default function ToolPalette(props: ToolPaletteProps) {
               onPress={onStyleModeToggle}
             />
           )}
+          {/* Text tool: its size comes first, not below every other style option. */}
+          {activeTool === 'text' && !io && (
+            <div style={{ padding: '4px 8px 0' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', marginBottom: 4 }}>Text size</div>
+              <input
+                type="range"
+                min={10}
+                max={72}
+                step={2}
+                value={drawingOptions.fontSize}
+                onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
+                style={{ width: '100%' }}
+              />
+              <div style={{ fontSize: 12, color: textMuted, marginTop: 4 }}>{drawingOptions.fontSize}px</div>
+            </div>
+          )}
           {!io ? (
           <>
           <p style={{ margin: '0 4px 10px', fontSize: 11, lineHeight: 1.45, color: textMuted }}>
@@ -1526,21 +1542,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
             )}
           {(activeTool === 'manualSwing' || activeTool === 'swingPath') &&
             chk('arrowEnd', 'Arrow at end of swing path', !!drawingOptions.arrowAtEnd, (v) => onOptionsChange({ arrowAtEnd: v }))}
-          {activeTool === 'text' && !io && (
-            <div style={{ padding: '4px 8px 0' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', marginBottom: 4 }}>Text size</div>
-              <input
-                type="range"
-                min={10}
-                max={72}
-                step={2}
-                value={drawingOptions.fontSize}
-                onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
-                style={{ width: '100%' }}
-              />
-              <div style={{ fontSize: 12, color: textMuted, marginTop: 4 }}>{drawingOptions.fontSize}px</div>
-            </div>
-          )}
         </ToolbarScrollArea>
         <GlobalActionsFooter chrome={chrome} />
       </div>
@@ -1582,6 +1583,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               push('style');
             }}
           />
+          <Row chrome={chrome} k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
           <Row chrome={chrome} k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} tooltip="Freehand drawing tool" label="Pen" onPress={() => setTool('pen')} />
           <Row chrome={chrome} k="line" active={activeTool === 'line'} icon={<Minus size={18} />} tooltip="Draw a straight line" label="Line" onPress={() => setTool('line')} />
           <Row chrome={chrome} k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} tooltip="Draw an arrow with direction" label="Arrow" onPress={() => setTool('arrow')} />
@@ -1593,7 +1595,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row chrome={chrome} k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} tooltip="Draw a circle or ellipse" label="Circle" onPress={() => setTool('circle')} />
           <Row chrome={chrome} k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} tooltip="Trace the racket swing path" label="Swing path" onPress={() => setTool('manualSwing')} />
           <Row chrome={chrome} k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} tooltip="Connect joint points to measure body alignment" label="Joint chain" onPress={() => setTool('jointChain')} />
-          <Row chrome={chrome} k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
           {/*
             The outline eraser is a TOOL, not a Style checkbox. As a checkbox it
             lived in Style mode and had to switch off when Style ended (an armed
