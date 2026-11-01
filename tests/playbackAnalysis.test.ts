@@ -40,14 +40,40 @@ test('samples: only poses, inside the range (+0.1 s), sorted, one per media time
 
 test('rate advice: slower only when a full window skipped more than a quarter of its frames', () => {
   const c = new PlaybackCollector({ start: 0, end: 100 });
-  for (let i = 0; i < ANALYSIS_EVAL_FRAMES - 1; i++) c.onFrame(i * 0.03, false);
+  let t = 0;
+  const frame = (busy: boolean) => { c.onFrame(t, busy); t += 0.03; }; // consecutive frames, no gaps
+  for (let i = 0; i < ANALYSIS_EVAL_FRAMES - 1; i++) frame(false);
   assert.equal(c.rateAdvice(0.25), null, 'window not full yet');
-  c.onFrame(5, false);
+  frame(false);
   assert.equal(c.rateAdvice(0.25), null, 'full window, nothing skipped');
-  for (let i = 0; i < ANALYSIS_EVAL_FRAMES; i++) c.onFrame(10 + i * 0.03, i % 2 === 0); // half skipped
+  for (let i = 0; i < ANALYSIS_EVAL_FRAMES; i++) frame(i % 2 === 0); // half skipped
   assert.equal(c.rateAdvice(0.25), 0.15);
-  for (let i = 0; i < ANALYSIS_EVAL_FRAMES; i++) c.onFrame(20 + i * 0.03, true);
+  for (let i = 0; i < ANALYSIS_EVAL_FRAMES; i++) frame(true);
   assert.equal(c.rateAdvice(0.1), null, 'already the slowest');
+});
+
+test('frames shown while a detection blocked the page are counted from the frame counter, so the rate steps down', () => {
+  const c = new PlaybackCollector({ start: 0, end: 100 });
+  // A slow detector: a callback only every 8th presented frame (7 missed each time).
+  let presented = 10;
+  let t = 1;
+  for (let i = 0; i < 4; i++) { c.onFrame(t, false, presented); presented += 8; t += 8 / 30; }
+  const s = c.stats();
+  assert.equal(s.detections, 4);
+  assert.equal(s.skipped, 21, '3 gaps × 7 missed frames');
+  assert.equal(s.frames, 4 + 21);
+  // 25 frames went by in the window, 21 of them missed: play slower.
+  assert.equal(c.rateAdvice(0.25), 0.15);
+});
+
+test('without a frame counter, the media-time gap shows the missed frames', () => {
+  const c = new PlaybackCollector({ start: 0, end: 100 });
+  c.onFrame(1.0, false);
+  c.onFrame(1.033, false);      // one frame apart: sets the frame interval
+  c.onFrame(1.033 + 5 * 0.0333, false); // five frames later: four missed
+  const s = c.stats();
+  assert.equal(s.skipped, 4);
+  assert.equal(s.frames, 3 + 4);
 });
 
 test('no player: stops early only after enough detections without a single pose', () => {

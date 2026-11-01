@@ -2428,3 +2428,7 @@ detection.
 **Needs the real iPhone.** The S4 clip: probe log lines (latencies), the note
 and estimate against the real duration, whether the track is no longer frozen;
 a fast clip's pass time unchanged; a stall (if any) shows the closable message.
+
+**069 — verified.** Vin confirmed on the iPhone (720×1280 S4 clip, final PR #107 build): "Analyze skeleton" then "Export" works, the exported skeleton follows the player and the video is smooth.
+
+**069 — second finding (Chromium end-to-end check, slow CPU).** With slow detection the analysis saw only 4 of ~57 frames of a 2 s clip: a detection blocks the page for tens of ms, the frames shown meanwhile get no `requestVideoFrameCallback`, and the controller only counted a frame as skipped when the detector was busy at its callback, so it never slowed the playback. The frozen-track guard correctly rejected the thin track ("4 poses in 1.9 s"). Fix: `PlaybackCollector.onFrame` counts the missed frames from the presented-frame counter's jump (or from the media-time gap), so the rate steps down 0.25 → 0.15 → 0.1×. A 9 s clip then analyzed to 71 samples (8/s) and exported with a moving skeleton (stored lookups of the left wrist varied across the range; render clock moved; render guard ok). Limit: a clip shorter than the first evaluation window (~20 frames) cannot adapt before it ends.
