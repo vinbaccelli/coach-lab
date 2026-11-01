@@ -20,3 +20,36 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit -p tsconfig.json
       - run: npm test
+
+  # Smoke test (docs/SMOKE_TEST.md): builds the app with dummy settings, starts it, and loads
+  # the pages a coach hits first (landing, pricing, login, privacy, /analysis sign-in redirect,
+  # 404). No real Supabase, Stripe, Google or YouTube is used. A separate job on purpose: it is
+  # NOT a required check, so a flaky run can never block a merge, and the `checks` job above
+  # is unchanged.
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://smoke.invalid
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: smoke-anon-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: smoke-next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: smoke-next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run smoke
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: smoke-report
+          path: smoke/.output
+          retention-days: 7
