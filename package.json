@@ -10,7 +10,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --conditions=react-server --import tsx --test tests/*.test.ts"
+    "test": "node --conditions=react-server --import tsx --test tests/*.test.ts",
+    "smoke:build": "NEXT_PUBLIC_SUPABASE_URL=https://smoke.invalid NEXT_PUBLIC_SUPABASE_ANON_KEY=smoke-anon-key npm run build",
+    "smoke": "playwright test -c smoke/playwright.config.ts"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",
@@ -42,6 +44,7 @@
   },
   "devDependencies": {
     "@next/bundle-analyzer": "^16.2.9",
+    "@playwright/test": "1.63.0",
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",
