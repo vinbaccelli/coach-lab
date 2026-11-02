@@ -1,6 +1,6 @@
 # Share link for a player's profile and reports: design, security and build plan
 
-Status: **plan only** (revision 2, 2026-11-02). No code changed, no migration applied, no Supabase, Vercel or
+Status: **plan only** (revision 3, 2026-11-02: final decisions applied, see section 1b). No code changed, no migration applied, no Supabase, Vercel or
 Drive setting touched. Revision 1 (per-report link, first name, 30-day expiry) is replaced by Vin's settled
 decisions below. Companion document: `docs/SCALE_LIMITS.md` (limits, sources, scale model).
 
@@ -24,9 +24,8 @@ short CDN cache with tag invalidation, images go through a **token-scoped redire
 proxy), and the "opened N times" counter writes at most once per 10 minutes per link, so the feature stays
 inside free-tier limits. Link-holder contributions are a per-player switch, **off**, built in phases
 (A read-only, B text comments the coach approves, C pictures). Prerequisite: Light gets the player database
-(PR #130, and a one-line decision about the Drive upload gate, section 3a).
-**The one thing the design cannot fix:** Vercel's Hobby plan forbids commercial use, so "no paid Vercel tier"
-is probably unavailable regardless of the share link (section 7, `[DISAGREE]` 1).
+(PR #130) plus Drive-only screenshots for every plan (P12, section 3a). Cost position: stay on Vercel Hobby under about
+100 users with three triggers for acting (section 7); Hobby is non-commercial, a risk Vin owns.
 
 ---
 
@@ -35,7 +34,7 @@ is probably unavailable regardless of the share link (section 7, `[DISAGREE]` 1)
 | # | Decision (Vin) | Status in this plan |
 |---|---|---|
 | D1 | One link per player; opens the player profile page (info + all reports) at `/share/<token>` | Done: one row per player (`unique (player_id)`), section 4 |
-| D2 | Full name on the page; **all profile fields visible by default**, each with a "hide from shared page" switch | Done; two `[DISAGREE]` notes (age instead of date of birth; sensitive row labels), section 4.5 |
+| D2 | Full name on the page; **all profile fields visible by default**, each with a "hide from shared page" switch | Done, section 4.5. Birth date: the coach chooses **exact date or age per player, default exact date**. No hidden defaults for sensitive rows, even under 18: the coach decides and is responsible |
 | D3 | Notes shared by default; each with a "Private" switch; notes can come from recording with screenshots or stand alone | Done; **gaps found**: no standalone-note screen, no note field when saving a screenshot, **no way to edit or delete an entry**, section 3b |
 | D4 | The link never expires; coach can revoke or replace; old link dies in one step | Done, section 4.7 |
 | D5 | Always re-copyable: hash for lookup + encrypted copy for display | Done, key management and leak analysis in section 4.2 |
@@ -45,8 +44,11 @@ is probably unavailable regardless of the share link (section 7, `[DISAGREE]` 1)
 | D9 | "Made with AngleMotion" footer link is the only app navigation | Done, section 4.4 |
 | D10 | First-time warning on link creation; draft terms line about minors | Draft copy in section 4.9, `[VIN TO CONFIRM]` |
 | D11 | Contributions: per-player switch, off by default; A read-only, B text comments, C pictures and videos; add-only | Section 5 |
-| D12 | Cost goal: no paid Vercel or Supabase tier at 1,000 coaches | Section 7 and `docs/SCALE_LIMITS.md`; `[DISAGREE]` 1 |
-| D13 | Make `checks` a required check | **Not decided.** Repository setting, unchanged; waits for "yes, require checks" |
+| D12 | Cost: Hobby under about 100 users, with triggers (50 users, 60% of any limit, subscriptions cover $20) | Section 7 and `docs/SCALE_LIMITS.md` |
+| D14 | **Screenshots are Drive-only on every plan; no Supabase fallback for new screenshots** (P12) | Section 3a, 4.10, 9; cost model re-run in `docs/SCALE_LIMITS.md` |
+| D15 | **Only text and links in our database**; binary files live in the coach's Drive and YouTube; a coach's profile stays until about 1,000 players, then we suggest PDF export and archiving | Section 7b |
+| D16 | PDF export (report and all reports, videos as thumbnail plus YouTube link) is its own PR, P14: the "safe to archive" path | Section 7b, 13 |
+| D13 | Make `checks` a required check | **Not decided.** Repository setting, unchanged; Vin's call after tonight's merges ("yes, require checks") |
 
 ---
 
@@ -71,7 +73,7 @@ is probably unavailable regardless of the share link (section 7, `[DISAGREE]` 1)
 
 | Source | Share page shows (default) | Never sent to a viewer |
 |---|---|---|
-| `players` | `display_name` (full name), `photo_url`, **age** (derived from `date_of_birth`), `nationality`, `playing_hand`, `notes` (profile coach notes), every `technical_sheet` row (label + value) | raw `date_of_birth`, `google_doc_id`, `google_match_doc_id`, `google_folder_id`, `coach_id`, `created_at`/`updated_at` |
+| `players` | `display_name` (full name), `photo_url`, **birth date shown as the exact date or as an age, per the coach's choice for that player (default exact date)**, `nationality`, `playing_hand`, `notes` (profile coach notes), every `technical_sheet` row (label + value) | `date_of_birth` when the coach chose "age" (only the age is sent), `google_doc_id`, `google_match_doc_id`, `google_folder_id`, `coach_id`, `created_at`/`updated_at` |
 | `player_entries` | `category`, `folder_label` (title), date, `opponent_name`, `body_text` (the note), `youtube_url`, `screenshots` (as token-scoped image links), `metadata.measurements`, `.sections`, `.manualMatch`, `.decoderReport` | `coach_id`, `source`, every other `metadata` key (for example a `doc_url`), Drive file ids |
 | `player_sessions` | **not shown in v1** (they hold `coach_notes` and saved clips; question Q2) | everything |
 | coach account | nothing (no email, name, Google data) | all |
@@ -95,14 +97,20 @@ Supabase copy → "Image unavailable" (`components/reports/DriveImage.tsx:20-23`
 
 ## 3. Findings that change the build
 
-### 3a. Light + saving to a player: the Drive upload gate (decision needed)
+### 3a. Screenshots are Drive-only for every plan (decided; build = P12 follow-up on #130)
 
-PR #130 moves `players` and `saveToPlayer` to the Light plan. But `POST /api/google/upload-image` is guarded by
-**`docsExport`** (a Pro feature; `app/api/google/upload-image/route.ts:21`, pinned by `tests/apiGuards.test.ts:26`).
-For a Light coach that call returns 403, and `lib/reports/saveScreenshot.ts:129-147` falls back to the **public**
-Supabase `player-assets` bucket ("kept in AngleMotion — Drive unavailable"). Result: Light coaches' player
-screenshots would all land in the public fallback bucket. **Recommended:** guard that route with `saveToPlayer`
-(one line + its test) in PR #130. Waiting on Vin's yes.
+Decision: new screenshots go to the coach's Drive on **every** plan including Light, with **no Supabase fallback**.
+Why this was needed: `POST /api/google/upload-image` is guarded by `docsExport` (Pro; `route.ts:21`, pinned by
+`tests/apiGuards.test.ts:26`), so with #130 a Light coach's upload would be refused and
+`lib/reports/saveScreenshot.ts:129-147` would drop the image into the **public** `player-assets` bucket. P12 gates the
+route by `saveToPlayer` and removes that fallback for screenshots. Consequences this plan accounts for:
+
+- Supabase holds **no screenshot bytes**: cost model re-run in `docs/SCALE_LIMITS.md` section 4b.
+- A coach whose Google access is missing or expired **cannot save a screenshot** until they reconnect (today the
+  fallback hid that). The save screen must say so plainly (P12's job).
+- Old entries may still carry a `player-assets` fallback URL; the viewer keeps reading it (and the image redirect
+  accepts the project's own storage host only for those legacy rows). No new ones are created.
+- The "anyone with the link" Drive permission stays (it is how reports display the images, and it is intended).
 
 ### 3b. Notes: how they exist today, what is missing
 
@@ -191,14 +199,11 @@ to the browser (a test searches its JSON for canary strings, section 11).
   If the hide key is the label, **renaming a hidden row makes it visible again**. Fix: give rows a stable `id`
   (jsonb, no migration; existing rows get ids on next save) and key by id. Until then the coach UI must keep the
   hidden state when a label is edited.
-- `[DISAGREE]` 2 (date of birth): "all fields visible" would show a minor's exact date of birth. I implement
-  **age only** and never send the raw date; no switch needed. If Vin wants the date shown, it is a one-line change.
-- `[DISAGREE]` 3 (sensitive rows visible by default): P2 deliberately suggests rows named **Diet** and
-  **Goals**, and coaches may add Health, Injury or Medical. Visible-by-default means those go live the moment the
-  link exists. The settled rule is kept, but I recommend two cheap safeguards that do not change it: the
-  first-time warning (4.9) lists the rows that would be public with their current values, and any row whose label
-  matches diet / health / injury / medical / allerg* / medication starts **hidden** in the share settings with a
-  visible "Show" switch. This is a default only; the coach decides.
+- **Birth date (decided):** `dob_mode` on the share row, `'date'` (default) or `'age'`, chosen by the coach per player.
+  With `'age'` only the computed age is ever sent; the raw date is never in the DTO.
+- **Sensitive rows (decided):** no hidden defaults, not even for players under 18. The coach decides and is
+  responsible. The controls that remain are the first-time warning (4.9), which lists what is public with its
+  current values, the per-row hide switches and the terms line.
 
 ### 4.6 "Opened N times, last opened on" without a write per view
 
@@ -260,8 +265,8 @@ this information." Whether to add it to `app/terms/page.tsx` and `app/privacy/pa
   `docs/SCALE_LIMITS.md`). Cache key is the full URL, so each token is its own cache entry. Editing the profile
   or an entry also calls `invalidateByTag`, otherwise edits show within 60 s.
 - **Images:** `app/share/[token]/img/[n]/route.ts`: validate token (hash lookup), take image `n` from the
-  server-built list, **302** to `https://lh3.googleusercontent.com/d/<id>=w1600` (Drive) or the Supabase copy;
-  `CDN-Cache-Control: max-age=60`. The browser downloads bytes from Google, not from Vercel. The upstream URL is
+  server-built list, **302** to `https://lh3.googleusercontent.com/d/<id>=w1600` (Drive) or, for **legacy entries only**, the
+  Supabase copy; `CDN-Cache-Control: max-age=60`. The browser downloads bytes from Google, not from Vercel. The upstream URL is
   reconstructed from a Drive id or restricted to the project's own Supabase storage host: never an arbitrary
   stored URL (no open redirect/SSRF).
 - **Rate limiting:** malformed tokens are rejected before the database; a **Vercel Firewall rate-limit rule** on
@@ -324,7 +329,7 @@ phase D on request.
 
 | Question | Answer |
 |---|---|
-| What does a leaked link expose? | The shared profile and reports of one player as projected (4.3), until revoked/replaced. Not other players, not the coach's account. Because **all fields are visible by default**, the first-time warning and hide switches are the main control; `[DISAGREE]` 3 adds safe defaults. |
+| What does a leaked link expose? | The shared profile and reports of one player as projected (4.3), until revoked/replaced. Not other players, not the coach's account. Because **all fields are visible by default**, the first-time warning, the hide switches and the coach's responsibility (terms line) are the controls; there are no hidden defaults, even for players under 18 (decided). |
 | Guessability | 256 bits. Guessing is infeasible; the realistic abuse is *cost* (random tokens burning invocations), handled by the rate rule. |
 | Lifetime | Never expires (D4). Mitigation: revoke/replace, the "opened N times" signal, optional reminder in the card ("This link has been active for 6 months"). |
 | Database exposure | Hash + ciphertext only; no usable link (4.2). |
@@ -367,19 +372,30 @@ Drive sharing already has. Upgrade path: if Drive-id exposure is unacceptable la
 
 ### What the numbers say about the goal
 
-- `[DISAGREE]` 1: **"no paid Vercel tier" probably cannot be met by anyone selling a subscription product on
-  Hobby**: Vercel's terms restrict Hobby to non-commercial use. Vin must say which plan the project runs on. If it
-  is Pro, the goal becomes "stay inside Pro's included usage" and is easy. If it is Hobby, the issue exists
-  today and is independent of this feature. This is a Vin action, not a code change.
+- **Decision (Vin): stay on Vercel Hobby under about 100 users, with three triggers.** The first that happens means
+  act: **(1)** about 50 users; **(2)** Vercel's usage page shows 60% of any limit; **(3)** subscriptions cover the $20
+  (Pro price as stated by Vin; not verified from Vercel's pages). At trigger 1 or 2 either upgrade to Pro or decide
+  to move hosts. Moving hosts is a project, not a switch, so decide at 50 users, not at 100. **Hobby is
+  non-commercial** (`docs/SCALE_LIMITS.md` section 1): that risk is Vin's, recorded here and not hidden.
 - With the mid-range assumptions the **app as a whole** passes Supabase Free's 500 MB database at ≈ 420 coaches
   and Hobby's 1M invocations well before 1,000 coaches, **with or without** the share link
   (`docs/SCALE_LIMITS.md` section 4). The share feature adds ≈ 2% to the database (a ~0.6 KB row per player) and the
   traffic in the table above.
-- **Light gets the player database (D8):** this raises the number of coaches with players. The model already
-  assumes every coach has players (worst case). Light can also create player *sessions* and clip artifacts (stored
-  by AngleMotion; the `artifacts` route requires `players`, `app/api/sessions/[sessionId]/artifacts/route.ts:15`),
-  which consume the 1 GB storage: no per-plan player or storage limit exists today (searched `app`, `lib`,
-  `components`), so none was invented; recommend adding a per-coach storage cap before Light volume grows.
+- **Light gets the player database (D8):** this raises the number of coaches with players; the model already assumes
+  every coach has players (worst case). Light can also create player *sessions* and clip artifacts (stored by
+  AngleMotion; `app/api/sessions/[sessionId]/artifacts/route.ts:15` requires `players`), the one binary thing still
+  in Supabase Storage (see 7b).
+
+### 7b. Storage principle (replaces the "Light storage cap" question)
+
+**Only text and links live in our database. Binary files (screenshots, videos) live in the coach's Drive and YouTube.**
+A coach's profile and reports stay for as long as they want until about **1,000 players**; at that point the app
+suggests exporting PDFs and archiving old players. The "safe to archive" path is the PDF export (**P14**, its own PR:
+report PDF and all-reports PDF; videos appear as a thumbnail with a clickable YouTube link, never embedded, which keeps
+files small and readable on a phone). Honest limit: on the Supabase Free plan the 1,000-player threshold is a
+**policy, not protection**: at 1,000 players a single coach is already about 79 MB (mid assumptions) to about 600 MB
+(high) of the 500 MB database (`docs/SCALE_LIMITS.md` section 4b), so the free database is exhausted by volume of
+coaches long before any one coach reaches the threshold.
 
 ---
 
@@ -404,6 +420,8 @@ create table if not exists public.player_shares (
   token_enc      text not null check (length(token_enc) between 60 and 400),
   key_version    smallint not null default 1 check (key_version >= 1),
   hidden_fields  text[] not null default '{}' check (cardinality(hidden_fields) <= 80),
+  -- Birth date on the shared page: the exact date (default) or only the age, chosen per player.
+  dob_mode       text not null default 'date' check (dob_mode in ('date', 'age')),
   -- Reserved for phases B and C. Only 'off' is allowed until a later migration widens it.
   contrib_mode   text not null default 'off' check (contrib_mode = 'off'),
   created_at     timestamptz not null default now(),
@@ -432,7 +450,7 @@ create policy "player_shares_select_own" on public.player_shares
 
 revoke all on public.player_shares from anon, authenticated;
 -- Column-level read: a coach's browser can never select token_hash or token_enc.
-grant select (id, coach_id, player_id, key_version, hidden_fields, contrib_mode,
+grant select (id, coach_id, player_id, key_version, hidden_fields, dob_mode, contrib_mode,
               created_at, rotated_at, revoked_at, opens_total, last_opened_at)
   on public.player_shares to authenticated;
 ```
@@ -465,10 +483,10 @@ stay. Key rollback: remove `SHARE_TOKEN_KEY_V1` (the feature disables itself, 4.
 |---|---|
 | **Player deleted** | cascade removes the share row with the player (8) → uniform "no longer available". Cache is tag-invalidated on delete (`deletePlayer` step), else ≤ 60 s. |
 | **Revoked / replaced / unknown / malformed token** | same neutral page and status (404) for all. |
-| **Drive image no longer shared / deleted / throttled** | the `/img/<n>` route cannot validate upstream (it only redirects), so the browser's image load fails; the page shows the existing fallback chain result: the Supabase copy if one exists, else "Image unavailable" **without** an external link (`shareMode`). The rest of the page renders. |
+| **Drive image no longer shared / deleted / throttled** | the `/img/<n>` route cannot validate upstream (it only redirects), so the browser's image load fails; the page shows "Image unavailable" **without** an external link (`shareMode`); only legacy entries have a Supabase copy to fall back to, new screenshots have none (D14). The rest of the page renders. |
 | **Account stops paying** | existing links keep working (D7); creating/replacing/hide-setting is refused (403 `plan_required`, same as other player writes); revoke still works. |
 | **Account deleted** | `coach_id` cascade removes shares; the player rows go too. |
-| **Coach disconnects Google** | the viewer path uses no Google session; images keep working only while the Drive files stay shared. New screenshots fall back to the public bucket (`saveScreenshot.ts:129-147`), which is why section 3a matters. |
+| **Coach disconnects Google** | the viewer path uses no Google session; images keep working only while the Drive files stay shared. New screenshot saves **fail with a clear "reconnect Google" message** (no Supabase fallback any more, D14, section 3a); the shared page and old images are unaffected. |
 | **Supabase project paused (Free: 1 week of inactivity)** | all share links 404/500 until restored; unlikely with active coaches, relevant before launch scale (`docs/SCALE_LIMITS.md`). |
 | **Service-role key missing** | `createSupabaseServiceClient()` returns `null` (`lib/supabase/service.ts:70-103`): page returns the neutral 404 and logs once. Never an open page. |
 | **Encryption key missing/rotated badly** | links keep working; "copy link" shows "Replace link to get a new one". |
@@ -507,7 +525,7 @@ stay. Key rollback: remove `SHARE_TOKEN_KEY_V1` (the feature disables itself, 4.
    config, re-encrypts to V2); malformed tokens rejected without a DB call (empty, short, long, unicode, `../`).
 2. **Projection allow-list (canary test):** populate a player and entries with canary strings in `date_of_birth`,
    Google ids, `coach_id`, `metadata.doc_url`, an unknown metadata key, an unknown block type; `JSON.stringify(dto)`
-   contains none. Raw date of birth never present (age only). Hidden field/row absent; **renamed hidden row stays
+   contains none. Raw date of birth present only when `dob_mode = 'date'`, otherwise only the age. Hidden field/row absent; **renamed hidden row stays
    hidden** (id-based); `private` entry withholds `body_text`, `gameNotes`, section `notes` but keeps images and
    measurements; unknown fields dropped.
 3. **Access:** uniform response for unknown / malformed / revoked / deleted; replace kills the old token at once.
@@ -537,12 +555,12 @@ Rule: a failing test means a code bug; tests are never weakened to pass.
 
 | Step | What | Files | Migration? | Phone test |
 |---|---|---|---|---|
-| **P7** | Light gets players (**PR #130**, open) + upload-image gate decision (3a) | `lib/entitlements.ts` etc. (done) + `upload-image/route.ts`, `tests/apiGuards.test.ts` | no | Light account: create player, edit, save a screenshot (goes to Drive, not the public bucket) |
+| **P7 + P12** | Light gets players (**PR #130**, open) + Drive-only screenshots on every plan (gate `upload-image` by `saveToPlayer`, remove the Supabase fallback for screenshots) | `lib/entitlements.ts` etc. (done) + `app/api/google/upload-image/route.ts`, `lib/reports/saveScreenshot.ts`, tests | no | Light account: create player, edit, save a screenshot (goes to Drive; with Google disconnected a clear message, nothing in the public bucket) |
 | S1 | Token + crypto + env-key guard | `lib/share/token.ts`, `tests/shareToken.test.ts` | no | none (pure) |
-| S2 | Projection (allow-list, hidden fields, private notes, age) | `lib/share/view.ts`, `tests/shareView.test.ts` | no | none (pure) |
+| S2 | Projection (allow-list, hidden fields, private notes, birth date as date or age) | `lib/share/view.ts`, `tests/shareView.test.ts` | no | none (pure) |
 | S3 | **Migration** + flag | `supabase/migrations/20261102120000_player_shares.sql`, `lib/featureFlags.ts`, `tests/shareMigration.test.ts` | **YES** | none |
 | S4 | Coach API: status/link (decrypt), create, replace, revoke, hide fields | `app/api/players/[id]/share/route.ts`, `lib/share/store.ts`, `tests/shareApi.test.ts` | needs table | none (API); covered by S9 |
-| S5 | Entry edit/delete route (note text, `metadata.private`) | `app/api/players/[id]/entries/[entryId]/route.ts`, `lib/players/entryPatch.ts`, `tests/entryPatch.test.ts` | no | edit then delete a note on a real player |
+| S5 = **P10** | Entry edit/delete route (note text, `metadata.private`); built as its own PR before PDF export | `app/api/players/[id]/entries/[entryId]/route.ts`, `lib/players/entryPatch.ts`, `tests/entryPatch.test.ts` | no | edit then delete a note on a real player |
 | S6 | Viewer page (profile + reports, neutral 404, bucketed counter) | `app/share/[token]/page.tsx`, `components/share/SharedProfile.tsx`, `tests/shareViewer.test.ts` | needs table | open a link on the phone, both orientations |
 | S7 | Public path + headers | `middleware.ts`, `next.config.js`, `tests/shareHeaders.test.ts` | no | check headers with the smoke test |
 | S8 | Sentry token scrub (also `/affiliate/`) | `lib/sentryConfig.ts`, `tests/sentryConfig.test.ts` | no | none |
@@ -569,53 +587,55 @@ answered. A "suggested changes" phase D is only built if Vin asks.
 
 Legend: **V** = needs Vin's decision or approval · **M** = needs the migration · **Ph** = phone test.
 
-1. **Now, Vin (no code):**
-   - V: which Vercel plan the project runs on (Team settings → Billing) and the last 30 days of Usage; run the three
-     read-only SQL queries in `docs/SCALE_LIMITS.md` section 5; allow `vercel.com` / `supabase.com` in the session's
-     network settings so the limits can be verified from the official pages.
-   - V: answer the questions in section 14.
-2. **P7 / PR #130** (Light gets players). V: yes/no on the upload-image gate change (3a). Ph: Light account creates a
-   player, edits, saves a screenshot. Merge before S11 (the share card must work for Light).
-3. **Merge #127** (profile layout): the share card and hide switches live in that profile. Ph on the phone sheet.
-4. **S1 → S2** (pure logic, tests only). No dependency on anything; can start immediately after step 1.
-5. **S3 migration**. **V + M:** approve, apply to a preview database first, then production. Set
-   `SHARE_TOKEN_KEY_V1` (V: Vin creates the Vercel Sensitive env var; a command to generate it is given in S3's PR).
-6. **S4, S5** (APIs), then **S6, S7, S8, S9, S10** (viewer, headers, scrub, shell, images). The flag stays **off**
-   until S6–S10 are all merged: without S7–S10 the page leaks the token to Sentry, shows coach UI, or exposes Drive ids.
-7. **S11, S12, S13** (coach UI, hide switches, notes). Ph on the phone: the full coach flow. This is the first thing Vin
-   can try end to end.
-8. **S14** (smoke test, docs, privacy/terms). V: approve the terms line and resolve the `[VIN TO CONFIRM]` items
-   (PR #122) before turning the flag on.
-9. **Turn on the flag for one coach (Vin), watch a week.** V: add the Vercel Firewall rate-limit rule on `/share/*`
-   first. Check `opens_total` and the Vercel usage page.
-10. **Phase B** only after step 9 is calm: B1 (**V + M**), B2, B3. **Phase C**: only after the legal answer
-    (5.3): C1 (**V + M**), C2, C3. Phase D on request.
+**Launch track (before any share code; each is its own PR):**
 
-What to do first: step 1 (it unblocks cost decisions), then step 2.
+1. **P12 Drive-only screenshots** (follow-up on #130; with the gate change). Ph: Light account saves a screenshot to a
+   player; with Google disconnected the message is clear and nothing lands in the public bucket.
+2. **P13 privacy items** (follow-up on #122). V: only the legal points stay flagged (controller/processor, accountant).
+3. **P8 landing copy** (stacked on #131; no mention of PDF export or the share link until they merge).
+4. **P11 storage per coach** and **P6 launch checklist** (docs PRs).
+5. Phone test sheet (#129) plus the P7 and P9 checks; merge in two batches as Vin decides.
+
+**Feature track:**
+
+6. **P10 edit notes, delete entries** (= S5; branch from #130's branch; no migration). Ph: edit then delete a note.
+7. **P14 PDF export** (after P10; both change the report components; behind `REPORTS_IN_APP`; the "safe to archive" path
+   of 7b). Ph: a 10-screenshot report exports to a readable, small PDF that opens on iPhone.
+8. **Merge #127** (profile layout): the share card lives in that profile.
+
+**Share link track (V1.1):**
+
+9. **R1 review** of this plan (`docs/REPORT_SHARE_REVIEW.md`); fix findings in the plan.
+10. **S1 → S2** (pure logic, tests only).
+11. **S3 migration.** **V + M:** approve; apply to a preview database first, then production. Set
+    `SHARE_TOKEN_KEY_V1` (V: Vin creates the Vercel Sensitive env var).
+12. **S4**, then **S6, S7, S8, S9, S10** (viewer, headers, scrub, shell, images). The flag stays **off** until S6–S10
+    are all merged: without S7–S10 the page leaks the token to Sentry, shows coach UI, or exposes Drive ids.
+13. **S11, S12, S13** (coach UI, hide switches and birth-date choice, notes UI). Ph: the full coach flow.
+14. **S14** (smoke test, docs, terms line). V: approve the terms line.
+15. **Turn on the flag for one coach (Vin), watch a week.** V: Vercel Firewall rate-limit rule on `/share/*` first.
+16. **Phase B**, then **Phase C**, only after step 15 is calm and (for C) the legal answer in 5.3. Each: migration (**V + M**).
+    Phase D (suggested changes) on request.
+
+**Watch triggers (Vercel Hobby):** about 50 users, 60% of any limit on Vercel's usage page, or subscriptions cover the
+$20: the first one means decide between Pro and moving hosts (a project, so decide at 50, not at 100).
+
+What to do first: steps 1 to 5.
 
 ---
 
-## 14. Questions for Vin and the `[DISAGREE]` list
+## 14. Decisions, open points and the `[DISAGREE]` list
 
-**`[DISAGREE]`**
+**`[DISAGREE]`:** none outstanding. Settled and recorded: Hobby with triggers (7), birth date as the coach chooses
+(4.5), no hidden defaults for sensitive rows (4.5), Drive-only screenshots (3a), text-and-links-only storage (7b).
+One soft note kept: **never expires + re-copyable** (D4/D5) leaves an old forwarded link live until revoked; the card's
+"active for N months" reminder mitigates it.
 
-1. **Cost goal (D12).** Vercel Hobby forbids commercial use; if the project is on Hobby, "no paid Vercel tier" is not
-   possible regardless of this feature. Please confirm the plan. Also: with mid assumptions the whole app, not the
-   share link, passes Supabase Free's 500 MB near 420 coaches.
-2. **Date of birth.** "All fields visible" would publish a minor's exact birth date. Implemented: **age only**.
-3. **Sensitive rows visible by default.** Implemented as decided, plus the warning listing what is public; I
-   recommend rows labelled diet / health / injury / medical / allergy / medication start hidden (default only).
-4. (Soft) **Never expires + re-copyable.** Accepted as decided; the cost is that an old forwarded link stays live
-   for years until revoked. The "active for N months" reminder in the card mitigates it.
+**Still open (none blocks a PR):**
 
-**Questions**
-
-- Q1 Vercel plan and the real numbers (section 13 step 1).
 - Q2 Should `player_sessions` (coach notes, saved clips) appear on the shared page? v1 says no.
-- Q3 Upload-image gate: change it to `saveToPlayer` in #130 so Light screenshots go to the coach's Drive? (3a)
-- Q4 Phase C video: link-only (recommended) or a different storage plan?
-- Q5 Per-coach storage cap for Light (no limit exists today).
-- Q6 Terms/privacy lines about sharing and minors, after the #122 items.
+- Q4 Phase C video: link-only (recommended), no video file upload.
+- Q6 Terms/privacy lines about sharing and minors (P13 handles the privacy page; the share terms line waits for V1.1).
 - Q7 Who applies the migration, and is there a Supabase preview branch?
 - Q8 Vercel Firewall rate-limit rule on `/share/*` (Vin's dashboard setting; plan availability not published).
-- Q9 Make `checks` a required check on `main`? ("yes, require checks"; not changed.)
+- Q9 Make `checks` a required check on `main` ("yes, require checks"; not changed).

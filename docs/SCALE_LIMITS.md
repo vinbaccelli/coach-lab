@@ -1,7 +1,8 @@
 # Scale limits: Vercel and Supabase, and what hits first at 100 / 1,000 / 10,000 coaches
 
 Written 2026-11-02 for the share-link plan (`docs/REPORT_SHARE_PLAN.md`). No code, database or settings changed.
-Goal under test: **no paid Vercel or Supabase tier at 1,000 coaches.**
+Original goal under test: no paid Vercel or Supabase tier at 1,000 coaches. **Superseded by Vin's decision (section 1b):
+stay on Hobby under about 100 users, with three triggers for acting.**
 
 ## 0. How to read this document (and what could not be verified)
 
@@ -23,7 +24,7 @@ Goal under test: **no paid Vercel or Supabase tier at 1,000 coaches.**
 | Service | Plan | How I know |
 |---|---|---|
 | Supabase | **Free** (`plan: "free"`, `tier: "tier_free"`) | Supabase management API `get_organization` for the organization "Anglemotion", read 2026-11-02. |
-| Vercel | **Not determinable from here** | No Vercel API access in this session. Two Vercel projects exist (`anglemotion-v1`, `anglemotionverification`) under the team `vinbaccellis-projects` (from the Vercel bot comments on the PRs). The plan is a dashboard fact: Vin has to read it (Team settings → Billing). |
+| Vercel | **Hobby** (stated by Vin, 2026-11-02; not verifiable from here) | No Vercel API access in this session. Two Vercel projects exist (`anglemotion-v1`, `anglemotionverification`) under the team `vinbaccellis-projects` (from the Vercel bot comments on the PRs). The plan is a dashboard fact: Vin has to read it (Team settings → Billing). |
 
 ### Commercial-use terms (this is the first thing that matters)
 
@@ -42,6 +43,17 @@ Goal under test: **no paid Vercel or Supabase tier at 1,000 coaches.**
 - **Supabase Free:** the sources I could read do not state a commercial-use restriction for the Free plan.
   I found no such wording; I did **not** find an explicit "commercial use allowed" statement either:
   **not published in the results I read.** Re-check <https://supabase.com/terms> and the pricing page.
+
+### 1b. Decision (Vin, 2026-11-02): Hobby under about 100 users, three triggers
+
+Stay on Vercel Hobby while under about 100 users. The first of these that happens means **act**:
+1. **About 50 users.**
+2. **Vercel's usage page shows 60% of any limit** (bandwidth, invocations, CDN requests...).
+3. **Subscriptions cover the $20** (the Pro price as stated by Vin; not verified from Vercel's pages).
+
+At trigger 1 or 2: upgrade to Pro, or decide to move hosts. Moving hosts is a project, not a switch, so decide at
+**50 users, not at 100**. Strictly, Hobby is non-commercial (section 1): that risk is Vin's and stays recorded here.
+Supabase stays on Free; its first limit (500 MB database) is modelled below and measurable with the queries in section 5.
 
 ## 2. Limits that matter (Free / Hobby), with sources
 
@@ -162,7 +174,27 @@ Share viewer traffic at 1,000 coaches (100,000 views/month), by delivery option 
 | **1,000 coaches** | **Supabase database size** (1.2 GB vs 500 MB; Free-plan action when over: not published) and **Vercel function invocations** (5 M vs 1 M) | Supabase egress in the high case; Vercel bandwidth if the models are re-downloaded |
 | **10,000 coaches** | Everything: DB 12 GB, invocations 50 M, bandwidth ≈ 650 GB, egress | Supabase MAU (50,000) is still not reached |
 
-**Conclusion for the cost goal.** With the mid assumptions "no paid tier at 1,000 coaches" **does not hold
+### 4b. Re-run with Drive-only screenshots and the "text and links only" principle (decided 2026-11-02)
+
+- **Screenshots are Drive-only on every plan; no Supabase fallback for new screenshots.** The model above never counted
+  screenshot bytes in the database (URLs only), so the **database** figures do not change. What changes is **Supabase
+  Storage and its egress**: the public `player-assets` bucket no longer grows from new screenshots (Light coaches
+  would have added to it without this change), so screenshot storage = **0 bytes** and screenshot egress = **0**.
+  The only binary data left in Supabase Storage is saved Motion Layer clips (player sessions) and, if built, phase C
+  picture uploads (capped: ≤ 3 MB each, ≤ 50 MB per player).
+- **New dependency:** every screenshot save and every shared-page image now depends on the coach's Google access.
+  Drive's own throttle ("Too many users have viewed or downloaded this file recently") has **no published threshold**
+  (section 2), so a very popular shared link could see broken images; the page shows a plain "Image unavailable" tile.
+- **Per-coach threshold: about 1,000 players, then suggest PDF export and archiving** (P14). Size at that point
+  (rows only; images are in Drive): mid assumptions 1,000 × (25 entries × 3 KB + 3.6 KB) ≈ **79 MB**; high
+  assumptions 1,000 × (60 × 10 KB + 3.6 KB) ≈ **600 MB**, which alone exceeds the 500 MB Free database. **So the
+  1,000-player threshold is a policy, not protection:** on the Free plan the database is exhausted by the number of
+  coaches (≈ 420 at the mid assumptions) long before any one coach reaches 1,000 players. The first thing to
+  measure is the real average size per coach (section 5).
+- **What PDF export changes:** nothing in the database by itself; it lets a coach archive and then delete old players,
+  which is the only way a player's rows ever shrink.
+
+**Conclusion.** With the mid assumptions "no paid tier at 1,000 coaches" **does not hold
 for the app as a whole**, with or without the share link: the database and the invocation count exceed Free /
 Hobby well before 1,000 coaches, and Vercel Hobby forbids commercial use outright. **The share link can be
 designed so it is not what pushes a limit** (option B+G: ≈ 2 to 4% of invocations, ≈ 2% of the database, ≈ 6 to 10% of
