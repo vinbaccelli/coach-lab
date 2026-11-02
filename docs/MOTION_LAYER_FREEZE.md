@@ -5,6 +5,8 @@ Written from `main` at `9db01dd9`. Every code claim carries a `file:line` from a
 document. "Measured" means I measured it in this sandbox (desktop Chromium, 390×844 touch viewport,
 no GPU, `next dev`), **not** on an iPhone.
 
+Update 3 (2026-11-02, latest): Vin's production-versus-preview results change the ranking again. **Section 11 supersedes sections 0, 6, 7 and 10.5 where they differ**: the detector warm-up is real but is **not sufficient** to freeze an iPhone (the preview ran the same warm-up and worked).
+
 Update 2 (2026-11-02, later): Vin's newest results (video loaded, network on: the page freezes 2-3 s after he presses play; Safari on the same iPhone behaves the same) are analysed in **section 10, which supersedes the ranking in sections 0, 6 and 7 where they differ**.
 
 Update 2026-11-02: Vin also tested the app's own demo video on the same iPhone and it freezes the same way, so the clip's length and size are **not** the trigger; section 9 answers the follow-up questions.
@@ -362,3 +364,113 @@ with `stopMotionLayerWarmups` disposing the detector and segmenter, setting `loc
 3. Was the skeleton on? (Default off.)
 4. Airplane mode **after** Motion Layer has opened once on Wi-Fi (panel chunk cached), then reopen it: if there is no freeze, the freeze is the detector download/initialisation.
 5. Not verified here, still needs the phone: the block length on an iPhone, whether the tab is killed, and the HTTP-cache behaviour for the 68 MB model.
+
+## 11. Update 3: production freezes, the preview works, Auto-detect reloads the page
+
+### 11.0 What the new results change
+
+| Vin's result (iPhone 14 Pro, iOS 18.5) | Reading |
+| --- | --- |
+| anglemotion.com freezes with a video loaded, Safari and Chrome | Same engine (WebKit), so one cause, not two |
+| Preview of #135 (same code as `main`, no Sentry variable, fresh origin): Motion Layer opens and **plays fine** | The preview runs the **same** warm-ups (`page.tsx:2105`, `:3413`) and does not freeze. So the detector warm-up (section 10) is **not sufficient** on an iPhone. **It is demoted**; its 6 s desktop block is real and still worth removing, but it is not why production freezes |
+| Preview: Auto-detect shows "AI detecting the athlete: frame 6/6", then the app reloads and everything is gone | A second problem, reproducible on the preview: see 11.3 |
+
+So something that exists **only on production** is needed to make the freeze happen. The rest of this section lists what that could be.
+
+### 11.1 (a) What differs between production and preview
+
+| Difference | Production | Preview | Could it affect Motion Layer? |
+| --- | --- | --- | --- |
+| **Origin / domain** | `anglemotion.com` (www) | `*.vercel.app` | Yes, indirectly: localStorage, sessionStorage, Cache Storage, the service worker and cookies are per origin. Production holds Vin's history; the preview starts empty |
+| **Signed-in state** | signed in (Supabase cookie on the production origin) | almost certainly signed out (a different origin has no cookie, and Google sign-in redirects are tied to the production domain; not verified) | Yes: plan, entitlement and sign-in code paths run only when signed in (`lib/useEntitlement`, `AuthButton`, player context) |
+| `NEXT_PUBLIC_SENTRY_DSN` | set (Vin confirmed) | not set | **Yes, see below** |
+| `NEXT_PUBLIC_SENTRY_ENVIRONMENT` / `_RELEASE` | `production` / commit SHA (`next.config.js:14-15`) | `preview` / commit SHA | No behaviour, labels only |
+| `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` | build only: source-map upload (`next.config.js:77-86`) | unknown | Not at runtime |
+| Other client variables the code reads: `NEXT_PUBLIC_SUPABASE_URL/_ANON_KEY`, `NEXT_PUBLIC_YT_RESOLVER_URL` (`page.tsx:5726`), `NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA` (`lib/tempDebugPose.ts:53`), Stripe and Google client ids (`.env.example`) | set | probably the same set | Not for Motion Layer; I cannot read the dashboards, so this is **unverified** |
+| Vercel preview toolbar and comments script | no | injected by Vercel (the "Vercel Preview Comments" check) | Extra script on the preview only; not a cause of a *missing* freeze |
+| `next.config.js` headers (`:49-66`) | COOP `same-origin`, COEP `credentialless` on every page | identical | No difference (same file). No `Cache-Control` is set there for any file |
+| Cache headers for the model files | Vercel edge. Same-origin `public/` files (models, `/ort`, `/mediapipe-*`) carry no app-set header, so Vercel/Next defaults apply (revalidate each time); hashed `/_next/static/*` is immutable. **Not measured:** the sandbox cannot reach anglemotion.com (403 from the proxy) | same | No difference between the two unless the domain or a CDN rule differs; the detector model is on `storage.googleapis.com` (`cache-control: public, max-age=3600`, measured) for both |
+| **Service worker** (`public/sw.js`, registered 3 s after load in **any** production build, `app/ServiceWorkerRegistration.tsx`) | installed since launch, caches accumulated (11.2) | installed at first visit, **empty caches** (and it takes control mid-session: `skipWaiting` + `clients.claim`, `sw.js:60-74`) | **Yes**, see 11.2 |
+
+**What runs only when the DSN is set (verified in the installed SDK, `@sentry/core` 11.10.0).** `Client.init()` sets integrations up only when the client is enabled
+(`node_modules/@sentry/core/build/cjs/client.js:307-316`); our config passes `enabled: false` and no DSN when the variable is empty (`lib/sentryConfig.ts`, `sentryBaseOptions`). So on the preview **none of the following exists**, and on production all of it does:
+
+- `BrowserApiErrors` **wraps `setTimeout`, `setInterval`, `requestAnimationFrame`, `XMLHttpRequest.send` and `addEventListener` on every event target** (`@sentry/browser/.../integrations/browserapierrors.js`): every animation frame, timer and event handler the analysis page and the canvas loop use goes through a Sentry wrapper;
+- `Breadcrumbs`: every `console.*` call, every `fetch`/XHR and every click is recorded as a breadcrumb and passed through our `beforeBreadcrumb: scrubBreadcrumb` (`lib/sentryConfig.ts`), which deep-walks every logged argument up to six levels (`scrubDeep`). The Motion Layer code paths alone contain 102 `console.*` calls; the page and canvas have many more. A log that passes a large object or a typed array (a mask is a 921,600-byte `Uint8ClampedArray`) would be walked entry by entry. I found no such call on the tap path, so this is a **mechanism, not a proven cause**;
+- `GlobalHandlers` (every unhandled error and rejection becomes an event, scrubbed by `scrubEvent`, depth 8) and the feedback widget.
+
+### 11.2 (b) What is persisted per origin, how much it can grow, and what page load does with it
+
+| Store | What the code writes | Size / growth |
+| --- | --- | --- |
+| localStorage | small flags: tour progress JSON (`anglemotion-tours-v1`), timeline fps (`anglemotion.timeline.*`), sound (`anglemotion.sound.v1`), install-prompt dismissals, toolbar collapsed, foot-line notice, precision-draw instructions; and the **developer toggles** `stroSegmenter`, `stroRacket`, `autoRacket`, `samRacket` | a few KB |
+| sessionStorage | reload latch (`anglemotion:reload-reset-evaluated-at`), tour state, debug flags | per tab, gone on close |
+| IndexedDB | **nothing written by the app** (no `indexedDB` use in `app/`, `components/`, `lib/`, `hooks/`) | none |
+| Cookies | Supabase sign-in (production only, in practice) | small |
+| **Cache Storage `angle-motion-v3`** (the service worker) | precache of 6 small files; then **cache-first** for every `/_next/static/*` chunk, images and fonts; **network-first plus `cache.put` for everything else**, including cross-origin GETs (`sw.js:84-190`) | **grows without a limit.** The name has not changed since 2026-09-09; `activate` only deletes caches with a *different* name |
+
+What can land in Cache Storage for a user who tests daily: every hashed `/_next/static/` chunk of every deploy visited (the production build of the analysis route alone is several MB; **I could not measure production sizes**), plus every model and runtime
+file that was ever fetched through the catch-all: `public/models` 115 MB (pose heavy 30.7, SAM-2 33, selfie multiclass 16.4, MoveNet 17.7, full pose 9.4, D-FINE 5.8, magic_touch 6.2), `public/ort` 49 MB, `public/mediapipe-wasm` 33 MB, `public/mediapipe-selfie` 12 MB, plus the detector's **67.8 MB** from `storage.googleapis.com`.
+That is up to **~280 MB of models** plus the accumulated chunks, i.e. plausibly hundreds of MB, possibly more than 1 GB, on a long-lived production origin, against an empty cache on the preview. Entries are replaced per URL, so this is a ceiling, not a typical day.
+
+What a page load does with it: the service worker starts, `install` precaches 6 files, `activate` deletes other cache names, then **every** same-origin request passes through the worker; `/_next/static/` requests call `caches.match`, which has to search the cache. Nothing reads or parses the stored models at load. The localStorage flags are read **when Motion Layer opens**: `selectedSegmenter()` reads `stroSegmenter` (`lib/stroMotionDraft/segmenterCommon.ts:55`, `selfieSegmenter.ts:194-204`); if it was ever set to `multiclass`, the open-time warm-up loads the **16.4 MB multiclass model and MediaPipe's wasm** instead of the 5.7 MB selfie runtime; `autoRacket` and `samRacket` change what Auto-detect runs
+(`lib/stroMotionDraft/autoRacketFlags.ts:25-54`, `page.tsx:128-137`). A developer-tester's production origin is exactly where those could have been set. Whether any of this slows a real iPhone is **not measurable here**.
+
+### 11.3 (c) Why Auto-detect ends with the page reloading (described only; Auto-detect is not changed)
+
+What "frame 6/6" is: the end of the **cheap** phase (one pose per frame, `page.tsx:2759` for the racket mode, `:2938` for the player mode). Directly after it the heavy batch starts (`autoProcessFrames`, `hooks/useStroMotion.ts:588-1000`):
+
+1. optional racket-arc sweep: capture every frame into memory (`preCaptured`);
+2. foot-pose pass: MediaPipe full pose per frame (`detectFullPoseOnBitmap`, loads `pose_landmarker_full.task` 9.4 MB);
+3. racket phase A: the D-FINE detector on every frame through ONNX Runtime wasm (`public/ort` 13-24 MB wasm, `public/models/dfine-n`); **on by default**, because the default object type is `racket` (`hooks/useStroMotion.ts:157`) and auto-racket is on in implement modes (`autoRacketFlags.ts:25-54`);
+4. the mask pass: `proposeFrameMask` per frame with the person segmenter;
+5. racket phase C: **SAM-2** on every frame with a detection (`samRacket.ts`, vision encoder 28.5 MB + decoder 4.6 MB, ONNX Runtime). iOS 18.5 has no WebGPU in the browser, so this is the wasm execution provider. Its embedding cache has a **420 MiB budget** ("tens of MB per frame ... rather than letting the tab OOM", `samRacket.ts:115-122`).
+
+**Memory per frame and how many are held at once.** The mask pass itself is small: the motion-diff works at a capped 420 px (`proposeFrameMask.ts:67-80`). What a frame retains is its source `ImageBitmap` (720x1280x4 = 3.5 MiB) plus two full-frame masks (0.88 MiB each), plus a third copy at commit: **~6.1 MiB per frame**. **All frames are held at once on purpose** (the commit is atomic: "builds every frame's proposal in memory ... then commits the COMPLETE set", `useStroMotion.ts:578-587`), so 6 frames are ~37 MiB and 15 frames ~92 MiB, plus the background plate. **That is not what runs a phone out of memory.** The large part is the **models**: MediaPipe pose, the ONNX Runtime wasm heap with D-FINE, the segmenter, and SAM-2's encoder plus its cache (up to 420 MiB of embeddings), loaded one after another during one pass. I cannot give a megabyte figure for the whole stack without a device.
+
+**Would iOS terminate the tab? Most consistent with yes.** Reasons: (i) the page came back as the **empty Upload screen**, not as the app's own error page (`app/analysis/error.tsx` would show "Something went wrong" and wait for a click); (ii) nothing in the Motion Layer or Auto-detect code calls `location.reload` or navigates (only that error page's button does); (iii) a browser that kills a tab reloads it when the user returns, and the page then *deliberately* resets a reloaded session (`page.tsx:4375-4410`: `nav.type === 'reload'` runs `resetSession()`); (iv) a local `blob:` video dies with the process. iOS does not publish its per-tab limit. **No proof:** only a device log can show it (see 11.7).
+
+**Recoverable after the reload?** **No.** The Auto-detect result, the draft, the snapshots and the loaded clip live only in the tab (React state, `ImageBitmap`s and a `blob:` URL of the local file). Nothing was ever written to storage, so there is nothing to restore.
+
+### 11.4 (d) What autosave exists, and why nothing was restored
+
+- The only "auto-save" in the analysis page is `page.tsx:3710`: the measurement column is copied into the active snapshot **in memory**. It writes nothing to storage.
+- Persistence exists only on an explicit **Save** to the player's session (Supabase, `components/sessions/SaveSessionModal.tsx`, `lib/sessions/saveSession`), and the Motion Layer image/video only exist once Generate has produced them (`lib/sessions/adapters/stroMotionAdapter.ts`).
+- On a reload the page resets itself on purpose ("Full page reload should not inherit URL field or stale session state", `page.tsx:4336`), and a local file cannot be re-opened by the browser without the coach choosing it again.
+- So it did not restore because **nothing was written and the design does not restore**, not because a restore failed.
+
+### 11.5 Private-tab test: separating stored data from production settings
+
+On a private tab, anglemotion.com has the **same code, the same domain, the same Vercel environment variables (including the Sentry DSN)**, but **empty localStorage, sessionStorage, Cache Storage, cookies, and a signed-out state**. (In Safari private windows the service worker may not be available at all, which also removes it from the picture; note that, it is not a flaw.)
+
+| Result in a private tab on anglemotion.com | Meaning |
+| --- | --- |
+| Motion Layer works, plays, no freeze | The cause is **stored data or sign-in state** on Vin's normal profile: the developer flags, the accumulated Cache Storage, or the signed-in code path. **Not** the production settings |
+| Still freezes | A **production setting**: the Sentry DSN (wrapping, breadcrumbs, scrub) or another environment variable |
+
+To split the first row further: (1) private tab, signed out; (2) private tab, **signed in** (freeze back = a sign-in-dependent path); (3) normal tab after removing the site's data (Safari: Settings > Safari > Advanced > Website Data > remove anglemotion.com; Chrome: delete "Cookies and site data" for the site), then signed in (freeze gone = stored data, which the cleanup also proves).
+
+### 11.6 Updated ranked causes
+
+1. **A production-only factor, not yet identified** (the preview works). Ordered by what the code supports; the private-tab test above splits (A)+(C) from (B):
+   - **(A) Stored data on the production origin.** The developer toggles in localStorage that change the open-time warm-up (`stroSegmenter=multiclass` loads 16.4 MB + wasm instead of 5.7 MB) and the Auto-detect stack (`autoRacket`, `samRacket`), and an unbounded service-worker Cache Storage (up to hundreds of MB, chunks of every visited deploy, every model fetched). Evidence: the code paths exist and read these keys; the preview has none of them. No measurement.
+   - **(B) Sentry with the DSN.** Verified: the integrations exist only on production (11.1), wrapping every `requestAnimationFrame`, timer and event listener and scrubbing every console argument. No mechanism proven for the freeze at this tap.
+   - **(C) Signed-in state** on production versus signed-out on the preview.
+2. **The detector warm-up** (section 10): real (6 s on desktop), **not sufficient** on the iPhone; may still amplify one of the above. Cheap hygiene to remove, not the cure.
+3. **Auto-detect runs the heaviest model stack on the phone** (separate problem, reproduced on the preview): D-FINE + SAM-2 on wasm with a 420 MiB cache and the other models in one pass; the tab is most likely killed by iOS, and nothing is recoverable.
+4. Not a regression in Motion Layer's own code (section 9a); unchanged.
+
+### 11.7 Updated smallest-fix proposals (none implemented; each needs approval)
+
+1. **Do nothing until the private-tab result is in.** It decides between "stored data" and "production settings", and the right fix differs.
+2. If **stored data**: (a) make the service worker stop caching the large model and runtime files (skip `/models/`, `/ort/`, `/mediapipe-*` and every cross-origin response in the catch-all `cache.put`, `public/sw.js:176-190`) and bump `CACHE_NAME` so `activate` evicts the accumulated cache; (b) a "Reset local data" action (unregister the worker, delete caches, clear the four developer keys). One file for (a).
+3. If **Sentry**: keep the DSN but make the browser init lighter: skip the `BrowserApiErrors` wrapper of `requestAnimationFrame`/timers/`addEventListener` and the console breadcrumbs (`instrumentation-client.ts`, `integrations` option). One file.
+4. **Auto-detect crash loop breaker (does not touch Auto-detect itself).** Around the call at `page.tsx:2938-2985`: write a marker in localStorage when a pass starts and clear it when it ends; on the next load, if the marker is still there, tell the coach "the last Auto-detect did not finish; this device ran out of memory" and set `autoRacket='0'` and `samRacket='0'`, the existing switches that turn off D-FINE and SAM-2. Before starting on a phone, offer "Save session first". It cannot make the pass lighter; it stops the loop and the surprise. A default of "phones start with those two switches off" is the next step and changes Auto-detect's behaviour, so it needs a decision.
+5. Keep from section 10: remove the detector warm-up and the one-line frame-gap guard. They are hygiene now.
+
+### 11.8 What Vin can do next (no code)
+
+1. The **private tab** test above, with the three steps.
+2. **Confirm the tab kill:** iPhone Settings > Privacy & Security > Analytics & Improvements > Analytics Data, look for a `JetsamEvent` entry at the time of the reload (needs "Share iPhone Analytics" on); the entry names the process and its memory. Send the file.
+3. Auto-detect with the two switches off cannot be tested without a console on iOS; the preview can instead be tested with the same flow while Auto-detect runs on **a 3-frame** selection (fewer frames: less cache), to see whether the crash depends on the frame count.
+4. Not verified here: cache headers on anglemotion.com, production chunk sizes, anything on a real device.
