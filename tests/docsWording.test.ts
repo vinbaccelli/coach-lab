@@ -56,7 +56,7 @@ test('privacy page: the sections the task asked for are there', () => {
 
 test('privacy page: every uncertain item carries a visible [VIN TO CONFIRM] tag, and no retention period is invented', () => {
   const tags = [...privacyText.matchAll(/<Confirm>([\s\S]*?)<\/Confirm>/g)].map((m) => m[1].replace(/\s+/g, ' ').trim());
-  assert.equal(tags.length, 4, tags.join(' | '));
+  assert.equal(tags.length, 3, tags.join(' | '));
   for (const t of tags) assert.ok(t.length > 15, t);
   assert.ok(privacy.includes('[VIN TO CONFIRM: {children}]'), 'the tag renders its marker');
   // Only a duration the code itself fixes (referral cookie: 60 days). The 30-day deletion promise was removed: no period is promised.
@@ -78,6 +78,11 @@ test('privacy page ↔ code: Sentry is EU only, no replay or tracing, scrubbed',
   const client = read('instrumentation-client.ts');
   assert.equal(/replayIntegration|replaysSessionSampleRate|tracesSampleRate/.test(client + read('sentry.server.config.ts')), false);
   assert.ok(client.includes('showName: false') && client.includes('showEmail: false') && client.includes('enableScreenshot: false'));
+  // Server and middleware Sentry are registered and read the same DSN as the browser, so the page may say all three report.
+  assert.ok(read('instrumentation.ts').includes("import('./sentry.server.config')") && read('instrumentation.ts').includes("import('./sentry.edge.config')"));
+  assert.ok(read('sentry.server.config.ts').includes('sentryEnvFromProcess()') && read('sentry.edge.config.ts').includes('sentryEnvFromProcess()'));
+  assert.ok(privacyText.includes('the browser, the server and the sign-in middleware'));
+  assert.ok(privacyText.includes('functions in Paris, EU'));
   assert.ok(privacyText.includes('EU region only') && privacyText.includes('session') && privacyText.includes('replay'));
 });
 

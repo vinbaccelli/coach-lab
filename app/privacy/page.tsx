@@ -124,7 +124,7 @@ export default function PrivacyPage() {
 
         <Section title="Where your data is stored">
           <ul style={ul}>
-            <li><strong>Supabase</strong> (database, sign-in and file storage): your account, player profiles, report text and structure, saved sessions, subscription and invoice records, and the encrypted YouTube token. Row-level security limits each coach to their own rows. <Confirm>the Supabase and Vercel hosting regions: the Supabase project region could not be read (the management API refused access to the project) and the repository sets no Vercel region</Confirm></li>
+            <li><strong>Supabase</strong> (database, sign-in and file storage): your account, player profiles, report text and structure, saved sessions, subscription and invoice records, and the encrypted YouTube token. Row-level security limits each coach to their own rows. Our database is hosted in Paris, France (EU).</li>
             <li><strong>Your own Google Drive</strong>: screenshots you save to a player, in a folder AngleMotion creates (AngleMotion / Players / the player&rsquo;s name / Screenshots). To let reports display them, each screenshot file is set so that anyone who has its link can view it. This is intentional: the link is the only protection, so save only screenshots you would be comfortable with a person holding the link seeing.</li>
             <li><strong>AngleMotion storage (Supabase Storage)</strong>: a Motion Layer clip you save with a session is stored here, at a web address that anyone who has it can open. Screenshots are not stored here: they go to your own Google Drive only. (Screenshots saved before this change may still be kept here.)</li>
             <li><strong>YouTube</strong>: videos you publish, on your channel, as Unlisted (anyone with the link can watch).</li>
@@ -146,7 +146,7 @@ export default function PrivacyPage() {
           The services the app calls, taken from the code:
           <ul style={ul}>
             <li><strong>Supabase</strong>: database, sign-in sessions and file storage.</li>
-            <li><strong>Vercel</strong>: hosting.</li>
+            <li><strong>Vercel</strong>: hosting (functions in Paris, EU).</li>
             <li><strong>Stripe</strong>: payments, invoices and the billing portal.</li>
             <li><strong>Google</strong>: sign-in, Drive, Docs and YouTube (as above).</li>
             <li><strong>Sentry</strong>: error monitoring (see below).</li>
@@ -157,13 +157,13 @@ export default function PrivacyPage() {
         </Section>
 
         <Section title="Error monitoring (Sentry)">
-          When error monitoring is switched on, errors from the browser and the server are sent to Sentry, in its
-          <strong> EU region only</strong> (the app refuses to start Sentry with any other region). We do not use session
+          Error monitoring is switched on in production. Errors from the browser, the server and the sign-in middleware are
+          sent to Sentry, in its<strong> EU region only</strong> (the app refuses to start Sentry with any other region). We do not use session
           replay or performance tracing. Before anything is sent, we remove the signed-in user, cookies, request headers
           and bodies, URL query strings, blob and data URLs, image and video file names, and email addresses. A small
           &ldquo;Report a problem&rdquo; button lets you send a message you type yourself; it has no name, email or
           screenshot field, so please do not include personal details in it. Error reports can still contain technical
-          details such as the page, the browser and the error text. <Confirm>whether Sentry is switched on in production: it runs only when an EU Sentry address is set in the hosting settings, which could not be read from the code</Confirm>
+          details such as the page, the browser and the error text. <Confirm>how long Sentry keeps error reports: this is set in the Sentry account and cannot be read from the code</Confirm>
         </Section>
 
         <Section title="Data retention and deletion">
