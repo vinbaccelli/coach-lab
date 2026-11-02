@@ -37,7 +37,8 @@ import Image from 'next/image';
 import { Check, ChevronDown, ArrowRight, ArrowUpRight } from 'lucide-react';
 import {
   PLANS, DEMO, EBOOK_TITLE, PRICE_TAX_NOTE, formatMaybePrice, planPrice, yearlyPerMonth,
-  yearlySavingsLabel, maxYearlySavingsPct, yearlySavingsSentence, type PlanPrices,
+  yearlySavingsLabel, maxYearlySavingsPct, yearlySavingsSentence, planBonusLines, YEARLY_BONUS_COPY, YEARLY_BONUS_TEXT,
+  type PlanPrices,
 } from '@/lib/plans';
 import { TRUSTPILOT_PROFILE_URL } from '@/lib/trustpilot';
 import TrustpilotReviewCollector from '@/components/TrustpilotReviewCollector';
@@ -214,7 +215,7 @@ const ENTRIES: Entry[] = [
     title: 'Published, linked, handed over.',
     body:
       'Push the finished video to your own YouTube channel as unlisted and save the link to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply.',
-    micro: 'Part of Pro and Academy: the player database, YouTube upload and Docs export.',
+    micro: 'Every plan has the player database. YouTube upload and Docs export are part of Pro and Academy.',
     shots: [
       {
         src: `${SHOT_DIR}/season-recording-complete.webp`,
@@ -317,7 +318,7 @@ function buildFaqs(prices: PlanPrices) {
     { q: 'Where do my videos live?', a: 'On Pro and Academy, a recording you publish goes to your own YouTube channel as an unlisted video, and its link is saved to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply. The footage you analyse is processed in your browser; a Motion Layer clip you save to a player’s session is stored by AngleMotion with that session.' },
     { q: 'What do I need to run it?', a: 'Just a browser — nothing to install. A laptop or desktop with graphics acceleration on gives the smoothest AI skeleton.' },
     { q: 'Is this only for coaches?', a: 'No. Plenty of players and parents run their own analysis and build their own record over time. The Academy exists so you can learn what to film and what to look for.' },
-    { q: 'How does yearly billing and the ebook work?', a: `${yearlySavingsSentence(prices) ?? ''} Pro and Academy billed yearly include the ${EBOOK_TITLE} ebook, downloaded from your account page. ${PRICE_TAX_NOTE}`.trim() },
+    { q: 'How does yearly billing and the ebook work?', a: `${yearlySavingsSentence(prices) ?? ''} Pro and Academy billed yearly include the ${EBOOK_TITLE} ebook, downloaded from your account page.${YEARLY_BONUS_COPY ? ` ${YEARLY_BONUS_TEXT}` : ''} ${PRICE_TAX_NOTE}`.trim() },
     { q: 'Can I use my SwingVision data?', a: 'Yes — the Match Decoder reads SwingVision screenshots and folds match stats into the player’s file.' },
   ];
 }
@@ -628,6 +629,9 @@ export default function LandingPage({ prices }: { prices: PlanPrices }) {
                   <li key={f}><Check size={15} aria-hidden="true" /> <span>{f}</span></li>
                 ))}
               </ul>
+              {planBonusLines(plan, annual).map((line) => (
+                <p key={line} className="am-plan-bonus" data-plan-bonus>{line}</p>
+              ))}
               <Link href="/pricing" className={`am-btn ${plan.featured ? '' : 'am-btn-quiet'} am-btn-block`}>
                 Choose {plan.name}
               </Link>
@@ -971,6 +975,7 @@ const CSS = `
 .am-plan-price { margin: 0; font-size: 42px; font-weight: 800; letter-spacing: -0.04em; line-height: 1; }
 .am-plan-per { font-size: 15px; font-weight: 600; color: var(--cl-text-secondary); letter-spacing: 0; }
 .am-plan-billed { margin: 8px 0 18px; font-size: 13px; color: var(--cl-text-secondary); }
+.am-plan-bonus { margin: 0 0 16px; padding: 10px 12px; border-radius: 10px; background: var(--cl-accent-soft); font-size: 13px; font-weight: 600; line-height: 1.45; color: var(--cl-text-primary); }
 .am-plan-features { list-style: none; margin: 0 0 24px; padding: 0; display: grid; gap: 10px; flex: 1; }
 .am-plan-features li { display: grid; grid-template-columns: 18px 1fr; gap: 9px; font-size: 15px; line-height: 1.45; color: var(--cl-text-secondary); }
 .am-plan-features svg { color: var(--cl-accent); margin-top: 3px; }
