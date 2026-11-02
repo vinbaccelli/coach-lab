@@ -2362,3 +2362,24 @@ column are still never exported.
 **Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
 
 **Severity.** Medium (visual).
+
+## 082 — Text still described reports as Google Docs; privacy policy out of date (wording only)
+
+**Found:** 2026-11-01. Numbered 082 because 076–081 are used by PRs #118–#121.
+
+**What changed (text only, no logic).**
+- `components/LandingPage.tsx`: five passages said reports are a Google Doc, "two documents", or live "in your Google Drive". They now say reports are kept in AngleMotion, with the video link, screenshots and comments, and that screenshots are in the coach's own Google Drive.
+- `components/tours/playersTour.ts`: two unconditional steps said screenshots and Generate reports go into a Technical Analysis Doc and match reports into a Match Analysis Doc. Generate with "Export Google Docs report" does still write the Technical Analysis Google Doc, and the step says so; screenshots and match reports now go to the in-app reports.
+- `app/privacy/page.tsx`: new sections (player data, where it is stored, the coach's responsibility, services, Sentry), and three statements the code contradicted were corrected: "we only store your subscription status" (invoice records hold billing name, email, address, tax IDs), "Google access tokens… are not stored" (the encrypted YouTube refresh token is), and "we do not upload or store your videos" (a Motion Layer clip saved with a session is stored). Anything the code cannot answer is tagged `[VIN TO CONFIRM: …]` (8 tags, counted by `tests/docsWording.test.ts`) and must be resolved before this page goes live.
+
+**Left as it is, on purpose.**
+- `lib/plans.ts:76` ("Your reports live in your Google Docs") and the plan bullets: pricing text is a later pass. `lib/plans.ts:119` ("Google Docs report export") is still true.
+- `app/terms/page.tsx` §4.3 and §6 (Google API Services): describe API use, still accurate; not in this PR's files.
+- The two landing screenshots `public/marketing/landing/web/season-player-reports.webp` and `step-coach-summary.webp` still show the old UI (Technical Analysis Doc / Match Analysis Doc buttons, "Save to Google Docs"). Their alt texts describe what the images show, so they were not changed. **They need re-shooting** (an image change, not text).
+- `lib/entitlements.ts:133` label "Google Docs export": the export buttons still exist.
+
+**Defects noticed while reading the code (not fixed here).**
+- *Public fallback screenshots.* When Drive cannot be reached, `app/analysis/page.tsx:3564-3566` stores the screenshot in the `player-assets` bucket and keeps a public URL (the bucket is public). The path is `<user id>/screenshots/<timestamp>.png`, so it is not secret. Severity medium (images of players, possibly minors). Proposed fix: a private bucket with signed URLs.
+- *Drive screenshots are link-viewable.* `app/api/google/upload-image/route.ts:127` sets every screenshot to "anyone with the link can view" so that Docs can embed it. With reports now in the app, check whether that is still needed. The policy states it and asks Vin to confirm.
+
+**Severity.** Low (wording), but the privacy page is a public legal statement: do not merge before the tags are resolved.
