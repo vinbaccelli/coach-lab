@@ -214,7 +214,7 @@ const ENTRIES: Entry[] = [
     title: 'Published, linked, handed over.',
     body:
       'Push the finished video to your own YouTube channel as unlisted and save the link to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply.',
-    micro: 'Part of Pro and Academy: the player database, YouTube upload and Docs export.',
+    micro: 'Every plan has the player database. YouTube upload and Docs export are part of Pro and Academy.',
     shots: [
       {
         src: `${SHOT_DIR}/season-recording-complete.webp`,

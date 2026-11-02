@@ -3491,7 +3491,7 @@ function Home() {
     if (!screenshotDataUrl) return;
     if (!canUseFeature('saveToPlayer')) {
       setUpgradeFeature('saveToPlayer');
-      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — the image was not saved.' });
+      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: 'Saving to a player needs an active plan — the image was not saved.' });
       return;
     }
     // One save at a time: a second tap while the first is still running would
@@ -3602,7 +3602,7 @@ function Home() {
       // Checked BEFORE creating, so a plan block does not leave a new empty player behind.
       if (!canUseFeature('saveToPlayer')) {
         setUpgradeFeature('saveToPlayer');
-        setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — no player was created and the image was not saved.' });
+        setScreenshotMessage({ kind: 'error', text: 'Saving to a player needs an active plan — no player was created and the image was not saved.' });
         return;
       }
       setScreenshotSaving(true);
