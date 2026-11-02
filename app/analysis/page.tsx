@@ -76,6 +76,8 @@ import {
   subjectBoxFromRegion,
 } from '@/lib/stroMotion';
 import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
+import SelectedItemDeleteBar from '@/components/metrics/SelectedItemDeleteBar';
+import { deleteBlockedReason, OVERLAY_LABEL, removeById, restoreAt, rowForOverlay, type ColumnRow } from '@/lib/metrics/deleteSelected';
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
@@ -1357,6 +1359,65 @@ function Home() {
   const [generateVideoUrl, setGenerateVideoUrl] = useState<string | null>(null);
   const [generateVideoBlob, setGenerateVideoBlob] = useState<Blob | null>(null);
   const [generateRecording, setGenerateRecording] = useState(false);
+
+  // ── Delete the SELECTED snapshot or AI angle, with a short Undo ───────────────────────────────
+  // Select the way the coach already does (the green ball; a data-column row or an AI line), then
+  // tap Delete. Only that item goes; everything else stays. Undo restores it for a few seconds.
+  const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
+  const [hiddenByOwner, setHiddenByOwner] = useState<Record<string, string[]>>({});
+  const [lastDeleted, setLastDeleted] = useState<
+    | { kind: 'snapshot'; label: string; snap: Snapshot; index: number }
+    | { kind: 'angle'; label: string; row: ColumnRow; index: number; overlayId: string; owner: string }
+    | null
+  >(null);
+  const lastDeletedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDeleted = useCallback((d: NonNullable<typeof lastDeleted>) => {
+    if (lastDeletedTimerRef.current) clearTimeout(lastDeletedTimerRef.current);
+    setLastDeleted(d);
+    lastDeletedTimerRef.current = setTimeout(() => setLastDeleted(null), 6000);
+  }, []);
+  useEffect(() => () => { if (lastDeletedTimerRef.current) clearTimeout(lastDeletedTimerRef.current); }, []);
+  const ownerKey = biomechSelectedPhaseId ?? 'live';
+  const hiddenOverlayIds = useMemo(() => new Set(hiddenByOwner[ownerKey] ?? []), [hiddenByOwner, ownerKey]);
+  const deleteBlocked = deleteBlockedReason({
+    exportOpen: metricsExportOpen, generateOpen: generateWorkspaceOpen, replaying: replayActive, recording: generateRecording,
+  });
+  const selectedAngleRow = selectedOverlayId && !hiddenOverlayIds.has(selectedOverlayId)
+    ? rowForOverlay(measurementColumn, selectedOverlayId) : null;
+
+  const deleteSelected = useCallback(() => {
+    if (deleteBlocked) return;
+    // A selected AI angle wins over the snapshot it lives in: it is the more specific selection.
+    if (selectedOverlayId && selectedAngleRow) {
+      const { row, index } = selectedAngleRow;
+      const overlayId = selectedOverlayId;
+      setMeasurementColumn(prev => removeById(prev, row.id));
+      setHiddenByOwner(prev => ({ ...prev, [ownerKey]: [...(prev[ownerKey] ?? []), overlayId] }));
+      setSelectedOverlayId(null);
+      showDeleted({ kind: 'angle', label: row.label, row, index, overlayId, owner: ownerKey });
+      return;
+    }
+    if (activeSnapshot) {
+      const index = snapshots.findIndex(s => s.id === activeSnapshot.id);
+      showDeleted({ kind: 'snapshot', label: activeSnapshot.label, snap: activeSnapshot, index });
+      deleteSnapshot(activeSnapshot.id);
+      setSelectedOverlayId(null);
+    }
+  }, [deleteBlocked, selectedOverlayId, selectedAngleRow, ownerKey, activeSnapshot, snapshots, deleteSnapshot, showDeleted]);
+
+  const undoDelete = useCallback(() => {
+    const d = lastDeleted;
+    if (!d) return;
+    if (lastDeletedTimerRef.current) clearTimeout(lastDeletedTimerRef.current);
+    setLastDeleted(null);
+    if (d.kind === 'snapshot') {
+      setSnapshots(prev => restoreAt(prev, d.snap, d.index));
+    } else {
+      setHiddenByOwner(prev => ({ ...prev, [d.owner]: (prev[d.owner] ?? []).filter(x => x !== d.overlayId) }));
+      setMeasurementColumn(prev => restoreAt(prev, d.row, d.index));
+    }
+  }, [lastDeleted]);
+
   /**
    * Why the export outcome needs its OWN state instead of the status banner.
    *
@@ -7652,6 +7713,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   onMeasurementColumnDrag={setMeasurementColumnPos}
                   onMeasurementColumnRect={setMeasurementColumnRect}
                   columnDeleteMode={columnDeleteMode}
+                  hiddenOverlayIds={hiddenOverlayIds}
+                  onActiveOverlayChange={setSelectedOverlayId}
                   onMeasurementItemDelete={(id) => {
                     setMeasurementColumn(prev => {
                       const next = prev.filter(m => m.id !== id);
@@ -7788,6 +7851,14 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     }}
                   />
                 )}
+                {/* One clear Delete for the selected snapshot or AI angle, and the Undo toast after it. */}
+                <SelectedItemDeleteBar
+                  selectedLabel={selectedAngleRow ? (OVERLAY_LABEL[selectedOverlayId ?? ''] ?? selectedAngleRow.row.label) : (activeSnapshot ? activeSnapshot.label : null)}
+                  blockedReason={deleteBlocked}
+                  onDelete={deleteSelected}
+                  deletedLabel={lastDeleted ? lastDeleted.label : null}
+                  onUndo={undoDelete}
+                />
                 {/* Data column HTML overlay buttons — anchored to the live
                     canvas-drawn column rect so they track drag + resize exactly. */}
                 {dataColumnVisible && measurementColumnRect && (
@@ -7811,12 +7882,12 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         const unit = valStr && !isNaN(val) ? (prompt('Unit (°, px, m):') ?? '') : '';
                         setMeasurementColumn(prev => [...prev, { id: `n-${Date.now()}`, label: label.trim(), value: isNaN(val) ? 0 : val, unit, type: 'note' }]);
                       }} style={{
-                        width: 24, height: 24, borderRadius: 6, border: 'none',
+                        width: 24, height: 24, minWidth: isMobile ? 44 : undefined, minHeight: isMobile ? 44 : undefined, borderRadius: 6, border: 'none',
                         background: 'rgba(255,255,255,0.2)', color: '#fff',
                         fontSize: 16, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
                       }}>+</button>
                       <button type="button" onClick={() => setColumnDeleteMode(d => !d)} style={{
-                        width: 24, height: 24, borderRadius: 6, border: 'none',
+                        width: 24, height: 24, minWidth: isMobile ? 44 : undefined, minHeight: isMobile ? 44 : undefined, borderRadius: 6, border: 'none',
                         background: columnDeleteMode ? 'rgba(255,59,48,0.5)' : 'rgba(255,59,48,0.3)',
                         color: '#FF3B30',
                         fontSize: 16, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
