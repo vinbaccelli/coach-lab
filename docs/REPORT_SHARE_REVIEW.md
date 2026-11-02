@@ -167,7 +167,7 @@ Attack attempts tried on paper:
 | 3 | Visitor guesses tokens / enumerates | 256 bits; malformed rejected before DB; uniform 404 (cost abuse: **F2**) |
 | 4 | SQL injection through the token path segment | well-formedness regex + parameterised supabase-js |
 | 5 | Viewer reaches another player via the image route (`/img/<n>`) | `n` indexes a server-built list for that share only |
-| 6 | Open redirect / SSRF through the image redirect | host is fixed (`lh3.googleusercontent.com`) and the id is extracted by regex; the legacy Supabase branch must compare the **exact** project host (stored URLs are coach-controlled), add to S10 test |
+| 6 | Open redirect / SSRF through the image redirect | host is fixed (`lh3.googleusercontent.com`) and the id is extracted by regex; the legacy Supabase branch must compare the **exact** project host (stored URLs are coach-controlled), add to plan S10 test |
 | 7 | Malicious coach plants `javascript:` / phishing link in an entry | **not stopped today: B1** |
 | 8 | Script injection through SVG chart strings in `metadata` | `sanitizeSvg` allow-list exists; with no CSP a bypass runs on the app origin: **B2** |
 | 9 | Viewer replays a cached copy after revoke | page/images CDN-cached ≤ 60 s, browser `no-store`; HTML not cached by the service worker (`sw.js:44-55`); tag invalidation availability: **N5** |
