@@ -54,7 +54,8 @@ const GenerateWorkspace = React.lazy(() => import('@/components/metrics/Generate
 // Static (not lazy): Generate must open with no chunk fetch on the click.
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
-import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoDetailText, videoStateText } from '@/lib/firstFrame';
+import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, tapHintVisible, videoDetailText, videoStateText } from '@/lib/firstFrame';
+import FirstFrameTapHint from '@/components/FirstFrameTapHint';
 import { recoveryPlan, reloadSameSource, shouldRestartFromStart, watchStuckPlayback } from '@/lib/seekWait';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
 import { selectedSection, type TrackScope } from '@/lib/aiTrackScope';
@@ -776,6 +777,8 @@ function Home() {
 
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
+  // Slot A is in the first-frame S5 state: no frame yet, a tap on the video is awaited (lib/firstFrame.ts).
+  const [firstFrameTapNeededA, setFirstFrameTapNeededA] = useState(false);
   const [videoLoadErrorA, setVideoLoadErrorA] = useState<string | null>(null);
   /** Error loading the bundled strategy-board court asset (see loadBundledCourt) */
   const [courtLoadError, setCourtLoadError] = useState<string | null>(null);
@@ -4511,6 +4514,7 @@ function Home() {
       tapTarget: () => video.parentElement,
       debug: vdebug,
       onFrame: () => { requestCanvasPaintAfterVideoLoad('A'); void canvasRef.current?.waitForRender?.(); },
+      onTapNeeded: setFirstFrameTapNeededA,
     }) : null;
 
     return () => {
@@ -8278,6 +8282,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       </button>
                     </div>
                   </div>
+                ) : null}
+                {tapHintVisible({ waitingForTap: firstFrameTapNeededA, hasVideo: !!videoSrc, loadError: !!videoLoadErrorA, tapToPlay: showTapToPlay }) ? (
+                  <FirstFrameTapHint insetLeft={panelToolbarInset} />
                 ) : null}
                 {showTapToPlay && videoSrc && !videoLoadErrorA ? (
                   <div

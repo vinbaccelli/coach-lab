@@ -49,6 +49,14 @@ export function ignoreLoadError(state: Pick<FirstFrameState, 'touched' | 'reache
   return Boolean(state && state.touched && state.reachedMetadata);
 }
 
+/**
+ * Should the "tap the video" hint be on screen? Only in the S5 state (the strategies ran, no frame yet, a tap is
+ * awaited): never while the video is still loading, and never over the page's own error or "Tap to Play" screens.
+ */
+export function tapHintVisible(s: { waitingForTap: boolean; hasVideo: boolean; loadError: boolean; tapToPlay: boolean }): boolean {
+  return s.waitingForTap && s.hasVideo && !s.loadError && !s.tapToPlay;
+}
+
 /** Is there a decoded frame to show? (readyState ≥ 2 and drawImage paints pixels.) */
 export function frameDecoded(v: HTMLVideoElement): boolean {
   if (v.readyState < 2 || !(v.videoWidth > 0) || !(v.videoHeight > 0)) return false;
@@ -195,7 +203,7 @@ async function prime(
  */
 export function ensureFirstFrame(
   v: HTMLVideoElement,
-  { slot, tapTarget, debug, onFrame }: { slot: string; tapTarget: () => HTMLElement | null; debug: boolean; onFrame?: () => void },
+  { slot, tapTarget, debug, onFrame, onTapNeeded }: { slot: string; tapTarget: () => HTMLElement | null; debug: boolean; onFrame?: () => void; onTapNeeded?: (needed: boolean) => void },
 ): () => void {
   let cancelled = false;
   let running = false;
@@ -221,9 +229,19 @@ export function ensureFirstFrame(
     firstFrameLog(slot, `new load, src=${srcKind(v.getAttribute('src'))} | ${videoStateText(v)}`);
   }
 
+  // The S5 state, reported to the page so it can show a hint: true while a tap is awaited, false from the moment
+  // the tap arrives, a frame shows, the coach plays, or this load is cancelled. Reporting only: no strategy reads it.
+  let tapNeeded = false;
+  const setTapNeeded = (needed: boolean) => {
+    if (tapNeeded === needed) return;
+    tapNeeded = needed;
+    onTapNeeded?.(needed);
+  };
+
   const succeed = (by: string) => {
     if (finished) return;
     finished = true;
+    setTapNeeded(false);
     log(`frame decoded (${by})`);
     onFrame?.();
   };
@@ -262,6 +280,7 @@ export function ensureFirstFrame(
     if (!el) { log('S5 unavailable: no video panel'); return; }
     const onTap = () => {
       el.removeEventListener('pointerdown', onTap, true);
+      setTapNeeded(false);
       try {
         if (cancelled || finished || v.error || frameDecoded(v)) return;
         if (!untouched()) { log('S5 skipped: video already played or moved'); return; }
@@ -282,6 +301,13 @@ export function ensureFirstFrame(
     };
     el.addEventListener('pointerdown', onTap, true);
     cleanups.push(() => el.removeEventListener('pointerdown', onTap, true));
+    // A frame can also arrive by another route (a seek, the coach pressing Play): the hint goes with it.
+    const frameCheck = () => { if (tapNeeded && frameDecoded(v)) setTapNeeded(false); };
+    for (const type of ['loadeddata', 'canplay', 'seeked'] as const) {
+      v.addEventListener(type, frameCheck);
+      cleanups.push(() => v.removeEventListener(type, frameCheck));
+    }
+    setTapNeeded(true);
   };
 
   const onMeta = () => { log('loadedmetadata → run strategies'); void run(); };
@@ -290,9 +316,9 @@ export function ensureFirstFrame(
     v.addEventListener('loadedmetadata', onMeta, { once: true });
     cleanups.push(() => v.removeEventListener('loadedmetadata', onMeta));
   }
-  const onPlayed = () => { if (!finished && !v.paused) { finished = true; log('played by the coach: done'); } };
+  const onPlayed = () => { if (!finished && !v.paused) { finished = true; setTapNeeded(false); log('played by the coach: done'); } };
   v.addEventListener('playing', onPlayed);
   cleanups.push(() => v.removeEventListener('playing', onPlayed));
 
-  return () => { cancelled = true; cleanups.forEach((fn) => fn()); };
+  return () => { cancelled = true; setTapNeeded(false); cleanups.forEach((fn) => fn()); };
 }
