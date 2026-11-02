@@ -2,11 +2,10 @@
 
 import { useState } from 'react';
 
-/** Pull the Drive file id out of the URL forms upload-image and Drive itself produce. */
-export function driveFileId(url: string): string | null {
-  const m = /[?&]id=([\w-]{10,})/.exec(url) ?? /\/file\/d\/([\w-]{10,})/.exec(url) ?? /googleusercontent\.com\/d\/([\w-]{10,})/.exec(url);
-  return m ? m[1] : null;
-}
+import { driveFileId } from '@/lib/reports/driveId';
+import { safeHttpUrl } from '@/lib/reports/safeUrl';
+
+export { driveFileId };
 
 /**
  * A report screenshot. Stored URLs are Drive `uc?export=view` links (or public
@@ -19,7 +18,12 @@ export function driveFileId(url: string): string | null {
  */
 export default function DriveImage({ url, alt, fallbackUrl }: { url: string; alt: string; fallbackUrl?: string }) {
   const id = driveFileId(url);
-  const sources = [url, ...(id ? [`https://lh3.googleusercontent.com/d/${id}=w1600`] : []), ...(fallbackUrl ? [fallbackUrl] : [])];
+  // Only plain http(s) addresses are ever used as an image source or a link: a stored `javascript:` or
+  // `data:` address is dropped here (the tile below then says "Image unavailable", with no link).
+  const sources = [url, ...(id ? [`https://lh3.googleusercontent.com/d/${id}=w1600`] : []), ...(fallbackUrl ? [fallbackUrl] : [])]
+    .map((u) => safeHttpUrl(u))
+    .filter((u): u is string => u !== null);
+  const openUrl = safeHttpUrl(url);
   const [attempt, setAttempt] = useState(0);
 
   if (attempt >= sources.length) {
@@ -30,9 +34,11 @@ export default function DriveImage({ url, alt, fallbackUrl }: { url: string; alt
         style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 120, padding: '18px 14px', borderRadius: 12, background: 'var(--cl-bg-secondary)', textAlign: 'center' }}
       >
         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--cl-text-secondary)' }}>Image unavailable</span>
-        <a href={url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', minHeight: 44, color: 'var(--cl-accent)', fontSize: 14, fontWeight: 600, textDecoration: 'none' }}>
-          Open image ↗
-        </a>
+        {openUrl ? (
+          <a href={openUrl} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', minHeight: 44, color: 'var(--cl-accent)', fontSize: 14, fontWeight: 600, textDecoration: 'none' }}>
+            Open image ↗
+          </a>
+        ) : null}
       </div>
     );
   }
