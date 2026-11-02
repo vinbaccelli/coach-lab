@@ -5,6 +5,8 @@ Written from `main` at `9db01dd9`. Every code claim carries a `file:line` from a
 document. "Measured" means I measured it in this sandbox (desktop Chromium, 390×844 touch viewport,
 no GPU, `next dev`), **not** on an iPhone.
 
+Update 2026-11-02: Vin also tested the app's own demo video on the same iPhone and it freezes the same way, so the clip's length and size are **not** the trigger; section 9 answers the follow-up questions.
+
 Report (Vin): iPhone 14 Pro, iOS 18.5, Chrome for iOS (CriOS 156), anglemotion.com, a 15 s 720×1280
 local file (`src=blob`). The page freezes the moment Motion Layer is tapped, every time, also when
 the video is already playing (`readyState=4`). Reloading afterwards is extremely slow. `?vdebug=1`
@@ -192,3 +194,68 @@ rest of the session.
 3. The `?vdebug=1` lines right after the tap (any `[selfieSegmenter]`/`[captureFrame]` lines).
 4. Reload time with the clip but **without** tapping Motion Layer (baseline for the slow-reload report).
 5. Sentry will not show it: the inits add no performance tracing (`lib/sentryConfig.ts`), so a long task is not an event. A crash-and-restart of the tab would not be reported either.
+
+## 9. Follow-up: regression, iPhone-only dependencies, other entry points
+
+### 9a. Did it work before, and which commit changed it?
+
+- **No Motion Layer code changed in the last 30 days.** `git log --since=2026-10-03` on `hooks/useStroMotion.ts`, `lib/stroMotion.ts`,
+  `lib/stroMotionDraft/*`, `components/stroMotion/*`, `components/StroMotionPanel.tsx`, `lib/racketCocoDetect.ts` returns **no commits**. Last commit that
+  touched Motion Layer code: `7f5acba4` (2026-10-14, playhead-ball drag, `app/analysis/page.tsx`/timeline only). From `7f5acba4` to now
+  `git diff` of those Motion Layer libraries, `public/sw.js` and `lib/racketCocoDetect.ts` is **empty**.
+- **The tap-time code is older still and unchanged.** The racket-detector warm-up was added in `3183f581` (2026-06-15), the mirror `<video>`
+  capture source in `0c8d8cc1` (2026-07-26), the selfie warm-up in `b7c1f8d3` (2026-07-27). All four things that run on the tap (section 1) are
+  present, identical, at `7f5acba4`, `01c2f23e` and `dd141b67` (the 2026-09-02 import commit, 551 files).
+- **It worked on a real phone recently.** KNOWN_ISSUES 038 (commit `7f5acba4`, 2026-10-14) is the owner testing Motion Layer on a real phone
+  ("a freshly opened Motion Layer", frame stops, playhead drag). That says it opened and was usable then. It does not say which phone, iOS or browser
+  version: **ask Vin**.
+- **What did change since 2026-10-14 in `main`** (page-level, not Motion Layer): `8541078d` first frame after upload on iPhone (#94, 10-19);
+  `7ccc7d55`/`857b918a`/`913bd52f`/`36233c47` Metrics export work (#92, #93, #96, #97; run on export, not on the tap); `adb0fc16`/`9fbd242f` export sound
+  (#99, #112); `03ee28f5` **Sentry** (#101, 10-25: the only new runtime dependency, `@sentry/nextjs`, `package.json`); `9de55c46`/`57c4d362` AI Track (#107, #100);
+  `929d29cb` in-app reports (#111); `727fb300` stuck-video watcher (#113, 10-30). Only `727fb300` and `03ee28f5` run on every page load; the rest are idle during the tap.
+- **Verdict.** This is **not a regression in Motion Layer's own code**, and I **cannot name a commit that caused it**. If it is a regression, the candidates are outside Motion Layer:
+  1. `03ee28f5` Sentry (#101). The browser SDK wraps `addEventListener`, timers, `requestAnimationFrame`, `fetch` and `console` for breadcrumbs (`instrumentation-client.ts`,
+     `lib/sentryConfig.ts`; every breadcrumb goes through `scrubBreadcrumb`). It is **live only where `NEXT_PUBLIC_SENTRY_DSN` is set**, and Vin confirmed it is set for Production.
+     That would explain "anglemotion.com freezes" while a local or preview build does not, but I found no mechanism that makes it freeze at this tap. **Weak.**
+  2. `727fb300` stuck-video recovery (#113): it may `load()` the main video, but it is gated off only while `stroMotionProcessing` (`app/analysis/page.tsx`, `stuckRecoveryAllowedRef`),
+     and opening Motion Layer is not "processing". **Weak.**
+  3. An iOS 18.5 / CriOS 156 update, or the page simply holding more memory than in mid-October (Sentry, reports, export code). **Not checkable from the repo.**
+- **How to settle it without code** (needs your approval, it creates deployments): push a branch at `7f5acba4` (known to open Motion Layer on Vin's phone) and at `main`, and let Vin tap Motion Layer on both preview URLs.
+  If `7f5acba4` also freezes on this phone, it is the device/browser, not a commit. Cheaper first check: tap Motion Layer on the **preview** deployment of this PR (same code as `main`). If the DSN is
+  set for Production only, Sentry is off there: freeze gone on the preview means Sentry/production environment; freeze still there means not Sentry.
+
+### 9b. What Motion Layer depends on that differs on iPhone Chrome (CriOS = WebKit)
+
+Checked in the Motion Layer files; only the first three run **on the tap**:
+
+| Dependency | Where | On the tap? | iPhone note |
+| --- | --- | --- | --- |
+| Second hidden `<video>` on the same blob, never played | `captureSource.ts:174-200`, style at `:56-64` | yes | iOS stops at `HAVE_METADATA` for a never-played element (KNOWN_ISSUES 055), so `waitForDecodableFrame` (`captureFrame.ts:46-48`) can wait up to 15 s; two decoders on one blob |
+| WebGL contexts: TensorFlow.js `setBackend('webgl')` | `racketCocoDetect.ts:26-30` | yes | one context; weights uploaded as GPU textures (68 MB model) |
+| WebGL + wasm: MediaPipe selfie solution (`simd_wasm_bin.wasm`, 5.7 MB) | `selfieSegmenter.ts:127-145` | yes | a second WebGL context; the pose landmarker may hold a third (GPU delegate, `lib/mediapipePose.ts:92-94`) when the skeleton is on; WebKit limits concurrent contexts and GPU memory |
+| `createImageBitmap(video)` | `captureFrame.ts` (`normalizedFrameBitmap`) | yes (2 plates) | needs a decoded frame; has a size-mismatch re-grab for portrait phone clips |
+| `OffscreenCanvas` | `lib/stroMotion.ts:157-163` (falls back to a canvas when missing) | no (Generate) | supported on iOS 16.4+ |
+| `canvas.captureStream(30)` + `MediaRecorder` | `lib/stroMotion.ts:1232-1263` | no (preview video only) | webm/vp9 is not supported on iOS, the code falls back to `video/mp4` |
+| Web Audio / `AudioContext` | none in Motion Layer files | no | only the Generate sound path (#112) uses it |
+| Web Worker | none at tap | no | the pose worker is not used by these steps |
+| SharedArrayBuffer (ORT threaded wasm, SAM racket) | `samRacket.ts:177` | no (on press) | needs cross-origin isolation; not on the tap |
+
+So the iPhone-specific risks at the tap are the never-played mirror `<video>`, **two WebGL runtimes starting at once**, ~74 MB of model download, and the tab memory ceiling. `captureStream`, `MediaRecorder`, `OffscreenCanvas` and Web Audio are **not** involved in the tap.
+
+### 9c. Does it work if Motion Layer is opened from another entry point?
+
+There is only **one** way in. Both toolbar rows (`components/ToolPalette.tsx:1825` in the Tools list, `:2049` on the home list) call `push('stromotion')`, which reaches
+`onNavigate('stromotion')` (`app/analysis/page.tsx:6877`) and `setStroMotionActive(true)` (`:6878`); `grep` finds no other place that turns it on, and the tours do not open it.
+So the code path is identical from either row, and I **cannot test another entry point because there is none**. What can differ is the state at the moment of the tap:
+
+- **No clip loaded.** The selfie warm-up runs whenever Motion Layer is on (`page.tsx:2105-2110`, not gated on a video); the detector warm-up needs a loaded HTML5 video (`:3413-3417`, `stroMotionHtml5Only`).
+  So "tap Motion Layer with **no video loaded**" isolates the selfie/MediaPipe path: freeze there means MediaPipe/WebGL init; no freeze means the freeze needs the detector warm-up or the capture (clip-dependent) path.
+- Video paused vs playing (Vin already confirmed playing makes no difference), phases present or not (`:6879-6890`, only changes the section).
+
+### 9d. Updated tests for Vin (replace the "3-second clip" test, the demo video already ruled out clip size)
+
+1. Tap Motion Layer with **no video loaded** (see 9c).
+2. Load the demo video, switch to **airplane mode**, then tap Motion Layer (detector model cannot download; the tfjs chunk cannot load either).
+3. Tap Motion Layer on the **preview** deployment of this PR, then on `main` production (9a).
+4. Say which iOS and Chrome versions the October 14 phone test used, and whether this is the same phone.
+5. `?vdebug=1` lines right after the tap; time a reload without ever tapping Motion Layer.
