@@ -5,6 +5,8 @@ Written from `main` at `9db01dd9`. Every code claim carries a `file:line` from a
 document. "Measured" means I measured it in this sandbox (desktop Chromium, 390×844 touch viewport,
 no GPU, `next dev`), **not** on an iPhone.
 
+Update 2 (2026-11-02, later): Vin's newest results (video loaded, network on: the page freezes 2-3 s after he presses play; Safari on the same iPhone behaves the same) are analysed in **section 10, which supersedes the ranking in sections 0, 6 and 7 where they differ**.
+
 Update 2026-11-02: Vin also tested the app's own demo video on the same iPhone and it freezes the same way, so the clip's length and size are **not** the trigger; section 9 answers the follow-up questions.
 
 Report (Vin): iPhone 14 Pro, iOS 18.5, Chrome for iOS (CriOS 156), anglemotion.com, a 15 s 720×1280
@@ -13,7 +15,7 @@ the video is already playing (`readyState=4`). Reloading afterwards is extremely
 logs no error; before the first tap it shows the known first-frame fallback (`readyState=1`,
 `play()` rejected with `NotAllowedError`).
 
-## 0. Answer in five lines
+## 0. Answer in five lines (see section 10 for the current version)
 
 1. The tap does **not** capture or render frames and does not touch the clip's length. Memory by frame
    count (the 1.7 GB hypothesis) is **ruled out** by the code: at most 15 frames, none captured on open.
@@ -259,3 +261,104 @@ So the code path is identical from either row, and I **cannot test another entry
 3. Tap Motion Layer on the **preview** deployment of this PR, then on `main` production (9a).
 4. Say which iOS and Chrome versions the October 14 phone test used, and whether this is the same phone.
 5. `?vdebug=1` lines right after the tap; time a reload without ever tapping Motion Layer.
+
+## 10. Update 2: what runs while the video plays with Motion Layer open (Vin's newest results)
+
+### 10.0 What Vin saw, and what it tells us
+
+| Vin's test (iPhone 14 Pro, iOS 18.5) | Reading |
+| --- | --- |
+| No video loaded: "video needed" | Correct and handled. |
+| Airplane mode, video loaded: "Motion Layer couldn't open... Retry" | `components/shared/LazyPanelBoundary.tsx:81` (the panel is `React.lazy`, `app/analysis/page.tsx:51`, wrapped at `:3344-3396`). The panel's JavaScript chunk could not be downloaded; the failure is handled. It also shows the panel chunk is **not cached before its first use**. |
+| Network on, video loaded: opens, then the page freezes **2-3 s after he presses play** | See 10.1: the freeze is not caused by playing; the play press is a coincidence of timing. |
+| Same in Safari | Not Chrome-specific. On iOS every browser is WebKit, so Chrome and Safari run the same engine. |
+
+### 10.1 (a) What runs per frame during playback, and how often the detector runs
+
+Reproduced on desktop (Chromium 390x844, 4 cores, no GPU, `next dev`, 15 s 720x1280 clip). Motion Layer opened, play pressed 1.5 s later,
+long tasks and frame gaps measured for 14 s:
+
+| Run | Result |
+| --- | --- |
+| A, normal | One **6.1-6.2 s main-thread task starting 2.3-3.9 s after play**; the biggest gap between two painted frames was **6.1-6.2 s** (the canvas stops completely); plus ~25 tasks of 50-110 ms |
+| C, `storage.googleapis.com` blocked (detector model cannot download) | No big task; largest frame gap **283 ms** |
+| E, detector, selfie model and tfjs chunk all blocked | Largest frame gap 83 ms; only small tasks |
+
+That is Vin's timeline: he opens Motion Layer, presses play within a couple of seconds, and the stall lands 2-3 s later. Earlier measurements without pressing play show the same
+block 4-5 s after opening (section 6). **The block belongs to opening Motion Layer, not to playing.**
+
+What actually runs, per frame and per event (code read, `file:line`):
+
+| Work | How often | Thread | Guard against falling behind |
+| --- | --- | --- | --- |
+| Canvas draw loop, `requestAnimationFrame(render)` (`components/Canvas.tsx:5674`, `:7213`) | every frame while playing | main | normal drawing, dirty-flag based; nothing Motion Layer specific on a fresh open |
+| Motion Layer composite on the canvas (`renderStroMotionDraftComposite`, `Canvas.tsx:5830-5846`, `:5959-5985`) | every frame **only when** `stroDraftPreviewActive` is true: at least one frame has a preview mask (`page.tsx:7229-7232`). **Not on a fresh open.** | main | **none**: per ghost, per frame, it does `drawImage` + `getImageData` of the full frame and a JS loop over every pixel (`lib/stroMotionDraft/compositeFromDraft.ts`, `renderMaskedFrame`; 921,600 pixels per ghost at 720x1280) and creates a scratch canvas each call. This is a **later** risk for a phone once frames are detected, not the cause now |
+| `timeupdate` listener that calls `setStroVideoTime` (`page.tsx:3157-3180`) and the timeline's `onCurrentTime: setStroVideoTime` (`:6646`; throttled to ~10/s while playing, `components/PreciseTimeline.tsx:431-436`) | several times a second | main | the value is read nowhere (declared `:849`), so every update re-renders the whole analysis page for nothing |
+| **The racket detector (COCO-SSD)** | **never per frame.** `detectTennisRacketNorm` runs only when the coach presses something: the racket-multiplier tool (`Canvas.tsx:3294-3311`), the auto-detect passes (`page.tsx:2317`, `:7074`) and object tracking (`lib/stroMotionObjectTrack.ts`) | **main thread** (TensorFlow.js is imported by the page, `lib/racketCocoDetect.ts:21-36`; no worker) | **none**: no busy flag, no time limit, no frame skip in `racketCocoDetect.ts` |
+| **What runs on open is the detector's LOAD** (`page.tsx:3413-3417`): tfjs, `tf.setBackend('webgl')`, `cocoSsd.load({ base: 'mobilenet_v2' })` | once per open | main thread | **none**: nothing times it out, cancels it or limits it. This is the 6 s block |
+| Person segmenter (MediaPipe selfie solution; `page.tsx:2105-2110`, `selfieSegmenter.ts:127-204`) | load once per open; `send` once per frame only during an auto-detect pass | main thread | calls are serialized (`sendQueue`, `selfieSegmenter.ts:172-184`), so no overlap, but no time limit |
+| Live skeleton (pose) | only when the coach switched the skeleton on (default **off**, `page.tsx:1039`) | MediaPipe live landmarker on the main thread (`lib/mediapipePose.ts:504-545`) and/or the pose worker (`lib/poseWorker.ts:4-8`) | **yes**: 15 Hz scheduled from completion (`Canvas.tsx:4644`, `:4764`), a busy flag (`:4708`), and a median over budget twice in a row reverts it (`:4653-4700`) |
+
+So the project rule ("if something must drop frames, it drops frames and the UI never freezes") **is implemented for the live pose and is not implemented for the Motion Layer warm-ups**.
+
+**WebGL contention (described only, nothing changed).** When Motion Layer opens, up to four GPU users can start at once: the detector's TensorFlow.js `webgl` backend (its own context,
+`racketCocoDetect.ts:26-30`), the MediaPipe selfie solution (its own context), and, if the skeleton is on, the MediaPipe live landmarker (GPU delegate) and the pose worker's OffscreenCanvas WebGL context
+(`poseWorker.ts:4-8`, with its own recovery for lost contexts), all while the 2D canvas and the video decoder are compositing. WebKit on iOS runs all of them through one GPU process with limits on concurrent
+contexts and GPU memory. Also note that `@tensorflow/tfjs` is a **module singleton on the main thread**: `tf.setBackend('webgl')` in the detector's load is global for that instance, and the pose code's
+main-thread fallback shares the same detector library and "a TFJS detector is not re-entrant" (`Canvas.tsx` comment, `lib/sharedPoseDetector.ts:49`). I could not test that interaction here. **Ask Vin whether the skeleton was on.**
+
+### 10.2 (b) Are the models cached between visits? What does a reload re-download?
+
+- **Nothing is fetched on a plain page reload.** All three loads are gated on Motion Layer being open (`page.tsx:2105`, `:3413`); the page itself does not touch them.
+- **Detector model** (`storage.googleapis.com/tfjs-models/savedmodel/ssd_mobilenet_v2/`): 17 weight shards of 4,194,304 bytes plus `model.json` (measured 67.8 MB). Google's response headers (measured with `curl`): `cache-control: public, max-age=3600`, `etag`, `access-control-allow-origin: *`.
+  So the browser's own HTTP cache **may** keep it for one hour and revalidate afterwards; the app does **not** store it itself (the load is `cocoSsd.load({ base })`, a plain URL: no IndexedDB or Cache Storage save in `racketCocoDetect.ts`). Whether iOS keeps 68 MB in its HTTP cache is not something I can verify.
+- **Selfie runtime** (`/mediapipe-selfie/*`, 5.7 MB wasm + 0.25 MB model) and the **tfjs chunk**: same origin. The service worker (`public/sw.js`) caches `/_next/static/` chunks cache-first after first use, and everything else same-origin or cross-origin with a catch-all that is **network-first and also copies every successful response into Cache Storage** (`sw.js:176-190`), so the 68 MB detector download is written to Cache Storage as well. `next.config.js` sets no `Cache-Control` for `public/` files (only COOP/COEP, `:49-66`); Next's own default for those files is revalidate-every-time (not verified here).
+- **What every open repeats regardless of any cache:** parsing tfjs, `tf.ready()`, WebGL backend start and shader compilation, parsing the 17 shards, and uploading the weights to the GPU. That is CPU/GPU work on the main thread, and it is the multi-second block; a warm network cache would shorten the download, not this work.
+- The panel's own chunk (`StroMotionPanel`) was not cached before first use (Vin's airplane-mode result); after a first successful open the service worker has it.
+
+### 10.3 (c) Smallest fix to evaluate (not implemented)
+
+Order by size, smallest first; each needs approval before coding because it changes when a download and an initialisation happen (CLAUDE.md section 6):
+
+1. **Do not warm the detector on open.** Remove the effect at `app/analysis/page.tsx:3413-3417`. It is a warm-up only: the first real use (an Auto-detect press) already loads the model lazily (`racketCocoDetect.ts:53`). Cost: the first Auto-detect press waits for the load (the page already has a processing status for that). One file, ~4 lines.
+2. **On phones, also skip the selfie warm-up** (`page.tsx:2105-2110`) and keep it on desktop, where the code comment records it saves ~3.3 s off the first frame. Same file.
+3. **Or warm only while paused and idle, never while playing, and never on phones** (`requestIdleCallback` after a pause), so a coach who presses play is never behind a load.
+4. **Smaller model** (`lite_mobilenet_v2`, coco-ssd's own default, a few MB instead of 68): changes detection quality, so it needs a measurement on racket footage first.
+5. **"Throttle to every Nth frame and skip when behind"** does not apply to the detector today (it is never per frame); if a future feature runs it per frame, copy the pose pattern: schedule from completion (`Canvas.tsx:4764`) plus a busy flag. **"Detect only while paused or scrubbing"** is already how the detector behaves.
+
+What could break: the first Auto-detect press on desktop is 4-6 s slower; tests that read `page.tsx` source (none found for these two effects, to be confirmed when coding).
+
+### 10.4 (d) The guard that stops it and says so
+
+Honest limit first: JavaScript cannot interrupt a synchronous block that is already running, so **a guard cannot cut a 6 s task short**; it can only (1) stop the next one from starting and (2) tell the coach.
+Two facts shape it: the Long Tasks API (`PerformanceObserver('longtask')`) **is not available in WebKit**, so on every iPhone browser it would never fire; and a frame-gap check does work everywhere.
+
+The one-line guard to evaluate (runs only while Motion Layer is open, stops the warm-ups and shows the message on the first stall over 1.5 s):
+
+```ts
+const tick = (t: number) => { if (t - last > 1500) stopMotionLayerWarmups('Auto-detect is too heavy for this device. You can still mark frames by hand.'); last = t; requestAnimationFrame(tick); };
+```
+
+with `stopMotionLayerWarmups` disposing the detector and segmenter, setting `localStorage['anglemotion-no-warmup']='1'` (so the next open skips them) and showing the message through the existing `setProcessingStatus`. The preventive version is change 1/2 above (never start the load on a phone); the guard is the safety net for whatever still locks.
+
+### 10.5 Updated ranked causes
+
+1. **The detector's load on open (top, now reproduced).** One uncapped main-thread job: tfjs + WebGL backend + 68 MB model, started when Motion Layer opens (`page.tsx:3413-3417`). Measured on desktop: **6.1-6.2 s with the canvas fully stalled, starting 2.3-3.9 s after play**, gone when only that download is blocked (run C). Timeline matches Vin's; Safari = Chrome on iOS explains "same in Safari". A phone adds the tab memory limit, so the same job can end in a killed tab (reload very slow). No guard, no timeout, no worker.
+2. **The same moment's other work:** selfie model load (main thread, ~3.3 s per the code comment), the second hidden capture `<video>` (waits up to 15 s on iOS, section 3), and page re-renders from `setStroVideoTime`. Adds to the stall; alone it is the 100-300 ms level in run C.
+3. **Per-frame composite once frames have masks (a separate, later risk):** unguarded full-frame `getImageData` + per-pixel loop per ghost per frame (`compositeFromDraft.ts`). Not the cause on a fresh open.
+4. **Skeleton contention** if the coach had the skeleton on (four GPU users at once). Unknown for Vin's runs.
+5. Not a regression in Motion Layer's code (section 9a): unchanged since June to September; the Sentry candidate stays weak.
+
+### 10.6 Recovery for a coach whose page is already frozen
+
+- Nothing is stored (section 4), so there is no broken Motion Layer to repair: the page recovers when the job ends or after a reload; a killed tab simply reloads.
+- Today's workaround: reload, load the clip, and **do not open Motion Layer** on that phone until the fix lands.
+- Proposed (not implemented): the watchdog in 10.4 sets `anglemotion-no-warmup`, after which Motion Layer opens without any warm-up; a "Reset Motion Layer" action calls the existing `clearStroMotionAll` (`page.tsx:1020`) and `disposeCaptureSources()` (`lib/stroMotionDraft/captureSource.ts`) and drops the detector, without touching the rest of the session. The existing "couldn't open ... Retry" boundary stays as it is.
+
+### 10.7 What Vin can send next
+
+1. Open Motion Layer and **do not press play**; wait 15 s. Prediction: the freeze happens anyway, about 4-6 s after opening.
+2. Press play first, **then** open Motion Layer. Prediction: the freeze still follows the opening, not the play.
+3. Was the skeleton on? (Default off.)
+4. Airplane mode **after** Motion Layer has opened once on Wi-Fi (panel chunk cached), then reopen it: if there is no freeze, the freeze is the detector download/initialisation.
+5. Not verified here, still needs the phone: the block length on an iPhone, whether the tab is killed, and the HTTP-cache behaviour for the 68 MB model.
