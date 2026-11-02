@@ -33,6 +33,13 @@ export interface SaveScreenshotInput {
   timestampLabel: string;
   /** File name for the Drive upload. */
   fileName: string;
+  /** Optional one-line note typed in the save dialog. Empty or missing: the fixed placeholder is stored, as before. */
+  note?: string;
+}
+
+/** The note as stored: one line, trimmed, capped; '' when there is nothing to keep. */
+export function oneLineNote(raw: string | undefined): string {
+  return (raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
 }
 
 export interface SaveScreenshotDeps {
@@ -150,7 +157,7 @@ export async function saveScreenshotToPlayer(
     body: JSON.stringify({
       category: 'technique',
       folder_label: input.folderLabel,
-      body_text: 'Screenshot from analysis session.',
+      body_text: oneLineNote(input.note) || 'Screenshot from analysis session.',
       screenshots: [imageUrl],
       source: 'analysis-screenshot',
     }),

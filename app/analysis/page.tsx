@@ -3437,6 +3437,10 @@ function Home() {
   const [screenshotStage, setScreenshotStage] = useState<'uploading' | 'saving'>('uploading');
   const screenshotSaveBusyRef = useRef(false);
   /** The outcome of the last save/create, shown INSIDE the picker (a toast alone can be missed). */
+  // Optional one-line note typed in the save dialog (in-app reports only). Never blocks a save; kept while a
+  // failed save is retried, cleared when the dialog's capture goes away.
+  const [screenshotNote, setScreenshotNote] = useState('');
+  useEffect(() => { if (!screenshotDataUrl) setScreenshotNote(''); }, [screenshotDataUrl]);
   const [screenshotMessage, setScreenshotMessage] = useState<{ kind: 'error' | 'info'; text: string; reconnect?: boolean } | null>(null);
 
   /** Capture the current frame into state and open the player picker */
@@ -3575,6 +3579,7 @@ function Home() {
           folderLabel: `Analysis ${localDateTimeForFolder()}`,
           timestampLabel: localDateTimeForFolder(),
           fileName: `${playerName.replace(/[^\w]+/g, '-')}-${Date.now()}.png`,
+          ...(REPORTS_IN_APP ? { note: screenshotNote } : {}),
         },
         {
           fetchFn: (input, init) => fetch(input, init),
@@ -3603,7 +3608,7 @@ function Home() {
       screenshotSaveBusyRef.current = false;
       setScreenshotSaving(false);
     }
-  }, [screenshotDataUrl, handleScreenshotDownload, canUseFeature]);
+  }, [screenshotDataUrl, screenshotNote, handleScreenshotDownload, canUseFeature]);
 
   const handleScreenshotCreateAndSave = useCallback(async () => {
     if (!screenshotNewPlayerName?.trim() || !screenshotDataUrl) return;
@@ -9318,6 +9323,18 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               >×</button>
             </div>
             <img src={screenshotDataUrl} alt="Screenshot preview" style={{ width: '100%', borderRadius: 10, objectFit: 'cover', maxHeight: 180 }} />
+            {REPORTS_IN_APP && (
+              <input
+                type="text"
+                data-screenshot-note
+                value={screenshotNote}
+                onChange={(e) => setScreenshotNote(e.target.value)}
+                maxLength={200}
+                placeholder="Add a note (optional)"
+                aria-label="Note for this screenshot (optional)"
+                style={{ minHeight: 44, borderRadius: 10, border: '1px solid rgba(0,0,0,0.15)', padding: '0 12px', fontSize: 16, width: '100%', boxSizing: 'border-box' }}
+              />
+            )}
             {REPORTS_IN_APP && screenshotMessage?.kind === 'error' && !screenshotSaving && (
               <div role="alert" style={{
                 padding: '12px 14px', borderRadius: 10, background: 'rgba(255,59,48,0.08)',

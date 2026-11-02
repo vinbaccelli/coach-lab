@@ -10,6 +10,7 @@ import DeletePlayerSection from '@/components/players/DeletePlayerSection';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
 import { useEntitlement } from '@/lib/useEntitlement';
+import { safeHttpUrl } from '@/lib/reports/safeUrl';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
@@ -647,7 +648,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                     : player.google_doc_id;
                   const url = e.metadata?.doc_url
                     ?? (fallbackId ? `https://docs.google.com/document/d/${fallbackId}/edit` : null);
-                  if (url) window.open(url, '_blank', 'noopener');
+                  const safe = safeHttpUrl(url);
+                  if (safe) window.open(safe, '_blank', 'noopener');
                 }}
                 style={{
                   padding: 14,
@@ -675,9 +677,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                   <span style={{ fontSize: 11, color: 'var(--cl-text-secondary)' }}>{new Date(e.created_at).toLocaleString()}</span>
                 </div>
                 <div style={{ fontWeight: 700, fontSize: 14, marginTop: 8 }}>{e.folder_label}</div>
-                {e.youtube_url ? (
+                {safeHttpUrl(e.youtube_url) ? (
                   <a
-                    href={e.youtube_url}
+                    href={safeHttpUrl(e.youtube_url) ?? undefined}
                     target="_blank"
                     rel="noreferrer"
                     onClick={(ev) => ev.stopPropagation()}

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { ArrowLeft, Download } from 'lucide-react';
 import SessionArtifactPreview from '@/components/sessions/SessionArtifactPreview';
 import type { PlayerSession } from '@/lib/sessions/types';
+import { safeHttpUrl } from '@/lib/reports/safeUrl';
 import { analysisTypeLabel, sanitizeLegacyLabel } from '@/lib/sessions/displayLabels';
 
 export default function PlayerSessionDetailClient({
@@ -17,6 +18,7 @@ export default function PlayerSessionDetailClient({
 }) {
   const label = analysisTypeLabel(session.analysisType);
   const videoUrl = session.videoRef.url;
+  const videoHref = safeHttpUrl(videoUrl);
   // session.title is coach-set free text; sessions saved before the StroMotion →
   // Motion Layer rename can still have the old word baked into it (the app used
   // to default new titles to "... — StroMotion"). Sanitized here, not in the DB.
@@ -82,9 +84,13 @@ export default function PlayerSessionDetailClient({
         {videoUrl ? (
           <section style={{ marginTop: 16 }}>
             <h2 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--cl-text-primary)' }}>Source video</h2>
-            <a href={videoUrl} target="_blank" rel="noreferrer" style={{ fontSize: 14, color: '#2563eb' }}>
-              {session.videoRef.label ?? videoUrl}
-            </a>
+            {videoHref ? (
+              <a href={videoHref} target="_blank" rel="noreferrer" style={{ fontSize: 14, color: '#2563eb' }}>
+                {session.videoRef.label ?? videoUrl}
+              </a>
+            ) : (
+              <span style={{ fontSize: 14, overflowWrap: 'anywhere' }}>{session.videoRef.label ?? videoUrl}</span>
+            )}
           </section>
         ) : null}
 
@@ -109,9 +115,9 @@ export default function PlayerSessionDetailClient({
             {session.artifacts.map((artifact) => (
               <div key={artifact.id}>
                 <SessionArtifactPreview artifact={artifact} />
-                {artifact.publicUrl ? (
+                {safeHttpUrl(artifact.publicUrl) ? (
                   <a
-                    href={artifact.publicUrl}
+                    href={safeHttpUrl(artifact.publicUrl) ?? undefined}
                     download
                     style={{
                       display: 'inline-flex',
