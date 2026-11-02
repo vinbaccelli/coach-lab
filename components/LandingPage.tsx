@@ -197,12 +197,13 @@ const ENTRIES: Entry[] = [
   },
   {
     date: 'JUN 02',
-    title: 'Two files that outlive the session.',
+    title: 'A profile that outlives the session.',
     body:
-      'Every player carries two documents — technical analysis and match analysis — plus a player database and progress tracking across the whole season. Rivals hand you a clip and stop. This is the client file, the deliverable, and the storefront in one place.',
+      'Every player gets a profile page in AngleMotion: their info, dated notes with screenshots, and all their technical and match reports in one place, plus a player database and progress tracking across the whole season. Rivals hand you a clip and stop. This is the client file, the deliverable, and the storefront in one place.',
     micro: 'Every student’s technical story in one file — from first lesson to nationals.',
     shots: [
       {
+        // TODO retake after profile merge: shows the old Technical/Match Analysis Doc buttons (alt text matches the image).
         src: `${SHOT_DIR}/season-player-reports.webp`,
         width: 1320,
         height: 1396,
@@ -214,7 +215,7 @@ const ENTRIES: Entry[] = [
     date: 'JUN 21',
     title: 'Published, linked, handed over.',
     body:
-      'Push the finished video to your own YouTube channel as unlisted and save the link to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply.',
+      'Push the finished video to your own YouTube channel as unlisted and save the link to the player’s profile. No AngleMotion storage limit: your videos live on your YouTube and your screenshots in your own Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply.',
     micro: 'Every plan has the player database. YouTube upload and Docs export are part of Pro and Academy.',
     shots: [
       {
@@ -256,7 +257,8 @@ const TUTORIAL_STEPS: Array<{ t: string; b: string; shot: Shot }> = [
   },
   {
     t: 'Send the report',
-    b: 'Publish to YouTube, drop everything into the player’s document, and share the link.',
+    b: 'Publish to YouTube, save the link and the screenshots to the player’s profile, and send the video link.',
+    // TODO retake after profile merge: shows the "Save to Google Docs" button (alt text matches the image).
     shot: { src: `${SHOT_DIR}/step-coach-summary.webp`, width: 1136, height: 680, alt: 'A coach’s summary of six numbered observations above a Save to Google Docs button.' },
   },
 ];
@@ -313,9 +315,9 @@ const TRUSTPILOT_URL = TRUSTPILOT_PROFILE_URL;
 
 function buildFaqs(prices: PlanPrices) {
   return [
-    { q: 'What is AngleMotion?', a: 'A browser-based tennis video-analysis platform: AI skeleton + angle detection you can edit by hand, Motion Layer composites, slow-motion phase replays, a recording hub, and per-player Google Docs coaching reports — all in one place.' },
+    { q: 'What is AngleMotion?', a: 'A browser-based tennis video-analysis platform: AI skeleton + angle detection you can edit by hand, Motion Layer composites, slow-motion phase replays, a recording hub, and a profile page for every player with their notes, screenshots and reports — all in one place.' },
     { q: 'Does the AI replace my judgment?', a: 'No. Every skeleton point and angle the AI detects is editable — drag it, correct it, trust it. AI does the fast 90%; you own the 10% that matters.' },
-    { q: 'Where do my videos live?', a: 'On Pro and Academy, a recording you publish goes to your own YouTube channel as an unlisted video, and its link is saved to the player’s report, which is a Google Doc. No AngleMotion storage limit: your videos live on your YouTube, your reports in your Google Drive. Unlisted means anyone with the link can watch, and Google’s own account limits still apply. The footage you analyse is processed in your browser; a Motion Layer clip you save to a player’s session is stored by AngleMotion with that session.' },
+    { q: 'Where do my videos live?', a: 'On Pro and Academy, a recording you publish goes to your own YouTube channel as an unlisted video, and its link is saved to the player’s profile. No AngleMotion storage limit: your videos live on your YouTube and your screenshots in your own Google Drive; the report text is kept in AngleMotion. Unlisted means anyone with the link can watch, and Google’s own account limits still apply. The footage you analyse is processed in your browser; a Motion Layer clip you save to a player’s session is stored by AngleMotion with that session.' },
     { q: 'What do I need to run it?', a: 'Just a browser — nothing to install. A laptop or desktop with graphics acceleration on gives the smoothest AI skeleton.' },
     { q: 'Is this only for coaches?', a: 'No. Plenty of players and parents run their own analysis and build their own record over time. The Academy exists so you can learn what to film and what to look for.' },
     { q: 'How does yearly billing and the ebook work?', a: `${yearlySavingsSentence(prices) ?? ''} Pro and Academy billed yearly include the ${EBOOK_TITLE} ebook, downloaded from your account page.${YEARLY_BONUS_COPY ? ` ${YEARLY_BONUS_TEXT}` : ''} ${PRICE_TAX_NOTE}`.trim() },
@@ -435,8 +437,8 @@ export default function LandingPage({ prices }: { prices: PlanPrices }) {
           Analyze every angle <span style={{ color: ACCENT }}>of your game.</span>
         </h1>
         <p className="am-lede">
-          Video in, report out. AngleMotion turns the footage you already have into a permanent,
-          shareable record of a player’s development — measured, corrected by you, and kept for as
+          Video in, report out. AngleMotion turns the footage you already have into a permanent
+          record of a player’s development — measured, corrected by you, and kept for as
           long as they play.
         </p>
         <div className="am-cta-row">
@@ -459,7 +461,7 @@ export default function LandingPage({ prices }: { prices: PlanPrices }) {
         <ul className="am-facts">
           <li>Runs in your browser — nothing to install</li>
           <li>Your videos stay local — no cloud lock-in</li>
-          <li>Works with Google Docs, YouTube and SwingVision</li>
+          <li>Works with Google Drive, YouTube and SwingVision</li>
         </ul>
       </header>
 
