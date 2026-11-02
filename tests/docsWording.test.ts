@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { sentryBaseOptions, sentryEnabled, scrubEvent } from '@/lib/sentryConfig';
 import { DEFAULT_TECHNICAL_SHEET_LABELS } from '@/lib/players/technicalSheet';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
@@ -56,12 +56,12 @@ test('privacy page: the sections the task asked for are there', () => {
 
 test('privacy page: every uncertain item carries a visible [VIN TO CONFIRM] tag, and no retention period is invented', () => {
   const tags = [...privacyText.matchAll(/<Confirm>([\s\S]*?)<\/Confirm>/g)].map((m) => m[1].replace(/\s+/g, ' ').trim());
-  assert.equal(tags.length, 8, tags.join(' | '));
+  assert.equal(tags.length, 4, tags.join(' | '));
   for (const t of tags) assert.ok(t.length > 15, t);
   assert.ok(privacy.includes('[VIN TO CONFIRM: {children}]'), 'the tag renders its marker');
-  // Only durations the code itself fixes (referral cookie: 60 days) or the policy already promised (30 days to delete).
+  // Only a duration the code itself fixes (referral cookie: 60 days). The 30-day deletion promise was removed: no period is promised.
   const durations = new Set([...privacyText.matchAll(/\b(\d+)[ -](days?|months?|years?)\b/gi)].map((m) => `${m[1]} ${m[2].replace(/s$/, '')}`));
-  assert.deepEqual([...durations].sort(), ['30 day', '60 day']);
+  assert.deepEqual([...durations].sort(), ['60 day']);
   assert.ok(read('lib/affiliates.ts').includes('REF_COOKIE_MAX_AGE_S = 60 * 24 * 60 * 60'), 'the 60 days is the real cookie lifetime');
 });
 
@@ -103,8 +103,16 @@ test('privacy page ↔ code: player data, storage and deletion statements match 
   assert.ok(read('supabase/migrations/20260728120000_youtube_connections.sql').includes('refresh_token_enc'));
   assert.ok(/delete\s+\*?\s*the stored row/.test(read('app/api/youtube/disconnect/route.ts')));
   // Services named on the page are the ones the code calls.
-  assert.ok(read('lib/gemini/decodeMatchScreenshots.ts').includes('generativelanguage.googleapis.com'));
+  // Gemini is not on the page: its only route is admin-only and unreferenced, so it never sees a coach's data.
   assert.ok(read('app/api/gemini/decode-match/route.ts').includes('isAdmin(session.email)'));
+  assert.equal(privacyText.includes('Gemini'), false);
+  // Public addresses in Supabase Storage: saved Motion Layer clips (session artifacts) are served by public URL.
+  assert.ok(read('lib/sessions/serverStorage.ts').includes('getPublicUrl'));
+  assert.ok(privacyText.includes('a Motion Layer clip you save with a session is stored here'));
+  // Retention: no promised period, and nothing in the repo deletes inactive accounts on a schedule.
+  assert.equal(/\b30 days?\b/.test(privacyText), false);
+  assert.ok(privacyText.includes('We do not automatically delete inactive accounts'));
+  assert.equal(existsSync('vercel.json'), false, 'no scheduled jobs are configured');
   assert.ok(read('lib/youtubeResolve.ts').includes('pipedapi.'));
   assert.ok(read('lib/ffmpegWebmToMp4.ts').includes('cdn.jsdelivr.net') && read('components/ExportModal.tsx').includes('unpkg.com'));
 });

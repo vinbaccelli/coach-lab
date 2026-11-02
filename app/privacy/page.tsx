@@ -70,7 +70,7 @@ export default function PrivacyPage() {
           <ul style={ul}>
             <li><strong>Account information:</strong> when you sign in with Google we receive your name, email address, and profile picture.</li>
             <li><strong>Content you create:</strong> the player data, reports, measurements and screenshots described under &ldquo;Player data you store&rdquo;, saved in our database (hosted by Supabase) so you can access them across devices.</li>
-            <li><strong>Payment and billing information:</strong> subscriptions are processed by Stripe. We never see or store your card details. We store your subscription status, and for each paid invoice the billing name, email, address, country and tax identifiers that Stripe sends us, so that invoices can be issued and kept. <Confirm>how long invoice records are kept, and the legal basis</Confirm></li>
+            <li><strong>Payment and billing information:</strong> subscriptions are processed by Stripe. We never see or store your card details. We store your subscription status, and for each paid invoice the billing name, email, address, country and tax identifiers that Stripe sends us, so that invoices can be issued and kept for as long as the law requires for accounting and tax. <Confirm>have the accountant confirm the legal basis and how long invoice records must be kept (no period is stated here)</Confirm></li>
             <li><strong>Public coach profile:</strong> if you create one, the name, tagline, bio, picture, services and links you enter are shown publicly at <code>/coach/&lt;your-name&gt;</code>.</li>
             <li><strong>Academy posts:</strong> questions and replies you post in the Academy are stored with your name and email address.</li>
             <li><strong>Technical basics:</strong> authentication cookies to keep you signed in, and a referral cookie (60 days) if you arrived through an affiliate link. We do not run third-party advertising, and the code contains no analytics or tracking scripts other than the error monitoring and the Trustpilot widget described below.</li>
@@ -124,9 +124,9 @@ export default function PrivacyPage() {
 
         <Section title="Where your data is stored">
           <ul style={ul}>
-            <li><strong>Supabase</strong> (database, sign-in and file storage): your account, player profiles, report text and structure, saved sessions, subscription and invoice records, and the encrypted YouTube token. Row-level security limits each coach to their own rows. <Confirm>the Supabase and Vercel hosting regions</Confirm></li>
-            <li><strong>Your own Google Drive</strong>: screenshots you save to a player, in a folder AngleMotion creates (AngleMotion / Players / the player&rsquo;s name / Screenshots). To let reports display them, each screenshot file is set so that anyone who has its link can view it. <Confirm>that &ldquo;anyone with the link can view&rdquo; is intended for screenshots of players, including minors</Confirm></li>
-            <li><strong>AngleMotion storage (Supabase Storage)</strong>: if your Drive cannot be reached, a screenshot is kept in AngleMotion&rsquo;s own storage instead, at a public web address; a Motion Layer clip you save with a session is stored there too. <Confirm>who can open these public addresses and for how long they should be kept</Confirm></li>
+            <li><strong>Supabase</strong> (database, sign-in and file storage): your account, player profiles, report text and structure, saved sessions, subscription and invoice records, and the encrypted YouTube token. Row-level security limits each coach to their own rows. <Confirm>the Supabase and Vercel hosting regions: the Supabase project region could not be read (the management API refused access to the project) and the repository sets no Vercel region</Confirm></li>
+            <li><strong>Your own Google Drive</strong>: screenshots you save to a player, in a folder AngleMotion creates (AngleMotion / Players / the player&rsquo;s name / Screenshots). To let reports display them, each screenshot file is set so that anyone who has its link can view it. This is intentional: the link is the only protection, so save only screenshots you would be comfortable with a person holding the link seeing.</li>
+            <li><strong>AngleMotion storage (Supabase Storage)</strong>: a Motion Layer clip you save with a session is stored here, at a web address that anyone who has it can open. Screenshots are not stored here: they go to your own Google Drive only. (Screenshots saved before this change may still be kept here.)</li>
             <li><strong>YouTube</strong>: videos you publish, on your channel, as Unlisted (anyone with the link can watch).</li>
             <li><strong>Stripe</strong>: payment details and the subscription. We never see your card number.</li>
           </ul>
@@ -139,7 +139,7 @@ export default function PrivacyPage() {
           their data, you can delete the player in AngleMotion: this removes the player&rsquo;s profile, reports and
           saved sessions from our database, moves the player&rsquo;s Drive folder to your Drive trash (it is not erased
           until you empty the trash), and removes any images we stored ourselves. Videos on YouTube are not touched.
-          <Confirm>AngleMotion&rsquo;s role (controller or processor) for player data, and any data-processing terms for coaches</Confirm>
+          You decide what player data to store and share; AngleMotion processes it on your behalf. <Confirm>legal point for a lawyer to check: AngleMotion&rsquo;s role (controller or processor) for player data, and any data-processing terms for coaches</Confirm>
         </Section>
 
         <Section title="Services we use">
@@ -153,7 +153,6 @@ export default function PrivacyPage() {
             <li><strong>Trustpilot</strong>: the review widget on the landing page.</li>
             <li><strong>Content delivery networks</strong> (cdn.jsdelivr.net and unpkg.com): some video tools load their code from these when you use them, so the CDN sees your IP address and browser details.</li>
             <li><strong>YouTube link resolvers</strong>: when you import a video from a YouTube link, our server looks the video up through YouTube and, if that fails, through public Piped servers. Only the video ID is sent.</li>
-            <li><strong>Google Gemini API</strong>: a match-screenshot reading tool that is deployed but limited to AngleMotion administrators and not used by coaches. <Confirm>whether to keep this line, or remove the tool</Confirm></li>
           </ul>
         </Section>
 
@@ -164,14 +163,16 @@ export default function PrivacyPage() {
           and bodies, URL query strings, blob and data URLs, image and video file names, and email addresses. A small
           &ldquo;Report a problem&rdquo; button lets you send a message you type yourself; it has no name, email or
           screenshot field, so please do not include personal details in it. Error reports can still contain technical
-          details such as the page, the browser and the error text. <Confirm>whether Sentry is switched on in production, the Sentry legal entity, and how long Sentry keeps events</Confirm>
+          details such as the page, the browser and the error text. <Confirm>whether Sentry is switched on in production: it runs only when an EU Sentry address is set in the hosting settings, which could not be read from the code</Confirm>
         </Section>
 
         <Section title="Data retention and deletion">
-          Your saved content is kept while your account is active. To delete your account and all associated data,
-          email <a href="mailto:vinbaccelli@gmail.com" style={a}>vinbaccelli@gmail.com</a> and we will remove it within
-          30 days. Reports and videos already exported to your Google Drive and YouTube belong to you and are
-          unaffected by deletion of your AngleMotion account. <Confirm>retention periods for each kind of data (inactive accounts, backups, invoices) and the 30-day deletion promise</Confirm>
+          Your saved content is kept while your account is active. You can delete a player at any time in the app: this
+          removes the player&rsquo;s data from our database and moves the player&rsquo;s Drive folder to your Drive trash.
+          To delete your account, email <a href="mailto:vinbaccelli@gmail.com" style={a}>vinbaccelli@gmail.com</a>; we
+          handle such requests without undue delay. We do not automatically delete inactive accounts. Reports and videos
+          already exported to your Google Drive and YouTube belong to you and are unaffected by deletion of your
+          AngleMotion account.
         </Section>
 
         <Section title="Security">
