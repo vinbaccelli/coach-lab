@@ -5,7 +5,9 @@ Written from `main` at `9db01dd9`. Every code claim carries a `file:line` from a
 document. "Measured" means I measured it in this sandbox (desktop Chromium, 390×844 touch viewport,
 no GPU, `next dev`), **not** on an iPhone.
 
-Update 3 (2026-11-02, latest): Vin's production-versus-preview results change the ranking again. **Section 11 supersedes sections 0, 6, 7 and 10.5 where they differ**: the detector warm-up is real but is **not sufficient** to freeze an iPhone (the preview ran the same warm-up and worked).
+Update 4 (2026-11-02, newest): Vin's **Safari Private tab on the live site did not freeze**. That points to what the normal browser has stored for the origin (service-worker caches, local data), not to the models loading on open. **Section 12 supersedes the rankings in sections 0, 6, 7, 10.5 and 11.6**: the model load on open is now a *secondary risk*, and the service worker is the first thing to look at. Section 12 also covers the page reload after Auto-detect.
+
+Update 3 (2026-11-02, earlier): Vin's production-versus-preview results change the ranking again. **Section 11 supersedes sections 0, 6, 7 and 10.5 where they differ**: the detector warm-up is real but is **not sufficient** to freeze an iPhone (the preview ran the same warm-up and worked).
 
 Update 2 (2026-11-02, later): Vin's newest results (video loaded, network on: the page freezes 2-3 s after he presses play; Safari on the same iPhone behaves the same) are analysed in **section 10, which supersedes the ranking in sections 0, 6 and 7 where they differ**.
 
@@ -474,3 +476,132 @@ To split the first row further: (1) private tab, signed out; (2) private tab, **
 2. **Confirm the tab kill:** iPhone Settings > Privacy & Security > Analytics & Improvements > Analytics Data, look for a `JetsamEvent` entry at the time of the reload (needs "Share iPhone Analytics" on); the entry names the process and its memory. Send the file.
 3. Auto-detect with the two switches off cannot be tested without a console on iOS; the preview can instead be tested with the same flow while Auto-detect runs on **a 3-frame** selection (fewer frames: less cache), to see whether the crash depends on the frame count.
 4. Not verified here: cache headers on anglemotion.com, production chunk sizes, anything on a real device.
+
+## 12. Update 4: a Private tab works; the service worker and stored data first; the Auto-detect reload
+
+### 12.0 What the new result changes
+
+A Safari Private tab on anglemotion.com has the **same code, the same domain, the same Vercel variables including the Sentry DSN**, and empty stored data. It opened Motion Layer and reached Auto-detect. Therefore:
+
+- The freeze on Vin's normal browser is tied to **what that browser has stored for anglemotion.com** (Cache Storage, the service worker, localStorage) **or to being signed in** (a Private tab is signed out; that is not yet separated).
+- It is **not** a production setting. That all but rules out the Sentry DSN as the cause (the DSN was on in the Private tab), and it rules out the models loading on open as the cause (they load in the Private tab too, same code, same network).
+- **The model load on open (sections 10 and 11) is now a secondary risk**: it costs ~6 s of main thread on desktop and keeps ~68 MB of weights resident, but it is not why the normal profile freezes.
+- Caveat for the next test: Safari may not run a service worker at all in a Private window, so the Private result does not by itself say *which* stored item matters (service worker caches, localStorage flags, or sign-in). 12.5 gives the splitting steps.
+
+### 12.1 The service worker: what it caches, how it versions, how it could hurt
+
+**Version and update logic** (`public/sw.js`, `app/ServiceWorkerRegistration.tsx`):
+
+- The only version is the string `CACHE_NAME = 'angle-motion-v3'` (`sw.js:20`), **unchanged since 2026-09-09**. There is no build-tied version, no size limit, no age limit, no cleanup other than `activate`, which deletes every cache whose name differs (`sw.js:69-75`). Nothing evicts entries inside `v3`.
+- `install` precaches 6 small files, then `skipWaiting()`; `activate` ends with `clients.claim()` (`sw.js:60-76`): a new worker takes over open pages immediately. No code listens for `controllerchange` and nothing reloads on update.
+- Registration is production-only (`NODE_ENV === 'production'`, which includes every Vercel preview), 3 s after load, with no `update()` call. The browser re-checks `sw.js` on navigations (at most about once a day by spec); an edited `sw.js` is the only way a new version reaches users.
+
+**What it caches** (rules in order, `sw.js:78-190`):
+
+| Rule | Strategy | Checks | Notes |
+| --- | --- | --- | --- |
+| `/api/*` | network only; on failure answers `{"error":"Offline"}` with **status 200** | n/a | not cached |
+| `cdn.jsdelivr.net` (ffmpeg core wasm ~31 MB, `lib/ffmpegWebmToMp4.ts:11`; webcam segmentation) | **cache-first** | **none**: any status, incl. errors | held forever |
+| images, fonts, `/icons/*` (includes **Next optimizer URLs**, marketing images and **report screenshots from Google Drive**, which are cross-origin `<img>` requests, i.e. opaque responses) | **cache-first** | **none** | an error or empty response is stored and served forever; Chromium pads each opaque entry to ~7 MB of quota (WebKit's accounting not verified) |
+| documents and RSC payloads | network, offline page on failure | n/a | not cached |
+| video, audio, Range | not handled | n/a | |
+| `/_next/static/*` | **cache-first** | only `ok` | hashed names, one set per deploy visited, **never removed** |
+| everything else, same-origin **and cross-origin** (models, wasm, `.tflite`, `.task`, `.onnx`, JSON, **the 68 MB detector shards**) | **network-first, then `cache.put`**; cache used only when offline | `ok` and not 206 | every successful download is **copied into Cache Storage** |
+
+What that can add up to on a long-lived origin: `public/models` 115 MB, `public/ort` 49 MB, `public/mediapipe-wasm` 33 MB, `public/mediapipe-selfie` 12 MB, the detector 67.8 MB, ffmpeg ~31 MB = **~310 MB of model and runtime files**, plus **every hashed chunk of every deploy the user opened since September** (this repo ships ~110 commits a month; production chunk sizes not measured), plus images (opaque Drive screenshots padded). A tester who opens the app daily on a phone can plausibly hold several hundred MB, possibly over a gigabyte. A Private tab and every preview origin start at zero.
+
+**How a stale, bloated or corrupted cache could give "freeze on open, slow reload"** (mechanisms, ranked by how well the code supports them; **none is verified on a device**):
+
+1. **Size and lookup cost.** Every `/_next/static/*`, image and font request goes through `caches.match`, which searches the origin's caches; the analysis page loads dozens of chunks. With thousands of entries and hundreds of MB, opening the cache and the lookups slow the load ("slow reload"), and the service-worker process competes for memory with the tab.
+2. **Memory pressure from the worker itself.** Each model download is `fetch` + `response.clone()` + `cache.put` (`sw.js:176-190`): the clone buffers body data until both readers finish; the 68 MB detector and the 30 MB pose model pass through the worker's memory at the moment Motion Layer opens. On a phone, the browser's process budget is shared.
+3. **Storage eviction mid-state.** WebKit removes script-writable storage for sites after a period without use, and can purge under storage pressure. A partly purged origin (registration present, caches or localStorage missing, or the reverse) is a combination the code never tests.
+4. **Poisoned entries.** The image and jsdelivr rules store whatever came back and serve it forever (no `ok` check, no expiry): a one-time error stays. This produces broken images and a broken ffmpeg load, not a freeze, but it shows the cache has no way to heal itself.
+5. **A stale chunk set cannot mismatch the page:** documents are network-first and chunk names are hashed, so a stale-chunk crash is **not** supported by the code.
+
+A related finding outside the freeze: **report screenshots from Drive are cached cache-first and opaque with no revalidation** (`DriveImage.tsx` images match the image rule). A one-time Drive error is therefore remembered. Worth a KNOWN_ISSUES entry; not part of this investigation.
+
+**A safe way to reset it, without losing saved work.** Saved work (players, reports, entries, sessions) lives in Supabase and is untouched by anything below. Unsaved analysis lives only in the tab and is lost by any reload anyway. The sign-in cookie is not in Cache Storage and is not touched by these options.
+
+| Option | What it does | Files | Risk |
+| --- | --- | --- | --- |
+| **A. Version bump plus limits** | `CACHE_NAME` to `v4`: every user's `activate` deletes `v3` once. In the same change: stop caching what is large or cross-origin or opaque (`/models/`, `/ort/`, `/mediapipe-*`, `.wasm/.tflite/.onnx/.task`, every cross-origin response), add the missing `ok` check to the image and jsdelivr rules, and trim `/_next/static` to a fixed number of entries | `public/sw.js` (one file), optionally `ServiceWorkerRegistration.tsx` to call `update()` so it does not wait a day | Offline use of previously visited pages is reduced until the next visit (the offline page stays precached); first use after the change re-downloads what it needs (the HTTP cache still helps). Must be tested with a real update (old worker to new) |
+| **B. "Reset cached data" action, plus an escape-hatch page** | unregisters the service worker, deletes every cache, removes the four developer keys (`stroSegmenter`, `stroRacket`, `autoRacket`, `samRacket`), shows `navigator.storage.estimate()` before and after, then reloads. A tiny standalone route (for example `/reset`) with no analysis code, so a coach whose analysis page freezes can still run it | one new small page and a link in the Help area | warn "unsaved analysis in this tab will be lost" and disable it while a video is loaded |
+| **C. Manual (today, no code)** | Safari: Settings > Safari > Advanced > Website Data > anglemotion.com > delete (this also signs the coach out; saved work is on the server). Chrome for iOS: Settings > Privacy > Delete Browsing Data > Cookies and Site Data | none | signs out |
+
+A (once, automatic, for everyone) plus B (a self-service way out) is the combination I would evaluate; C is the diagnostic Vin can run now.
+
+### 12.2 (2) The reload after Auto-detect: is any code reloading the page?
+
+Searched `app/`, `components/`, `lib/`, `hooks/`, `public/sw.js`, `middleware.ts`, `instrumentation*.ts` for every reload and navigation mechanism, then Next.js 15.5.24's own client code:
+
+| Mechanism | Found | Can it fire when Auto-detect ends or the editor opens? |
+| --- | --- | --- |
+| `location.reload()` | only `app/analysis/error.tsx:70`, the "Reload page" button of the error screen | No: it needs a click, and that screen would show "Something went wrong", not the empty Upload screen |
+| `location.href = ...` | billing, pricing and payment-banner buttons (`app/billing/page.tsx:57`, `:287`, `PricingClient.tsx:98`, `PaymentFailedBanner.tsx:33`) | No: only on a click on those pages |
+| `router.refresh()` | `components/WorkspaceChrome.tsx:41` (sign out), used on catalog and admin pages, not on `/analysis` | No |
+| `router.push/replace` | `app/analysis/page.tsx:7487`, `:9703` (go to the player page / after save) | No: tied to buttons |
+| `controllerchange`, service-worker message reload | none in the code; the worker only `skipWaiting` and `clients.claim` (no reload) | No |
+| Chunk-load-error recovery | none besides `LazyPanelBoundary` (a "Retry" button that re-renders the panel) | No |
+| `app/error.tsx`, `app/global-error.tsx` | do not exist; `app/analysis/error.tsx` shows a message and waits | No |
+| Next.js internal hard navigations (`page-bootstrap.js`, `app-router.js:346` on a back/forward to a non-Next history entry, `doMpaNavigation` when a navigation gets a non-RSC reply) | present in the framework | No: they need a navigation or history event; nothing at the end of Auto-detect navigates |
+| Autosave or restore | none | n/a |
+
+What the end of Auto-detect does (`app/analysis/page.tsx:3004-3012` onward): `refreshStroPreviewFromDraft()`, a log line, and a status message. It does **not** open the editor by itself (`setStroEditingFrameIndex` is only called from buttons and from "mark ready and next", `page.tsx:3061`). Run on desktop with the synthetic clip (5 frames), the whole pass completed in 45 s ("auto-detect committed 5 of 5 frames", "AI auto-selected 5/5 frames") **with no reload**.
+
+**Conclusion: no deliberate reload fires.** The page returns to the empty Upload screen because **the browser reloaded it after the tab's process died**: iOS kills a tab that uses too much memory and reloads it when the coach returns, and the page then deliberately resets a reloaded session (`page.tsx:4375-4410`) and a local `blob:` video cannot come back. A cheap confirmation: **after a kill Safari shows a notice "This webpage was reloaded because a problem occurred"** (and "A problem repeatedly occurred" on a second one). Ask Vin whether he saw it.
+
+### 12.3 Is the tab being killed by memory? What is held at the end of the pass
+
+At 720x1280: one frame is 3,686,400 bytes (**3.52 MiB**), one mask 921,600 bytes (**0.88 MiB**).
+
+| What is held when the pass ends | 6 frames | 15 frames |
+| --- | --- | --- |
+| Draft frames after the atomic commit: `sourceFrame` + `aiSnapshot` + `working` + `readyMask` = 6.15 MiB each (all held at once on purpose, `hooks/useStroMotion.ts:578-587`) | 36.9 MiB | 92.3 MiB |
+| Background plate + end plate | 7.0 MiB | 7.0 MiB |
+| **Right after the commit, `refreshStroPreviewFromDraft` (`page.tsx:2021-2042`)** re-captures a **new background plate and a new source frame for every frame** (`hydrateDraftBitmapsForExport`, `lib/stroMotionDraft/exportDraft.ts:19-48`) through the capture video, draws the composite on a 3.5 MiB canvas and builds a PNG data URL. `closeBitmap` is **defined in that file (`:8`) and never called**, so these (N+1) bitmaps are not closed | +24.6 MiB (7 bitmaps) | +56.3 MiB (16 bitmaps) |
+| Transient per ghost while compositing: `getImageData` 3.5 MiB (up to ~11 MiB if a mask has to be rescaled) | ~3.5-11 MiB | same |
+
+So **the frames and masks are ~45-120 MiB**: small. They do not explain a kill by themselves. What is large is everything else resident during and after the pass:
+
+- the **MediaPipe pose** model (foot-capable pass) and the person segmenter;
+- **D-FINE** (ONNX wasm): the code releases it before SAM loads (log: "D-FINE disposed — ONNX session released before SAM loads"), which is a deliberate memory measure;
+- **SAM-2** (when a racket box is found): wasm execution (no WebGPU on iOS 18.5), vision encoder 28.5 MB of weights, and an embedding cache of up to **420 MiB**, kept in a module-level cache after the pass so "Redo mask" is fast (`lib/stroMotionDraft/samRacket.ts:115-122`, `:280-304`);
+- the **detector model from the open-time warm-up**: ~68 MB of weights loaded and **never used by Auto-detect**, which uses D-FINE. This is where the model-load finding is a **contributing, secondary** risk: dead weight resident during the heaviest phase;
+- the page, canvases and the video decoder.
+
+Measured on desktop (synthetic clip with no person or racket, so SAM-2 was **not** exercised): JavaScript heap 65 MB at open, 100 MB peak, 90 MB at the end; the pass took 45 s, including a 10.98 s foot-pose pass and a 5.7 s D-FINE load. That is the JS heap only, not WebAssembly or GPU memory, and on a clip with a real racket SAM-2 adds its encoder and embeddings. **A peak for an iPhone cannot be measured here**, and iOS does not publish its per-tab limit, so I will not quote one. What can be said: the models are the big term, frames are the small term, and the detector warm-up adds ~68 MB to the big one at the worst moment.
+
+Consistent with a kill: the empty Upload screen, no reload code (12.2), the pass reaches its heaviest phase right after "frame 6/6", and the same device completes the cheap phase fine. **Still unproven.** The two device checks are the Safari notice above and the `JetsamEvent` log (11.8).
+
+### 12.4 What autosave or restore exists for a session in progress
+
+None that survives a reload: the only "auto-save" is the in-memory copy of the measurement column into the active snapshot (`page.tsx:3710`); a reload deliberately resets the session (`page.tsx:4336`, `:4375-4410`); the loaded clip is a `blob:` URL of a local file; sessions are saved only by an explicit Save to the player's profile. Nothing is written to localStorage, sessionStorage or IndexedDB for a session in progress, so nothing could be restored.
+
+**Smallest protections that do not touch Auto-detect or the atomic commit** (each needs approval):
+
+1. **Crash marker and notice (smallest).** Write a flag in localStorage just before the pass starts (`page.tsx` around the call at `:2938-2985`, outside the pass) and clear it when it ends. On the next load, if the flag is still there: "The last Auto-detect did not finish; this phone ran out of memory. Auto-detect's racket detection is switched off here; mark the racket by hand." and set the existing `autoRacket='0'` and `samRacket='0'` switches. It stops a crash loop and the surprise; it saves nothing.
+2. **"Save your session first" nudge on phones** before Auto-detect starts, using the existing Save session dialog (needs a player). The coach keeps the annotations, snapshots and Motion Layer stills already produced.
+3. **Light recovery file:** on `visibilitychange: hidden` (fires before iOS suspends a tab; there is no event at the moment of a kill) write a small JSON of the annotations, snapshots, measurement column and frame times to localStorage; after a reload and re-picking the file, offer "Restore your last session". It restores the work, not the video. A feature of its own.
+4. **Bigger (not proposed now):** keep the video `File` and masks in IndexedDB for a full restore.
+
+### 12.5 Updated ranked causes and tests
+
+1. **Stored data on Vin's normal profile** (new first cause; the Private tab works). Within it, by how well the code supports each:
+   - **(a) The service worker's Cache Storage** (12.1): unbounded, never trimmed since September, holds hundreds of MB of models, runtimes, chunks and opaque images; mechanisms 1-3 above.
+   - **(b) The developer toggles in localStorage** (`stroSegmenter`, `autoRacket`, `samRacket`, `stroRacket`): a tester's origin may carry `stroSegmenter=multiclass`, which changes the open-time warm-up to the 16.4 MB multiclass model plus MediaPipe wasm.
+   - **(c) Signed-in state** is still not separated (the Private tab was signed out).
+2. **Auto-detect exhausting the tab's memory** (a separate problem; reproduces on the preview and the live site; most likely an iOS kill, 12.2-12.3).
+3. **The model load on open: a secondary risk, not the cause.** Real (6 s on desktop, ~68 MB resident, unused by Auto-detect) and a contributor to the memory in 2, but it runs identically in the Private tab, which works.
+4. **Sentry with the DSN:** effectively **ruled out** as the freeze cause (the DSN is on in the Private tab on the live site); it remains a small overhead.
+5. Not a regression in Motion Layer's own code (section 9a).
+
+**Smallest fixes to evaluate, in order** (none implemented): (i) service-worker version bump plus limits (option A in 12.1), automatically for everyone; (ii) a "Reset cached data" action and an escape-hatch page (option B); (iii) the crash marker (12.4 point 1); (iv) the earlier hygiene change of not warming the detector on open (section 10.3), now a memory saving rather than a freeze fix.
+
+**Tests for Vin (no code), in this order**
+1. **Safari > Settings > Safari > Advanced > Website Data**: send the size shown for anglemotion.com (hundreds of MB would point at (a)).
+2. A **Private tab, signed in** (separates sign-in from stored data).
+3. **Delete anglemotion.com's website data**, sign in again, repeat: if the freeze is gone, stored data is confirmed.
+4. After a reload following Auto-detect, did Safari show **"This webpage was reloaded because a problem occurred"**?
+5. Auto-detect on **3 frames** instead of 5.
+
+**Not verified:** anything on a device; Safari's service-worker behaviour in Private windows; WebKit's Cache Storage accounting for opaque entries and its purge rules; production chunk sizes.
