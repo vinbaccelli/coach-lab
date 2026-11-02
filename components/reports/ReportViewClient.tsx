@@ -8,6 +8,8 @@ import { findReportForEntry } from '@/lib/reports/deriveBlocks';
 import { usePlayerReports } from '@/components/reports/usePlayerReports';
 import ReportBlocks from '@/components/reports/ReportBlocks';
 import EntryManager from '@/components/reports/EntryManager';
+import DownloadPdfButton from '@/components/reports/DownloadPdfButton';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import PlayerNav, { PlayerNotFound } from '@/components/reports/PlayerNav';
 import { reportTitle } from '@/components/reports/ReportsIndexClient';
 import { backLink, chipStyle, FOCUS_CSS, formatDateKey, KIND_CHIP, mutedText, wrap } from '@/components/reports/reportStyles';
@@ -81,6 +83,11 @@ export default function ReportViewClient({ playerId, entryId }: { playerId: stri
           {report.opponent ? ` · vs ${report.opponent}` : ''}
         </p>
       </header>
+      {REPORTS_IN_APP ? (
+        <div style={{ margin: '-12px 0 24px' }}>
+          <DownloadPdfButton label="Download PDF" playerName={playerName} reports={[report]} filenameBase={`${playerName || 'player'} ${reportTitle(report)}`} />
+        </div>
+      ) : null}
       <ReportBlocks blocks={report.blocks} fallbackText={report.fallbackText} />
       <EntryManager
         playerId={playerId}

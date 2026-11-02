@@ -13,6 +13,8 @@ import { useEntitlement } from '@/lib/useEntitlement';
 import { safeHttpUrl } from '@/lib/reports/safeUrl';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
+import DownloadPdfButton from '@/components/reports/DownloadPdfButton';
+import { groupEntriesIntoReports, type EntryLike } from '@/lib/reports/deriveBlocks';
 import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 
 type Player = {
@@ -125,6 +127,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   useEffect(() => {
     load();
   }, [load]);
+
+  // All of this player's reports, for "Download all reports" (the same grouping the Reports pages use).
+  const allReports = useMemo(() => groupEntriesIntoReports(entries as unknown as EntryLike[]), [entries]);
 
   // ── Player database: Technical / Match tabs + text search ────────────────
   const [dbTab, setDbTab] = useState<'all' | 'technique' | 'match'>('all');
@@ -526,6 +531,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
               >
                 Open reports →
               </Link>
+            ) : null}
+            {REPORTS_IN_APP ? (
+              <DownloadPdfButton label="Download all reports" playerName={player.display_name} reports={allReports} filenameBase={`${player.display_name || 'player'} reports`} />
             ) : null}
             {!REPORTS_IN_APP && player.google_doc_id ? (
               <a
