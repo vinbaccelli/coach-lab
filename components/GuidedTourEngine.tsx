@@ -22,9 +22,14 @@
  *    find their way back. Every waiting step can also be skipped.
  *  - Progress is saved per tour in localStorage, so a tour can be resumed.
  *  - The card never sits on the step's target: it goes beside it, and when
- *    no side has room it takes the roomier side and scrolls inside itself.
- *  - Every step that asks for a click points at the control: a pulsing ring
- *    and an arrow from the card (still under prefers-reduced-motion).
+ *    no side has room it is shortened (it scrolls inside itself) above, below
+ *    or as a full-height column beside the target — on the side with the most
+ *    room. A centred card is only for steps with no target.
+ *  - Every step shows an animated arrow, so the coach always sees where to
+ *    tap: at the target control on steps that ask for something; at a spot
+ *    inside the working area on area steps; at the card's own main button
+ *    (Next / Finish) on explanation steps and untargeted cards. Targets also
+ *    get a pulsing ring. Under prefers-reduced-motion the arrow stays, still.
  *  - Back never re-fires a step: a step already passed does not skip or
  *    auto-advance on a condition that is already met — it shows Next instead.
  *    Nothing the coach did is undone.
@@ -63,9 +68,26 @@ const POINTER_GAP = 40;
 const MARGIN = 12;
 
 /** Smallest card height worth showing when no side has room for the whole card. */
-const MIN_CARD_H = 150;
+const MIN_CARD_H = 120;
+/** The card's usual width, and the narrowest it is squeezed to beside a large target. */
+const CARD_W = 340;
+const MIN_CARD_W = 168;
 /** Below this width the step picture starts folded away (phones). */
 const COMPACT_W = 640;
+/** A viewport whose short side is under this is a phone (either way up): compact card. */
+const DENSE_SHORT_SIDE = 520;
+/** The animated arrow: longest tail, the gap its tip rests at, and how far it travels toward the point. */
+const ARROW_MAX_LEN = 150;
+const ARROW_REST_GAP = 14;
+const ARROW_STUB_LEN = 56;
+/** Shorter than this, a line from the card is mostly hidden by the card: use a free-standing arrow. */
+const ARROW_MIN_TAIL = 36;
+/** Area steps: a shorter tail, so the arrow does not cover much of the video. */
+const ARROW_AREA_MAX_LEN = 90;
+/** Area steps: how far short of the chosen spot the arrow tip rests. */
+const ARROW_AREA_GAP = 18;
+/** Space the explanation-step arrow takes above the card's buttons. */
+const NEXT_ARROW_ROOM = 30;
 
 /** How often an open step re-reads its target and its finish condition. */
 const POLL_MS = 150;
@@ -148,28 +170,52 @@ function viewport() {
 
 type Side = 'top' | 'bottom' | 'left' | 'right';
 
-interface TipPlacement {
+export interface TipPlacement {
   x: number;
   y: number;
   /** Set when the card had to be shortened to stay off the target (it scrolls). */
   maxH?: number;
+  /** Set when the card had to be narrower than usual to fit beside a large target. */
+  w?: number;
 }
 
+export interface ViewportSize {
+  w: number;
+  h: number;
+}
+
+const rectsIntersect = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
 /**
- * Where the card goes. Rule one: never on the target. Beside it on the
- * preferred side, else any side with room; when none has room for the whole
- * card, the roomier of above/below with the card shortened to fit (it
- * scrolls). Working areas that fill the screen are the one exception — the
- * card tucks into a corner of the area, away from what the step is about.
+ * Where the card goes. Rule one: never on the target — on any step that
+ * highlights a control. In order: beside it on the preferred side, else any
+ * side with room for the whole card; else shortened (it scrolls inside
+ * itself) on whichever of above / below / a full-height column beside the
+ * target leaves the most card visible. Only if no position clears the target
+ * at all (it fills the screen) does the card take the least-covering spot —
+ * never the centre. Working areas that fill the screen are the one exception:
+ * the card tucks into a corner of the area, away from what the step is about.
+ * Steps with no target are centred.
  */
-function resolveTooltipPos(
+export function resolveTooltipPos(
   target: Rect | null,
   tip: { w: number; h: number },
   step: TourStep,
+  vp: ViewportSize = viewport(),
 ): TipPlacement {
-  const vp = viewport();
-  const centred = { x: Math.max(MARGIN, (vp.w - tip.w) / 2), y: Math.max(MARGIN, (vp.h - tip.h) / 2) };
-  if (!target || step.placement === 'center') return centred;
+  // The card's width is decided from the viewport and the target only — never
+  // from its measured size — so a width change cannot flip the placement back.
+  const W = Math.min(CARD_W, vp.w - 24);
+  const hCap = Math.max(MIN_CARD_H, vp.h - MARGIN * 2);
+  const fitH = Math.min(tip.h, hCap);
+  const capped = (h: number): { maxH?: number } => (h < tip.h - 0.5 ? { maxH: h } : {});
+  if (!target) {
+    return {
+      x: Math.max(MARGIN, (vp.w - W) / 2),
+      y: Math.max(MARGIN, (vp.h - fitH) / 2),
+      ...capped(fitH),
+    };
+  }
 
   const pad = step.area ? 0 : SPOTLIGHT_PADDING;
   const t = { x: target.x - pad, y: target.y - pad, w: target.w + pad * 2, h: target.h + pad * 2 };
@@ -182,24 +228,24 @@ function resolveTooltipPos(
   };
 
   const order: Side[] = [];
-  if (step.placement) order.push(step.placement as Side);
+  if (step.placement && step.placement !== 'center') order.push(step.placement);
   for (const p of ['bottom', 'top', 'right', 'left'] as const) if (!order.includes(p)) order.push(p);
-  const fits = (p: Side) => (p === 'top' || p === 'bottom' ? space[p] >= tip.h : space[p] >= tip.w);
+  const fits = (p: Side) => (p === 'top' || p === 'bottom' ? space[p] >= tip.h : space[p] >= W && tip.h <= hCap);
   const side = order.find(fits);
 
-  const along = (p: Side, h: number): TipPlacement => {
-    let x = t.x + t.w / 2 - tip.w / 2;
+  const along = (p: Side, h: number, w: number = W): TipPlacement => {
+    let x = t.x + t.w / 2 - w / 2;
     let y = t.y + t.h / 2 - h / 2;
     if (p === 'top') y = t.y - gap - h;
     if (p === 'bottom') y = t.y + t.h + gap;
-    if (p === 'left') x = t.x - gap - tip.w;
+    if (p === 'left') x = t.x - gap - w;
     if (p === 'right') x = t.x + t.w + gap;
-    if (p === 'top' || p === 'bottom') x = Math.min(Math.max(MARGIN, x), vp.w - tip.w - MARGIN);
+    if (p === 'top' || p === 'bottom') x = Math.min(Math.max(MARGIN, x), vp.w - w - MARGIN);
     else y = Math.min(Math.max(MARGIN, y), vp.h - h - MARGIN);
-    return { x, y };
+    return { x, y, ...capped(h), ...(w !== W ? { w } : {}) };
   };
 
-  if (side) return along(side, tip.h);
+  if (side) return along(side, side === 'left' || side === 'right' ? fitH : tip.h);
 
   if (step.area) {
     const corner = step.corner ?? 'top-left';
@@ -207,15 +253,45 @@ function resolveTooltipPos(
     const bottom = corner.startsWith('bottom');
     const vis = { x0: Math.max(0, target.x), y0: Math.max(0, target.y), x1: Math.min(vp.w, target.x + target.w), y1: Math.min(vp.h, target.y + target.h) };
     return {
-      x: Math.min(Math.max(MARGIN, right ? vis.x1 - tip.w - MARGIN : vis.x0 + MARGIN), vp.w - tip.w - MARGIN),
+      x: Math.min(Math.max(MARGIN, right ? vis.x1 - W - MARGIN : vis.x0 + MARGIN), vp.w - W - MARGIN),
       y: Math.min(Math.max(MARGIN, bottom ? vis.y1 - tip.h - MARGIN : vis.y0 + MARGIN), vp.h - tip.h - MARGIN),
     };
   }
 
-  // No side holds the whole card: shorten it on the roomier of above/below.
-  const vert: Side = space.top > space.bottom ? 'top' : 'bottom';
-  if (space[vert] >= MIN_CARD_H) return { ...along(vert, space[vert]), maxH: space[vert] };
-  return centred;
+  // No side holds the whole card: shorten it where the most of it stays visible.
+  const candidates: Array<{ side: Side; visible: number }> = [
+    { side: 'top', visible: Math.min(tip.h, space.top) },
+    { side: 'bottom', visible: Math.min(tip.h, space.bottom) },
+  ];
+  for (const s of ['right', 'left'] as const) if (space[s] >= W) candidates.push({ side: s, visible: fitH });
+  candidates.sort((a, b) => b.visible - a.visible);
+  const best = candidates[0];
+  if (best.visible >= MIN_CARD_H) return along(best.side, best.visible);
+
+  // Neither above, below nor a full-width column fits (a big target in the
+  // middle of a short, wide screen): a narrower full-height column beside it.
+  const narrowSide: Side = space.left >= space.right ? 'left' : 'right';
+  if (space[narrowSide] >= MIN_CARD_W) return along(narrowSide, fitH, Math.min(W, Math.floor(space[narrowSide])));
+
+  // The target fills the screen: nothing clears it. Take the spot that covers
+  // the least of it (top or bottom edge of the screen), never the centre.
+  const cardH = Math.min(fitH, Math.max(MIN_CARD_H, Math.max(space.top, space.bottom)));
+  const topY = MARGIN;
+  const botY = vp.h - MARGIN - cardH;
+  const x = Math.min(Math.max(MARGIN, t.x + t.w / 2 - W / 2), vp.w - W - MARGIN);
+  const overlapAt = (y: number) => {
+    const o = { x1: Math.max(x, t.x), x2: Math.min(x + W, t.x + t.w), y1: Math.max(y, t.y), y2: Math.min(y + cardH, t.y + t.h) };
+    return Math.max(0, o.x2 - o.x1) * Math.max(0, o.y2 - o.y1);
+  };
+  const y = overlapAt(topY) <= overlapAt(botY) ? topY : botY;
+  return { x, y, ...capped(cardH) };
+}
+
+export interface ArrowSegment {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
 }
 
 /**
@@ -223,7 +299,7 @@ function resolveTooltipPos(
  * target's centre, trimmed to the gap between the two boxes. Null when they
  * (nearly) touch.
  */
-function pointerSegment(card: Rect, target: Rect): { x1: number; y1: number; x2: number; y2: number } | null {
+export function pointerSegment(card: Rect, target: Rect): ArrowSegment | null {
   const cx = card.x + card.w / 2;
   const cy = card.y + card.h / 2;
   const gx = target.x + target.w / 2;
@@ -248,6 +324,88 @@ function pointerSegment(card: Rect, target: Rect): { x1: number; y1: number; x2:
   const y2 = cy + dy * b;
   if (Math.hypot(x2 - x1, y2 - y1) < 16) return null;
   return { x1, y1, x2, y2 };
+}
+
+/**
+ * The arrow that points at `target` (a control's highlight, or a tiny box at
+ * the spot to start on in a working area). It comes from the card when the two
+ * are apart; when they are too close for a line, or the line would be a long
+ * stripe across the screen, it is a short arrow from whichever side of the
+ * target has the most room clear of the card. The tip rests `restGap` short of
+ * the target, so the arrow never covers what it points at, and the whole arrow
+ * stays on screen. Null only when the viewport has no room at all.
+ */
+export function arrowToward(card: Rect, target: Rect, vp: ViewportSize, restGap: number, maxLen: number = ARROW_MAX_LEN): ArrowSegment | null {
+  const clamp = (v: number, max: number) => Math.min(Math.max(4, v), max - 4);
+  const finish = (x1: number, y1: number, x2: number, y2: number): ArrowSegment => ({
+    x1: clamp(x1, vp.w),
+    y1: clamp(y1, vp.h),
+    x2: clamp(x2, vp.w),
+    y2: clamp(y2, vp.h),
+  });
+  const seg = pointerSegment(card, target);
+  if (seg) {
+    const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+    const ux = (seg.x2 - seg.x1) / len;
+    const uy = (seg.y2 - seg.y1) / len;
+    const tipX = seg.x2 - ux * restGap;
+    const tipY = seg.y2 - uy * restGap;
+    const tail = Math.min(len - restGap, maxLen);
+    if (tail >= ARROW_MIN_TAIL) return finish(tipX - ux * tail, tipY - uy * tail, tipX, tipY);
+  }
+  // Short arrow from the roomiest side of the target that the card does not occupy.
+  // (ux, uy) is the direction of travel, toward the target; the tail is behind the tip.
+  const cx = target.x + target.w / 2;
+  const cy = target.y + target.h / 2;
+  const approaches = [
+    { ux: 0, uy: 1, tipX: cx, tipY: target.y - restGap }, // from above, travelling down
+    { ux: 0, uy: -1, tipX: cx, tipY: target.y + target.h + restGap }, // from below
+    { ux: 1, uy: 0, tipX: target.x - restGap, tipY: cy }, // from the left
+    { ux: -1, uy: 0, tipX: target.x + target.w + restGap, tipY: cy }, // from the right
+  ];
+  let best: ArrowSegment | null = null;
+  let bestScore = -Infinity;
+  for (const a of approaches) {
+    const tailX = a.tipX - a.ux * ARROW_STUB_LEN;
+    const tailY = a.tipY - a.uy * ARROW_STUB_LEN;
+    // How much of the tail would fall off the screen (negative = off by that much).
+    const room = Math.min(tailX - 4, vp.w - 4 - tailX, tailY - 4, vp.h - 4 - tailY, a.tipX - 4, vp.w - 4 - a.tipX, a.tipY - 4, vp.h - 4 - a.tipY);
+    const probe: Rect = {
+      x: Math.min(tailX, a.tipX) - 4,
+      y: Math.min(tailY, a.tipY) - 4,
+      w: Math.abs(tailX - a.tipX) + 8,
+      h: Math.abs(tailY - a.tipY) + 8,
+    };
+    // Staying on screen outranks keeping clear of the card.
+    const score = Math.min(room, 0) * 100_000 + (rectsIntersect(probe, card) ? -10_000 : 0) + Math.min(room, 200) / 1000;
+    if (score > bestScore) {
+      bestScore = score;
+      best = finish(tailX, tailY, a.tipX, a.tipY);
+    }
+  }
+  return best;
+}
+
+/** Which arrow a step shows: see the header comment. */
+export type ArrowKind = 'target' | 'area' | 'next' | 'none';
+
+export function arrowKind(
+  step: Pick<TourStep, 'area' | 'target' | 'advance'>,
+  o: { missing: boolean; reviewing: boolean },
+): ArrowKind {
+  // The card's main button (Next / Finish / Skip) is on screen unless the step is
+  // waiting for the coach to act: then the arrow points at what to act on.
+  const mainButton = step.advance.kind === 'next' || o.reviewing;
+  if (mainButton) return 'next';
+  if (o.missing) return 'none';
+  return step.area ? 'area' : 'target';
+}
+
+/** The spot an area step's arrow points at: `pointAt` (fractions of the area) or its centre. */
+export function areaPoint(area: Rect, pointAt?: { x: number; y: number }): { x: number; y: number } {
+  const fx = Math.min(1, Math.max(0, pointAt?.x ?? 0.5));
+  const fy = Math.min(1, Math.max(0, pointAt?.y ?? 0.5));
+  return { x: area.x + area.w * fx, y: area.y + area.h * fy };
 }
 
 /** Live rect of a step's target, re-read every POLL_MS while the step is open. */
@@ -400,6 +558,9 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
   /** Phones: the step picture starts folded; the coach can open it. */
   const [imageOpen, setImageOpen] = useState(false);
   const [compact, setCompact] = useState(false);
+  /** Phones either way up: the card drops its padding and shrinks its text. */
+  const [dense, setDense] = useState(false);
+  const [vpSize, setVpSize] = useState<ViewportSize>({ w: 1280, h: 800 });
   const [progress, setProgress] = useState<Progress>({});
   const [seenBefore, setSeenBefore] = useState(true);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
@@ -519,7 +680,12 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
   }, [stepIdx, tour]);
 
   useEffect(() => {
-    const read = () => setCompact(window.innerWidth < COMPACT_W);
+    const read = () => {
+      const isDense = Math.min(window.innerWidth, window.innerHeight) < DENSE_SHORT_SIDE;
+      setCompact(window.innerWidth < COMPACT_W || isDense);
+      setDense(isDense);
+      setVpSize((prev) => (prev.w === window.innerWidth && prev.h === window.innerHeight ? prev : { w: window.innerWidth, h: window.innerHeight }));
+    };
     read();
     window.addEventListener('resize', read);
     return () => window.removeEventListener('resize', read);
@@ -645,8 +811,8 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
   }, [targetRect, step]);
 
   const tipPos: TipPlacement = useMemo(
-    () => (step ? resolveTooltipPos(targetRect, tipSize, step) : { x: 0, y: 0 }),
-    [targetRect, tipSize, step],
+    () => (step ? resolveTooltipPos(targetRect, tipSize, step, vpSize) : { x: 0, y: 0 }),
+    [targetRect, tipSize, step, vpSize],
   );
 
   if (!mounted) return null;
@@ -812,17 +978,25 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
     // Untargeted cards (intro/outro) dim the whole page; a missing target dims
     // nothing, so the coach can get back to where the step happens.
     const dimAll = !step.target;
-    // Steps that ask for a click get the pointer: a ring on the control and an
-    // arrow from the card. Working areas (drawing on the frame) are outlined
-    // instead — the whole area is the target there.
-    const pointing = !!spotlight && !missing && !step.area && step.advance.kind !== 'next';
+    // Every step points. A control that is the target gets a ring; the arrow is
+    // at the control (steps that wait for the coach), at a spot inside the area
+    // (working areas), or at the card's own main button (Next / Finish — the
+    // explanation steps and the untargeted cards). Working areas are outlined
+    // instead of ringed: the whole area is the target there.
+    const ringed = !!spotlight && !missing && !step.area;
+    const kind = arrowKind(step, { missing, reviewing });
     const cardBox: Rect = {
       x: tipPos.x,
       y: tipPos.y,
-      w: tipSize.w,
+      w: tipPos.w ?? tipSize.w,
       h: tipPos.maxH !== undefined ? Math.min(tipSize.h, tipPos.maxH) : tipSize.h,
     };
-    const seg = pointing && spotlight ? pointerSegment(cardBox, spotlight) : null;
+    let seg: ArrowSegment | null = null;
+    if (kind === 'target' && spotlight) seg = arrowToward(cardBox, spotlight, vp, ARROW_REST_GAP);
+    if (kind === 'area' && spotlight) {
+      const at = areaPoint(spotlight, step.pointAt);
+      seg = arrowToward(cardBox, { x: at.x - 1, y: at.y - 1, w: 2, h: 2 }, vp, ARROW_AREA_GAP, ARROW_AREA_MAX_LEN);
+    }
     const segLen = seg ? Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1) : 0;
     // A step waiting on something slow holds back its instructions (and picture).
     const holding = !!step.wait && waitPhase !== 'ready';
@@ -891,7 +1065,7 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
           />
         ))}
 
-        {pointing && spotlight ? (
+        {ringed && spotlight ? (
           <div
             aria-hidden
             data-tour-pointer-ring=""
@@ -916,11 +1090,11 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
         {seg ? (
           <svg
             aria-hidden="true"
-            data-tour-pointer-arrow=""
+            data-tour-pointer-arrow={kind}
             style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', zIndex: Z_OVERLAY, pointerEvents: 'none', overflow: 'visible' }}
           >
             <defs>
-              <marker id={`${maskId}-head`} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <marker id={`${maskId}-head`} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                 <path d="M0,0 L10,5 L0,10 z" fill="var(--cl-accent)" stroke="#fff" strokeWidth={1.2} />
               </marker>
             </defs>
@@ -929,7 +1103,7 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
               style={{
                 ['--am-nx' as string]: String((seg.x2 - seg.x1) / segLen),
                 ['--am-ny' as string]: String((seg.y2 - seg.y1) / segLen),
-                animation: 'anglemotion-tour-nudge 1.1s ease-in-out infinite',
+                animation: 'anglemotion-tour-nudge 1.2s ease-in-out infinite',
               } as React.CSSProperties}
             >
               <line
@@ -938,7 +1112,7 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
                 x2={seg.x2 - ((seg.x2 - seg.x1) / segLen) * 6}
                 y2={seg.y2 - ((seg.y2 - seg.y1) / segLen) * 6}
                 stroke="rgba(255,255,255,0.85)"
-                strokeWidth={6}
+                strokeWidth={7}
                 strokeLinecap="round"
               />
               <line
@@ -947,7 +1121,7 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
                 x2={seg.x2 - ((seg.x2 - seg.x1) / segLen) * 6}
                 y2={seg.y2 - ((seg.y2 - seg.y1) / segLen) * 6}
                 stroke="var(--cl-accent)"
-                strokeWidth={3}
+                strokeWidth={4}
                 strokeLinecap="round"
                 markerEnd={`url(#${maskId}-head)`}
               />
@@ -967,14 +1141,16 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
           data-tour-reviewing={reviewing ? '' : undefined}
           style={{
             ...cardStyle,
+            padding: dense ? 12 : cardStyle.padding,
             position: 'fixed',
             top: tipPos.y,
             left: tipPos.x,
-            width: 'min(340px, calc(100vw - 24px))',
+            width: tipPos.w ?? 'min(340px, calc(100vw - 24px))',
             maxHeight: tipPos.maxH,
             overflowY: tipPos.maxH !== undefined ? 'auto' : undefined,
+            // No slide between steps: on a busy phone (the skeleton loading) a sliding
+            // card crossed the control it was leaving room for, for a second or more.
             zIndex: Z_TOOLTIP,
-            transition: 'top 250ms cubic-bezier(0.4, 0, 0.2, 1), left 250ms cubic-bezier(0.4, 0, 0.2, 1)',
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -985,7 +1161,7 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
               Exit
             </button>
           </div>
-          <h3 id={`tour-title-${stepIdx}`} style={{ margin: '0 0 6px', fontSize: 17, fontWeight: 700, lineHeight: 1.25 }}>
+          <h3 id={`tour-title-${stepIdx}`} style={{ margin: '0 0 6px', fontSize: dense ? 15 : 17, fontWeight: 700, lineHeight: 1.25 }}>
             {step.title}
           </h3>
           {step.image && compact && !holding ? (
@@ -1047,14 +1223,14 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
               ) : null}
             </div>
           ) : (
-            <p style={{ margin: '0 0 12px', fontSize: 14, lineHeight: 1.5, color: 'var(--cl-text-secondary)' }}>{step.body}</p>
+            <p style={{ margin: '0 0 12px', fontSize: dense ? 13 : 14, lineHeight: dense ? 1.4 : 1.5, color: 'var(--cl-text-secondary)' }}>{step.body}</p>
           )}
           {missing ? (
             <p style={{ margin: '0 0 12px', fontSize: 13, lineHeight: 1.45, color: 'var(--cl-text-primary)' }}>
               Not on screen right now — go back to the panel this step is about, and the tour picks up from there.
             </p>
           ) : null}
-          <div aria-hidden style={{ height: 4, background: 'var(--cl-border)', borderRadius: 999, overflow: 'hidden', marginBottom: 12 }}>
+          <div aria-hidden style={{ height: 4, background: 'var(--cl-border)', borderRadius: 999, overflow: 'hidden', marginBottom: kind === 'next' ? NEXT_ARROW_ROOM : 12 }}>
             <div
               style={{
                 height: '100%',
@@ -1087,14 +1263,40 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
                 </button>
               </>
             ) : (
-              <button
-                type="button"
-                aria-label={last ? 'Finish tour' : holding ? 'Skip this step' : 'Next step'}
-                onClick={next}
-                style={{ ...primaryBtn, flex: 1 }}
-              >
-                {last ? 'Finish' : holding ? 'Skip step' : 'Next →'}
-              </button>
+              <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+                {kind === 'next' ? (
+                  // The arrow for an explanation step: down at the card's main button.
+                  // It sits in the gap above the buttons, over the progress bar only.
+                  <svg
+                    aria-hidden="true"
+                    data-tour-next-arrow=""
+                    width={28}
+                    height={NEXT_ARROW_ROOM - 2}
+                    viewBox="0 0 28 26"
+                    className="anglemotion-tour-anim"
+                    style={{
+                      position: 'absolute',
+                      left: '50%',
+                      top: -(NEXT_ARROW_ROOM - 4),
+                      marginLeft: -14,
+                      pointerEvents: 'none',
+                      overflow: 'visible',
+                      animation: 'anglemotion-tour-nudge-down 1.2s ease-in-out infinite',
+                    }}
+                  >
+                    <path d="M14 1 V17 M5 11 L14 21 L23 11" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth={7} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M14 1 V17 M5 11 L14 21 L23 11" fill="none" stroke="var(--cl-accent)" strokeWidth={4} strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : null}
+                <button
+                  type="button"
+                  aria-label={last ? 'Finish tour' : holding ? 'Skip this step' : 'Next step'}
+                  onClick={next}
+                  style={{ ...primaryBtn, flex: 1 }}
+                >
+                  {last ? 'Finish' : holding ? 'Skip step' : 'Next →'}
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -1114,7 +1316,11 @@ export default function GuidedTourEngine({ page = 'analysis', suppressFloatingHe
       }
       @keyframes anglemotion-tour-nudge {
         0%, 100% { transform: translate(0, 0); }
-        50%      { transform: translate(calc(var(--am-nx) * -7px), calc(var(--am-ny) * -7px)); }
+        55%      { transform: translate(calc(var(--am-nx) * 9px), calc(var(--am-ny) * 9px)); }
+      }
+      @keyframes anglemotion-tour-nudge-down {
+        0%, 100% { transform: translateY(0); }
+        55%      { transform: translateY(7px); }
       }
       @keyframes anglemotion-tour-spin {
         to { transform: rotate(360deg); }
