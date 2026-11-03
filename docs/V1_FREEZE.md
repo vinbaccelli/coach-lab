@@ -5,7 +5,7 @@ subsystems that are **frozen** (working, verified, and off-limits to refactor)
 and the work that **remains**. Every subsystem finished during stabilization is
 added here.
 
-Last updated: 2026-07-19
+Last updated: 2026-11-03
 
 ---
 
@@ -20,6 +20,12 @@ Last updated: 2026-07-19
    explain why before writing code.**
 7. **Every fix must preserve backward compatibility** with all existing V1
    behavior.
+8. **Rule 8: A failing test is a finding, never something to fix quietly.**
+   - When any test or check fails (a unit test, a Playwright or end-to-end check, `tsc`, the build, or a manual check), you must NOT edit the test, its expected values, its fixtures, its snapshots or the check so that it passes. You must NOT skip, delete, loosen, `.skip` or `.only` it, and you must NOT change the code only to satisfy the test without saying so.
+   - Stop and report to the architect: the test name and file, expected versus actual, the change that most likely caused it, and your own assessment (a bug in the new change, or the feature was changed on purpose).
+   - The architect decides. If it is a bug, the code is fixed and the test stays as it is. If the behaviour was changed on purpose, the architect approves the new expectation in writing, and only then is the test updated, in a separate commit whose message says "test updated: <reason>, approved".
+   - A new test written for new code follows the same rule if it fails.
+   - This applies equally to tests of frozen systems, and to every reply that reports verification: a reply must list every failing test it saw, even ones it believes are unrelated.
 
 The goal is stabilization only, not redesign.
 
