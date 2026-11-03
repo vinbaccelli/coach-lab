@@ -43,6 +43,12 @@ export interface TourStep {
    * step is about — e.g. the data column, drawn at the canvas's top right.
    */
   corner?: TourCorner;
+  /**
+   * Area steps only: where the animated arrow points, as fractions of the area
+   * (0..1 from its top-left). Default: the centre. Set it when the centre is the
+   * wrong place to start (e.g. the spot the coach should press is off to a side).
+   */
+  pointAt?: { x: number; y: number };
   placement?: TourPlacement;
   advance: TourAdvance;
   /** Skip the step on entry if this selector already matches a visible element. */
