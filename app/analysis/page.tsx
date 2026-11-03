@@ -209,6 +209,7 @@ import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { useEntitlement } from '@/lib/useEntitlement';
 import type { Feature } from '@/lib/entitlements';
+import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled } from '@/lib/stroMotionDraft/phoneBudget';
 import UpgradeSheet from '@/components/UpgradeSheet';
 
 /**
@@ -4407,6 +4408,15 @@ function Home() {
   }, [resetSession, videoRef]);
 
   // ── Video upload ──────────────────────────────────────────────────────────
+  // Phone memory budget: if the last Auto-detect on this phone never finished (the marker
+  // set before its heavy phase is still there), say why the page restarted. One line,
+  // shown once, never blocks anything (lib/stroMotionDraft/phoneBudget.ts).
+  useEffect(() => {
+    if (!consumeAutoDetectKilled()) return;
+    const id = window.setTimeout(() => setProcessingStatus(AUTODETECT_KILLED_NOTICE), 1500);
+    return () => window.clearTimeout(id);
+  }, []);
+
   const resetToolAfterVideoLoad = useCallback(() => {
     setActiveTool('select');
     setDrawContextActive(false);

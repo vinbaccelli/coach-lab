@@ -1,5 +1,6 @@
 'use client';
 
+import { isPhoneBudgetActive, markAutoDetectFinished, markAutoDetectStarted, processingSize } from '@/lib/stroMotionDraft/phoneBudget';
 import { renderStroMotionDraftComposite } from '@/lib/stroMotionDraft/compositeFromDraft';
 import { exportStroMotionDraftPng } from '@/lib/stroMotionDraft/exportDraft';
 import { clearStroMotionDraft } from '@/lib/stroMotionDraft/clearDraft';
@@ -585,9 +586,11 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
    * commits, which interleaved with video seeks / re-syncs and could leave
    * frames half-committed (no sourceFrame, or not export-ready).
    */
-  const autoProcessFrames = useCallback(async (
+  const autoProcessFramesInner = useCallback(async (
     specs: StroAutoFrameSpec[],
     onProgress?: (done: number, total: number) => void,
+    /** Phone memory budget (phoneBudget.ts). False: every line below behaves as it always did. */
+    phone = false,
   ): Promise<number> => {
     const video = videoRef.current;
     const current = draftRef.current;
@@ -635,9 +638,11 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     // that shipped. All of the new risk lives behind the opt-in switch.
     const axisByFrame = new Map<number, import('@/lib/stroMotionDraft/racketTrajectory').RacketAxis>();
     const preCaptured = new Map<number, ImageBitmap>();
+    let arcActive = false;
     try {
       const { racketMode, buildRacketTrajectory } = await import('@/lib/stroMotionDraft/racketTrajectory');
       if (racketMode() === 'arc') {
+        arcActive = true; // dev-only axis sweep captures at native size: no phone cap in that mode
         const { captureVideoFrameAtTime } = await import('@/lib/stroMotionDraft/captureSource');
         const vw = video.videoWidth;
         const vh = video.videoHeight;
@@ -672,6 +677,14 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       // The trajectory is a diagnostic overlay. It may never break a mask run.
       console.warn('[racketArc] trajectory pass failed:', e);
     }
+
+    // Phone memory budget: the frames and masks the rest of the pass works on are capped
+    // at PHONE_MAX_EDGE (scale 1 = native = the unchanged path). The final masks are
+    // scaled back up, and the native frames re-captured, just before the commit.
+    const proc = processingSize(video.videoWidth, video.videoHeight, phone && !arcActive);
+    const capSize = proc.scale !== 1 ? { w: proc.w, h: proc.h } : undefined;
+    /** Phone: let the browser reclaim memory and paint between heavy stages. No-op elsewhere. */
+    const stageYield = async () => { if (phone) await new Promise<void>((r) => setTimeout(r, 60)); };
 
     // ── PHASE 0a2 — FOOT-CAPABLE POSE ON EVERY FRAME ────────────────────────
     //
@@ -727,7 +740,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
           // shared rather than paid for twice.
           let bmp = preCaptured.get(spec.frameIndex) ?? null;
           if (!bmp) {
-            bmp = await captureVideoFrameAtTime(video, frame.timeSec);
+            bmp = await captureVideoFrameAtTime(video, frame.timeSec, capSize);
             preCaptured.set(spec.frameIndex, bmp);
           }
           const t0 = performance.now();
@@ -832,6 +845,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     // is what the coach judges, so it gets the cleanest memory state in the pass.
     //
     // Skipped entirely when the flag is off — the detector is never even imported.
+    await stageYield();
     const racketBoxes = new Map<number, import('@/lib/stroMotionDraft/autoRacketPass').RacketBoxForFrame>();
     let racketPassActive = false;
     try {
@@ -852,7 +866,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
           let bmp = preCaptured.get(spec.frameIndex) ?? null;
           if (!bmp) {
             try {
-              bmp = await captureVideoFrameAtTime(video, frame.timeSec);
+              bmp = await captureVideoFrameAtTime(video, frame.timeSec, capSize);
               preCaptured.set(spec.frameIndex, bmp);
             } catch (err) {
               console.warn('[autoRacket] capture failed for detection on frame', spec.frameIndex, err);
@@ -867,8 +881,8 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
           });
         }
         const found = await detectRacketBoxesForBatch(inputs, {
-          vw: video.videoWidth,
-          vh: video.videoHeight,
+          vw: proc.w,
+          vh: proc.h,
           unitFloorNorm,
         });
         found.forEach((v, k) => racketBoxes.set(k, v));
@@ -878,6 +892,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       console.warn('[autoRacket] PHASE A failed — continuing with the person cutout only:', e);
     }
 
+    await stageYield();
     // Phase 1 — build ALL proposals in memory. No draft writes here, so nothing
     // can interleave, re-sync, or leave a frame partially committed.
     /** Phase-0 bitmaps that proposeFrameMask accepted ownership of. */
@@ -913,6 +928,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             preCaptured.get(spec.frameIndex) ?? null,
             axisByFrame.get(spec.frameIndex) ?? null,
             unitFloorNorm,
+            capSize ? proc : null,
           );
           // A non-null proposal has TAKEN the bitmap: it comes back as
           // `proposal.sourceFrame` and is closed by the commit below or by the
@@ -949,6 +965,16 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     for (const [idx, bmp] of preCaptured) {
       if (handedOff.has(idx)) continue;
       try { bmp.close(); } catch { /* already released */ }
+    }
+
+    // Phone: the person segmenter is done for this pass; release its wasm and GL
+    // contexts BEFORE SAM-2 loads, so only one heavy stage is resident at a time.
+    if (phone) {
+      try {
+        const { releaseSelfieSegmenter } = await import('@/lib/stroMotionDraft/selfieSegmenter');
+        await releaseSelfieSegmenter();
+      } catch { /* best-effort */ }
+      await stageYield();
     }
 
     if (built.length === 0) {
@@ -1009,8 +1035,28 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         } catch (e) {
           console.warn('[autoRacket] PHASE C failed on frame', b.frameIndex, e);
         }
+        if (phone) {
+          try {
+            const { dropRacketEncoding } = await import('@/lib/stroMotionDraft/samRacket');
+            dropRacketEncoding(racketFrameKey(b.frameIndex, frame.timeSec));
+          } catch { /* best-effort */ }
+        }
         // Yield so the paint loop keeps running through the SAM encodes.
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      }
+    }
+
+    // Phone: SAM-2 and its embeddings are done for this pass; release them, then scale
+    // the capped masks and frames back to native size. The commit below is unchanged.
+    if (phone) {
+      try {
+        const { releaseSamRacket } = await import('@/lib/stroMotionDraft/samRacket');
+        await releaseSamRacket();
+      } catch { /* best-effort */ }
+      await stageYield();
+      if (capSize) {
+        const { finalizeBuiltAtNativeSize } = await import('@/lib/stroMotionDraft/phoneFinalize');
+        await finalizeBuiltAtNativeSize(video, built, (i) => current.frames[i]?.timeSec);
       }
     }
 
@@ -1053,6 +1099,26 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     });
     return built.length;
   }, [invalidatePreview, videoRef, getBackgroundPlate]);
+
+  /**
+   * Auto-detect entry. Off a phone this is the inner function and nothing else. On a
+   * phone it sets the crash marker before the heavy phase and clears it after the
+   * commit (or on any error), so a page that loads with the marker still set can say
+   * that the phone stopped the pass (phoneBudget.ts).
+   */
+  const autoProcessFrames = useCallback(async (
+    specs: StroAutoFrameSpec[],
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<number> => {
+    const phone = isPhoneBudgetActive();
+    if (!phone) return autoProcessFramesInner(specs, onProgress, false);
+    markAutoDetectStarted();
+    try {
+      return await autoProcessFramesInner(specs, onProgress, true);
+    } finally {
+      markAutoDetectFinished();
+    }
+  }, [autoProcessFramesInner]);
 
   const updateFrameMask = useCallback((frameIndex: number, mask: AlphaMask) => {
     // TEMP-DEBUG-PAINT — the far end of the paint chain. If applyAtPoint logs but

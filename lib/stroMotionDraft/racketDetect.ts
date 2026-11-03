@@ -1,5 +1,7 @@
 'use client';
 
+import { PHONE_ORT_SESSION_OPTIONS, isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+
 /**
  * AUTO-RACKET DETECTION — D-FINE-N, wrist-gated.
  *
@@ -210,7 +212,7 @@ async function getSession(): Promise<DetectSession | null> {
       const opts = (d: 'webgpu' | 'wasm') => ({
         dtype: 'q4f16',
         device: d,
-        session_options: { graphOptimizationLevel: 'basic' },
+        session_options: { graphOptimizationLevel: 'basic', ...(isPhoneBudgetActive() ? PHONE_ORT_SESSION_OPTIONS : {}) },
       });
 
       const t0 = performance.now();
