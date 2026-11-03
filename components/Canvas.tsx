@@ -476,6 +476,10 @@ export interface CanvasProps {
   /** When true, a column row-click deletes that row (delete-mode). */
   columnDeleteMode?: boolean;
   onMeasurementItemDelete?: (id: string) => void;
+  /** AI overlay lines (shoulder, hip, head, lfoot, rfoot, racket) the coach deleted: not drawn and not grabbable. */
+  hiddenOverlayIds?: ReadonlySet<string>;
+  /** Which AI overlay line is selected (a column-row tap or a tap on the line); null when none. */
+  onActiveOverlayChange?: (id: string | null) => void;
   /** Dragging an AI measurement overlay line recomputes its angle; the dependent
    *  column value updates automatically (BUG 1). */
   onOverlayAngleEdit?: (overlayId: string, deg: number) => void;
@@ -2232,6 +2236,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       onMeasurementItemEdit,
       columnDeleteMode,
       onMeasurementItemDelete,
+      hiddenOverlayIds,
+      onActiveOverlayChange,
       onOverlayAngleEdit,
       onMeasurementAdd,
       onMeasurementRemoveLast,
@@ -2477,6 +2483,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // The AI-overlay line the coach is currently editing (highlighted; it is the
     // priority drag target). Set by column-click or clicking near a line.
     const activeOverlayIdRef = useRef<string | null>(null);
+    const hiddenOverlayIdsRef = useRef<ReadonlySet<string> | undefined>(hiddenOverlayIds);
+    hiddenOverlayIdsRef.current = hiddenOverlayIds;
+    const onActiveOverlayChangeRef = useRef(onActiveOverlayChange);
+    onActiveOverlayChangeRef.current = onActiveOverlayChange;
+    /** Select (or clear) an AI overlay line and tell the page, which shows the Delete control for it. */
+    const setActiveOverlay = (id: string | null) => {
+      activeOverlayIdRef.current = id;
+      onActiveOverlayChangeRef.current?.(id);
+    };
     const onMeasurementAddRef = useRef(onMeasurementAdd);
     useEffect(() => { onMeasurementAddRef.current = onMeasurementAdd; }, [onMeasurementAdd]);
     const onMeasurementRemoveLastRef = useRef(onMeasurementRemoveLast);
@@ -6380,6 +6395,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             id: string,
             x1: number, y1: number, x2: number, y2: number,
           ) => {
+            if (hiddenOverlayIdsRef.current?.has(id)) return; // a deleted AI angle
             const adj = overlayAdjustmentsRef.current[id];
             const ax = (x1 + (adj?.dx1 ?? 0)) * msx;
             const ay = (y1 + (adj?.dy1 ?? 0)) * msy;
@@ -8585,6 +8601,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         }
 
+        // Deleted AI angles can no longer be grabbed or selected.
+        if (hiddenOverlayIdsRef.current?.size) {
+          for (let i = overlayEndpoints.length - 1; i >= 0; i--) {
+            if (hiddenOverlayIdsRef.current.has(overlayEndpoints[i].id)) overlayEndpoints.splice(i, 1);
+          }
+        }
         // Pick the GLOBALLY nearest endpoint across all overlays (not the first
         // match) so clicking never grabs a different, farther line. If a line is
         // active (column-selected), only that line's endpoints are targetable.
@@ -8609,7 +8631,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (ep) {
             const endpoint = bestHit!.endpoint;
             const eid = ep.id;
-            activeOverlayIdRef.current = eid;
+            setActiveOverlay(eid);
             const baseX = endpoint === 'start' ? ep.x1 : ep.x2;
             const baseY = endpoint === 'start' ? ep.y1 : ep.y2;
             isDraggingRef.current = true;
@@ -8642,7 +8664,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               // re-clicked its column row. Clearing here keeps the deliberate
               // row-select→edit flow (row sets it, this drag clears it) while
               // restoring free grabbing afterwards.
-              activeOverlayIdRef.current = null;
+              setActiveOverlay(null);
               // Recompute the angle from the dragged line so the dependent
               // column value follows what the coach drew (video-pixel coords).
               const a = overlayAdjustmentsRef.current[eid] ?? { dx1: 0, dy1: 0, dx2: 0, dy2: 0 };
@@ -8681,7 +8703,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               if (dSeg < bestLineDist) { bestLineDist = dSeg; bestLineId = ep.id; }
             }
             if (bestLineId) {
-              activeOverlayIdRef.current = bestLineId;
+              setActiveOverlay(bestLineId);
               renderDirtyRef.current = true;
               e.preventDefault();
               return;
@@ -8823,7 +8845,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 : null;
               if (oid && showMeasurementOverlaysRef.current) {
                 // Toggle: clicking the already-active line clears the selection.
-                activeOverlayIdRef.current = activeOverlayIdRef.current === oid ? null : oid;
+                setActiveOverlay(activeOverlayIdRef.current === oid ? null : oid);
                 renderDirtyRef.current = true;
                 e.preventDefault();
                 return;
