@@ -17,8 +17,59 @@
 // content hash, so a new build is a new URL that cannot collide with a cached
 // entry. Verified by rebuild — changing emitted code moved the analysis chunk
 // from page-20a0462fb88eef0c.js to page-97c9b85e228d079a.js.
-const CACHE_NAME = 'angle-motion-v3';
+//
+// v4 (2026-11-03): what the worker stored was never bounded. The catch-all
+// (and the cache-first rules for cdn.jsdelivr.net, images and fonts) stored
+// EVERY response with no size or status check, so a returning visitor's cache
+// held the pose models, the ONNX/WASM runtimes and the chunks of every deploy
+// ever visited (public/models alone is 115 MB, /ort 49 MB, and one hashed
+// 23 MB .wasm under /_next/static/), plus any error response a cache-first rule
+// had happily stored. Nothing ever evicted any of it, and on iPhone Safari a
+// cache that large is a prime suspect for the Motion Layer freeze
+// (docs/MOTION_LAYER_FREEZE.md, section 12). From v4:
+//   - only complete 200 responses are stored (no errors, 206, redirects,
+//     empty bodies, and no opaque cross-origin responses, which cannot be
+//     inspected);
+//   - nothing larger than MAX_ENTRY_BYTES is stored;
+//   - the coco-ssd model host is not intercepted at all;
+//   - the runtime part of the cache holds at most MAX_RUNTIME_ENTRIES entries,
+//     oldest evicted first.
+// Bumping the name makes `activate` delete every v3 entry.
+const CACHE_NAME = 'angle-motion-v4';
 const OFFLINE_URL = '/offline.html';
+
+/**
+ * The largest single response the worker will store. Every JS and CSS chunk the
+ * app ships is under 520 KB uncompressed (largest: the analysis page chunk,
+ * 515 KB at the time of writing), so 1 MiB keeps all of them and everything
+ * else that makes the shell work offline, and refuses every model and WASM
+ * runtime (the smallest is 6 MB) and media file.
+ *
+ * Size is read from the Content-Length header when there is one (the wire size;
+ * a compressed response is smaller than what it unpacks to, which is
+ * acceptable at this margin). A response that declares no length is measured by
+ * reading a clone of it, stopping at the limit. An opaque response (a no-cors
+ * cross-origin fetch) has status 0 and no readable headers or body, so its
+ * size and its success cannot be known: it is never stored.
+ */
+const MAX_ENTRY_BYTES = 1024 * 1024;
+
+/**
+ * At most this many runtime entries (everything except the precached shell).
+ * One full production build is about 175 files under /_next/static/, so this
+ * holds one build and not two: when a deploy changes the chunk names, the
+ * previous build's chunks are evicted oldest first as the new ones arrive.
+ * Worst case (every entry at the 1 MiB limit) is 200 MiB; a real build is under
+ * 10 MB because the one big file in it, the 23 MB ORT WASM, is not stored.
+ */
+const MAX_RUNTIME_ENTRIES = 200;
+
+/**
+ * Hosts whose requests the worker does not touch at all: the browser fetches
+ * them itself. storage.googleapis.com serves the 68 MB COCO-SSD model; proxying
+ * it through the worker only risked buffering it, and it must never be stored.
+ */
+const BYPASS_HOSTS = ['storage.googleapis.com'];
 
 // Static shell assets only — every visitor gets byte-identical responses for
 // these, so a shared cache is safe.
@@ -57,6 +108,99 @@ function isAuthDependent(request, url) {
   return accept.includes('text/html') || accept.includes('text/x-component');
 }
 
+/** Why a response may or may not be stored: 'store', 'measure' (declares no size) or 'skip'. */
+function classifyResponse(response) {
+  if (!response) return 'skip';
+  // Opaque (status 0), errors, redirects, 206 partial content and every non-200:
+  // never stored. `ok` alone is not enough — it also admits 201..299.
+  if (response.status !== 200) return 'skip';
+  if (response.type === 'opaque' || response.type === 'opaqueredirect' || response.type === 'error') return 'skip';
+  const header = response.headers && response.headers.get('Content-Length');
+  if (header !== null && header !== undefined && header !== '') {
+    const declared = Number(header);
+    if (Number.isFinite(declared)) return declared > 0 && declared <= MAX_ENTRY_BYTES ? 'store' : 'skip';
+  }
+  return response.body ? 'measure' : 'skip';
+}
+
+/** Read `response` (a clone) and say whether its body is non-empty and within the limit. Stops reading at the limit. */
+async function bodyWithinLimit(response) {
+  const reader = response.body && response.body.getReader ? response.body.getReader() : null;
+  if (!reader) return false;
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value ? value.byteLength : 0;
+      if (total > MAX_ENTRY_BYTES) {
+        reader.cancel().catch(() => {});
+        return false;
+      }
+    }
+  } catch (_) {
+    return false;
+  }
+  return total > 0;
+}
+
+/** Keep at most `max` runtime entries; the precached shell is never evicted. Oldest first (Cache.keys() is in insertion order). */
+async function trimCache(cache, max) {
+  const keys = await cache.keys();
+  const shell = new Set(PRECACHE_ASSETS);
+  const runtime = keys.filter((req) => {
+    try {
+      return !shell.has(new URL(req.url).pathname);
+    } catch (_) {
+      return true;
+    }
+  });
+  const excess = runtime.length - max;
+  for (let i = 0; i < excess; i++) await cache.delete(runtime[i]);
+}
+
+/**
+ * Decide, then store, a response for `request`. Call it synchronously from the
+ * fetch handler with the ORIGINAL response (it clones before the body is
+ * used); pass the returned promise to event.waitUntil. Never throws.
+ */
+function storeIfAllowed(request, response) {
+  const verdict = classifyResponse(response);
+  if (verdict === 'skip') return Promise.resolve(false);
+  const forCache = response.clone();
+  const probe = verdict === 'measure' ? response.clone() : null;
+  return (async () => {
+    try {
+      if (probe && !(await bodyWithinLimit(probe))) {
+        if (forCache.body) forCache.body.cancel().catch(() => {});
+        return false;
+      }
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(request, forCache);
+      await trimCache(cache, MAX_RUNTIME_ENTRIES);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  })();
+}
+
+/** Store without ever affecting the response that goes back to the page. */
+function storeInBackground(event, request, response) {
+  try {
+    event.waitUntil(storeIfAllowed(request, response));
+  } catch (_) {
+    /* the page still gets its response */
+  }
+}
+
+/** Delete every cache whose name is not the current one (old versions, anything else on the origin). */
+function deleteOldCaches() {
+  return caches.keys().then((keys) =>
+    Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+  );
+}
+
 // Install: precache shell assets
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -67,11 +211,7 @@ self.addEventListener('install', (event) => {
 
 // Activate: clean up old caches
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
-  );
+  event.waitUntil(deleteOldCaches());
   self.clients.claim();
 });
 
@@ -82,6 +222,9 @@ self.addEventListener('fetch', (event) => {
 
   // Skip non-GET and browser extensions
   if (request.method !== 'GET' || !url.protocol.startsWith('http')) return;
+
+  // Large third-party model hosts: not intercepted, not stored.
+  if (BYPASS_HOSTS.includes(url.hostname)) return;
 
   // Network-first for API routes
   if (url.pathname.startsWith('/api/')) {
@@ -100,8 +243,7 @@ self.addEventListener('fetch', (event) => {
       caches.match(request).then((cached) => {
         if (cached) return cached;
         return fetch(request).then((response) => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          storeInBackground(event, request, response);
           return response;
         });
       })
@@ -120,8 +262,7 @@ self.addEventListener('fetch', (event) => {
       caches.match(request).then((cached) => {
         if (cached) return cached;
         return fetch(request).then((response) => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          storeInBackground(event, request, response);
           return response;
         });
       })
@@ -165,10 +306,7 @@ self.addEventListener('fetch', (event) => {
       caches.match(request).then((cached) => {
         if (cached) return cached;
         return fetch(request).then((response) => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone)).catch(() => {});
-          }
+          storeInBackground(event, request, response);
           return response;
         });
       })
@@ -183,12 +321,17 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        if (response.ok && response.status !== 206) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone)).catch(() => {});
-        }
+        storeInBackground(event, request, response);
         return response;
       })
       .catch(() => caches.match(request))
   );
 });
+
+// Test hook only: a service worker global has no `module`, so this never runs there.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    CACHE_NAME, MAX_ENTRY_BYTES, MAX_RUNTIME_ENTRIES, BYPASS_HOSTS, PRECACHE_ASSETS,
+    classifyResponse, bodyWithinLimit, trimCache, storeIfAllowed, storeInBackground, deleteOldCaches,
+  };
+}
