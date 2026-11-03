@@ -1366,7 +1366,7 @@ function Home() {
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
   const [hiddenByOwner, setHiddenByOwner] = useState<Record<string, string[]>>({});
   const [lastDeleted, setLastDeleted] = useState<
-    | { kind: 'snapshot'; label: string; snap: Snapshot; index: number }
+    | { kind: 'snapshot'; label: string; snap: Snapshot; index: number; wasActive: boolean }
     | { kind: 'angle'; label: string; row: ColumnRow; index: number; overlayId: string; owner: string }
     | null
   >(null);
@@ -1399,7 +1399,21 @@ function Home() {
     }
     if (activeSnapshot) {
       const index = snapshots.findIndex(s => s.id === activeSnapshot.id);
-      showDeleted({ kind: 'snapshot', label: activeSnapshot.label, snap: activeSnapshot, index });
+      // The active snapshot's newest drawings, column and pose live on the canvas, not yet in the
+      // stored object (saveActiveSnapshot writes them on a switch). Capture them now, so Undo brings
+      // back what the coach saw and not an older copy. The same reads as saveActiveSnapshot.
+      const box = strokesBoxOf(canvasRef.current);
+      const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
+      const snap: Snapshot = {
+        ...activeSnapshot,
+        column: measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'),
+        overlaysOn: showMeasurementOverlaysStateRef.current,
+        overlayAdjustments: canvasRef.current?.getOverlayAdjustments?.() ?? {},
+        drawingsJson: canvasRef.current?.exportStrokes?.() ?? '',
+        ...(skeleton ? { skeleton } : {}),
+        ...(box ? { drawingsBox: box } : {}),
+      };
+      showDeleted({ kind: 'snapshot', label: activeSnapshot.label, snap, index, wasActive: biomechSelectedPhaseIdRef.current === activeSnapshot.id });
       deleteSnapshot(activeSnapshot.id);
       setSelectedOverlayId(null);
     }
@@ -1411,7 +1425,19 @@ function Home() {
     if (lastDeletedTimerRef.current) clearTimeout(lastDeletedTimerRef.current);
     setLastDeleted(null);
     if (d.kind === 'snapshot') {
-      setSnapshots(prev => restoreAt(prev, d.snap, d.index));
+      const snap = d.snap;
+      setSnapshots(prev => restoreAt(prev, snap, d.index));
+      // It was the selected snapshot: select it again with everything it had (as selectSnapshot does),
+      // unless the coach has since selected another one.
+      if (d.wasActive && !biomechSelectedPhaseIdRef.current) {
+        setBiomechSelectedPhaseId(snap.id);
+        setMeasurementColumn(scrubRetiredLabels(snap.column));
+        setShowMeasurementOverlays(snap.overlaysOn);
+        canvasRef.current?.importStrokes?.(snap.drawingsJson || '[]');
+        canvasRef.current?.setOverlayAdjustments?.(snap.overlayAdjustments ?? {});
+        canvasRef.current?.setSkeletonKeypoints?.(snap.skeleton ?? null, 'snapshot');
+        if (videoRef.current) { videoRef.current.currentTime = snap.timeSec; videoRef.current.pause(); }
+      }
     } else {
       setHiddenByOwner(prev => ({ ...prev, [d.owner]: (prev[d.owner] ?? []).filter(x => x !== d.overlayId) }));
       setMeasurementColumn(prev => restoreAt(prev, d.row, d.index));
