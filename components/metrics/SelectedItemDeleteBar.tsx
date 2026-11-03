@@ -13,7 +13,9 @@ import { deleteBarState } from '@/lib/metrics/deleteSelected';
  */
 
 const base: React.CSSProperties = {
-  position: 'absolute', right: 8, bottom: 8, zIndex: 16, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8,
+  // Left edge, vertically centred: nothing else lives there (the playback bar is along the bottom, the
+  // Remove A / Add B buttons top right, the zoom cluster right). Never over a control.
+  position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', zIndex: 16, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8,
   pointerEvents: 'none', maxWidth: 'calc(100% - 16px)',
 };
 const pill: React.CSSProperties = {
