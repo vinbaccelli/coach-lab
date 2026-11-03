@@ -38,7 +38,7 @@ Measurement artefact to avoid: starting the CPU profiler at the last racket fram
 3. **Editor first open at 4K** (Canvas rAF `drawImage` of a 4K frame plus the mask surface): 3.2 s block, ~75 ms blocks sustained for ~10 s. Small at 1080p.
 4. Not causes: SAM-2 release (68 ms), SAM reload, thumbnails, `refreshStroPreviewFromDraft`.
 
-Memory (not measured here): at 4K the re-capture creates 5 × 33 MiB bitmaps plus 3 × 8.3 MiB masks per frame right after the heavy models were released; a tab that is near its limit can be stalled or killed here with no crash notice if the OS reload happens before the marker is read (marker is cleared in `finally`, `useStroMotion.ts:1109-1119`, so a kill *after* the commit leaves no notice — consistent with the report).
+Memory (not measured here): at 4K the re-capture creates 5 × 33 MiB bitmaps plus 3 × 8.3 MiB masks per frame right after the heavy models were released; a tab that is near its limit can be stalled or killed here with no crash notice if the OS reload happens before the marker is read (marker is cleared in `finally`, `useStroMotion.ts:1114-1120`, so a kill *after* the commit leaves no notice — consistent with the report).
 
 ## 5. Options
 
@@ -46,7 +46,7 @@ Memory (not measured here): at 4K the re-capture creates 5 × 33 MiB bitmaps plu
 - a1 (`phoneBudget.ts upscaleAlphaMask`, `phoneFinalize.ts`): process 32–64 rows per slice and `await` a macrotask between slices and between the capture and the upscale. 1080p ≈ 440 ms/frame at 4× → ~10 slices of ~45 ms. Total time slightly longer, UI stays responsive. Fixes cause 2.
 - a2 (cause 1): to get under 100 ms per slice the composite must stop doing a sync full-frame readback per layer: either build each masked layer once, one layer per tick (still ~500 ms/layer at 1080p/4× unless rows are chunked), or draw it at the capped size on phones. That edits `compositeFromDraft.ts` / `Canvas.tsx` (the render path). It cannot be reached by yielding alone.
 
-**(b) A visible "Opening editor…" state at once.** In `onProgress`/`setProcessingStatus` (`page.tsx:2991-2992` wiring, text only) set the text before step 3 and wait two animation frames so it paints before the first block, and keep it until the first composite has painted (`canvasRef.current?.waitForRender`, already used at `page.tsx:2203`). Does not shorten any block; the page is still frozen, but the coach sees why.
+**(b) A visible "Opening editor…" state at once.** In `onProgress`/`setProcessingStatus` (`page.tsx:2872` and `page.tsx:2978`, text only) set the text before step 3 and wait two animation frames so it paints before the first block, and keep it until the first composite has painted (`canvasRef.current?.waitForRender`, already used at `page.tsx:2203`). Does not shorten any block; the page is still frozen, but the coach sees why.
 
 **Frozen-file impact**
 | Option | Pose Worker | `public/sw.js` | atomic batch commit | Foot Line | StroMotion architecture | other hot files |
