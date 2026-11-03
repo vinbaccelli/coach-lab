@@ -230,7 +230,7 @@ const ENTRIES: Entry[] = [
 const TUTORIAL_STEPS: Array<{ t: string; b: string; shot: Shot }> = [
   {
     t: 'Bring the video in',
-    b: 'Upload from your camera roll, pull from Google Drive, or paste a YouTube link. Nothing to install.',
+    b: 'Upload from your camera roll or pull from Google Drive. Nothing to install.',
     shot: { src: `${SHOT_DIR}/step-upload.webp`, width: 1920, height: 1328, alt: 'The empty workspace with Upload Video, the tennis-court strategy board and the demo clip.' },
   },
   {

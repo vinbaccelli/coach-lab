@@ -88,7 +88,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
 
           <p className="lg-fine">
             By continuing you agree to store your videos as Unlisted in your YouTube account when
-            importing from URLs.
+            you upload them from AngleMotion.
           </p>
 
           <div className="lg-links">

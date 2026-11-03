@@ -5512,7 +5512,7 @@ function Home() {
     const ctrl = playbackControllerARef.current;
     const dur = youtubeVideoIdA ? ctrl?.getDuration() : video?.duration;
     if (!Number.isFinite(dur) || !dur || dur <= 0) {
-      setProcessingStatus('No video loaded. Upload a video or paste a YouTube URL first.');
+      setProcessingStatus('No video loaded. Upload a video first.');
       return;
     }
 
@@ -5642,6 +5642,8 @@ function Home() {
     [cleanupVideoEl],
   );
 
+  // V2: importing from a pasted link is abandoned (founder, 2026-11). No field or button calls this any more;
+  // kept, not deleted, as a deferred feature. Upload and Google Drive are the supported ways in.
   const handleUrlSubmit = useCallback(async () => {
     const raw = normalizeWebUrlInput(urlInput);
     if (!raw) return;
