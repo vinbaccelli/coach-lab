@@ -209,10 +209,12 @@ import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { useEntitlement } from '@/lib/useEntitlement';
 import type { Feature } from '@/lib/entitlements';
-import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled, isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
-import { currentNavType, installRestartBreadcrumb } from '@/lib/restartBreadcrumb';
+import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled, isPhoneBudgetActive, markAutoDetectFinished, markAutoDetectStarted } from '@/lib/stroMotionDraft/phoneBudget';
+import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/restartBreadcrumb';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
+
+const PREPARING_MOTION_LAYER_TEXT = 'Preparing Motion Layer…';
 
 /**
  * Has the once-per-page-load reload reset already been evaluated?
@@ -2760,6 +2762,7 @@ function Home() {
     const yieldFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     for (let i = 0; i < pending.length; i++) {
       setProcessingStatus(`AI detecting the athlete: frame ${i + 1}/${pending.length}…`);
+      recordStage(`Auto-detect: object detection, frame ${i + 1}/${pending.length}`);
       // A single frame's detection error must NOT abort the whole batch — that
       // left every later frame empty ("click a frame → draw a box again").
       try {
@@ -2931,6 +2934,13 @@ function Home() {
       return;
     }
     stroAutoSelectBusyRef.current = true;
+    // PHONE ONLY: the crash marker starts at the click, not when the mask pass begins, so a
+    // kill during the pose pass below (it loads the pose model and its WebGL programs) also
+    // gets the notice. The pass itself keeps it until the first layers are drawn; every path
+    // that ends without reaching the pass clears it in the `finally` below.
+    const phoneRun = isPhoneBudgetActive();
+    if (phoneRun) { markAutoDetectStarted(); recordStage('Auto-detect: started'); }
+    let phoneHeld = false;
     // ── SLOW, SETTLED, EXACT — for the mask AND for what the coach sees ──────
     //
     // The pass takes the EXACT-POSE LOCK and nothing else. Under the lock the
@@ -2975,6 +2985,7 @@ function Home() {
         const specs: StroAutoFrameSpec[] = [];
         for (let i = 0; i < pending.length; i++) {
           setProcessingStatus(`AI detecting the athlete: frame ${i + 1}/${pending.length}…`);
+          recordStage(`Auto-detect: pose pass, frame ${i + 1}/${pending.length}`);
           let spec: StroAutoFrameSpec | null = null;
           try {
             spec = await buildPlayerFrameSpec(pending[i].index);
@@ -3016,6 +3027,7 @@ function Home() {
           setProcessingStatus(`Removing background: frame ${done}/${total}…`),
         );
       }
+      phoneHeld = ok > 0; // the pass's phone wrapper keeps the marker until the first layers are drawn
       void refreshStroPreviewFromDraft();
       console.log('[StroMotion] auto-detect committed', ok, 'of', pending.length, 'frames');
       // Frames with no exact pose are committed with the selection box as their
@@ -3038,6 +3050,9 @@ function Home() {
       setProcessingStatus('Auto-detect hit an error (see console). Try Select Area on a frame manually.');
     } finally {
       stroAutoSelectBusyRef.current = false;
+      // Phone: when the pass built frames its wrapper holds the marker until the first layers
+      // are drawn; on any other exit (nothing found, an error) it is cleared here.
+      if (phoneRun && !phoneHeld) markAutoDetectFinished();
       // Releasing hands the skeleton back to the coach's own setting, which this
       // pass never changed. Released on every exit path, including a crash.
       canvasRef.current?.setExactPoseLock?.(false);
@@ -3452,9 +3467,33 @@ function Home() {
   }, [stroMotionActive, stroMotionHtml5Only, stroMotionDraft, stroActiveFrameIndex]);
 
   useEffect(() => {
-    if (stroMotionActive && stroMotionHtml5Only) {
+    if (!(stroMotionActive && stroMotionHtml5Only)) return;
+    if (!isPhoneBudgetActive()) {
       void import('@/lib/racketCocoDetect').then((m) => m.preloadRacketDetector());
+      return;
     }
+    // PHONE ONLY (docs/PHONE_REFRESH_AFTER_AUTODETECT.md §7): the COCO-SSD warm-up compiles ~260
+    // WebGL programs on the main thread and holds a model Auto-detect does not use, so it starts
+    // AFTER the person-segmenter warm-up has had a head start and never while Auto-detect is
+    // running; "Preparing Motion Layer…" is on screen from the first frame. The racket tool and
+    // object tracking get the same detector, a few seconds later.
+    let cancelled = false;
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const clearPreparing = () => setProcessingStatus((cur) => (cur === PREPARING_MOTION_LAYER_TEXT ? null : cur));
+    setProcessingStatus((cur) => cur ?? PREPARING_MOTION_LAYER_TEXT);
+    recordStage('Motion Layer opened (warming models)');
+    void (async () => {
+      await sleep(1500);
+      while (!cancelled && stroAutoSelectBusyRef.current) await sleep(1000);
+      if (cancelled) return;
+      try {
+        recordStage('Motion Layer: loading the racket-tool detector');
+        const m = await import('@/lib/racketCocoDetect');
+        await m.preloadRacketDetector();
+      } catch { /* best-effort */ }
+      if (!cancelled) clearPreparing();
+    })();
+    return () => { cancelled = true; clearPreparing(); };
   }, [stroMotionActive, stroMotionHtml5Only]);
 
   /** Clear the Metrics/Snapshot analysis state (snapshots, data column, skeleton). */

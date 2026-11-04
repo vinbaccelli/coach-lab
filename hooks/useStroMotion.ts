@@ -1,5 +1,6 @@
 'use client';
 
+import { recordStage } from '@/lib/restartBreadcrumb';
 import { isPhoneBudgetActive, markAutoDetectFinished, markAutoDetectStarted, processingSize } from '@/lib/stroMotionDraft/phoneBudget';
 import { renderStroMotionDraftComposite } from '@/lib/stroMotionDraft/compositeFromDraft';
 import { exportStroMotionDraftPng } from '@/lib/stroMotionDraft/exportDraft';
@@ -655,6 +656,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         for (const spec of specs) {
           const frame = current.frames[spec.frameIndex];
           if (!frame) continue;
+          recordStage(`Auto-detect: foot pose, frame ${spec.frameIndex + 1}/${specs.length}`);
           try {
             const bmp = await captureVideoFrameAtTime(video, frame.timeSec);
             preCaptured.set(spec.frameIndex, bmp);
@@ -854,6 +856,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       racketPassActive = autoRacketActive(current.objectType);
       if (racketPassActive) {
         console.log('[autoRacket] PHASE A — detecting on all frames (D-FINE alone)…');
+        recordStage('Auto-detect: racket detector (loading, then frames)');
         const { captureVideoFrameAtTime } = await import('@/lib/stroMotionDraft/captureSource');
         const inputs: import('@/lib/stroMotionDraft/autoRacketPass').RacketDetectInput[] = [];
         for (const spec of specs) {
@@ -907,6 +910,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     for (let i = 0; i < specs.length; i++) {
       const spec = specs[i];
       const frame = current.frames[spec.frameIndex];
+      recordStage(`Auto-detect: removing background, frame ${i + 1}/${specs.length}`);
       if (frame) {
         try {
           const proposal = await proposeFrameMask(
@@ -1007,12 +1011,14 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     // Every failure path leaves that frame's mask exactly as the cutout built it.
     if (racketPassActive && racketBoxes.size > 0) {
       console.log(`[autoRacket] PHASE C — segmenting ${racketBoxes.size} racket(s) with SAM (alone)…`);
+      recordStage(`Auto-detect: racket segmentation (loading, then ${racketBoxes.size} frame(s))`);
       const { segmentRacketIntoMask } = await import('@/lib/stroMotionDraft/autoRacketPass');
       for (const b of built) {
         const hit = racketBoxes.get(b.frameIndex);
         if (!hit) continue;
         const frame = current.frames[b.frameIndex];
         if (!frame) continue;
+        recordStage(`Auto-detect: racket segmentation, frame ${b.frameIndex + 1}`);
         try {
           const r = await segmentRacketIntoMask({
             mask: b.aiSnapshot,
@@ -1049,6 +1055,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     // Phone: SAM-2 and its embeddings are done for this pass; release them, then scale
     // the capped masks and frames back to native size. The commit below is unchanged.
     if (phone) {
+      recordStage('Auto-detect: releasing models, then native-size finalize');
       try {
         const { releaseSamRacket } = await import('@/lib/stroMotionDraft/samRacket');
         await releaseSamRacket();
@@ -1062,6 +1069,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
 
     // Phase 2 — commit the COMPLETE set in ONE update. Every built frame becomes
     // fully editable AND export-ready in the same commit.
+    recordStage('Auto-detect: committing frames');
     setDraft((prev) => {
       if (!prev) {
         built.forEach((b) => { try { b.sourceFrame.close(); } catch { /* closed */ } });

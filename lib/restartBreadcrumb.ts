@@ -27,6 +27,8 @@ export interface Trail {
   state: TrailState;
   at: number;
   lastError: { msg: string; at: number; kind: 'error' | 'rejection' } | null;
+  /** The last thing the page said it was doing (`recordStage`), e.g. "Auto-detect: SAM frame 2/5". */
+  stage?: string | null;
 }
 
 export type RestartReason = 'killed' | 'script-error' | 'reload';
@@ -50,7 +52,7 @@ export function readTrail(storage: TrailStorage | null): Trail | null {
     const t = JSON.parse(raw) as Partial<Trail>;
     if (t.state !== 'running' && t.state !== 'hidden' && t.state !== 'leaving') return null;
     if (typeof t.at !== 'number') return null;
-    return { state: t.state, at: t.at, lastError: t.lastError ?? null };
+    return { state: t.state, at: t.at, lastError: t.lastError ?? null, stage: typeof t.stage === 'string' ? t.stage : null };
   } catch {
     return null;
   }
@@ -67,9 +69,10 @@ export function writeTrail(storage: TrailStorage | null, t: Trail): void {
 export function classifyRestart(prev: Trail | null, navType: string | undefined): RestartVerdict | null {
   if (!prev) return null;
   const blamed = prev.lastError && prev.at - prev.lastError.at <= ERROR_BLAME_WINDOW_MS ? prev.lastError : null;
+  const where = prev.stage ? ` Last step: ${prev.stage}.` : '';
   const scriptError = (e: NonNullable<Trail['lastError']>): RestartVerdict => ({
     reason: 'script-error',
-    text: `The page restarted. Reason: a script error (${e.msg}).`,
+    text: `The page restarted. Reason: a script error (${e.msg}).${where}`,
   });
   if (prev.state !== 'leaving') {
     // The page never said it was leaving: it was ended from outside.
@@ -77,15 +80,29 @@ export function classifyRestart(prev: Trail | null, navType: string | undefined)
     return {
       reason: 'killed',
       text: prev.state === 'hidden'
-        ? 'The page restarted. Reason: killed by the phone while it was in the background.'
-        : 'The page restarted. Reason: killed by the phone (the page ended without warning, usually its memory).',
+        ? `The page restarted. Reason: killed by the phone while it was in the background.${where}`
+        : `The page restarted. Reason: killed by the phone (the page ended without warning, usually its memory).${where}`,
     };
   }
   if (navType === 'reload') {
     if (blamed) return scriptError(blamed);
-    return { reason: 'reload', text: 'The page restarted. Reason: a reload (the page was refreshed or reloaded itself).' };
+    return { reason: 'reload', text: `The page restarted. Reason: a reload (the page was refreshed or reloaded itself).${where}` };
   }
   return null;
+}
+
+let activeStage: ((name: string) => void) | null = null;
+
+/**
+ * Say what the page is doing now. A no-op unless the breadcrumb is installed (phones only),
+ * so callers can leave it in without a gate. Cheap: one small sessionStorage write, and it
+ * skips the write when the stage has not changed.
+ */
+let lastStage: string | null = null;
+export function recordStage(name: string): void {
+  if (!activeStage || name === lastStage) return;
+  lastStage = name;
+  activeStage(name);
 }
 
 export interface BreadcrumbEnv {
@@ -121,6 +138,10 @@ export function installRestartBreadcrumb(env: BreadcrumbEnv): { verdict: Restart
     trail = { ...trail, ...patch, at: now() };
     writeTrail(env.storage, trail);
   };
+  lastStage = null;
+  activeStage = (name: string) => { if (trail.state !== 'leaving') update({ stage: name }); };
+  const onOpening = () => activeStage?.('opening the editor (finalize)');
+  const onDrawn = () => activeStage?.('editor open, first layers drawn');
 
   // `pagehide` can come BEFORE the `visibilitychange` that follows it on the way out (iOS
   // Safari, and Chrome on a reload): once the page has said it is leaving, a later hidden
@@ -148,6 +169,8 @@ export function installRestartBreadcrumb(env: BreadcrumbEnv): { verdict: Restart
   env.win.addEventListener('pageshow', onPageShow);
   env.win.addEventListener('error', onError);
   env.win.addEventListener('unhandledrejection', onRejection);
+  env.win.addEventListener('stro:opening-editor', onOpening);
+  env.win.addEventListener('stro:first-layers-drawn', onDrawn);
   return {
     verdict,
     dispose: () => {
@@ -156,6 +179,9 @@ export function installRestartBreadcrumb(env: BreadcrumbEnv): { verdict: Restart
       env.win.removeEventListener('pageshow', onPageShow);
       env.win.removeEventListener('error', onError);
       env.win.removeEventListener('unhandledrejection', onRejection);
+      env.win.removeEventListener('stro:opening-editor', onOpening);
+      env.win.removeEventListener('stro:first-layers-drawn', onDrawn);
+      activeStage = null;
     },
   };
 }

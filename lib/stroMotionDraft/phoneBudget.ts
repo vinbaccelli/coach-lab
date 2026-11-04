@@ -128,8 +128,29 @@ interface MarkerStorage {
   removeItem(k: string): void;
 }
 
+/**
+ * The marker is kept in BOTH sessionStorage and localStorage. A Private tab on iOS may not
+ * keep localStorage across the reload that follows a kill (the restart breadcrumb, which
+ * lives in sessionStorage, did survive one, while the Auto-detect notice never showed), and
+ * sessionStorage is the one that survives a reload of the same tab. Either one set counts.
+ */
+export function combineStorages(list: Array<MarkerStorage | null>): MarkerStorage | null {
+  const have = list.filter((x): x is MarkerStorage => !!x);
+  if (have.length === 0) return null;
+  return {
+    getItem: (k) => {
+      for (const st of have) { try { const v = st.getItem(k); if (v !== null) return v; } catch { /* blocked */ } }
+      return null;
+    },
+    setItem: (k, v) => { for (const st of have) { try { st.setItem(k, v); } catch { /* blocked */ } } },
+    removeItem: (k) => { for (const st of have) { try { st.removeItem(k); } catch { /* blocked */ } } },
+  };
+}
+
 function realStorage(): MarkerStorage | null {
-  try { return typeof window !== 'undefined' ? window.localStorage : null; } catch { return null; }
+  const pick = (get: () => Storage): MarkerStorage | null => { try { return get(); } catch { return null; } };
+  if (typeof window === 'undefined') return null;
+  return combineStorages([pick(() => window.sessionStorage), pick(() => window.localStorage)]);
 }
 
 /** Set before the heavy phase. Never throws. */
