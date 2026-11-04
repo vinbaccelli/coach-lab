@@ -209,7 +209,12 @@ import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { useEntitlement } from '@/lib/useEntitlement';
 import type { Feature } from '@/lib/entitlements';
+import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled, isPhoneBudgetActive, markAutoDetectFinished, markAutoDetectStarted } from '@/lib/stroMotionDraft/phoneBudget';
+import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/restartBreadcrumb';
+import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
+
+const PREPARING_MOTION_LAYER_TEXT = 'Preparing Motion Layer…';
 
 /**
  * Has the once-per-page-load reload reset already been evaluated?
@@ -2757,6 +2762,7 @@ function Home() {
     const yieldFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     for (let i = 0; i < pending.length; i++) {
       setProcessingStatus(`AI detecting the athlete: frame ${i + 1}/${pending.length}…`);
+      recordStage(`Auto-detect: object detection, frame ${i + 1}/${pending.length}`);
       // A single frame's detection error must NOT abort the whole batch — that
       // left every later frame empty ("click a frame → draw a box again").
       try {
@@ -2872,6 +2878,42 @@ function Home() {
     );
   }, [detectObjectBoxAtFrame, autoProcessStroFrames, videoRef]);
 
+  // PHONE ONLY: "Opening editor…" from the start of the native-size finalize until the
+  // first layers are drawn (lib/stroMotionDraft/phoneFinalize.ts). The events are
+  // only ever sent on a phone, so off a phone none of this runs. The pass's final
+  // message is held while the notice is up and shown when it ends.
+  const stroOpeningRef = useRef<{ active: boolean; final: string | null; prev: string | null; timer: number | null }>({ active: false, final: null, prev: null, timer: null });
+  const stroEndOpening = useCallback(() => {
+    const o = stroOpeningRef.current;
+    if (o.timer !== null) { window.clearTimeout(o.timer); o.timer = null; }
+    if (!o.active) return;
+    o.active = false;
+    const restore = o.final ?? o.prev;
+    o.final = null;
+    o.prev = null;
+    setProcessingStatus((cur) => (cur === OPENING_EDITOR_TEXT ? restore : cur));
+  }, []);
+  const setStroFinalStatus = useCallback((msg: string) => {
+    if (stroOpeningRef.current.active) { stroOpeningRef.current.final = msg; return; }
+    stroOpeningRef.current.final = null;
+    setProcessingStatus(msg);
+  }, []);
+  useEffect(() => {
+    const onOpening = () => {
+      const o = stroOpeningRef.current;
+      if (o.active) return;
+      o.active = true;
+      setProcessingStatus((cur) => { o.prev = cur === OPENING_EDITOR_TEXT ? null : cur; return OPENING_EDITOR_TEXT; });
+      o.timer = window.setTimeout(stroEndOpening, OPENING_EDITOR_FAILSAFE_MS);
+    };
+    window.addEventListener(OPENING_EDITOR_EVENT, onOpening);
+    window.addEventListener(FIRST_LAYERS_DRAWN_EVENT, stroEndOpening);
+    return () => {
+      window.removeEventListener(OPENING_EDITOR_EVENT, onOpening);
+      window.removeEventListener(FIRST_LAYERS_DRAWN_EVENT, stroEndOpening);
+    };
+  }, [stroEndOpening]);
+
   /** One click (or auto-trigger): boxes + masks for every pending frame. */
   const stroAutoSelectBusyRef = useRef(false);
   const handleStroAutoSelectAll = useCallback(async () => {
@@ -2892,6 +2934,13 @@ function Home() {
       return;
     }
     stroAutoSelectBusyRef.current = true;
+    // PHONE ONLY: the crash marker starts at the click, not when the mask pass begins, so a
+    // kill during the pose pass below (it loads the pose model and its WebGL programs) also
+    // gets the notice. The pass itself keeps it until the first layers are drawn; every path
+    // that ends without reaching the pass clears it in the `finally` below.
+    const phoneRun = isPhoneBudgetActive();
+    if (phoneRun) { markAutoDetectStarted(); recordStage('Auto-detect: started'); }
+    let phoneHeld = false;
     // ── SLOW, SETTLED, EXACT — for the mask AND for what the coach sees ──────
     //
     // The pass takes the EXACT-POSE LOCK and nothing else. Under the lock the
@@ -2936,6 +2985,7 @@ function Home() {
         const specs: StroAutoFrameSpec[] = [];
         for (let i = 0; i < pending.length; i++) {
           setProcessingStatus(`AI detecting the athlete: frame ${i + 1}/${pending.length}…`);
+          recordStage(`Auto-detect: pose pass, frame ${i + 1}/${pending.length}`);
           let spec: StroAutoFrameSpec | null = null;
           try {
             spec = await buildPlayerFrameSpec(pending[i].index);
@@ -2977,6 +3027,7 @@ function Home() {
           setProcessingStatus(`Removing background: frame ${done}/${total}…`),
         );
       }
+      phoneHeld = ok > 0; // the pass's phone wrapper keeps the marker until the first layers are drawn
       void refreshStroPreviewFromDraft();
       console.log('[StroMotion] auto-detect committed', ok, 'of', pending.length, 'frames');
       // Frames with no exact pose are committed with the selection box as their
@@ -2987,21 +3038,26 @@ function Home() {
       const noPoseNote = noPose.length
         ? ` No skeleton found on frame${noPose.length > 1 ? 's' : ''} ${noPose.join(', ')} — check ${noPose.length > 1 ? 'those' : 'that one'} first.`
         : '';
-      setProcessingStatus(
+      if (ok === 0) stroEndOpening();
+      setStroFinalStatus(
         ok === 0
           ? 'Auto-detect found nothing — make sure the subject is visible, or use Select Area manually.'
           : `AI auto-selected ${ok}/${pending.length} frames. Review each, fix with Add brush if needed, then Generate.${noPoseNote}`,
       );
     } catch (err) {
       console.error('[StroMotion] auto-detect crashed', err);
+      stroEndOpening();
       setProcessingStatus('Auto-detect hit an error (see console). Try Select Area on a frame manually.');
     } finally {
       stroAutoSelectBusyRef.current = false;
+      // Phone: when the pass built frames its wrapper holds the marker until the first layers
+      // are drawn; on any other exit (nothing found, an error) it is cleared here.
+      if (phoneRun && !phoneHeld) markAutoDetectFinished();
       // Releasing hands the skeleton back to the coach's own setting, which this
       // pass never changed. Released on every exit path, including a crash.
       canvasRef.current?.setExactPoseLock?.(false);
     }
-  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, videoRef, canvasRef]);
+  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, setStroFinalStatus, stroEndOpening, videoRef, canvasRef]);
 
   // SPEC: no auto-trigger. Opening StroMotion only opens the toolbar; the AI
   // pass starts when the coach presses "AI auto-detect" after choosing the
@@ -3411,9 +3467,33 @@ function Home() {
   }, [stroMotionActive, stroMotionHtml5Only, stroMotionDraft, stroActiveFrameIndex]);
 
   useEffect(() => {
-    if (stroMotionActive && stroMotionHtml5Only) {
+    if (!(stroMotionActive && stroMotionHtml5Only)) return;
+    if (!isPhoneBudgetActive()) {
       void import('@/lib/racketCocoDetect').then((m) => m.preloadRacketDetector());
+      return;
     }
+    // PHONE ONLY (docs/PHONE_REFRESH_AFTER_AUTODETECT.md §7): the COCO-SSD warm-up compiles ~260
+    // WebGL programs on the main thread and holds a model Auto-detect does not use, so it starts
+    // AFTER the person-segmenter warm-up has had a head start and never while Auto-detect is
+    // running; "Preparing Motion Layer…" is on screen from the first frame. The racket tool and
+    // object tracking get the same detector, a few seconds later.
+    let cancelled = false;
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const clearPreparing = () => setProcessingStatus((cur) => (cur === PREPARING_MOTION_LAYER_TEXT ? null : cur));
+    setProcessingStatus((cur) => cur ?? PREPARING_MOTION_LAYER_TEXT);
+    recordStage('Motion Layer opened (warming models)');
+    void (async () => {
+      await sleep(1500);
+      while (!cancelled && stroAutoSelectBusyRef.current) await sleep(1000);
+      if (cancelled) return;
+      try {
+        recordStage('Motion Layer: loading the racket-tool detector');
+        const m = await import('@/lib/racketCocoDetect');
+        await m.preloadRacketDetector();
+      } catch { /* best-effort */ }
+      if (!cancelled) clearPreparing();
+    })();
+    return () => { cancelled = true; clearPreparing(); };
   }, [stroMotionActive, stroMotionHtml5Only]);
 
   /** Clear the Metrics/Snapshot analysis state (snapshots, data column, skeleton). */
@@ -4407,6 +4487,30 @@ function Home() {
   }, [resetSession, videoRef]);
 
   // ── Video upload ──────────────────────────────────────────────────────────
+  // Phone memory budget: if the last Auto-detect on this phone never finished (the marker
+  // set before its heavy phase is still there), say why the page restarted. One line,
+  // shown once, never blocks anything (lib/stroMotionDraft/phoneBudget.ts).
+  useEffect(() => {
+    if (!consumeAutoDetectKilled()) return;
+    const id = window.setTimeout(() => setProcessingStatus(AUTODETECT_KILLED_NOTICE), 1500);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  // PHONE ONLY (docs/PHONE_REFRESH_AFTER_AUTODETECT.md): the phone check, resolved after
+  // mount so the first render matches the server's; and the restart breadcrumb, which
+  // says on the next load why the page restarted. Neither runs off a phone.
+  const [phoneGate, setPhoneGate] = useState(false);
+  const [restartNotice, setRestartNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isPhoneBudgetActive()) return;
+    setPhoneGate(true);
+    let storage: Storage | null = null;
+    try { storage = window.sessionStorage; } catch { /* blocked */ }
+    const trail = installRestartBreadcrumb({ win: window, doc: document, storage, navType: currentNavType() });
+    if (trail.verdict) setRestartNotice(trail.verdict.text);
+    return trail.dispose;
+  }, []);
+
   const resetToolAfterVideoLoad = useCallback(() => {
     setActiveTool('select');
     setDrawContextActive(false);
@@ -7355,6 +7459,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       ...toolPaletteBaseProps,
       mobileChrome: isMobile && showMobileToolStrip,
     };
+    // PHONE ONLY: the rail keeps a fixed footprint in the layout and the labels open OVER
+    // the video. Growing the rail in the flow resized the canvas on every frame of the 200 ms
+    // width transition, and each resize re-composited every Motion Layer at native size
+    // (measured: 5 composites, 79 MiB of readbacks and a 2 s block per tap).
+    const railOverlay = phoneGate && compactToolbarRail;
     return (
       <aside
         ref={tempDebugAsideElRef} /* TEMP-DEBUG: direct handle to read real rendered rail width — remove later */
@@ -7362,12 +7471,13 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         className="anglemotion-video-toolbar"
         style={{
           flexShrink: 0,
-          width: toolbarWidthPx,
-          transition: 'width 200ms ease',
+          width: railOverlay ? TOOLBAR_MOBILE_W : toolbarWidthPx,
+          transition: railOverlay ? 'none' : 'width 200ms ease',
+          position: railOverlay ? 'relative' : undefined,
           display: 'flex',
           flexDirection: 'column',
           minHeight: 0,
-          overflow: 'hidden',
+          overflow: railOverlay ? 'visible' : 'hidden',
           zIndex: 80,
           background: '#FFFFFF',
           borderRight: '1px solid #D1D1D6',
@@ -7382,6 +7492,20 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             display: 'flex',
             flexDirection: 'column',
             padding: isMobile ? '4px 4px' : '6px 4px',
+            ...(railOverlay
+              ? {
+                  position: 'absolute' as const,
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  width: toolbarWidthPx,
+                  boxSizing: 'border-box' as const,
+                  background: '#FFFFFF',
+                  borderRight: '1px solid #D1D1D6',
+                  boxShadow: toolbarLabelsExpanded ? '2px 0 12px rgba(0,0,0,0.18)' : 'none',
+                  transition: 'width 200ms ease',
+                }
+              : null),
           }}
         >
           <ToolPalette {...paletteProps} />
@@ -7406,6 +7530,29 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         WebkitTouchCallout: 'none',
       }}
     >
+      {restartNotice && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed', top: 8, left: 8, right: 8, zIndex: 100000,
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '8px 12px', borderRadius: 10,
+            background: 'rgba(255,255,255,0.97)', color: '#1D1D1F',
+            border: '1px solid #D1D1D6', boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+            fontSize: 13, lineHeight: 1.35,
+          }}
+        >
+          <span style={{ flex: 1 }}>{restartNotice}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setRestartNotice(null)}
+            style={{ border: 'none', background: 'transparent', fontSize: 18, lineHeight: 1, padding: '2px 6px', cursor: 'pointer', color: '#1D1D1F' }}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {precisionDialog && (
         <PrecisionTrackDialog
           sectionSec={precisionDialog.sectionSec}

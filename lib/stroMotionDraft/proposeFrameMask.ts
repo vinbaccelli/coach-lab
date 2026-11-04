@@ -316,13 +316,25 @@ export async function proposeFrameMask(
    * and Re-propose paths are byte-for-byte unchanged.
    */
   unitFloorNorm?: number | null,
+  /**
+   * Phone memory budget (phoneBudget.ts): work at this size instead of the video's
+   * native size. `preCapturedFrame` is then already this size, and the masks come
+   * back at this size too; the caller scales them up. Omitted, or scale 1, means
+   * the existing native-size path, untouched.
+   */
+  processSize?: { w: number; h: number; scale: number } | null,
 ): Promise<ProposeFrameMaskResult | null> {
   if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+  const capped = !!processSize && processSize.scale !== 1;
+  const vw = capped ? processSize!.w : video.videoWidth;
+  const vh = capped ? processSize!.h : video.videoHeight;
+  const capSize = capped ? { w: vw, h: vh } : undefined;
+  // The plate's scale is relative to the NATIVE width; at a smaller working size
+  // a box pixel maps to plate pixel by (plate scale / working scale).
+  const plate = capped && backgroundPlate ? { ...backgroundPlate, scale: backgroundPlate.scale / processSize!.scale } : backgroundPlate;
   const box = normalizeObjectBox(selectionBox);
-  const sourceFrame = preCapturedFrame ?? await captureVideoFrameAtTime(video, timeSec);
+  const sourceFrame = preCapturedFrame ?? await captureVideoFrameAtTime(video, timeSec, capSize);
 
   let aiSnapshot: AlphaMask | null = null;
 
@@ -441,9 +453,9 @@ export async function proposeFrameMask(
   // 1a. Motion diff against the temporal-MEDIAN plate — robust even when the
   //     object overlaps its own position in any single reference frame. Skipped
   //     when rung 0 (segmentation) already produced a mask.
-  if (!maskHasContent(aiSnapshot) && backgroundPlate) {
+  if (!maskHasContent(aiSnapshot) && plate) {
     try {
-      aiSnapshot = await motionDiffMaskInSelection(sourceFrame, backgroundPlate, box, vw, vh);
+      aiSnapshot = await motionDiffMaskInSelection(sourceFrame, plate, box, vw, vh);
     } catch {
       aiSnapshot = null;
     }
@@ -453,7 +465,7 @@ export async function proposeFrameMask(
   //     effectively the same frame — nothing to diff).
   if ((!aiSnapshot || !maskHasContent(aiSnapshot)) && Math.abs(backgroundTimeSec - timeSec) > 0.05) {
     try {
-      const backgroundFrame = await captureVideoFrameAtTime(video, backgroundTimeSec);
+      const backgroundFrame = await captureVideoFrameAtTime(video, backgroundTimeSec, capSize);
       try {
         aiSnapshot = await motionDiffMaskInSelection(sourceFrame, { bitmap: backgroundFrame, scale: 1 }, box, vw, vh);
       } finally {
@@ -525,7 +537,7 @@ export async function proposeFrameMask(
       if (racketEnabled()) {
         const r = await buildRacketCandidate({
           sourceFrame,
-          background: backgroundPlate ?? null,
+          background: plate ?? null,
           keypoints: guideKeypoints,
           vw,
           vh,

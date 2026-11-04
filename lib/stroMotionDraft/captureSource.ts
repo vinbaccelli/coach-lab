@@ -34,7 +34,7 @@ export interface CaptureSource {
   /** Resolve once the private element holds a decodable frame. */
   ready(timeoutMs?: number): Promise<void>;
   /** Seek to `timeSec` and grab that frame. */
-  capture(timeSec: number): Promise<ImageBitmap>;
+  capture(timeSec: number, size?: { w: number; h: number }): Promise<ImageBitmap>;
   /** Tear down the element and release any URL this source minted itself. */
   dispose(): void;
 }
@@ -97,11 +97,11 @@ export function createCaptureSource(src: string, opts: CaptureSourceOptions = {}
       return waitForDecodableFrame(el, timeoutMs);
     },
 
-    capture(timeSec: number) {
+    capture(timeSec: number, size?: { w: number; h: number }) {
       if (disposed) return Promise.reject(new Error('capture source disposed'));
       // Same capture logic as the shared path — only the element differs. Pausing
       // and seeking here cannot disturb playback, because nothing renders this el.
-      return captureFrameFromElement(el, timeSec);
+      return captureFrameFromElement(el, timeSec, size);
     },
 
     dispose() {
@@ -206,18 +206,18 @@ export function disposeCaptureSources(): void {
   for (const src of Array.from(mirrors.keys())) dropMirror(src);
 }
 
-async function captureIsolated(video: HTMLVideoElement, timeSec: number): Promise<ImageBitmap> {
+async function captureIsolated(video: HTMLVideoElement, timeSec: number, size?: { w: number; h: number }): Promise<ImageBitmap> {
   const mirror = mirrorFor(video);
 
   // No mirrorable source — a MediaStream (webcam) carries no URL to hand a second
   // element. Capture direct, exactly as before Phase 2. StroMotion itself is gated
   // to html5 sources (page.tsx `stroMotionHtml5Only`), so this is the live-camera
   // path, not the StroMotion one.
-  if (!mirror) return captureFrameFromElement(video, timeSec);
+  if (!mirror) return captureFrameFromElement(video, timeSec, size);
 
   try {
     await mirror.source.ready(MIRROR_READY_TIMEOUT_MS);
-    return await mirror.source.capture(timeSec);
+    return await mirror.source.capture(timeSec, size);
   } catch (err) {
     // Deliberately NO fallback to `video`: capturing from the coach's element is
     // the bug this replaces, and a silent fallback would resurrect it under load
@@ -238,10 +238,12 @@ async function captureIsolated(video: HTMLVideoElement, timeSec: number): Promis
 export function captureVideoFrameAtTime(
   video: HTMLVideoElement,
   timeSec: number,
+  /** Phone memory budget only: capture at this size instead of native. Omitted = unchanged. */
+  size?: { w: number; h: number },
 ): Promise<ImageBitmap> {
   const run = captureQueue.then(
-    () => captureIsolated(video, timeSec),
-    () => captureIsolated(video, timeSec), // a failed predecessor must not block the queue
+    () => captureIsolated(video, timeSec, size),
+    () => captureIsolated(video, timeSec, size), // a failed predecessor must not block the queue
   );
   captureQueue = run.then(() => {}, () => {});
   return run;
