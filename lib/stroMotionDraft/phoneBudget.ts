@@ -120,7 +120,7 @@ export const AUTODETECT_MARKER_KEY = 'anglemotion:autodetect-in-progress';
 /** A marker older than this is not a kill from the last run (the coach may have closed the tab). */
 export const AUTODETECT_MARKER_MAX_AGE_MS = 30 * 60 * 1000;
 export const AUTODETECT_KILLED_NOTICE =
-  'Auto-detect was stopped by your phone’s memory. Try a shorter clip.';
+  "Auto-detect was stopped by your phone's memory. Close other tabs and apps, then run it again.";
 
 interface MarkerStorage {
   getItem(k: string): string | null;

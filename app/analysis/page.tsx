@@ -209,7 +209,8 @@ import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { useEntitlement } from '@/lib/useEntitlement';
 import type { Feature } from '@/lib/entitlements';
-import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled } from '@/lib/stroMotionDraft/phoneBudget';
+import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled, isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+import { currentNavType, installRestartBreadcrumb } from '@/lib/restartBreadcrumb';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
 
@@ -4456,6 +4457,21 @@ function Home() {
     return () => window.clearTimeout(id);
   }, []);
 
+  // PHONE ONLY (docs/PHONE_REFRESH_AFTER_AUTODETECT.md): the phone check, resolved after
+  // mount so the first render matches the server's; and the restart breadcrumb, which
+  // says on the next load why the page restarted. Neither runs off a phone.
+  const [phoneGate, setPhoneGate] = useState(false);
+  const [restartNotice, setRestartNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isPhoneBudgetActive()) return;
+    setPhoneGate(true);
+    let storage: Storage | null = null;
+    try { storage = window.sessionStorage; } catch { /* blocked */ }
+    const trail = installRestartBreadcrumb({ win: window, doc: document, storage, navType: currentNavType() });
+    if (trail.verdict) setRestartNotice(trail.verdict.text);
+    return trail.dispose;
+  }, []);
+
   const resetToolAfterVideoLoad = useCallback(() => {
     setActiveTool('select');
     setDrawContextActive(false);
@@ -7404,6 +7420,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       ...toolPaletteBaseProps,
       mobileChrome: isMobile && showMobileToolStrip,
     };
+    // PHONE ONLY: the rail keeps a fixed footprint in the layout and the labels open OVER
+    // the video. Growing the rail in the flow resized the canvas on every frame of the 200 ms
+    // width transition, and each resize re-composited every Motion Layer at native size
+    // (measured: 5 composites, 79 MiB of readbacks and a 2 s block per tap).
+    const railOverlay = phoneGate && compactToolbarRail;
     return (
       <aside
         ref={tempDebugAsideElRef} /* TEMP-DEBUG: direct handle to read real rendered rail width — remove later */
@@ -7411,12 +7432,13 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         className="anglemotion-video-toolbar"
         style={{
           flexShrink: 0,
-          width: toolbarWidthPx,
-          transition: 'width 200ms ease',
+          width: railOverlay ? TOOLBAR_MOBILE_W : toolbarWidthPx,
+          transition: railOverlay ? 'none' : 'width 200ms ease',
+          position: railOverlay ? 'relative' : undefined,
           display: 'flex',
           flexDirection: 'column',
           minHeight: 0,
-          overflow: 'hidden',
+          overflow: railOverlay ? 'visible' : 'hidden',
           zIndex: 80,
           background: '#FFFFFF',
           borderRight: '1px solid #D1D1D6',
@@ -7431,6 +7453,20 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             display: 'flex',
             flexDirection: 'column',
             padding: isMobile ? '4px 4px' : '6px 4px',
+            ...(railOverlay
+              ? {
+                  position: 'absolute' as const,
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  width: toolbarWidthPx,
+                  boxSizing: 'border-box' as const,
+                  background: '#FFFFFF',
+                  borderRight: '1px solid #D1D1D6',
+                  boxShadow: toolbarLabelsExpanded ? '2px 0 12px rgba(0,0,0,0.18)' : 'none',
+                  transition: 'width 200ms ease',
+                }
+              : null),
           }}
         >
           <ToolPalette {...paletteProps} />
@@ -7455,6 +7491,29 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         WebkitTouchCallout: 'none',
       }}
     >
+      {restartNotice && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed', top: 8, left: 8, right: 8, zIndex: 100000,
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '8px 12px', borderRadius: 10,
+            background: 'rgba(255,255,255,0.97)', color: '#1D1D1F',
+            border: '1px solid #D1D1D6', boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+            fontSize: 13, lineHeight: 1.35,
+          }}
+        >
+          <span style={{ flex: 1 }}>{restartNotice}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setRestartNotice(null)}
+            style={{ border: 'none', background: 'transparent', fontSize: 18, lineHeight: 1, padding: '2px 6px', cursor: 'pointer', color: '#1D1D1F' }}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {precisionDialog && (
         <PrecisionTrackDialog
           sectionSec={precisionDialog.sectionSec}

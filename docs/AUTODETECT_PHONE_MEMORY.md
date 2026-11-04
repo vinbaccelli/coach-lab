@@ -10,7 +10,7 @@ Gate: `window.__stroPhoneBudget` (true/false) > `localStorage stroPhoneBudget` (
 3. **Release**: segmenter state released after Phase 1; SAM-2 + all embeddings released (`releaseSamRacket`) before the commit; each frame's 16.8 MB embedding is dropped right after its decode (`dropRacketEncoding`). Cost: the editor's Object tool re-loads SAM and re-encodes (~12 s a frame on wasm).
 4. **ORT arena**: D-FINE and SAM sessions use `enableCpuMemArena:false, enableMemPattern:false`.
 5. **Stages** run one after another with a 60 ms yield between them.
-6. **Marker**: `anglemotion:autodetect-in-progress` set before the heavy phase, cleared on every exit; on load a marker < 30 min old shows "Auto-detect was stopped by your phone’s memory. Try a shorter clip." through the status text, once, never blocking.
+6. **Marker**: `anglemotion:autodetect-in-progress` set before the heavy phase, cleared on every exit; on load a marker < 30 min old shows "Auto-detect was stopped by your phone's memory. Close other tabs and apps, then run it again." through the status text, once, never blocking.
 
 ## Measured (desktop Chromium, 1080p/5 frames, gate forced on; renderer RSS peak via `ps`)
 | run | renderer peak | total browser RSS peak | live bitmaps |
