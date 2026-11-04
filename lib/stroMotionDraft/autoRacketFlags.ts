@@ -1,5 +1,7 @@
 'use client';
 
+import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+
 /**
  * FLAGS for AUTO-RACKET detection (D-FINE → SAM-2).
  *
@@ -9,7 +11,7 @@
  * pull transformers.js into the mask bundle for a feature that must cost nothing
  * until it is actually used.
  *
- * No imports, no state, no side effects.
+ * One import (the phone check, which itself has no imports), no state, no side effects.
  */
 
 /** Motion Layer object types that mean "the coach is working on an implement". */
@@ -50,5 +52,10 @@ export function autoRacketEnabled(objectType: string): boolean {
   }
   if (stored === '1') return true;
   if (stored === '0') return false;
+  // PHONES: OFF unless asked for above. The racket pass loads D-FINE and SAM-2 (about +1 GB of
+  // wasm heap that is not returned) and the phone ends the page during it; the same clip
+  // finishes with the pass off (docs/PHONE_REFRESH_AFTER_AUTODETECT.md §8). Opt back in with
+  // localStorage 'autoRacket' = '1' or window.__autoRacket = true.
+  if (isPhoneBudgetActive()) return false;
   return IMPLEMENT_MODES.has(objectType);
 }
