@@ -35,6 +35,8 @@ import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
+import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+import { PhoneFirstComposite } from '@/lib/stroMotionDraft/phoneFinalize';
 import type { ContextualStyleSnapshot } from '@/components/ContextualStyleBar';
 
 /** Poll interval while waiting for a ref-backed <video> to mount. */
@@ -2883,6 +2885,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const webcamOpacityRef    = useRef(webcamOpacity);
     const stroMotionResultRef = useRef<StroMotionResult | null>(stroMotionResult ?? null);
     const stroMotionDraftRef = useRef<StroMotionDraft | null>(stroMotionDraft ?? null);
+    const phoneFirstCompositeRef = useRef<PhoneFirstComposite | null>(null);
     const stroMotionCanvasPreviewRef = useRef(stroMotionCanvasPreview);
     const stroMotionUseExportMasksRef = useRef(stroMotionUseExportMasks);
     const stroMotionBackgroundRef = useRef(stroMotionBackground);
@@ -5831,7 +5834,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const stroComposite = stroMotionCanvasPreviewRef.current ? stroMotionResultRef.current : null;
           if (stroDraft && dw > 0 && dh > 0) {
             const visibleCount = stroMotionVisibleCountRef.current ?? stroDraft.frames.length;
-            renderStroMotionDraftComposite(ctx, stroDraft, {
+            const stroCompositeOptions = {
               visibleCount,
               visibleStart: stroMotionVisibleStartRef.current,
               previewMode: !stroMotionUseExportMasksRef.current,
@@ -5843,7 +5846,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               ...(stroMotionGhostOpacityRef.current !== undefined
                 ? { fadeMode: 'uniform' as const, opacity: stroMotionGhostOpacityRef.current }
                 : {}),
-            });
+            };
+            // PHONE ONLY: the first composite of a new draft is built one layer per
+            // frame (phoneFinalize.ts) so it is not one multi-second block. Anywhere
+            // else, and whenever it declines, the original one-pass call below runs.
+            if (!(isPhoneBudgetActive() && (phoneFirstCompositeRef.current ??= new PhoneFirstComposite({ render: renderStroMotionDraftComposite }))
+              .draw(ctx, stroDraft, stroCompositeOptions, () => { renderDirtyRef.current = true; }))) {
+              renderStroMotionDraftComposite(ctx, stroDraft, stroCompositeOptions);
+            }
 
             if (stroMotionShowSkeletonRef.current && stroComposite?.ghostPoses?.length) {
               const total = stroDraft.frames.length;

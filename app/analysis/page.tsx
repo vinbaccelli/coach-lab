@@ -210,6 +210,7 @@ import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { useEntitlement } from '@/lib/useEntitlement';
 import type { Feature } from '@/lib/entitlements';
 import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled } from '@/lib/stroMotionDraft/phoneBudget';
+import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
 
 /**
@@ -2873,6 +2874,42 @@ function Home() {
     );
   }, [detectObjectBoxAtFrame, autoProcessStroFrames, videoRef]);
 
+  // PHONE ONLY: "Opening editor…" from the start of the native-size finalize until the
+  // first layers are drawn (lib/stroMotionDraft/phoneFinalize.ts). The events are
+  // only ever sent on a phone, so off a phone none of this runs. The pass's final
+  // message is held while the notice is up and shown when it ends.
+  const stroOpeningRef = useRef<{ active: boolean; final: string | null; prev: string | null; timer: number | null }>({ active: false, final: null, prev: null, timer: null });
+  const stroEndOpening = useCallback(() => {
+    const o = stroOpeningRef.current;
+    if (o.timer !== null) { window.clearTimeout(o.timer); o.timer = null; }
+    if (!o.active) return;
+    o.active = false;
+    const restore = o.final ?? o.prev;
+    o.final = null;
+    o.prev = null;
+    setProcessingStatus((cur) => (cur === OPENING_EDITOR_TEXT ? restore : cur));
+  }, []);
+  const setStroFinalStatus = useCallback((msg: string) => {
+    if (stroOpeningRef.current.active) { stroOpeningRef.current.final = msg; return; }
+    stroOpeningRef.current.final = null;
+    setProcessingStatus(msg);
+  }, []);
+  useEffect(() => {
+    const onOpening = () => {
+      const o = stroOpeningRef.current;
+      if (o.active) return;
+      o.active = true;
+      setProcessingStatus((cur) => { o.prev = cur === OPENING_EDITOR_TEXT ? null : cur; return OPENING_EDITOR_TEXT; });
+      o.timer = window.setTimeout(stroEndOpening, OPENING_EDITOR_FAILSAFE_MS);
+    };
+    window.addEventListener(OPENING_EDITOR_EVENT, onOpening);
+    window.addEventListener(FIRST_LAYERS_DRAWN_EVENT, stroEndOpening);
+    return () => {
+      window.removeEventListener(OPENING_EDITOR_EVENT, onOpening);
+      window.removeEventListener(FIRST_LAYERS_DRAWN_EVENT, stroEndOpening);
+    };
+  }, [stroEndOpening]);
+
   /** One click (or auto-trigger): boxes + masks for every pending frame. */
   const stroAutoSelectBusyRef = useRef(false);
   const handleStroAutoSelectAll = useCallback(async () => {
@@ -2988,13 +3025,15 @@ function Home() {
       const noPoseNote = noPose.length
         ? ` No skeleton found on frame${noPose.length > 1 ? 's' : ''} ${noPose.join(', ')} — check ${noPose.length > 1 ? 'those' : 'that one'} first.`
         : '';
-      setProcessingStatus(
+      if (ok === 0) stroEndOpening();
+      setStroFinalStatus(
         ok === 0
           ? 'Auto-detect found nothing — make sure the subject is visible, or use Select Area manually.'
           : `AI auto-selected ${ok}/${pending.length} frames. Review each, fix with Add brush if needed, then Generate.${noPoseNote}`,
       );
     } catch (err) {
       console.error('[StroMotion] auto-detect crashed', err);
+      stroEndOpening();
       setProcessingStatus('Auto-detect hit an error (see console). Try Select Area on a frame manually.');
     } finally {
       stroAutoSelectBusyRef.current = false;
@@ -3002,7 +3041,7 @@ function Home() {
       // pass never changed. Released on every exit path, including a crash.
       canvasRef.current?.setExactPoseLock?.(false);
     }
-  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, videoRef, canvasRef]);
+  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, setStroFinalStatus, stroEndOpening, videoRef, canvasRef]);
 
   // SPEC: no auto-trigger. Opening StroMotion only opens the toolbar; the AI
   // pass starts when the coach presses "AI auto-detect" after choosing the

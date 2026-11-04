@@ -1113,10 +1113,20 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     const phone = isPhoneBudgetActive();
     if (!phone) return autoProcessFramesInner(specs, onProgress, false);
     markAutoDetectStarted();
+    // The marker stays set after the commit until the first layers have been drawn
+    // (phoneFinalize.ts), so a kill while the editor is still opening gets the notice.
+    // Any error exit, or a pass that built nothing, clears it at once.
+    let held = false;
     try {
-      return await autoProcessFramesInner(specs, onProgress, true);
+      const built = await autoProcessFramesInner(specs, onProgress, true);
+      if (built > 0) {
+        const { clearMarkerWhenFirstLayersDrawn } = await import('@/lib/stroMotionDraft/phoneFinalize');
+        clearMarkerWhenFirstLayersDrawn(markAutoDetectFinished);
+        held = true;
+      }
+      return built;
     } finally {
-      markAutoDetectFinished();
+      if (!held) markAutoDetectFinished();
     }
   }, [autoProcessFramesInner]);
 
