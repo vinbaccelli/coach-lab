@@ -42,7 +42,7 @@ import YouTubeEmbed from '@/components/YouTubeEmbed';
 import EmbedCapturePanel from '@/components/EmbedCapturePanel';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { downloadDataURL, captureFrame } from '@/lib/drawingTools';
-import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD, REPORTS_IN_APP } from '@/lib/featureFlags';
+import { ENABLE_GOOGLE_EXPORTS, ENABLE_YOUTUBE_UPLOAD, GOOGLE_EXPORT_SCOPES, REPORTS_IN_APP } from '@/lib/featureFlags';
 import { createPlayer, saveScreenshotToPlayer } from '@/lib/reports/saveScreenshot';
 import SavingNotice from '@/components/reports/SavingNotice';
 import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
@@ -203,7 +203,6 @@ import RulerOverlay from '@/components/ruler/RulerOverlay';
 import { emitTourSignal } from '@/lib/tourSignals';
 import type { RulerCalibration } from '@/lib/ruler/types';
 import type { UnitSystem } from '@/lib/ruler/units';
-import { uploadDataUrl } from '@/lib/supabase/storage';
 import { proposePhaseMarkers } from '@/lib/biomechanics/phaseDetection';
 import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
@@ -3518,7 +3517,7 @@ function Home() {
   const [screenshotStage, setScreenshotStage] = useState<'uploading' | 'saving'>('uploading');
   const screenshotSaveBusyRef = useRef(false);
   /** The outcome of the last save/create, shown INSIDE the picker (a toast alone can be missed). */
-  const [screenshotMessage, setScreenshotMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
+  const [screenshotMessage, setScreenshotMessage] = useState<{ kind: 'error' | 'info'; text: string; reconnect?: boolean } | null>(null);
 
   /** Capture the current frame into state and open the player picker */
   const handleScreenshotSave = useCallback(async () => {
@@ -3567,11 +3566,43 @@ function Home() {
     setScreenshotSavedTo(null);
   }, [screenshotDataUrl]);
 
+  /**
+   * "Reconnect Google Drive": a fresh Google sign-in with the Drive scope, opened in a NEW tab so
+   * this page (and the captured screenshot, which lives only in memory) is not reloaded.
+   * Come back to this tab and press the player again.
+   */
+  const handleReconnectGoogleDrive = useCallback(async () => {
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase) {
+      setScreenshotMessage({ kind: 'error', text: 'Cannot reconnect here. Your screenshot is kept: use Download.' });
+      return;
+    }
+    // Open the tab inside the tap (phones block a tab opened after an await), then point it at Google.
+    const tab = window.open('', '_blank');
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent('/')}`,
+        skipBrowserRedirect: true,
+        scopes: GOOGLE_EXPORT_SCOPES,
+        queryParams: { access_type: 'offline', prompt: 'consent' },
+      },
+    });
+    if (error || !data?.url) {
+      tab?.close();
+      setScreenshotMessage({ kind: 'error', text: `Could not start the Google sign-in${error ? ` — ${error.message}` : ''}. Your screenshot is kept.` });
+      return;
+    }
+    if (tab) tab.location.href = data.url;
+    else window.location.href = data.url; // popup blocked: sign in here (the capture is lost on reload, as it was before)
+    setScreenshotMessage({ kind: 'info', text: 'Finish connecting Google in the other tab, then come back here and press the player again. Your screenshot is kept.' });
+  }, []);
+
   const handleScreenshotSaveToPlayer = useCallback(async (playerId: string, playerName: string) => {
     if (!screenshotDataUrl) return;
     if (!canUseFeature('saveToPlayer')) {
       setUpgradeFeature('saveToPlayer');
-      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — the image was not saved.' });
+      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: 'Saving to a player needs an active plan — the image was not saved.' });
       return;
     }
     // One save at a time: a second tap while the first is still running would
@@ -3602,12 +3633,13 @@ function Home() {
     screenshotSaveBusyRef.current = true;
     setScreenshotSaving(true);
     try {
-      // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive.
-      // Supabase storage is the fallback — used whenever the Drive upload fails,
-      // and was the ONLY path while ENABLE_GOOGLE_EXPORTS was off pending Google's
-      // OAuth verification (approved 2026-07-28; the flag flipped true in 399b3b2
-      // on 2026-08-03). Screenshots saved before that date are Supabase-only and
-      // have no Drive folder — expected for their era, not a bug.
+      // Bring-your-own-cloud: the screenshot lives in the coach's Google Drive,
+      // on EVERY plan, and ONLY there: there is no Supabase fallback for new
+      // screenshots. If Drive is not connected or the upload fails, nothing is
+      // saved, `screenshotDataUrl` stays set (the capture is kept in memory) and
+      // the coach can reconnect and press the player again. Screenshots saved
+      // earlier into the public player-assets bucket are plain URLs in old
+      // entries and still render; nothing in that bucket is touched.
       //
       // The save itself lives in lib/reports/saveScreenshot.ts (tested against a
       // mocked Drive/Supabase). With REPORTS_IN_APP the entry is all that is
@@ -3627,30 +3659,11 @@ function Home() {
         {
           fetchFn: (input, init) => fetch(input, init),
           onStage: setScreenshotStage,
-          // Fallback bucket is `player-assets`, NOT `analysis-screenshots`: the
-          // latter is created by no migration (only player-assets is, in
-          // 20260615140000_player_sessions.sql), so every upload there failed.
-          // player-assets is public=true, so getPublicUrl yields a permanent,
-          // anonymously-fetchable URL that cannot expire out from under a report
-          // the way a signed URL would. Its RLS requires the first path segment
-          // to be the caller's uid.
-          uploadFallback: async (dataUrl) => {
-            let uid = userId;
-            if (!uid) {
-              const sess = await supabase.auth.getSession();
-              uid = sess.data.session?.user?.id ?? (await supabase.auth.getUser()).data.user?.id;
-            }
-            if (!uid) return null;
-            const path = await uploadDataUrl('player-assets', `${uid}/screenshots/${Date.now()}.png`, dataUrl);
-            if (!path) return null;
-            const { data: pub } = supabase.storage.from('player-assets').getPublicUrl(path);
-            return pub?.publicUrl ?? null;
-          },
         },
       );
       setProcessingStatus(result.message);
       if (!result.ok) {
-        if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: result.message });
+        if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: result.message, reconnect: result.reconnect });
         return;
       }
       if (result.linkUrl) {
@@ -3682,7 +3695,7 @@ function Home() {
       // Checked BEFORE creating, so a plan block does not leave a new empty player behind.
       if (!canUseFeature('saveToPlayer')) {
         setUpgradeFeature('saveToPlayer');
-        setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — no player was created and the image was not saved.' });
+        setScreenshotMessage({ kind: 'error', text: 'Saving to a player needs an active plan — no player was created and the image was not saved.' });
         return;
       }
       setScreenshotSaving(true);
@@ -9458,7 +9471,23 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
               <div role="alert" style={{
                 padding: '12px 14px', borderRadius: 10, background: 'rgba(255,59,48,0.08)',
                 border: '1px solid rgba(255,59,48,0.4)', color: '#B91C1C', fontSize: 13, fontWeight: 600, lineHeight: 1.4,
+                display: 'flex', flexDirection: 'column', gap: 10,
               }}>
+                <span>{screenshotMessage.text}</span>
+                {screenshotMessage.reconnect && (
+                  <button
+                    type="button"
+                    data-reconnect-drive
+                    onClick={() => { void handleReconnectGoogleDrive(); }}
+                    style={{ minHeight: 44, borderRadius: 10, border: 'none', background: '#007AFF', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    Reconnect Google Drive
+                  </button>
+                )}
+              </div>
+            )}
+            {REPORTS_IN_APP && screenshotMessage?.kind === 'info' && !screenshotSaving && (
+              <div role="status" style={{ padding: '12px 14px', borderRadius: 10, background: 'rgba(0,122,255,0.08)', border: '1px solid rgba(0,122,255,0.3)', color: '#1D1D1F', fontSize: 13, fontWeight: 600, lineHeight: 1.4 }}>
                 {screenshotMessage.text}
               </div>
             )}
