@@ -2782,6 +2782,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const aheadBufRef = useRef(new AheadBuffer());
     const aheadRttRef = useRef(120);
     const aheadLogAtRef = useRef(0);
+    const aheadBlockedRef = useRef(false);
+    const aheadWatchdogRef = useRef<number | null>(null);
     const aheadEnabledRef = useRef(false);
     useEffect(() => { aheadEnabledRef.current = !lookAheadDisabled(); poseDbg.event(modeLabel(aheadEnabledRef.current)); }, []); // TEMP-DEBUG-POSE: mode line
     /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
@@ -4847,6 +4849,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       // ── Look-ahead video lifecycle ─────────────────────────────────────────────
       const stopAhead = () => {
+        if (aheadWatchdogRef.current !== null) { clearInterval(aheadWatchdogRef.current); aheadWatchdogRef.current = null; }
         if (aheadVideoRef.current) poseDbg.event('look-ahead video released'); // TEMP-DEBUG-POSE
         aheadVideoRef.current?.destroy();
         aheadVideoRef.current = null;
@@ -4854,13 +4857,26 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
       /** The hidden video to read frames from, or null ⇒ use the main video exactly as before. */
       const ensureAhead = (v: HTMLVideoElement): HTMLVideoElement | null => {
-        if (!aheadEnabledRef.current || v.paused) return null;
+        if (!aheadEnabledRef.current || aheadBlockedRef.current || v.paused) return null;
         let a = aheadVideoRef.current;
         if (!a) {
           a = new LookAheadVideo();
           aheadVideoRef.current = a;
           a.start(v);
           poseDbg.event('look-ahead video started'); // TEMP-DEBUG-POSE
+          // SAFETY: if the MAIN video stops advancing while it should play (a second decoder starving it, as seen on an
+          // iPhone), release the hidden video at once and never create it again this session.
+          const watch = { t: v.currentTime, at: performance.now() };
+          aheadWatchdogRef.current = window.setInterval(() => {
+            const m = videoRef.current;
+            if (!m || m.paused) { watch.at = performance.now(); return; }
+            if (m.currentTime !== watch.t) { watch.t = m.currentTime; watch.at = performance.now(); }
+            else if (performance.now() - watch.at > 700) {
+              poseDbg.event('look-ahead released: main video stalled'); // TEMP-DEBUG-POSE
+              aheadBlockedRef.current = true;
+              stopAhead();
+            }
+          }, 250);
         }
         if (a.failed) {
           poseDbg.event(`look-ahead failed (${a.failReason}) → previous live path`); // TEMP-DEBUG-POSE

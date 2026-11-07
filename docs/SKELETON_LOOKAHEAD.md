@@ -1,4 +1,8 @@
-# Look-ahead live skeleton (Skeleton Stage 2b)
+# Look-ahead live skeleton (Skeleton Stage 2b) — EXPERIMENTAL, OFF BY DEFAULT
+
+> **iPhone result (first phone test, build 5b8b8fe):** with look-ahead ON the debug panel showed `main fps 25, max gap 1050 ms, in flight 1041 ms` right after `look-ahead video started`, then the app's stuck-video recovery printed "Video reset. Ready to play.", and later the main video was black ("Tap to Play", readyState 0). A second PLAYING video starved the main video's decoder on that phone. This could not show up in headless Chromium. Consequences: look-ahead is now **opt-in** (`?lookahead=1`, not recommended on iPhone), a stall guard releases the hidden video and blocks it for the session if the main video stops advancing for 0.7 s, and a second playing decoder is **not** a viable way to get zero latency on iPhone. The same test also exposed the stale-pose bug (fixed in d915f3db).
+>
+> Real phone live-path numbers from the same test: Lightning/wasm inference 19–36 ms, round trip 33–88 ms at 28–30 detections/s; Thunder/webgl inference 52–84 ms, round trip 73 ms+ (first frame 1.1 s). The worker fell back to Lightning/wasm in the first session (`thunder model load timed out` at 50.7 s: cold model download on a new preview address).
 
 Goal: a standard-play skeleton that is on the player at the frame being shown, with AI Track remaining the slow exact pass.
 

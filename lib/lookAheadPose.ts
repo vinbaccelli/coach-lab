@@ -16,10 +16,11 @@
  * pause / seek / end / skeleton-off (decoder released); any failure falls back to the
  * previous live path.
  *
- * Switches (lib/skeletonSwitches.ts): link `?legacy=1` (all skeleton changes) or `?lookahead=0` (this feature only).
+ * EXPERIMENTAL and OFF by default (an iPhone test showed the hidden second video stalling the main one).
+ * Switches (lib/skeletonSwitches.ts): link `?lookahead=1` turns it on, `?legacy=1` turns every skeleton change off.
  */
 
-import { legacyOn, lookAheadOffSwitch } from './skeletonSwitches';
+import { legacyOn, lookAheadOnSwitch } from './skeletonSwitches';
 
 export interface AheadKp { x: number; y: number; score: number; name: string }
 
@@ -107,7 +108,8 @@ export function driftAction(aheadT: number, mainT: number, lead: number, mainRat
 
 export function lookAheadDisabled(): boolean {
   if (typeof window === 'undefined') return true;
-  return legacyOn() || lookAheadOffSwitch();
+  // OFF by default: on an iPhone the second playing video stalled the main one (see docs/SKELETON_LOOKAHEAD.md).
+  return legacyOn() || !lookAheadOnSwitch();
 }
 
 /**

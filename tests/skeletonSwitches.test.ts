@@ -1,6 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyUrlSwitches, legacyOn, lookAheadOffSwitch, modeLabel, LEGACY_KEY, LOOKAHEAD_OFF_KEY } from '../lib/skeletonSwitches';
+import { applyUrlSwitches, legacyOn, lookAheadOnSwitch, modeLabel, LEGACY_KEY, LOOKAHEAD_ON_KEY } from '../lib/skeletonSwitches';
 import { lookAheadDisabled } from '../lib/lookAheadPose';
 
 function fakeWindow(search: string, store: Record<string, string> = {}) {
@@ -14,7 +14,7 @@ beforeEach(() => { delete (globalThis as unknown as { window?: unknown }).window
 
 test('no window (server render / tests): everything off, nothing throws', () => {
   assert.equal(legacyOn(), false);
-  assert.equal(lookAheadOffSwitch(), false);
+  assert.equal(lookAheadOnSwitch(), false);
   assert.equal(lookAheadDisabled(), true, 'look-ahead needs a browser');
 });
 
@@ -27,15 +27,17 @@ test('?legacy=1 persists, ?legacy=0 clears', () => {
   assert.equal(LEGACY_KEY in st, false);
 });
 
-test('?lookahead=0 turns only look-ahead off; ?lookahead=1 turns it back on', () => {
-  const st = fakeWindow('?lookahead=0');
-  assert.equal(lookAheadOffSwitch(), true);
-  assert.equal(legacyOn(), false);
-  assert.equal(lookAheadDisabled(), true);
+test('look-ahead is OFF by default; ?lookahead=1 turns it on, ?lookahead=0 off again', () => {
+  const st = fakeWindow('?debug=1');
+  assert.equal(lookAheadDisabled(), true, 'default OFF (an iPhone test showed it can stall the main video)');
   fakeWindow('?lookahead=1', st);
-  assert.equal(lookAheadOffSwitch(), false);
-  assert.equal(st[LOOKAHEAD_OFF_KEY], undefined);
+  assert.equal(lookAheadOnSwitch(), true);
+  assert.equal(st[LOOKAHEAD_ON_KEY], '1');
   assert.equal(lookAheadDisabled(), false);
+  fakeWindow('?lookahead=0', st);
+  assert.equal(lookAheadOnSwitch(), false);
+  assert.equal(st[LOOKAHEAD_ON_KEY], undefined);
+  assert.equal(lookAheadDisabled(), true);
 });
 
 test('a link without switches keeps whatever was set before (sticky)', () => {
@@ -45,12 +47,12 @@ test('a link without switches keeps whatever was set before (sticky)', () => {
   assert.equal(legacyOn(), true);
 });
 
-test('legacy implies look-ahead disabled; mode label says which mode ran', () => {
-  fakeWindow('?legacy=1');
+test('legacy implies look-ahead disabled even if switched on; mode label says which mode ran', () => {
+  fakeWindow('?legacy=1&lookahead=1');
   assert.equal(lookAheadDisabled(), true);
   assert.match(modeLabel(false), /LEGACY/);
   fakeWindow('?legacy=0&lookahead=1');
-  assert.match(modeLabel(true), /NEW · look-ahead ON/);
-  assert.match(modeLabel(false), /look-ahead OFF/);
+  assert.match(modeLabel(true), /NEW · look-ahead ON \(experimental\)/);
+  assert.match(modeLabel(false), /look-ahead OFF \(default\)/);
   applyUrlSwitches();
 });

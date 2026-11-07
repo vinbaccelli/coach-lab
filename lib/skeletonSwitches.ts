@@ -3,12 +3,12 @@
  * They persist in localStorage until changed:
  *   ?legacy=1      previous skeleton behaviour everywhere (AI Track bake + live display, no look-ahead)
  *   ?legacy=0      back to the new behaviour
- *   ?lookahead=0   new behaviour but WITHOUT the look-ahead video
- *   ?lookahead=1   look-ahead on again
+ *   ?lookahead=1   EXPERIMENTAL look-ahead video ON (default OFF: on an iPhone a second playing video stalled the main one)
+ *   ?lookahead=0   look-ahead OFF again (the default)
  * Remove once the skeleton work is accepted.
  */
 export const LEGACY_KEY = 'anglemotion:skeleton-legacy';
-export const LOOKAHEAD_OFF_KEY = 'anglemotion:lookahead-off';
+export const LOOKAHEAD_ON_KEY = 'anglemotion:lookahead-on';
 
 /** Apply `?legacy=` / `?lookahead=` from the current URL to localStorage (idempotent, never throws). */
 export function applyUrlSwitches(): void {
@@ -20,8 +20,8 @@ export function applyUrlSwitches(): void {
     if (legacy === '1') ls.setItem(LEGACY_KEY, '1');
     else if (legacy === '0') ls.removeItem(LEGACY_KEY);
     const ahead = q.get('lookahead');
-    if (ahead === '0') ls.setItem(LOOKAHEAD_OFF_KEY, '1');
-    else if (ahead === '1') ls.removeItem(LOOKAHEAD_OFF_KEY);
+    if (ahead === '1') ls.setItem(LOOKAHEAD_ON_KEY, '1');
+    else if (ahead === '0') ls.removeItem(LOOKAHEAD_ON_KEY);
   } catch { /* blocked storage: switches simply don't apply */ }
 }
 
@@ -30,12 +30,13 @@ export function legacyOn(): boolean {
   try { return typeof window !== 'undefined' && (!!(window as unknown as { __skeletonLegacy?: boolean }).__skeletonLegacy || window.localStorage.getItem(LEGACY_KEY) === '1'); } catch { return false; }
 }
 
-export function lookAheadOffSwitch(): boolean {
+/** The experimental look-ahead is OFF unless explicitly switched on. */
+export function lookAheadOnSwitch(): boolean {
   applyUrlSwitches();
-  try { return typeof window !== 'undefined' && window.localStorage.getItem(LOOKAHEAD_OFF_KEY) === '1'; } catch { return false; }
+  try { return typeof window !== 'undefined' && window.localStorage.getItem(LOOKAHEAD_ON_KEY) === '1'; } catch { return false; }
 }
 
 /** One line for the ?debug=1 panel so a screenshot proves which mode ran. */
 export function modeLabel(lookAheadActive: boolean): string {
-  return legacyOn() ? 'mode: LEGACY (previous skeleton behaviour)' : `mode: NEW · look-ahead ${lookAheadActive ? 'ON' : 'OFF'}`;
+  return legacyOn() ? 'mode: LEGACY (previous skeleton behaviour)' : `mode: NEW · look-ahead ${lookAheadActive ? 'ON (experimental)' : 'OFF (default)'}`;
 }

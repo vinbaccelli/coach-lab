@@ -3,13 +3,15 @@
 Base link (PR #153, which contains everything from #152):
 `https://anglemotion-v1-git-skeleton-stage2-40fc0e-vinbaccellis-projects.vercel.app/analysis`
 
-## The three modes (each is just a link; the choice sticks until you open another link)
+## The modes (each is just a link; the choice sticks until you open another link)
 | Mode | Link | What runs |
 |---|---|---|
-| **A · Existing** | `…/analysis?debug=1&legacy=1` | previous behaviour everywhere (old AI Track bake, old live display, no look-ahead) |
-| **B · Stage 2a** | `…/analysis?debug=1&legacy=0&lookahead=0` | new AI Track (crop, validation, frame gate) + new live display, **no** look-ahead |
-| **C · Look-ahead** | `…/analysis?debug=1&legacy=0&lookahead=1` | everything new, including look-ahead live skeleton |
-Reset to normal any time: `…/analysis?legacy=0&lookahead=1`.
+| **A · Existing** | `…/analysis?debug=1&legacy=1` | previous behaviour everywhere (old AI Track bake, old live display) |
+| **B · New (default)** | `…/analysis?debug=1&legacy=0&lookahead=0` | new AI Track (crop, validation, frame gate) + new live display |
+| **C · Look-ahead (experimental)** | `…/analysis?debug=1&legacy=0&lookahead=1` | B + hidden look-ahead video. **Do not use on iPhone**: it stalled the main video there |
+Reset to normal any time: `…/analysis?legacy=0&lookahead=0`.
+
+**First visit to a link downloads the AI models (tens of MB).** On a cold address the pose worker can time out and fall back to Lightning/wasm (`worker error: thunder model load timed out`). Open the link once, wait until the panel shows `thunder` / `webgl` (≈ 20 s on a warm connection), reload, then test. For AI Track also allow 1–2 minutes the very first time ("Loading precision tracking model…").
 
 After opening a link, the debug panel (bottom) shows the mode: `mode: LEGACY …` / `mode: NEW · look-ahead OFF|ON`. Take a screenshot right after load so it is visible. Use the same phone, same browser, same serve clip, same section, for every mode. Close other tabs first.
 
