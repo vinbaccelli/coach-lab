@@ -31,6 +31,10 @@ const BONE_LONG = 1.5;           // × local median length
 const BONE_BLAME_BH = 0.08;      // blamed endpoint must also be off its neighbours by this much
 const NEIGHBOUR_MAX_DT = 0.12;   // neighbours further apart than this (s) aren't a usable reference
 const LOCAL_HALF = 10;           // samples each side for local bone median
+const LAYOUT_LONG = 1.5;         // frame gate: a limb bone this much longer than its local median is off…
+const LAYOUT_SHORT = 0.6;        // …or this much shorter (arms↔legs swap changes both)
+const LAYOUT_MIN_OFF = 3;        // frame is implausible when ≥ this many of the 8 limb bones are off (of ≥ 4 measurable)
+const ORDER_MARGIN_BH = 0.1;     // shoulders above hips above ankles, by at least this many body heights
 
 const SWAP_PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['left_shoulder', 'right_shoulder'], ['left_elbow', 'right_elbow'], ['left_wrist', 'right_wrist'],
@@ -46,6 +50,8 @@ const HEIGHT_JOINTS = ['left_shoulder', 'right_shoulder', 'left_hip', 'right_hip
 
 export interface ValidationReport {
   samples: number;
+  /** Frames whose whole limb layout is implausible (e.g. legs where arms should be): dropped like a missed detection. */
+  droppedFrames: number;
   swapsFixed: number;
   invalidLowScore: number;
   invalidOutlier: number;
@@ -61,9 +67,10 @@ const median = (v: number[]) => {
 
 type Index = Map<string, TrackKeypoint>;
 
-export function validateTrack(samples: TrackSample[]): { samples: TrackSample[]; report: ValidationReport } {
-  const report: ValidationReport = { samples: samples.length, swapsFixed: 0, invalidLowScore: 0, invalidOutlier: 0, invalidBone: 0 };
-  if (samples.length < 4) return { samples, report };
+export function validateTrack(samples: TrackSample[]): { samples: TrackSample[]; report: ValidationReport; dropped: boolean[] } {
+  const report: ValidationReport = { samples: samples.length, droppedFrames: 0, swapsFixed: 0, invalidLowScore: 0, invalidOutlier: 0, invalidBone: 0 };
+  const noDrops = () => new Array<boolean>(samples.length).fill(false);
+  if (samples.length < 4) return { samples, report, dropped: noDrops() };
 
   const out: TrackSample[] = samples.map((s) => ({ t: s.t, kps: s.kps.map((k) => ({ ...k })) }));
   const idx: Index[] = out.map((s) => new Map(s.kps.filter((k) => k.name).map((k) => [k.name, k])));
@@ -74,9 +81,9 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
     const ks = HEIGHT_JOINTS.map((n) => m.get(n));
     if (ks.every((k) => k && k.score >= 0.3)) { const ys = ks.map((k) => k!.y); hs.push(Math.max(...ys) - Math.min(...ys)); }
   }
-  if (hs.length < 4) return { samples, report };
+  if (hs.length < 4) return { samples, report, dropped: noDrops() };
   const BH = median(hs);
-  if (!(BH > 20)) return { samples, report };
+  if (!(BH > 20)) return { samples, report, dropped: noDrops() };
 
   // ── 1. L/R swaps, greedy against the previous output frame ──────────────
   for (let i = 1; i < out.length; i++) {
@@ -143,10 +150,39 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
     }
   }
 
+  // ── 5. FRAME LAYOUT GATE: a sustained wrong layout (legs where arms belong, a
+  // hallucinated body on a small player) passes every per-joint test above because
+  // its neighbours are wrong too. Judge the frame as a whole: several limb bones far
+  // from their local median length at once, or the vertical order of shoulders / hips /
+  // ankles inverted. Such a frame is dropped = treated exactly like a missed detection
+  // (playback interpolates across short holes, snaps across long ones).
+  const dropped = noDrops();
+  const limbLen = (i: number, [A, B]: readonly [string, string]) => (valid(i, A) && valid(i, B) ? d(idx[i].get(A)!, idx[i].get(B)!) : null);
+  const lens = BONES.map((bn) => out.map((_, i) => limbLen(i, bn)));
+  const mean = (ks: Array<{ y: number } | null | undefined>) => { const v = ks.filter((k): k is { y: number } => !!k); return v.length ? v.reduce((a, k) => a + k.y, 0) / v.length : null; };
+  for (let i = 0; i < out.length; i++) {
+    let checked = 0, off = 0;
+    BONES.forEach((_, b) => {
+      const l = lens[b][i];
+      if (l == null) return;
+      const win: number[] = [];
+      for (let j = Math.max(0, i - LOCAL_HALF * 2); j <= Math.min(out.length - 1, i + LOCAL_HALF * 2); j++) if (lens[b][j] != null && j !== i) win.push(lens[b][j]!);
+      if (win.length < 6) return;
+      checked++;
+      const m = median(win);
+      if (l > m * LAYOUT_LONG || l < m * LAYOUT_SHORT) off++;
+    });
+    const sh = mean([valid(i, 'left_shoulder'), valid(i, 'right_shoulder')]);
+    const hip = mean([valid(i, 'left_hip'), valid(i, 'right_hip')]);
+    const an = mean([valid(i, 'left_ankle'), valid(i, 'right_ankle')]);
+    const inverted = sh != null && hip != null && an != null && !(sh < hip - ORDER_MARGIN_BH * BH && hip < an - ORDER_MARGIN_BH * BH);
+    if ((checked >= 4 && off >= LAYOUT_MIN_OFF) || (inverted && off >= 1)) { dropped[i] = true; report.droppedFrames++; }
+  }
+
   for (const key of bad) {
     const [si, n] = key.split('|');
     const k = idx[+si].get(n);
     if (k) k.score = Math.min(k.score, INVALID_SCORE);
   }
-  return { samples: out, report };
+  return { samples: out, report, dropped };
 }

@@ -110,3 +110,38 @@ test('refineBakedTrack: legacy flag = previous smoothing-only path; default = va
   assert.equal(compareToTruth(fixed, t).swapsVsTruth, 0);
   assert.equal(LEGACY_SKELETON_KEY, 'anglemotion:skeleton-legacy');
 });
+
+import { crossClassJumps } from '../lib/skeletonBench/metrics';
+import { injectLayoutSwap } from '../lib/skeletonBench/synthetic';
+
+test('frame gate: clean fast swings are never dropped (forehand/serve/lateral @60 and @30)', () => {
+  for (const fps of [60, 30]) for (const k of ['forehand', 'serve', 'lateral'] as const) {
+    assert.equal(run(truth(k, fps), fps).report.droppedFrames, 0, `${k}@${fps}`);
+  }
+});
+
+test('frame gate: a sustained "legs as arms" layout is dropped, neighbours are kept', () => {
+  const t = truth('lateral');
+  const frames = Array.from({ length: 16 }, (_, i) => 30 + i); // 30..45
+  const bad = injectLayoutSwap(t, frames);
+  const r = run(bad, 60);
+  const droppedIdx = r.dropped.map((d, i) => (d ? i : -1)).filter((i) => i >= 0);
+  const hit = droppedIdx.filter((i) => frames.includes(i)).length;
+  console.log('[frame gate] injected', frames.length, '→ dropped', droppedIdx.length, '(of which injected', hit + ')');
+  assert.ok(hit >= 14, `only ${hit}/16 injected frames dropped`);
+  assert.ok(droppedIdx.length - hit <= 1, 'at most one innocent neighbour dropped');
+  assert.ok(crossClassJumps(bad).armToLeg + crossClassJumps(bad).legToArm > 0, 'metric sees the corruption');
+});
+
+test('refineBakedTrack drops implausible frames before smoothing and leaves no cross-limb jumps', () => {
+  const t = truth('lateral');
+  const bad = injectLayoutSwap(t, Array.from({ length: 16 }, (_, i) => 30 + i));
+  const s = toTrackSamples(bad, 60);
+  const legacy = fromTrackSamples(refineBakedTrack(s, true));
+  const fixed = fromTrackSamples(refineBakedTrack(s, false));
+  const a = crossClassJumps(legacy), b = crossClassJumps(fixed);
+  console.log('[refine] cross-limb jumps legacy', a.armToLeg + a.legToArm, '→ new', b.armToLeg + b.legToArm, '| frames', legacy.length, '→', fixed.length);
+  assert.ok(a.armToLeg + a.legToArm > 0);
+  assert.equal(b.armToLeg + b.legToArm, 0);
+  assert.ok(fixed.length < legacy.length);
+});

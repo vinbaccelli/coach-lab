@@ -213,3 +213,42 @@ export function compareToTruth(est: Seq, truth: Seq, wrist = 'right_wrist', minS
     missing,
   };
 }
+
+const ARM_JOINTS = ['left_elbow', 'right_elbow', 'left_wrist', 'right_wrist'];
+const LEG_JOINTS = ['left_knee', 'right_knee', 'left_ankle', 'right_ankle'];
+
+export interface CrossClass {
+  /** An arm joint moved to (near) where a LEG joint was in the previous frame. */
+  armToLeg: number;
+  /** A leg joint moved to where an ARM joint was. */
+  legToArm: number;
+  /** Frames where the median joint moved > 0.25 body heights (identity switch / hallucinated body). */
+  wholeBodyJumps: number;
+}
+
+/**
+ * "Legs as arms" detector: counts joints that jump to the previous position of a
+ * limb of the OTHER class (closer than half their own step, step ≥ 0.12 body heights).
+ * Left/right swaps within a class are counted by trackStats().swaps instead.
+ */
+export function crossClassJumps(seq: Seq, minScore = 0): CrossClass {
+  const H = bodyHeight(seq);
+  let armToLeg = 0, legToArm = 0, whole = 0;
+  const use = (k: Pt | undefined): k is Pt => !!k && (k.vis ?? 1) >= minScore;
+  for (let i = 1; i < seq.length; i++) {
+    const a = seq[i - 1], b = seq[i];
+    if (!a || !b) continue;
+    const steps = Object.keys(b).filter((k) => a[k]).map((k) => dist(a[k], b[k]) / H).sort((x, y) => x - y);
+    if (steps.length && steps[steps.length >> 1] > 0.25) whole++;
+    for (const [grp, other, isArm] of [[ARM_JOINTS, LEG_JOINTS, true], [LEG_JOINTS, ARM_JOINTS, false]] as const) {
+      for (const j of grp) {
+        if (!use(a[j]) || !use(b[j])) continue;
+        const own = dist(a[j], b[j]);
+        if (own / H < 0.12) continue;
+        const near = Math.min(...other.filter((k) => use(a[k])).map((k) => dist(a[k], b[j])));
+        if (near < own * 0.5) { if (isArm) armToLeg++; else legToArm++; }
+      }
+    }
+  }
+  return { armToLeg, legToArm, wholeBodyJumps: whole };
+}

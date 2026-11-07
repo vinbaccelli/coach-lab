@@ -7,6 +7,7 @@
  */
 import { smoothBakedTrack, type TrackSample } from './trackSmoothing';
 import { validateTrack } from './skeletonValidate';
+import { poseDbg } from './tempDebugPose'; // TEMP-DEBUG-POSE: shows the bake report in the ?debug=1 panel
 
 export const LEGACY_SKELETON_KEY = 'anglemotion:skeleton-legacy';
 
@@ -20,5 +21,9 @@ export function isLegacySkeleton(): boolean {
 
 export function refineBakedTrack(samples: TrackSample[], legacy: boolean = isLegacySkeleton()): TrackSample[] {
   if (legacy) return smoothBakedTrack(samples);
-  return smoothBakedTrack(validateTrack(samples).samples);
+  const v = validateTrack(samples);
+  const kept = v.report.droppedFrames ? v.samples.filter((_, i) => !v.dropped[i]) : v.samples;
+  const r = v.report;
+  poseDbg.event(`bake: ${r.samples} frames · swaps fixed ${r.swapsFixed} · frames dropped ${r.droppedFrames} · joints hidden ${r.invalidLowScore + r.invalidOutlier + r.invalidBone}`); // TEMP-DEBUG-POSE
+  return smoothBakedTrack(kept);
 }
