@@ -32,6 +32,7 @@ import { getPoseDetector } from '@/lib/poseDetection';
 import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
 import { continuePose } from '@/lib/liveDisplay';
 import { AheadBuffer, LookAheadVideo, leadSeconds, lookAheadDisabled, type AheadKp } from '@/lib/lookAheadPose';
+import { modeLabel } from '@/lib/skeletonSwitches';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
@@ -2781,7 +2782,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const aheadBufRef = useRef(new AheadBuffer());
     const aheadRttRef = useRef(120);
     const aheadEnabledRef = useRef(false);
-    useEffect(() => { aheadEnabledRef.current = !lookAheadDisabled(); }, []);
+    useEffect(() => { aheadEnabledRef.current = !lookAheadDisabled(); poseDbg.event(modeLabel(aheadEnabledRef.current)); }, []); // TEMP-DEBUG-POSE: mode line
     /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
     const seekRequestRef = useRef<{ t: number; at: number } | null>(null);
     /** Whether the live pose was hidden as stale on the previous frame (log transitions only). */

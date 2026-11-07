@@ -16,9 +16,10 @@
  * pause / seek / end / skeleton-off (decoder released); any failure falls back to the
  * previous live path.
  *
- * Kill switches: localStorage `anglemotion:skeleton-legacy=1` (all skeleton changes) or
- * `anglemotion:lookahead-off=1` (this feature only).
+ * Switches (lib/skeletonSwitches.ts): link `?legacy=1` (all skeleton changes) or `?lookahead=0` (this feature only).
  */
+
+import { legacyOn, lookAheadOffSwitch } from './skeletonSwitches';
 
 export interface AheadKp { x: number; y: number; score: number; name: string }
 
@@ -106,11 +107,7 @@ export function driftAction(aheadT: number, mainT: number, lead: number, mainRat
 
 export function lookAheadDisabled(): boolean {
   if (typeof window === 'undefined') return true;
-  try {
-    if ((window as unknown as { __skeletonLegacy?: boolean }).__skeletonLegacy) return true;
-    const ls = window.localStorage;
-    return ls.getItem('anglemotion:skeleton-legacy') === '1' || ls.getItem('anglemotion:lookahead-off') === '1';
-  } catch { return false; }
+  return legacyOn() || lookAheadOffSwitch();
 }
 
 /**
