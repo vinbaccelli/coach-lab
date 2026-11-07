@@ -37,6 +37,8 @@ export class AheadBuffer {
   private items: Array<{ t: number; kps: AheadKp[] }> = [];
 
   get size() { return this.items.length; }
+  /** Newest buffered video time (s), or null when empty. */
+  get lastTime(): number | null { return this.items.length ? this.items[this.items.length - 1].t : null; }
   clear() { this.items = []; }
 
   push(t: number, kps: AheadKp[]) {
@@ -85,6 +87,23 @@ export class AheadBuffer {
 export function leadSeconds(rttMs: number, playbackRate: number, marginMs = 40): number {
   const lead = ((Math.max(0, rttMs) + marginMs) * Math.max(0.05, playbackRate)) / 1000;
   return Math.min(0.8, Math.max(0.04, lead));
+}
+
+/**
+ * Which video feeds this detection. A hidden video that starts `lead` s ahead leaves [playhead, playhead + lead) with no
+ * results, so until the playhead reaches the first hidden frame every second detection is taken from the MAIN video
+ * (live quality, the same as today) and the rest from the hidden one. After that the hidden video owns every detection.
+ */
+export function sampleHiddenNow(tick: number, playhead: number, gapUntil: number, tailFrom = Infinity): boolean {
+  // The last `lead` seconds of a clip: the hidden video is pinned at the end and cannot be ahead any more ⇒ main video only.
+  if (playhead >= tailFrom) return false;
+  if (playhead >= gapUntil - 0.05) return true;
+  return (tick & 1) === 1;
+}
+
+/** Graceful degradation: too many draws found no result near the playhead ⇒ the look-ahead is not keeping up. */
+export function coverageDegraded(hits: number, draws: number, minDraws = 60, minShare = 0.5): boolean {
+  return draws >= minDraws && hits / draws < minShare;
 }
 
 export type DriftAction =

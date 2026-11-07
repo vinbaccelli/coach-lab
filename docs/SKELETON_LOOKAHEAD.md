@@ -47,3 +47,10 @@ The remaining error at 1× is **detection density**, not lag: ≈ 10 detections 
 2. `?debug=1`: you should see `look-ahead video started` shortly after pressing play and `look-ahead video released` on pause. Send me `infer`, `rtt`, `sent/s` **while playing** and any `look-ahead failed (reason)` line.
 3. Scrub/seek while playing, change speed while playing, pause/resume repeatedly (10×): skeleton must recover, no freeze, no tab reload.
 4. Watch for memory problems: long clip, phone warm, repeated play/pause. Tell me device + browser.
+
+## Stage 2d — feasibility probe (rolling look-ahead, deeper lead)
+Switches (links, persisted): `?lookahead=decode` (hidden video plays, detection and display stay on the live path — isolates the cost of a second decoder), `?lookahead=1` (full look-ahead), `?la_lead=0.3|1|2.5` (target lead in VIDEO seconds, 0.04–3; `auto` = one measured round trip), `?lookahead=0` off.
+- **Warm-up gap:** a hidden video that starts `lead` s ahead leaves [playhead, playhead+lead) without results, so until the playhead reaches the first hidden frame every second detection comes from the MAIN video (live quality, as today). Playback never waits. Last `lead` s of a clip: main video only (the hidden video is pinned at the end).
+- **Panel line (every 2 s):** `la-stats: N det/s · depth +Nms · covered N% · main dropped D/T` — detections per second, buffer depth ahead of the playhead, share of draws that found a result near the playhead, dropped frames of the MAIN video.
+- **Graceful degradation:** past the warm-up, covered < 50 % ⇒ hidden video released, live path until the next play (`look-ahead released: not keeping up`). Main video stalled 0.7 s ⇒ released for the session (unchanged).
+- Headless Chromium (software inference ≈ 150 ms, 854×480): lead error −30 ms (want 1000 ms, got 970), covered 100 % after the warm-up, main dropped 0 after a start spike of 13–22 frames. **Not an iPhone result.**
