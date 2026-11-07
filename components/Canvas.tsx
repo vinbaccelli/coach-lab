@@ -29,7 +29,7 @@ import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { getPoseDetector } from '@/lib/poseDetection';
-import { smoothBakedTrack } from '@/lib/trackSmoothing';
+import { refineBakedTrack } from '@/lib/skeletonRefine';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
@@ -3851,7 +3851,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (opts?.splitGapSec !== undefined) {
           const segs = splitAtGaps(kept, opts.splitGapSec).filter((g) => g.length >= 2);
           if (!segs.length) return 0;
-          const made = segs.map((g) => ({ samples: smoothBakedTrack(g), start: g[0].t, end: g[g.length - 1].t, locked: opts.locked }));
+          const made = segs.map((g) => ({ samples: refineBakedTrack(g), start: g[0].t, end: g[g.length - 1].t, locked: opts.locked }));
           bakedTracksRef.current = [
             ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
             ...made,
@@ -3861,7 +3861,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
         // Offline post-pass: outlier repair + centered (zero-lag) smoothing —
         // the precision live tracking can mathematically never reach.
-        const smoothed = smoothBakedTrack(kept);
+        const smoothed = refineBakedTrack(kept);
         // Add as a new tracked section, replacing any overlapping older track.
         bakedTracksRef.current = [
           ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),

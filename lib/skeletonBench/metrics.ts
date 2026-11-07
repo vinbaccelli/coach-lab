@@ -77,7 +77,10 @@ export interface TrackStats {
   boneViolationRate: number;
 }
 
-export function trackStats(seq: Seq, opts: { jumpStep?: number; swapMinSeparation?: number } = {}): TrackStats {
+/** `minScore` > 0 evaluates only joints the app would draw (vis ≥ minScore); hidden joints count as unknown, not as errors. */
+export function trackStats(seq: Seq, opts: { jumpStep?: number; swapMinSeparation?: number; minScore?: number } = {}): TrackStats {
+  const minScore = opts.minScore ?? 0;
+  const use = (k: Pt | undefined): k is Pt => !!k && (k.vis ?? 1) >= minScore;
   const jumpStep = opts.jumpStep ?? 0.12;
   const minSep = opts.swapMinSeparation ?? 0.05;
   const ok = seq.filter(present);
@@ -94,8 +97,9 @@ export function trackStats(seq: Seq, opts: { jumpStep?: number; swapMinSeparatio
   const jerk: number[] = [];
   for (let i = 2; i < seq.length; i++) {
     const a = seq[i - 2], b = seq[i - 1], c = seq[i];
-    if (!present(a) || !present(b) || !present(c)) continue;
+    if (!a || !b || !c) continue;
     for (const nm of USE_JOINTS) {
+      if (!use(a[nm]) || !use(b[nm]) || !use(c[nm])) continue;
       const s = dist(b[nm], c[nm]) / H;
       n++;
       if (s > jumpStep) jumps++;
@@ -103,6 +107,7 @@ export function trackStats(seq: Seq, opts: { jumpStep?: number; swapMinSeparatio
       jerk.push(Math.hypot(c[nm].x - 2 * b[nm].x + a[nm].x, c[nm].y - 2 * b[nm].y + a[nm].y) / H);
     }
     for (const [L, R] of LR_PAIRS) {
+      if (!use(b[L]) || !use(b[R]) || !use(c[L]) || !use(c[R])) continue;
       const keep = dist(c[L], b[L]) + dist(c[R], b[R]);
       const swp = dist(c[L], b[R]) + dist(c[R], b[L]);
       if (swp < keep * 0.6 && dist(b[L], b[R]) / H > minSep) swaps++;
@@ -112,7 +117,8 @@ export function trackStats(seq: Seq, opts: { jumpStep?: number; swapMinSeparatio
 
   let cvSum = 0, viol = 0, vn = 0;
   for (const [A, B] of BONES) {
-    const lens = ok.map((k) => dist(k[A], k[B]));
+    const lens = ok.filter((k) => use(k[A]) && use(k[B])).map((k) => dist(k[A], k[B]));
+    if (lens.length < 2) continue;
     const med = median(lens);
     if (!(med > 0)) continue;
     const mean = lens.reduce((s, v) => s + v, 0) / lens.length;
@@ -148,7 +154,8 @@ export interface TruthComparison {
   missing: number;
 }
 
-export function compareToTruth(est: Seq, truth: Seq, wrist = 'right_wrist'): TruthComparison {
+/** `minScore` > 0 scores only joints the app would DRAW (vis ≥ minScore) — what the coach sees; joints below it count as unknown, not as errors. */
+export function compareToTruth(est: Seq, truth: Seq, wrist = 'right_wrist', minScore = 0): TruthComparison {
   const H = bodyHeight(truth);
   const errs: number[] = [];
   const per: Record<string, number[]> = {};
@@ -159,6 +166,7 @@ export function compareToTruth(est: Seq, truth: Seq, wrist = 'right_wrist'): Tru
     if (!e) { missing++; continue; }
     for (const nm of USE_JOINTS) {
       if (!e[nm] || !t[nm]) continue;
+      if ((e[nm].vis ?? 1) < minScore) continue;
       const d = dist(e[nm], t[nm]) / H;
       errs.push(d);
       (per[nm] ||= []).push(d);

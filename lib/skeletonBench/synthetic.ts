@@ -170,3 +170,10 @@ export function boxBlur(seq: Seq, half: number): Seq {
     return o;
   });
 }
+
+import type { TrackSample } from '../trackSmoothing';
+/** Seq ⇄ TrackSample (names kept), so the production track functions can run on synthetic tracks. */
+export const toTrackSamples = (s: Seq, fps: number): TrackSample[] =>
+  s.map((p, i) => ({ t: i / fps, kps: Object.entries(p!).map(([name, v]) => ({ name, x: v.x, y: v.y, score: v.vis ?? 0.9 })) }));
+export const fromTrackSamples = (s: TrackSample[]): Seq =>
+  s.map((x) => Object.fromEntries(x.kps.map((k) => [k.name, { x: k.x, y: k.y, vis: k.score }])));
