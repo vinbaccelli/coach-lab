@@ -1,0 +1,38 @@
+<!doctype html><meta charset=utf-8><video id=v src=/clip.webm muted playsinline></video><canvas id=c></canvas>
+<script type=module>
+import { FilesetResolver, PoseLandmarker } from '/vision_bundle.mjs';
+const NAMES = ['nose','left_eye_inner','left_eye','left_eye_outer','right_eye_inner','right_eye','right_eye_outer','left_ear','right_ear','mouth_l','mouth_r','left_shoulder','right_shoulder','left_elbow','right_elbow','left_wrist','right_wrist','left_pinky','right_pinky','left_index','right_index','left_thumb','right_thumb','left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle','left_heel','right_heel','left_foot_index','right_foot_index'];
+const USE = ['left_shoulder','right_shoulder','left_elbow','right_elbow','left_wrist','right_wrist','left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle'];
+window.run = async (cfg) => {
+  const v = document.getElementById('v'); await new Promise(r => v.readyState >= 2 ? r() : v.addEventListener('loadeddata', r, { once: true }));
+  const W = v.videoWidth, H = v.videoHeight;
+  const fileset = await FilesetResolver.forVisionTasks('/mediapipe-wasm');
+  const lm = await PoseLandmarker.createFromOptions(fileset, { baseOptions: { modelAssetPath: '/models/pose_landmarker_' + cfg.model + '.task', delegate: 'CPU' }, runningMode: 'IMAGE', numPoses: 1 });
+  const seek = (t) => new Promise(r => { const f = () => { v.removeEventListener('seeked', f); (v.requestVideoFrameCallback ? v.requestVideoFrameCallback(() => r()) : r()); }; v.addEventListener('seeked', f); v.currentTime = t; setTimeout(r, 1500); });
+  const base = document.createElement('canvas'); base.width = W; base.height = H; const bx = base.getContext('2d'); const SC = cfg.scale || 1; const drawBase = () => { bx.fillStyle = '#6b7a63'; bx.fillRect(0, 0, W, H); const w = W * SC, h = H * SC; bx.drawImage(v, (W - w) / 2, H - h - 20, w, h); };
+  const cv = document.getElementById('c'); const cx = cv.getContext('2d', { willReadFrequently: true });
+  const detect = (crop) => { // crop = {x,y,w,h} in video px or null
+    const cw = crop ? Math.round(crop.w) : W, ch = crop ? Math.round(crop.h) : H;
+    cv.width = cw; cv.height = ch;
+    if (crop) cx.drawImage(base, crop.x, crop.y, crop.w, crop.h, 0, 0, cw, ch); else cx.drawImage(base, 0, 0, W, H);
+    const res = lm.detect(cv);
+    const p = res.landmarks && res.landmarks[0]; if (!p) return null;
+    const ox = crop ? crop.x : 0, oy = crop ? crop.y : 0;
+    const o = {}; NAMES.forEach((n, i) => { o[n] = { x: ox + p[i].x * cw, y: oy + p[i].y * ch, vis: p[i].visibility }; }); return o;
+  };
+  const boxOf = (k, pad) => { const pts = USE.map(n => k[n]); const xs = pts.map(p => p.x), ys = pts.map(p => p.y); let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys); const cxm = (x0 + x1) / 2, cym = (y0 + y1) / 2; let s = Math.max(x1 - x0, y1 - y0) * (1 + pad); s = Math.max(s, 160); s = Math.min(s, Math.min(W, H)); let x = cxm - s / 2, y = cym - s / 2; x = Math.max(0, Math.min(W - s, x)); y = Math.max(0, Math.min(H - s, y)); return { x, y, w: s, h: s }; };
+  const out = { full: [], roi: [], W, H, t0: cfg.t0, n: cfg.n };
+  const step = 1 / cfg.fps; let last = null; const tms = { full: [], roi: [] };
+  for (let i = 0; i < cfg.n; i++) {
+    const t = cfg.t0 + i * step; await seek(t);
+    drawBase(); let a0 = performance.now(); const A = detect(null); tms.full.push(performance.now() - a0); out.full.push(A);
+    let B = null; a0 = performance.now();
+    const seedBox = last ? boxOf(last, cfg.pad) : (cfg.seed ? boxOf(cfg.seed, cfg.pad) : (A ? boxOf(A, cfg.pad) : null));
+    if (seedBox) { B = detect(seedBox); }
+    tms.roi.push(performance.now() - a0); out.roi.push(B); if (B) last = B; else if (A) last = A;
+  }
+  out.ms = { full: tms.full.reduce((a, b) => a + b, 0) / tms.full.length, roi: tms.roi.reduce((a, b) => a + b, 0) / tms.roi.length };
+  return out;
+};
+window.READY = true;
+</script>
