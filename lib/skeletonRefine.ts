@@ -9,15 +9,12 @@ import { smoothBakedTrack, type TrackSample } from './trackSmoothing';
 import { validateTrack } from './skeletonValidate';
 import { poseDbg } from './tempDebugPose'; // TEMP-DEBUG-POSE: shows the bake report in the ?debug=1 panel
 
-export const LEGACY_SKELETON_KEY = 'anglemotion:skeleton-legacy';
+import { LEGACY_KEY, legacyOn } from './skeletonSwitches';
 
-export function isLegacySkeleton(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    if ((window as unknown as { __skeletonLegacy?: boolean }).__skeletonLegacy) return true;
-    return window.localStorage.getItem(LEGACY_SKELETON_KEY) === '1';
-  } catch { return false; }
-}
+export const LEGACY_SKELETON_KEY = LEGACY_KEY;
+
+/** True ⇒ previous skeleton behaviour (URL `?legacy=1`, localStorage, or window flag). */
+export const isLegacySkeleton = legacyOn;
 
 export function refineBakedTrack(samples: TrackSample[], legacy: boolean = isLegacySkeleton()): TrackSample[] {
   if (legacy) return smoothBakedTrack(samples);

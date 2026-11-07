@@ -122,3 +122,58 @@ export function liveScore(truth: Seq, truthFps: number, shown: Pose[], times: nu
     peakRatio: tp > 0 ? pk(shown.map((p) => p[joint])) / tp : NaN,
   };
 }
+
+/**
+ * LOOK-AHEAD live path: detection runs on a second video kept `lead` ahead of the
+ * displayed one; each result is stored under the VIDEO time of the frame it describes
+ * and displayed when the playhead reaches that time (interpolated between neighbours,
+ * exactly like a baked track). `rate` = playback speed (1 = real time).
+ * Returns the shown pose at each render time, with `times` in VIDEO milliseconds
+ * (so liveScore compares against the truth of the frame actually on screen).
+ */
+export function simulateLookAhead(o: {
+  truth: Seq; truthFps: number; latencyMs: number; rate: number;
+  overheadMs?: number; marginMs?: number; noisePx?: number; seed?: number; renderHz?: number; cubic?: boolean; smoothing?: 'sport' | 'none';
+}): { shown: Pose[]; times: number[]; samplesPerVideoSec: number } {
+  const rng = mulberry32(o.seed ?? 1);
+  const dur = (o.truth.length / o.truthFps) * 1000;            // video ms
+  const L = o.latencyMs, ovh = o.overheadMs ?? 5, margin = o.marginMs ?? 30;
+  const lead = (L + margin) * o.rate;                          // video ms the second decoder runs ahead
+  const smoother = new OneEuroKeypointSmoother(o.smoothing === 'none' ? { minCutoff: 1000, beta: 0, dCutoff: 1000 } : undefined);
+  type S = { t: number; kps: Array<{ name: string; x: number; y: number; score: number }> };
+  const buf: S[] = [];
+  const wallEnd = dur / o.rate;
+  for (let tcw = 0; tcw + L < wallEnd; tcw += L + ovh) {
+    const tv = Math.min(dur - 1, tcw * o.rate + lead);          // video time of the captured (ahead) frame
+    const tr = at(o.truth, o.truthFps, tv);
+    const raw = names(tr).map((n) => ({ name: n, x: tr[n].x + gauss(rng) * (o.noisePx ?? 3), y: tr[n].y + gauss(rng) * (o.noisePx ?? 3), score: 0.9 }));
+    buf.push({ t: tv, kps: smoother.apply(raw, tcw + L) as S['kps'] });
+  }
+  const shown: Pose[] = [], times: number[] = [];
+  const step = 1000 / (o.renderHz ?? 60);
+  for (let rw = 0; rw < wallEnd; rw += step) {
+    const p = rw * o.rate;                                      // playhead, video ms
+    // only results that have ARRIVED by wall time rw are usable: capture wall time + L ≤ rw
+    const usable = buf.filter((_, i) => i * (L + ovh) + L <= rw);
+    if (!usable.length) continue;
+    let ia = 0, ib = usable.length - 1;
+    for (let i = 0; i < usable.length; i++) { if (usable[i].t <= p) ia = i; if (usable[i].t >= p) { ib = i; break; } }
+    const a = usable[ia], b = usable[ib];
+    const f = b.t === a.t ? 1 : Math.min(1, Math.max(0, (p - a.t) / (b.t - a.t)));
+    const pose: Pose = {};
+    a.kps.forEach((q, i) => {
+      const w = b.kps[i];
+      if (!o.cubic || ib === ia) { pose[q.name] = { x: q.x + (w.x - q.x) * f, y: q.y + (w.y - q.y) * f, vis: q.score }; return; }
+      const z = usable[Math.max(0, ia - 1)].kps[i], y3 = usable[Math.min(usable.length - 1, ib + 1)].kps[i];
+      const t0 = usable[Math.max(0, ia - 1)].t, t3 = usable[Math.min(usable.length - 1, ib + 1)].t, dt = b.t - a.t;
+      const herm = (p0: number, p1: number, p2: number, p3: number) => {
+        const m1 = ((p2 - p0) / Math.max(1, b.t - t0)) * dt, m2 = ((p3 - p1) / Math.max(1, t3 - a.t)) * dt;
+        const f2 = f * f, f3 = f2 * f;
+        return (2 * f3 - 3 * f2 + 1) * p1 + (f3 - 2 * f2 + f) * m1 + (-2 * f3 + 3 * f2) * p2 + (f3 - f2) * m2;
+      };
+      pose[q.name] = { x: herm(z.x, q.x, w.x, y3.x), y: herm(z.y, q.y, w.y, y3.y), vis: q.score };
+    });
+    shown.push(pose); times.push(p);
+  }
+  return { shown, times, samplesPerVideoSec: (buf.length / dur) * 1000 };
+}
