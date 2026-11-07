@@ -22,6 +22,7 @@
  *   /models/pose_landmarker_full.task
  */
 
+import { cropRect, shouldCrop, acceptCropPose, mapFromCrop, trackBox, type Box as CropBox, type Rect as CropRect } from './skeletonCrop';
 export type PoseKeypoint = { x: number; y: number; score: number; name: string };
 
 export interface FootPoints {
@@ -374,6 +375,98 @@ export async function detectPosePrecise(
       score: Math.max(ka.score, kb.score),
     };
   });
+}
+
+// ── Crop-tracked single-player pass (lib/skeletonCrop.ts) ───────────────────
+// For a SMALL tracked player, detect inside a crop around them (more pixels on
+// the body; stays on the same person), falling back to the unchanged full-frame
+// `detectPosePrecise` whenever the crop result fails its checks. Large players
+// never leave the full-frame path. `detectPosePrecise` itself is untouched.
+export interface CropTracker {
+  box: CropBox | null;
+  cropFrames: number;
+  fullFrames: number;
+  reacquires: number;
+}
+export const newCropTracker = (seed?: CropBox | null): CropTracker => ({ box: seed ?? null, cropFrames: 0, fullFrames: 0, reacquires: 0 });
+
+let cropScratch: HTMLCanvasElement | null = null;
+let cropFlipScratch: HTMLCanvasElement | null = null;
+const CROP_MAX_SIDE = 640; // model input is 256 px; more than this is wasted pixels
+
+function drawCrop(video: HTMLVideoElement, r: CropRect, flip: boolean): HTMLCanvasElement | null {
+  const side = Math.max(16, Math.round(Math.min(r.w, CROP_MAX_SIDE)));
+  const h = Math.max(16, Math.round(side * (r.h / r.w)));
+  const target = flip ? (cropFlipScratch ||= document.createElement('canvas')) : (cropScratch ||= document.createElement('canvas'));
+  if (target.width !== side) target.width = side;
+  if (target.height !== h) target.height = h;
+  const ctx = target.getContext('2d');
+  if (!ctx) return null;
+  if (flip) { ctx.setTransform(-1, 0, 0, 1, side, 0); }
+  ctx.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, side, h);
+  if (flip) ctx.setTransform(1, 0, 0, 1, 0, 0);
+  return target;
+}
+
+function detectInCrop(lm: PoseLandmarkerT, video: HTMLVideoElement, r: CropRect, tta: boolean): PoseKeypoint[] | null {
+  let base: PoseKeypoint[] | null;
+  try {
+    const c = drawCrop(video, r, false);
+    if (!c) return null;
+    const k = landmarksToKeypoints(lm.detect(c)?.landmarks?.[0], r.w, r.h, false);
+    base = k ? mapFromCrop(k, r) : null;
+  } catch { return null; }
+  if (!base || !tta) return base;
+  let flip: PoseKeypoint[] | null = null;
+  try {
+    const c = drawCrop(video, r, true);
+    const k = c ? landmarksToKeypoints(lm.detect(c)?.landmarks?.[0], r.w, r.h, true) : null;
+    flip = k ? mapFromCrop(k, r) : null;
+  } catch { flip = null; }
+  if (!flip) return base;
+  // Same agreeing-joints-only merge as detectPosePrecise; the agreement radius
+  // scales with the crop (≈ 0.25 body heights) instead of the frame width.
+  const AGREE = r.h * 0.12;
+  const byName = new Map(flip.map((k) => [k.name, k]));
+  return base.map((ka) => {
+    const kb = byName.get(ka.name);
+    if (!kb || Math.hypot(ka.x - kb.x, ka.y - kb.y) > AGREE) return ka;
+    const w = ka.score + kb.score;
+    if (w <= 0) return ka;
+    return {
+      name: ka.name,
+      x: (ka.x * ka.score + kb.x * kb.score) / w,
+      y: (ka.y * ka.score + kb.y * kb.score) / w,
+      score: Math.max(ka.score, kb.score),
+    };
+  });
+}
+
+export async function detectPosePreciseTracked(
+  video: HTMLVideoElement,
+  params: TrackParams,
+  tracker: CropTracker,
+): Promise<PoseKeypoint[] | null> {
+  if (!video || video.videoWidth < 16 || video.readyState < 2) return null;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (shouldCrop(tracker.box, vh)) {
+    const lm = (await getLandmarker(params.model)) ?? (await getLandmarker('full'));
+    if (lm) {
+      const r = cropRect(tracker.box!, vw, vh);
+      const pose = detectInCrop(lm, video, r, params.tta);
+      if (pose && acceptCropPose(tracker.box!, pose, r, vw, vh)) {
+        tracker.box = trackBox(pose) ?? tracker.box;
+        tracker.cropFrames++;
+        return pose;
+      }
+      tracker.reacquires++;
+    }
+  }
+  const full = await detectPosePrecise(video, params); // unchanged full-frame behaviour
+  tracker.fullFrames++;
+  const b = trackBox(full);
+  if (b) tracker.box = b; // keep the last box (or the seed) through a miss so the next frame can crop
+  return full;
 }
 
 // ── LOCKED-PLAYER path: a separate multi-person landmarker ──────────────────

@@ -77,6 +77,7 @@ import {
 } from '@/lib/stroMotion';
 import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
 import { SKELETON_ANGLE_LABELS, hasAnyAngle, persistableRows } from '@/lib/skeletonAngles';
+import { isLegacySkeleton } from '@/lib/skeletonRefine';
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
@@ -1663,12 +1664,18 @@ function Home() {
       const step = 1 / params.fps;
       const total = Math.max(1, Math.ceil((end - start) / step));
       const passT0 = performance.now();
+      // Crop tracking for SMALL players (lib/skeletonCrop.ts); large players and the
+      // legacy switch keep the exact previous full-frame call. Seeded from the first
+      // detection, else from the skeleton on screen (a far player the full frame misses).
+      const cropTracker = useMediaPipe && !isLegacySkeleton()
+        ? mp.newCropTracker(poseBox(probe) ?? poseBox(canvasRef.current?.getSkeletonKeypoints?.() ?? null))
+        : null;
       for (let k = 1; k <= total; k++) {
         if (precisionAbortRef.current) break;
         const t = Math.min(end, start + k * step);
         await seekTo(t);
         if (useMediaPipe) {
-          const kps = await mp.detectPosePrecise(v, params).catch(() => null);
+          const kps = await (cropTracker ? mp.detectPosePreciseTracked(v, params, cropTracker) : mp.detectPosePrecise(v, params)).catch(() => null);
           if (kps) canvasRef.current?.addBakeSample?.(v.currentTime, kps);
         } else {
           // MoveNet fallback: the paused-frame 'seeked' detection (Canvas pose
@@ -1685,6 +1692,9 @@ function Home() {
         return 0;
       }
       const kept = canvasRef.current?.finishBakeCapture?.({ start, end }) ?? 0;
+      if (cropTracker && process.env.NODE_ENV !== 'production') {
+        console.log(`[PrecisionTrack] crop tracking: ${cropTracker.cropFrames} crop / ${cropTracker.fullFrames} full-frame / ${cropTracker.reacquires} re-acquires`);
+      }
       if (kept >= 2 && process.env.NODE_ENV !== 'production') {
         const passMs = performance.now() - passT0;
         console.log(`[PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);

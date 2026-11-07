@@ -16,3 +16,4 @@ for (const key of Object.keys(d).filter((k) => Array.isArray(d[k]))) {
   };
 }
 console.table(rows);
+if (d.trackCounts) console.log('tracked path:', JSON.stringify(d.trackCounts));
