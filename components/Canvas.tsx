@@ -4486,9 +4486,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      poseDbg.probeModelFiles(); // TEMP-DEBUG-POSE: debug panel only, no behaviour change
       const bridge = new PoseWorkerBridge({
         frameSkip: poseFrameSkipRef.current,
         onStatus: (msg: string) => {
+          poseDbg.event(`engine: ${msg}`); // TEMP-DEBUG-POSE: timestamped init trail
           onProcessingStatus?.(msg);
           // lib/poseWorkerBridge.ts's own failure message; a waiting tour step shows it.
           if (msg.startsWith('Skeleton load failed')) reportTourState('skeleton', 'failed');

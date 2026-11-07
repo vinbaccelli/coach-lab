@@ -118,6 +118,33 @@ export const poseDbg = {
   workerError(msg: string) { if (poseDebugOn()) { D.workerErrors++; event(`worker error: ${msg}`); } },
   workerOnerror() { if (poseDebugOn()) { D.workerOnerror++; event('worker onerror'); } },
   event(msg: string) { if (poseDebugOn()) event(msg); },
+  /** Debug only: time the live-skeleton model files from the main thread (HTTP cache or network?). Collection only. */
+  probeModelFiles() {
+    if (!poseDebugOn() || typeof window === 'undefined') return;
+    const files: [string, string][] = [
+      ['wasm-simd', '/tfjs-wasm/tfjs-backend-wasm-simd.wasm'],
+      ['lightning', '/models/movenet-lightning/model.json'],
+      ['lightning-1', '/models/movenet-lightning/group1-shard1of2.bin'],
+      ['lightning-2', '/models/movenet-lightning/group1-shard2of2.bin'],
+      ['thunder-1', '/models/movenet-thunder/group1-shard1of3.bin'],
+    ];
+    // Starts 40 s after the worker so it neither competes with nor pre-warms the worker's own downloads.
+    window.setTimeout(() => void (async () => {
+      for (const [name, url] of files) {
+        const t0 = performance.now();
+        try {
+          const r = await fetch(url);
+          const n = (await r.arrayBuffer()).byteLength;
+          const ms = Math.round(performance.now() - t0);
+          const e = performance.getEntriesByName(window.location.origin + url).pop() as PerformanceResourceTiming | undefined;
+          const src = e ? (e.transferSize === 0 ? 'cache' : 'network') : '?';
+          event(`probe ${name}: ${(n / 1048576).toFixed(1)} MB in ${ms} ms (${src}, ${r.status})`);
+        } catch (err) {
+          event(`probe ${name}: failed after ${Math.round(performance.now() - t0)} ms (${(err as Error)?.message})`);
+        }
+      }
+    })(), 40_000);
+  },
   /** Called every draw while a live pose is on screen and the video plays (cheap no-op unless ?debug=1). */
   drawn(x: { videoNow: number; rate: number; videoCapture: number; arrivalPerf: number; reqAt?: number; prevArrival?: number; newSample: boolean; legacy: boolean }) {
     if (!poseDebugOn()) return;
