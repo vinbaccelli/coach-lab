@@ -37,6 +37,8 @@ export class AheadBuffer {
   private items: Array<{ t: number; kps: AheadKp[] }> = [];
 
   get size() { return this.items.length; }
+  /** Newest buffered video time (s), or null when empty. */
+  get lastTime(): number | null { return this.items.length ? this.items[this.items.length - 1].t : null; }
   clear() { this.items = []; }
 
   push(t: number, kps: AheadKp[]) {
@@ -87,6 +89,23 @@ export function leadSeconds(rttMs: number, playbackRate: number, marginMs = 40):
   return Math.min(0.8, Math.max(0.04, lead));
 }
 
+/**
+ * Which video feeds this detection. A hidden video that starts `lead` s ahead leaves [playhead, playhead + lead) with no
+ * results, so until the playhead reaches the first hidden frame every second detection is taken from the MAIN video
+ * (live quality, the same as today) and the rest from the hidden one. After that the hidden video owns every detection.
+ */
+export function sampleHiddenNow(tick: number, playhead: number, gapUntil: number, tailFrom = Infinity): boolean {
+  // The last `lead` seconds of a clip: the hidden video is pinned at the end and cannot be ahead any more ⇒ main video only.
+  if (playhead >= tailFrom) return false;
+  if (playhead >= gapUntil - 0.05) return true;
+  return (tick & 1) === 1;
+}
+
+/** Graceful degradation: too many draws found no result near the playhead ⇒ the look-ahead is not keeping up. */
+export function coverageDegraded(hits: number, draws: number, minDraws = 60, minShare = 0.5): boolean {
+  return draws >= minDraws && hits / draws < minShare;
+}
+
 export type DriftAction =
   | { kind: 'rate'; rate: number }
   | { kind: 'seek'; to: number };
@@ -104,6 +123,11 @@ export function driftAction(aheadT: number, mainT: number, lead: number, mainRat
     return { kind: 'rate', rate: mainRate * (1 + nudge) };
   }
   return { kind: 'rate', rate: mainRate };
+}
+
+/** A hidden video that is paused and has not reached its end needs a play() — whatever its readyState (iOS stays at 0 until then). An ended one would restart from 0, so it is left alone. */
+export function needsPlay(v: { paused: boolean; ended: boolean }): boolean {
+  return v.paused && !v.ended;
 }
 
 export function lookAheadDisabled(): boolean {
@@ -144,8 +168,11 @@ export class LookAheadVideo {
     Object.assign(v.style, { position: 'fixed', left: '0', top: '0', width: '2px', height: '2px', opacity: '0', pointerEvents: 'none', zIndex: '-1' });
     v.addEventListener('error', () => this.fail(`video error ${v.error?.code ?? ''}`));
     v.src = src;
+    v.autoplay = true;
+    v.setAttribute('muted', '');
     document.body.appendChild(v);
     this.video = v;
+    this.play(v); // iPhone: a 0x0 / readyState 0 hidden video never loads until play() is called (seen in the stage-2d phone test)
     this.startedAt = this.lastProgressAt = performance.now();
     this.unplayableSince = this.startedAt;
     return true;
@@ -178,8 +205,13 @@ export class LookAheadVideo {
       if (act.kind === 'seek') v.currentTime = Math.min(act.to, Math.max(0, (main.duration || act.to) - 0.001));
       else if (Math.abs(v.playbackRate - act.rate) > 0.005) v.playbackRate = Math.min(16, Math.max(0.0625, act.rate));
       // Only an autoplay refusal is fatal; an interrupted play() (a seek, a reload) just retries on the next tick.
-      if (v.paused && v.readyState >= 2) void v.play().catch((e: { name?: string }) => { if (e?.name === 'NotAllowedError') this.fail('autoplay refused'); });
+      if (needsPlay(v)) this.play(v);
     } catch (e) { this.fail(`sync threw ${(e as Error)?.message ?? ''}`.slice(0, 60)); }
+  }
+
+  /** play() a muted inline video. On iOS media is not even loaded until play() is called (preload is ignored), so this must NOT wait for readyState. */
+  private play(v: HTMLVideoElement) {
+    void v.play().catch((e: { name?: string }) => { if (e?.name === 'NotAllowedError') this.fail('autoplay refused'); });
   }
 
   /** Release the decoder. Safe to call repeatedly. */

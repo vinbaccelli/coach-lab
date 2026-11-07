@@ -31,8 +31,8 @@ import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { getPoseDetector } from '@/lib/poseDetection';
 import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
 import { continuePose } from '@/lib/liveDisplay';
-import { AheadBuffer, LookAheadVideo, leadSeconds, lookAheadDisabled, type AheadKp } from '@/lib/lookAheadPose';
-import { modeLabel } from '@/lib/skeletonSwitches';
+import { AheadBuffer, LookAheadVideo, leadSeconds, lookAheadDisabled, sampleHiddenNow, coverageDegraded, type AheadKp } from '@/lib/lookAheadPose';
+import { modeLabel, lookAheadDecodeOnly, lookAheadLeadOverride } from '@/lib/skeletonSwitches';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
@@ -2787,7 +2787,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonPrepSinceRef = useRef(0); // when the 'Preparing the skeleton…' hint first showed (0 = not showing)
     const aheadWatchdogRef = useRef<number | null>(null);
     const aheadEnabledRef = useRef(false);
-    useEffect(() => { aheadEnabledRef.current = !lookAheadDisabled(); poseDbg.event(modeLabel(aheadEnabledRef.current)); }, []); // TEMP-DEBUG-POSE: mode line
+    // Feasibility probe (?lookahead=decode / ?la_lead=): decode-only flag, lead override, gap end, per-tick counter, 2 s stats window.
+    const aheadDecodeOnlyRef = useRef(false);
+    const aheadLeadOverrideRef = useRef<number | null>(null);
+    const aheadGapUntilRef = useRef(0);
+    const aheadSoftBlockRef = useRef(false); // a coverage release lasts until the next play; a main-video stall release lasts the session
+    const aheadTickRef = useRef(0);
+    const aheadStatsRef = useRef({ at: 0, dets: 0, draws: 0, hits: 0, dropped: 0, total: 0, startedAt: 0, totDraws: 0, totHits: 0 });
+    useEffect(() => {
+      aheadEnabledRef.current = !lookAheadDisabled();
+      aheadDecodeOnlyRef.current = lookAheadDecodeOnly();
+      aheadLeadOverrideRef.current = lookAheadLeadOverride();
+      poseDbg.event(modeLabel(aheadEnabledRef.current)); // TEMP-DEBUG-POSE: mode line
+    }, []);
     /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
     const seekRequestRef = useRef<{ t: number; at: number } | null>(null);
     /** Whether the live pose was hidden as stale on the previous frame (log transitions only). */
@@ -4519,8 +4531,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // LOOK-AHEAD result: while the main video plays and the hidden video is up, every live
         // result belongs to the TIME-INDEXED buffer (it describes a frame the playhead has not
         // reached yet, or just reached). It never goes through the live display / pose cache below.
-        if (keypoints && meta && resV && !resV.paused && !bakingRef.current && aheadVideoRef.current && aheadVideoRef.current.ready) {
+        if (keypoints && meta && resV && !resV.paused && !bakingRef.current && aheadVideoRef.current && aheadVideoRef.current.ready && !aheadDecodeOnlyRef.current) {
           aheadBufRef.current.push(meta.videoTime, keypoints as AheadKp[]);
+          aheadStatsRef.current.dets++;
           aheadRttRef.current = aheadRttRef.current * 0.8 + 0.2 * Math.max(20, performance.now() - meta.requestedAt);
           renderDirtyRef.current = true;
           return;
@@ -4859,6 +4872,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         aheadVideoRef.current?.destroy();
         aheadVideoRef.current = null;
         aheadBufRef.current.clear();
+        aheadGapUntilRef.current = 0;
       };
       /** The hidden video to read frames from, or null ⇒ use the main video exactly as before. */
       const ensureAhead = (v: HTMLVideoElement): HTMLVideoElement | null => {
@@ -4887,16 +4901,44 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           poseDbg.event(`look-ahead failed (${a.failReason}) → previous live path`); // TEMP-DEBUG-POSE
           return null;
         }
-        const lead = leadSeconds(aheadRttRef.current, v.playbackRate || 1);
+        const leadOv = aheadLeadOverrideRef.current;
+        const lead = leadOv ?? leadSeconds(aheadRttRef.current, v.playbackRate || 1);
+        if (!aheadGapUntilRef.current) { aheadGapUntilRef.current = v.currentTime + lead; const q0 = v.getVideoPlaybackQuality?.(); aheadStatsRef.current = { at: performance.now(), dets: 0, draws: 0, hits: 0, dropped: q0?.droppedVideoFrames ?? 0, total: q0?.totalVideoFrames ?? 0, startedAt: performance.now(), totDraws: 0, totHits: 0 }; }
         a.sync(v, lead);
         // TEMP-DEBUG-POSE: one state line every ~2 s so a phone screenshot shows what the hidden video is really doing
         const nowMs = performance.now();
         if (a.video && nowMs - aheadLogAtRef.current > 2000) {
           aheadLogAtRef.current = nowMs;
-          poseDbg.event(`look-ahead: Δ${Math.round((a.video.currentTime - v.currentTime) * 1000)}ms (want ${Math.round(lead * 1000)}) · ready ${a.ready ? 'y' : 'n'} · paused ${a.video.paused ? 'y' : 'n'} · rate ${a.video.playbackRate.toFixed(2)} · ${a.video.videoWidth}x${a.video.videoHeight} vs ${v.videoWidth}x${v.videoHeight} · buf ${aheadBufRef.current.size} · rtt ${Math.round(aheadRttRef.current)}ms`);
+          // PROBE metrics for the last window: detections/s, buffer depth ahead of the playhead, how many draws found a result
+          // (coverage), the MAIN video's dropped frames, so a phone screenshot answers "can it keep up, does it hurt the main video".
+          const st = aheadStatsRef.current;
+          const secs = Math.max(0.5, (nowMs - st.at) / 1000);
+          const q = v.getVideoPlaybackQuality?.();
+          const dDrop = q ? q.droppedVideoFrames - st.dropped : 0;
+          const dTot = q ? q.totalVideoFrames - st.total : 0;
+          const lastT = aheadBufRef.current.lastTime;
+          const depthMs = lastT === null ? 0 : Math.round((lastT - v.currentTime) * 1000);
+          const cov = st.draws ? Math.round((100 * st.hits) / st.draws) : null;
+          poseDbg.event(`look-ahead: Δ${Math.round((a.video.currentTime - v.currentTime) * 1000)}ms (want ${Math.round(lead * 1000)}) · ready ${a.ready ? 'y' : 'n'} · paused ${a.video.paused ? 'y' : 'n'} · rate ${a.video.playbackRate.toFixed(2)} · rs ${a.video.readyState} ns ${a.video.networkState}${a.video.error ? ` err ${a.video.error.code}` : ''} · ${a.video.videoWidth}x${a.video.videoHeight} vs ${v.videoWidth}x${v.videoHeight} · buf ${aheadBufRef.current.size} · rtt ${Math.round(aheadRttRef.current)}ms`);
+          poseDbg.event(`la-stats: ${(st.dets / secs).toFixed(1)} det/s · depth ${depthMs >= 0 ? '+' : ''}${depthMs}ms · covered ${cov === null ? '–' : cov + '%'} · main dropped ${dDrop}/${dTot}${aheadDecodeOnlyRef.current ? ' · DECODE-ONLY' : ''}`);
+          // Graceful degradation: past the warm-up gap, if the buffer does not cover the playhead most of the time, release the
+          // hidden video and use the live path (never freeze, never show an increasingly outdated pose).
+          st.totDraws += st.draws; st.totHits += st.hits;
+          const tailFrom = Number.isFinite(v.duration) ? v.duration - lead - 0.05 : Infinity;
+          if (!aheadDecodeOnlyRef.current && v.currentTime > aheadGapUntilRef.current + 1 && v.currentTime < tailFrom && coverageDegraded(st.hits, st.draws, 30)) {
+            poseDbg.event(`look-ahead released: not keeping up (covered ${cov}%) → live path until the next play`); // TEMP-DEBUG-POSE
+            aheadBlockedRef.current = true;
+            aheadSoftBlockRef.current = true;
+            stopAhead();
+            return null;
+          }
+          aheadStatsRef.current = { ...st, at: nowMs, dets: 0, draws: 0, hits: 0, dropped: q?.droppedVideoFrames ?? 0, total: q?.totalVideoFrames ?? 0 };
         }
         if (!a.ready) return null;
+        if (aheadDecodeOnlyRef.current) return null; // decode-only probe: hidden video plays, detection stays on the main video
         aheadBufRef.current.prune(v.currentTime);
+        // Warm-up gap (deep lead): until the playhead reaches the first hidden frame, alternate main / hidden detections.
+        if (!sampleHiddenNow(aheadTickRef.current++, v.currentTime, aheadGapUntilRef.current, Number.isFinite(v.duration) ? v.duration - lead - 0.05 : Infinity)) return null;
         return a.video;
       };
 
@@ -5019,7 +5061,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
       // Resume-from-pause: snap the filter to the live frame instead of letting
       // a stale velocity estimate produce a jitter/lag burst on the first frames.
-      const onPlay = () => { livePoseClockRef.current = performance.now(); poseBridgeRef.current?.resetSmoothing(); stopAhead(); cancelScheduled(); scheduleNext(); };
+      const onPlay = () => { if (aheadSoftBlockRef.current) { aheadSoftBlockRef.current = false; aheadBlockedRef.current = false; } livePoseClockRef.current = performance.now(); poseBridgeRef.current?.resetSmoothing(); stopAhead(); cancelScheduled(); scheduleNext(); };
       // Returning from another app/tab: rVFC/rAF were throttled or dropped
       // while hidden — restart the loop (playing) or re-snap the static frame
       // (paused) so the skeleton never "disappears" after switching apps.
@@ -6249,7 +6291,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           !exactPoseLockRef.current && poseModeRef.current === 'live' && video && !bakingRef.current
             ? (lookupBakedPose(video.currentTime)
               // look-ahead: a pose detected for THIS video time, one round trip before the playhead got here
-              ?? (!video.paused && aheadVideoRef.current?.ready ? aheadBufRef.current.lookup(video.currentTime) : null))
+              ?? (!video.paused && aheadVideoRef.current?.ready && !aheadDecodeOnlyRef.current ? (() => {
+                const hit = aheadBufRef.current.lookup(video.currentTime);
+                aheadStatsRef.current.draws++; if (hit) aheadStatsRef.current.hits++;
+                return hit;
+              })() : null))
             : null;
 
         // A BAKED POSE OUTRANKS SUPPRESSION.
@@ -6334,7 +6380,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
           // Look-ahead healthy and playing: the live pose is no longer updated, so with no look-ahead result near the
           // playhead the right thing is to draw NOTHING, never the stale live pose (it would sit off the player).
-          const aheadOwnsDisplay = !bakedPose && !!video && !video.paused && !!aheadVideoRef.current?.ready;
+          const aheadOwnsDisplay = !bakedPose && !!video && !video.paused && !!aheadVideoRef.current?.ready && !aheadDecodeOnlyRef.current;
           if (!hiddenByTrackScope && !hiddenAsStale && !aheadOwnsDisplay && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
             // Motion smoothing (live path): while PLAYING, INTERPOLATE the
             // displayed pose between the last two detections (prev → latest,

@@ -60,7 +60,7 @@ const BUILD_ID = (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || 'local').slic
 export function poseDebugOn(): boolean {
   if (enabled !== null) return enabled;
   try {
-    const v = new URLSearchParams(window.location.search).get('debug');
+    const v = new URLSearchParams(window.location.search).get('debug')?.trim(); // a stray space ("debug=1 ") from a pasted link must still work
     if (v === '1') window.sessionStorage.setItem('am-temp-debug', '1');
     if (v === '0') window.sessionStorage.removeItem('am-temp-debug');
     enabled = window.sessionStorage.getItem('am-temp-debug') === '1';
