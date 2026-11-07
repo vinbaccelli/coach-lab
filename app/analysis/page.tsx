@@ -76,6 +76,7 @@ import {
   subjectBoxFromRegion,
 } from '@/lib/stroMotion';
 import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
+import { SKELETON_ANGLE_LABELS, hasAnyAngle, persistableRows } from '@/lib/skeletonAngles';
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
@@ -969,7 +970,7 @@ function Home() {
 
   // ── Snapshot model: single source of truth for Metrics analysis ──────────
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number; unit: string; type: string }>>([]);
+  const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number | null; unit: string; type: string }>>([]);
   const measurementColumnRef = useRef(measurementColumn);
   measurementColumnRef.current = measurementColumn;
   const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
@@ -1181,7 +1182,7 @@ function Home() {
     const col = measurementColumnRef.current;
     setSnapshots(prev => prev.map(s => s.id === id ? {
       ...s,
-      column: col.filter(m => m.type !== 'skeleton-angle'),
+      column: persistableRows(col),
       overlaysOn: showMeasurementOverlaysStateRef.current,
       overlayAdjustments,
       drawingsJson,
@@ -1254,7 +1255,7 @@ function Home() {
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
     const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
-    const liveColumn = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
+    const liveColumn = scrubRetiredLabels(persistableRows(measurementColumnRef.current));
     const overlay = canvasRef.current?.getCanvas?.();
     let screenshot: string | undefined;
     if (overlay) { try { screenshot = captureFrame(v, overlay, canvasRef.current?.getVideoBounds?.()); } catch { screenshot = undefined; } }
@@ -3794,7 +3795,7 @@ function Home() {
     // Gated: only the snapshot domain may write the snapshot store.
     if (analysisMode.kind !== 'snapshot') return;
     const ownerId = analysisMode.snapshotId;
-    const nonAngle = measurementColumn.filter(m => m.type !== 'skeleton-angle');
+    const nonAngle = persistableRows(measurementColumn);
     setSnapshots(prev => {
       const cur = prev.find(s => s.id === ownerId);
       if (!cur) return prev;
@@ -3814,9 +3815,9 @@ function Home() {
   }, [measurementColumn, analysisMode]);
 
   // Live skeleton angle updates → data column (throttled to avoid render storms)
-  const liveAnglesRef = useRef<Array<{ label: string; deg: number }>>([]);
+  const liveAnglesRef = useRef<Array<{ label: string; deg: number | null }>>([]);
   const angleThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ALL_ANGLE_LABELS = ['L Elbow', 'R Elbow', 'L Knee', 'R Knee'];
+  const ALL_ANGLE_LABELS = SKELETON_ANGLE_LABELS;
 
   const flushAnglesToColumn = useCallback(() => {
     // Mode isolation: live skeleton-angle rows belong to LIVE mode only. In
@@ -3827,7 +3828,7 @@ function Home() {
     const angleItems = ALL_ANGLE_LABELS.map(label => ({
       id: `skel-${label}`,
       label,
-      value: angleMap.get(label) ?? 0,
+      value: angleMap.get(label) ?? null, // unknown = null (shown as a dash), never 0°
       unit: '°',
       type: 'skeleton-angle',
     }));
@@ -3856,9 +3857,9 @@ function Home() {
     setFootLineUnsupported(reason);
   }, []);
 
-  const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number }>) => {
+  const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number | null }>) => {
     liveAnglesRef.current = angles;
-    if (!skeletonFirstDetectedRef.current && angles.length > 0) {
+    if (!skeletonFirstDetectedRef.current && hasAnyAngle(angles)) {
       skeletonFirstDetectedRef.current = true;
       setTimeout(() => setSkeletonConfirmOpen(true), 1500);
     }
@@ -7124,11 +7125,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         } catch { /* feet unavailable — the anatomical estimate still applies */ }
       }
       // Capture the LIVE column before snapshot creation (spec §6 step 1).
-      const liveCol = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
+      const liveCol = scrubRetiredLabels(persistableRows(measurementColumnRef.current));
       // Step 2: compute AI measurements on the frozen pose.
       const { computePhaseMeasurements } = require('@/lib/biomechanics/measurements');
       const meas = computePhaseMeasurements('auto', 'AI Detect', 0, kps);
-      const items: typeof measurementColumn = [];
+      const items: Array<(typeof measurementColumn)[number] & { value: number }> = [];
       if (meas.jointAngles.leftElbowDeg != null) items.push({ id: `ai-le-${Date.now()}`, label: 'L Elbow', value: Math.round(meas.jointAngles.leftElbowDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.rightElbowDeg != null) items.push({ id: `ai-re-${Date.now()}`, label: 'R Elbow', value: Math.round(meas.jointAngles.rightElbowDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.leftKneeDeg != null) items.push({ id: `ai-lk-${Date.now()}`, label: 'L Knee', value: Math.round(meas.jointAngles.leftKneeDeg), unit: '°', type: 'angle' });
@@ -9642,7 +9643,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           {/* Differential: if there's a previous arrowAngle in the column, offer to compute difference */}
           {pendingMeasurement.type === 'arrowAngle' && measurementColumn.some(m => m.type === 'arrowAngle') && (() => {
             const lastAngle = [...measurementColumn].reverse().find(m => m.type === 'arrowAngle');
-            if (!lastAngle) return null;
+            if (!lastAngle || lastAngle.value == null) return null;
             // Bearings are 0..360 now, so a raw subtraction wraps (350 vs 10
             // would read 340, not 20). Same helper the automatic flow uses.
             const diff = angleDifferenceDeg(pendingMeasurement.value, lastAngle.value);
