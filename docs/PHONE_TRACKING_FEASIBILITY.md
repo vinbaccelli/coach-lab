@@ -40,7 +40,7 @@ Not measured: motion blur, occlusion, two players (the locked path asks for 4 po
 
 ## 3. Why the skeleton "gets drunk" (ranked)
 1. **No memory between frames + the person is small in the frame.** The model's detector sees a fixed small version of the whole frame, so the fewer pixels the player covers, the less it can place the joints. (measured: §2)
-2. **The repair cannot fix it.** A median over 5 samples fixes 1–2 bad frames, not a stretch of them; a gap longer than 0.25 s splits the track and the display snaps over a gap > 0.5 s (`aiTrackLock.ts`, `Canvas.tsx:2367`). So the skeleton jumps, vanishes and returns: "drunk". (code + measured)
+2. **The repair cannot fix it.** A median over 5 samples fixes 1–2 bad frames, not a stretch of them; a gap longer than 0.25 s splits the track and the display snaps over a gap > 0.5 s (`aiTrackLock.ts`, `Canvas.tsx:2357`; split constant `aiTrackLock.ts:28`). So the skeleton jumps, vanishes and returns: "drunk". (code + measured)
 3. **Not the model tier.** `max` is already `heavy` + flip test at 60 fps (`mediapipePose.ts:307`). Spending more on the same whole-frame pass is the wrong lever. (code)
 4. **Untested, possible:** motion blur on the racket arm, the 4-pose locked path, a different clip orientation. I need the screenshots or the clip to separate these.
 
@@ -62,7 +62,7 @@ Not measured: motion blur, occlusion, two players (the locked path asks for 4 po
 - **CoachNow and Dartfish (their own words, unverified):** CoachNow advertises "AI-enabled skeleton tracking" with tap-a-joint angles inside its paid Analyze suite ([CoachNow blog](https://coachnow.io/blog/using-coachnows-ai-tools), [help center](https://help.coachnow.io/en/articles/8533900-what-s-included-with-coachnow-analyze)); I found no statement of where it runs. For Dartfish, one third-party review mentions an AI-assisted body overlay ([review](https://www.bow-international.com/?p=7278)); I found no official page. "Responsive" can come from precomputing the track once, not from live inference. We already work that way for AI Track (bake once, play back).
 
 ## 7. Proposed order (smallest steps first)
-1. **Phone download fix** (small, safe): use the share sheet or a new tab instead of a same-tab blob link on phones; needs one answer from the tester (§ report). The "add column" control needs a repro.
+1. **Phone download fix** (small, safe): use the share sheet or a new tab instead of a same-tab blob link on phones; needs one answer from the tester (see the reply that accompanies this PR). The "add column" control needs a repro.
 2. **ROI crop in AI Track** (§5.1) with tests and the same measurement script: the main visible win.
 3. **`full` model on phones** (§5.2), measured with the stage trail on a real phone.
 4. **Motion Layer racket on phones:** spike (a), then decide (b) or (c).
