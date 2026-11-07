@@ -7,12 +7,13 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const CLIP = process.env.CLIP;
 // Bundle the REAL crop-tracking geometry for the harness page.
 const OUT = path.join(ROOT, 'bench-out'); fs.mkdirSync(OUT, { recursive: true });
-require('child_process').execFileSync('npx', ['esbuild', path.join(ROOT, 'lib/skeletonCrop.ts'), '--bundle', '--format=esm', '--outfile=' + path.join(OUT, 'skeletonCrop.mjs')], { cwd: ROOT, stdio: 'ignore' });
+for (const f of ['skeletonCrop', 'lookAheadPose']) require('child_process').execFileSync('npx', ['esbuild', path.join(ROOT, 'lib/' + f + '.ts'), '--bundle', '--format=esm', '--outfile=' + path.join(OUT, f + '.mjs')], { cwd: ROOT, stdio: 'ignore' });
 const map = (u) => {
   if (u === '/' || u === '/harness.html') return path.join(__dirname, 'harness.html');
   if (u === '/vision_bundle.mjs') return path.join(ROOT, 'node_modules/@mediapipe/tasks-vision/vision_bundle.mjs');
   if (u.startsWith('/mediapipe-wasm/') || u.startsWith('/models/')) return path.join(ROOT, 'public', u);
-  if (u === '/skeletonCrop.mjs') return path.join(OUT, 'skeletonCrop.mjs');
+  if (u === '/skeletonCrop.mjs' || u === '/lookAheadPose.mjs') return path.join(OUT, u.slice(1));
+  if (u === '/lookahead.html') return path.join(__dirname, 'lookahead.html');
   if (u === '/clip.webm') return CLIP;
   return null;
 };
