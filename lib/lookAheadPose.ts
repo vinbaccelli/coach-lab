@@ -149,7 +149,15 @@ export class LookAheadVideo {
     return true;
   }
 
-  get ready() { return !!this.video && !this.failed && this.video.readyState >= 2 && this.video.videoWidth > 0; }
+  /**
+   * Usable right now: decodable AND actually advancing (a hidden video a phone refuses to play would
+   * otherwise "be ready" while frozen and feed a frozen frame). Not advancing for > 0.8 s ⇒ not ready,
+   * the caller uses the previous live path until it moves again (or it is marked failed after 2.5 s).
+   */
+  get ready() {
+    const v = this.video;
+    return !!v && !this.failed && v.readyState >= 2 && v.videoWidth > 0 && performance.now() - this.lastProgressAt < 800;
+  }
 
   /** Call every detection tick while the main video plays. */
   sync(main: HTMLVideoElement, lead: number) {

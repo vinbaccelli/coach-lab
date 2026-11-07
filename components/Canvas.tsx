@@ -2781,6 +2781,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const aheadVideoRef = useRef<LookAheadVideo | null>(null);
     const aheadBufRef = useRef(new AheadBuffer());
     const aheadRttRef = useRef(120);
+    const aheadLogAtRef = useRef(0);
     const aheadEnabledRef = useRef(false);
     useEffect(() => { aheadEnabledRef.current = !lookAheadDisabled(); poseDbg.event(modeLabel(aheadEnabledRef.current)); }, []); // TEMP-DEBUG-POSE: mode line
     /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
@@ -4511,7 +4512,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // LOOK-AHEAD result: while the main video plays and the hidden video is up, every live
         // result belongs to the TIME-INDEXED buffer (it describes a frame the playhead has not
         // reached yet, or just reached). It never goes through the live display / pose cache below.
-        if (keypoints && meta && resV && !resV.paused && !bakingRef.current && aheadVideoRef.current && !aheadVideoRef.current.failed) {
+        if (keypoints && meta && resV && !resV.paused && !bakingRef.current && aheadVideoRef.current && aheadVideoRef.current.ready) {
           aheadBufRef.current.push(meta.videoTime, keypoints as AheadKp[]);
           aheadRttRef.current = aheadRttRef.current * 0.8 + 0.2 * Math.max(20, performance.now() - meta.requestedAt);
           renderDirtyRef.current = true;
@@ -4867,6 +4868,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
         const lead = leadSeconds(aheadRttRef.current, v.playbackRate || 1);
         a.sync(v, lead);
+        // TEMP-DEBUG-POSE: one state line every ~2 s so a phone screenshot shows what the hidden video is really doing
+        const nowMs = performance.now();
+        if (a.video && nowMs - aheadLogAtRef.current > 2000) {
+          aheadLogAtRef.current = nowMs;
+          poseDbg.event(`look-ahead: Δ${Math.round((a.video.currentTime - v.currentTime) * 1000)}ms (want ${Math.round(lead * 1000)}) · ready ${a.ready ? 'y' : 'n'} · paused ${a.video.paused ? 'y' : 'n'} · rate ${a.video.playbackRate.toFixed(2)} · ${a.video.videoWidth}x${a.video.videoHeight} vs ${v.videoWidth}x${v.videoHeight} · buf ${aheadBufRef.current.size} · rtt ${Math.round(aheadRttRef.current)}ms`);
+        }
         if (!a.ready) return null;
         aheadBufRef.current.prune(v.currentTime);
         return a.video;
@@ -6221,7 +6228,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           !exactPoseLockRef.current && poseModeRef.current === 'live' && video && !bakingRef.current
             ? (lookupBakedPose(video.currentTime)
               // look-ahead: a pose detected for THIS video time, one round trip before the playhead got here
-              ?? (!video.paused && aheadVideoRef.current ? aheadBufRef.current.lookup(video.currentTime) : null))
+              ?? (!video.paused && aheadVideoRef.current?.ready ? aheadBufRef.current.lookup(video.currentTime) : null))
             : null;
 
         // A BAKED POSE OUTRANKS SUPPRESSION.
@@ -6304,7 +6311,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               ? `stale pose hidden (${hiddenAsStalePaused ? `pose t=${stamp!.t.toFixed(2)}, video t=${video!.currentTime.toFixed(2)}` : 'no fresh result'})`
               : 'stale pose shown again');
           }
-          if (!hiddenByTrackScope && !hiddenAsStale && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
+          // Look-ahead healthy and playing: the live pose is no longer updated, so with no look-ahead result near the
+          // playhead the right thing is to draw NOTHING, never the stale live pose (it would sit off the player).
+          const aheadOwnsDisplay = !bakedPose && !!video && !video.paused && !!aheadVideoRef.current?.ready;
+          if (!hiddenByTrackScope && !hiddenAsStale && !aheadOwnsDisplay && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
             // Motion smoothing (live path): while PLAYING, INTERPOLATE the
             // displayed pose between the last two detections (prev → latest,
             // blended by sample age). Bounded — no overshoot, no stale-freeze

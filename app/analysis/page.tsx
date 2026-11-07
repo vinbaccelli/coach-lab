@@ -1538,6 +1538,7 @@ function Home() {
     try {
       v.pause();
       setProcessingStatus('Loading precision tracking model…');
+      const tModel = performance.now(); // TEMP-DEBUG-POSE
       const mp = await import('@/lib/mediapipePose');
       const params = mp.TRACK_QUALITY[quality];
       await seekVideoTo(start);
@@ -1545,6 +1546,7 @@ function Home() {
       // the whole pass so MoveNet and MediaPipe coords never mix in one track.
       const probe = await mp.detectPosePrecise(v, params).catch(() => null);
       const useMediaPipe = !!probe;
+      poseDbg.event(`AI Track: model ready in ${Math.round(performance.now() - tModel)} ms (${probe ? 'MediaPipe' : 'MoveNet fallback'}, ${params.model}, ${params.fps} fps)`); // TEMP-DEBUG-POSE
       // LOCKED PLAYER (lib/aiTrackLock.ts). No lock, or AI_TRACK_USE_LOCK off →
       // `lock` is null and everything below runs exactly as before.
       passFinalRef.current = null;
@@ -1654,6 +1656,7 @@ function Home() {
               gaps++;
             }
             done++;
+            if (done % 10 === 0) poseDbg.event(`AI Track ${done}/${total} · ${Math.round((performance.now() - passT0) / done)} ms/frame`); // TEMP-DEBUG-POSE
             if (done % 3 === 0 || done === total - 1) {
               setProcessingStatus(`AI-tracking your locked player… ${Math.round(((done + 1) / total) * 100)}% (${params.speedLabel} · real feet)`);
             }
@@ -1703,6 +1706,7 @@ function Home() {
           // scheduler) feeds the bake via the bridge hook — give it one beat.
           await new Promise((r) => setTimeout(r, 90));
         }
+        if (k % 10 === 0) poseDbg.event(`AI Track ${k}/${total} · ${Math.round((performance.now() - passT0) / k)} ms/frame`); // TEMP-DEBUG-POSE
         if (k % 3 === 0 || k === total) {
           setProcessingStatus(`AI-tracking… ${Math.round((k / total) * 100)}% (${params.speedLabel}${useMediaPipe ? ' · real feet' : ''})`);
         }
