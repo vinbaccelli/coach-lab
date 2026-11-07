@@ -29,7 +29,8 @@ import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { getPoseDetector } from '@/lib/poseDetection';
-import { refineBakedTrack } from '@/lib/skeletonRefine';
+import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
+import { continuePose } from '@/lib/liveDisplay';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
@@ -2769,6 +2770,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      * track or a restored pose written by anything else is never judged by it.
      */
     const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number } | null>(null);
+    // Temporary rollback switch (localStorage anglemotion:skeleton-legacy=1, read once at mount): previous live display blend.
+    const legacyLiveDisplayRef = useRef(false);
+    useEffect(() => { legacyLiveDisplayRef.current = isLegacySkeleton(); }, []);
     /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
     const seekRequestRef = useRef<{ t: number; at: number } | null>(null);
     /** Whether the live pose was hidden as stale on the previous frame (log transitions only). */
@@ -6269,7 +6273,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const age = performance.now() - latestS.ts;
               // a: 0 → show prev pose, 1 → show latest pose. Clamped, no overshoot.
               const a = Math.min(1, Math.max(0, age / interval));
-              if (a < 0.98) {
+              if (!legacyLiveDisplayRef.current) {
+                // Continue the motion from the NEWEST detection instead of replaying the
+                // previous one (lib/liveDisplay.ts: ≈ one detection interval less lag,
+                // measured in lib/skeletonBench/liveSim.ts). Legacy switch keeps the blend below.
+                displayKps = continuePose(latestS, prevS, performance.now()) as typeof displayKps;
+              } else if (a < 0.98) {
                 displayKps = latestS.kps.map((k, i) => {
                   const p = prevS.kps[i];
                   if (!p || k.score < 0.2 || p.score < 0.2) return k;
