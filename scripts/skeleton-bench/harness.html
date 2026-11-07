@@ -1,6 +1,7 @@
 <!doctype html><meta charset=utf-8><video id=v src=/clip.webm muted playsinline></video><canvas id=c></canvas>
 <script type=module>
 import { FilesetResolver, PoseLandmarker } from '/vision_bundle.mjs';
+import * as CROP from '/skeletonCrop.mjs'; // the REAL lib/skeletonCrop.ts, bundled by server.js
 const NAMES = ['nose','left_eye_inner','left_eye','left_eye_outer','right_eye_inner','right_eye','right_eye_outer','left_ear','right_ear','mouth_l','mouth_r','left_shoulder','right_shoulder','left_elbow','right_elbow','left_wrist','right_wrist','left_pinky','right_pinky','left_index','right_index','left_thumb','right_thumb','left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle','left_heel','right_heel','left_foot_index','right_foot_index'];
 const USE = ['left_shoulder','right_shoulder','left_elbow','right_elbow','left_wrist','right_wrist','left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle'];
 window.run = async (cfg) => {
@@ -30,6 +31,23 @@ window.run = async (cfg) => {
     const seedBox = last ? boxOf(last, cfg.pad) : (cfg.seed ? boxOf(cfg.seed, cfg.pad) : (A ? boxOf(A, cfg.pad) : null));
     if (seedBox) { B = detect(seedBox); }
     tms.roi.push(performance.now() - a0); out.roi.push(B); if (B) last = B; else if (A) last = A;
+  }
+  if (cfg.tracked) { // decisions come from the real skeletonCrop.ts; detection is the same crop/full detect as above
+    const COCO = ['nose','left_eye','right_eye','left_ear','right_ear','left_shoulder','right_shoulder','left_elbow','right_elbow','left_wrist','right_wrist','left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle'];
+    const toArr = (k) => k && COCO.map(n => ({ x: k[n].x, y: k[n].y, score: k[n].vis }));
+    const toRec = (a, k) => k; // keep the record form for output
+    let box = cfg.seed ? CROP.trackBox(toArr(cfg.seed)) : null; out.tracked = []; out.trackCounts = { crop: 0, full: 0, reacquire: 0 };
+    for (let i = 0; i < cfg.n; i++) {
+      const t = cfg.t0 + i * step; await seek(t); drawBase();
+      let res = null;
+      if (CROP.shouldCrop(box, H)) {
+        const r = CROP.cropRect(box, W, H); const k = detect(r);
+        if (k && CROP.acceptCropPose(box, toArr(k), r, W, H)) { res = k; out.trackCounts.crop++; } else out.trackCounts.reacquire++;
+      }
+      if (!res) { res = detect(null); out.trackCounts.full++; }
+      out.tracked.push(res);
+      const b = res && CROP.trackBox(toArr(res)); if (b) box = b;
+    }
   }
   out.ms = { full: tms.full.reduce((a, b) => a + b, 0) / tms.full.length, roi: tms.roi.reduce((a, b) => a + b, 0) / tms.roi.length };
   return out;

@@ -10,6 +10,7 @@ import React, {
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
+import { computeSkeletonAngles, formatAngleValue } from '@/lib/skeletonAngles';
 import { emitTourSignal, reportTourState } from '@/lib/tourSignals';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
@@ -28,7 +29,8 @@ import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { getPoseDetector } from '@/lib/poseDetection';
-import { smoothBakedTrack } from '@/lib/trackSmoothing';
+import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
+import { continuePose } from '@/lib/liveDisplay';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
@@ -443,7 +445,7 @@ export interface CanvasProps {
   onProcessingStatus?: (msg: string | null) => void;
   onSkeletonFocusSet?: () => void;
   /** Called each frame with live skeleton angle values for the data column */
-  onSkeletonAnglesUpdate?: (angles: Array<{ label: string; deg: number }>) => void;
+  onSkeletonAnglesUpdate?: (angles: Array<{ label: string; deg: number | null }>) => void;
   /**
    * Step 1 Mode Guard: when false (snapshot/frame domain active), live pose
    * detection still feeds the time-indexed cache but must NOT write the
@@ -461,7 +463,7 @@ export interface CanvasProps {
   /** Called when a drawing measurement is committed (angle, ruler, etc.) */
   onMeasurementCommit?: (measurement: { type: 'angle' | 'ruler' | 'arrowAngle'; value: number; unit: string }) => void;
   /** Measurements to render in the right-side column overlay */
-  measurementColumnItems?: Array<{ id: string; label: string; value: number; unit: string }> | null;
+  measurementColumnItems?: Array<{ id: string; label: string; value: number | null; unit: string }> | null;
   /**
    * Header label for the data column. Reflects the locked owner: the phase
    * label in snapshot mode, "FRAME N" in frame mode, or "DATA COLUMN" when live.
@@ -2427,7 +2429,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      */
     const dockTopRef = useRef(0);
 
-    const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
+    const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number | null; unit: string }> | null>(null);
     const mcPosRef = useRef<{ x: number; y: number }>({ x: 0.85, y: 0.02 });
     const mcTitleRef = useRef<string>(measurementColumnTitle);
     const mcDraggingRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
@@ -2768,6 +2770,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      * track or a restored pose written by anything else is never judged by it.
      */
     const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number } | null>(null);
+    // Temporary rollback switch (localStorage anglemotion:skeleton-legacy=1, read once at mount): previous live display blend.
+    const legacyLiveDisplayRef = useRef(false);
+    useEffect(() => { legacyLiveDisplayRef.current = isLegacySkeleton(); }, []);
     /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
     const seekRequestRef = useRef<{ t: number; at: number } | null>(null);
     /** Whether the live pose was hidden as stale on the previous frame (log transitions only). */
@@ -3850,7 +3855,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (opts?.splitGapSec !== undefined) {
           const segs = splitAtGaps(kept, opts.splitGapSec).filter((g) => g.length >= 2);
           if (!segs.length) return 0;
-          const made = segs.map((g) => ({ samples: smoothBakedTrack(g), start: g[0].t, end: g[g.length - 1].t, locked: opts.locked }));
+          const made = segs.map((g) => ({ samples: refineBakedTrack(g), start: g[0].t, end: g[g.length - 1].t, locked: opts.locked }));
           bakedTracksRef.current = [
             ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
             ...made,
@@ -3860,7 +3865,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
         // Offline post-pass: outlier repair + centered (zero-lag) smoothing —
         // the precision live tracking can mathematically never reach.
-        const smoothed = smoothBakedTrack(kept);
+        const smoothed = refineBakedTrack(kept);
         // Add as a new tracked section, replacing any overlapping older track.
         bakedTracksRef.current = [
           ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
@@ -6268,7 +6273,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const age = performance.now() - latestS.ts;
               // a: 0 → show prev pose, 1 → show latest pose. Clamped, no overshoot.
               const a = Math.min(1, Math.max(0, age / interval));
-              if (a < 0.98) {
+              if (!legacyLiveDisplayRef.current) {
+                // Continue the motion from the NEWEST detection instead of replaying the
+                // previous one (lib/liveDisplay.ts: ≈ one detection interval less lag,
+                // measured in lib/skeletonBench/liveSim.ts). Legacy switch keeps the blend below.
+                displayKps = continuePose(latestS, prevS, performance.now()) as typeof displayKps;
+              } else if (a < 0.98) {
                 displayKps = latestS.kps.map((k, i) => {
                   const p = prevS.kps[i];
                   if (!p || k.score < 0.2 || p.score < 0.2) return k;
@@ -6298,26 +6308,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const emitBaked = !!bakedPose && animTickRef.current % 6 === 0;
             if (onSkeletonAnglesUpdateRef.current && (emitBaked || (!bakedPose && latestKeypointsRef.current !== lastEmittedKpsRef.current))) {
               lastEmittedKpsRef.current = latestKeypointsRef.current;
-              const kps = displayKps;
-              const scoreMin = 0.2;
-              const angleDefs = [
-                { indices: [7, 5, 9], label: 'L Elbow' },
-                { indices: [8, 6, 10], label: 'R Elbow' },
-                { indices: [13, 11, 15], label: 'L Knee' },
-                { indices: [14, 12, 16], label: 'R Knee' },
-              ];
-              const angles: Array<{ label: string; deg: number }> = [];
-              for (const { indices: [vi, ai, bi], label } of angleDefs) {
-                const v = kps[vi], a = kps[ai], b = kps[bi];
-                if (!v || !a || !b || v.score < scoreMin || a.score < scoreMin || b.score < scoreMin) continue;
-                const v1x = a.x - v.x, v1y = a.y - v.y;
-                const v2x = b.x - v.x, v2y = b.y - v.y;
-                const mag = Math.sqrt(v1x * v1x + v1y * v1y) * Math.sqrt(v2x * v2x + v2y * v2y);
-                if (mag < 1) continue;
-                const deg = Math.round(Math.acos(Math.min(1, Math.max(-1, (v1x * v2x + v1y * v2y) / mag))) * 180 / Math.PI);
-                angles.push({ label, deg });
-              }
-              onSkeletonAnglesUpdateRef.current(angles);
+              onSkeletonAnglesUpdateRef.current(computeSkeletonAngles(displayKps));
             }
             ctx.restore();
           } else if (
@@ -7149,7 +7140,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 ctx.fillText(item.label, mcX + pad, y);
                 ctx.fillStyle = '#93C5FD';
                 ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
-                const valText = `${item.value}${item.unit}`;
+                const valText = formatAngleValue(item.value, item.unit);
                 ctx.fillText(valText, mcX + mcW - pad - ctx.measureText(valText).width, y);
               }
             }

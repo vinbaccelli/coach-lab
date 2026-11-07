@@ -76,6 +76,9 @@ import {
   subjectBoxFromRegion,
 } from '@/lib/stroMotion';
 import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
+import { SKELETON_ANGLE_LABELS, hasAnyAngle, persistableRows } from '@/lib/skeletonAngles';
+import { isLegacySkeleton } from '@/lib/skeletonRefine';
+import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
@@ -969,7 +972,7 @@ function Home() {
 
   // ── Snapshot model: single source of truth for Metrics analysis ──────────
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number; unit: string; type: string }>>([]);
+  const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number | null; unit: string; type: string }>>([]);
   const measurementColumnRef = useRef(measurementColumn);
   measurementColumnRef.current = measurementColumn;
   const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
@@ -1181,7 +1184,7 @@ function Home() {
     const col = measurementColumnRef.current;
     setSnapshots(prev => prev.map(s => s.id === id ? {
       ...s,
-      column: col.filter(m => m.type !== 'skeleton-angle'),
+      column: persistableRows(col),
       overlaysOn: showMeasurementOverlaysStateRef.current,
       overlayAdjustments,
       drawingsJson,
@@ -1254,7 +1257,7 @@ function Home() {
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
     const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
-    const liveColumn = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
+    const liveColumn = scrubRetiredLabels(persistableRows(measurementColumnRef.current));
     const overlay = canvasRef.current?.getCanvas?.();
     let screenshot: string | undefined;
     if (overlay) { try { screenshot = captureFrame(v, overlay, canvasRef.current?.getVideoBounds?.()); } catch { screenshot = undefined; } }
@@ -1610,19 +1613,37 @@ function Home() {
         }
         if (inSection(lockFrameT, start, end)) canvasRef.current?.addBakeSample?.(lockFrameT, first.pose);
         canvasRef.current?.setAiTrackFollow?.({ box: seedBox, label });
+        // Crop tracking for a SMALL locked player (lib/skeletonCrop.ts): try a crop around the
+        // followed box first; the crop pose must still pass followStep (so it continues the
+        // locked player and not a known other), else this frame uses the unchanged full-frame
+        // multi-person detection below. Legacy switch ⇒ previous behaviour exactly.
+        const cropOn = !isLegacySkeleton();
+        let cropFrames = 0, cropMisses = 0;
         const walk = async (times: number[]) => {
           let st: FollowState = startFollow(seedBox, lockFrameT, seedOthers);
+          const tracker = cropOn ? mp.newCropTracker(seedBox) : null;
           let inGap = false;
           for (const t of times) {
             if (precisionAbortRef.current) return;
             await seekTo(t);
             const ft = v.currentTime;
             let next = st;
-            const r = await detectLocked((c) => {
-              const f = followStep(st, c, ft);
-              next = f.state;
-              return f.index;
-            });
+            let cropPose: Awaited<ReturnType<typeof mp.detectCropOnly>> = null;
+            if (tracker) {
+              cropPose = await mp.detectCropOnly(v, params, tracker).catch(() => null);
+              if (cropPose) {
+                const f = followStep(st, [cropPose], ft);
+                if (f.index === 0) { next = f.state; cropFrames++; } else { cropPose = null; cropMisses++; }
+              }
+            }
+            const r = cropPose
+              ? { pose: cropPose, candidates: 1, available: true }
+              : await detectLocked((c) => {
+                const f = followStep(st, c, ft);
+                next = f.state;
+                return f.index;
+              });
+            if (r.pose && tracker && !cropPose) tracker.box = poseBox(r.pose) ?? tracker.box;
             if (r.pose) {
               st = next;
               inGap = false;
@@ -1641,6 +1662,8 @@ function Home() {
         await walk(forward);
         await walk(backward);
         canvasRef.current?.setAiTrackFollow?.(null);
+        if (cropOn && process.env.NODE_ENV !== 'production') console.log(`[PrecisionTrack] locked crop tracking: ${cropFrames} crop frames, ${cropMisses} rejected by the identity check`);
+        if (cropOn) poseDbg.event(`locked crop: ${cropFrames} crop frames · ${total - cropFrames} full-frame/gap · ${cropMisses} identity-rejected`); // TEMP-DEBUG-POSE
         if (precisionAbortRef.current) {
           canvasRef.current?.discardBakeCapture?.();
           return 0;
@@ -1662,12 +1685,18 @@ function Home() {
       const step = 1 / params.fps;
       const total = Math.max(1, Math.ceil((end - start) / step));
       const passT0 = performance.now();
+      // Crop tracking for SMALL players (lib/skeletonCrop.ts); large players and the
+      // legacy switch keep the exact previous full-frame call. Seeded from the first
+      // detection, else from the skeleton on screen (a far player the full frame misses).
+      const cropTracker = useMediaPipe && !isLegacySkeleton()
+        ? mp.newCropTracker(poseBox(probe) ?? poseBox(canvasRef.current?.getSkeletonKeypoints?.() ?? null))
+        : null;
       for (let k = 1; k <= total; k++) {
         if (precisionAbortRef.current) break;
         const t = Math.min(end, start + k * step);
         await seekTo(t);
         if (useMediaPipe) {
-          const kps = await mp.detectPosePrecise(v, params).catch(() => null);
+          const kps = await (cropTracker ? mp.detectPosePreciseTracked(v, params, cropTracker) : mp.detectPosePrecise(v, params)).catch(() => null);
           if (kps) canvasRef.current?.addBakeSample?.(v.currentTime, kps);
         } else {
           // MoveNet fallback: the paused-frame 'seeked' detection (Canvas pose
@@ -1684,6 +1713,9 @@ function Home() {
         return 0;
       }
       const kept = canvasRef.current?.finishBakeCapture?.({ start, end }) ?? 0;
+      if (cropTracker && process.env.NODE_ENV !== 'production') {
+        console.log(`[PrecisionTrack] crop tracking: ${cropTracker.cropFrames} crop / ${cropTracker.fullFrames} full-frame / ${cropTracker.reacquires} re-acquires`);
+      }
       if (kept >= 2 && process.env.NODE_ENV !== 'production') {
         const passMs = performance.now() - passT0;
         console.log(`[PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);
@@ -3794,7 +3826,7 @@ function Home() {
     // Gated: only the snapshot domain may write the snapshot store.
     if (analysisMode.kind !== 'snapshot') return;
     const ownerId = analysisMode.snapshotId;
-    const nonAngle = measurementColumn.filter(m => m.type !== 'skeleton-angle');
+    const nonAngle = persistableRows(measurementColumn);
     setSnapshots(prev => {
       const cur = prev.find(s => s.id === ownerId);
       if (!cur) return prev;
@@ -3814,9 +3846,9 @@ function Home() {
   }, [measurementColumn, analysisMode]);
 
   // Live skeleton angle updates → data column (throttled to avoid render storms)
-  const liveAnglesRef = useRef<Array<{ label: string; deg: number }>>([]);
+  const liveAnglesRef = useRef<Array<{ label: string; deg: number | null }>>([]);
   const angleThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ALL_ANGLE_LABELS = ['L Elbow', 'R Elbow', 'L Knee', 'R Knee'];
+  const ALL_ANGLE_LABELS = SKELETON_ANGLE_LABELS;
 
   const flushAnglesToColumn = useCallback(() => {
     // Mode isolation: live skeleton-angle rows belong to LIVE mode only. In
@@ -3827,7 +3859,7 @@ function Home() {
     const angleItems = ALL_ANGLE_LABELS.map(label => ({
       id: `skel-${label}`,
       label,
-      value: angleMap.get(label) ?? 0,
+      value: angleMap.get(label) ?? null, // unknown = null (shown as a dash), never 0°
       unit: '°',
       type: 'skeleton-angle',
     }));
@@ -3856,9 +3888,9 @@ function Home() {
     setFootLineUnsupported(reason);
   }, []);
 
-  const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number }>) => {
+  const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number | null }>) => {
     liveAnglesRef.current = angles;
-    if (!skeletonFirstDetectedRef.current && angles.length > 0) {
+    if (!skeletonFirstDetectedRef.current && hasAnyAngle(angles)) {
       skeletonFirstDetectedRef.current = true;
       setTimeout(() => setSkeletonConfirmOpen(true), 1500);
     }
@@ -7124,11 +7156,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         } catch { /* feet unavailable — the anatomical estimate still applies */ }
       }
       // Capture the LIVE column before snapshot creation (spec §6 step 1).
-      const liveCol = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
+      const liveCol = scrubRetiredLabels(persistableRows(measurementColumnRef.current));
       // Step 2: compute AI measurements on the frozen pose.
       const { computePhaseMeasurements } = require('@/lib/biomechanics/measurements');
       const meas = computePhaseMeasurements('auto', 'AI Detect', 0, kps);
-      const items: typeof measurementColumn = [];
+      const items: Array<(typeof measurementColumn)[number] & { value: number }> = [];
       if (meas.jointAngles.leftElbowDeg != null) items.push({ id: `ai-le-${Date.now()}`, label: 'L Elbow', value: Math.round(meas.jointAngles.leftElbowDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.rightElbowDeg != null) items.push({ id: `ai-re-${Date.now()}`, label: 'R Elbow', value: Math.round(meas.jointAngles.rightElbowDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.leftKneeDeg != null) items.push({ id: `ai-lk-${Date.now()}`, label: 'L Knee', value: Math.round(meas.jointAngles.leftKneeDeg), unit: '°', type: 'angle' });
@@ -9642,7 +9674,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           {/* Differential: if there's a previous arrowAngle in the column, offer to compute difference */}
           {pendingMeasurement.type === 'arrowAngle' && measurementColumn.some(m => m.type === 'arrowAngle') && (() => {
             const lastAngle = [...measurementColumn].reverse().find(m => m.type === 'arrowAngle');
-            if (!lastAngle) return null;
+            if (!lastAngle || lastAngle.value == null) return null;
             // Bearings are 0..360 now, so a raw subtraction wraps (350 vs 10
             // would read 340, not 20). Same helper the automatic flow uses.
             const diff = angleDifferenceDeg(pendingMeasurement.value, lastAngle.value);

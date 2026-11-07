@@ -199,7 +199,7 @@ interface ToolPaletteProps {
   /** Add a manual note to the data column */
   onAddNote?: () => void;
   /** Current measurement column items for display in toolbar */
-  measurementColumnItems?: Array<{ id: string; label: string; value: number; unit: string }>;
+  measurementColumnItems?: Array<{ id: string; label: string; value: number | null; unit: string }>;
   /** Delete a specific measurement by id */
   onDeleteMeasurement?: (id: string) => void;
   /** Quick screenshot → docs. When provided, shows a camera button in the footer. */

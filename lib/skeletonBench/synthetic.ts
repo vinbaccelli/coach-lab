@@ -141,6 +141,18 @@ export function injectSwaps(seq: Seq, frames: number[], pairs: ReadonlyArray<rea
   return o;
 }
 
+/** "Legs as arms": swap each arm joint with the same-side leg joint on the given frames (a sustained wrong layout). */
+export function injectLayoutSwap(seq: Seq, frames: number[]): Seq {
+  const o = cloneSeq(seq);
+  const pairs: Array<[string, string]> = [['left_elbow', 'left_knee'], ['left_wrist', 'left_ankle'], ['right_elbow', 'right_knee'], ['right_wrist', 'right_ankle']];
+  for (const f of frames) {
+    const p = o[f];
+    if (!p) continue;
+    for (const [a, b] of pairs) { const t = p[a]; p[a] = p[b]; p[b] = t; }
+  }
+  return o;
+}
+
 export function dropFrames(seq: Seq, frames: number[]): Seq {
   const o = cloneSeq(seq);
   for (const f of frames) o[f] = null;
@@ -170,3 +182,10 @@ export function boxBlur(seq: Seq, half: number): Seq {
     return o;
   });
 }
+
+import type { TrackSample } from '../trackSmoothing';
+/** Seq ⇄ TrackSample (names kept), so the production track functions can run on synthetic tracks. */
+export const toTrackSamples = (s: Seq, fps: number): TrackSample[] =>
+  s.map((p, i) => ({ t: i / fps, kps: Object.entries(p!).map(([name, v]) => ({ name, x: v.x, y: v.y, score: v.vis ?? 0.9 })) }));
+export const fromTrackSamples = (s: TrackSample[]): Seq =>
+  s.map((x) => Object.fromEntries(x.kps.map((k) => [k.name, { x: k.x, y: k.y, vis: k.score }])));
