@@ -2771,7 +2771,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      * detection or a cache restore). `kps` identifies it, so a snapshot, a baked
      * track or a restored pose written by anything else is never judged by it.
      */
-    const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number } | null>(null);
+    const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number; reqAt?: number } | null>(null);
+    const traceLastKpsRef = useRef<unknown>(null); // TEMP-DEBUG-POSE: the sample already counted as 'first drawn'
     // Temporary rollback switch (localStorage anglemotion:skeleton-legacy=1, read once at mount): previous live display blend.
     const legacyLiveDisplayRef = useRef(false);
     useEffect(() => { legacyLiveDisplayRef.current = isLegacySkeleton(); }, []);
@@ -2783,6 +2784,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const aheadRttRef = useRef(120);
     const aheadLogAtRef = useRef(0);
     const aheadBlockedRef = useRef(false);
+    const skeletonPrepSinceRef = useRef(0); // when the 'Preparing the skeleton…' hint first showed (0 = not showing)
     const aheadWatchdogRef = useRef<number | null>(null);
     const aheadEnabledRef = useRef(false);
     useEffect(() => { aheadEnabledRef.current = !lookAheadDisabled(); poseDbg.event(modeLabel(aheadEnabledRef.current)); }, []); // TEMP-DEBUG-POSE: mode line
@@ -4496,6 +4498,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       poseLoopActiveRef.current = true;
 
       bridge.onResult((keypoints, meta?: PoseResultMeta) => {
+        skeletonPrepSinceRef.current = 0; // a result arrived ⇒ the skeleton is no longer 'preparing'
         // A result for a frame the coach has scrubbed away from is never drawn
         // nor cached: it was requested before the latest seek, or (paused) it
         // belongs to another video time. It used to land on whatever frame was
@@ -4559,7 +4562,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             poseLatestSampleRef.current = { kps: keypoints, ts: performance.now() };
             latestKeypointsRef.current = keypoints;
             noteLivePoseForLock(keypoints);
-            livePoseStampRef.current = { kps: keypoints, t: meta?.videoTime ?? (v?.currentTime ?? 0) };
+            livePoseStampRef.current = { kps: keypoints, t: meta?.videoTime ?? (v?.currentTime ?? 0), reqAt: meta?.requestedAt };
             renderDirtyRef.current = true;
             const sr = seekRequestRef.current;
             if (sr && meta && Math.abs(meta.videoTime - sr.t) < 0.05) {
@@ -6363,6 +6366,19 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 });
               }
             }
+            // TEMP-DEBUG-POSE: how stale is what the viewer is looking at? (video time now − video time of the frame the
+            // newest live pose was detected on), plus where the delay goes (round trip, wait for the next draw, interval).
+            if (!bakedPose && video && !video.paused) {
+              const ls = poseLatestSampleRef.current, st = livePoseStampRef.current;
+              if (ls && st && st.kps === ls.kps) {
+                poseDbg.drawn({
+                  videoNow: video.currentTime, rate: video.playbackRate || 1, videoCapture: st.t, arrivalPerf: ls.ts,
+                  reqAt: st.reqAt, prevArrival: posePrevSampleRef.current?.ts, newSample: traceLastKpsRef.current !== ls.kps,
+                  legacy: legacyLiveDisplayRef.current,
+                });
+                traceLastKpsRef.current = ls.kps;
+              }
+            }
             ctx.save();
             ctx.translate(dx, dy);
             // Never let an overlay-draw exception (bad keypoint, NaN geometry)
@@ -6398,6 +6414,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             // who presses play early would otherwise just see no skeleton.
             drawCanvasHint(ctx, dx, dy, dw, 'Preparing the skeleton…');
             reportTourState('skeleton', 'loading'); // a waiting tour step shows it too
+            // Elapsed time (and why it can be long on a first visit) as a SECOND line, so the wait is understood, not mistaken for a hang.
+            if (skeletonPrepSinceRef.current === 0) skeletonPrepSinceRef.current = performance.now();
+            const prepS = Math.round((performance.now() - skeletonPrepSinceRef.current) / 1000);
+            if (prepS >= 4) drawCanvasHint(ctx, dx, dy + 30, dw, `${prepS} s${prepS >= 8 ? ' · first visit downloads the AI model' : ''}`);
           } else if (hiddenAsStale && vW > 0 && vH > 0) {
             drawCanvasHint(ctx, dx, dy, dw, 'Skeleton catching up…');
           } else if (hiddenByTrackScope && vW > 0 && vH > 0) {
