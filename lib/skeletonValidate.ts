@@ -31,9 +31,8 @@ const BONE_LONG = 1.5;           // × local median length
 const BONE_BLAME_BH = 0.08;      // blamed endpoint must also be off its neighbours by this much
 const NEIGHBOUR_MAX_DT = 0.12;   // neighbours further apart than this (s) aren't a usable reference
 const LOCAL_HALF = 10;           // samples each side for local bone median
-const LAYOUT_LONG = 1.5;         // frame gate: a limb bone this much longer than its local median is off…
-const LAYOUT_SHORT = 0.6;        // …or this much shorter (arms↔legs swap changes both)
-const LAYOUT_MIN_OFF = 3;        // frame is implausible when ≥ this many of the 8 limb bones are off (of ≥ 4 measurable)
+const ARM_OVER_LEG = 1.25;        // frame gate: mean arm-bone length above mean leg-bone length ⇒ limbs on the wrong parts
+const INVERTED_ARM_OVER_LEG = 0.75; // …or vertical order inverted and arms not clearly shorter than legs
 const ORDER_MARGIN_BH = 0.1;     // shoulders above hips above ankles, by at least this many body heights
 
 const SWAP_PAIRS: ReadonlyArray<readonly [string, string]> = [
@@ -152,32 +151,41 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
 
   // ── 5. FRAME LAYOUT GATE: a sustained wrong layout (legs where arms belong, a
   // hallucinated body on a small player) passes every per-joint test above because
-  // its neighbours are wrong too. Judge the frame as a whole: several limb bones far
-  // from their local median length at once, or the vertical order of shoulders / hips /
-  // ankles inverted. Such a frame is dropped = treated exactly like a missed detection
-  // (playback interpolates across short holes, snaps across long ones).
+  // its neighbours are wrong too. Judge the frame by a limb-CLASS invariant that
+  // foreshortening does not break: arm bones (shoulder–elbow, elbow–wrist) are
+  // shorter than leg bones (hip–knee, knee–ankle) — about 0.20 vs 0.31 of body
+  // height. A frame whose arms are longer than its legs, or whose shoulders / hips /
+  // ankles are vertically inverted while arms are not clearly shorter than legs,
+  // has the limbs assigned to the wrong body parts. It is dropped = treated exactly
+  // like a missed detection (playback interpolates across short holes, snaps across
+  // long ones). (A first version compared each bone with its own local median;
+  // that marginally caught arm↔leg swaps and also fired on serve foreshortening.)
   const dropped = noDrops();
-  const limbLen = (i: number, [A, B]: readonly [string, string]) => (valid(i, A) && valid(i, B) ? d(idx[i].get(A)!, idx[i].get(B)!) : null);
-  const lens = BONES.map((bn) => out.map((_, i) => limbLen(i, bn)));
+  const meanLen = (i: number, bones: ReadonlyArray<readonly [string, string]>) => {
+    const v: number[] = [];
+    for (const [A, B] of bones) if (valid(i, A) && valid(i, B)) v.push(d(idx[i].get(A)!, idx[i].get(B)!));
+    return v.length >= 2 ? v.reduce((x, y) => x + y, 0) / v.length : null;
+  };
+  const ARM_BONES = BONES.slice(0, 4), LEG_BONES = BONES.slice(4, 8);
   const mean = (ks: Array<{ y: number } | null | undefined>) => { const v = ks.filter((k): k is { y: number } => !!k); return v.length ? v.reduce((a, k) => a + k.y, 0) / v.length : null; };
-  for (let i = 0; i < out.length; i++) {
-    let checked = 0, off = 0;
-    BONES.forEach((_, b) => {
-      const l = lens[b][i];
-      if (l == null) return;
-      const win: number[] = [];
-      for (let j = Math.max(0, i - LOCAL_HALF * 2); j <= Math.min(out.length - 1, i + LOCAL_HALF * 2); j++) if (lens[b][j] != null && j !== i) win.push(lens[b][j]!);
-      if (win.length < 6) return;
-      checked++;
-      const m = median(win);
-      if (l > m * LAYOUT_LONG || l < m * LAYOUT_SHORT) off++;
-    });
+  const rows = out.map((_, i) => {
+    const arm = meanLen(i, ARM_BONES), leg = meanLen(i, LEG_BONES);
+    if (arm == null || leg == null) return null;
     const sh = mean([valid(i, 'left_shoulder'), valid(i, 'right_shoulder')]);
     const hip = mean([valid(i, 'left_hip'), valid(i, 'right_hip')]);
     const an = mean([valid(i, 'left_ankle'), valid(i, 'right_ankle')]);
     const inverted = sh != null && hip != null && an != null && !(sh < hip - ORDER_MARGIN_BH * BH && hip < an - ORDER_MARGIN_BH * BH);
-    if ((checked >= 4 && off >= LAYOUT_MIN_OFF) || (inverted && off >= 1)) { dropped[i] = true; report.droppedFrames++; }
-  }
+    return { arm, leg, inverted };
+  });
+  // Orientation guard: the vertical-order rule only makes sense for an UPRIGHT clip. If most
+  // frames are "inverted" the video is rotated / sideways, so that rule is switched off for the track.
+  const measured = rows.filter((r) => r != null).length;
+  const invertedShare = measured ? rows.filter((r) => r?.inverted).length / measured : 0;
+  const useOrder = invertedShare <= 0.5;
+  rows.forEach((r, i) => {
+    if (!r) return;
+    if (r.arm > r.leg * ARM_OVER_LEG || (useOrder && r.inverted && r.arm > r.leg * INVERTED_ARM_OVER_LEG)) { dropped[i] = true; report.droppedFrames++; }
+  });
 
   for (const key of bad) {
     const [si, n] = key.split('|');

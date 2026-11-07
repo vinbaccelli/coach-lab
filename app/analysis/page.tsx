@@ -78,6 +78,7 @@ import {
 import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
 import { SKELETON_ANGLE_LABELS, hasAnyAngle, persistableRows } from '@/lib/skeletonAngles';
 import { isLegacySkeleton } from '@/lib/skeletonRefine';
+import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
@@ -1612,19 +1613,37 @@ function Home() {
         }
         if (inSection(lockFrameT, start, end)) canvasRef.current?.addBakeSample?.(lockFrameT, first.pose);
         canvasRef.current?.setAiTrackFollow?.({ box: seedBox, label });
+        // Crop tracking for a SMALL locked player (lib/skeletonCrop.ts): try a crop around the
+        // followed box first; the crop pose must still pass followStep (so it continues the
+        // locked player and not a known other), else this frame uses the unchanged full-frame
+        // multi-person detection below. Legacy switch ⇒ previous behaviour exactly.
+        const cropOn = !isLegacySkeleton();
+        let cropFrames = 0, cropMisses = 0;
         const walk = async (times: number[]) => {
           let st: FollowState = startFollow(seedBox, lockFrameT, seedOthers);
+          const tracker = cropOn ? mp.newCropTracker(seedBox) : null;
           let inGap = false;
           for (const t of times) {
             if (precisionAbortRef.current) return;
             await seekTo(t);
             const ft = v.currentTime;
             let next = st;
-            const r = await detectLocked((c) => {
-              const f = followStep(st, c, ft);
-              next = f.state;
-              return f.index;
-            });
+            let cropPose: Awaited<ReturnType<typeof mp.detectCropOnly>> = null;
+            if (tracker) {
+              cropPose = await mp.detectCropOnly(v, params, tracker).catch(() => null);
+              if (cropPose) {
+                const f = followStep(st, [cropPose], ft);
+                if (f.index === 0) { next = f.state; cropFrames++; } else { cropPose = null; cropMisses++; }
+              }
+            }
+            const r = cropPose
+              ? { pose: cropPose, candidates: 1, available: true }
+              : await detectLocked((c) => {
+                const f = followStep(st, c, ft);
+                next = f.state;
+                return f.index;
+              });
+            if (r.pose && tracker && !cropPose) tracker.box = poseBox(r.pose) ?? tracker.box;
             if (r.pose) {
               st = next;
               inGap = false;
@@ -1643,6 +1662,8 @@ function Home() {
         await walk(forward);
         await walk(backward);
         canvasRef.current?.setAiTrackFollow?.(null);
+        if (cropOn && process.env.NODE_ENV !== 'production') console.log(`[PrecisionTrack] locked crop tracking: ${cropFrames} crop frames, ${cropMisses} rejected by the identity check`);
+        if (cropOn) poseDbg.event(`locked crop: ${cropFrames} crop frames · ${total - cropFrames} full-frame/gap · ${cropMisses} identity-rejected`); // TEMP-DEBUG-POSE
         if (precisionAbortRef.current) {
           canvasRef.current?.discardBakeCapture?.();
           return 0;

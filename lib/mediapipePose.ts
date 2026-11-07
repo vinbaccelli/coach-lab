@@ -442,26 +442,40 @@ function detectInCrop(lm: PoseLandmarkerT, video: HTMLVideoElement, r: CropRect,
   });
 }
 
-export async function detectPosePreciseTracked(
+/**
+ * Crop attempt ONLY: the accepted crop pose, or null (player large / unknown, or the result
+ * failed its checks) — never a full-frame fallback, so the locked-player pass can fall back to
+ * its own identity-safe multi-person path.
+ */
+export async function detectCropOnly(
   video: HTMLVideoElement,
   params: TrackParams,
   tracker: CropTracker,
 ): Promise<PoseKeypoint[] | null> {
   if (!video || video.videoWidth < 16 || video.readyState < 2) return null;
   const vw = video.videoWidth, vh = video.videoHeight;
-  if (shouldCrop(tracker.box, vh)) {
-    const lm = (await getLandmarker(params.model)) ?? (await getLandmarker('full'));
-    if (lm) {
-      const r = cropRect(tracker.box!, vw, vh);
-      const pose = detectInCrop(lm, video, r, params.tta);
-      if (pose && acceptCropPose(tracker.box!, pose, r, vw, vh)) {
-        tracker.box = trackBox(pose) ?? tracker.box;
-        tracker.cropFrames++;
-        return pose;
-      }
-      tracker.reacquires++;
-    }
+  if (!shouldCrop(tracker.box, vh)) return null;
+  const lm = (await getLandmarker(params.model)) ?? (await getLandmarker('full'));
+  if (!lm) return null;
+  const r = cropRect(tracker.box!, vw, vh);
+  const pose = detectInCrop(lm, video, r, params.tta);
+  if (pose && acceptCropPose(tracker.box!, pose, r, vw, vh)) {
+    tracker.box = trackBox(pose) ?? tracker.box;
+    tracker.cropFrames++;
+    return pose;
   }
+  tracker.reacquires++;
+  return null;
+}
+
+export async function detectPosePreciseTracked(
+  video: HTMLVideoElement,
+  params: TrackParams,
+  tracker: CropTracker,
+): Promise<PoseKeypoint[] | null> {
+  if (!video || video.videoWidth < 16 || video.readyState < 2) return null;
+  const cropped = await detectCropOnly(video, params, tracker);
+  if (cropped) return cropped;
   const full = await detectPosePrecise(video, params); // unchanged full-frame behaviour
   tracker.fullFrames++;
   const b = trackBox(full);

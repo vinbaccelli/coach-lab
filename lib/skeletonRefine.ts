@@ -24,6 +24,6 @@ export function refineBakedTrack(samples: TrackSample[], legacy: boolean = isLeg
   const v = validateTrack(samples);
   const kept = v.report.droppedFrames ? v.samples.filter((_, i) => !v.dropped[i]) : v.samples;
   const r = v.report;
-  poseDbg.event(`bake: ${r.samples} frames · swaps fixed ${r.swapsFixed} · frames dropped ${r.droppedFrames} · joints hidden ${r.invalidLowScore + r.invalidOutlier + r.invalidBone}`); // TEMP-DEBUG-POSE
+  poseDbg.event(`bake: ${r.samples} frames · swaps fixed ${r.swapsFixed} · frames dropped ${r.droppedFrames} · joints hidden ${r.invalidLowScore + r.invalidOutlier + r.invalidBone} (low-score ${r.invalidLowScore} / outlier ${r.invalidOutlier} / bone ${r.invalidBone})`); // TEMP-DEBUG-POSE
   return smoothBakedTrack(kept);
 }

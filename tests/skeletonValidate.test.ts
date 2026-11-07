@@ -145,3 +145,31 @@ test('refineBakedTrack drops implausible frames before smoothing and leaves no c
   assert.equal(b.armToLeg + b.legToArm, 0);
   assert.ok(fixed.length < legacy.length);
 });
+
+test('frame gate does not fire on foreshortening or a squat (serve loading, arms toward camera)', () => {
+  // arms at 40 % length (pointing at the camera) and legs at 70 % (knee bend): still arm < leg
+  const t = truth('serve');
+  const squat = t.map((p) => {
+    if (!p) return p;
+    const q = JSON.parse(JSON.stringify(p));
+    for (const side of ['left', 'right']) {
+      const sh = q[`${side}_shoulder`], el = q[`${side}_elbow`], wr = q[`${side}_wrist`];
+      el.x = sh.x + (el.x - sh.x) * 0.4; el.y = sh.y + (el.y - sh.y) * 0.4;
+      wr.x = el.x + (wr.x - p[`${side}_elbow`].x) * 0.4; wr.y = el.y + (wr.y - p[`${side}_elbow`].y) * 0.4;
+      const hp = q[`${side}_hip`], kn = q[`${side}_knee`], an = q[`${side}_ankle`];
+      kn.x = hp.x + (kn.x - hp.x) * 0.7; kn.y = hp.y + (kn.y - hp.y) * 0.7;
+      an.x = kn.x + (an.x - p[`${side}_knee`].x) * 0.7; an.y = kn.y + (an.y - p[`${side}_knee`].y) * 0.7;
+    }
+    return q;
+  }) as Seq;
+  assert.equal(run(squat, 60).report.droppedFrames, 0);
+});
+
+test('frame gate: a rotated (sideways) clip is not dropped wholesale by the vertical-order rule', () => {
+  const t = truth('forehand');
+  const rotated = t.map((p) => {
+    if (!p) return p;
+    return Object.fromEntries(Object.entries(p).map(([k, v]) => [k, { x: v.y, y: -v.x, vis: v.vis }]));
+  }) as Seq;
+  assert.equal(run(rotated, 60).report.droppedFrames, 0);
+});
