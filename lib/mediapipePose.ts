@@ -69,6 +69,11 @@ const MODEL_ASSET: Record<PoseModel, string> = {
   heavy: '/models/pose_landmarker_heavy.task',
 };
 
+/** Files a cold start has to download for this model (model + the SIMD wasm runtime): used to show real download progress. */
+export function trackAssetUrls(model: PoseModel): string[] {
+  return [MODEL_ASSET[model], '/mediapipe-wasm/vision_wasm_internal.wasm'];
+}
+
 // One cached landmarker per model. FULL (9.4MB) backs the live AI-Detect + the
 // fast track tier; HEAVY (30MB) is lazily loaded only when the coach picks a
 // more precise track speed.

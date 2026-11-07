@@ -32,6 +32,10 @@ interface PoseDbg {
   bitmapFailures: number;
   events: string[];
   frameGaps: Win;
+  ageMs: Win;        // staleness of the newest live pose at each draw (video ms)
+  waitMs: Win;       // result arrival → first draw (ms)
+  intervalMs: Win;   // time between consecutive results (ms)
+  traceRows: string[];
 }
 
 const D: PoseDbg = {
@@ -42,6 +46,7 @@ const D: PoseDbg = {
   bitmapMs: [], rttMs: [], inferMs: [],
   nullResults: 0, workerErrors: 0, workerOnerror: 0, bitmapFailures: 0,
   events: [], frameGaps: [],
+  ageMs: [], waitMs: [], intervalMs: [], traceRows: [],
 };
 
 let enabled: boolean | null = null;
@@ -113,12 +118,62 @@ export const poseDbg = {
   workerError(msg: string) { if (poseDebugOn()) { D.workerErrors++; event(`worker error: ${msg}`); } },
   workerOnerror() { if (poseDebugOn()) { D.workerOnerror++; event('worker onerror'); } },
   event(msg: string) { if (poseDebugOn()) event(msg); },
+  /** Debug only: time the live-skeleton model files from the main thread (HTTP cache or network?). Collection only. */
+  probeModelFiles() {
+    if (!poseDebugOn() || typeof window === 'undefined') return;
+    const files: [string, string][] = [
+      ['wasm-simd', '/tfjs-wasm/tfjs-backend-wasm-simd.wasm'],
+      ['lightning', '/models/movenet-lightning/model.json'],
+      ['lightning-1', '/models/movenet-lightning/group1-shard1of2.bin'],
+      ['lightning-2', '/models/movenet-lightning/group1-shard2of2.bin'],
+      ['thunder-1', '/models/movenet-thunder/group1-shard1of3.bin'],
+    ];
+    // Starts 40 s after the worker so it neither competes with nor pre-warms the worker's own downloads.
+    window.setTimeout(() => void (async () => {
+      for (const [name, url] of files) {
+        const t0 = performance.now();
+        try {
+          const r = await fetch(url);
+          const n = (await r.arrayBuffer()).byteLength;
+          const ms = Math.round(performance.now() - t0);
+          const e = performance.getEntriesByName(window.location.origin + url).pop() as PerformanceResourceTiming | undefined;
+          const src = e ? (e.transferSize === 0 ? 'cache' : 'network') : '?';
+          event(`probe ${name}: ${(n / 1048576).toFixed(1)} MB in ${ms} ms (${src}, ${r.status})`);
+        } catch (err) {
+          event(`probe ${name}: failed after ${Math.round(performance.now() - t0)} ms (${(err as Error)?.message})`);
+        }
+      }
+    })(), 40_000);
+  },
+  /** Called every draw while a live pose is on screen and the video plays (cheap no-op unless ?debug=1). */
+  drawn(x: { videoNow: number; rate: number; videoCapture: number; arrivalPerf: number; reqAt?: number; prevArrival?: number; newSample: boolean; legacy: boolean }) {
+    if (!poseDebugOn()) return;
+    const t = now();
+    const age = (x.videoNow - x.videoCapture) * 1000;
+    if (age >= -50 && age < 5000) D.ageMs.push({ t, v: age });
+    if (x.newSample) {
+      const wait = t - x.arrivalPerf;
+      const rtt = x.reqAt !== undefined ? x.arrivalPerf - x.reqAt : NaN;
+      const interval = x.prevArrival !== undefined ? x.arrivalPerf - x.prevArrival : NaN;
+      D.waitMs.push({ t, v: wait });
+      if (Number.isFinite(interval) && interval > 0 && interval < 2000) D.intervalMs.push({ t, v: interval });
+      D.traceRows.push([t.toFixed(0), x.videoNow.toFixed(3), x.rate.toFixed(2), age.toFixed(0), Number.isFinite(rtt) ? rtt.toFixed(0) : '', wait.toFixed(0), Number.isFinite(interval) ? interval.toFixed(0) : '', x.legacy ? 'legacy' : 'new'].join(','));
+      if (D.traceRows.length > 240) D.traceRows.shift();
+    }
+  },
 };
 
 function event(msg: string) {
   const s = (now() / 1000).toFixed(1);
   D.events.push(`${s}s ${msg}`);
   if (D.events.length > 8) D.events.shift();
+}
+
+function stats3(w: Win): string {
+  if (!w.length) return '-';
+  const v = w.map((x) => x.v).sort((a, b) => a - b);
+  const q = (p: number) => Math.round(v[Math.min(v.length - 1, Math.floor(v.length * p))]);
+  return `${q(0.5)}/${q(0.95)}/${Math.round(v[v.length - 1])}`;
 }
 
 function stats(w: Win): string {
@@ -139,7 +194,27 @@ function install() {
     background: 'rgba(0,0,0,0.78)', color: '#7CFC9A', pointerEvents: 'none',
     font: '10px/1.35 ui-monospace, Menlo, monospace', whiteSpace: 'pre-wrap',
   } as Partial<CSSStyleDeclaration>);
-  const attach = () => document.body?.appendChild(el);
+  const btn = document.createElement('button');
+  btn.textContent = 'COPY TRACE';
+  Object.assign(btn.style, {
+    position: 'fixed', right: '6px', bottom: '6px', zIndex: '2147483647', padding: '6px 10px', borderRadius: '6px',
+    background: '#0A84FF', color: '#fff', border: 'none', font: '600 11px ui-monospace, Menlo, monospace', pointerEvents: 'auto',
+  } as Partial<CSSStyleDeclaration>);
+  btn.addEventListener('click', () => {
+    const head = `# AngleMotion live-pose trace · build ${BUILD_ID} · ${D.mode}/${D.backend}/${D.model} · ${navigator.userAgent}\n# t_ms,video_t,rate,age_video_ms,rtt_ms,wait_to_draw_ms,interval_ms,display\n`;
+    const text = head + D.traceRows.join('\n');
+    const done = (ok: boolean) => event(ok ? `trace copied (${D.traceRows.length} rows)` : 'copy failed — select the text shown');
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      Object.assign(ta.style, { position: 'fixed', left: '8px', right: '8px', top: '8px', height: '45vh', zIndex: '2147483647', font: '10px monospace' } as Partial<CSSStyleDeclaration>);
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      let ok = false; try { ok = document.execCommand('copy'); } catch { ok = false; }
+      if (ok) ta.remove(); done(ok);
+    };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => done(true), fallback); else fallback();
+  });
+  const attach = () => { document.body?.appendChild(el); document.body?.appendChild(btn); };
   if (document.body) attach(); else window.addEventListener('DOMContentLoaded', attach, { once: true });
 
   // Main-thread jank: the longest gap between animation frames.
@@ -156,6 +231,7 @@ function install() {
     const t = now();
     keep(D.sendCalls, t); keep(D.sent, t); keep(D.results, t);
     keepW(D.bitmapMs, t); keepW(D.rttMs, t); keepW(D.inferMs, t); keepW(D.frameGaps, t);
+    keepW(D.ageMs, t); keepW(D.waitMs, t); keepW(D.intervalMs, t);
     const inFlightMs = D.inFlightSince === null ? 0 : t - D.inFlightSince;
     if (inFlightMs > D.maxInFlightMs) D.maxInFlightMs = inFlightMs;
     const gaps = D.frameGaps.map((g) => g.v);
@@ -174,6 +250,7 @@ function install() {
       `calls/s ${D.sendCalls.length} sent/s ${D.sent.length} res/s ${D.results.length} null ${D.nullResults}`,
       `skip init ${D.skipInit} notReady ${D.skipNotReady} fskip ${D.skipFrameSkip} busy ${D.skipBusy}`,
       `ms p50/max  bitmap ${stats(D.bitmapMs)}  infer ${stats(D.inferMs)}  rtt ${stats(D.rttMs)}`,
+      `LAG ms p50/p95/max  shown-pose age ${stats3(D.ageMs)}  result→draw ${stats3(D.waitMs)}  interval ${stats3(D.intervalMs)}`,
       `in flight ${Math.round(inFlightMs)}ms (max ${Math.round(D.maxInFlightMs)})${inFlightMs > 2500 ? '  STUCK' : ''}`,
       `errors worker ${D.workerErrors} onerror ${D.workerOnerror} bitmap ${D.bitmapFailures}`,
       `main fps ${fps.toFixed(0)} max gap ${Math.round(maxGap)}ms`,

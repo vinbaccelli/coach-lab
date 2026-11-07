@@ -79,6 +79,7 @@ import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/li
 import { SKELETON_ANGLE_LABELS, hasAnyAngle, persistableRows } from '@/lib/skeletonAngles';
 import { isLegacySkeleton } from '@/lib/skeletonRefine';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
+import { percentFromStatus } from '@/lib/modelPrefetch';
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
@@ -1541,6 +1542,18 @@ function Home() {
       const tModel = performance.now(); // TEMP-DEBUG-POSE
       const mp = await import('@/lib/mediapipePose');
       const params = mp.TRACK_QUALITY[quality];
+      // Cold start: a REAL byte-level progress for the model files (silent when they are already cached).
+      {
+        const { prefetchWithProgress, formatProgress } = await import('@/lib/modelPrefetch');
+        const tDl = performance.now();
+        await prefetchWithProgress(mp.trackAssetUrls(params.model), (pr) => {
+          const slow = performance.now() - tDl > 400;
+          if (slow && pr.pct < 100) setProcessingStatus(`Downloading AI model… ${formatProgress(pr)}`);
+          else if (slow) setProcessingStatus('Starting the AI engine…');
+        }).catch(() => undefined);
+        poseDbg.event(`AI Track: model files ready in ${Math.round(performance.now() - tDl)} ms`); // TEMP-DEBUG-POSE
+        if (precisionAbortRef.current) return 0;
+      }
       await seekVideoTo(start);
       // Probe once: cold model init + first inference. Decides the engine for
       // the whole pass so MoveNet and MediaPipe coords never mix in one track.
@@ -9943,8 +9956,10 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             gap: 10,
             opacity: statusFading ? 0 : 1,
             transition: `opacity ${FADE_MS}ms ease`,
+            overflow: 'hidden',
           }}
         >
+          {(() => { const pc = percentFromStatus(processingStatus); return pc === null ? null : <div aria-hidden style={{ position: 'absolute', left: 0, bottom: 0, height: 3, width: `${pc}%`, background: '#007AFF', transition: 'width 200ms linear' }} />; })()}
           <span style={{ flex: 1 }}>
             {angleDiffState
               ? angleDiffState.first === null
