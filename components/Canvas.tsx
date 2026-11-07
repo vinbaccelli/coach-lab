@@ -4919,7 +4919,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const lastT = aheadBufRef.current.lastTime;
           const depthMs = lastT === null ? 0 : Math.round((lastT - v.currentTime) * 1000);
           const cov = st.draws ? Math.round((100 * st.hits) / st.draws) : null;
-          poseDbg.event(`look-ahead: Δ${Math.round((a.video.currentTime - v.currentTime) * 1000)}ms (want ${Math.round(lead * 1000)}) · ready ${a.ready ? 'y' : 'n'} · paused ${a.video.paused ? 'y' : 'n'} · rate ${a.video.playbackRate.toFixed(2)} · ${a.video.videoWidth}x${a.video.videoHeight} vs ${v.videoWidth}x${v.videoHeight} · buf ${aheadBufRef.current.size} · rtt ${Math.round(aheadRttRef.current)}ms`);
+          poseDbg.event(`look-ahead: Δ${Math.round((a.video.currentTime - v.currentTime) * 1000)}ms (want ${Math.round(lead * 1000)}) · ready ${a.ready ? 'y' : 'n'} · paused ${a.video.paused ? 'y' : 'n'} · rate ${a.video.playbackRate.toFixed(2)} · rs ${a.video.readyState} ns ${a.video.networkState}${a.video.error ? ` err ${a.video.error.code}` : ''} · ${a.video.videoWidth}x${a.video.videoHeight} vs ${v.videoWidth}x${v.videoHeight} · buf ${aheadBufRef.current.size} · rtt ${Math.round(aheadRttRef.current)}ms`);
           poseDbg.event(`la-stats: ${(st.dets / secs).toFixed(1)} det/s · depth ${depthMs >= 0 ? '+' : ''}${depthMs}ms · covered ${cov === null ? '–' : cov + '%'} · main dropped ${dDrop}/${dTot}${aheadDecodeOnlyRef.current ? ' · DECODE-ONLY' : ''}`);
           // Graceful degradation: past the warm-up gap, if the buffer does not cover the playhead most of the time, release the
           // hidden video and use the live path (never freeze, never show an increasingly outdated pose).

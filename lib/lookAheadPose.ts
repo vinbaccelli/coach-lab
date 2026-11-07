@@ -125,6 +125,11 @@ export function driftAction(aheadT: number, mainT: number, lead: number, mainRat
   return { kind: 'rate', rate: mainRate };
 }
 
+/** A hidden video that is paused and has not reached its end needs a play() — whatever its readyState (iOS stays at 0 until then). An ended one would restart from 0, so it is left alone. */
+export function needsPlay(v: { paused: boolean; ended: boolean }): boolean {
+  return v.paused && !v.ended;
+}
+
 export function lookAheadDisabled(): boolean {
   if (typeof window === 'undefined') return true;
   // OFF by default: on an iPhone the second playing video stalled the main one (see docs/SKELETON_LOOKAHEAD.md).
@@ -163,8 +168,11 @@ export class LookAheadVideo {
     Object.assign(v.style, { position: 'fixed', left: '0', top: '0', width: '2px', height: '2px', opacity: '0', pointerEvents: 'none', zIndex: '-1' });
     v.addEventListener('error', () => this.fail(`video error ${v.error?.code ?? ''}`));
     v.src = src;
+    v.autoplay = true;
+    v.setAttribute('muted', '');
     document.body.appendChild(v);
     this.video = v;
+    this.play(v); // iPhone: a 0x0 / readyState 0 hidden video never loads until play() is called (seen in the stage-2d phone test)
     this.startedAt = this.lastProgressAt = performance.now();
     this.unplayableSince = this.startedAt;
     return true;
@@ -197,8 +205,13 @@ export class LookAheadVideo {
       if (act.kind === 'seek') v.currentTime = Math.min(act.to, Math.max(0, (main.duration || act.to) - 0.001));
       else if (Math.abs(v.playbackRate - act.rate) > 0.005) v.playbackRate = Math.min(16, Math.max(0.0625, act.rate));
       // Only an autoplay refusal is fatal; an interrupted play() (a seek, a reload) just retries on the next tick.
-      if (v.paused && v.readyState >= 2) void v.play().catch((e: { name?: string }) => { if (e?.name === 'NotAllowedError') this.fail('autoplay refused'); });
+      if (needsPlay(v)) this.play(v);
     } catch (e) { this.fail(`sync threw ${(e as Error)?.message ?? ''}`.slice(0, 60)); }
+  }
+
+  /** play() a muted inline video. On iOS media is not even loaded until play() is called (preload is ignored), so this must NOT wait for readyState. */
+  private play(v: HTMLVideoElement) {
+    void v.play().catch((e: { name?: string }) => { if (e?.name === 'NotAllowedError') this.fail('autoplay refused'); });
   }
 
   /** Release the decoder. Safe to call repeatedly. */

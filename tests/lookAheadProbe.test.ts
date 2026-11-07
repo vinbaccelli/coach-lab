@@ -1,7 +1,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyUrlSwitches, lookAheadOnSwitch, lookAheadDecodeOnly, lookAheadLeadOverride, modeLabel, LOOKAHEAD_ON_KEY, LOOKAHEAD_LEAD_KEY } from '../lib/skeletonSwitches';
-import { AheadBuffer, sampleHiddenNow, coverageDegraded, lookAheadDisabled } from '../lib/lookAheadPose';
+import { AheadBuffer, sampleHiddenNow, coverageDegraded, lookAheadDisabled, needsPlay } from '../lib/lookAheadPose';
 
 function fakeWindow(search: string, store: Record<string, string> = {}) {
   (globalThis as unknown as { window: unknown }).window = {
@@ -65,4 +65,10 @@ test('degradation: only declared once enough draws were seen and fewer than half
 test('tail of the clip: the last `lead` seconds use the main video only (the hidden video is pinned at the end)', () => {
   for (let tick = 0; tick < 4; tick++) assert.equal(sampleHiddenNow(tick, 13, 2.5, 12.45), false);
   assert.equal(sampleHiddenNow(0, 10, 2.5, 12.45), true);
+});
+
+test('hidden video: play() whenever it is paused and not ended, regardless of readyState (iOS stays at 0 until play())', () => {
+  assert.equal(needsPlay({ paused: true, ended: false }), true);
+  assert.equal(needsPlay({ paused: false, ended: false }), false);
+  assert.equal(needsPlay({ paused: true, ended: true }), false, 'an ended video would restart from 0');
 });
