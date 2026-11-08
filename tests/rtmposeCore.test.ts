@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cropFromBox, decodeSimcc, boxFromKeypoints, iou, bestPerson, cropToTensor, IN_W, IN_H, SIMCC_X, SIMCC_Y, COCO17, rgbaCropToTensor } from '../lib/rtmpose/core';
+import { containRect, cropFromBox, decodeSimcc, boxFromKeypoints, iou, bestPerson, cropToTensor, IN_W, IN_H, SIMCC_X, SIMCC_Y, COCO17, rgbaCropToTensor } from '../lib/rtmpose/core';
 import { summarize, compareToReference, type LabFrame } from '../lib/rtmpose/labMetrics';
 
 test('cropFromBox keeps the 3:4 model aspect and pads 1.25×', () => {
@@ -77,4 +77,13 @@ test('labMetrics: summary, reference comparison, wrist speed ratio', () => {
   assert.ok(s.peakWristBhPerS! > 0);
   const missing = ref.map((f, i) => (i % 2 ? { ...f, kps: null } : f));
   assert.equal(summarize(missing).detectedPct, 50);
+});
+
+test('containRect: a portrait clip in a wide box is pillarboxed, scale from the height (the overlay bug seen on the phone)', () => {
+  const r = containRect(867, 760, 1080, 1920);
+  assert.ok(Math.abs(r.scale - 760 / 1920) < 1e-9);
+  assert.ok(Math.abs(r.w - 1080 * 760 / 1920) < 1e-6);
+  assert.ok(Math.abs(r.x - (867 - r.w) / 2) < 1e-6 && r.y === 0);
+  const wide = containRect(400, 600, 1920, 1080);
+  assert.ok(Math.abs(wide.scale - 400 / 1920) < 1e-9 && wide.x === 0 && wide.y > 0);
 });

@@ -8,7 +8,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { ENGINE_IDS, REFERENCE_ENGINE, createEngine, type EngineId } from '@/lib/rtmpose/labEngines';
 import { bodyHeight } from '@/lib/skeletonBench/metrics';
 import { summarize, compareToReference, toSeq, type EngineSummary, type RefComparison, type LabFrame } from '@/lib/rtmpose/labMetrics';
-import type { Kp } from '@/lib/rtmpose/core';
+import { containRect, type Kp } from '@/lib/rtmpose/core';
 
 interface EngineResult {
   id: EngineId; label: string; initMs: number; info: Record<string, unknown>; warmupMs: number;
@@ -234,14 +234,16 @@ export default function RtmposeLab() {
     await seekWithFrame(v, first.frames[idx].t);
     const rect = v.getBoundingClientRect(); c.width = rect.width; c.height = rect.height;
     const ctx = c.getContext('2d')!; ctx.clearRect(0, 0, c.width, c.height);
-    const sc = rect.width / v.videoWidth;
+    // the video is letterboxed inside its element (portrait clips are pillarboxed): scale and offset from the CONTENT rect
+    const cr = containRect(rect.width, rect.height, v.videoWidth, v.videoHeight);
+    const sc = cr.scale;
     for (const r of results) {
       if (set[r.id] === false) continue;
       const k = r.frames[idx]?.kps; if (!k) continue;
       const col = COLORS[r.id] ?? '#cccccc', m = new Map(k.map((p) => [p.name, p]));
       ctx.lineWidth = r.id === REFERENCE_ENGINE ? 3 : 2; ctx.strokeStyle = col; ctx.fillStyle = col;
-      for (const [a2, b2] of EDGES) { const p = m.get(a2), q = m.get(b2); if (p && q && p.score > 0.3 && q.score > 0.3) { ctx.beginPath(); ctx.moveTo(p.x * sc, p.y * sc); ctx.lineTo(q.x * sc, q.y * sc); ctx.stroke(); } }
-      for (const p of k) if (p.score > 0.3) { ctx.beginPath(); ctx.arc(p.x * sc, p.y * sc, 2.5, 0, 7); ctx.fill(); }
+      for (const [a2, b2] of EDGES) { const p = m.get(a2), q = m.get(b2); if (p && q && p.score > 0.3 && q.score > 0.3) { ctx.beginPath(); ctx.moveTo(cr.x + p.x * sc, cr.y + p.y * sc); ctx.lineTo(cr.x + q.x * sc, cr.y + q.y * sc); ctx.stroke(); } }
+      for (const p of k) if (p.score > 0.3) { ctx.beginPath(); ctx.arc(cr.x + p.x * sc, cr.y + p.y * sc, 2.5, 0, 7); ctx.fill(); }
     }
   }, [results]);
 
@@ -277,7 +279,7 @@ export default function RtmposeLab() {
       <p style={{ margin: '4px 0 10px', color: '#555' }}>Runs the chosen engines on the same frames of one clip. Keep this tab in the foreground until it finishes. Not part of the product.</p>
       <input type="file" accept="video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) { setUrl(URL.createObjectURL(f)); setResults([]); setReport(''); } }} />
       <div style={{ position: 'relative', marginTop: 8 }}>
-        <video ref={videoRef} src={url ?? undefined} muted playsInline preload="auto" controls={false} onLoadedMetadata={(e) => { try { e.currentTarget.currentTime = 0.001; } catch { /* noop */ } }} style={{ width: '100%', maxHeight: 320, background: '#000' }} />
+        <video ref={videoRef} src={url ?? undefined} muted playsInline preload="auto" controls={false} onLoadedMetadata={(e) => { try { e.currentTarget.currentTime = 0.001; } catch { /* noop */ } }} style={{ width: '100%', maxHeight: '55vh', background: '#000' }} />
         <canvas ref={overlayRef} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }} />
       </div>
       <fieldset style={{ margin: '10px 0', padding: 8 }}>

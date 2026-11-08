@@ -89,3 +89,17 @@ No dropped frames in any engine. RTMPose-t is ≈ 10–13 ms faster than the app
 | RTMPose-s | 51 | 0.031 | 0.961 | 0.018 | 0.041 | 0.022 | 0.98 | 7 | 17 / 5 |
 
 **Read this with care:** (1) 10 fps samples a swing that moves ≈ 0.7 body heights per sample, so "jumps" (30–38 % of steps for EVERY engine, the reference included) and "outliers" measure the motion, not the model. (2) The reference itself lost joints on 28 of 50 frames, so it is weakest exactly where it matters. (3) Differences vs the reference are small (0.026–0.035 bh, PCK 96–97 %): **no engine is clearly right or wrong on this clip.** (4) RTMPose-t drops swing speed (0.69), RTMPose-s keeps it (0.98), as MoveNet does. (5) Arm↔leg jumps are higher for RTMPose-s (7) and MediaPipe live (8) than for MoveNet (3) / RTMPose-t (3): needs a look at those frames, not a conclusion. The lab now overlays every engine on one frame in its own colour (white = reference) and lists the frames with the largest disagreement.
+
+## Fourth iPhone run — fast serve, 20 fps × 4 s (80 frames), same clip as the third (IMG_1281, 1080×1920)
+**The overlay viewer drew the skeletons in the wrong place** (it scaled by the element width and ignored the letterbox, so a portrait clip showed every skeleton too big and shifted to the bottom). The viewer comparison from this run is therefore void; the numbers below are unaffected. Fixed with `containRect` (tested) — the skeletons are now scaled and offset from the picture's real rectangle; the video box is also taller (55 vh).
+
+| engine | p50 ms | err vs ref (bh) | PCK@.1 | arm / leg / wrist err | wrist-speed ratio | frames with all 12 joints ≥ 0.3 | bone-length CV / violations | validator: low-score / outlier / bone |
+|---|---|---|---|---|---|---|---|---|
+| MoveNet (app worker) | 69 | 0.032 | 0.965 | 0.026 / 0.038 / 0.033 | 1.59 | 46 / 80 | 0.144 / 3.5 % | 14 / 6 / 3 |
+| MediaPipe live | 38 | 0.038 | 0.942 | 0.024 / 0.051 / 0.029 | 1.16 | 61 / 80 | 0.146 / 3.4 % | 17 / 7 / 2 |
+| RTMPose-t | 33 | 0.036 | 0.959 | 0.019 / 0.051 / 0.022 | 1.34 | 66 / 80 | 0.194 / 5.9 % | 3 / 13 / 2 |
+| RTMPose-s | 51 | 0.029 | 0.973 | 0.018 / 0.039 / 0.022 | 1.03 | 69 / 80 | 0.196 / 8.0 % | 1 / 3 / 3 |
+| MediaPipe heavy (reference) | 108 | – | – | – | – | 39 / 80 | 0.146 / 4.1 % | 18 / 8 / 0 |
+Live (1×, 6 s): MoveNet app 25.5 det/s, age 39 ms (51 at draw); MediaPipe live 26.7 det/s, age 34 ms (jank gap max 60 ms); RTMPose-t 32.8 det/s, age 30 ms (39); RTMPose-s 19 det/s, age 53 ms (61). Same ranking as the third run.
+
+Reading: RTMPose-s is closest to the reference overall (0.029, PCK 0.973), best on arm/wrist error and wrist-speed preservation (1.03), and keeps confident joints on the most frames; **but its limb lengths vary about twice as much as MoveNet's / MediaPipe's (CV 0.196 vs 0.144, 8 % vs 3.5 % of bones out of range)** — less anatomically consistent. "Frames with all joints confident" partly reflects each model's score scale, not accuracy. The reference lost joints on 41 of 80 frames, so differences of 0.03 bh are inside its own uncertainty. **Still no clear winner on one clip.**

@@ -155,3 +155,10 @@ export function rgba416ToYoloxTensor(rgba: Uint8ClampedArray | Uint8Array, size 
   }
   return out;
 }
+
+/** Where a video of size vw×vh is actually drawn inside a box of size bw×bh with object-fit: contain (letterbox / pillarbox). */
+export function containRect(bw: number, bh: number, vw: number, vh: number): { scale: number; x: number; y: number; w: number; h: number } {
+  const scale = Math.min(bw / vw, bh / vh);
+  const w = vw * scale, h = vh * scale;
+  return { scale, x: (bw - w) / 2, y: (bh - h) / 2, w, h };
+}
