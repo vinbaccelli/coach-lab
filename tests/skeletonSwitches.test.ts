@@ -52,7 +52,7 @@ test('legacy implies look-ahead disabled even if switched on; mode label says wh
   assert.equal(lookAheadDisabled(), true);
   assert.match(modeLabel(false), /LEGACY/);
   fakeWindow('?legacy=0&lookahead=1');
-  assert.match(modeLabel(true), /NEW · look-ahead ON \(experimental\)/);
+  assert.match(modeLabel(true), /NEW · LIVE ENGINE rtmpose-t · look-ahead ON \(experimental\)/);
   assert.match(modeLabel(false), /look-ahead OFF \(default\)/);
   applyUrlSwitches();
 });

@@ -32,7 +32,7 @@ import { getPoseDetector } from '@/lib/poseDetection';
 import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
 import { continuePose } from '@/lib/liveDisplay';
 import { AheadBuffer, LookAheadVideo, leadSeconds, lookAheadDisabled, sampleHiddenNow, coverageDegraded, type AheadKp } from '@/lib/lookAheadPose';
-import { modeLabel, lookAheadDecodeOnly, lookAheadLeadOverride } from '@/lib/skeletonSwitches';
+import { modeLabel, lookAheadDecodeOnly, lookAheadLeadOverride, liveEngineSwitch } from '@/lib/skeletonSwitches';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
@@ -2788,6 +2788,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const aheadWatchdogRef = useRef<number | null>(null);
     const aheadEnabledRef = useRef(false);
     // Feasibility probe (?lookahead=decode / ?la_lead=): decode-only flag, lead override, gap end, per-tick counter, 2 s stats window.
+    // EXPERIMENT (?live=rtmpose-t|rtmpose-s): RTMPose drives the live skeleton. Default off; every other path is unchanged.
+    const rtmLiveRef = useRef<{ eng: import('@/lib/rtmpose/engine').RtmposeEngine | null; initP: Promise<boolean> | null; busy: boolean; failed: boolean; errs: number; lastT: number; smoother: import('@/lib/keypointSmooth').OneEuroKeypointSmoother | null; ms: number[]; since: number; n: number }>({ eng: null, initP: null, busy: false, failed: false, errs: 0, lastT: -1, smoother: null, ms: [], since: 0, n: 0 });
     const aheadDecodeOnlyRef = useRef(false);
     const aheadLeadOverrideRef = useRef<number | null>(null);
     const aheadGapUntilRef = useRef(0);
@@ -4843,6 +4845,90 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       };
 
+      /** RTMPose-t is the DEFAULT live engine (?live=off → MoveNet, ?live=rtmpose-s → larger model): it owns the live pose. Never while foot lines are on (they need MediaPipe's feet), during a bake, or once tracks exist. */
+      const useRtmposeLive = () =>
+        !!liveEngineSwitch()
+        && !rtmLiveRef.current.failed
+        && !skeletonShowFootLineRef.current
+        && !bakingRef.current
+        && bakedTracksRef.current.length === 0;
+
+      /** One RTMPose detection, published exactly where the worker's / MediaPipe's results go (same refs, same smoothing as the MoveNet path). */
+      const runRtmposeLive = async (v: HTMLVideoElement) => {
+        const R = rtmLiveRef.current;
+        if (R.busy) return;
+        R.busy = true;
+        try {
+          if (!R.eng) {
+            if (!R.initP) {
+              const which = liveEngineSwitch()!;
+              R.initP = (async () => {
+                try {
+                  onProcessingStatus?.('Loading RTMPose…');
+                  const { RtmposeEngine } = await import('@/lib/rtmpose/engine');
+                  const eng = new RtmposeEngine(which, { proxy: true });
+                  const info = await eng.init();
+                  R.eng = eng;
+                  poseDbg.set('mode', `RTMPose ${which.slice(-1)} · ${info.threads} thread${info.threads > 1 ? 's' : ''} · worker`); // TEMP-DEBUG-POSE
+                  poseDbg.event(`rtmpose ready in ${Math.round(info.loadMs)} ms`); // TEMP-DEBUG-POSE
+                  onProcessingStatus?.('Skeleton ready');
+                  return true;
+                } catch (e) {
+                  R.failed = true;
+                  poseDbg.event(`rtmpose failed: ${(e as Error)?.message} → MoveNet`); // TEMP-DEBUG-POSE
+                  onProcessingStatus?.('RTMPose failed — using the normal skeleton');
+                  return false;
+                }
+              })();
+            }
+            await R.initP;
+            if (!R.eng) return;
+          }
+          if (v.readyState < 2 || v.videoWidth < 16) return;
+          const capAt = performance.now(), capT = v.currentTime;
+          if (Math.abs(capT - R.lastT) > 0.5) { R.eng.reset(); R.smoother?.reset(); } // a seek / a jump: forget the old box and smoothing
+          R.lastT = capT;
+          const raw = await R.eng.detect(v);
+          R.errs = 0;
+          const ms = performance.now() - capAt;
+          if (!R.smoother) { const { OneEuroKeypointSmoother } = await import('@/lib/keypointSmooth'); R.smoother = new OneEuroKeypointSmoother(); }
+          // sampling stats for the debug panel: detections/s and per-detection ms, every ~2 s
+          R.ms.push(ms); R.n++;
+          if (!R.since) R.since = capAt;
+          if (capAt - R.since > 2000) {
+            const s2 = [...R.ms].sort((a, b) => a - b);
+            poseDbg.event(`rtmpose: ${(R.n / ((capAt - R.since) / 1000)).toFixed(1)} det/s · ${Math.round(s2[s2.length >> 1])} ms p50 · ${Math.round(s2[Math.floor(s2.length * 0.95)] ?? 0)} ms p95`); // TEMP-DEBUG-POSE
+            R.ms = []; R.n = 0; R.since = capAt;
+          }
+          if (!raw || exactPoseLockRef.current) return;
+          if (skeletonSuppressedRef.current || !skeletonDrawEnabledRef.current) {
+            if (liveSkeletonActive()) latestKeypointsRef.current = null;
+            return;
+          }
+          const kps = R.smoother.apply(raw, performance.now()) as PoseKeypoint[];
+          const lastFrame = skeletonFramesRef.current.at(-1);
+          if (!lastFrame || Math.abs(capT - lastFrame.timeSeconds) > 1 / 60) {
+            skeletonFramesRef.current.push({ timeSeconds: capT, keypoints: kps });
+            if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+              skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+            }
+          }
+          if (liveSkeletonActive()) {
+            posePrevSampleRef.current = poseLatestSampleRef.current;
+            poseLatestSampleRef.current = { kps, ts: performance.now() };
+            latestKeypointsRef.current = kps;
+            noteLivePoseForLock(kps);
+            livePoseStampRef.current = { kps, t: capT, reqAt: capAt };
+            renderDirtyRef.current = true;
+          }
+        } catch (e) {
+          console.warn('[Canvas] RTMPose live frame failed:', e);
+          if (++R.errs >= 5) { R.failed = true; poseDbg.event(`rtmpose: 5 failures in a row → MoveNet`); } // TEMP-DEBUG-POSE
+        } finally {
+          R.busy = false;
+        }
+      };
+
       // While PLAYING: drive detection from presented frames (rVFC) / rAF.
       // While PAUSED: do NOT poll. requestVideoFrameCallback never fires while
       // paused (which stalled updates after pause), and re-inferring a static
@@ -4961,6 +5047,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (exactPoseLockRef.current) { scheduleNext(); return; }
         const bridge = poseBridgeRef.current;
         const v = videoRef.current;
+        // EXPERIMENT: RTMPose owns the live pose (only with ?live=rtmpose-t|s).
+        if (v && useRtmposeLive()) {
+          void runRtmposeLive(v);
+          scheduleNext();
+          return;
+        }
         // FOOT LINES ON ⇒ MediaPipe owns the live pose; MoveNet does not run.
         if (v && useMediaPipeLive()) {
           void runMediaPipeLive(v);
@@ -4992,6 +5084,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (!v || !v.paused) return;
         // Same source rule as sendFrame: whichever model owns the live pose
         // must also own the paused frame, or pausing would swap the skeleton.
+        if (useRtmposeLive()) {
+          rtmLiveRef.current.smoother?.reset(); // snap to this frame instead of easing from the last one
+          void runRtmposeLive(v);
+          return;
+        }
         if (useMediaPipeLive()) {
           mpLiveNextAtRef.current = 0; // a static frame is worth detecting now
           void runMediaPipeLive(v);
