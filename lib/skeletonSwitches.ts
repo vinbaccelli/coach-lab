@@ -30,7 +30,8 @@ export function applyUrlSwitches(): void {
     else if (ahead === '0') ls.removeItem(LOOKAHEAD_ON_KEY);
     const live = q.get('live');
     if (live === 'rtmpose-t' || live === 'rtmpose-s') ls.setItem(LIVE_ENGINE_KEY, live);
-    else if (live === 'off') ls.removeItem(LIVE_ENGINE_KEY);
+    else if (live === 'off') ls.setItem(LIVE_ENGINE_KEY, 'off'); // explicit opt-out → MoveNet
+    else if (live === 'default') ls.removeItem(LIVE_ENGINE_KEY);
     const lead = q.get('la_lead');
     if (lead !== null) {
       const n = Number(lead);
@@ -51,15 +52,21 @@ export function lookAheadOnSwitch(): boolean {
   try { if (typeof window === 'undefined') return false; const v = window.localStorage.getItem(LOOKAHEAD_ON_KEY); return v === '1' || v === 'decode'; } catch { return false; }
 }
 
-/** EXPERIMENT: which RTMPose model drives the live skeleton (null = the default MoveNet worker). Default OFF. */
+/**
+ * Which RTMPose model drives the live skeleton. DEFAULT: rtmpose-t (decided after the iPhone comparison, docs/RTMPOSE_SPIKE.md).
+ * `?live=rtmpose-s` picks the larger model, `?live=off` (persisted) opts out to the MoveNet worker, `?live=default` clears the choice.
+ * null = MoveNet (opted out, or no window). A failed RTMPose init/run also falls back to MoveNet (Canvas `rtmLiveRef.failed`).
+ */
+export const DEFAULT_LIVE_ENGINE: LiveEngineChoice = 'rtmpose-t';
 export type LiveEngineChoice = 'rtmpose-t' | 'rtmpose-s';
 export function liveEngineSwitch(): LiveEngineChoice | null {
   applyUrlSwitches();
   try {
     if (typeof window === 'undefined') return null;
     const v = window.localStorage.getItem(LIVE_ENGINE_KEY);
-    return v === 'rtmpose-t' || v === 'rtmpose-s' ? v : null;
-  } catch { return null; }
+    if (v === 'off') return null;
+    return v === 'rtmpose-t' || v === 'rtmpose-s' ? v : DEFAULT_LIVE_ENGINE;
+  } catch { return DEFAULT_LIVE_ENGINE; }
 }
 
 /** Feasibility probe: hidden video decodes, but nothing is detected on it and the display stays on the live path. */
@@ -80,5 +87,5 @@ export function lookAheadLeadOverride(): number | null {
 
 /** One line for the ?debug=1 panel so a screenshot proves which mode ran. */
 export function modeLabel(lookAheadActive: boolean): string {
-  return legacyOn() ? 'mode: LEGACY (previous skeleton behaviour)' : `mode: NEW${liveEngineSwitch() ? ` · LIVE ENGINE ${liveEngineSwitch()} (experiment)` : ''} · look-ahead ${lookAheadActive ? `ON (experimental)${lookAheadDecodeOnly() ? ' · DECODE-ONLY probe' : ''} · lead ${lookAheadLeadOverride() ?? 'auto'}` : 'OFF (default)'}`;
+  return legacyOn() ? 'mode: LEGACY (previous skeleton behaviour)' : `mode: NEW${liveEngineSwitch() ? ` · LIVE ENGINE ${liveEngineSwitch()}` : ''} · look-ahead ${lookAheadActive ? `ON (experimental)${lookAheadDecodeOnly() ? ' · DECODE-ONLY probe' : ''} · lead ${lookAheadLeadOverride() ?? 'auto'}` : 'OFF (default)'}`;
 }

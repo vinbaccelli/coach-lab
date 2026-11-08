@@ -2789,7 +2789,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const aheadEnabledRef = useRef(false);
     // Feasibility probe (?lookahead=decode / ?la_lead=): decode-only flag, lead override, gap end, per-tick counter, 2 s stats window.
     // EXPERIMENT (?live=rtmpose-t|rtmpose-s): RTMPose drives the live skeleton. Default off; every other path is unchanged.
-    const rtmLiveRef = useRef<{ eng: import('@/lib/rtmpose/engine').RtmposeEngine | null; initP: Promise<boolean> | null; busy: boolean; failed: boolean; lastT: number; smoother: import('@/lib/keypointSmooth').OneEuroKeypointSmoother | null; ms: number[]; since: number; n: number }>({ eng: null, initP: null, busy: false, failed: false, lastT: -1, smoother: null, ms: [], since: 0, n: 0 });
+    const rtmLiveRef = useRef<{ eng: import('@/lib/rtmpose/engine').RtmposeEngine | null; initP: Promise<boolean> | null; busy: boolean; failed: boolean; errs: number; lastT: number; smoother: import('@/lib/keypointSmooth').OneEuroKeypointSmoother | null; ms: number[]; since: number; n: number }>({ eng: null, initP: null, busy: false, failed: false, errs: 0, lastT: -1, smoother: null, ms: [], since: 0, n: 0 });
     const aheadDecodeOnlyRef = useRef(false);
     const aheadLeadOverrideRef = useRef<number | null>(null);
     const aheadGapUntilRef = useRef(0);
@@ -4845,7 +4845,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       };
 
-      /** EXPERIMENT (?live=rtmpose-t|rtmpose-s): RTMPose owns the live pose. Never while foot lines are on (they need MediaPipe's feet), during a bake, or once tracks exist. */
+      /** RTMPose-t is the DEFAULT live engine (?live=off → MoveNet, ?live=rtmpose-s → larger model): it owns the live pose. Never while foot lines are on (they need MediaPipe's feet), during a bake, or once tracks exist. */
       const useRtmposeLive = () =>
         !!liveEngineSwitch()
         && !rtmLiveRef.current.failed
@@ -4869,7 +4869,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                   const eng = new RtmposeEngine(which, { proxy: true });
                   const info = await eng.init();
                   R.eng = eng;
-                  poseDbg.set('mode', `RTMPose ${which.slice(-1)} (experiment) · ${info.threads} thread${info.threads > 1 ? 's' : ''} · worker`); // TEMP-DEBUG-POSE
+                  poseDbg.set('mode', `RTMPose ${which.slice(-1)} · ${info.threads} thread${info.threads > 1 ? 's' : ''} · worker`); // TEMP-DEBUG-POSE
                   poseDbg.event(`rtmpose ready in ${Math.round(info.loadMs)} ms`); // TEMP-DEBUG-POSE
                   onProcessingStatus?.('Skeleton ready');
                   return true;
@@ -4889,6 +4889,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (Math.abs(capT - R.lastT) > 0.5) { R.eng.reset(); R.smoother?.reset(); } // a seek / a jump: forget the old box and smoothing
           R.lastT = capT;
           const raw = await R.eng.detect(v);
+          R.errs = 0;
           const ms = performance.now() - capAt;
           if (!R.smoother) { const { OneEuroKeypointSmoother } = await import('@/lib/keypointSmooth'); R.smoother = new OneEuroKeypointSmoother(); }
           // sampling stats for the debug panel: detections/s and per-detection ms, every ~2 s
@@ -4922,6 +4923,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
         } catch (e) {
           console.warn('[Canvas] RTMPose live frame failed:', e);
+          if (++R.errs >= 5) { R.failed = true; poseDbg.event(`rtmpose: 5 failures in a row → MoveNet`); } // TEMP-DEBUG-POSE
         } finally {
           R.busy = false;
         }
