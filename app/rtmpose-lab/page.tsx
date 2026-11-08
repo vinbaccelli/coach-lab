@@ -23,12 +23,36 @@ async function seek(v: HTMLVideoElement, t: number) {
   await new Promise<void>((res) => {
     let done = false;
     const fin = () => { if (done) return; done = true; v.removeEventListener('seeked', fin); res(); };
-    v.addEventListener('seeked', fin); v.currentTime = t; setTimeout(fin, 1500);
+    v.addEventListener('seeked', fin); v.currentTime = t; setTimeout(fin, 1200);
   });
   await new Promise<void>((res) => {
     const vv = v as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
-    if (typeof vv.requestVideoFrameCallback === 'function') { vv.requestVideoFrameCallback(() => res()); setTimeout(res, 200); } else setTimeout(res, 60);
+    if (!v.paused && typeof vv.requestVideoFrameCallback === 'function') { vv.requestVideoFrameCallback(() => res()); setTimeout(res, 200); } else setTimeout(res, 80);
   });
+}
+
+/** iOS never decodes a frame of a paused video that was never played: a short play/pause primes it. */
+async function primeVideo(v: HTMLVideoElement) {
+  try { v.muted = true; await v.play(); await new Promise((r) => setTimeout(r, 300)); v.pause(); } catch { /* noop */ }
+}
+
+/** True when the frame currently on the video is black / not decoded (mean luma ≈ 0). */
+function frameIsBlack(v: HTMLVideoElement): boolean {
+  try {
+    const c = document.createElement('canvas'); c.width = 16; c.height = 16;
+    const ctx = c.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(v, 0, 0, 16, 16);
+    const d = ctx.getImageData(0, 0, 16, 16).data; let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+    return sum / (256 * 3) < 3;
+  } catch { return false; }
+}
+
+/** Seek and make sure a real frame is showing (prime + retry); false if the browser will not give us frames. */
+async function seekWithFrame(v: HTMLVideoElement, t: number): Promise<boolean> {
+  await seek(v, t);
+  for (let i = 0; i < 3 && frameIsBlack(v); i++) { if (i === 1) await primeVideo(v); await seek(v, t); }
+  return !frameIsBlack(v);
 }
 
 function deviceInfo() {
@@ -60,8 +84,9 @@ export default function RtmposeLab() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [url, setUrl] = useState<string | null>(null);
-  const [fps, setFps] = useState(15);
-  const [seconds, setSeconds] = useState(6);
+  const [fps, setFps] = useState(10);
+  const [seconds, setSeconds] = useState(5);
+  const [proxy, setProxy] = useState(true);
   const [startAt, setStartAt] = useState(0);
   const [threads, setThreads] = useState(0);
   const [detEvery, setDetEvery] = useState(0);
@@ -86,18 +111,22 @@ export default function RtmposeLab() {
     cancelRef.current = false; setBusy(true); setResults([]);
     const out: EngineResult[] = [];
     const bat0 = await battery(); const t00 = performance.now();
+    await primeVideo(v);
+    if (!(await seekWithFrame(v, T0))) { say('STOPPED: the browser is not giving this page video frames (black). Tap the video once, press play, then try again.'); setBusy(false); return null; }
     for (const id of sel) {
       if (cancelRef.current) break;
       say(`${id}: loading…`);
-      const eng = createEngine(id, { threads: threads || undefined, detEvery });
+      const eng = createEngine(id, { threads: threads || undefined, detEvery, proxy });
       const frames: LabFrame[] = [];
+      let blackRun = 0;
       let initMs = 0, info: Record<string, unknown> = {}, warmupMs = 0, error: string | undefined;
       try {
         const t0 = performance.now(); info = await eng.init(); initMs = performance.now() - t0;
         say(`${id}: ready in ${(initMs / 1000).toFixed(1)} s — running ${count} frames`);
         for (let k = 0; k < count && !cancelRef.current; k++) {
           const t = T0 + k / F;
-          await seek(v, t);
+          const ok = await seekWithFrame(v, t);
+          if (!ok && ++blackRun >= 5) { error = 'video frames were black (not decoded) — run stopped for this engine'; break; }
           const a = performance.now(); let kps: Kp[] | null = null;
           try { kps = await eng.detect(v); } catch (e) { error = (e as Error)?.message; }
           const ms = performance.now() - a;
@@ -145,17 +174,19 @@ export default function RtmposeLab() {
     for (const id of sel) {
       if (cancelRef.current) break;
       say(`LIVE ${id}: loading…`);
-      const eng = createEngine(id, { threads: threads || undefined, detEvery });
+      const eng = createEngine(id, { threads: threads || undefined, detEvery, proxy });
       let error: string | undefined; const frames: LabFrame[] = []; const ages: number[] = [], atDraw: number[] = []; const pairs: Array<[number, number]> = [];
       try {
         await eng.init();
-        v.muted = true; v.playbackRate = 1; await seek(v, T0);
+        v.muted = true; v.playbackRate = 1; v.loop = true; await primeVideo(v); await seekWithFrame(v, T0);
         // warm-up on the paused frame so shader / graph compile is not counted
         for (let k = 0; k < 2; k++) await eng.detect(v);
-        await seek(v, T0);
+        await seekWithFrame(v, T0);
         const q0 = v.getVideoPlaybackQuality?.(); const r0 = rafs.length;
         const start = performance.now(); await v.play();
-        while (performance.now() - start < S * 1000 && !v.paused && !v.ended && !cancelRef.current) {
+        let resumes = 0;
+        while (performance.now() - start < S * 1000 && !cancelRef.current) {
+          if (v.paused) { if (resumes++ > 5) { error = 'video kept pausing'; break; } try { await v.play(); } catch { /* noop */ } }
           const t = v.currentTime, a = performance.now();
           let kps: Kp[] | null = null;
           try { kps = await eng.detect(v); } catch (e) { error = (e as Error)?.message; break; }
@@ -165,7 +196,7 @@ export default function RtmposeLab() {
         }
         const wall = (performance.now() - start) / 1000;
         v.pause();
-        const q1 = v.getVideoPlaybackQuality?.();
+        const q1 = v.getVideoPlaybackQuality?.(); const looped = !!(q0 && q1 && q1.totalVideoFrames < q0.totalVideoFrames);
         await new Promise((r) => setTimeout(r, 80)); // let the last refreshes land, then find each result's next refresh
         for (const [a, b] of pairs) { const next = rafs.find((x) => x >= b); if (next !== undefined) atDraw.push(next - a); }
         const gaps: number[] = []; for (let i = r0 + 1; i < rafs.length; i++) gaps.push(rafs[i] - rafs[i - 1]);
@@ -173,7 +204,7 @@ export default function RtmposeLab() {
         out.push({
           id, label: eng.label, seconds: Math.round(wall * 10) / 10, frames: frames.length, detPerSec: frames.length ? Math.round((frames.length / wall) * 10) / 10 : null,
           detectedPct: sm.detectedPct, ageMs: [pc(ages, 0.5), pc(ages, 0.95), pc(ages, 1)], ageAtDrawMs: [pc(atDraw, 0.5), pc(atDraw, 0.95), pc(atDraw, 1)],
-          mainDropped: q0 && q1 ? `${q1.droppedVideoFrames - q0.droppedVideoFrames}/${q1.totalVideoFrames - q0.totalVideoFrames}` : 'n/a',
+          mainDropped: q0 && q1 && !looped ? `${q1.droppedVideoFrames - q0.droppedVideoFrames}/${q1.totalVideoFrames - q0.totalVideoFrames}` : 'n/a',
           mainFrameGapMs: [pc(gaps, 0.5), pc(gaps, 1)], jankOver50: gaps.filter((g) => g > 50).length, jumps: sm.track.jumps, swaps: sm.track.swaps, error,
         });
       } catch (e) { error = (e as Error)?.message ?? String(e); say(`LIVE ${id}: FAILED ${error}`); out.push({ id, label: eng.label, seconds: 0, frames: 0, detPerSec: null, detectedPct: 0, ageMs: [null, null, null], ageAtDrawMs: [null, null, null], mainDropped: 'n/a', mainFrameGapMs: [null, null], jankOver50: 0, jumps: 0, swaps: 0, error }); }
@@ -207,7 +238,10 @@ export default function RtmposeLab() {
     ctx.fillStyle = '#f33'; for (const p of k) if (p.score > 0.3) { ctx.beginPath(); ctx.arc(p.x * s, p.y * s, 3, 0, 7); ctx.fill(); }
   }, [results]);
 
-  const copy = async () => { try { await navigator.clipboard.writeText(report); say('result copied'); } catch { say('copy failed — use Download'); } };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(report); say('result copied'); return; } catch { /* fall through */ }
+    try { const ta = document.getElementById('lab-report') as HTMLTextAreaElement | null; if (ta) { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); const ok = document.execCommand('copy'); say(ok ? 'result copied' : 'copy blocked — long-press the text box below, Select All, Copy'); } } catch { say('copy blocked — long-press the text box below, Select All, Copy'); }
+  };
   const download = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([report], { type: 'application/json' })); a.download = `rtmpose-lab-${Date.now()}.json`; a.click(); };
 
   return (
@@ -241,6 +275,7 @@ export default function RtmposeLab() {
         {busy && <button onClick={() => { cancelRef.current = true; }} style={{ padding: '10px 16px', fontSize: 16 }}>Stop</button>}
         {report && <><button onClick={copy} style={{ padding: '10px 16px', fontSize: 16 }}>Copy result</button><button onClick={download} style={{ padding: '10px 16px', fontSize: 16 }}>Download</button></>}
       </div>
+      <label style={{ display: 'block', margin: '4px 0' }}><input type="checkbox" checked={proxy} onChange={(e) => setProxy(e.target.checked)} /> run RTMPose in its own worker (keeps the page responsive; try off to compare)</label>
       <pre style={{ background: '#111', color: '#9f9', padding: 8, fontSize: 12, maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{log.join('\n') || 'log'}</pre>
       {liveResults.length > 0 && (
         <div style={{ overflowX: 'auto', marginBottom: 10 }}>
@@ -271,6 +306,12 @@ export default function RtmposeLab() {
             <input type="range" min={0} max={Math.max(0, (results[0]?.frames.length ?? 1) - 1)} value={viewIdx} onChange={(e) => { const i = Number(e.target.value); setViewIdx(i); void draw(viewEngine, i); }} style={{ width: '60%' }} /> frame {viewIdx}
           </div>
         </div>
+      )}
+      {report && (
+        <details open style={{ marginTop: 10 }}>
+          <summary>Result (long-press → Select All → Copy if the Copy button does not work)</summary>
+          <textarea id="lab-report" readOnly value={report} onFocus={(e) => e.currentTarget.select()} style={{ width: '100%', height: 160, fontFamily: 'monospace', fontSize: 11 }} />
+        </details>
       )}
     </div>
     </div>

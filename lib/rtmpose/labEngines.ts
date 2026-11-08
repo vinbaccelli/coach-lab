@@ -57,14 +57,14 @@ function mediapipeLive(): LabEngine {
   };
 }
 
-function mediapipeCrop(id: string, label: string, quality: 'fast' | 'max', seeded = false): LabEngine {
+function mediapipeCrop(id: string, label: string, quality: 'fast' | 'max', seeded = false, opts?: { proxy?: boolean }): LabEngine {
   let tracker: import('../mediapipePose').CropTracker | null = null;
   let finder: PersonFinder | null = null;
   return {
     id, label,
     async init() {
       const m = await import('../mediapipePose'); tracker = m.newCropTracker();
-      if (seeded) { finder = new PersonFinder(); await finder.init(); }
+      if (seeded) { finder = new PersonFinder(); await finder.init(undefined, { proxy: opts?.proxy }); }
       return { model: m.TRACK_QUALITY[quality === 'fast' ? 'fast' : 'balanced'].model, seededByYolox: seeded };
     },
     async detect(video) {
@@ -82,7 +82,7 @@ function mediapipeCrop(id: string, label: string, quality: 'fast' | 'max', seede
   };
 }
 
-function rtmpose(size: RtmposeSize, opts: { threads?: number; detEvery?: number }): LabEngine {
+function rtmpose(size: RtmposeSize, opts: { threads?: number; detEvery?: number; proxy?: boolean }): LabEngine {
   const eng = new RtmposeEngine(size, opts);
   return {
     id: size, label: `RTMPose-${size.slice(-1)} (ONNX wasm, tracked crop + YOLOX-tiny)`,
@@ -97,14 +97,14 @@ export type EngineId = (typeof ENGINE_IDS)[number];
 /** The slow, high-accuracy engine the others are compared against (pseudo-truth). */
 export const REFERENCE_ENGINE: EngineId = 'mp-crop-heavy';
 
-export function createEngine(id: EngineId, opts: { threads?: number; detEvery?: number } = {}): LabEngine {
+export function createEngine(id: EngineId, opts: { threads?: number; detEvery?: number; proxy?: boolean } = {}): LabEngine {
   switch (id) {
     case 'movenet-thunder': return movenet(id, 'MoveNet Thunder (current live default; tfjs on the main thread here)', 'thunder');
     case 'movenet-lightning': return movenet(id, 'MoveNet Lightning (tfjs, main thread)', 'lightning');
     case 'mp-live-full': return mediapipeLive();
     case 'mp-crop-full': return mediapipeCrop(id, 'MediaPipe optimised (full, tracked crop, IMAGE mode)', 'fast');
-    case 'mp-crop-seeded': return mediapipeCrop(id, 'MediaPipe optimised + YOLOX-tiny seed (full, tracked crop)', 'fast', true);
-    case 'mp-crop-heavy': return mediapipeCrop(id, 'MediaPipe heavy, tracked crop (AI Track quality) — REFERENCE', 'max', true);
+    case 'mp-crop-seeded': return mediapipeCrop(id, 'MediaPipe optimised + YOLOX-tiny seed (full, tracked crop)', 'fast', true, opts);
+    case 'mp-crop-heavy': return mediapipeCrop(id, 'MediaPipe heavy, tracked crop (AI Track quality) — REFERENCE', 'max', true, opts);
     case 'rtmpose-t': case 'rtmpose-s': case 'rtmpose-m': return rtmpose(id, opts);
   }
 }

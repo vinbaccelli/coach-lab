@@ -41,3 +41,10 @@ Conclusion so far: the pipeline is **correct** and cheap enough to be interestin
 5. Note battery % before and after a full run.
 
 Known separate issue (not part of this spike): the stuck-video bug.
+
+## First iPhone run (iPhone, Chrome/WebKit, iOS 18.5, clip 1080×1920, 7.6 s) — mostly INVALID, lab bugs fixed after it
+- **Paused comparison: every engine "detected 0 %" and the run took 54 min.** iOS never decodes a frame of a paused video that was never played, so every seek showed a black frame; each seek then timed out. Nothing from that table says anything about the models. Fixed: the video is primed (short play/pause), every seek checks the frame is not black (retry, then stop with a clear message after 5 black frames), shorter waits, defaults now 10 fps × 5 s.
+- **Live test was truncated for most engines** (1–2 s instead of 6 s; negative dropped-frame counter = the media pipeline was reset). The loop stopped when the video reported paused/ended. Fixed: the clip loops, a paused video is resumed, the loop runs for the wall time asked.
+- **`rtmpose-s: FetchEvent.respondWith … Load failed`** in the paused run: the app's service worker failed one large model fetch; the same model loaded fine later. Fixed in the lab only (4 retries, bytes handed to ORT; `sw.js` untouched).
+- **`crossOriginIsolated: false` on iPhone Chrome** (the page sends COOP same-origin + COEP credentialless; WebKit does not provide SharedArrayBuffer here) ⇒ RTMPose runs **single-threaded wasm** (`threads: 1`), as feared. New option "run RTMPose in its own worker" keeps the page responsive in that case (costs ≈ 10–15 ms of messaging).
+- Valid but short live numbers from that run (treat as indications): MoveNet Thunder (tfjs WebGL, main thread, 6 s): 15.2 det/s, age p50 58 ms, age at draw p95 118 ms, 88 refresh gaps > 50 ms. MediaPipe Live full (2.2 s): 30.9 det/s, age p50 28 ms. RTMPose-s (1.3 s): 16.4 det/s, age p50 47 ms, p95 109 ms, max 229 ms. RTMPose-t and the MediaPipe crop variants produced ≤ 1 s of data.

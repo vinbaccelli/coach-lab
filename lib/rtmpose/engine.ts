@@ -9,17 +9,40 @@ import { IN_W, IN_H, cropFromBox, rgbaCropToTensor, decodeSimcc, boxFromKeypoint
 export type RtmposeSize = 'rtmpose-t' | 'rtmpose-s' | 'rtmpose-m';
 type Ort = typeof import('onnxruntime-web/wasm');
 
-export interface RtmposeInfo { threads: number; crossOriginIsolated: boolean; ep: string; loadMs: number }
+export interface RtmposeInfo { threads: number; crossOriginIsolated: boolean; ep: string; proxyWorker: boolean; loadMs: number }
 
 /** YOLOX-tiny person finder (shared by RTMPose and by the YOLOX-seeded MediaPipe variant in the lab). */
+async function fetchModel(url: string, tries = 4): Promise<Uint8Array> {
+  let last: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+      return new Uint8Array(await r.arrayBuffer());
+    } catch (e) { last = e; await new Promise((res) => setTimeout(res, 400 * (i + 1))); }
+  }
+  throw last instanceof Error ? last : new Error(String(last));
+}
+
+/** Run ORT's wasm in its own worker so inference never blocks the page (matters when SharedArrayBuffer threads are unavailable, e.g. iPhone). */
+function configureOrt(ort: Ort, opts: { threads?: number; proxy?: boolean }) {
+  const env = ort.env;
+  env.wasm.wasmPaths = '/ort/';
+  const iso = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
+  const threads = opts.threads ?? (iso ? Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2))) : 1);
+  env.wasm.numThreads = threads;
+  env.wasm.proxy = !!opts.proxy;
+  return { iso, threads };
+}
+
 export class PersonFinder {
   private ort!: Ort;
   private det!: import('onnxruntime-web/wasm').InferenceSession;
   private canvas: HTMLCanvasElement | null = null;
-  async init(ort?: Ort) {
+  async init(ort?: Ort, opts: { threads?: number; proxy?: boolean } = {}) {
     this.ort = ort ?? (await import('onnxruntime-web/wasm'));
-    this.ort.env.wasm.wasmPaths = '/ort/';
-    this.det = await this.ort.InferenceSession.create('/models/rtmpose/yolox-tiny.onnx', { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+    if (!ort) configureOrt(this.ort, opts);
+    this.det = await this.ort.InferenceSession.create(await fetchModel('/models/rtmpose/yolox-tiny.onnx'), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
   }
   async find(video: HTMLVideoElement, prefer?: Box | null): Promise<Box | null> {
     const W = video.videoWidth, H = video.videoHeight, S = 416;
@@ -48,22 +71,18 @@ export class RtmposeEngine {
   lastDetMs = 0;
   detections = 0;
 
-  constructor(private size: RtmposeSize, private opts: { threads?: number; detEvery?: number } = {}) {}
+  constructor(private size: RtmposeSize, private opts: { threads?: number; detEvery?: number; proxy?: boolean } = {}) {}
 
   async init(): Promise<RtmposeInfo> {
     const t0 = performance.now();
     this.ort = await import('onnxruntime-web/wasm'); // wasm-only build: asks for ort-wasm-simd-threaded.wasm, which is staged in public/ort
-    const env = this.ort.env;
-    env.wasm.wasmPaths = '/ort/';
-    const iso = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
-    const threads = this.opts.threads ?? (iso ? Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2))) : 1);
-    env.wasm.numThreads = threads;
+    const { iso, threads } = configureOrt(this.ort, this.opts);
     const so = { executionProviders: ['wasm'], graphOptimizationLevel: 'all' as const };
-    this.pose = await this.ort.InferenceSession.create(`/models/rtmpose/${this.size}.onnx`, so);
+    this.pose = await this.ort.InferenceSession.create(await fetchModel(`/models/rtmpose/${this.size}.onnx`), so);
     await this.finder.init(this.ort);
     this.crop.width = IN_W; this.crop.height = IN_H;
     this.cctx = this.crop.getContext('2d', { willReadFrequently: true })!;
-    this.info = { threads, crossOriginIsolated: iso, ep: 'wasm', loadMs: performance.now() - t0 };
+    this.info = { threads, crossOriginIsolated: iso, ep: 'wasm', proxyWorker: !!this.opts.proxy, loadMs: performance.now() - t0 };
     return this.info;
   }
 
