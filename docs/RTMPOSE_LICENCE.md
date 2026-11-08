@@ -34,7 +34,24 @@ Whether dataset terms bind trained weights is a legal question; none of the sour
 
 The detector shipped in the lab (`public/models/rtmpose/yolox-tiny.onnx`) is the **Human-Art** variant. Human-Art is distributed under an authorization form "for non-commercial purposes" (https://github.com/IDEA-Research/HumanArt). It should not be in V1 at all.
 
-Options (decision pending with the architect): the Apache-2.0 YOLOX-tiny **COCO** weights, or no detector (seed the first box from the existing MoveNet/MediaPipe pose). Neither is implemented yet.
+Decision pending with the architect; see "Detector options" below. Nothing is changed yet.
+
+## Detector options (investigated 2026-11-08)
+
+**Apache-2.0 YOLOX-tiny (COCO): provenance is NOT sufficiently documented, so it is not adopted.**
+- Code licence: Apache-2.0, "Megvii Inc., 2021-2022" (https://raw.githubusercontent.com/Megvii-BaseDetection/YOLOX/main/LICENSE).
+- Checkpoint: `yolox_tiny.pth` from `github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/` (legacy: `Megvii-BaseDetection/storage/releases/download/0.0.1/yolox_tiny_32dot8.pth`); README model zoo: Tiny, 416, 32.8 mAP, 5.06 M params. The README does not say what it was trained on beyond "reproduce our results on COCO". https://github.com/Megvii-BaseDetection/YOLOX
+- **No licence statement for the weights.** Two open issues ask exactly this and have no maintainer answer: https://github.com/Megvii-BaseDetection/YOLOX/issues/1865 (commercial iOS app bundling) and https://github.com/Megvii-BaseDetection/YOLOX/issues/1915. Third-party sites that call the weights Apache-2.0 cite no Megvii statement.
+- Training data would be COCO: annotations CC BY 4.0, images Flickr under per-image licences (see the COCO row above), the same open question as the pose weights.
+- Technical cost too: the shipped detector is the OpenMMLab mmdeploy export (outputs `dets`/`labels`, NMS inside). Megvii's ONNX export has a different output and needs new decode + NMS code in `lib/rtmpose/core.ts`.
+
+**Alternatives that add no new unclear dependency (for the architect to choose):**
+1. **Seed the RTMPose box from the MoveNet pose already running in the app (worker).** MoveNet's model card states Apache-2.0 for the model (https://storage.googleapis.com/movenet/MoveNet.SinglePose%20Model%20Card.pdf; training data COCO + Google's internal "Active" set, so the training-data question is not zero either), and it is the product's current default engine. It needs no extra download. Limit: single person (same crowd behaviour the app has today); re-acquire when RTMPose loses the box.
+2. **Seed from the on-screen player the coach locks or confirms** (the existing "click player" / lock flow). No model at all; needs a click when the player is lost.
+3. **Seed from MediaPipe's pose landmarker** (already self-hosted, Apache-2.0 model card). Heavier, main thread, failed on small players in the lab unless seeded.
+4. **Ask counsel / Megvii** for written confirmation on the YOLOX weights, or train our own detector (V2 scope).
+
+Recommendation (not implemented): 1 with 2 as the manual fallback; keep the Human-Art file out of any production build until then.
 
 ## Obligations if RTMPose-t ships (Apache-2.0 for code, to be confirmed for weights)
 
