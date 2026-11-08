@@ -48,3 +48,22 @@ Known separate issue (not part of this spike): the stuck-video bug.
 - **`rtmpose-s: FetchEvent.respondWith … Load failed`** in the paused run: the app's service worker failed one large model fetch; the same model loaded fine later. Fixed in the lab only (4 retries, bytes handed to ORT; `sw.js` untouched).
 - **`crossOriginIsolated: false` on iPhone Chrome** (the page sends COOP same-origin + COEP credentialless; WebKit does not provide SharedArrayBuffer here) ⇒ RTMPose runs **single-threaded wasm** (`threads: 1`), as feared. New option "run RTMPose in its own worker" keeps the page responsive in that case (costs ≈ 10–15 ms of messaging).
 - Valid but short live numbers from that run (treat as indications): MoveNet Thunder (tfjs WebGL, main thread, 6 s): 15.2 det/s, age p50 58 ms, age at draw p95 118 ms, 88 refresh gaps > 50 ms. MediaPipe Live full (2.2 s): 30.9 det/s, age p50 28 ms. RTMPose-s (1.3 s): 16.4 det/s, age p50 47 ms, p95 109 ms, max 229 ms. RTMPose-t and the MediaPipe crop variants produced ≤ 1 s of data.
+
+## Second iPhone run — paused comparison VALID, live test failed to load (iPhone, Chrome/WebKit iOS 18.5)
+Clip 1080×1920, 7.6 s, 10 fps × 5 s from t = 0; player ≈ 254 px tall (≈13 % of the frame); **slow motion** (reference peak wrist speed 0.17 body heights/s) — an easy clip, not a fast swing. RTMPose ran **single-threaded wasm in its own worker** (`crossOriginIsolated: false`). p50 ms = crop + inference + decode per frame, sequential.
+
+| engine | p50 / p95 ms | fps | found | err vs ref (bh) | PCK@.1 | wrist-speed ratio | jerk median | bone-length CV |
+|---|---|---|---|---|---|---|---|---|
+| MoveNet Thunder (tfjs WebGL, **main thread**) | 80 / 103 | 12 | 100 % | 0.017 | 0.998 | 1.57 | 0.0059 | 0.016 |
+| MediaPipe live full | 38 / 42 | 27 | 100 % | 0.015 | 0.998 | 2.89 | 0.0056 | 0.025 |
+| MediaPipe crop (unseeded) | 72 / 86 | 14 | 100 % | 0.017 | 1.00 | 1.87 | 0.0138 | 0.035 |
+| MediaPipe crop + YOLOX seed | 72 / 86 | 14 | 100 % | 0.017 | 1.00 | 1.73 | 0.0140 | 0.027 |
+| MediaPipe heavy crop (reference) | 109 / 135 | 9 | 100 % | – | – | – | 0.0098 | 0.022 |
+| **RTMPose-t** | 46 / 50 | 22 | 100 % | 0.014 | 1.00 | 1.04 | 0.0087 | 0.014 |
+| **RTMPose-s** | 65 / 68 | 15 | 100 % | 0.013 | 1.00 | 0.73 | 0.0056 | 0.0096 |
+
+All engines: 0 jumps, 0 swaps, 0 arm↔leg errors, 0 validator drops. **On this clip no engine is wrong; the differences are speed and stability.**
+- Read the wrist-speed ratio with care: on slow motion the peak speed is dominated by jitter, so a ratio above 1 means noisier than the reference, and 0.73 on a slow clip says nothing about whether a fast swing's speed is preserved. A fast serve is needed for that.
+- RTMPose-s has the lowest bone-length variation and the lowest jerk; RTMPose-t is as accurate as MoveNet at 57 % of its time here.
+- **Not apples to apples:** the lab runs MoveNet on the main thread (80 ms); the app runs it in a worker at ≈ 34–42 ms (earlier phone panel). New engine `movenet-app-worker` runs the app's own bridge for a fair baseline.
+- **The LIVE test did not run:** every engine failed with "Loading chunk … failed (timeout)" on the first visit to the fresh deploy. The paused run later loaded the same chunks. Fixed: dynamic imports now retry 4×.

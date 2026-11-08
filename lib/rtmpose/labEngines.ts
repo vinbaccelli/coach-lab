@@ -5,6 +5,7 @@
  */
 import { COCO17, type Kp } from './core';
 import { RtmposeEngine, PersonFinder, type RtmposeSize } from './engine';
+import { retryImport as R } from './retryImport';
 
 export interface LabEngine {
   id: string;
@@ -24,15 +25,15 @@ function movenet(id: string, label: string, model: 'thunder' | 'lightning'): Lab
   return {
     id, label,
     async init() {
-      const tf = await import('@tensorflow/tfjs-core');
-      await import('@tensorflow/tfjs-backend-webgl');
-      await import('@tensorflow/tfjs-converter');
+      const tf = await R(() => import('@tensorflow/tfjs-core'));
+      await R(() => import('@tensorflow/tfjs-backend-webgl'));
+      await R(() => import('@tensorflow/tfjs-converter'));
       try { await tf.setBackend('webgl'); await tf.ready(); backend = 'webgl'; } catch {
-        const wasm = await import('@tensorflow/tfjs-backend-wasm');
+        const wasm = await R(() => import('@tensorflow/tfjs-backend-wasm'));
         wasm.setWasmPaths('/tfjs-wasm/');
         await tf.setBackend('wasm'); await tf.ready(); backend = 'wasm';
       }
-      const pd = await import('@tensorflow-models/pose-detection');
+      const pd = await R(() => import('@tensorflow-models/pose-detection'));
       det = await pd.createDetector(pd.SupportedModels.MoveNet, {
         modelType: model === 'thunder' ? pd.movenet.modelType.SINGLEPOSE_THUNDER : pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
         modelUrl: `${window.location.origin}/models/movenet-${model}/model.json`,
@@ -48,12 +49,37 @@ function movenet(id: string, label: string, model: 'thunder' | 'lightning'): Lab
   };
 }
 
+/** The CURRENT live engine exactly as the app runs it: PoseWorkerBridge (worker, WebGL Thunder, One Euro smoothing). Bridge is used, not modified. */
+function appWorkerMoveNet(): LabEngine {
+  let bridge: import('../poseWorkerBridge').PoseWorkerBridge | null = null;
+  let pending: ((k: Kp[] | null) => void) | null = null;
+  return {
+    id: 'movenet-app-worker', label: 'MoveNet as the app runs it today (PoseWorkerBridge: worker, Thunder/WebGL, smoothing)',
+    async init() {
+      const { PoseWorkerBridge } = await R(() => import('../poseWorkerBridge'));
+      bridge = new PoseWorkerBridge({ frameSkip: 0 });
+      bridge.onResult((kps) => { const p = pending; pending = null; p?.(clean(kps as never)); });
+      await new Promise<void>((res, rej) => { const t = setTimeout(() => rej(new Error('worker not ready in 60 s')), 60000); bridge!.onReady(() => { clearTimeout(t); res(); }); });
+      return { thread: 'worker (app bridge)' };
+    },
+    detect(video) {
+      return new Promise<Kp[] | null>((resolve) => {
+        pending = resolve;
+        const t = setTimeout(() => { if (pending === resolve) { pending = null; resolve(null); } }, 3000);
+        const done = resolve; pending = (k) => { clearTimeout(t); done(k); };
+        bridge!.sendFrame(video);
+      });
+    },
+    dispose() { try { bridge?.dispose(); } catch { /* noop */ } bridge = null; pending = null; },
+  };
+}
+
 function mediapipeLive(): LabEngine {
   return {
     id: 'mp-live-full', label: 'MediaPipe Live (full, VIDEO mode, as used today with Foot Lines)',
-    async init() { const m = await import('../mediapipePose'); await m.detectPoseLive(document.createElement('video')); return { model: 'full' }; },
-    async detect(video) { const m = await import('../mediapipePose'); const r = await m.detectPoseLive(video); return r?.notReady ? null : clean(r?.kps); },
-    dispose() { void import('../mediapipePose').then((m) => m.disposeLiveLandmarker()); },
+    async init() { const m = await R(() => import('../mediapipePose')); await m.detectPoseLive(document.createElement('video')); return { model: 'full' }; },
+    async detect(video) { const m = await R(() => import('../mediapipePose')); const r = await m.detectPoseLive(video); return r?.notReady ? null : clean(r?.kps); },
+    dispose() { void R(() => import('../mediapipePose')).then((m) => m.disposeLiveLandmarker()); },
   };
 }
 
@@ -63,12 +89,12 @@ function mediapipeCrop(id: string, label: string, quality: 'fast' | 'max', seede
   return {
     id, label,
     async init() {
-      const m = await import('../mediapipePose'); tracker = m.newCropTracker();
+      const m = await R(() => import('../mediapipePose')); tracker = m.newCropTracker();
       if (seeded) { finder = new PersonFinder(); await finder.init(undefined, { proxy: opts?.proxy }); }
       return { model: m.TRACK_QUALITY[quality === 'fast' ? 'fast' : 'balanced'].model, seededByYolox: seeded };
     },
     async detect(video) {
-      const m = await import('../mediapipePose');
+      const m = await R(() => import('../mediapipePose'));
       const params = m.TRACK_QUALITY[quality === 'fast' ? 'fast' : 'balanced'];
       // Seeded variant: MediaPipe never finds a small player by itself (it ran 0 % on a 165 px player), so a person box from
       // YOLOX-tiny starts the crop tracker, exactly like the app starts it from a locked / first-detected player.
@@ -92,13 +118,14 @@ function rtmpose(size: RtmposeSize, opts: { threads?: number; detEvery?: number;
   };
 }
 
-export const ENGINE_IDS = ['movenet-thunder', 'movenet-lightning', 'mp-live-full', 'mp-crop-full', 'mp-crop-seeded', 'mp-crop-heavy', 'rtmpose-t', 'rtmpose-s', 'rtmpose-m'] as const;
+export const ENGINE_IDS = ['movenet-app-worker', 'movenet-thunder', 'movenet-lightning', 'mp-live-full', 'mp-crop-full', 'mp-crop-seeded', 'mp-crop-heavy', 'rtmpose-t', 'rtmpose-s', 'rtmpose-m'] as const;
 export type EngineId = (typeof ENGINE_IDS)[number];
 /** The slow, high-accuracy engine the others are compared against (pseudo-truth). */
 export const REFERENCE_ENGINE: EngineId = 'mp-crop-heavy';
 
 export function createEngine(id: EngineId, opts: { threads?: number; detEvery?: number; proxy?: boolean } = {}): LabEngine {
   switch (id) {
+    case 'movenet-app-worker': return appWorkerMoveNet();
     case 'movenet-thunder': return movenet(id, 'MoveNet Thunder (current live default; tfjs on the main thread here)', 'thunder');
     case 'movenet-lightning': return movenet(id, 'MoveNet Lightning (tfjs, main thread)', 'lightning');
     case 'mp-live-full': return mediapipeLive();

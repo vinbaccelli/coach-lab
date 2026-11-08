@@ -90,7 +90,7 @@ export default function RtmposeLab() {
   const [startAt, setStartAt] = useState(0);
   const [threads, setThreads] = useState(0);
   const [detEvery, setDetEvery] = useState(0);
-  const [picked, setPicked] = useState<Record<string, boolean>>({ 'movenet-thunder': true, 'mp-live-full': true, 'mp-crop-full': true, 'mp-crop-seeded': true, 'mp-crop-heavy': true, 'rtmpose-t': true, 'rtmpose-s': true, 'rtmpose-m': false });
+  const [picked, setPicked] = useState<Record<string, boolean>>({ 'movenet-app-worker': true, 'movenet-thunder': false, 'mp-live-full': true, 'mp-crop-full': true, 'mp-crop-seeded': true, 'mp-crop-heavy': true, 'rtmpose-t': true, 'rtmpose-s': true, 'rtmpose-m': false });
   const [log, setLog] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<EngineResult[]>([]);

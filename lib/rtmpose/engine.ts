@@ -4,6 +4,7 @@
  * Weights are self-hosted (public/models/rtmpose/), the wasm runtime is the one staged in public/ort/.
  * NOT wired into the analysis page — only the lab page (/rtmpose-lab) uses it in this spike.
  */
+import { retryImport as R } from './retryImport';
 import { IN_W, IN_H, cropFromBox, rgbaCropToTensor, decodeSimcc, boxFromKeypoints, bestPerson, rgba416ToYoloxTensor, type Box, type Kp } from './core';
 
 export type RtmposeSize = 'rtmpose-t' | 'rtmpose-s' | 'rtmpose-m';
@@ -40,7 +41,7 @@ export class PersonFinder {
   private det!: import('onnxruntime-web/wasm').InferenceSession;
   private canvas: HTMLCanvasElement | null = null;
   async init(ort?: Ort, opts: { threads?: number; proxy?: boolean } = {}) {
-    this.ort = ort ?? (await import('onnxruntime-web/wasm'));
+    this.ort = ort ?? (await R(() => import('onnxruntime-web/wasm')));
     if (!ort) configureOrt(this.ort, opts);
     this.det = await this.ort.InferenceSession.create(await fetchModel('/models/rtmpose/yolox-tiny.onnx'), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
   }
@@ -75,7 +76,7 @@ export class RtmposeEngine {
 
   async init(): Promise<RtmposeInfo> {
     const t0 = performance.now();
-    this.ort = await import('onnxruntime-web/wasm'); // wasm-only build: asks for ort-wasm-simd-threaded.wasm, which is staged in public/ort
+    this.ort = await R(() => import('onnxruntime-web/wasm')); // wasm-only build: asks for ort-wasm-simd-threaded.wasm, which is staged in public/ort
     const { iso, threads } = configureOrt(this.ort, this.opts);
     const so = { executionProviders: ['wasm'], graphOptimizationLevel: 'all' as const };
     this.pose = await this.ort.InferenceSession.create(await fetchModel(`/models/rtmpose/${this.size}.onnx`), so);
