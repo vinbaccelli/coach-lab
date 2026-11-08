@@ -1,0 +1,351 @@
+'use client';
+/**
+ * RTMPose spike — LAB. Runs several pose engines over the SAME frames of one clip and compares them.
+ * Not part of the product: not linked from the app, own route, does not touch the analysis page or AI Track.
+ * Desktop and phone results are different things — the page prints the device so a pasted result says where it came from.
+ */
+import React, { useCallback, useRef, useState } from 'react';
+import { ENGINE_IDS, REFERENCE_ENGINE, createEngine, type EngineId } from '@/lib/rtmpose/labEngines';
+import { bodyHeight } from '@/lib/skeletonBench/metrics';
+import { summarize, compareToReference, toSeq, type EngineSummary, type RefComparison, type LabFrame } from '@/lib/rtmpose/labMetrics';
+import { containRect, type Kp } from '@/lib/rtmpose/core';
+
+interface EngineResult {
+  id: EngineId; label: string; initMs: number; info: Record<string, unknown>; warmupMs: number;
+  frames: LabFrame[]; summary: EngineSummary; vsRef: RefComparison | null; error?: string;
+}
+
+const EDGES: Array<[string, string]> = [
+  ['left_shoulder', 'right_shoulder'], ['left_shoulder', 'left_elbow'], ['left_elbow', 'left_wrist'], ['right_shoulder', 'right_elbow'], ['right_elbow', 'right_wrist'],
+  ['left_shoulder', 'left_hip'], ['right_shoulder', 'right_hip'], ['left_hip', 'right_hip'], ['left_hip', 'left_knee'], ['left_knee', 'left_ankle'], ['right_hip', 'right_knee'], ['right_knee', 'right_ankle'],
+];
+
+async function seek(v: HTMLVideoElement, t: number) {
+  await new Promise<void>((res) => {
+    let done = false;
+    const fin = () => { if (done) return; done = true; v.removeEventListener('seeked', fin); res(); };
+    v.addEventListener('seeked', fin); v.currentTime = t; setTimeout(fin, 1200);
+  });
+  await new Promise<void>((res) => {
+    const vv = v as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
+    if (!v.paused && typeof vv.requestVideoFrameCallback === 'function') { vv.requestVideoFrameCallback(() => res()); setTimeout(res, 200); } else setTimeout(res, 80);
+  });
+}
+
+/** iOS never decodes a frame of a paused video that was never played: a short play/pause primes it. */
+async function primeVideo(v: HTMLVideoElement) {
+  try { v.muted = true; await v.play(); await new Promise((r) => setTimeout(r, 300)); v.pause(); } catch { /* noop */ }
+}
+
+/** True when the frame currently on the video is black / not decoded (mean luma ≈ 0). */
+function frameIsBlack(v: HTMLVideoElement): boolean {
+  try {
+    const c = document.createElement('canvas'); c.width = 16; c.height = 16;
+    const ctx = c.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(v, 0, 0, 16, 16);
+    const d = ctx.getImageData(0, 0, 16, 16).data; let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+    return sum / (256 * 3) < 3;
+  } catch { return false; }
+}
+
+/** Seek and make sure a real frame is showing (prime + retry); false if the browser will not give us frames. */
+async function seekWithFrame(v: HTMLVideoElement, t: number): Promise<boolean> {
+  await seek(v, t);
+  for (let i = 0; i < 3 && frameIsBlack(v); i++) { if (i === 1) await primeVideo(v); await seek(v, t); }
+  return !frameIsBlack(v);
+}
+
+function deviceInfo() {
+  const n = navigator as Navigator & { deviceMemory?: number; gpu?: unknown };
+  return {
+    userAgent: n.userAgent, cores: n.hardwareConcurrency, memoryGB: n.deviceMemory ?? null, webgpu: !!n.gpu,
+    crossOriginIsolated: typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated, dpr: window.devicePixelRatio,
+  };
+}
+
+async function battery(): Promise<{ level: number; charging: boolean } | null> {
+  try { const b = await (navigator as Navigator & { getBattery?: () => Promise<{ level: number; charging: boolean }> }).getBattery?.(); return b ? { level: b.level, charging: b.charging } : null; } catch { return null; }
+}
+
+interface LiveResult {
+  id: EngineId; label: string; seconds: number; frames: number; detPerSec: number | null; detectedPct: number;
+  /** capture→result (ms, real time at 1×): the engine's own latency */
+  ageMs: [number | null, number | null, number | null];
+  /** capture→next screen refresh after the result: what a drawn skeleton would trail the picture by */
+  ageAtDrawMs: [number | null, number | null, number | null];
+  mainDropped: string; mainFrameGapMs: [number | null, number | null]; jankOver50: number; jumps: number; swaps: number; error?: string;
+}
+
+const pc = (v: number[], p: number) => { if (!v.length) return null; const s = [...v].sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(s.length * p))] * 10) / 10; };
+
+const fmt = (n: number | null | undefined, d = 1) => (n === null || n === undefined || !Number.isFinite(n) ? '–' : n.toFixed(d));
+
+export default function RtmposeLab() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [fps, setFps] = useState(20);
+  const [seconds, setSeconds] = useState(4);
+  const [proxy, setProxy] = useState(true);
+  const [startAt, setStartAt] = useState(0);
+  const [threads, setThreads] = useState(0);
+  const [detEvery, setDetEvery] = useState(0);
+  const [picked, setPicked] = useState<Record<string, boolean>>({ 'movenet-app-worker': true, 'movenet-thunder': false, 'mp-live-full': true, 'mp-crop-full': true, 'mp-crop-seeded': true, 'mp-crop-heavy': true, 'rtmpose-t': true, 'rtmpose-s': true, 'rtmpose-m': false });
+  const [log, setLog] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<EngineResult[]>([]);
+  const [report, setReport] = useState<string>('');
+  const [liveSeconds, setLiveSeconds] = useState(6);
+  const [liveResults, setLiveResults] = useState<LiveResult[]>([]);
+  const [viewSet, setViewSet] = useState<Record<string, boolean>>({});
+  const [viewIdx, setViewIdx] = useState(0);
+  const cancelRef = useRef(false);
+
+  const say = useCallback((s: string) => setLog((l) => [...l.slice(-40), s]), []);
+
+  const run = useCallback(async (ids?: EngineId[], o?: { fps?: number; seconds?: number; startAt?: number }) => {
+    const v = videoRef.current; if (!v || !url) return null;
+    const sel = ids ?? ENGINE_IDS.filter((e) => picked[e]);
+    const F = o?.fps ?? fps, S = o?.seconds ?? seconds, T0 = o?.startAt ?? startAt;
+    const count = Math.max(2, Math.min(Math.floor(S * F), Math.floor(((v.duration || S) - T0) * F)));
+    cancelRef.current = false; setBusy(true); setResults([]);
+    const out: EngineResult[] = [];
+    const bat0 = await battery(); const t00 = performance.now();
+    await primeVideo(v);
+    if (!(await seekWithFrame(v, T0))) { say('STOPPED: the browser is not giving this page video frames (black). Tap the video once, press play, then try again.'); setBusy(false); return null; }
+    for (const id of sel) {
+      if (cancelRef.current) break;
+      say(`${id}: loading…`);
+      const eng = createEngine(id, { threads: threads || undefined, detEvery, proxy });
+      const frames: LabFrame[] = [];
+      let blackRun = 0;
+      let initMs = 0, info: Record<string, unknown> = {}, warmupMs = 0, error: string | undefined;
+      try {
+        const t0 = performance.now(); info = await eng.init(); initMs = performance.now() - t0;
+        say(`${id}: ready in ${(initMs / 1000).toFixed(1)} s — running ${count} frames`);
+        for (let k = 0; k < count && !cancelRef.current; k++) {
+          const t = T0 + k / F;
+          const ok = await seekWithFrame(v, t);
+          if (!ok && ++blackRun >= 5) { error = 'video frames were black (not decoded) — run stopped for this engine'; break; }
+          const a = performance.now(); let kps: Kp[] | null = null;
+          try { kps = await eng.detect(v); } catch (e) { error = (e as Error)?.message; }
+          const ms = performance.now() - a;
+          if (k < 2) warmupMs += ms; // first calls pay shader/graph compile: reported separately, excluded from timing stats
+          frames.push({ t, kps, ms: k < 2 ? 0 : ms });
+          if (k % 10 === 0) { setLog((l) => [...l.slice(-40).filter((x) => !x.startsWith(`${id}: frame`)), `${id}: frame ${k}/${count}`]); await new Promise((r) => setTimeout(r, 0)); }
+        }
+      } catch (e) { error = (e as Error)?.message ?? String(e); say(`${id}: FAILED ${error}`); }
+      try { eng.dispose(); } catch { /* noop */ }
+      const summary = summarize(frames);
+      out.push({ id, label: eng.label, initMs, info, warmupMs, frames, summary, vsRef: null, error });
+      say(`${id}: p50 ${fmt(summary.msP50)} ms, detected ${summary.detectedPct}%`);
+    }
+    const ref = out.find((r) => r.id === REFERENCE_ENGINE);
+    for (const r of out) r.vsRef = ref && r !== ref ? compareToReference(r.frames, ref.frames) : null;
+    const bat1 = await battery();
+    setResults(out); setBusy(false);
+    const rep = {
+      kind: 'rtmpose-lab', when: new Date().toISOString(), device: deviceInfo(), clip: { w: v.videoWidth, h: v.videoHeight, duration: v.duration, startAt: T0, fps: F, frames: count },
+      note: 'vsRef compares against the MediaPipe heavy engine: PSEUDO-truth, not ground truth. Timings exclude the first 2 frames (warm-up).',
+      wallSeconds: Math.round((performance.now() - t00) / 100) / 10, battery: { start: bat0, end: bat1 },
+      engines: out.map((r) => ({ id: r.id, label: r.label, initMs: Math.round(r.initMs), warmupMs: Math.round(r.warmupMs), info: r.info, error: r.error, summary: r.summary, vsRef: r.vsRef })),
+    };
+    setReport(JSON.stringify(rep, null, 1));
+    setViewIdx(0);
+    (window as unknown as { __rtmLabResults?: unknown }).__rtmLabResults = { report: rep, frames: Object.fromEntries(out.map((r) => [r.id, r.frames])) };
+    return rep;
+  }, [url, picked, fps, seconds, startAt, threads, detEvery, say]);
+
+  React.useEffect(() => { (window as unknown as { __rtmLab?: unknown }).__rtmLab = { run }; }, [run]);
+
+
+  /** REAL-TIME test: the clip plays at 1× while the engine detects the latest frame, one in flight (like the live skeleton). */
+  const runLive = useCallback(async (ids?: EngineId[], o?: { seconds?: number; startAt?: number }) => {
+    const v = videoRef.current; if (!v || !url) return null;
+    const sel = (ids ?? ENGINE_IDS.filter((e) => picked[e] && e !== REFERENCE_ENGINE));
+    const S = o?.seconds ?? liveSeconds, T0 = o?.startAt ?? startAt;
+    cancelRef.current = false; setBusy(true); setLiveResults([]);
+    const out: LiveResult[] = [];
+    const bat0 = await battery();
+    // refresh timestamps, to know when a result would reach the screen
+    const rafs: number[] = []; let rafOn = true;
+    const tick = (ts: number) => { rafs.push(ts); if (rafs.length > 4000) rafs.splice(0, 1000); if (rafOn) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+    for (const id of sel) {
+      if (cancelRef.current) break;
+      say(`LIVE ${id}: loading…`);
+      const eng = createEngine(id, { threads: threads || undefined, detEvery, proxy });
+      let error: string | undefined; const frames: LabFrame[] = []; const ages: number[] = [], atDraw: number[] = []; const pairs: Array<[number, number]> = [];
+      try {
+        await eng.init();
+        v.muted = true; v.playbackRate = 1; v.loop = true; await primeVideo(v); await seekWithFrame(v, T0);
+        // warm-up on the paused frame so shader / graph compile is not counted
+        for (let k = 0; k < 2; k++) await eng.detect(v);
+        await seekWithFrame(v, T0);
+        const q0 = v.getVideoPlaybackQuality?.(); const r0 = rafs.length;
+        const start = performance.now(); await v.play();
+        let resumes = 0;
+        while (performance.now() - start < S * 1000 && !cancelRef.current) {
+          if (v.paused) { if (resumes++ > 5) { error = 'video kept pausing'; break; } try { await v.play(); } catch { /* noop */ } }
+          const t = v.currentTime, a = performance.now();
+          let kps: Kp[] | null = null;
+          try { kps = await eng.detect(v); } catch (e) { error = (e as Error)?.message; break; }
+          const b = performance.now();
+          frames.push({ t, kps, ms: b - a }); ages.push(b - a); pairs.push([a, b]);
+          await new Promise((r) => setTimeout(r, 0)); // let the browser breathe like the app's rVFC loop would
+        }
+        const wall = (performance.now() - start) / 1000;
+        v.pause();
+        const q1 = v.getVideoPlaybackQuality?.(); const looped = !!(q0 && q1 && q1.totalVideoFrames < q0.totalVideoFrames);
+        await new Promise((r) => setTimeout(r, 80)); // let the last refreshes land, then find each result's next refresh
+        for (const [a, b] of pairs) { const next = rafs.find((x) => x >= b); if (next !== undefined) atDraw.push(next - a); }
+        const gaps: number[] = []; for (let i = r0 + 1; i < rafs.length; i++) gaps.push(rafs[i] - rafs[i - 1]);
+        const use = frames.slice(0), sm = summarize(use);
+        out.push({
+          id, label: eng.label, seconds: Math.round(wall * 10) / 10, frames: frames.length, detPerSec: frames.length ? Math.round((frames.length / wall) * 10) / 10 : null,
+          detectedPct: sm.detectedPct, ageMs: [pc(ages, 0.5), pc(ages, 0.95), pc(ages, 1)], ageAtDrawMs: [pc(atDraw, 0.5), pc(atDraw, 0.95), pc(atDraw, 1)],
+          mainDropped: q0 && q1 && !looped ? `${q1.droppedVideoFrames - q0.droppedVideoFrames}/${q1.totalVideoFrames - q0.totalVideoFrames}` : 'n/a',
+          mainFrameGapMs: [pc(gaps, 0.5), pc(gaps, 1)], jankOver50: gaps.filter((g) => g > 50).length, jumps: sm.track.jumps, swaps: sm.track.swaps, error,
+        });
+      } catch (e) { error = (e as Error)?.message ?? String(e); say(`LIVE ${id}: FAILED ${error}`); out.push({ id, label: eng.label, seconds: 0, frames: 0, detPerSec: null, detectedPct: 0, ageMs: [null, null, null], ageAtDrawMs: [null, null, null], mainDropped: 'n/a', mainFrameGapMs: [null, null], jankOver50: 0, jumps: 0, swaps: 0, error }); }
+      try { v.pause(); eng.dispose(); } catch { /* noop */ }
+      const last = out[out.length - 1]; say(`LIVE ${id}: ${last?.detPerSec ?? '–'} det/s, age p50 ${last?.ageMs[0] ?? '–'} ms, at draw ${last?.ageAtDrawMs[0] ?? '–'} ms`);
+    }
+    rafOn = false;
+    const bat1 = await battery();
+    setLiveResults(out); setBusy(false);
+    const rep = { kind: 'rtmpose-lab-live', when: new Date().toISOString(), device: deviceInfo(), clip: { w: v.videoWidth, h: v.videoHeight, startAt: T0, seconds: S },
+      note: 'Real-time playback at 1x, one detection in flight. age = capture to result; age at draw = capture to the next screen refresh after the result. Battery API is Chromium-only (null on iPhone).',
+      battery: { start: bat0, end: bat1 }, engines: out };
+    setReport((prev) => { try { const p = prev ? JSON.parse(prev) : {}; return JSON.stringify({ ...p, live: rep }, null, 1); } catch { return JSON.stringify({ live: rep }, null, 1); } });
+    (window as unknown as { __rtmLabLive?: unknown }).__rtmLabLive = rep;
+    return rep;
+  }, [url, picked, liveSeconds, startAt, threads, detEvery, say]);
+
+  React.useEffect(() => { (window as unknown as { __rtmLabLiveRun?: unknown }).__rtmLabLiveRun = runLive; }, [runLive]);
+
+  // overlay viewer
+  const COLORS: Record<string, string> = { 'mp-crop-heavy': '#ffffff', 'movenet-app-worker': '#ff9900', 'movenet-thunder': '#ffcc66', 'mp-live-full': '#33aaff', 'mp-crop-full': '#99ccff', 'mp-crop-seeded': '#66ddee', 'rtmpose-t': '#ff44ff', 'rtmpose-s': '#33ff66', 'rtmpose-m': '#aaff33', 'movenet-lightning': '#ffaa66' };
+  /** Overlay EVERY engine's skeleton for one frame in its own colour (white = the heavy reference). */
+  const draw = useCallback(async (idx: number, set: Record<string, boolean>) => {
+    const v = videoRef.current, c = overlayRef.current; const first = results[0];
+    if (!v || !c || !first?.frames[idx]) return;
+    await seekWithFrame(v, first.frames[idx].t);
+    const rect = v.getBoundingClientRect(); c.width = rect.width; c.height = rect.height;
+    const ctx = c.getContext('2d')!; ctx.clearRect(0, 0, c.width, c.height);
+    // the video is letterboxed inside its element (portrait clips are pillarboxed): scale and offset from the CONTENT rect
+    const cr = containRect(rect.width, rect.height, v.videoWidth, v.videoHeight);
+    const sc = cr.scale;
+    for (const r of results) {
+      if (set[r.id] === false) continue;
+      const k = r.frames[idx]?.kps; if (!k) continue;
+      const col = COLORS[r.id] ?? '#cccccc', m = new Map(k.map((p) => [p.name, p]));
+      ctx.lineWidth = r.id === REFERENCE_ENGINE ? 3 : 2; ctx.strokeStyle = col; ctx.fillStyle = col;
+      for (const [a2, b2] of EDGES) { const p = m.get(a2), q = m.get(b2); if (p && q && p.score > 0.3 && q.score > 0.3) { ctx.beginPath(); ctx.moveTo(cr.x + p.x * sc, cr.y + p.y * sc); ctx.lineTo(cr.x + q.x * sc, cr.y + q.y * sc); ctx.stroke(); } }
+      for (const p of k) if (p.score > 0.3) { ctx.beginPath(); ctx.arc(cr.x + p.x * sc, cr.y + p.y * sc, 2.5, 0, 7); ctx.fill(); }
+    }
+  }, [results]);
+
+  /** Per frame: the largest joint distance (in reference body heights) between any engine and the reference. Biggest first = where to look. */
+  const disagreement = React.useMemo(() => {
+    const ref = results.find((r) => r.id === REFERENCE_ENGINE); if (!ref) return [] as Array<{ i: number; d: number; who: string }>;
+    const H = bodyHeight(toSeq(ref.frames, 0.3)); if (!(H > 0)) return [];
+    const out: Array<{ i: number; d: number; who: string }> = [];
+    for (let i = 0; i < ref.frames.length; i++) {
+      const rk = ref.frames[i].kps; if (!rk) continue;
+      const rm = new Map(rk.filter((p) => p.score > 0.3).map((p) => [p.name, p]));
+      let best = 0, who = '';
+      for (const r of results) {
+        if (r === ref) continue; const k = r.frames[i]?.kps; if (!k) continue;
+        for (const p of k) { const q = rm.get(p.name); if (q && p.score > 0.3) { const d = Math.hypot(p.x - q.x, p.y - q.y) / H; if (d > best) { best = d; who = `${r.id}:${p.name}`; } } }
+      }
+      if (best > 0) out.push({ i, d: best, who });
+    }
+    return out.sort((a, b) => b.d - a.d).slice(0, 10);
+  }, [results]);
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(report); say('result copied'); return; } catch { /* fall through */ }
+    try { const ta = document.getElementById('lab-report') as HTMLTextAreaElement | null; if (ta) { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); const ok = document.execCommand('copy'); say(ok ? 'result copied' : 'copy blocked — long-press the text box below, Select All, Copy'); } } catch { say('copy blocked — long-press the text box below, Select All, Copy'); }
+  };
+  const download = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([report], { type: 'application/json' })); a.download = `rtmpose-lab-${Date.now()}.json`; a.click(); };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', background: '#fff', color: '#111' }}>
+    {/* the app's global styles lock the page scroll; this lab scrolls inside its own fixed layer */}
+    <div style={{ padding: 12, paddingBottom: 120, fontFamily: 'system-ui, sans-serif', fontSize: 14, maxWidth: 900, margin: '0 auto' }}>
+      <h2 style={{ margin: '4px 0' }}>Pose engine lab (spike)</h2>
+      <p style={{ margin: '4px 0 10px', color: '#555' }}>Runs the chosen engines on the same frames of one clip. Keep this tab in the foreground until it finishes. Not part of the product.</p>
+      <input type="file" accept="video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) { setUrl(URL.createObjectURL(f)); setResults([]); setReport(''); } }} />
+      <div style={{ position: 'relative', marginTop: 8 }}>
+        <video ref={videoRef} src={url ?? undefined} muted playsInline preload="auto" controls={false} onLoadedMetadata={(e) => { try { e.currentTarget.currentTime = 0.001; } catch { /* noop */ } }} style={{ width: '100%', maxHeight: '55vh', background: '#000' }} />
+        <canvas ref={overlayRef} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }} />
+      </div>
+      <fieldset style={{ margin: '10px 0', padding: 8 }}>
+        <legend>Engines</legend>
+        {ENGINE_IDS.map((e) => (
+          <label key={e} style={{ display: 'block' }}><input type="checkbox" checked={!!picked[e]} onChange={(ev) => setPicked((p) => ({ ...p, [e]: ev.target.checked }))} /> {e}{e === REFERENCE_ENGINE ? ' (reference, keep ON)' : ''}</label>
+        ))}
+      </fieldset>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <label>sample fps <input type="number" value={fps} min={5} max={30} onChange={(e) => setFps(Number(e.target.value))} style={{ width: 56 }} /></label>
+        <label>seconds <input type="number" value={seconds} min={1} max={30} onChange={(e) => setSeconds(Number(e.target.value))} style={{ width: 56 }} /></label>
+        <label>start at (s) <input type="number" value={startAt} min={0} step={0.5} onChange={(e) => setStartAt(Number(e.target.value))} style={{ width: 64 }} /></label>
+        <label>RTMPose threads (0 = auto) <input type="number" value={threads} min={0} max={8} onChange={(e) => setThreads(Number(e.target.value))} style={{ width: 48 }} /></label>
+        <label>re-detect person every N frames (0 = only when lost) <input type="number" value={detEvery} min={0} onChange={(e) => setDetEvery(Number(e.target.value))} style={{ width: 56 }} /></label>
+      </div>
+      <div style={{ margin: '10px 0', display: 'flex', gap: 8 }}>
+        <button disabled={!url || busy} onClick={() => void run()} style={{ padding: '10px 16px', fontSize: 16 }}>{busy ? 'Running…' : 'Run comparison'}</button>
+        <label style={{ alignSelf: 'center' }}>live seconds <input type="number" value={liveSeconds} min={3} max={20} onChange={(e) => setLiveSeconds(Number(e.target.value))} style={{ width: 48 }} /></label>
+        <button disabled={!url || busy} onClick={() => void runLive()} style={{ padding: '10px 16px', fontSize: 16 }}>Run LIVE test (1×)</button>
+        {busy && <button onClick={() => { cancelRef.current = true; }} style={{ padding: '10px 16px', fontSize: 16 }}>Stop</button>}
+        {report && <><button onClick={copy} style={{ padding: '10px 16px', fontSize: 16 }}>Copy result</button><button onClick={download} style={{ padding: '10px 16px', fontSize: 16 }}>Download</button></>}
+      </div>
+      <label style={{ display: 'block', margin: '4px 0' }}><input type="checkbox" checked={proxy} onChange={(e) => setProxy(e.target.checked)} /> run RTMPose in its own worker (keeps the page responsive; try off to compare)</label>
+      <pre style={{ background: '#111', color: '#9f9', padding: 8, fontSize: 12, maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{log.join('\n') || 'log'}</pre>
+      {liveResults.length > 0 && (
+        <div style={{ overflowX: 'auto', marginBottom: 10 }}>
+          <b>LIVE (real time, 1×)</b>
+          <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 640 }}>
+            <thead><tr>{['engine', 'det/s', 'age p50', 'p95', 'max', 'at draw p50', 'p95', 'main dropped', 'frame gap p50/max', 'gaps>50ms', 'found %', 'jumps', 'swaps'].map((h) => <th key={h} style={{ border: '1px solid #ccc', padding: '2px 6px', textAlign: 'left' }}>{h}</th>)}</tr></thead>
+            <tbody>{liveResults.map((r) => (
+              <tr key={r.id}>{[r.id + (r.error ? ' ⚠' : ''), fmt(r.detPerSec), fmt(r.ageMs[0], 0), fmt(r.ageMs[1], 0), fmt(r.ageMs[2], 0), fmt(r.ageAtDrawMs[0], 0), fmt(r.ageAtDrawMs[1], 0), r.mainDropped, `${fmt(r.mainFrameGapMs[0], 0)}/${fmt(r.mainFrameGapMs[1], 0)}`, String(r.jankOver50), String(r.detectedPct), String(r.jumps), String(r.swaps)].map((c, i) => <td key={i} style={{ border: '1px solid #ccc', padding: '2px 6px' }}>{c}</td>)}</tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      {results.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 700 }}>
+            <thead><tr>{['engine', 'init s', 'ms p50', 'ms p95', 'fps*', 'found %', 'jumps', 'swaps', 'arm↔leg', 'dropped', 'wrist bh/s', 'err vs ref', 'PCK@.1', 'wrist ratio'].map((h) => <th key={h} style={{ border: '1px solid #ccc', padding: '2px 6px', textAlign: 'left' }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {results.map((r) => (
+                <tr key={r.id} style={{ background: r.id === REFERENCE_ENGINE ? '#eef' : undefined }}>
+                  {[r.id + (r.error ? ' ⚠' : ''), fmt(r.initMs / 1000), fmt(r.summary.msP50), fmt(r.summary.msP95), fmt(r.summary.fpsSustained, 0), String(r.summary.detectedPct), String(r.summary.track.jumps), String(r.summary.track.swaps), String(r.summary.crossLimb.armToLeg + r.summary.crossLimb.legToArm), String(r.summary.validation.droppedFrames), fmt(r.summary.peakWristBhPerS, 1), fmt(r.vsRef?.meanErrBh, 3), fmt(r.vsRef?.pck10, 2), fmt(r.vsRef?.wristSpeedRatio, 2)].map((c, i) => <td key={i} style={{ border: '1px solid #ccc', padding: '2px 6px' }}>{c}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={{ color: '#555', fontSize: 12 }}>*fps = 1000 / mean ms, sequential, nothing else running. err/PCK/ratio are vs the reference engine (pseudo-truth). jumps/swaps/arm↔leg/dropped need no reference (lower is better).</p>
+          <div style={{ margin: '8px 0' }}>
+            <div style={{ fontSize: 12, marginBottom: 4 }}>{results.map((r) => (
+              <label key={r.id} style={{ marginRight: 8, color: COLORS[r.id] ?? '#ccc', background: '#222', padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={viewSet[r.id] !== false} onChange={(e) => { const ns = { ...viewSet, [r.id]: e.target.checked }; setViewSet(ns); void draw(viewIdx, ns); }} /> {r.id.replace('movenet-app-worker', 'MoveNet(app)').replace('mp-crop-heavy', 'REF')}
+              </label>))}</div>
+            <input type="range" min={0} max={Math.max(0, (results[0]?.frames.length ?? 1) - 1)} value={viewIdx} onChange={(e) => { const i = Number(e.target.value); setViewIdx(i); void draw(i, viewSet); }} style={{ width: '60%' }} /> frame {viewIdx}
+            {disagreement.length > 0 && (<div style={{ fontSize: 12, marginTop: 6 }}>Where the engines disagree most with the reference (tap to look):{' '}
+              {disagreement.map((x) => <button key={x.i} onClick={() => { setViewIdx(x.i); void draw(x.i, viewSet); }} style={{ margin: 2, padding: '2px 6px' }}>#{x.i} ({x.d.toFixed(2)})</button>)}</div>)}
+          </div>
+        </div>
+      )}
+      {report && (
+        <details open style={{ marginTop: 10 }}>
+          <summary>Result (long-press → Select All → Copy if the Copy button does not work)</summary>
+          <textarea id="lab-report" readOnly value={report} onFocus={(e) => e.currentTarget.select()} style={{ width: '100%', height: 160, fontFamily: 'monospace', fontSize: 11 }} />
+        </details>
+      )}
+    </div>
+    </div>
+  );
+}
