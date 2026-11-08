@@ -62,6 +62,7 @@ import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
 import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
+import { footLineChecked, posesHaveFeet, sampleTimes } from '@/lib/aiTrackFootLines';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
 import { poseScribble } from '@/lib/mediapipeSegmenter';
 import type { StroAutoFrameSpec } from '@/hooks/useStroMotion';
@@ -598,6 +599,8 @@ function Home() {
   // explicit off→on IS a real change event and engages MediaPipe cleanly (fires
   // the popup, warms the landmarker) exactly as intended.
   const [skeletonShowFootLine, setSkeletonShowFootLine] = useState(false);
+  /** AI Track's own DRAW-ONLY foot-line flag (lib/aiTrackFootLines.ts). Never read by the live-engine selection in Canvas, so it cannot move Live Skeleton off RTMPose-t. */
+  const [aiTrackFootLines, setAiTrackFootLines] = useState(false);
   const [skeletonClassicColors, setSkeletonClassicColors] = useState(true);
   const [skeletonShowRightArm, setSkeletonShowRightArm] = useState(true);
   const [skeletonShowLeftArm, setSkeletonShowLeftArm] = useState(true);
@@ -1753,6 +1756,12 @@ function Home() {
     setPrecisionTrackState('running');
     try {
       const kept = await runPrecisionPass(start, end, quality);
+      // Foot Lines are part of the standard AI Track output: on when this baked track really carries foot
+      // points (MediaPipe passes do; the MoveNet fallback bake does not). Draw-only flag, see aiTrackFootLines.
+      if (!precisionAbortRef.current && kept >= 2
+        && posesHaveFeet(sampleTimes(start, end).map((t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null))) {
+        setAiTrackFootLines(true);
+      }
       const note = lockNoteRef.current ? ` ${lockNoteRef.current}` : '';
       if (precisionAbortRef.current) {
         setProcessingStatus('AI Track cancelled');
@@ -1804,6 +1813,7 @@ function Home() {
   const handlePrecisionTrackClear = useCallback(() => {
     canvasRef.current?.clearBakedTrack?.();
     setPrecisionTrackState('idle');
+    setAiTrackFootLines(false);
     setProcessingStatus('AI Track cleared — live tracking resumed');
   }, []);
 
@@ -1841,7 +1851,7 @@ function Home() {
 
   // The baked track dies with its video (Canvas clears it too) — reset the UI,
   // and forget any manual section selection so the next video starts as "whole".
-  useEffect(() => { setPrecisionTrackState('idle'); setMetricsTrimUserAdjusted(false); }, [videoSrc]);
+  useEffect(() => { setPrecisionTrackState('idle'); setAiTrackFootLines(false); setMetricsTrimUserAdjusted(false); }, [videoSrc]);
 
   /**
    * A ruler calibration is only valid for the clip it was measured on — camera
@@ -3899,6 +3909,20 @@ function Home() {
     try { dismissed = localStorage.getItem(FOOT_LINE_NOTICE_KEY) === '1'; } catch { /* blocked */ }
     if (!dismissed) setFootLineNoticeOpen(true);
   }, []);
+
+  /**
+   * The toolbar's "Foot line" checkbox. With a baked AI Track it drives ONLY the draw-only AI Track flag, so it
+   * can never change the live pose engine (no popup, no live-model switch). Without one it is the existing
+   * live-model opt-in, unchanged.
+   */
+  const handleFootLineCheckbox = useCallback((on: boolean) => {
+    if (precisionTrackState === 'ready') {
+      setAiTrackFootLines(on);
+      if (!on && skeletonShowFootLine) handleSkeletonShowFootLineChange(false); // turning off is free and never switches an engine on
+      return;
+    }
+    handleSkeletonShowFootLineChange(on);
+  }, [precisionTrackState, skeletonShowFootLine, handleSkeletonShowFootLineChange]);
 
   /** Canvas reverted live MediaPipe → MoveNet because this device can't sustain it. */
   const handleFootLineLiveUnsupported = useCallback((reason: string) => {
@@ -7008,8 +7032,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onSkeletonShowHeadLineChange:    setSkeletonShowHeadLine,
     skeletonShowHeadDirection,
     onSkeletonShowHeadDirectionChange: setSkeletonShowHeadDirection,
-    skeletonShowFootLine,
-    onSkeletonShowFootLineChange:    handleSkeletonShowFootLineChange,
+    skeletonShowFootLine: footLineChecked({ liveFlag: skeletonShowFootLine, aiTrackFlag: aiTrackFootLines, bakedReady: precisionTrackState === 'ready' }),
+    onSkeletonShowFootLineChange:    handleFootLineCheckbox,
     skeletonActive:                  skeletonOn,
     onSkeletonActiveChange:          () => setSkeletonOn((v) => !v),
     precisionTrackState,
@@ -7947,6 +7971,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   skeletonShowHeadLine={skeletonShowHeadLine}
                   skeletonShowHeadDirection={skeletonShowHeadDirection}
                   skeletonShowFootLine={skeletonShowFootLine}
+                  aiTrackFootLines={aiTrackFootLines}
                   onFootLineLiveUnsupported={handleFootLineLiveUnsupported}
                   skeletonClassicColors={skeletonClassicColors}
                   skeletonParts={skeletonParts}
@@ -10192,7 +10217,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,
             isRangeBaked: (a, b) => canvasRef.current?.isRangeBaked?.(a, b) ?? false,
             hasBakedTrack: () => !!canvasRef.current?.getBakedTrackInfo?.(),
-            clearBakedTrack: () => { canvasRef.current?.clearBakedTrack?.(); setPrecisionTrackState('idle'); },
+            clearBakedTrack: () => { canvasRef.current?.clearBakedTrack?.(); setPrecisionTrackState('idle'); setAiTrackFootLines(false); },
             drawExportOverlay: (ctx, t, w, h, o) =>
               canvasRef.current?.drawExportOverlay?.(ctx, t, w, h, o)
               ?? { box: { dx: 0, dy: 0, dw: 0, dh: 0 }, videoW: 0, videoH: 0, drawingCount: 0, strokes: [], angles: [] },
