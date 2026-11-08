@@ -67,3 +67,25 @@ All engines: 0 jumps, 0 swaps, 0 arm↔leg errors, 0 validator drops. **On this 
 - RTMPose-s has the lowest bone-length variation and the lowest jerk; RTMPose-t is as accurate as MoveNet at 57 % of its time here.
 - **Not apples to apples:** the lab runs MoveNet on the main thread (80 ms); the app runs it in a worker at ≈ 34–42 ms (earlier phone panel). New engine `movenet-app-worker` runs the app's own bridge for a fair baseline.
 - **The LIVE test did not run:** every engine failed with "Loading chunk … failed (timeout)" on the first visit to the fresh deploy. The paused run later loaded the same chunks. Fixed: dynamic imports now retry 4×.
+
+## Third iPhone run — FAST swing clip (1080×1920, 5.9 s, player ≈ 255 px; reference peak wrist speed ≈ 8 body heights/s), both tests valid
+**Live (1×, 6 s, one detection in flight; RTMPose in a worker, single-threaded wasm; the worker option made no visible difference):**
+
+| engine | det/s | age p50 / p95 (ms) | age at draw p50 / p95 | page refresh gap p50 / max | found |
+|---|---|---|---|---|---|
+| MoveNet as the app runs it (worker, Thunder/WebGL) | 24.8 | 40 / 44 | 52 / 56 | 17 / 29 | 100 % |
+| MediaPipe live full (main thread) | 26.9 | 35 / 41 | 35 / 42 | 27 / 50 | 96 % |
+| RTMPose-t | 32.6 | 30 / 32 | 39 / 46 | 17 / 23 | 100 % |
+| RTMPose-s | 19.6 | 51 / 53 | 59 / 67 | 17 / 24 | 100 % |
+No dropped frames in any engine. RTMPose-t is ≈ 10–13 ms faster than the app's MoveNet and runs ≈ 30 % more detections/s; RTMPose-s is ≈ 11 ms slower.
+
+**Paused (10 fps × 5 s, 50 frames), vs the heavy MediaPipe reference (pseudo-truth):**
+
+| engine | p50 ms | err (bh) | PCK@.1 | arm err | leg err | wrist err | wrist-speed ratio | arm↔leg jumps | validator outliers / bone |
+|---|---|---|---|---|---|---|---|---|---|
+| MoveNet (app worker) | 68 | 0.026 | 0.973 | 0.020 | 0.031 | 0.024 | 0.99 | 3 | 8 / 1 |
+| MediaPipe live | 36 | 0.035 | 0.956 | 0.028 | 0.041 | 0.038 | 0.79 | 8 | 9 / 0 |
+| RTMPose-t | 32 | 0.033 | 0.965 | 0.021 | 0.043 | 0.027 | 0.69 | 3 | 18 / 3 |
+| RTMPose-s | 51 | 0.031 | 0.961 | 0.018 | 0.041 | 0.022 | 0.98 | 7 | 17 / 5 |
+
+**Read this with care:** (1) 10 fps samples a swing that moves ≈ 0.7 body heights per sample, so "jumps" (30–38 % of steps for EVERY engine, the reference included) and "outliers" measure the motion, not the model. (2) The reference itself lost joints on 28 of 50 frames, so it is weakest exactly where it matters. (3) Differences vs the reference are small (0.026–0.035 bh, PCK 96–97 %): **no engine is clearly right or wrong on this clip.** (4) RTMPose-t drops swing speed (0.69), RTMPose-s keeps it (0.98), as MoveNet does. (5) Arm↔leg jumps are higher for RTMPose-s (7) and MediaPipe live (8) than for MoveNet (3) / RTMPose-t (3): needs a look at those frames, not a conclusion. The lab now overlays every engine on one frame in its own colour (white = reference) and lists the frames with the largest disagreement.

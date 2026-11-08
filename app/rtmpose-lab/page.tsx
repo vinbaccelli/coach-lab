@@ -6,7 +6,8 @@
  */
 import React, { useCallback, useRef, useState } from 'react';
 import { ENGINE_IDS, REFERENCE_ENGINE, createEngine, type EngineId } from '@/lib/rtmpose/labEngines';
-import { summarize, compareToReference, type EngineSummary, type RefComparison, type LabFrame } from '@/lib/rtmpose/labMetrics';
+import { bodyHeight } from '@/lib/skeletonBench/metrics';
+import { summarize, compareToReference, toSeq, type EngineSummary, type RefComparison, type LabFrame } from '@/lib/rtmpose/labMetrics';
 import type { Kp } from '@/lib/rtmpose/core';
 
 interface EngineResult {
@@ -84,8 +85,8 @@ export default function RtmposeLab() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [url, setUrl] = useState<string | null>(null);
-  const [fps, setFps] = useState(10);
-  const [seconds, setSeconds] = useState(5);
+  const [fps, setFps] = useState(20);
+  const [seconds, setSeconds] = useState(4);
   const [proxy, setProxy] = useState(true);
   const [startAt, setStartAt] = useState(0);
   const [threads, setThreads] = useState(0);
@@ -97,7 +98,7 @@ export default function RtmposeLab() {
   const [report, setReport] = useState<string>('');
   const [liveSeconds, setLiveSeconds] = useState(6);
   const [liveResults, setLiveResults] = useState<LiveResult[]>([]);
-  const [viewEngine, setViewEngine] = useState<string>('');
+  const [viewSet, setViewSet] = useState<Record<string, boolean>>({});
   const [viewIdx, setViewIdx] = useState(0);
   const cancelRef = useRef(false);
 
@@ -151,7 +152,7 @@ export default function RtmposeLab() {
       engines: out.map((r) => ({ id: r.id, label: r.label, initMs: Math.round(r.initMs), warmupMs: Math.round(r.warmupMs), info: r.info, error: r.error, summary: r.summary, vsRef: r.vsRef })),
     };
     setReport(JSON.stringify(rep, null, 1));
-    if (out[0]) { setViewEngine(out[0].id); setViewIdx(0); }
+    setViewIdx(0);
     (window as unknown as { __rtmLabResults?: unknown }).__rtmLabResults = { report: rep, frames: Object.fromEntries(out.map((r) => [r.id, r.frames])) };
     return rep;
   }, [url, picked, fps, seconds, startAt, threads, detEvery, say]);
@@ -225,17 +226,41 @@ export default function RtmposeLab() {
   React.useEffect(() => { (window as unknown as { __rtmLabLiveRun?: unknown }).__rtmLabLiveRun = runLive; }, [runLive]);
 
   // overlay viewer
-  const draw = useCallback(async (engineId: string, idx: number) => {
-    const v = videoRef.current, c = overlayRef.current; const r = results.find((x) => x.id === engineId);
-    if (!v || !c || !r || !r.frames[idx]) return;
-    await seek(v, r.frames[idx].t);
+  const COLORS: Record<string, string> = { 'mp-crop-heavy': '#ffffff', 'movenet-app-worker': '#ff9900', 'movenet-thunder': '#ffcc66', 'mp-live-full': '#33aaff', 'mp-crop-full': '#99ccff', 'mp-crop-seeded': '#66ddee', 'rtmpose-t': '#ff44ff', 'rtmpose-s': '#33ff66', 'rtmpose-m': '#aaff33', 'movenet-lightning': '#ffaa66' };
+  /** Overlay EVERY engine's skeleton for one frame in its own colour (white = the heavy reference). */
+  const draw = useCallback(async (idx: number, set: Record<string, boolean>) => {
+    const v = videoRef.current, c = overlayRef.current; const first = results[0];
+    if (!v || !c || !first?.frames[idx]) return;
+    await seekWithFrame(v, first.frames[idx].t);
     const rect = v.getBoundingClientRect(); c.width = rect.width; c.height = rect.height;
     const ctx = c.getContext('2d')!; ctx.clearRect(0, 0, c.width, c.height);
-    const k = r.frames[idx].kps; if (!k) return;
-    const s = rect.width / v.videoWidth, m = new Map(k.map((p) => [p.name, p]));
-    ctx.lineWidth = 2; ctx.strokeStyle = '#0f0';
-    for (const [a, b] of EDGES) { const p = m.get(a), q = m.get(b); if (p && q && p.score > 0.3 && q.score > 0.3) { ctx.beginPath(); ctx.moveTo(p.x * s, p.y * s); ctx.lineTo(q.x * s, q.y * s); ctx.stroke(); } }
-    ctx.fillStyle = '#f33'; for (const p of k) if (p.score > 0.3) { ctx.beginPath(); ctx.arc(p.x * s, p.y * s, 3, 0, 7); ctx.fill(); }
+    const sc = rect.width / v.videoWidth;
+    for (const r of results) {
+      if (set[r.id] === false) continue;
+      const k = r.frames[idx]?.kps; if (!k) continue;
+      const col = COLORS[r.id] ?? '#cccccc', m = new Map(k.map((p) => [p.name, p]));
+      ctx.lineWidth = r.id === REFERENCE_ENGINE ? 3 : 2; ctx.strokeStyle = col; ctx.fillStyle = col;
+      for (const [a2, b2] of EDGES) { const p = m.get(a2), q = m.get(b2); if (p && q && p.score > 0.3 && q.score > 0.3) { ctx.beginPath(); ctx.moveTo(p.x * sc, p.y * sc); ctx.lineTo(q.x * sc, q.y * sc); ctx.stroke(); } }
+      for (const p of k) if (p.score > 0.3) { ctx.beginPath(); ctx.arc(p.x * sc, p.y * sc, 2.5, 0, 7); ctx.fill(); }
+    }
+  }, [results]);
+
+  /** Per frame: the largest joint distance (in reference body heights) between any engine and the reference. Biggest first = where to look. */
+  const disagreement = React.useMemo(() => {
+    const ref = results.find((r) => r.id === REFERENCE_ENGINE); if (!ref) return [] as Array<{ i: number; d: number; who: string }>;
+    const H = bodyHeight(toSeq(ref.frames, 0.3)); if (!(H > 0)) return [];
+    const out: Array<{ i: number; d: number; who: string }> = [];
+    for (let i = 0; i < ref.frames.length; i++) {
+      const rk = ref.frames[i].kps; if (!rk) continue;
+      const rm = new Map(rk.filter((p) => p.score > 0.3).map((p) => [p.name, p]));
+      let best = 0, who = '';
+      for (const r of results) {
+        if (r === ref) continue; const k = r.frames[i]?.kps; if (!k) continue;
+        for (const p of k) { const q = rm.get(p.name); if (q && p.score > 0.3) { const d = Math.hypot(p.x - q.x, p.y - q.y) / H; if (d > best) { best = d; who = `${r.id}:${p.name}`; } } }
+      }
+      if (best > 0) out.push({ i, d: best, who });
+    }
+    return out.sort((a, b) => b.d - a.d).slice(0, 10);
   }, [results]);
 
   const copy = async () => {
@@ -302,8 +327,13 @@ export default function RtmposeLab() {
           </table>
           <p style={{ color: '#555', fontSize: 12 }}>*fps = 1000 / mean ms, sequential, nothing else running. err/PCK/ratio are vs the reference engine (pseudo-truth). jumps/swaps/arm↔leg/dropped need no reference (lower is better).</p>
           <div style={{ margin: '8px 0' }}>
-            <select value={viewEngine} onChange={(e) => { setViewEngine(e.target.value); void draw(e.target.value, viewIdx); }}>{results.map((r) => <option key={r.id} value={r.id}>{r.id}</option>)}</select>{' '}
-            <input type="range" min={0} max={Math.max(0, (results[0]?.frames.length ?? 1) - 1)} value={viewIdx} onChange={(e) => { const i = Number(e.target.value); setViewIdx(i); void draw(viewEngine, i); }} style={{ width: '60%' }} /> frame {viewIdx}
+            <div style={{ fontSize: 12, marginBottom: 4 }}>{results.map((r) => (
+              <label key={r.id} style={{ marginRight: 8, color: COLORS[r.id] ?? '#ccc', background: '#222', padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={viewSet[r.id] !== false} onChange={(e) => { const ns = { ...viewSet, [r.id]: e.target.checked }; setViewSet(ns); void draw(viewIdx, ns); }} /> {r.id.replace('movenet-app-worker', 'MoveNet(app)').replace('mp-crop-heavy', 'REF')}
+              </label>))}</div>
+            <input type="range" min={0} max={Math.max(0, (results[0]?.frames.length ?? 1) - 1)} value={viewIdx} onChange={(e) => { const i = Number(e.target.value); setViewIdx(i); void draw(i, viewSet); }} style={{ width: '60%' }} /> frame {viewIdx}
+            {disagreement.length > 0 && (<div style={{ fontSize: 12, marginTop: 6 }}>Where the engines disagree most with the reference (tap to look):{' '}
+              {disagreement.map((x) => <button key={x.i} onClick={() => { setViewIdx(x.i); void draw(x.i, viewSet); }} style={{ margin: 2, padding: '2px 6px' }}>#{x.i} ({x.d.toFixed(2)})</button>)}</div>)}
           </div>
         </div>
       )}
