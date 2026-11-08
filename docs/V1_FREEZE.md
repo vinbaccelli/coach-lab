@@ -167,7 +167,7 @@ All of the following live in a **stack of open draft PRs, not on `main`** (state
 | Stage 2a: null angles (never 0°), per-joint validation, crop tracking, frame gate, live display continuation | `docs/SKELETON_ANGLES_NULL.md`, `SKELETON_VALIDATION.md`, `SKELETON_CROP_TRACKING.md`, `SKELETON_ON_OFF_AUDIT.md` | #152 |
 | Stage 2c: model-download progress, real-device lag trace (`?debug=1`, COPY TRACE) | `lib/modelPrefetch.ts`, `lib/tempDebugPose.ts` | #154 |
 | RTMPose evaluation lab (isolated) | `app/rtmpose-lab/`, `lib/rtmpose/*`, `docs/RTMPOSE_SPIKE.md` | #156 (not for merge as is: ~109 MB of lab weights) |
-| **RTMPose-t default Live Skeleton** (`?live=off` → MoveNet, `?live=rtmpose-s`, auto-fallback to MoveNet) | `lib/skeletonSwitches.ts`, `components/Canvas.tsx` `runRtmposeLive` | #157 (draft; **licence-gated**, see Stage 1 licensing) |
+| **RTMPose-t default Live Skeleton** (`?live=off` → MoveNet, `?live=rtmpose-s`, auto-fallback to MoveNet) | `lib/skeletonSwitches.ts`, `components/Canvas.tsx` `runRtmposeLive` | #157 (draft; **licence-gated**, see "Live Skeleton" under V1 remaining) |
 | **AI Track** (whole-video bake, selected player, completed track, scrub/playback) | `app/analysis/page.tsx` bake pipeline | already works well ("mode B very good"); **do not redesign or rebuild** |
 
 Measured on the architect's iPhone (Chrome/WebKit), same serve clip, build 017c9fb: RTMPose-t pose age 38–39 ms steady, round trip about 30 ms, about 30 detections/s; MoveNet default measured earlier 39–40 ms and 20–25 det/s; RTMPose-s 55–73 ms (worse). One clip only; crowds / two players / fast swings / 0.25× still to be tested.
