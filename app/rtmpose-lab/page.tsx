@@ -211,12 +211,14 @@ export default function RtmposeLab() {
   const download = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([report], { type: 'application/json' })); a.download = `rtmpose-lab-${Date.now()}.json`; a.click(); };
 
   return (
-    <div style={{ padding: 12, fontFamily: 'system-ui, sans-serif', fontSize: 14, maxWidth: 900, margin: '0 auto', color: '#111', background: '#fff', minHeight: '100vh' }}>
+    <div style={{ position: 'fixed', inset: 0, overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', background: '#fff', color: '#111' }}>
+    {/* the app's global styles lock the page scroll; this lab scrolls inside its own fixed layer */}
+    <div style={{ padding: 12, paddingBottom: 120, fontFamily: 'system-ui, sans-serif', fontSize: 14, maxWidth: 900, margin: '0 auto' }}>
       <h2 style={{ margin: '4px 0' }}>Pose engine lab (spike)</h2>
       <p style={{ margin: '4px 0 10px', color: '#555' }}>Runs the chosen engines on the same frames of one clip. Keep this tab in the foreground until it finishes. Not part of the product.</p>
       <input type="file" accept="video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) { setUrl(URL.createObjectURL(f)); setResults([]); setReport(''); } }} />
       <div style={{ position: 'relative', marginTop: 8 }}>
-        <video ref={videoRef} src={url ?? undefined} muted playsInline preload="auto" controls={false} style={{ width: '100%', maxHeight: 320, background: '#000' }} />
+        <video ref={videoRef} src={url ?? undefined} muted playsInline preload="auto" controls={false} onLoadedMetadata={(e) => { try { e.currentTarget.currentTime = 0.001; } catch { /* noop */ } }} style={{ width: '100%', maxHeight: 320, background: '#000' }} />
         <canvas ref={overlayRef} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }} />
       </div>
       <fieldset style={{ margin: '10px 0', padding: 8 }}>
@@ -270,6 +272,7 @@ export default function RtmposeLab() {
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }
