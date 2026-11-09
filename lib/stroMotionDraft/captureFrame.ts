@@ -1,5 +1,7 @@
 'use client';
 
+import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE (capture orientation diagnostic)
+
 const DECODABLE_TIMEOUT_MS = 5000;
 
 /**
@@ -153,6 +155,8 @@ export async function captureFrameFromElement(
   await waitForDecodableFrame(video);
 
   const bitmap = size ? await scaledFrameBitmap(video, size) : await normalizedFrameBitmap(video);
+  // TEMP-DEBUG-POSE: which path produced this frame, and do element and bitmap agree? (two of three frames came out rotated on iPhone)
+  poseDbg.event(`cap t=${timeSec.toFixed(2)} el=${video.videoWidth}x${video.videoHeight} bmp=${bitmap.width}x${bitmap.height} ${lastCapturePath} rs=${video.readyState}`);
   if (wasPlaying) void video.play().catch(() => {});
   return bitmap;
 }
@@ -163,7 +167,10 @@ export async function captureFrameFromElement(
  * options, which older WebKit lacks. `drawImage(video, …)` applies the same display
  * correction the element uses on screen.
  */
+let lastCapturePath = 'direct'; // TEMP-DEBUG-POSE
+
 async function scaledFrameBitmap(video: HTMLVideoElement, size: { w: number; h: number }): Promise<ImageBitmap> {
+  lastCapturePath = 'scaled';
   const scratch = document.createElement('canvas');
   scratch.width = size.w;
   scratch.height = size.h;
@@ -203,8 +210,10 @@ async function scaledFrameBitmap(video: HTMLVideoElement, size: { w: number; h: 
 async function normalizedFrameBitmap(video: HTMLVideoElement): Promise<ImageBitmap> {
   const w = video.videoWidth;
   const h = video.videoHeight;
+  lastCapturePath = 'direct';
   const bitmap = await createImageBitmap(video);
   if (!w || !h || (bitmap.width === w && bitmap.height === h)) return bitmap;
+  lastCapturePath = `REGRAB(raw ${bitmap.width}x${bitmap.height})`;
 
   console.warn(
     `[captureFrame] decoded frame ${bitmap.width}x${bitmap.height} disagrees with ` +
