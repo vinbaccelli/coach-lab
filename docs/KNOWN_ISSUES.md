@@ -2362,3 +2362,16 @@ column are still never exported.
 **Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
 
 **Severity.** Medium (visual).
+
+## 078 — Video cannot be played after Motion Layer Auto-detect (iPhone, reported 2026-11-09)
+- **Symptom:** after AI auto-detect has selected the frames, the main video will not play; the coach has to leave Motion Layer to play it.
+- **Root cause:** not yet investigated (reported by the user; they note it is redundant for the current workflow but should change later).
+- **Fault assessment:** by-design lock of the Motion Layer editing state or a stuck pause from the capture mirror — unverified. Do not assume.
+- **Proposed fix:** investigate where playback is blocked while a Motion Layer draft has frames (page.tsx Motion Layer mode handlers, capture mirror pause/seek); decide whether play should be allowed with the draft open.
+- **Severity:** low now (workflow does not need it), medium later. Found while testing PR #164/#165, out of scope for those.
+
+## 079 — Motion Layer frames 2 and 3 drawn in the wrong place/size, sometimes rotated (iPhone, reported 2026-11-09)
+- **Symptom:** in the ghost composite and the mask editor, frames 2 and 3 appear at the wrong position and size; in one earlier run they appeared rotated ~90°. Frame 1 is correct. Intermittent.
+- **Evidence so far:** the capture diagnostic (PR #165, build 242b91e) shows every frame captured `direct` with element and bitmap both 476×848, so the capture/re-grab path is NOT the cause in that run. `compositeFromDraft.renderMaskedFrame` stretches the mask to the picture's size when they differ, which would produce exactly this symptom if a mask were built at a different size from its picture — unconfirmed. Auto-detect also reported "No skeleton found on frame 2".
+- **Next step:** the follow-up diagnostic logs picture size, mask size and selection box per frame (marks MISMATCH); read it from one iPhone run.
+- **Severity:** high for Motion Layer correctness on phones. Do not fix before the evidence.
