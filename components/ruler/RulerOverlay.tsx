@@ -273,6 +273,7 @@ export default function RulerOverlay({
   // when ENABLE_RULER_PRECISION is false — see lib/featureFlags.
   const [precisionOn, setPrecisionOn] = useState(false);
   const precision = usePrecisionTouch<Point2D>({
+    label: 'ruler',
     enabled: ENABLE_RULER_PRECISION,
     active: precisionOn,
     // The hook measures its offset from this element's height, and the ruler's

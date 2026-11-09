@@ -332,6 +332,7 @@ export default function FrameMaskEditor({
   }, [precisionAvailable, precisionOn]);
 
   const precision = usePrecisionTouch<{ x: number; y: number }>({
+    label: 'mask editor',
     enabled: precisionAvailable,
     active: precisionOn,
     canvasRef,
