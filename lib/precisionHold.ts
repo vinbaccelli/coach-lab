@@ -51,3 +51,45 @@ export function judgeHoldMove(hold: HoldPoints, x: number, y: number): HoldVerdi
 export function precisionCursorOffsetPx(canvasHeightPx: number, ratio: number, minPx = 0): number {
   return Math.max(canvasHeightPx * ratio, minPx);
 }
+
+/** A press shorter than this (ms) and moving less than TAP_MAX_TRAVEL_PX counts as a tap. */
+export const DOUBLE_TAP_TAP_MS = 320;
+export const DOUBLE_TAP_TAP_MAX_TRAVEL_PX = 24;
+/** Max gap (ms) between the first lift and the second press, and max distance (px) between the two taps. */
+export const DOUBLE_TAP_GAP_MS = 450;
+export const DOUBLE_TAP_MAX_DISTANCE_PX = 40;
+
+/**
+ * One-finger double-tap detector: the gesture that turns precision mode OFF. Pure (callers pass timestamps) so it is
+ * unit-testable. A press that the hold armed (a long press) is never a tap; a second finger or pointercancel calls cancel().
+ * Usage: press(t,x,y) on pointerdown, move(x,y) on pointermove, lift(t,x,y) on pointerup → true when the second tap completes.
+ */
+export class DoubleTapDetector {
+  private down: { t: number; x: number; y: number; travel: number } | null = null;
+  private firstTap: { t: number; x: number; y: number } | null = null;
+
+  press(t: number, x: number, y: number): void {
+    // A press that begins too long after the first tap, or far from it, restarts the sequence.
+    if (this.firstTap && (t - this.firstTap.t > DOUBLE_TAP_GAP_MS ||
+        Math.hypot(x - this.firstTap.x, y - this.firstTap.y) > DOUBLE_TAP_MAX_DISTANCE_PX)) this.firstTap = null;
+    this.down = { t, x, y, travel: 0 };
+  }
+
+  move(x: number, y: number): void {
+    if (this.down) this.down.travel = Math.max(this.down.travel, Math.hypot(x - this.down.x, y - this.down.y));
+  }
+
+  /** Returns true when this lift completes a double-tap (the detector then resets). */
+  lift(t: number, x: number, y: number): boolean {
+    const d = this.down;
+    this.down = null;
+    if (!d) return false;
+    const travel = Math.max(d.travel, Math.hypot(x - d.x, y - d.y));
+    if (t - d.t > DOUBLE_TAP_TAP_MS || travel > DOUBLE_TAP_TAP_MAX_TRAVEL_PX) { this.firstTap = null; return false; }
+    if (this.firstTap) { this.firstTap = null; return true; }
+    this.firstTap = { t, x, y };
+    return false;
+  }
+
+  cancel(): void { this.down = null; this.firstTap = null; }
+}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef } from 'react';
-import { PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX, judgeHoldMove, precisionCursorOffsetPx } from '@/lib/precisionHold';
+import { PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX, judgeHoldMove, DoubleTapDetector, precisionCursorOffsetPx } from '@/lib/precisionHold';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE: hold diagnostics in the ?debug=1 panel
 
 /**
@@ -63,6 +63,8 @@ export type UsePrecisionTouchOptions<P extends PrecisionPoint> = {
   isHoldEligible?: () => boolean;
   /** Hold completed on a still finger — caller should switch precision mode on. */
   onActivate?: () => void;
+  /** One-finger double-tap while precision is active → caller should switch precision mode off. */
+  onDeactivate?: () => void;
   /** Second finger tapped — commit at this point, in the caller's space. */
   onCommit?: (point: P) => void;
   /** Called whenever the crosshair moves, so an imperative renderer can repaint. */
@@ -95,20 +97,21 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
 ): PrecisionTouchApi<P> {
   const {
     enabled, active, canvasRef, clientToLocal,
-    isHoldEligible, onActivate, onCommit, onChange,
+    isHoldEligible, onActivate, onDeactivate, onCommit, onChange,
   } = opts;
   const label = opts.label ?? 'editor';
 
   // Live refs so timers and native listeners never close over stale props.
   const activeRef = useRef(active);
   const enabledRef = useRef(enabled);
-  const cbRef = useRef({ clientToLocal, isHoldEligible, onActivate, onCommit, onChange });
+  const cbRef = useRef({ clientToLocal, isHoldEligible, onActivate, onDeactivate, onCommit, onChange });
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { enabledRef.current = enabled; }, [enabled]);
   useEffect(() => {
-    cbRef.current = { clientToLocal, isHoldEligible, onActivate, onCommit, onChange };
+    cbRef.current = { clientToLocal, isHoldEligible, onActivate, onDeactivate, onCommit, onChange };
   });
 
+  const tapRef = useRef(new DoubleTapDetector());
   const anchorPointerIdRef = useRef<number | null>(null);
   const anchorActiveRef = useRef(false);
   const crosshairRef = useRef<P | null>(null);
@@ -189,6 +192,7 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
     // commit tap — never a new consumer, never a pinch.
     if (anchorPointerIdRef.current !== null && e.pointerId !== anchorPointerIdRef.current) {
       const p = crosshairRef.current;
+      tapRef.current.cancel();
       if (p) cbRef.current.onCommit?.(p);
       return true;
     }
@@ -197,6 +201,7 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
     if (active && e.pointerType === 'touch' && anchorPointerIdRef.current === null) {
       anchorPointerIdRef.current = e.pointerId;
       anchorActiveRef.current = true;
+      tapRef.current.press(performance.now(), e.clientX, e.clientY);
       setCrosshairFromClient(e.clientX, e.clientY);
       return true;
     }
@@ -243,6 +248,7 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
     }
 
     if (anchorPointerIdRef.current === e.pointerId) {
+      tapRef.current.move(e.clientX, e.clientY);
       setCrosshairFromClient(e.clientX, e.clientY);
       return true;
     }
@@ -253,7 +259,9 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
     if (!enabled) return false;
     if (holdRef.current?.pointerId === e.pointerId) cancelHold('finger lifted before 2 s');
     if (anchorPointerIdRef.current === e.pointerId) {
+      const dbl = tapRef.current.lift(performance.now(), e.clientX, e.clientY);
       clearAnchor();
+      if (dbl) { tapRef.current.cancel(); cbRef.current.onDeactivate?.(); }
       return true;
     }
     return false;
@@ -263,6 +271,7 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
     if (!enabled) return false;
     if (holdRef.current?.pointerId === e.pointerId) cancelHold('pointercancel: the browser took the touch');
     if (anchorPointerIdRef.current === e.pointerId) {
+      tapRef.current.cancel();
       clearAnchor();
       return true;
     }

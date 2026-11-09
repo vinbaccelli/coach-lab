@@ -347,6 +347,7 @@ export default function FrameMaskEditor({
     // and the flood tools are single-shot fills; neither benefits from an anchor.
     isHoldEligible: () => brushMode === 'add' || brushMode === 'remove',
     onActivate: () => setPrecisionOn(true),
+    onDeactivate: () => setPrecisionOn(false),
     onCommit: (p) => applyAtPoint(p.x, p.y, true),
     onChange: () => {
       precisionCrosshairClientRef.current = precision.crosshairRef.current;

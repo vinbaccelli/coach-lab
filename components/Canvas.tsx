@@ -27,7 +27,7 @@ import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
-import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX } from '@/lib/precisionHold';
+import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX, DoubleTapDetector as _DoubleTapDetector } from '@/lib/precisionHold';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { smoothBakedTrack } from '@/lib/trackSmoothing';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
@@ -608,6 +608,8 @@ export interface CanvasProps {
    * prop round-trip.
    */
   onPrecisionHoldActivate?: () => void;
+  /** One-finger double-tap while precision drawing is on → turn precision drawing off. */
+  onPrecisionDeactivate?: () => void;
   /** Fires after a drawable shape is committed — parent opens toolbar draw-context mode. */
   onDrawCommitted?: () => void;
   poseFrameSkip?: number;
@@ -2285,6 +2287,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamPipBottomInsetPx = 0,
       precisionTouchDraw = false,
       onPrecisionHoldActivate,
+      onPrecisionDeactivate,
       onDrawCommitted,
       poseFrameSkip = 0,
       panModeEnabled = false,
@@ -2650,6 +2653,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /** Live ref to the activation callback so the timer never closes over a stale prop. */
     const onPrecisionHoldActivateRef = useRef(onPrecisionHoldActivate);
     useEffect(() => { onPrecisionHoldActivateRef.current = onPrecisionHoldActivate; }, [onPrecisionHoldActivate]);
+    const onPrecisionDeactivateRef = useRef(onPrecisionDeactivate);
+    useEffect(() => { onPrecisionDeactivateRef.current = onPrecisionDeactivate; }, [onPrecisionDeactivate]);
+    const precisionTapRef = useRef(new _DoubleTapDetector());
     /**
      * In-flight 2s hold. `clientX/clientY` is the press ORIGIN (for the total
      * travel cap) and `lastX/lastY` is the most recent sample (for the per-move
@@ -8321,6 +8327,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         e.preventDefault();
         const ch =
           precisionCrosshairDisplayRef.current ?? precisionCrosshairTargetRef.current;
+        precisionTapRef.current.cancel();
         if (ch) precisionCommitRef.current?.(ch);
         return;
       }
@@ -8408,6 +8415,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       if (precisionTouchEligible && precisionAnchorPointerIdRef.current === null) {
         precisionAnchorPointerIdRef.current = e.pointerId;
+        precisionTapRef.current.press(performance.now(), e.clientX, e.clientY);
         const ch = clientToLogical(e.clientX, e.clientY - precisionCursorOffsetY());
         precisionCrosshairTargetRef.current = ch;
         precisionCrosshairDisplayRef.current = { ...ch };
@@ -9512,6 +9520,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
         precisionAnchorPointerIdRef.current = null;
         precisionFadeStartRef.current = performance.now();
+        if (precisionTapRef.current.lift(performance.now(), e.clientX, e.clientY)) {
+          precisionTapRef.current.cancel();
+          poseDbg.event('precision turned off: double-tap'); // TEMP-DEBUG-POSE
+          onPrecisionDeactivateRef.current?.();
+        }
         try {
           (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
         } catch {
@@ -9669,6 +9682,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         webcamPinchRef.current = null;
       }
       if (precisionAnchorPointerIdRef.current === e.pointerId) {
+        precisionTapRef.current.cancel();
         precisionAnchorPointerIdRef.current = null;
         precisionFadeStartRef.current = performance.now();
       }

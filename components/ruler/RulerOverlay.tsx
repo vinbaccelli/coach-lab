@@ -289,6 +289,7 @@ export default function RulerOverlay({
     // measuring. Idle ruler UI never arms a hold.
     isHoldEligible: () => isCalibrating || isMeasuring,
     onActivate: () => setPrecisionOn(true),
+    onDeactivate: () => setPrecisionOn(false),
     // Second finger commits at the crosshair, routed to whichever step is live.
     // Measuring is two taps: the first sets the start, the second finishes the
     // measurement through the very same handler a drag would have used.
