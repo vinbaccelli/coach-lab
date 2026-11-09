@@ -2362,3 +2362,36 @@ column are still never exported.
 **Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
 
 **Severity.** Medium (visual).
+
+---
+
+## 076 — Skeleton arm moves before the player's arm (very short clips); deferred until after V1
+
+**Found:** 2026-11-09, iPhone (coach report on the PR #158 preview, last screenshot): in very short clips the skeleton's arm goes up BEFORE the player's arm does, the opposite of a delay. Present before RTMPose and before the Foot Lines change.
+
+**Root cause: NOT investigated.** Candidates to check later, none verified: the baked-track lookup/interpolation at clip start (`lookupBakedPose`, `refineBakedTrack` centred smoothing pulling a fast arm forward), the frame-time tag of the sample (`addBakeSample(v.currentTime, …)` vs the presented frame time after the seek), and very short clips giving the smoother too little context.
+
+**Decision (architect):** work on it after V1 is finished. Not in scope for Stages 1–3.
+
+**Severity.** Medium (visual accuracy, short clips).
+
+---
+
+## 077 — Page restarted on the FIRST AI Track run after loading (iPhone); second run fine
+
+**Found:** 2026-11-09, iPhone, PR #158 preview: the first AI Track run reloaded the page (the coach loses everything and starts again); the second run completed. Same class as the Motion Layer refresh problem (Stage 2, M4).
+
+**Not proven.** The restart reason is unknown: the next load should have shown the restart breadcrumb ("The page restarted. Reason: killed by the phone / a script error / a reload", `lib/restartBreadcrumb.ts`), but its text has not been captured.
+
+**Measured on desktop, not a phone (headless Chromium, software GL, demo clip 640×360, sum of all browser-process RSS, one run each):**
+
+| | live skeleton running | AI Track peak | after AI Track |
+|---|---|---|---|
+| default (RTMPose-t live) | 1302 MB | 2175 MB | 2097 MB |
+| `?live=off` (MoveNet only) | 1111 MB | 2012 MB | 1987 MB |
+
+So RTMPose adds about 160–190 MB resident here. It is never released while AI Track runs: `rtmLiveRef.current.eng` in `components/Canvas.tsx` is created once and no code disposes it (the bake only stops calling it, `useRtmposeLive` is false while baking). That is a hypothesis for the first-run kill (cold start loads MediaPipe heavy on top of the live engines), not a finding.
+
+**Proposed (needs approval, not implemented):** dispose the RTMPose engine (ORT sessions + proxy worker) when AI Track starts, re-create it lazily after the track is cleared; then re-measure, and test the first-run case on the iPhone with and without it (`?live=off` as the control).
+
+**Severity.** High (work lost; first impression).
