@@ -1,6 +1,7 @@
 'use client';
 
 import { PHONE_ORT_SESSION_OPTIONS, isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+import { bitmapToCanvas, isCanvasLike, type CanvasLike, type FrameSource } from '@/lib/stroMotionDraft/frameCanvas';
 
 /**
  * AUTO-RACKET DETECTION — D-FINE-N, wrist-gated.
@@ -312,7 +313,7 @@ function wrist(kps: NormKp[] | null | undefined, idx: number, vw: number, vh: nu
  * come back as a confident, precisely-segmented piece of the court.
  */
 export async function detectRacketBox(args: {
-  frame: ImageBitmap | HTMLCanvasElement;
+  frame: FrameSource;
   keypoints: NormKp[] | null | undefined;
   vw: number;
   vh: number;
@@ -345,8 +346,8 @@ export async function detectRacketBox(args: {
    * Chromium, `close()` leaves width and height at 0 while the object stays
    * truthy, so nothing upstream looks wrong.
    */
-  const srcW = frame instanceof HTMLCanvasElement ? frame.width : frame.width;
-  const srcH = frame instanceof HTMLCanvasElement ? frame.height : frame.height;
+  const srcW = frame.width;
+  const srcH = frame.height;
   if (!(srcW > 0) || !(srcH > 0)) {
     console.warn(
       `[autoRacket] ${tag} skipped — frame has no pixels (${srcW}x${srcH}). ` +
@@ -356,15 +357,12 @@ export async function detectRacketBox(args: {
   }
 
   // RawImage wants a canvas; an ImageBitmap is drawn once into one.
-  let canvas: HTMLCanvasElement;
-  if (frame instanceof HTMLCanvasElement) {
+  let canvas: CanvasLike;
+  if (isCanvasLike(frame)) {
     canvas = frame;
   } else {
-    canvas = document.createElement('canvas');
-    canvas.width = frame.width;
-    canvas.height = frame.height;
     try {
-      canvas.getContext('2d')!.drawImage(frame, 0, 0);
+      canvas = bitmapToCanvas(frame);
     } catch (e) {
       // "The image source is detached" — the bitmap was closed between the size
       // check above and here. Same non-detectable frame, same treatment.

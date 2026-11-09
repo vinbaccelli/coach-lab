@@ -1,6 +1,7 @@
 'use client';
 
 import { PHONE_ORT_SESSION_OPTIONS, isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+import { frameToCanvas, type CanvasLike, type FrameSource } from '@/lib/stroMotionDraft/frameCanvas';
 
 /**
  * SAM 2 RACKET SEGMENTATION — the promptable segmenter behind Motion Layer's
@@ -345,7 +346,7 @@ function evictIfNeeded(): void {
  */
 export async function encodeFrameForRacket(
   key: string,
-  frame: ImageBitmap | HTMLCanvasElement,
+  frame: FrameSource,
 ): Promise<{ ms: number; bytes: number } | null> {
   const session = await getSession();
   if (!session) return null;
@@ -358,21 +359,9 @@ export async function encodeFrameForRacket(
   }
 
   // RawImage wants a canvas; an ImageBitmap is drawn once into one.
-  let canvas: HTMLCanvasElement;
-  let width: number;
-  let height: number;
-  if (frame instanceof HTMLCanvasElement) {
-    canvas = frame;
-    width = frame.width;
-    height = frame.height;
-  } else {
-    width = frame.width;
-    height = frame.height;
-    canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    canvas.getContext('2d')!.drawImage(frame, 0, 0);
-  }
+  const canvas: CanvasLike = frameToCanvas(frame);
+  const width = frame.width;
+  const height = frame.height;
 
   /**
    * One encode attempt against one session. Kept as a closure because a WebGPU
