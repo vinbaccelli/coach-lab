@@ -16,6 +16,12 @@ import type { SamPromptBox } from '@/lib/stroMotionDraft/samRacket';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
+// Next's client build replaces `typeof window` with the constant "object" (even in a worker bundle), so the model modules' own
+// `typeof window !== 'undefined'` guards pass here and then read `window.…`, which does not exist in a worker (found: "window is not
+// defined" at racketDetect.ts). Point `window` at the worker global BEFORE those modules are imported (they are dynamic imports below).
+// `window.localStorage` / `matchMedia` stay undefined; the model code only touches them inside try/catch or optional chaining.
+(globalThis as { window?: unknown }).window = globalThis;
+
 // Relay log lines so the page console (and the ?debug=1 panel's consumers) keep seeing "[autoRacket] …" / "[samRacket] …".
 for (const level of ['log', 'warn'] as const) {
   const orig = console[level].bind(console);
@@ -34,7 +40,7 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
   const m = e.data;
   try {
     if (m.type === 'init') {
-      (globalThis as { __stroPhoneBudget?: boolean }).__stroPhoneBudget = m.phone;
+      (globalThis as { __stroPhoneBudget?: boolean }).__stroPhoneBudget = m.phone; // read through the window shim by isPhoneBudgetActive()
       ctx.postMessage({ id: m.id, ok: true });
       return;
     }
