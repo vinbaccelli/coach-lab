@@ -48,6 +48,11 @@ import SavingNotice from '@/components/reports/SavingNotice';
 import { useYouTubeConnection } from '@/hooks/useYouTubeConnection';
 import { uploadVideoToYouTube } from '@/lib/export/exportService';
 import { useStroMotion } from '@/hooks/useStroMotion';
+import { useMotionLayerPersistence } from '@/hooks/useMotionLayerPersistence';
+import { fingerprintFile } from '@/lib/stroMotionDraft/persistStore';
+import { deleteDraftRecord } from '@/lib/stroMotionDraft/persistStore';
+import type { VideoFingerprint } from '@/lib/stroMotionDraft/persist';
+import RestoreBanner from '@/components/stroMotion/RestoreBanner';
 const StroMotionPanel = React.lazy(() => import('@/components/StroMotionPanel'));
 const SnapshotScrollPanel = React.lazy(() => import('@/components/metrics/SnapshotScrollPanel'));
 const GenerateWorkspace = React.lazy(() => import('@/components/metrics/GenerateWorkspace'));
@@ -417,6 +422,8 @@ function Home() {
   const micStreamRef    = useRef<MediaStream | null>(null);
   // Legacy YouTube iframe player ref removed — URL workflow uses <video>.
   const lastBlobUrlARef = useRef<string | null>(null);
+  /** The File behind video A (M4: fingerprint for Motion Layer draft persistence). Null for non-file sources. */
+  const videoFileARef = useRef<File | null>(null);
   const lastBlobUrlBRef = useRef<string | null>(null);
   const ytPlayerARef = useRef<any>(null);
   const ytPlayerBRef = useRef<any>(null);
@@ -1014,6 +1021,7 @@ function Home() {
     updateFrameTime: updateStroFrameTime,
     selectAreaForFrame: selectStroAreaForFrame,
     autoProcessFrames: autoProcessStroFrames,
+    restoreDraft: restoreStroDraft,
     updateFrameMask,
     resetFrameMask,
     reproposeFrameMask,
@@ -1030,6 +1038,47 @@ function Home() {
     typeof HTMLCanvasElement !== 'undefined'
     && typeof HTMLCanvasElement.prototype.captureStream === 'function';
   const [stroIsExportingVideo, setStroIsExportingVideo] = useState(false);
+
+  // ── M4: Motion Layer draft persistence (local IndexedDB; the video itself is never stored) ──
+  const [stroFingerprint, setStroFingerprint] = useState<VideoFingerprint | null>(null);
+  const [stroRestoring, setStroRestoring] = useState(false);
+  useEffect(() => {
+    setStroFingerprint(null);
+    const file = videoFileARef.current;
+    const v = videoRef.current;
+    if (!stroMotionActive || !videoSrc || !file || !v) return;
+    let cancelled = false;
+    const go = () => {
+      if (cancelled || !v.videoWidth || !Number.isFinite(v.duration)) return;
+      fingerprintFile(file, v).then((fp) => { if (!cancelled) setStroFingerprint(fp); }).catch(() => { /* no persistence for this video */ });
+    };
+    if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
+    return () => { cancelled = true; v.removeEventListener('loadedmetadata', go); };
+  }, [stroMotionActive, videoSrc]);
+  const stroPersistSettings = useMemo(
+    () => ({ startSec: stroStartFrame, endSec: stroEndFrame, frameCount: stroFrameCount, background: stroBackground }),
+    [stroStartFrame, stroEndFrame, stroFrameCount, stroBackground],
+  );
+  const stroPersistence = useMotionLayerPersistence({
+    enabled: stroMotionActive && stroMotionHtml5Only,
+    draft: stroMotionDraft,
+    settings: stroPersistSettings,
+    fingerprint: stroFingerprint,
+  });
+  const handleStroRestore = useCallback(async () => {
+    const rec = stroPersistence.accept();
+    if (!rec) return;
+    setStroRestoring(true);
+    try {
+      const s = rec.settings;
+      setStroStartFrame(s.startSec);
+      setStroEndFrame(s.endSec);
+      setStroFrameCount(s.frameCount as StroMotionFrameCount);
+      setStroBackground(s.background);
+      setStroSampleTimesOverride(s.sampleTimes);
+      await restoreStroDraft(rec);
+    } finally { setStroRestoring(false); }
+  }, [stroPersistence, restoreStroDraft]);
 
   // Object Multiplier state
   const [objMultiplierFrameCount, setObjMultiplierFrameCount] = useState(5);
@@ -2006,6 +2055,8 @@ function Home() {
 
   /** Soft clear — used by the panel's Clear button. Stays in StroMotion mode. */
   const softClearStroMotion = useCallback(() => {
+    // An explicit Clear is the coach discarding the work: drop the saved copy too (loading another video does NOT).
+    if (stroFingerprint) void deleteDraftRecord(stroFingerprint);
     clearStroMotionAll();
     setStroSelectingObject(false);
     setStroSelectingFrameIndex(null);
@@ -2021,7 +2072,7 @@ function Home() {
     setStroPreviewModalOpen(false);
     setStroIsBuildingVideoPreview(false);
     setStroEditingFrameIndex(null);
-  }, [clearStroMotionAll, stroPreviewVideoUrl]);
+  }, [clearStroMotionAll, stroPreviewVideoUrl, stroFingerprint]);
 
   const refreshStroPreviewFromDraft = useCallback(async () => {
     const video = videoRef.current;
@@ -3400,6 +3451,15 @@ function Home() {
   // black screen reported on iPhone). See components/shared/LazyPanelBoundary.
   const stroMotionPanelEl = (
     <LazyPanelBoundary label="Motion Layer">
+    <RestoreBanner
+      offer={stroPersistence.offer}
+      others={stroPersistence.others}
+      notice={stroPersistence.notice}
+      hasVideo={!!stroFingerprint}
+      busy={stroRestoring}
+      onRestore={handleStroRestore}
+      onDiscard={stroPersistence.discard}
+    />
     <StroMotionPanel
       compact
       showLabels={panelShowLabels}
@@ -4538,6 +4598,7 @@ function Home() {
     const url = URL.createObjectURL(file);
     if (target === 'A') {
       lastBlobUrlARef.current = url;
+      videoFileARef.current = file;
       setVideoLoadErrorA(null);
       setVideoSrc(url);
       setYoutubeVideoIdA(null);

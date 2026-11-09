@@ -28,6 +28,8 @@ import type {
 } from '@/lib/stroMotionDraft/types';
 import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 import { useCallback, useRef, useState } from 'react';
+import { restoreDraftFromRecord } from '@/lib/stroMotionDraft/restoreDraft';
+import type { PersistedDraft } from '@/lib/stroMotionDraft/persist';
 
 export type StroMotionHookStatus = 'idle' | 'configuring' | 'proposing' | 'generating' | 'ready';
 
@@ -211,6 +213,17 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     setStatus('idle');
     setObjectType('racket');
   }, [clearDraftState]);
+
+  /** Replace the draft with one rebuilt from a saved record (M4 restore). The old draft's bitmaps are released. */
+  const restoreDraft = useCallback(async (rec: PersistedDraft): Promise<boolean> => {
+    const video = videoRef.current;
+    if (!video) return false;
+    const next = await restoreDraftFromRecord(video, rec);
+    if (!next) return false;
+    setObjectType(rec.settings.objectType);
+    setDraft(next); // old bitmaps are left to GC: the Canvas render loop may still hold them (see hydrateDraftBitmapsForExport)
+    return true;
+  }, [videoRef]);
 
   const invalidatePreview = useCallback(() => {
     setStatus((prev) => (prev === 'ready' ? 'configuring' : prev));
@@ -1295,6 +1308,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     progress,
     lastAutoRun,
     syncDraft,
+    restoreDraft,
     updateFrameTime,
     updateFrameLabel,
     clearAllSelections,
