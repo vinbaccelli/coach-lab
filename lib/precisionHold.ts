@@ -42,3 +42,12 @@ export function judgeHoldMove(hold: HoldPoints, x: number, y: number): HoldVerdi
   hold.lastY = y;
   return { keep: true };
 }
+
+/**
+ * How far above the finger the crosshair sits (px). A fraction of the canvas height works for the main video, but a
+ * small canvas (the Motion Layer mask editor on a phone is only a couple of hundred px tall) puts it almost under the
+ * fingertip, so callers can set a floor. `minPx` 0 keeps the old behaviour.
+ */
+export function precisionCursorOffsetPx(canvasHeightPx: number, ratio: number, minPx = 0): number {
+  return Math.max(canvasHeightPx * ratio, minPx);
+}

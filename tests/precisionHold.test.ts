@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { judgeHoldMove, PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX, type HoldPoints } from '../lib/precisionHold';
+import { judgeHoldMove, precisionCursorOffsetPx, PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX, type HoldPoints } from '../lib/precisionHold';
 
 const press = (x = 100, y = 100): HoldPoints => ({ clientX: x, clientY: y, lastX: x, lastY: y });
 /** Feed a sequence of move samples; returns the first cancel reason or null. */
@@ -46,4 +46,11 @@ test('an accepted move re-anchors the reference; a rejected one does not matter 
   assert.equal(judgeHoldMove(h, 108, 100).keep, true);
   assert.equal(h.lastX, 108);
   assert.equal(judgeHoldMove(h, 130, 100).keep, false);
+});
+
+test('crosshair offset: the old fraction of height, with an optional pixel floor for small canvases', () => {
+  assert.equal(precisionCursorOffsetPx(800, 0.12), 96);
+  assert.equal(precisionCursorOffsetPx(200, 0.12), 24, 'no floor: unchanged behaviour (the mask editor case that sat under the finger)');
+  assert.equal(precisionCursorOffsetPx(200, 0.12, 90), 90, 'floor wins on a small canvas');
+  assert.equal(precisionCursorOffsetPx(1000, 0.12, 90), 120, 'the fraction wins on a tall canvas');
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef } from 'react';
-import { PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX, judgeHoldMove } from '@/lib/precisionHold';
+import { PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX, judgeHoldMove, precisionCursorOffsetPx } from '@/lib/precisionHold';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE: hold diagnostics in the ?debug=1 panel
 
 /**
@@ -69,6 +69,8 @@ export type UsePrecisionTouchOptions<P extends PrecisionPoint> = {
   onChange?: () => void;
   /** Where this hook lives, for the hold diagnostics ("mask editor", "ruler"). */
   label?: string;
+  /** Floor (px) for the crosshair's distance above the finger; the default is the old fraction-of-height only. */
+  minCursorOffsetPx?: number;
 };
 
 export type PrecisionTouchApi<P extends PrecisionPoint> = {
@@ -118,8 +120,8 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
     const c = canvasRef.current;
     if (!c) return 0;
     const h = c.getBoundingClientRect().height;
-    return h * PRECISION_CURSOR_OFFSET_RATIO;
-  }, [canvasRef]);
+    return precisionCursorOffsetPx(h, PRECISION_CURSOR_OFFSET_RATIO, opts.minCursorOffsetPx ?? 0);
+  }, [canvasRef, opts.minCursorOffsetPx]);
 
   const cancelHold = useCallback((reason?: string) => {
     const h = holdRef.current;

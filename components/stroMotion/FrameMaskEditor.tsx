@@ -333,6 +333,8 @@ export default function FrameMaskEditor({
 
   const precision = usePrecisionTouch<{ x: number; y: number }>({
     label: 'mask editor',
+    // The editor canvas is small on a phone: 12 % of its height put the crosshair almost under the fingertip.
+    minCursorOffsetPx: 90,
     enabled: precisionAvailable,
     active: precisionOn,
     canvasRef,
