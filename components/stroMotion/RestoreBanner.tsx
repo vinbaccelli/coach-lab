@@ -11,13 +11,14 @@ function readyCount(p: PersistedDraft): number { return p.frames.filter((f) => f
 export default function RestoreBanner(props: {
   offer: PersistedDraft | null;
   others: PersistedDraft[];
+  mismatchReason?: string | null;
   notice: string | null;
   hasVideo: boolean;
   busy: boolean;
   onRestore: () => void;
   onDiscard: () => void;
 }) {
-  const { offer, others, notice, hasVideo, busy, onRestore, onDiscard } = props;
+  const { offer, others, mismatchReason, notice, hasVideo, busy, onRestore, onDiscard } = props;
   const btn: React.CSSProperties = { padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.35)', background: 'transparent', color: 'inherit', fontSize: 13, minHeight: 36 };
   const box: React.CSSProperties = { margin: '8px', padding: '10px 12px', borderRadius: 10, background: 'rgba(37,99,235,0.18)', border: '1px solid rgba(96,165,250,0.5)', fontSize: 13, lineHeight: 1.35 };
   return (
@@ -30,7 +31,7 @@ export default function RestoreBanner(props: {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button type="button" style={{ ...btn, background: '#2563eb', borderColor: '#2563eb', color: '#fff' }} disabled={busy} onClick={onRestore}>{busy ? 'Restoring…' : 'Restore'}</button>
-            <button type="button" style={btn} disabled={busy} onClick={onDiscard}>Start fresh</button>
+            <button type="button" style={btn} disabled={busy} onClick={onDiscard}>Start fresh (deletes saved copy)</button>
           </div>
         </div>
       )}
@@ -39,6 +40,7 @@ export default function RestoreBanner(props: {
           <strong>Unfinished Motion Layer work is saved on this device.</strong>
           <div style={{ opacity: 0.85, marginTop: 4 }}>
             {hasVideo ? 'It belongs to a different video. ' : ''}Load the same video file (e.g. “{others[0].fingerprint.name}”) to continue it. Your video is never copied or uploaded.
+            {mismatchReason ? <div style={{ opacity: 0.7, marginTop: 4, fontSize: 12 }}>Why it did not match: {mismatchReason}.</div> : null}
           </div>
         </div>
       )}

@@ -4,11 +4,10 @@
  * Every call resolves — failures come back as `{ ok: false, reason }` so a full or evicted store can never break editing
  * (the in-memory draft stays authoritative; the caller shows a notice).
  */
-import { fingerprintKey, hashBytes, type PersistedDraft, type VideoFingerprint, PERSIST_SCHEMA_VERSION } from '@/lib/stroMotionDraft/persist';
+import { fingerprintKey, averageHash, FINGERPRINT_FRAMES, FINGERPRINT_GRID, type PersistedDraft, type VideoFingerprint, PERSIST_SCHEMA_VERSION } from '@/lib/stroMotionDraft/persist';
 
 const DB_NAME = 'anglemotion-motion-layer';
 const STORE = 'drafts';
-const SAMPLE_BYTES = 64 * 1024;
 
 export type StoreResult<T = void> = { ok: true; value: T } | { ok: false; reason: 'unavailable' | 'quota' | 'error'; message: string };
 
@@ -69,11 +68,47 @@ export async function storageEstimate(): Promise<{ usage: number; quota: number 
   try { const e = await navigator.storage?.estimate?.(); return e && e.quota ? { usage: e.usage ?? 0, quota: e.quota } : null; } catch { return null; }
 }
 
-/** Fingerprint a picked video file (cheap: metadata + hash of the first and last 64 KB). */
-export async function fingerprintFile(file: File, video: { duration: number; videoWidth: number; videoHeight: number }): Promise<VideoFingerprint> {
-  const head = new Uint8Array(await file.slice(0, SAMPLE_BYTES).arrayBuffer());
-  const tail = new Uint8Array(await file.slice(Math.max(0, file.size - SAMPLE_BYTES)).arrayBuffer());
-  const both = new Uint8Array(head.length + tail.length);
-  both.set(head, 0); both.set(tail, head.length);
-  return { name: file.name, size: file.size, lastModified: file.lastModified, durationSec: video.duration, width: video.videoWidth, height: video.videoHeight, sample: hashBytes(both) };
+/**
+ * Visual signature of a video: FINGERPRINT_FRAMES evenly spaced frames, each shrunk to GRID×GRID gray and average-hashed.
+ * Uses its OWN hidden <video> on the same blob URL, so the coach's playhead and playback are never touched. Returns ''
+ * when any step fails or times out (the caller then falls back to file size).
+ */
+async function sampleSignature(url: string, durationSec: number): Promise<string> {
+  if (typeof document === 'undefined' || !(durationSec > 0)) return '';
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous';
+  const waitFor = (ev: string, ms = 6000) => new Promise<boolean>((resolve) => {
+    const t = setTimeout(() => { v.removeEventListener(ev, ok); resolve(false); }, ms);
+    const ok = () => { clearTimeout(t); resolve(true); };
+    v.addEventListener(ev, ok, { once: true });
+  });
+  try {
+    v.src = url;
+    if (v.readyState < 1 && !(await waitFor('loadedmetadata'))) return '';
+    const canvas = document.createElement('canvas');
+    canvas.width = FINGERPRINT_GRID; canvas.height = FINGERPRINT_GRID;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return '';
+    let sig = '';
+    for (let k = 0; k < FINGERPRINT_FRAMES; k++) {
+      const t = durationSec * (0.1 + (0.8 * k) / (FINGERPRINT_FRAMES - 1));
+      const seeked = waitFor('seeked');
+      v.currentTime = t;
+      if (!(await seeked)) return '';
+      ctx.drawImage(v, 0, 0, FINGERPRINT_GRID, FINGERPRINT_GRID);
+      const px = ctx.getImageData(0, 0, FINGERPRINT_GRID, FINGERPRINT_GRID).data;
+      const gray = new Uint8Array(FINGERPRINT_GRID * FINGERPRINT_GRID);
+      for (let i = 0; i < gray.length; i++) gray[i] = (px[i * 4] * 299 + px[i * 4 + 1] * 587 + px[i * 4 + 2] * 114) / 1000;
+      sig += averageHash(gray);
+    }
+    return sig;
+  } catch { return ''; } finally {
+    try { v.removeAttribute('src'); v.load(); } catch { /* ignore */ }
+  }
+}
+
+/** Fingerprint a picked video (resolution + duration + visual signature; file bytes are NOT used, see persist.ts). */
+export async function fingerprintFile(file: File, video: { duration: number; videoWidth: number; videoHeight: number }, url: string): Promise<VideoFingerprint> {
+  const sig = await sampleSignature(url, video.duration);
+  return { name: file.name, size: file.size, lastModified: file.lastModified, durationSec: video.duration, width: video.videoWidth, height: video.videoHeight, sig };
 }

@@ -1050,7 +1050,7 @@ function Home() {
     let cancelled = false;
     const go = () => {
       if (cancelled || !v.videoWidth || !Number.isFinite(v.duration)) return;
-      fingerprintFile(file, v).then((fp) => { if (!cancelled) setStroFingerprint(fp); }).catch(() => { /* no persistence for this video */ });
+      fingerprintFile(file, v, videoSrc).then((fp) => { if (!cancelled) setStroFingerprint(fp); }).catch(() => { /* no persistence for this video */ });
     };
     if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
     return () => { cancelled = true; v.removeEventListener('loadedmetadata', go); };
@@ -3454,6 +3454,7 @@ function Home() {
     <RestoreBanner
       offer={stroPersistence.offer}
       others={stroPersistence.others}
+      mismatchReason={stroPersistence.mismatchReason}
       notice={stroPersistence.notice}
       hasVideo={!!stroFingerprint}
       busy={stroRestoring}

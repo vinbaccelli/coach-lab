@@ -8,7 +8,7 @@
 import type { AlphaMask, StroMotionFrameStatus, StroMotionObjectType } from '@/lib/stroMotionDraft/types';
 import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 
-export const PERSIST_SCHEMA_VERSION = 1;
+export const PERSIST_SCHEMA_VERSION = 2;
 
 /** Run-length coded alpha mask: [value, runLength(u32 LE)] pairs packed in one Uint8Array (5 bytes per run). */
 export interface PackedMask { width: number; height: number; runs: Uint8Array }
@@ -53,7 +53,12 @@ export interface PersistedFrame {
   readyMask: PackedMask | null;
 }
 
-/** Identity of the source video. Cheap fields are compared exactly; `sample` is a hash of head+tail bytes. */
+/**
+ * Identity of the source video. Deliberately NOT based on file bytes: iOS re-exports/transcodes a Photos video on every pick,
+ * so the same clip arrives with a different size and different bytes each time (found on a real iPhone, PR #163 build 1).
+ * What survives a re-export is what the video LOOKS like, so identity = resolution + duration + a visual signature
+ * (`sig`: tiny average-hash of FINGERPRINT_FRAMES frames). `name`/`size`/`lastModified` are informational only.
+ */
 export interface VideoFingerprint {
   name: string;
   size: number;
@@ -61,7 +66,39 @@ export interface VideoFingerprint {
   durationSec: number;
   width: number;
   height: number;
-  sample: string;
+  /** Concatenated per-frame average hashes (hex); '' when the frames could not be sampled. */
+  sig: string;
+}
+
+export const FINGERPRINT_FRAMES = 5;
+export const FINGERPRINT_GRID = 16;
+/** Duration tolerance (s): a re-export can shift the container duration by a frame or two. */
+export const DURATION_TOLERANCE_SEC = 0.3;
+/** Max differing bits (of FRAMES*GRID*GRID) for "same footage": a re-encode flips a few percent of bits, a different clip far more. */
+export const SIG_MAX_DIFF_FRACTION = 0.06;
+
+/** Average hash of one GRID×GRID grayscale frame → GRID*GRID/4 hex chars. */
+export function averageHash(gray: ArrayLike<number>): string {
+  let sum = 0;
+  for (let i = 0; i < gray.length; i++) sum += gray[i];
+  const mean = sum / gray.length;
+  let out = '';
+  for (let i = 0; i < gray.length; i += 4) {
+    let nib = 0;
+    for (let b = 0; b < 4; b++) nib = (nib << 1) | (gray[i + b] > mean ? 1 : 0);
+    out += nib.toString(16);
+  }
+  return out;
+}
+
+export function hammingHex(a: string, b: string): number {
+  if (a.length !== b.length) return Number.POSITIVE_INFINITY;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) {
+    let x = parseInt(a[i], 16) ^ parseInt(b[i], 16);
+    while (x) { d += x & 1; x >>= 1; }
+  }
+  return d;
 }
 
 export interface PersistedSettings {
@@ -126,16 +163,26 @@ export type FingerprintVerdict = { ok: true } | { ok: false; reason: string };
 
 /** Is `candidate` (the video the coach just re-picked) the video the draft was made on? */
 export function matchFingerprint(saved: VideoFingerprint, candidate: VideoFingerprint): FingerprintVerdict {
-  if (saved.width !== candidate.width || saved.height !== candidate.height) return { ok: false, reason: 'different resolution' };
-  if (Math.abs(saved.durationSec - candidate.durationSec) > 0.05) return { ok: false, reason: 'different length' };
-  if (saved.size !== candidate.size) return { ok: false, reason: 'different file size' };
-  if (saved.sample !== candidate.sample) return { ok: false, reason: 'different content' };
-  return { ok: true }; // name/lastModified may legitimately change (re-download, cloud copy), so they are not required
+  if (saved.width !== candidate.width || saved.height !== candidate.height) {
+    return { ok: false, reason: `different resolution (${saved.width}×${saved.height} vs ${candidate.width}×${candidate.height})` };
+  }
+  if (Math.abs(saved.durationSec - candidate.durationSec) > DURATION_TOLERANCE_SEC) {
+    return { ok: false, reason: `different length (${saved.durationSec.toFixed(1)} s vs ${candidate.durationSec.toFixed(1)} s)` };
+  }
+  if (saved.sig && candidate.sig) {
+    const d = hammingHex(saved.sig, candidate.sig);
+    const max = Math.floor(saved.sig.length * 4 * SIG_MAX_DIFF_FRACTION);
+    if (d > max) return { ok: false, reason: `different picture content (${d} of ${saved.sig.length * 4} signature bits differ, limit ${max})` };
+    return { ok: true };
+  }
+  // A signature could not be taken on one side: fall back to the exact file size.
+  if (saved.size !== candidate.size) return { ok: false, reason: 'picture could not be compared and file size differs' };
+  return { ok: true }; // name/lastModified/size may legitimately change (re-export, cloud copy), so they are not required
 }
 
 /** Stable text key for the record (video identity without the cheap-to-change fields). */
 export function fingerprintKey(f: VideoFingerprint): string {
-  return `${f.size}:${f.width}x${f.height}:${Math.round(f.durationSec * 100)}:${f.sample}`;
+  return `${f.width}x${f.height}:${Math.round(f.durationSec * 10)}:${f.sig.slice(0, 32) || f.size}`;
 }
 
 /** FNV-1a 32-bit over bytes, hex. Used on head+tail slices of the video file. */
