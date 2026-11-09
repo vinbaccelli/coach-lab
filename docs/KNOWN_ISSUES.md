@@ -2365,15 +2365,21 @@ column are still never exported.
 
 ---
 
-## 076 — Skeleton arm moves before the player's arm (very short clips); deferred until after V1
+## 076 — At the START of an AI Track section the skeleton moves before the player, then the player catches up and they move together; deferred until after V1
 
-**Found:** 2026-11-09, iPhone (coach report on the PR #158 preview, last screenshot): in very short clips the skeleton's arm goes up BEFORE the player's arm does, the opposite of a delay. Present before RTMPose and before the Foot Lines change.
+**Found:** 2026-11-09, iPhone (coach report, PR #158 preview). Clarified by the coach: it is a start-of-section problem of AI Track, the skeleton moves first, then the player reaches the skeleton and the two move together; the same was seen in generated video before. Seen in very short clips. Present before RTMPose and before the Foot Lines change.
 
-**Root cause: NOT investigated.** Candidates to check later, none verified: the baked-track lookup/interpolation at clip start (`lookupBakedPose`, `refineBakedTrack` centred smoothing pulling a fast arm forward), the frame-time tag of the sample (`addBakeSample(v.currentTime, …)` vs the presented frame time after the seek), and very short clips giving the smoother too little context.
+**What that implies.** It lives in the baked track's first samples (it shows in playback and in Generate, which read the same track), not in the live display.
 
-**Decision (architect):** work on it after V1 is finished. Not in scope for Stages 1–3.
+**Candidate tested, NOT reproduced on desktop.** At pass start `runPrecisionPass` takes a probe sample after `seekVideoTo(start)` (`app/analysis/page.tsx:1326`), which waits for `seeked` or 1.5 s but not for the painted frame, then tags the pose with `start`. If the old frame were still on screen the first sample would be the wrong pose. Measured in the real app (headless Chromium, desktop, VP9 640×360 `demo6.webm`, software GL, unlocked whole-video pass): playhead parked at 3.0 s (its pose differs 13.5 % of body height from the t=0 pose) before starting AI Track; the first baked sample matched sample 1 (0.0 %), sample 2 (0.2 %) and sample 3 (0.3 %), i.e. it was the correct t=0 pose, with no stale-frame sample. Caveat: the player is almost still at the start of that clip (steps 0.0–0.2 % per sample), so a small tag error would not show; and iOS WebKit paints seeked frames later than desktop Chromium (the iPhone panel shows `seek: frame not ready (rs=4, not painted), retrying`), so this says nothing yet about the phone.
 
-**Severity.** Medium (visual accuracy, short clips).
+**Still open (none verified):** a presented-frame vs requested-time offset on iOS at the first seeks; edge behaviour of the centred smoothing in `smoothBakedTrack` at the start of a track; the time tag of the first samples of a short section.
+
+**How to capture it on the phone:** `…/analysis?debug=1&vdebug=1`, a short serve clip, run AI Track from the start; copy the panel lines `AI Track asked …` and the every-10th-seek lines (video time, presented frame time) plus COPY TRACE.
+
+**Decision (architect):** after V1.
+
+**Severity.** Medium (visual accuracy at the start of a track).
 
 ---
 
@@ -2392,6 +2398,8 @@ column are still never exported.
 
 So RTMPose adds about 160–190 MB resident here. It is never released while AI Track runs: `rtmLiveRef.current.eng` in `components/Canvas.tsx` is created once and no code disposes it (the bake only stops calling it, `useRtmposeLive` is false while baking). That is a hypothesis for the first-run kill (cold start loads MediaPipe heavy on top of the live engines), not a finding.
 
-**Proposed (needs approval, not implemented):** dispose the RTMPose engine (ORT sessions + proxy worker) when AI Track starts, re-create it lazily after the track is cleared; then re-measure, and test the first-run case on the iPhone with and without it (`?live=off` as the control).
+**Tried, no memory effect (2026-11-09):** branch `fix/rtmpose-release-on-aitrack` (`fda4ab24`, NO PR) disposes the RTMPose sessions when the bake starts and re-creates the engine afterwards (verified: after clearing the track the live panel shows `rtmpose ready in 395 ms` and det/s again). Measured on desktop, one run each, same script: AI Track peak 2247 MB / after 2158 MB with the release vs 2175 / 2097 without it (`?live=off`: 2012 / 1987), i.e. no reduction, within run-to-run noise. Likely reason, unverified: ORT's WebAssembly memory is never returned to the OS, so freeing sessions inside it does not lower the process size; only terminating the worker that owns it would. That needs RTMPose in a worker we create ourselves (a larger change), so the branch is parked, not proposed.
+
+**Next step (needs the coach):** on the iPhone, first AI Track run after a fresh load with `?live=off` as the control (does it still restart?), and the restart breadcrumb text after a reload. Without that we do not know that RTMPose is involved at all.
 
 **Severity.** High (work lost; first impression).
