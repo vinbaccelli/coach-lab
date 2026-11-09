@@ -209,12 +209,14 @@ import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { useEntitlement } from '@/lib/useEntitlement';
 import type { Feature } from '@/lib/entitlements';
+import { autoRacketEnabled, setAutoRacketPreference } from '@/lib/stroMotionDraft/autoRacketFlags';
 import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled, isPhoneBudgetActive, markAutoDetectFinished, markAutoDetectStarted } from '@/lib/stroMotionDraft/phoneBudget';
 import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/restartBreadcrumb';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
 
 const PREPARING_MOTION_LAYER_TEXT = 'Preparing Motion Layer…';
+
 
 /**
  * Has the once-per-page-load reload reset already been evaluated?
@@ -3398,6 +3400,16 @@ function Home() {
   // of its own the nearest one is the page-root `fallback={null}`, so opening
   // Motion Layer blanked the WHOLE analysis page until the chunk arrived (the
   // black screen reported on iPhone). See components/shared/LazyPanelBoundary.
+  // Racket detection switch (Auto Detect panel). The value lives in localStorage 'autoRacket' (autoRacketFlags.ts), which the
+  // detection pass already reads, so the switch changes behaviour without touching the pass. Re-read when the object type changes
+  // because the default depends on it (and on phones it is OFF until the coach turns it on).
+  const [stroRacketDetect, setStroRacketDetect] = useState(false);
+  useEffect(() => { setStroRacketDetect(autoRacketEnabled(stroObjectType)); }, [stroObjectType, stroMotionActive]);
+  const handleStroRacketDetectChange = useCallback((on: boolean) => {
+    setAutoRacketPreference(on);
+    setStroRacketDetect(on);
+  }, []);
+
   const stroMotionPanelEl = (
     <LazyPanelBoundary label="Motion Layer">
     <StroMotionPanel
@@ -3427,6 +3439,9 @@ function Home() {
       onGenerate={() => void handleStroGenerate()}
       onClear={softClearStroMotion}
       onAutoSelectAll={() => { void handleStroAutoSelectAll(); }}
+      racketDetect={stroRacketDetect}
+      onRacketDetectChange={handleStroRacketDetectChange}
+      racketDetectPhoneWarning={isPhoneBudgetActive()}
       lastAutoRun={stroLastAutoRun}
       previewPngUrl={stroPreviewPngUrl}
       previewVideoUrl={stroPreviewVideoUrl}
