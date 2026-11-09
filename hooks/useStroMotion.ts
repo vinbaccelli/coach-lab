@@ -1269,7 +1269,7 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
     const current = draftRef.current;
     if (!video || !current) return null;
     const hydrated = await hydrateDraftBitmapsForExport(video, current);
-    setDraft(hydrated);
+    if (hydrated !== current) setDraft(hydrated); // nothing re-captured ⇒ same draft ⇒ no state update, no re-composite
     return hydrated;
   }, [videoRef]);
 
