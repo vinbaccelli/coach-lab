@@ -564,6 +564,8 @@ export interface CanvasProps {
   skeletonShowHeadLine?: boolean;
   skeletonShowHeadDirection?: boolean;
   skeletonShowFootLine?: boolean;
+  /** AI Track's draw-only foot-line flag (baked tracks). Never used to pick the live pose model. */
+  aiTrackFootLines?: boolean;
   /**
    * Fired ONCE when live MediaPipe is engaged but this device cannot sustain it
    * (GPU delegate unavailable, or measured inference over the live budget), and
@@ -2274,6 +2276,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // skeleton-enable" reset. This is only a fallback for a caller that omits
       // the prop entirely; page.tsx always passes an explicit value.
       skeletonShowFootLine = false,
+      aiTrackFootLines = false,
       onFootLineLiveUnsupported,
       skeletonClassicColors = true,
       skeletonParts,
@@ -2940,6 +2943,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
     const skeletonShowHeadDirectionRef = useRef(skeletonShowHeadDirection);
     const skeletonShowFootLineRef = useRef(skeletonShowFootLine);
+    const aiTrackFootLinesRef = useRef(aiTrackFootLines);
+    /** DRAW only: foot arrows show for the live flag or AI Track's own flag. The live-engine choice (useMediaPipeLive / useRtmposeLive / the landmarker preload) reads ONLY skeletonShowFootLine. */
+    const footLinesDrawOn = () => skeletonShowFootLineRef.current || aiTrackFootLinesRef.current;
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
     const skeletonPartsRef = useRef(skeletonParts);
     const ballSampleModeRef = useRef(ballSampleMode);
@@ -3195,6 +3201,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; renderDirtyRef.current = true; },  [skeletonShowHeadLine]);
     useEffect(() => { skeletonShowHeadDirectionRef.current = skeletonShowHeadDirection; renderDirtyRef.current = true; }, [skeletonShowHeadDirection]);
     useEffect(() => { skeletonShowFootLineRef.current  = skeletonShowFootLine; renderDirtyRef.current = true; },  [skeletonShowFootLine]);
+    useEffect(() => { aiTrackFootLinesRef.current = aiTrackFootLines; renderDirtyRef.current = true; }, [aiTrackFootLines]);
     const onFootLineLiveUnsupportedRef = useRef(onFootLineLiveUnsupported);
     useEffect(() => { onFootLineLiveUnsupportedRef.current = onFootLineLiveUnsupported; }, [onFootLineLiveUnsupported]);
     /**
@@ -3970,7 +3977,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 showAngles: false,
                 showHeadLine: skeletonShowHeadLineRef.current,
                 showHeadDirection: skeletonShowHeadDirectionRef.current,
-                showFootLine: skeletonShowFootLineRef.current,
+                showFootLine: footLinesDrawOn(),
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
@@ -4011,7 +4018,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 showAngles: false,
                 showHeadLine: skeletonShowHeadLineRef.current,
                 showHeadDirection: skeletonShowHeadDirectionRef.current,
-                showFootLine: skeletonShowFootLineRef.current,
+                showFootLine: footLinesDrawOn(),
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
@@ -6534,7 +6541,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 showAngles: false,
                 showHeadLine: skeletonShowHeadLineRef.current,
                 showHeadDirection: skeletonShowHeadDirectionRef.current,
-                showFootLine: skeletonShowFootLineRef.current,
+                showFootLine: footLinesDrawOn(),
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
@@ -6678,7 +6685,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // Foot direction arrows — REAL toe keypoints only (appended at index
           // 17+ by AI Track / AI Detect). No estimate arrows: absent data means
           // absent arrow. Drawn only when the Foot line skeleton toggle is ON.
-          if (skeletonShowFootLineRef.current) {
+          if (footLinesDrawOn()) {
             const namedToe = (nm: string) => {
               for (let fi = 17; fi < kps.length; fi++) {
                 const c = kps[fi];
