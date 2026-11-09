@@ -300,6 +300,30 @@ export default function StroMotionPanel({
       ? <><span style={{ display: 'flex', width: 20, justifyContent: 'center', flexShrink: 0 }}>{icon}</span><span>{label}</span></>
       : <>{icon}</>;
 
+    const racketSwitch = onRacketDetectChange ? (
+          <>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!!racketDetect}
+              aria-label="Racket detection for Auto-detect"
+              data-testid="racket-detect-switch"
+              disabled={!!disabled || isGenerating || isProposingFrame}
+              onClick={() => onRacketDetectChange(!racketDetect)}
+              title={racketDetect ? 'Racket detection ON — Auto-detect also looks for the racket (uses more memory). Tap to turn off.' : 'Racket detection OFF — Auto-detect cuts out the player only. Tap to turn on.'}
+              style={ib(!!racketDetect)}
+            >
+              <Target size={showLabels ? 18 : 14} strokeWidth={2} />
+              {showLabels ? <span>{`Racket detect: ${racketDetect ? 'On' : 'Off'}`}</span> : null}
+            </button>
+            {racketDetect && racketDetectPhoneWarning ? (
+              <div role="note" data-testid="racket-detect-warning" style={{ fontSize: showLabels ? 11 : 9, lineHeight: 1.3, color: 'var(--cl-warning, #E8A33D)', textAlign: showLabels ? 'left' : 'center', padding: '0 2px' }}>
+                {showLabels ? 'Uses about 1 GB more memory. On some iPhones the page may restart — try fewer frames first.' : 'Uses lots of memory'}
+              </div>
+            ) : null}
+          </>
+    ) : null;
+
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: showLabels ? 6 : 4, alignItems: showLabels ? 'stretch' : 'center', padding: '4px 0', position: 'relative' }}>
         {disabled && (
@@ -427,29 +451,7 @@ export default function StroMotionPanel({
             <Sparkles size={14} strokeWidth={2} />
           </button>
         )}
-        {onRacketDetectChange && (
-          <>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={!!racketDetect}
-              aria-label="Racket detection for Auto-detect"
-              data-testid="racket-detect-switch"
-              disabled={!!disabled || isGenerating || isProposingFrame}
-              onClick={() => onRacketDetectChange(!racketDetect)}
-              title={racketDetect ? 'Racket detection ON — Auto-detect also looks for the racket (uses more memory). Tap to turn off.' : 'Racket detection OFF — Auto-detect cuts out the player only. Tap to turn on.'}
-              style={ib(!!racketDetect)}
-            >
-              <Target size={showLabels ? 18 : 14} strokeWidth={2} />
-              {showLabels ? <span>{`Racket detect: ${racketDetect ? 'On' : 'Off'}`}</span> : null}
-            </button>
-            {racketDetect && racketDetectPhoneWarning ? (
-              <div role="note" data-testid="racket-detect-warning" style={{ fontSize: showLabels ? 11 : 9, lineHeight: 1.3, color: 'var(--cl-warning, #E8A33D)', textAlign: showLabels ? 'left' : 'center', padding: '0 2px' }}>
-                {showLabels ? 'Uses about 1 GB more memory. On some iPhones the page may restart — try fewer frames first.' : 'Uses lots of memory'}
-              </div>
-            ) : null}
-          </>
-        )}
+        {racketSwitch}
 
         <div style={{ height: 1, background: 'var(--cl-border)', width: 32, margin: '4px auto' }} />
 
@@ -513,6 +515,7 @@ export default function StroMotionPanel({
               <LB icon={<Sparkles size={18} />} label="AI auto-detect" />
             </button>
           )}
+          {racketSwitch}
 
           <div style={{ height: 1, background: 'var(--cl-border)', width: '100%', margin: '4px 0' }} />
 

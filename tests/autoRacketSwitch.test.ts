@@ -16,3 +16,9 @@ test('the compact (shipping) panel renders the switch with a phone warning', () 
   assert.match(panel, /data-testid="racket-detect-warning"/);
   assert.match(panel, /role="switch"/);
 });
+test('the switch renders in BOTH panel modes (icon strip and labelled list) — it was missing from the labelled list in build 1', () => {
+  const uses = panel.split('{racketSwitch}').length - 1;
+  assert.equal(uses, 2);
+  const labelled = panel.slice(panel.indexOf('Labeled mode: frame buttons + actions with text'));
+  assert.match(labelled, /label="AI auto-detect"[\s\S]{0,200}\{racketSwitch\}/);
+});
