@@ -59,3 +59,10 @@ export function autoRacketEnabled(objectType: string): boolean {
   if (isPhoneBudgetActive()) return false;
   return IMPLEMENT_MODES.has(objectType);
 }
+
+/** Persist the coach's explicit choice from the Auto Detect panel switch (same key the flag reads, so the pass obeys it). */
+export function setAutoRacketPreference(on: boolean): void {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem('autoRacket', on ? '1' : '0'); } catch { /* private mode: the in-memory switch still shows the choice for this session */ }
+  (window as unknown as Record<string, unknown>).__autoRacket = on;
+}
