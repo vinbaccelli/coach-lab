@@ -8398,8 +8398,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       }
 
       // ── Priority router (rule 3): precision anchor acquisition ────────────
+      // A Motion Layer "Select Area" rubber-band is a modal gesture of its own: while it is armed the drag draws the
+      // box, so a latched precision-draw mode must not take the finger as an anchor (it ended the drag with "Selection
+      // cancelled" and no box; reproduced in the phone-emulated browser).
       const precisionTouchEligible =
         precisionTouchDrawRef.current &&
+        !isSelectingStroRegionRef.current &&
         e.pointerType === 'touch' &&
         toolEarly !== 'zoom' &&
         toolEarly !== 'objectMultiplier';
