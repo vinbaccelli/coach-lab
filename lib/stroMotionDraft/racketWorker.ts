@@ -21,7 +21,7 @@ for (const level of ['log', 'warn'] as const) {
   const orig = console[level].bind(console);
   console[level] = (...args: unknown[]) => {
     orig(...args);
-    try { ctx.postMessage({ type: 'log', level, text: args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ') }); } catch { /* ignore */ }
+    try { ctx.postMessage({ type: 'log', level, text: args.map((a) => (typeof a === 'string' ? a : a instanceof Error ? (a.stack ?? String(a)).slice(0, 1200) : String(a))).join(' ') }); } catch { /* ignore */ }
   };
 }
 
