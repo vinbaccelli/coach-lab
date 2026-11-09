@@ -118,7 +118,7 @@ export const poseDbg = {
 function event(msg: string) {
   const s = (now() / 1000).toFixed(1);
   D.events.push(`${s}s ${msg}`);
-  if (D.events.length > 8) D.events.shift();
+  if (D.events.length > 14) D.events.shift(); // TEMP: was 8; the frame/mask diagnostic needs more lines
 }
 
 function stats(w: Win): string {
