@@ -6,6 +6,20 @@ import {
   type StroMotionOpacityMode,
 } from '@/lib/stroMotion';
 import { getExportMask, getPreviewMask } from '@/lib/stroMotionDraft/frameMask';
+import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE (frame position/size diagnostic)
+
+// TEMP-DEBUG-POSE: one line per distinct (frame, picture size, mask size, box) so the 60 fps render loop cannot flood the panel.
+const seenFrameDiag = new Set<string>();
+function diagFrame(f: StroMotionFrameDraft, mask: AlphaMask): void {
+  const src = f.sourceFrame;
+  if (!src) return;
+  const b = f.selectionBox;
+  const key = `f${f.index} src=${src.width}x${src.height} mask=${mask.width}x${mask.height} box=${b ? [b.x, b.y, b.width, b.height].map((n) => n.toFixed(2)).join(',') : 'none'}`;
+  if (seenFrameDiag.has(key)) return;
+  seenFrameDiag.add(key);
+  poseDbg.event(`${key}${src.width === mask.width && src.height === mask.height ? '' : ' MISMATCH'}`);
+}
+
 import type { AlphaMask, StroMotionBackground, StroMotionDraft, StroMotionFrameDraft, StroMotionVideoOrder } from '@/lib/stroMotionDraft/types';
 
 function renderMaskedFrame(
@@ -170,6 +184,7 @@ export function renderStroMotionDraftComposite(
   for (const frame of painted) {
     const mask = pickMask(frame);
     if (!frame.sourceFrame || !mask) continue;
+    diagFrame(frame, mask); // TEMP-DEBUG-POSE
 
     const isCurrent = frame === currentFrame;
     const ghostAlpha = isCurrent
