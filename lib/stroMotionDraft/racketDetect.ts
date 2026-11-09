@@ -1,6 +1,6 @@
 'use client';
 
-import { PHONE_ORT_SESSION_OPTIONS, isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+import { PHONE_ORT_SESSION_OPTIONS, isPhoneBudgetActive, ortThreadsOverride } from '@/lib/stroMotionDraft/phoneBudget';
 
 /**
  * AUTO-RACKET DETECTION — D-FINE-N, wrist-gated.
@@ -149,6 +149,7 @@ async function getSession(): Promise<DetectSession | null> {
       env.allowRemoteModels = false;
       env.localModelPath = '/models/';
       if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = '/ort/';
+      { const nt = ortThreadsOverride(); if (nt && env.backends?.onnx?.wasm) env.backends.onnx.wasm.numThreads = nt; } // EXPERIMENT flag, default unchanged
 
       // ── THE WASM EP IS NOT A FALLBACK HERE. IT IS THE ONLY CORRECT ONE. ────
       //

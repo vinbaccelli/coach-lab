@@ -1,6 +1,6 @@
 'use client';
 
-import { PHONE_ORT_SESSION_OPTIONS, isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+import { PHONE_ORT_SESSION_OPTIONS, isPhoneBudgetActive, ortThreadsOverride } from '@/lib/stroMotionDraft/phoneBudget';
 
 /**
  * SAM 2 RACKET SEGMENTATION — the promptable segmenter behind Motion Layer's
@@ -169,6 +169,7 @@ async function getSession(): Promise<SamSession | null> {
       env.allowRemoteModels = false;
       env.localModelPath = '/models/';
       if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = '/ort/';
+      { const nt = ortThreadsOverride(); if (nt && env.backends?.onnx?.wasm) env.backends.onnx.wasm.numThreads = nt; } // EXPERIMENT flag, default unchanged
 
       // WebGPU where available; the wasm EP is the honest fallback rather than
       // a hard failure on machines without it.

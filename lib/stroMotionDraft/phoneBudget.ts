@@ -176,3 +176,18 @@ export function consumeAutoDetectKilled(storage: MarkerStorage | null = realStor
   const at = Number(raw);
   return Number.isFinite(at) && now - at >= 0 && now - at <= AUTODETECT_MARKER_MAX_AGE_MS;
 }
+
+/**
+ * EXPERIMENT (default unchanged): ORT wasm thread count for the racket models, from `localStorage 'ortThreads'` or
+ * `window.__ortThreads`. Every wasm thread has its own scratch/stack, so fewer threads may lower the peak heap of the SAM-2 encode
+ * (measured +554 MB on the first encode, desktop). Returns null when unset so ORT keeps its own default.
+ */
+export function ortThreadsOverride(): number | null {
+  if (typeof window === 'undefined') return null;
+  const w = window as unknown as Record<string, unknown>;
+  if (typeof w.__ortThreads === 'number') return w.__ortThreads;
+  try {
+    const v = Number(window.localStorage.getItem('ortThreads'));
+    return Number.isInteger(v) && v >= 1 && v <= 8 ? v : null;
+  } catch { return null; }
+}
