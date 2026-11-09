@@ -2789,7 +2789,28 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const aheadEnabledRef = useRef(false);
     // Feasibility probe (?lookahead=decode / ?la_lead=): decode-only flag, lead override, gap end, per-tick counter, 2 s stats window.
     // EXPERIMENT (?live=rtmpose-t|rtmpose-s): RTMPose drives the live skeleton. Default off; every other path is unchanged.
-    const rtmLiveRef = useRef<{ eng: import('@/lib/rtmpose/engine').RtmposeEngine | null; initP: Promise<boolean> | null; busy: boolean; failed: boolean; errs: number; lastT: number; smoother: import('@/lib/keypointSmooth').OneEuroKeypointSmoother | null; ms: number[]; since: number; n: number }>({ eng: null, initP: null, busy: false, failed: false, errs: 0, lastT: -1, smoother: null, ms: [], since: 0, n: 0 });
+    const rtmLiveRef = useRef<{ eng: import('@/lib/rtmpose/engine').RtmposeEngine | null; initP: Promise<boolean> | null; busy: boolean; failed: boolean; errs: number; gen: number; lastT: number; smoother: import('@/lib/keypointSmooth').OneEuroKeypointSmoother | null; ms: number[]; since: number; n: number }>({ eng: null, initP: null, busy: false, failed: false, errs: 0, gen: 0, lastT: -1, smoother: null, ms: [], since: 0, n: 0 });
+    /**
+     * Frees the RTMPose live engine (ORT pose + detector sessions). AI Track calls this when it starts: the bake
+     * does not use the live engine, and keeping it resident next to MediaPipe heavy cost about 160-190 MB on
+     * desktop (docs/KNOWN_ISSUES.md 077) on a phone that already restarts the page under load. The next live
+     * detection (no baked track, not baking) re-creates it lazily. `gen` makes an init that is still in flight
+     * discard its engine when it lands instead of re-filling the memory.
+     */
+    const releaseRtmposeLive = () => {
+      const R = rtmLiveRef.current;
+      R.gen++;
+      const eng = R.eng;
+      R.eng = null;
+      R.initP = null;
+      R.errs = 0;
+      R.lastT = -1;
+      R.smoother?.reset();
+      if (eng) {
+        try { eng.dispose(); } catch { /* already released */ }
+        poseDbg.event('rtmpose: released while AI Track runs'); // TEMP-DEBUG-POSE
+      }
+    };
     const aheadDecodeOnlyRef = useRef(false);
     const aheadLeadOverrideRef = useRef<number | null>(null);
     const aheadGapUntilRef = useRef(0);
@@ -3858,6 +3879,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderDirtyRef.current = true;
       },
       startBakeCapture: (collectFromBridge = true) => {
+        releaseRtmposeLive(); // the bake never uses the live engine; do not hold its memory next to MediaPipe heavy
         bakingRef.current = true;
         bakeBridgeCollectRef.current = collectFromBridge;
         bakeSamplesRef.current = [];
@@ -4862,12 +4884,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           if (!R.eng) {
             if (!R.initP) {
               const which = liveEngineSwitch()!;
+              const gen = R.gen;
               R.initP = (async () => {
                 try {
                   onProcessingStatus?.('Loading RTMPose…');
                   const { RtmposeEngine } = await import('@/lib/rtmpose/engine');
                   const eng = new RtmposeEngine(which, { proxy: true });
                   const info = await eng.init();
+                  if (gen !== R.gen) { eng.dispose(); return false; } // AI Track started meanwhile: do not keep it
                   R.eng = eng;
                   poseDbg.set('mode', `RTMPose ${which.slice(-1)} · ${info.threads} thread${info.threads > 1 ? 's' : ''} · worker`); // TEMP-DEBUG-POSE
                   poseDbg.event(`rtmpose ready in ${Math.round(info.loadMs)} ms`); // TEMP-DEBUG-POSE
