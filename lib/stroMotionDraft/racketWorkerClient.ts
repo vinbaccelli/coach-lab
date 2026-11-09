@@ -5,7 +5,7 @@
  */
 import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 import type { RacketDetection } from '@/lib/stroMotionDraft/racketDetect';
-import type { SamCandidate, SamPromptBox } from '@/lib/stroMotionDraft/samRacket';
+import type { SamCandidate, SamDecodeResult, SamPoint, SamPromptBox } from '@/lib/stroMotionDraft/samRacket';
 import type { AlphaMask } from '@/lib/stroMotionDraft/types';
 
 /**
@@ -35,6 +35,9 @@ export interface RacketWorkerHandle {
   detect(args: { frame: ImageBitmap | HTMLCanvasElement; keypoints: unknown; vw: number; vh: number; unitFloorNorm: number | null; label: string }): Promise<RacketDetection | null>;
   /** Resolves with `seg: null` and a reason when SAM could not produce a mask (never throws for "no mask"). */
   segment(args: { frame: ImageBitmap | HTMLCanvasElement; key: string; box: SamPromptBox }): Promise<{ seg: WorkerSegmentResult | null; reason: string }>;
+  /** Mask-editor Object tool: encode a frame once; the embedding stays in this worker for decodePoints(). */
+  encode(args: { frame: ImageBitmap | HTMLCanvasElement; key: string }): Promise<{ ms: number; bytes: number } | null>;
+  decodePoints(args: { key: string; points: SamPoint[]; force?: number | null }): Promise<SamDecodeResult | null>;
   terminate(): void;
 }
 
@@ -104,6 +107,17 @@ export function createRacketWorker(): RacketWorkerHandle {
       const bm = await copyFrame(a.frame);
       const r = await call({ type: 'segment', frame: bm, key: a.key, box: a.box }, [bm]);
       return { seg: (r.seg ?? null) as WorkerSegmentResult | null, reason: (r.reason as string | undefined) ?? '' };
+    },
+    async encode(a) {
+      await ready;
+      const bm = await copyFrame(a.frame);
+      const r = await call({ type: 'encode', frame: bm, key: a.key }, [bm]);
+      return (r.enc ?? null) as { ms: number; bytes: number } | null;
+    },
+    async decodePoints(a) {
+      await ready;
+      const r = await call({ type: 'decodePoints', key: a.key, points: a.points, force: a.force ?? null });
+      return (r.seg ?? null) as SamDecodeResult | null;
     },
     terminate() {
       if (!dead) failAll(new RacketWorkerUnavailable('racket worker terminated'));

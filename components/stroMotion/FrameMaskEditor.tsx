@@ -39,6 +39,8 @@ import {
 import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 import type { SamCandidate, SamPoint } from '@/lib/stroMotionDraft/samRacket';
 import { usePrecisionTouch } from '@/hooks/usePrecisionTouch';
+import { RacketWorkerUnavailable } from '@/lib/stroMotionDraft/racketWorkerClient';
+import { releaseEditorSamWorker } from '@/lib/stroMotionDraft/racketEditorSam';
 import { ENABLE_MOTION_LAYER_PRECISION } from '@/lib/featureFlags';
 
 /**
@@ -499,6 +501,9 @@ export default function FrameMaskEditor({
     drawRacketReticle();
   }, [brushMode, racketNegative, zoom, sourceFrame, drawRacketReticle]);
 
+  // Editor closed: terminate the Object tool's SAM worker so a phone gets all of its memory back (no-op when the page-side SAM was used).
+  useEffect(() => () => { releaseEditorSamWorker(); }, []);
+
   // Is this frame actually encoded? Without an embedding there is nothing to
   // prompt, so the tool reports that plainly instead of silently doing nothing.
   //
@@ -514,14 +519,27 @@ export default function FrameMaskEditor({
     void (async () => {
       try {
         const { isFrameEncoded, encodeFrameForRacket } = await import('@/lib/stroMotionDraft/samRacket');
+        const ws = await import('@/lib/stroMotionDraft/racketEditorSam');
         if (!live) return;
-        if (isFrameEncoded(racketKey)) {
+        // PHONE: SAM-2 runs in a worker that is terminated when the editor closes (a phone kept it, and its ~550 MB, in the page and was killed).
+        if (ws.isFrameEncodedViaWorker(racketKey) || isFrameEncoded(racketKey)) {
           setRacketReady(true);
           return;
         }
         setRacketReady(false);
         setRacketPreparing(true);
-        const res = await encodeFrameForRacket(racketKey, sourceFrame);
+        let res: { ms: number; bytes: number } | null;
+        if (ws.editorSamViaWorker()) {
+          try {
+            res = await ws.encodeViaWorker(racketKey, sourceFrame);
+          } catch (e) {
+            if (!(e instanceof RacketWorkerUnavailable)) throw e;
+            console.warn('[samRacket] worker unavailable — using the in-page SAM:', e.message);
+            res = await encodeFrameForRacket(racketKey, sourceFrame);
+          }
+        } else {
+          res = await encodeFrameForRacket(racketKey, sourceFrame);
+        }
         if (!live) return;
         setRacketReady(!!res);
         if (!res) setRacketNote('Object select unavailable — the segmenter could not load on this machine.');
@@ -573,7 +591,11 @@ export default function FrameMaskEditor({
       setRacketBusy(true);
       try {
         const { decodeRacketMask } = await import('@/lib/stroMotionDraft/samRacket');
-        const res = await decodeRacketMask(racketKey, points, forceCandidate);
+        const ws = await import('@/lib/stroMotionDraft/racketEditorSam');
+        // Decode where the frame was encoded: the embedding lives in the worker OR in the page, never both.
+        const res = ws.isFrameEncodedViaWorker(racketKey)
+          ? await ws.decodeViaWorker(racketKey, points, forceCandidate)
+          : await decodeRacketMask(racketKey, points, forceCandidate);
         if (!res) {
           // Every candidate failed the plausibility gate. Say so — a silent
           // no-op reads as a broken tool, and "no racket beats a wrong racket"

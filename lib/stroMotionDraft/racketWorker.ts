@@ -34,7 +34,10 @@ for (const level of ['log', 'warn'] as const) {
 type DetectMsg = { type: 'detect'; id: number; frame: ImageBitmap; keypoints: unknown; vw: number; vh: number; unitFloorNorm: number | null; label: string };
 type SegmentMsg = { type: 'segment'; id: number; frame: ImageBitmap; key: string; box: SamPromptBox };
 type InitMsg = { type: 'init'; id: number; phone: boolean };
-type Msg = DetectMsg | SegmentMsg | InitMsg;
+// Mask-editor Object tool: encode once (embedding stays cached in THIS worker), then decode per click.
+type EncodeMsg = { type: 'encode'; id: number; frame: ImageBitmap; key: string };
+type DecodePointsMsg = { type: 'decodePoints'; id: number; key: string; points: unknown; force: number | null };
+type Msg = DetectMsg | SegmentMsg | InitMsg | EncodeMsg | DecodePointsMsg;
 
 ctx.onmessage = async (e: MessageEvent<Msg>) => {
   const m = e.data;
@@ -60,6 +63,23 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
         try { m.frame.close(); } catch { /* already closed */ }
       }
       ctx.postMessage({ id: m.id, ok: true, hit });
+      return;
+    }
+    if (m.type === 'encode') {
+      const sam = await import('@/lib/stroMotionDraft/samRacket');
+      let enc = null;
+      try {
+        enc = await sam.encodeFrameForRacket(m.key, m.frame);
+      } finally {
+        try { m.frame.close(); } catch { /* already closed */ }
+      }
+      ctx.postMessage({ id: m.id, ok: true, enc });
+      return;
+    }
+    if (m.type === 'decodePoints') {
+      const sam = await import('@/lib/stroMotionDraft/samRacket');
+      const seg = await sam.decodeRacketMask(m.key, m.points as never, m.force ?? undefined);
+      ctx.postMessage({ id: m.id, ok: true, seg }, seg ? [seg.mask.data.buffer] : []);
       return;
     }
     if (m.type === 'segment') {
