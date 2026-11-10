@@ -26,7 +26,7 @@ import {
 } from '@/lib/youtubeThumbnailPose';
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
-import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
+import { PoseWorkerBridge, terminateGlobalPoseWorker, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX, DoubleTapDetector as _DoubleTapDetector } from '@/lib/precisionHold';
 import { getPoseDetector } from '@/lib/poseDetection';
@@ -442,6 +442,8 @@ export interface CanvasProps {
   containerHeight: number;
   ballTrailMode?: BallTrailMode;
   skeletonEnabled?: boolean;
+  /** PHONES, while Motion Layer is open: stop the live skeleton's engines (MoveNet worker, RTMPose) and free their memory. They come back as MoveNet when it closes. */
+  parkLiveEngines?: boolean;
   ballTrailEnabled?: boolean;
   /** When false, skeleton pose may still run but overlay is not drawn. */
   skeletonDrawEnabled?: boolean;
@@ -2227,6 +2229,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       containerHeight,
       ballTrailMode = 'comet',
       skeletonEnabled = false,
+      parkLiveEngines = false,
       skeletonDrawEnabled = true,
       ballTrailEnabled = false,
       onProcessingStatus,
@@ -4494,6 +4497,35 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // worker-vs-main-thread fallback internally; the render loop just calls
     // bridge.sendFrame(video) and receives keypoints via callback.
 
+    const parkLiveEnginesRef = useRef(parkLiveEngines);
+    parkLiveEnginesRef.current = parkLiveEngines;
+    const [liveParkNonce, setLiveParkNonce] = useState(0);
+
+    // ── PHONE MEMORY: no live skeleton engines while Motion Layer is open ──────
+    // Motion Layer's own pose work is the exact-pose path (the live loop is already suppressed under its lock), yet the live engines stayed
+    // resident: measured on desktop 1320 MB with them vs ~840 MB without (MoveNet worker ~350 MB, RTMPose's ORT worker ~130 MB). On a real
+    // iPhone the Object tool's SAM-2 then failed to load with "[wasm] RangeError: Out of memory". Freed memory only comes back by terminating
+    // the workers, so: dispose the MoveNet bridge + shared worker, terminate RTMPose's worker. When Motion Layer closes the bridge effect rebuilds
+    // MoveNet (RTMPose cannot be re-initialised in the same page: `failed` keeps it off until the next load).
+    useEffect(() => {
+      if (!parkLiveEngines) return;
+      poseLoopActiveRef.current = false;
+      latestKeypointsRef.current = null;
+      renderDirtyRef.current = true;
+      let freed = '';
+      if (poseBridgeRef.current) { poseBridgeRef.current.dispose(); poseBridgeRef.current = null; freed += 'MoveNet bridge '; }
+      terminateGlobalPoseWorker();
+      const R = rtmLiveRef.current;
+      const stopRtm = (eng: import('@/lib/rtmpose/engine').RtmposeEngine | null) => {
+        if (eng && !eng.terminated) { const n = eng.terminateRuntime(); poseDbg.event(`park: RTMPose runtime stopped (${n} worker${n === 1 ? '' : 's'})`); } // TEMP-DEBUG-POSE
+      };
+      if (R.eng) { stopRtm(R.eng); R.eng = null; freed += 'RTMPose '; }
+      else if (R.initP) void R.initP.then(() => { stopRtm(R.eng); R.eng = null; }); // still loading: stop it the moment it is up
+      R.failed = true; // MoveNet owns the skeleton from here on in this page
+      poseDbg.event(`park: live engines released for Motion Layer (${freed.trim() || 'none were running'})`); // TEMP-DEBUG-POSE
+      return () => { setLiveParkNonce((n) => n + 1); }; // Motion Layer closed: rebuild the skeleton engine
+    }, [parkLiveEngines]);
+
     useEffect(() => {
       if (!skeletonEnabled) {
         poseLoopActiveRef.current = false;
@@ -4501,6 +4533,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderDirtyRef.current = true;
         return;
       }
+      if (parkLiveEnginesRef.current) { poseLoopActiveRef.current = false; return; } // engines are parked until Motion Layer closes
       skeletonSuppressedRef.current = false;
       renderDirtyRef.current = true;
       if (typeof window === 'undefined') return;
@@ -4673,7 +4706,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return () => {
         poseLoopActiveRef.current = false;
       };
-    }, [skeletonEnabled, onProcessingStatus, videoRef]);
+    }, [skeletonEnabled, onProcessingStatus, videoRef, liveParkNonce]);
 
     useEffect(() => {
       return () => {
