@@ -10,6 +10,7 @@ import React, {
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
 import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
+import { computeSkeletonAngles, formatAngleValue } from '@/lib/skeletonAngles';
 import { emitTourSignal, reportTourState } from '@/lib/tourSignals';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
@@ -29,7 +30,10 @@ import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX, DoubleTapDetector as _DoubleTapDetector } from '@/lib/precisionHold';
 import { getPoseDetector } from '@/lib/poseDetection';
-import { smoothBakedTrack } from '@/lib/trackSmoothing';
+import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
+import { continuePose } from '@/lib/liveDisplay';
+import { AheadBuffer, LookAheadVideo, leadSeconds, lookAheadDisabled, sampleHiddenNow, coverageDegraded, type AheadKp } from '@/lib/lookAheadPose';
+import { modeLabel, lookAheadDecodeOnly, lookAheadLeadOverride, liveEngineSwitch } from '@/lib/skeletonSwitches';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
@@ -444,7 +448,7 @@ export interface CanvasProps {
   onProcessingStatus?: (msg: string | null) => void;
   onSkeletonFocusSet?: () => void;
   /** Called each frame with live skeleton angle values for the data column */
-  onSkeletonAnglesUpdate?: (angles: Array<{ label: string; deg: number }>) => void;
+  onSkeletonAnglesUpdate?: (angles: Array<{ label: string; deg: number | null }>) => void;
   /**
    * Step 1 Mode Guard: when false (snapshot/frame domain active), live pose
    * detection still feeds the time-indexed cache but must NOT write the
@@ -462,7 +466,7 @@ export interface CanvasProps {
   /** Called when a drawing measurement is committed (angle, ruler, etc.) */
   onMeasurementCommit?: (measurement: { type: 'angle' | 'ruler' | 'arrowAngle'; value: number; unit: string }) => void;
   /** Measurements to render in the right-side column overlay */
-  measurementColumnItems?: Array<{ id: string; label: string; value: number; unit: string }> | null;
+  measurementColumnItems?: Array<{ id: string; label: string; value: number | null; unit: string }> | null;
   /**
    * Header label for the data column. Reflects the locked owner: the phase
    * label in snapshot mode, "FRAME N" in frame mode, or "DATA COLUMN" when live.
@@ -561,6 +565,8 @@ export interface CanvasProps {
   skeletonShowHeadLine?: boolean;
   skeletonShowHeadDirection?: boolean;
   skeletonShowFootLine?: boolean;
+  /** AI Track's draw-only foot-line flag (baked tracks). Never used to pick the live pose model. */
+  aiTrackFootLines?: boolean;
   /**
    * Fired ONCE when live MediaPipe is engaged but this device cannot sustain it
    * (GPU delegate unavailable, or measured inference over the live budget), and
@@ -2273,6 +2279,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // skeleton-enable" reset. This is only a fallback for a caller that omits
       // the prop entirely; page.tsx always passes an explicit value.
       skeletonShowFootLine = false,
+      aiTrackFootLines = false,
       onFootLineLiveUnsupported,
       skeletonClassicColors = true,
       skeletonParts,
@@ -2431,7 +2438,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      */
     const dockTopRef = useRef(0);
 
-    const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
+    const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number | null; unit: string }> | null>(null);
     const mcPosRef = useRef<{ x: number; y: number }>({ x: 0.85, y: 0.02 });
     const mcTitleRef = useRef<string>(measurementColumnTitle);
     const mcDraggingRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
@@ -2775,7 +2782,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      * detection or a cache restore). `kps` identifies it, so a snapshot, a baked
      * track or a restored pose written by anything else is never judged by it.
      */
-    const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number } | null>(null);
+    const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number; reqAt?: number } | null>(null);
+    const traceLastKpsRef = useRef<unknown>(null); // TEMP-DEBUG-POSE: the sample already counted as 'first drawn'
+    // Temporary rollback switch (localStorage anglemotion:skeleton-legacy=1, read once at mount): previous live display blend.
+    const legacyLiveDisplayRef = useRef(false);
+    useEffect(() => { legacyLiveDisplayRef.current = isLegacySkeleton(); }, []);
+    // LOOK-AHEAD live skeleton (lib/lookAheadPose.ts): a hidden second video kept one worker round trip ahead
+    // is what the pose bridge reads while the main video PLAYS; results are stored by video time and drawn when
+    // the playhead arrives. Off with the legacy switch or `anglemotion:lookahead-off=1` (read once at mount).
+    const aheadVideoRef = useRef<LookAheadVideo | null>(null);
+    const aheadBufRef = useRef(new AheadBuffer());
+    const aheadRttRef = useRef(120);
+    const aheadLogAtRef = useRef(0);
+    const aheadBlockedRef = useRef(false);
+    const skeletonPrepSinceRef = useRef(0); // when the 'Preparing the skeleton…' hint first showed (0 = not showing)
+    const aheadWatchdogRef = useRef<number | null>(null);
+    const aheadEnabledRef = useRef(false);
+    // Feasibility probe (?lookahead=decode / ?la_lead=): decode-only flag, lead override, gap end, per-tick counter, 2 s stats window.
+    // EXPERIMENT (?live=rtmpose-t|rtmpose-s): RTMPose drives the live skeleton. Default off; every other path is unchanged.
+    const rtmLiveRef = useRef<{ eng: import('@/lib/rtmpose/engine').RtmposeEngine | null; initP: Promise<boolean> | null; busy: boolean; failed: boolean; errs: number; lastT: number; smoother: import('@/lib/keypointSmooth').OneEuroKeypointSmoother | null; ms: number[]; since: number; n: number }>({ eng: null, initP: null, busy: false, failed: false, errs: 0, lastT: -1, smoother: null, ms: [], since: 0, n: 0 });
+    const aheadDecodeOnlyRef = useRef(false);
+    const aheadLeadOverrideRef = useRef<number | null>(null);
+    const aheadGapUntilRef = useRef(0);
+    const aheadSoftBlockRef = useRef(false); // a coverage release lasts until the next play; a main-video stall release lasts the session
+    const aheadTickRef = useRef(0);
+    const aheadStatsRef = useRef({ at: 0, dets: 0, draws: 0, hits: 0, dropped: 0, total: 0, startedAt: 0, totDraws: 0, totHits: 0 });
+    useEffect(() => {
+      aheadEnabledRef.current = !lookAheadDisabled();
+      aheadDecodeOnlyRef.current = lookAheadDecodeOnly();
+      aheadLeadOverrideRef.current = lookAheadLeadOverride();
+      poseDbg.event(modeLabel(aheadEnabledRef.current)); // TEMP-DEBUG-POSE: mode line
+    }, []);
     /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
     const seekRequestRef = useRef<{ t: number; at: number } | null>(null);
     /** Whether the live pose was hidden as stale on the previous frame (log transitions only). */
@@ -2914,6 +2951,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
     const skeletonShowHeadDirectionRef = useRef(skeletonShowHeadDirection);
     const skeletonShowFootLineRef = useRef(skeletonShowFootLine);
+    const aiTrackFootLinesRef = useRef(aiTrackFootLines);
+    /** DRAW only: foot arrows show for the live flag or AI Track's own flag. The live-engine choice (useMediaPipeLive / useRtmposeLive / the landmarker preload) reads ONLY skeletonShowFootLine. */
+    const footLinesDrawOn = () => skeletonShowFootLineRef.current || aiTrackFootLinesRef.current;
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
     const skeletonPartsRef = useRef(skeletonParts);
     const ballSampleModeRef = useRef(ballSampleMode);
@@ -3169,6 +3209,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; renderDirtyRef.current = true; },  [skeletonShowHeadLine]);
     useEffect(() => { skeletonShowHeadDirectionRef.current = skeletonShowHeadDirection; renderDirtyRef.current = true; }, [skeletonShowHeadDirection]);
     useEffect(() => { skeletonShowFootLineRef.current  = skeletonShowFootLine; renderDirtyRef.current = true; },  [skeletonShowFootLine]);
+    useEffect(() => { aiTrackFootLinesRef.current = aiTrackFootLines; renderDirtyRef.current = true; }, [aiTrackFootLines]);
     const onFootLineLiveUnsupportedRef = useRef(onFootLineLiveUnsupported);
     useEffect(() => { onFootLineLiveUnsupportedRef.current = onFootLineLiveUnsupported; }, [onFootLineLiveUnsupported]);
     /**
@@ -3858,7 +3899,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (opts?.splitGapSec !== undefined) {
           const segs = splitAtGaps(kept, opts.splitGapSec).filter((g) => g.length >= 2);
           if (!segs.length) return 0;
-          const made = segs.map((g) => ({ samples: smoothBakedTrack(g), start: g[0].t, end: g[g.length - 1].t, locked: opts.locked }));
+          const made = segs.map((g) => ({ samples: refineBakedTrack(g), start: g[0].t, end: g[g.length - 1].t, locked: opts.locked }));
           bakedTracksRef.current = [
             ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
             ...made,
@@ -3868,7 +3909,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
         // Offline post-pass: outlier repair + centered (zero-lag) smoothing —
         // the precision live tracking can mathematically never reach.
-        const smoothed = smoothBakedTrack(kept);
+        const smoothed = refineBakedTrack(kept);
         // Add as a new tracked section, replacing any overlapping older track.
         bakedTracksRef.current = [
           ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
@@ -3944,7 +3985,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 showAngles: false,
                 showHeadLine: skeletonShowHeadLineRef.current,
                 showHeadDirection: skeletonShowHeadDirectionRef.current,
-                showFootLine: skeletonShowFootLineRef.current,
+                showFootLine: footLinesDrawOn(),
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
@@ -3985,7 +4026,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 showAngles: false,
                 showHeadLine: skeletonShowHeadLineRef.current,
                 showHeadDirection: skeletonShowHeadDirectionRef.current,
-                showFootLine: skeletonShowFootLineRef.current,
+                showFootLine: footLinesDrawOn(),
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
@@ -4474,9 +4515,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      poseDbg.probeModelFiles(); // TEMP-DEBUG-POSE: debug panel only, no behaviour change
       const bridge = new PoseWorkerBridge({
         frameSkip: poseFrameSkipRef.current,
         onStatus: (msg: string) => {
+          poseDbg.event(`engine: ${msg}`); // TEMP-DEBUG-POSE: timestamped init trail
           onProcessingStatus?.(msg);
           // lib/poseWorkerBridge.ts's own failure message; a waiting tour step shows it.
           if (msg.startsWith('Skeleton load failed')) reportTourState('skeleton', 'failed');
@@ -4486,6 +4529,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       poseLoopActiveRef.current = true;
 
       bridge.onResult((keypoints, meta?: PoseResultMeta) => {
+        skeletonPrepSinceRef.current = 0; // a result arrived ⇒ the skeleton is no longer 'preparing'
         // A result for a frame the coach has scrubbed away from is never drawn
         // nor cached: it was requested before the latest seek, or (paused) it
         // belongs to another video time. It used to land on whatever frame was
@@ -4499,6 +4543,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           (resV.paused && Math.abs(meta.videoTime - resV.currentTime) > 0.05)
         )) {
           poseDbg.event(`seek: dropped result for t=${meta.videoTime.toFixed(2)} (video t=${resV.currentTime.toFixed(2)})`); // TEMP-DEBUG-POSE
+          return;
+        }
+        // LOOK-AHEAD result: while the main video plays and the hidden video is up, every live
+        // result belongs to the TIME-INDEXED buffer (it describes a frame the playhead has not
+        // reached yet, or just reached). It never goes through the live display / pose cache below.
+        if (keypoints && meta && resV && !resV.paused && !bakingRef.current && aheadVideoRef.current && aheadVideoRef.current.ready && !aheadDecodeOnlyRef.current) {
+          aheadBufRef.current.push(meta.videoTime, keypoints as AheadKp[]);
+          aheadStatsRef.current.dets++;
+          aheadRttRef.current = aheadRttRef.current * 0.8 + 0.2 * Math.max(20, performance.now() - meta.requestedAt);
+          renderDirtyRef.current = true;
           return;
         }
         // Precision AI Track capture (MoveNet-fallback path only) — record every
@@ -4540,7 +4594,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             poseLatestSampleRef.current = { kps: keypoints, ts: performance.now() };
             latestKeypointsRef.current = keypoints;
             noteLivePoseForLock(keypoints);
-            livePoseStampRef.current = { kps: keypoints, t: meta?.videoTime ?? (v?.currentTime ?? 0) };
+            livePoseStampRef.current = { kps: keypoints, t: meta?.videoTime ?? (v?.currentTime ?? 0), reqAt: meta?.requestedAt };
             renderDirtyRef.current = true;
             const sr = seekRequestRef.current;
             if (sr && meta && Math.abs(meta.videoTime - sr.t) < 0.05) {
@@ -4806,6 +4860,90 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       };
 
+      /** RTMPose-t is the DEFAULT live engine (?live=off → MoveNet, ?live=rtmpose-s → larger model): it owns the live pose. Never while foot lines are on (they need MediaPipe's feet), during a bake, or once tracks exist. */
+      const useRtmposeLive = () =>
+        !!liveEngineSwitch()
+        && !rtmLiveRef.current.failed
+        && !skeletonShowFootLineRef.current
+        && !bakingRef.current
+        && bakedTracksRef.current.length === 0;
+
+      /** One RTMPose detection, published exactly where the worker's / MediaPipe's results go (same refs, same smoothing as the MoveNet path). */
+      const runRtmposeLive = async (v: HTMLVideoElement) => {
+        const R = rtmLiveRef.current;
+        if (R.busy) return;
+        R.busy = true;
+        try {
+          if (!R.eng) {
+            if (!R.initP) {
+              const which = liveEngineSwitch()!;
+              R.initP = (async () => {
+                try {
+                  onProcessingStatus?.('Loading RTMPose…');
+                  const { RtmposeEngine } = await import('@/lib/rtmpose/engine');
+                  const eng = new RtmposeEngine(which, { proxy: true });
+                  const info = await eng.init();
+                  R.eng = eng;
+                  poseDbg.set('mode', `RTMPose ${which.slice(-1)} · ${info.threads} thread${info.threads > 1 ? 's' : ''} · worker`); // TEMP-DEBUG-POSE
+                  poseDbg.event(`rtmpose ready in ${Math.round(info.loadMs)} ms`); // TEMP-DEBUG-POSE
+                  onProcessingStatus?.('Skeleton ready');
+                  return true;
+                } catch (e) {
+                  R.failed = true;
+                  poseDbg.event(`rtmpose failed: ${(e as Error)?.message} → MoveNet`); // TEMP-DEBUG-POSE
+                  onProcessingStatus?.('RTMPose failed — using the normal skeleton');
+                  return false;
+                }
+              })();
+            }
+            await R.initP;
+            if (!R.eng) return;
+          }
+          if (v.readyState < 2 || v.videoWidth < 16) return;
+          const capAt = performance.now(), capT = v.currentTime;
+          if (Math.abs(capT - R.lastT) > 0.5) { R.eng.reset(); R.smoother?.reset(); } // a seek / a jump: forget the old box and smoothing
+          R.lastT = capT;
+          const raw = await R.eng.detect(v);
+          R.errs = 0;
+          const ms = performance.now() - capAt;
+          if (!R.smoother) { const { OneEuroKeypointSmoother } = await import('@/lib/keypointSmooth'); R.smoother = new OneEuroKeypointSmoother(); }
+          // sampling stats for the debug panel: detections/s and per-detection ms, every ~2 s
+          R.ms.push(ms); R.n++;
+          if (!R.since) R.since = capAt;
+          if (capAt - R.since > 2000) {
+            const s2 = [...R.ms].sort((a, b) => a - b);
+            poseDbg.event(`rtmpose: ${(R.n / ((capAt - R.since) / 1000)).toFixed(1)} det/s · ${Math.round(s2[s2.length >> 1])} ms p50 · ${Math.round(s2[Math.floor(s2.length * 0.95)] ?? 0)} ms p95`); // TEMP-DEBUG-POSE
+            R.ms = []; R.n = 0; R.since = capAt;
+          }
+          if (!raw || exactPoseLockRef.current) return;
+          if (skeletonSuppressedRef.current || !skeletonDrawEnabledRef.current) {
+            if (liveSkeletonActive()) latestKeypointsRef.current = null;
+            return;
+          }
+          const kps = R.smoother.apply(raw, performance.now()) as PoseKeypoint[];
+          const lastFrame = skeletonFramesRef.current.at(-1);
+          if (!lastFrame || Math.abs(capT - lastFrame.timeSeconds) > 1 / 60) {
+            skeletonFramesRef.current.push({ timeSeconds: capT, keypoints: kps });
+            if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+              skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+            }
+          }
+          if (liveSkeletonActive()) {
+            posePrevSampleRef.current = poseLatestSampleRef.current;
+            poseLatestSampleRef.current = { kps, ts: performance.now() };
+            latestKeypointsRef.current = kps;
+            noteLivePoseForLock(kps);
+            livePoseStampRef.current = { kps, t: capT, reqAt: capAt };
+            renderDirtyRef.current = true;
+          }
+        } catch (e) {
+          console.warn('[Canvas] RTMPose live frame failed:', e);
+          if (++R.errs >= 5) { R.failed = true; poseDbg.event(`rtmpose: 5 failures in a row → MoveNet`); } // TEMP-DEBUG-POSE
+        } finally {
+          R.busy = false;
+        }
+      };
+
       // While PLAYING: drive detection from presented frames (rVFC) / rAF.
       // While PAUSED: do NOT poll. requestVideoFrameCallback never fires while
       // paused (which stalled updates after pause), and re-inferring a static
@@ -4828,6 +4966,83 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         poseScheduleRef.current = { kind: 'rvfc', id };
       };
 
+      // ── Look-ahead video lifecycle ─────────────────────────────────────────────
+      const stopAhead = () => {
+        if (aheadWatchdogRef.current !== null) { clearInterval(aheadWatchdogRef.current); aheadWatchdogRef.current = null; }
+        if (aheadVideoRef.current) poseDbg.event('look-ahead video released'); // TEMP-DEBUG-POSE
+        aheadVideoRef.current?.destroy();
+        aheadVideoRef.current = null;
+        aheadBufRef.current.clear();
+        aheadGapUntilRef.current = 0;
+      };
+      /** The hidden video to read frames from, or null ⇒ use the main video exactly as before. */
+      const ensureAhead = (v: HTMLVideoElement): HTMLVideoElement | null => {
+        if (!aheadEnabledRef.current || aheadBlockedRef.current || v.paused) return null;
+        let a = aheadVideoRef.current;
+        if (!a) {
+          a = new LookAheadVideo();
+          aheadVideoRef.current = a;
+          a.start(v);
+          poseDbg.event('look-ahead video started'); // TEMP-DEBUG-POSE
+          // SAFETY: if the MAIN video stops advancing while it should play (a second decoder starving it, as seen on an
+          // iPhone), release the hidden video at once and never create it again this session.
+          const watch = { t: v.currentTime, at: performance.now() };
+          aheadWatchdogRef.current = window.setInterval(() => {
+            const m = videoRef.current;
+            if (!m || m.paused) { watch.at = performance.now(); return; }
+            if (m.currentTime !== watch.t) { watch.t = m.currentTime; watch.at = performance.now(); }
+            else if (performance.now() - watch.at > 700) {
+              poseDbg.event('look-ahead released: main video stalled'); // TEMP-DEBUG-POSE
+              aheadBlockedRef.current = true;
+              stopAhead();
+            }
+          }, 250);
+        }
+        if (a.failed) {
+          poseDbg.event(`look-ahead failed (${a.failReason}) → previous live path`); // TEMP-DEBUG-POSE
+          return null;
+        }
+        const leadOv = aheadLeadOverrideRef.current;
+        const lead = leadOv ?? leadSeconds(aheadRttRef.current, v.playbackRate || 1);
+        if (!aheadGapUntilRef.current) { aheadGapUntilRef.current = v.currentTime + lead; const q0 = v.getVideoPlaybackQuality?.(); aheadStatsRef.current = { at: performance.now(), dets: 0, draws: 0, hits: 0, dropped: q0?.droppedVideoFrames ?? 0, total: q0?.totalVideoFrames ?? 0, startedAt: performance.now(), totDraws: 0, totHits: 0 }; }
+        a.sync(v, lead);
+        // TEMP-DEBUG-POSE: one state line every ~2 s so a phone screenshot shows what the hidden video is really doing
+        const nowMs = performance.now();
+        if (a.video && nowMs - aheadLogAtRef.current > 2000) {
+          aheadLogAtRef.current = nowMs;
+          // PROBE metrics for the last window: detections/s, buffer depth ahead of the playhead, how many draws found a result
+          // (coverage), the MAIN video's dropped frames, so a phone screenshot answers "can it keep up, does it hurt the main video".
+          const st = aheadStatsRef.current;
+          const secs = Math.max(0.5, (nowMs - st.at) / 1000);
+          const q = v.getVideoPlaybackQuality?.();
+          const dDrop = q ? q.droppedVideoFrames - st.dropped : 0;
+          const dTot = q ? q.totalVideoFrames - st.total : 0;
+          const lastT = aheadBufRef.current.lastTime;
+          const depthMs = lastT === null ? 0 : Math.round((lastT - v.currentTime) * 1000);
+          const cov = st.draws ? Math.round((100 * st.hits) / st.draws) : null;
+          poseDbg.event(`look-ahead: Δ${Math.round((a.video.currentTime - v.currentTime) * 1000)}ms (want ${Math.round(lead * 1000)}) · ready ${a.ready ? 'y' : 'n'} · paused ${a.video.paused ? 'y' : 'n'} · rate ${a.video.playbackRate.toFixed(2)} · rs ${a.video.readyState} ns ${a.video.networkState}${a.video.error ? ` err ${a.video.error.code}` : ''} · ${a.video.videoWidth}x${a.video.videoHeight} vs ${v.videoWidth}x${v.videoHeight} · buf ${aheadBufRef.current.size} · rtt ${Math.round(aheadRttRef.current)}ms`);
+          poseDbg.event(`la-stats: ${(st.dets / secs).toFixed(1)} det/s · depth ${depthMs >= 0 ? '+' : ''}${depthMs}ms · covered ${cov === null ? '–' : cov + '%'} · main dropped ${dDrop}/${dTot}${aheadDecodeOnlyRef.current ? ' · DECODE-ONLY' : ''}`);
+          // Graceful degradation: past the warm-up gap, if the buffer does not cover the playhead most of the time, release the
+          // hidden video and use the live path (never freeze, never show an increasingly outdated pose).
+          st.totDraws += st.draws; st.totHits += st.hits;
+          const tailFrom = Number.isFinite(v.duration) ? v.duration - lead - 0.05 : Infinity;
+          if (!aheadDecodeOnlyRef.current && v.currentTime > aheadGapUntilRef.current + 1 && v.currentTime < tailFrom && coverageDegraded(st.hits, st.draws, 30)) {
+            poseDbg.event(`look-ahead released: not keeping up (covered ${cov}%) → live path until the next play`); // TEMP-DEBUG-POSE
+            aheadBlockedRef.current = true;
+            aheadSoftBlockRef.current = true;
+            stopAhead();
+            return null;
+          }
+          aheadStatsRef.current = { ...st, at: nowMs, dets: 0, draws: 0, hits: 0, dropped: q?.droppedVideoFrames ?? 0, total: q?.totalVideoFrames ?? 0 };
+        }
+        if (!a.ready) return null;
+        if (aheadDecodeOnlyRef.current) return null; // decode-only probe: hidden video plays, detection stays on the main video
+        aheadBufRef.current.prune(v.currentTime);
+        // Warm-up gap (deep lead): until the playhead reaches the first hidden frame, alternate main / hidden detections.
+        if (!sampleHiddenNow(aheadTickRef.current++, v.currentTime, aheadGapUntilRef.current, Number.isFinite(v.duration) ? v.duration - lead - 0.05 : Infinity)) return null;
+        return a.video;
+      };
+
       const sendFrame = () => {
         if (!poseLoopActiveRef.current) return;
         // ── NO LIVE INFERENCE UNDER THE EXACT-POSE LOCK ────────────────────
@@ -4847,6 +5062,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (exactPoseLockRef.current) { scheduleNext(); return; }
         const bridge = poseBridgeRef.current;
         const v = videoRef.current;
+        // EXPERIMENT: RTMPose owns the live pose (only with ?live=rtmpose-t|s).
+        if (v && useRtmposeLive()) {
+          void runRtmposeLive(v);
+          scheduleNext();
+          return;
+        }
         // FOOT LINES ON ⇒ MediaPipe owns the live pose; MoveNet does not run.
         if (v && useMediaPipeLive()) {
           void runMediaPipeLive(v);
@@ -4859,7 +5080,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // pointless then. The bake pass itself (bakingRef) always sends.
           if (bakingRef.current || bakedTracksRef.current.length === 0) {
             bridge.frameSkip = poseFrameSkipRef.current;
-            bridge.sendFrame(v);
+            // Playing: detect on the look-ahead video (a frame one round trip in the future) when it is up.
+            bridge.sendFrame((!bakingRef.current ? ensureAhead(v) : null) ?? v);
           }
         }
         scheduleNext();
@@ -4877,6 +5099,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (!v || !v.paused) return;
         // Same source rule as sendFrame: whichever model owns the live pose
         // must also own the paused frame, or pausing would swap the skeleton.
+        if (useRtmposeLive()) {
+          rtmLiveRef.current.smoother?.reset(); // snap to this frame instead of easing from the last one
+          void runRtmposeLive(v);
+          return;
+        }
         if (useMediaPipeLive()) {
           mpLiveNextAtRef.current = 0; // a static frame is worth detecting now
           void runMediaPipeLive(v);
@@ -4889,7 +5116,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         bridge.sendFrame(v);
       };
 
-      const onPause = () => detectStaticFrame();
+      const onPause = () => { stopAhead(); detectStaticFrame(); };
 
       // ONE pose for the frame the coach stopped on. A touch drag on the timeline
       // seeks on every move; detecting on each `seeked` spent the single
@@ -4946,7 +5173,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
       // Resume-from-pause: snap the filter to the live frame instead of letting
       // a stale velocity estimate produce a jitter/lag burst on the first frames.
-      const onPlay = () => { livePoseClockRef.current = performance.now(); poseBridgeRef.current?.resetSmoothing(); cancelScheduled(); scheduleNext(); };
+      const onPlay = () => { if (aheadSoftBlockRef.current) { aheadSoftBlockRef.current = false; aheadBlockedRef.current = false; } livePoseClockRef.current = performance.now(); poseBridgeRef.current?.resetSmoothing(); stopAhead(); cancelScheduled(); scheduleNext(); };
       // Returning from another app/tab: rVFC/rAF were throttled or dropped
       // while hidden — restart the loop (playing) or re-snap the static frame
       // (paused) so the skeleton never "disappears" after switching apps.
@@ -4970,6 +5197,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       return () => {
         poseLoopActiveRef.current = false;
+        stopAhead();
         cancelScheduled();
         if (seekSettleTimer) clearTimeout(seekSettleTimer);
         video.removeEventListener('pause', onPause);
@@ -6173,7 +6401,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const bakedPose =
           skeletonAuthorised && skeletonDimsOk &&
           !exactPoseLockRef.current && poseModeRef.current === 'live' && video && !bakingRef.current
-            ? lookupBakedPose(video.currentTime)
+            ? (lookupBakedPose(video.currentTime)
+              // look-ahead: a pose detected for THIS video time, one round trip before the playhead got here
+              ?? (!video.paused && aheadVideoRef.current?.ready && !aheadDecodeOnlyRef.current ? (() => {
+                const hit = aheadBufRef.current.lookup(video.currentTime);
+                aheadStatsRef.current.draws++; if (hit) aheadStatsRef.current.hits++;
+                return hit;
+              })() : null))
             : null;
 
         // A BAKED POSE OUTRANKS SUPPRESSION.
@@ -6256,7 +6490,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               ? `stale pose hidden (${hiddenAsStalePaused ? `pose t=${stamp!.t.toFixed(2)}, video t=${video!.currentTime.toFixed(2)}` : 'no fresh result'})`
               : 'stale pose shown again');
           }
-          if (!hiddenByTrackScope && !hiddenAsStale && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
+          // Look-ahead healthy and playing: the live pose is no longer updated, so with no look-ahead result near the
+          // playhead the right thing is to draw NOTHING, never the stale live pose (it would sit off the player).
+          const aheadOwnsDisplay = !bakedPose && !!video && !video.paused && !!aheadVideoRef.current?.ready && !aheadDecodeOnlyRef.current;
+          if (!hiddenByTrackScope && !hiddenAsStale && !aheadOwnsDisplay && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
             // Motion smoothing (live path): while PLAYING, INTERPOLATE the
             // displayed pose between the last two detections (prev → latest,
             // blended by sample age). Bounded — no overshoot, no stale-freeze
@@ -6276,12 +6513,30 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const age = performance.now() - latestS.ts;
               // a: 0 → show prev pose, 1 → show latest pose. Clamped, no overshoot.
               const a = Math.min(1, Math.max(0, age / interval));
-              if (a < 0.98) {
+              if (!legacyLiveDisplayRef.current) {
+                // Continue the motion from the NEWEST detection instead of replaying the
+                // previous one (lib/liveDisplay.ts: ≈ one detection interval less lag,
+                // measured in lib/skeletonBench/liveSim.ts). Legacy switch keeps the blend below.
+                displayKps = continuePose(latestS, prevS, performance.now()) as typeof displayKps;
+              } else if (a < 0.98) {
                 displayKps = latestS.kps.map((k, i) => {
                   const p = prevS.kps[i];
                   if (!p || k.score < 0.2 || p.score < 0.2) return k;
                   return { ...k, x: p.x + (k.x - p.x) * a, y: p.y + (k.y - p.y) * a };
                 });
+              }
+            }
+            // TEMP-DEBUG-POSE: how stale is what the viewer is looking at? (video time now − video time of the frame the
+            // newest live pose was detected on), plus where the delay goes (round trip, wait for the next draw, interval).
+            if (!bakedPose && video && !video.paused) {
+              const ls = poseLatestSampleRef.current, st = livePoseStampRef.current;
+              if (ls && st && st.kps === ls.kps) {
+                poseDbg.drawn({
+                  videoNow: video.currentTime, rate: video.playbackRate || 1, videoCapture: st.t, arrivalPerf: ls.ts,
+                  reqAt: st.reqAt, prevArrival: posePrevSampleRef.current?.ts, newSample: traceLastKpsRef.current !== ls.kps,
+                  legacy: legacyLiveDisplayRef.current,
+                });
+                traceLastKpsRef.current = ls.kps;
               }
             }
             ctx.save();
@@ -6294,7 +6549,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 showAngles: false,
                 showHeadLine: skeletonShowHeadLineRef.current,
                 showHeadDirection: skeletonShowHeadDirectionRef.current,
-                showFootLine: skeletonShowFootLineRef.current,
+                showFootLine: footLinesDrawOn(),
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
@@ -6306,26 +6561,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const emitBaked = !!bakedPose && animTickRef.current % 6 === 0;
             if (onSkeletonAnglesUpdateRef.current && (emitBaked || (!bakedPose && latestKeypointsRef.current !== lastEmittedKpsRef.current))) {
               lastEmittedKpsRef.current = latestKeypointsRef.current;
-              const kps = displayKps;
-              const scoreMin = 0.2;
-              const angleDefs = [
-                { indices: [7, 5, 9], label: 'L Elbow' },
-                { indices: [8, 6, 10], label: 'R Elbow' },
-                { indices: [13, 11, 15], label: 'L Knee' },
-                { indices: [14, 12, 16], label: 'R Knee' },
-              ];
-              const angles: Array<{ label: string; deg: number }> = [];
-              for (const { indices: [vi, ai, bi], label } of angleDefs) {
-                const v = kps[vi], a = kps[ai], b = kps[bi];
-                if (!v || !a || !b || v.score < scoreMin || a.score < scoreMin || b.score < scoreMin) continue;
-                const v1x = a.x - v.x, v1y = a.y - v.y;
-                const v2x = b.x - v.x, v2y = b.y - v.y;
-                const mag = Math.sqrt(v1x * v1x + v1y * v1y) * Math.sqrt(v2x * v2x + v2y * v2y);
-                if (mag < 1) continue;
-                const deg = Math.round(Math.acos(Math.min(1, Math.max(-1, (v1x * v2x + v1y * v2y) / mag))) * 180 / Math.PI);
-                angles.push({ label, deg });
-              }
-              onSkeletonAnglesUpdateRef.current(angles);
+              onSkeletonAnglesUpdateRef.current(computeSkeletonAngles(displayKps));
             }
             ctx.restore();
           } else if (
@@ -6338,6 +6574,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             // who presses play early would otherwise just see no skeleton.
             drawCanvasHint(ctx, dx, dy, dw, 'Preparing the skeleton…');
             reportTourState('skeleton', 'loading'); // a waiting tour step shows it too
+            // Elapsed time (and why it can be long on a first visit) as a SECOND line, so the wait is understood, not mistaken for a hang.
+            if (skeletonPrepSinceRef.current === 0) skeletonPrepSinceRef.current = performance.now();
+            const prepS = Math.round((performance.now() - skeletonPrepSinceRef.current) / 1000);
+            if (prepS >= 4) drawCanvasHint(ctx, dx, dy + 30, dw, `${prepS} s${prepS >= 8 ? ' · first visit downloads the AI model' : ''}`);
           } else if (hiddenAsStale && vW > 0 && vH > 0) {
             drawCanvasHint(ctx, dx, dy, dw, 'Skeleton catching up…');
           } else if (hiddenByTrackScope && vW > 0 && vH > 0) {
@@ -6453,7 +6693,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // Foot direction arrows — REAL toe keypoints only (appended at index
           // 17+ by AI Track / AI Detect). No estimate arrows: absent data means
           // absent arrow. Drawn only when the Foot line skeleton toggle is ON.
-          if (skeletonShowFootLineRef.current) {
+          if (footLinesDrawOn()) {
             const namedToe = (nm: string) => {
               for (let fi = 17; fi < kps.length; fi++) {
                 const c = kps[fi];
@@ -7157,7 +7397,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 ctx.fillText(item.label, mcX + pad, y);
                 ctx.fillStyle = '#93C5FD';
                 ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
-                const valText = `${item.value}${item.unit}`;
+                const valText = formatAngleValue(item.value, item.unit);
                 ctx.fillText(valText, mcX + mcW - pad - ctx.measureText(valText).width, y);
               }
             }
