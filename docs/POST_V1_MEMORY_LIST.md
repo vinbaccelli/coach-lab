@@ -25,3 +25,7 @@
 - Motion Layer mask drawn in the wrong place on some frames (a person-shaped blob over the floor shadow), only seen with racket detection on, only on iPhone; not reproduced on desktop. Needs the `?debug=1` panel from a wrong frame (picture size, mask size, selection box). See 079.
 - During Auto-detect the skeleton jumps between frame poses over a frozen video (the pass reads a hidden copy of the video while the visible one stays still). Cosmetic; hide or sync the overlay during the pass.
 - Playing the video while Motion Layer is loading freezes it (see 078).
+
+## Deferred to V1.1 (decided by the architect)
+- **M4 draft restore (PR #163, branch `feat/motion-layer-m4-persist`, head 5edef69d, main merged in, unmerged).** Autosave of the Motion Layer draft to IndexedDB with a restore offer when the same clip is reopened. Phone test on the preview: "not working" (no detail recorded). Decision: not needed for V1, the priority is that the app does not crash. Revisit in V1.1 with a fresh diagnosis (what the offer does or does not show, clip matching, IndexedDB on iOS).
+- **M1 bitmap leak (PR #159, branch `fix/motion-layer-m1-bitmaps`, unmerged, untested):** also parked for the memory pass.
