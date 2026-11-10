@@ -268,6 +268,8 @@ export default function FrameMaskEditor({
   const [racketNote, setRacketNote] = useState<string | null>(null);
   const [racketReady, setRacketReady] = useState(false);
   const [racketPreparing, setRacketPreparing] = useState(false);
+  /** Bumped to re-run the prepare step after the Object tool's SAM worker was released to save memory (phones). */
+  const [racketPrepNonce, setRacketPrepNonce] = useState(0);
 
   /**
    * Reticle position in CANVAS PIXELS — the same space clicks are resolved in.
@@ -571,7 +573,12 @@ export default function FrameMaskEditor({
     return () => {
       live = false;
     };
-  }, [brushMode, racketKey, sourceFrame]);
+  }, [brushMode, racketKey, sourceFrame, racketPrepNonce]);
+
+  // PHONE: the Object tool's SAM worker holds ~+850 MB while it exists. Free it the moment the coach leaves the Object tool; coming back re-prepares (a few seconds).
+  useEffect(() => {
+    if (brushMode !== 'racket' && releaseEditorSamWorker()) setRacketReady(false);
+  }, [brushMode]);
 
   /**
    * Re-decode from a point list. The single path through which the racket mask
@@ -673,6 +680,9 @@ export default function FrameMaskEditor({
    */
   const racketApply = useCallback(() => {
     if (!racketMask) return;
+    // Free the SAM worker BEFORE the mask is merged and the draft re-renders: the mask we need is already here, and a real iPhone was killed at
+    // exactly this step with the worker still holding ~850 MB. Another click re-prepares it (the tool says so).
+    if (releaseEditorSamWorker()) setRacketReady(false);
     void (async () => {
       const { unionRacketIntoMask } = await import('@/lib/stroMotionDraft/samRacket');
       pushUndo(cloneAlphaMask(maskRef.current));
@@ -1449,7 +1459,7 @@ export default function FrameMaskEditor({
               {racketPreparing
                 ? 'Preparing the racket tool for this frame — one-off, a few seconds…'
                 : !racketReady
-                ? 'Object select not ready for this frame.'
+                ? 'Object select was released to save memory — tap the video to prepare it again.'
                 : racketBusy
                   ? 'Segmenting…'
                   : racketPoints.length === 0
@@ -1752,7 +1762,8 @@ export default function FrameMaskEditor({
                 // stroke machinery below ever sees it.
                 if (brushMode === 'racket') {
                   const rc = canvasRef.current;
-                  if (!rc || racketBusy || racketPreparing || !racketReady) return;
+                  if (!rc || racketBusy || racketPreparing) return;
+                  if (!racketReady) { setRacketPrepNonce((n) => n + 1); return; } // released to save memory: this tap re-prepares it
                   const rr = rc.getBoundingClientRect();
                   const rx = (e.clientX - rr.left) * (rc.width / rr.width);
                   const ry = (e.clientY - rr.top) * (rc.height / rr.height);

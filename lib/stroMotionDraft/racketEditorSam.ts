@@ -49,9 +49,13 @@ export async function decodeViaWorker(key: string, points: SamPoint[], force?: n
   }
 }
 
-/** Terminate the worker (editor closed): everything SAM held is returned to the phone. Embeddings are gone, so the next Object use re-encodes. */
-export function releaseEditorSamWorker(): void {
+/** Terminate the worker (editor closed, Object tool left, or a racket was added to the mask). Returns whether a worker was running.
+ * Measured (desktop, phone limits): the worker holds ~+850 MB while it exists and gives it all back when terminated. */
+// (previously: Terminate the worker (editor closed): everything SAM held is returned to the phone. Embeddings are gone, so the next Object use re-encodes. */
+export function releaseEditorSamWorker(): boolean {
+  const had = worker !== null;
   if (worker) { try { worker.terminate(); } catch { /* already gone */ } }
   worker = null;
   encoded.clear();
+  return had;
 }
