@@ -73,7 +73,7 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
       } finally {
         try { m.frame.close(); } catch { /* already closed */ }
       }
-      ctx.postMessage({ id: m.id, ok: true, enc });
+      ctx.postMessage({ id: m.id, ok: true, enc, err: enc ? '' : sam.getLastSamError() });
       return;
     }
     if (m.type === 'decodePoints') {

@@ -41,6 +41,10 @@ export interface RacketWorkerHandle {
   terminate(): void;
 }
 
+/** Why the last worker encode returned nothing (the worker's SAM load error). */
+let lastEncodeError = '';
+export function getLastWorkerEncodeError(): string { return lastEncodeError; }
+
 const CALL_TIMEOUT_MS = 300_000; // SAM-2 on a phone: model load plus a multi-second wasm encode
 
 export function createRacketWorker(): RacketWorkerHandle {
@@ -112,6 +116,7 @@ export function createRacketWorker(): RacketWorkerHandle {
       await ready;
       const bm = await copyFrame(a.frame);
       const r = await call({ type: 'encode', frame: bm, key: a.key }, [bm]);
+      lastEncodeError = (r.err as string | undefined) ?? '';
       return (r.enc ?? null) as { ms: number; bytes: number } | null;
     },
     async decodePoints(a) {
