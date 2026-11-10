@@ -38,7 +38,7 @@ import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
 import { HelpCircle } from 'lucide-react';
-import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
+import { renderStroMotionComposite, exportStroMotionVideo, pickStroVideoMime, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
 import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 import { PhoneFirstComposite } from '@/lib/stroMotionDraft/phoneFinalize';
@@ -4209,11 +4209,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const vh = draft.videoHeight || video.videoHeight;
         if (!vw || !vh) return { ok: false, reason: 'no-video-size' };
 
-        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-          ? 'video/webm;codecs=vp9'
-          : MediaRecorder.isTypeSupported('video/webm')
-            ? 'video/webm'
-            : 'video/mp4';
+        // iOS: MP4 first (the Files app cannot open a WebM); elsewhere WebM first, as before. See pickStroVideoMime.
+        const mimeType = pickStroVideoMime((t) => MediaRecorder.isTypeSupported(t), navigator.userAgent);
 
         // Off-screen composite canvas (matches video resolution)
         const offCanvas = document.createElement('canvas');
@@ -4230,6 +4227,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const savedEndPlate = stroMotionEndPlateRef.current;
         stroMotionCanvasPreviewRef.current = true;
         stroMotionOverlayModeRef.current = false; // use live bitmap as background plate
+        // The recorder films the MAIN canvas, which also paints the live skeleton overlay. Nothing updates it during this render loop, so the
+        // preview video carried a skeleton frozen in the middle of the picture (real iPhone, 2026-11-10). Hide it for the recording only.
+        const savedSkeletonSuppressed = skeletonSuppressedRef.current;
+        skeletonSuppressedRef.current = true;
 
         const waitRender = () => new Promise<void>((resolve) => {
           renderWaitersRef.current.push(resolve);
@@ -4330,6 +4331,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           stroMotionCanvasPreviewRef.current = savedPreview;
           stroMotionOverlayModeRef.current = savedOverlay;
           stroMotionEndPlateRef.current = savedEndPlate;
+          skeletonSuppressedRef.current = savedSkeletonSuppressed;
           stroMotionBackgroundRef.current = stroMotionBackground; // restore from prop
           renderDirtyRef.current = true;
         }
