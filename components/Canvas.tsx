@@ -4227,6 +4227,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const savedEndPlate = stroMotionEndPlateRef.current;
         stroMotionCanvasPreviewRef.current = true;
         stroMotionOverlayModeRef.current = false; // use live bitmap as background plate
+        // The recorder films the MAIN canvas, which also paints the live skeleton overlay. Nothing updates it during this render loop, so the
+        // preview video carried a skeleton frozen in the middle of the picture (real iPhone, 2026-11-10). Hide it for the recording only.
+        const savedSkeletonSuppressed = skeletonSuppressedRef.current;
+        skeletonSuppressedRef.current = true;
 
         const waitRender = () => new Promise<void>((resolve) => {
           renderWaitersRef.current.push(resolve);
@@ -4327,6 +4331,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           stroMotionCanvasPreviewRef.current = savedPreview;
           stroMotionOverlayModeRef.current = savedOverlay;
           stroMotionEndPlateRef.current = savedEndPlate;
+          skeletonSuppressedRef.current = savedSkeletonSuppressed;
           stroMotionBackgroundRef.current = stroMotionBackground; // restore from prop
           renderDirtyRef.current = true;
         }
