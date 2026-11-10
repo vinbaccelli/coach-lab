@@ -133,6 +133,25 @@ async function detectViaWorker(
 // ── SAM worker: one per pass, created on the first frame and terminated by finishRacketSegmentation() ──
 let samWorker: RacketWorkerHandle | null = null;
 let samWorkerFailed = false;
+let samFramesDone = 0;
+const SAM_SETTLE_MS = 1000;
+/**
+ * Frames one SAM worker handles before it is terminated and replaced. DEFAULT: never (one worker for the pass, as before).
+ * TEST KNOB for the iPhone crash at racket segmentation frame 4: `?samRecycle=1` (fresh worker per frame), `?samRecycle=2`, `?samRecycle=0` (off).
+ * Desktop cannot judge this (Linux keeps freed heap in RSS: recycling looked WORSE there, 4214 vs 2689 MB peak), so it is a phone experiment.
+ */
+function samRecycleEvery(): number {
+  let v: number | undefined;
+  try {
+    const q = new URLSearchParams(window.location.search).get('samRecycle');
+    if (q !== null) v = Number(q);
+    else {
+      const o = (window as unknown as { __samRecycleEvery?: number }).__samRecycleEvery;
+      if (o !== undefined) v = o;
+    }
+  } catch { /* no window (worker) */ }
+  return v === undefined || !(v > 0) ? Infinity : v;
+}
 
 /** End of Phase C: terminate the SAM worker so everything it held is returned. Safe to call when none exists. */
 export function finishRacketSegmentation(): void {
@@ -142,6 +161,7 @@ export function finishRacketSegmentation(): void {
   }
   samWorker = null;
   samWorkerFailed = false;
+  samFramesDone = 0;
 }
 
 export async function detectRacketBoxesForBatch(
@@ -254,6 +274,17 @@ export async function segmentRacketIntoMask(args: {
     try {
       if (!samWorker) samWorker = createRacketWorker();
       const { seg, reason } = await samWorker.segment({ frame, key: samKey, box: hit.box });
+      // Real iPhone: one worker kept for the whole pass was killed at segmentation frame 2, and at frame 4 once the live engines were parked.
+      // Each frame leaves wasm heap behind that only a terminated worker returns, so a worker serves samRecycleEvery() frames, is terminated,
+      // and the next one starts after a short settle (a first try that started the next worker at once PEAKED higher on desktop: 4252 vs 2689 MB,
+      // the old heap was not yet reclaimed).
+      samFramesDone++;
+      if (samFramesDone >= samRecycleEvery()) {
+        try { samWorker.terminate(); } catch { /* already gone */ }
+        samWorker = null;
+        samFramesDone = 0;
+        await new Promise<void>((r) => setTimeout(r, SAM_SETTLE_MS));
+      }
       if (!seg) return nothing(reason || 'SAM returned nothing plausible for the detected box');
       const { unionRacketIntoMask } = await import('@/lib/stroMotionDraft/samRacket');
       return {
