@@ -62,6 +62,7 @@ import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
 import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
+import { defaultMeasurementName, plusAction, type LastMeasurement } from '@/lib/columnPrompt';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
 import { poseScribble } from '@/lib/mediapipeSegmenter';
 import type { StroAutoFrameSpec } from '@/hooks/useStroMotion';
@@ -1064,6 +1065,16 @@ function Home() {
   const skeletonLockedRef = useRef(false);
   useEffect(() => { skeletonLockedRef.current = skeletonLocked; }, [skeletonLocked]);
   const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
+  /** The last measurement a drawing produced, waiting for the column's "+" (lib/columnPrompt.ts). No modal opens by itself. */
+  const [lastMeasurement, setLastMeasurement] = useState<LastMeasurement | null>(null);
+  /** The column's "+": with a drawing waiting, ask whether to add it (the existing naming prompt); else false (manual note). */
+  const askAboutLastDrawing = (): boolean => {
+    if (plusAction(lastMeasurement) !== 'ask-last-drawing' || !lastMeasurement) return false;
+    setPendingMeasurement(lastMeasurement);
+    setPendingMeasurementName(defaultMeasurementName(lastMeasurement.type));
+    setLastMeasurement(null);
+    return true;
+  };
   /**
    * ANGLE DIFFERENTIAL — the two-arrow measuring flow.
    *
@@ -7837,6 +7848,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     });
                   }}
                   onMeasurementAdd={() => {
+                    if (askAboutLastDrawing()) return;
                     const label = prompt('Label:');
                     if (!label?.trim()) return;
                     const valStr = prompt('Value (empty for text-only):');
@@ -7869,10 +7881,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       }
                       return;
                     }
-                    if (dataColumnVisible) {
-                      setPendingMeasurement(m);
-                      setPendingMeasurementName(m.type === 'angle' ? 'Angle' : m.type === 'arrowAngle' ? 'Arrow angle' : 'Distance');
-                    }
+                    // No modal per drawing: remember it, the column's "+" asks about the last one (lib/columnPrompt.ts).
+                    if (dataColumnVisible) setLastMeasurement(m);
                   }}
                   isRecording={isRecording}
                   suppressWebcamPipWhileRecording={suppressWebcamPipWhileRecording}
@@ -7934,10 +7944,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     compact={isMobile}
                     precisionAvailable={precisionAvailable}
                     onMeasurement={(value, unit) => {
-                      if (dataColumnActive) {
-                        setPendingMeasurement({ type: 'ruler', value, unit });
-                        setPendingMeasurementName('Distance');
-                      }
+                      if (dataColumnActive) setLastMeasurement({ type: 'ruler', value, unit });
                     }}
                   />
                 )}
@@ -7955,8 +7962,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     <div style={{
                       display: 'flex', gap: 4, pointerEvents: 'auto',
                     }}>
-                      <button type="button" onClick={() => {
+                      <button type="button" title={lastMeasurement ? 'Add your last drawing to the column' : 'Add a note to the column'} aria-label={lastMeasurement ? 'Add last drawing to the column' : 'Add a note to the column'} onClick={() => {
                         setColumnDeleteMode(false);
+                        if (askAboutLastDrawing()) return;
                         const label = prompt('Label:');
                         if (!label?.trim()) return;
                         const valStr = prompt('Value (empty for text-only):');
@@ -7965,7 +7973,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         setMeasurementColumn(prev => [...prev, { id: `n-${Date.now()}`, label: label.trim(), value: isNaN(val) ? 0 : val, unit, type: 'note' }]);
                       }} style={{
                         width: 24, height: 24, borderRadius: 6, border: 'none',
-                        background: 'rgba(255,255,255,0.2)', color: '#fff',
+                        background: lastMeasurement ? '#007AFF' : 'rgba(255,255,255,0.2)', color: '#fff',
                         fontSize: 16, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
                       }}>+</button>
                       <button type="button" onClick={() => setColumnDeleteMode(d => !d)} style={{
