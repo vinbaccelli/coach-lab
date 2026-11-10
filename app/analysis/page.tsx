@@ -3468,6 +3468,7 @@ function Home() {
 
   useEffect(() => {
     if (!(stroMotionActive && stroMotionHtml5Only)) return;
+    if ((window as unknown as Record<string, unknown>).__noCocoPreload === true) return; // TEMP-EXPERIMENT
     if (!isPhoneBudgetActive()) {
       void import('@/lib/racketCocoDetect').then((m) => m.preloadRacketDetector());
       return;
