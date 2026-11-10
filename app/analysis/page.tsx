@@ -219,7 +219,6 @@ import { autoRacketEnabled, setAutoRacketPreference } from '@/lib/stroMotionDraf
 import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled, isPhoneBudgetActive, markAutoDetectFinished, markAutoDetectStarted } from '@/lib/stroMotionDraft/phoneBudget';
 import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/restartBreadcrumb';
 import { racketWorkerEnabled } from '@/lib/stroMotionDraft/racketWorkerClient';
-import { autoRacketEnabled } from '@/lib/stroMotionDraft/autoRacketFlags';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
 
