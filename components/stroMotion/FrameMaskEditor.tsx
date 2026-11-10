@@ -336,6 +336,9 @@ export default function FrameMaskEditor({
   }, [precisionAvailable, precisionOn]);
 
   const precision = usePrecisionTouch<{ x: number; y: number }>({
+    label: 'mask editor',
+    // The editor canvas is small on a phone: 12 % of its height put the crosshair almost under the fingertip.
+    minCursorOffsetPx: 90,
     enabled: precisionAvailable,
     active: precisionOn,
     canvasRef,
@@ -348,6 +351,7 @@ export default function FrameMaskEditor({
     // and the flood tools are single-shot fills; neither benefits from an anchor.
     isHoldEligible: () => brushMode === 'add' || brushMode === 'remove',
     onActivate: () => setPrecisionOn(true),
+    onDeactivate: () => setPrecisionOn(false),
     onCommit: (p) => applyAtPoint(p.x, p.y, true),
     onChange: () => {
       precisionCrosshairClientRef.current = precision.crosshairRef.current;
