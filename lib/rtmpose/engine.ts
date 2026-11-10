@@ -71,6 +71,9 @@ export class RtmposeEngine {
   /** ms spent in the person detector on the last detect() call (0 when the tracked box was used). */
   lastDetMs = 0;
   detections = 0;
+  /** ORT's own proxy worker(s) (env.wasm.proxy): its wasm heap is never returned inside a page, only by terminating the worker. */
+  private ortWorkers: Worker[] = [];
+  private dead = false;
 
   constructor(private size: RtmposeSize, private opts: { threads?: number; detEvery?: number; proxy?: boolean } = {}) {}
 
@@ -79,8 +82,25 @@ export class RtmposeEngine {
     this.ort = await R(() => import('onnxruntime-web/wasm')); // wasm-only build: asks for ort-wasm-simd-threaded.wasm, which is staged in public/ort
     const { iso, threads } = configureOrt(this.ort, this.opts);
     const so = { executionProviders: ['wasm'], graphOptimizationLevel: 'all' as const };
-    this.pose = await this.ort.InferenceSession.create(await fetchModel(`/models/rtmpose/${this.size}.onnx`), so);
-    await this.finder.init(this.ort);
+    // ORT creates its proxy worker inside the first session create and offers no way to stop it. Note the ones that are ORT's (by script name)
+    // while the sessions are created, so terminateRuntime() can free the engine's whole memory (measured on desktop: -127 MB resident).
+    const NativeWorker = this.opts.proxy && typeof Worker === 'function' ? Worker : null;
+    if (NativeWorker) {
+      const seen = this.ortWorkers;
+      const Wrapped = function (this: unknown, url: string | URL, o?: WorkerOptions) {
+        const w = new NativeWorker(url, o);
+        if (/ort[.-]wasm/i.test(String(url))) seen.push(w);
+        return w;
+      } as unknown as typeof Worker;
+      Wrapped.prototype = NativeWorker.prototype;
+      globalThis.Worker = Wrapped;
+    }
+    try {
+      this.pose = await this.ort.InferenceSession.create(await fetchModel(`/models/rtmpose/${this.size}.onnx`), so);
+      await this.finder.init(this.ort);
+    } finally {
+      if (NativeWorker) globalThis.Worker = NativeWorker;
+    }
     this.crop.width = IN_W; this.crop.height = IN_H;
     this.cctx = this.crop.getContext('2d', { willReadFrequently: true })!;
     this.info = { threads, crossOriginIsolated: iso, ep: 'wasm', proxyWorker: !!this.opts.proxy, loadMs: performance.now() - t0 };
@@ -118,7 +138,23 @@ export class RtmposeEngine {
     return kps;
   }
 
+  /**
+   * Kill ORT's proxy worker(s): everything the engine holds in wasm memory goes back to the phone. The engine is unusable afterwards (ORT keeps a
+   * handle to the dead worker, so it cannot be re-initialised in this page — build a new page or use another engine). Returns how many workers it stopped.
+   */
+  terminateRuntime(): number {
+    let n = 0;
+    for (const w of this.ortWorkers) { try { w.terminate(); n++; } catch { /* already gone */ } }
+    this.ortWorkers = [];
+    this.dead = true;
+    this.box = null;
+    return n;
+  }
+
+  get terminated(): boolean { return this.dead; }
+
   dispose() {
+    if (this.dead) return; // the runtime is gone; release() would wait on a dead worker
     void this.pose?.release?.(); this.finder.dispose();
     this.box = null;
   }

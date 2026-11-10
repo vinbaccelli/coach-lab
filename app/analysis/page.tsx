@@ -7894,6 +7894,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   containerHeight={canvasSize.height}
                   ballTrailMode={ballTrailMode}
                   skeletonEnabled={skeletonEnabled && markupTarget === 'A'}
+                  parkLiveEngines={stroMotionActive && racketWorkerEnabled() && !(typeof window !== 'undefined' && (window as unknown as { __noPark?: boolean }).__noPark)}
                   skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
