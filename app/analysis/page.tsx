@@ -4107,6 +4107,9 @@ function Home() {
     });
   }, []);
 
+  /** One-finger double-tap while precision drawing is on: back to normal drawing. */
+  const handlePrecisionDeactivate = useCallback(() => setPrecisionDrawEnabled(false), []);
+
   const dismissPrecisionInstructions = useCallback(() => {
     markPrecisionInstructionsSeen();
     setPrecisionInstructionsOpen(false);
@@ -7908,6 +7911,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   webcamCutout={webcamCutout}
                   precisionTouchDraw={precisionAvailable && precisionDrawEnabled}
                   onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
+                  onPrecisionDeactivate={precisionAvailable ? handlePrecisionDeactivate : undefined}
                   webcamPipMobileChrome={isMobile}
                   webcamPipBottomInsetPx={toolbarBottomReservePx}
                   showTourHelpInZoomCluster={toursEnabled}
@@ -8691,6 +8695,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionAvailable && precisionDrawEnabled}
                       onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
+                  onPrecisionDeactivate={precisionAvailable ? handlePrecisionDeactivate : undefined}
                       webcamPipMobileChrome={isMobile}
                       webcamPipBottomInsetPx={toolbarBottomReservePx}
                       poseFrameSkip={1}

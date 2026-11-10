@@ -27,6 +27,7 @@ import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
+import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX, DoubleTapDetector as _DoubleTapDetector } from '@/lib/precisionHold';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { smoothBakedTrack } from '@/lib/trackSmoothing';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
@@ -106,8 +107,8 @@ const PRECISION_CURSOR_OFFSET_RATIO = 0.12;
  * feature looked completely dead while the pointerdown handler was in fact
  * still willing to erase. One list, used everywhere.
  */
-/** Still-hold duration (ms) that activates precision mode without the toolbar. */
-const PRECISION_HOLD_MS = 2000;
+/** Still-hold duration (ms) that activates precision mode without the toolbar (one definition: lib/precisionHold.ts). */
+const PRECISION_HOLD_MS = _PRECISION_HOLD_MS;
 /**
  * Travel BETWEEN CONSECUTIVE MOVE SAMPLES that cancels the hold — past this the
  * finger is stroking, not holding.
@@ -122,7 +123,7 @@ const PRECISION_HOLD_MS = 2000;
  * the full 2.4s all silently failed — with the finger motionless afterwards in
  * every one of those cases.
  */
-const PRECISION_HOLD_SLOP_PX = 10;
+const PRECISION_HOLD_SLOP_PX = _PRECISION_HOLD_SLOP_PX;
 /**
  * Total travel from the press origin that cancels the hold regardless of how
  * slowly it accumulated. Without this, re-anchoring per sample would let an
@@ -130,7 +131,7 @@ const PRECISION_HOLD_SLOP_PX = 10;
  * tap-target size used throughout this UI — about a fingertip, comfortably
  * above any settle and far below a real mark.
  */
-const PRECISION_HOLD_MAX_TRAVEL_PX = 44;
+const PRECISION_HOLD_MAX_TRAVEL_PX = _PRECISION_HOLD_MAX_TRAVEL_PX;
 /**
  * Tools where a 2-second still hold arms precision mode. Drawing tools only:
  * holding still over a pan, zoom, skeleton-focus or region-select gesture means
@@ -607,6 +608,8 @@ export interface CanvasProps {
    * prop round-trip.
    */
   onPrecisionHoldActivate?: () => void;
+  /** One-finger double-tap while precision drawing is on → turn precision drawing off. */
+  onPrecisionDeactivate?: () => void;
   /** Fires after a drawable shape is committed — parent opens toolbar draw-context mode. */
   onDrawCommitted?: () => void;
   poseFrameSkip?: number;
@@ -2284,6 +2287,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamPipBottomInsetPx = 0,
       precisionTouchDraw = false,
       onPrecisionHoldActivate,
+      onPrecisionDeactivate,
       onDrawCommitted,
       poseFrameSkip = 0,
       panModeEnabled = false,
@@ -2649,6 +2653,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /** Live ref to the activation callback so the timer never closes over a stale prop. */
     const onPrecisionHoldActivateRef = useRef(onPrecisionHoldActivate);
     useEffect(() => { onPrecisionHoldActivateRef.current = onPrecisionHoldActivate; }, [onPrecisionHoldActivate]);
+    const onPrecisionDeactivateRef = useRef(onPrecisionDeactivate);
+    useEffect(() => { onPrecisionDeactivateRef.current = onPrecisionDeactivate; }, [onPrecisionDeactivate]);
+    const precisionTapRef = useRef(new _DoubleTapDetector());
     /**
      * In-flight 2s hold. `clientX/clientY` is the press ORIGIN (for the total
      * travel cap) and `lastX/lastY` is the most recent sample (for the per-move
@@ -2664,11 +2671,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     >(null);
 
     /** Drop any in-flight hold. Safe to call unconditionally. */
-    const cancelPrecisionHold = useCallback(() => {
+    const cancelPrecisionHold = useCallback((reason?: string) => {
       const h = precisionHoldRef.current;
       if (!h) return;
       clearTimeout(h.timer);
       precisionHoldRef.current = null;
+      if (reason) poseDbg.event(`precision hold (canvas) cancelled: ${reason}`); // TEMP-DEBUG-POSE
     }, []);
 
     /** Never leave a hold timer running past unmount. */
@@ -8319,6 +8327,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         e.preventDefault();
         const ch =
           precisionCrosshairDisplayRef.current ?? precisionCrosshairTargetRef.current;
+        precisionTapRef.current.cancel();
         if (ch) precisionCommitRef.current?.(ch);
         return;
       }
@@ -8406,6 +8415,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       if (precisionTouchEligible && precisionAnchorPointerIdRef.current === null) {
         precisionAnchorPointerIdRef.current = e.pointerId;
+        precisionTapRef.current.press(performance.now(), e.clientX, e.clientY);
         const ch = clientToLogical(e.clientX, e.clientY - precisionCursorOffsetY());
         precisionCrosshairTargetRef.current = ch;
         precisionCrosshairDisplayRef.current = { ...ch };
@@ -9103,6 +9113,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // PRECISION_HOLD_SLOP_PX cancels it in onPointerMove, and lift/cancel
       // cancels it too. Touch only: precision mode itself is mobile-only, and a
       // held mouse button means something else.
+      if (e.pointerType === 'touch' && !precisionTouchDrawRef.current && !precisionHoldRef.current) {
+        // TEMP-DEBUG-POSE: say why a hold is NOT armed (the phone test could not tell the reasons apart)
+        if (!onPrecisionHoldActivateRef.current) poseDbg.event('precision hold (canvas) not armed: precision is not offered on this device (needs the mobile layout and a coarse pointer)');
+        else if (!PRECISION_HOLD_TOOLS.has(tool)) poseDbg.event(`precision hold (canvas) not armed: the ${tool} tool has no hold (only the placement tools do; freehand tools use the toolbar toggle)`);
+      }
       if (
         e.pointerType === 'touch' &&
         !precisionTouchDrawRef.current &&
@@ -9110,6 +9125,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         PRECISION_HOLD_TOOLS.has(tool)
       ) {
         cancelPrecisionHold();
+        poseDbg.event(`precision hold (canvas) armed on ${tool}`); // TEMP-DEBUG-POSE
         const holdClientX = e.clientX;
         const holdClientY = e.clientY;
         const holdPointerId = e.pointerId;
@@ -9121,6 +9137,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           lastY: holdClientY,
           timer: setTimeout(() => {
             precisionHoldRef.current = null;
+            poseDbg.event('precision hold (canvas) fired'); // TEMP-DEBUG-POSE
             // The still hold was about to commit a dot — discard it.
             activeStrokeRef.current = null;
             isDraggingRef.current = false;
@@ -9156,7 +9173,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const step = Math.hypot(e.clientX - hold.lastX, e.clientY - hold.lastY);
         const travel = Math.hypot(e.clientX - hold.clientX, e.clientY - hold.clientY);
         if (step > PRECISION_HOLD_SLOP_PX || travel > PRECISION_HOLD_MAX_TRAVEL_PX) {
-          cancelPrecisionHold();
+          cancelPrecisionHold(step > PRECISION_HOLD_SLOP_PX
+            ? `moved ${Math.round(step)} px in one step (limit ${PRECISION_HOLD_SLOP_PX})`
+            : `drifted ${Math.round(travel)} px from the press (limit ${PRECISION_HOLD_MAX_TRAVEL_PX})`);
         } else {
           // Still holding — advance the reference so a slow settle does not
           // accumulate into a false cancel.
@@ -9453,7 +9472,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       // Lifting before the 2s elapses is an ordinary tap/stroke, never precision.
-      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold();
+      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold('finger lifted before 2 s');
       // ── Normalize: this pointer is gone ───────────────────────────────────
       activePointersRef.current.delete(e.pointerId);
       const remainingTouch = [...activePointersRef.current.values()].filter(
@@ -9501,6 +9520,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
         precisionAnchorPointerIdRef.current = null;
         precisionFadeStartRef.current = performance.now();
+        if (precisionTapRef.current.lift(performance.now(), e.clientX, e.clientY)) {
+          precisionTapRef.current.cancel();
+          poseDbg.event('precision turned off: double-tap'); // TEMP-DEBUG-POSE
+          onPrecisionDeactivateRef.current?.();
+        }
         try {
           (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
         } catch {
@@ -9648,7 +9672,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // route here so the gesture lock is always released — the single teardown
     // that prevents stuck isDragging / activeStroke / pinch / pip state.
     const onPointerCancel = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold();
+      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold('pointercancel: the browser took the touch');
       activePointersRef.current.delete(e.pointerId);
       const remainingTouch = [...activePointersRef.current.values()].filter(
         (p) => p.pointerType === 'touch',
@@ -9658,6 +9682,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         webcamPinchRef.current = null;
       }
       if (precisionAnchorPointerIdRef.current === e.pointerId) {
+        precisionTapRef.current.cancel();
         precisionAnchorPointerIdRef.current = null;
         precisionFadeStartRef.current = performance.now();
       }
