@@ -552,7 +552,7 @@ export default function FrameMaskEditor({
           const { getLastSamError } = await import('@/lib/stroMotionDraft/samRacket');
           const { getLastWorkerEncodeError } = await import('@/lib/stroMotionDraft/racketWorkerClient');
           const why = (ws.editorSamViaWorker() ? getLastWorkerEncodeError() : '') || getLastSamError();
-          setRacketNote(`Object select unavailable — the segmenter could not load on this machine.${why ? ` (${why.slice(0, 160)})` : ''}`);
+          setRacketNote(`Object select unavailable — the segmenter could not load on this machine.${why ? ` (${why.slice(0, 160)})` : ''}${(globalThis as unknown as { __parkReport?: string }).__parkReport ? ` [${(globalThis as unknown as { __parkReport?: string }).__parkReport}]` : ' [park: did not run]'}`);
         }
       } catch (e) {
         console.warn('[samRacket] prepare failed:', e);

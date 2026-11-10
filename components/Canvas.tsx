@@ -4511,14 +4511,21 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       latestKeypointsRef.current = null;
       renderDirtyRef.current = true;
       let freed = '';
+      // One line a coach can screenshot (shown under a failed Object select): what the park actually did on THIS device.
+      const report = (msg: string) => { (globalThis as unknown as { __parkReport?: string }).__parkReport = msg; };
       if (poseBridgeRef.current) { poseBridgeRef.current.dispose(); poseBridgeRef.current = null; freed += 'MoveNet bridge '; }
       terminateGlobalPoseWorker();
       const R = rtmLiveRef.current;
       const stopRtm = (eng: import('@/lib/rtmpose/engine').RtmposeEngine | null) => {
-        if (eng && !eng.terminated) { const n = eng.terminateRuntime(); poseDbg.event(`park: RTMPose runtime stopped (${n} worker${n === 1 ? '' : 's'})`); } // TEMP-DEBUG-POSE
+        if (eng && !eng.terminated) {
+          const n = eng.terminateRuntime();
+          poseDbg.event(`park: RTMPose runtime stopped (${n} worker${n === 1 ? '' : 's'})`); // TEMP-DEBUG-POSE
+          report(`park: ${freed.trim() || 'no bridge'}; RTMPose ORT workers stopped: ${n}`);
+        }
       };
       if (R.eng) { stopRtm(R.eng); R.eng = null; freed += 'RTMPose '; }
-      else if (R.initP) void R.initP.then(() => { stopRtm(R.eng); R.eng = null; }); // still loading: stop it the moment it is up
+      else if (R.initP) { report('park: RTMPose still loading — stops when ready'); void R.initP.then(() => { stopRtm(R.eng); R.eng = null; }); } // still loading: stop it the moment it is up
+      else report(`park: ${freed.trim() || 'no live engine was loaded'}; RTMPose was never loaded`);
       R.failed = true; // MoveNet owns the skeleton from here on in this page
       poseDbg.event(`park: live engines released for Motion Layer (${freed.trim() || 'none were running'})`); // TEMP-DEBUG-POSE
       return () => { setLiveParkNonce((n) => n + 1); }; // Motion Layer closed: rebuild the skeleton engine
