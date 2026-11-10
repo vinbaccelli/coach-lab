@@ -1,6 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef } from 'react';
+import { PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX, judgeHoldMove, DoubleTapDetector, precisionCursorOffsetPx } from '@/lib/precisionHold';
+import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE: hold diagnostics in the ?debug=1 panel
 
 /**
  * usePrecisionTouch — the precision-touch interaction, as a reusable hook.
@@ -37,10 +39,9 @@ import { useCallback, useEffect, useRef } from 'react';
 
 /** Crosshair offset above the finger, as a fraction of canvas height. */
 export const PRECISION_CURSOR_OFFSET_RATIO = 0.12;
-/** Still-hold duration (ms) that activates precision mode without a toolbar tap. */
-export const PRECISION_HOLD_MS = 2000;
-/** Finger travel (px) that cancels a pending hold — past this it is a drag. */
-export const PRECISION_HOLD_SLOP_PX = 10;
+// The hold constants and the still-hold test live in lib/precisionHold.ts (one definition shared with the
+// main canvas). Re-exported so existing imports keep working.
+export { PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX };
 /** How long the crosshair lingers after the anchor finger lifts. */
 export const PRECISION_CURSOR_FADE_MS = 220;
 
@@ -62,10 +63,16 @@ export type UsePrecisionTouchOptions<P extends PrecisionPoint> = {
   isHoldEligible?: () => boolean;
   /** Hold completed on a still finger — caller should switch precision mode on. */
   onActivate?: () => void;
+  /** One-finger double-tap while precision is active → caller should switch precision mode off. */
+  onDeactivate?: () => void;
   /** Second finger tapped — commit at this point, in the caller's space. */
   onCommit?: (point: P) => void;
   /** Called whenever the crosshair moves, so an imperative renderer can repaint. */
   onChange?: () => void;
+  /** Where this hook lives, for the hold diagnostics ("mask editor", "ruler"). */
+  label?: string;
+  /** Floor (px) for the crosshair's distance above the finger; the default is the old fraction-of-height only. */
+  minCursorOffsetPx?: number;
 };
 
 export type PrecisionTouchApi<P extends PrecisionPoint> = {
@@ -90,39 +97,42 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
 ): PrecisionTouchApi<P> {
   const {
     enabled, active, canvasRef, clientToLocal,
-    isHoldEligible, onActivate, onCommit, onChange,
+    isHoldEligible, onActivate, onDeactivate, onCommit, onChange,
   } = opts;
+  const label = opts.label ?? 'editor';
 
   // Live refs so timers and native listeners never close over stale props.
   const activeRef = useRef(active);
   const enabledRef = useRef(enabled);
-  const cbRef = useRef({ clientToLocal, isHoldEligible, onActivate, onCommit, onChange });
+  const cbRef = useRef({ clientToLocal, isHoldEligible, onActivate, onDeactivate, onCommit, onChange });
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { enabledRef.current = enabled; }, [enabled]);
   useEffect(() => {
-    cbRef.current = { clientToLocal, isHoldEligible, onActivate, onCommit, onChange };
+    cbRef.current = { clientToLocal, isHoldEligible, onActivate, onDeactivate, onCommit, onChange };
   });
 
+  const tapRef = useRef(new DoubleTapDetector());
   const anchorPointerIdRef = useRef<number | null>(null);
   const anchorActiveRef = useRef(false);
   const crosshairRef = useRef<P | null>(null);
   const holdRef = useRef<
-    { timer: ReturnType<typeof setTimeout>; pointerId: number; clientX: number; clientY: number } | null
+    { timer: ReturnType<typeof setTimeout>; pointerId: number; clientX: number; clientY: number; lastX: number; lastY: number } | null
   >(null);
 
   const cursorOffsetY = useCallback(() => {
     const c = canvasRef.current;
     if (!c) return 0;
     const h = c.getBoundingClientRect().height;
-    return h * PRECISION_CURSOR_OFFSET_RATIO;
-  }, [canvasRef]);
+    return precisionCursorOffsetPx(h, PRECISION_CURSOR_OFFSET_RATIO, opts.minCursorOffsetPx ?? 0);
+  }, [canvasRef, opts.minCursorOffsetPx]);
 
-  const cancelHold = useCallback(() => {
+  const cancelHold = useCallback((reason?: string) => {
     const h = holdRef.current;
     if (!h) return;
     clearTimeout(h.timer);
     holdRef.current = null;
-  }, []);
+    if (reason) poseDbg.event(`precision hold (${label}) cancelled: ${reason}`); // TEMP-DEBUG-POSE
+  }, [label]);
 
   const setCrosshairFromClient = useCallback((clientX: number, clientY: number) => {
     crosshairRef.current = cbRef.current.clientToLocal(clientX, clientY - cursorOffsetY());
@@ -182,6 +192,7 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
     // commit tap — never a new consumer, never a pinch.
     if (anchorPointerIdRef.current !== null && e.pointerId !== anchorPointerIdRef.current) {
       const p = crosshairRef.current;
+      tapRef.current.cancel();
       if (p) cbRef.current.onCommit?.(p);
       return true;
     }
@@ -190,6 +201,7 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
     if (active && e.pointerType === 'touch' && anchorPointerIdRef.current === null) {
       anchorPointerIdRef.current = e.pointerId;
       anchorActiveRef.current = true;
+      tapRef.current.press(performance.now(), e.clientX, e.clientY);
       setCrosshairFromClient(e.clientX, e.clientY);
       return true;
     }
@@ -207,10 +219,12 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
       const clientX = e.clientX;
       const clientY = e.clientY;
       const pointerId = e.pointerId;
+      poseDbg.event(`precision hold (${label}) armed`); // TEMP-DEBUG-POSE
       holdRef.current = {
-        pointerId, clientX, clientY,
+        pointerId, clientX, clientY, lastX: clientX, lastY: clientY,
         timer: setTimeout(() => {
           holdRef.current = null;
+          poseDbg.event(`precision hold (${label}) fired`); // TEMP-DEBUG-POSE
           anchorPointerIdRef.current = pointerId;
           anchorActiveRef.current = true;
           setCrosshairFromClient(clientX, clientY);
@@ -226,14 +240,15 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
     if (!enabled) return false;
 
     const hold = holdRef.current;
-    if (
-      hold && hold.pointerId === e.pointerId &&
-      Math.hypot(e.clientX - hold.clientX, e.clientY - hold.clientY) > PRECISION_HOLD_SLOP_PX
-    ) {
-      cancelHold();
+    if (hold && hold.pointerId === e.pointerId) {
+      // Per-move step re-anchored on every accepted move + a total-travel cap (lib/precisionHold.ts):
+      // a finger settling on glass must not kill a hold that is still for the rest of the 2 s.
+      const v = judgeHoldMove(hold, e.clientX, e.clientY);
+      if (!v.keep) cancelHold(v.reason);
     }
 
     if (anchorPointerIdRef.current === e.pointerId) {
+      tapRef.current.move(e.clientX, e.clientY);
       setCrosshairFromClient(e.clientX, e.clientY);
       return true;
     }
@@ -242,9 +257,11 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
 
   const onPointerUp = useCallback((e: React.PointerEvent): boolean => {
     if (!enabled) return false;
-    if (holdRef.current?.pointerId === e.pointerId) cancelHold();
+    if (holdRef.current?.pointerId === e.pointerId) cancelHold('finger lifted before 2 s');
     if (anchorPointerIdRef.current === e.pointerId) {
+      const dbl = tapRef.current.lift(performance.now(), e.clientX, e.clientY);
       clearAnchor();
+      if (dbl) { tapRef.current.cancel(); cbRef.current.onDeactivate?.(); }
       return true;
     }
     return false;
@@ -252,8 +269,9 @@ export function usePrecisionTouch<P extends PrecisionPoint>(
 
   const onPointerCancel = useCallback((e: React.PointerEvent): boolean => {
     if (!enabled) return false;
-    if (holdRef.current?.pointerId === e.pointerId) cancelHold();
+    if (holdRef.current?.pointerId === e.pointerId) cancelHold('pointercancel: the browser took the touch');
     if (anchorPointerIdRef.current === e.pointerId) {
+      tapRef.current.cancel();
       clearAnchor();
       return true;
     }

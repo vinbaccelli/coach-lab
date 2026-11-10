@@ -1,6 +1,7 @@
 'use client';
 
 import { PHONE_ORT_SESSION_OPTIONS, isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+import { frameToCanvas, type CanvasLike, type FrameSource } from '@/lib/stroMotionDraft/frameCanvas';
 
 /**
  * SAM 2 RACKET SEGMENTATION — the promptable segmenter behind Motion Layer's
@@ -222,6 +223,7 @@ async function getSession(): Promise<SamSession | null> {
       return { tjs, model, processor, device } as SamSession;
     } catch (e) {
       console.warn('[samRacket] model load failed — racket tool unavailable:', e);
+      lastSamError = `model load failed: ${e instanceof Error ? e.message : String(e)}`;
       // Null out so a later attempt can retry rather than being stuck on a
       // rejected promise for the life of the tab.
       sessionPromise = null;
@@ -343,9 +345,13 @@ function evictIfNeeded(): void {
  * Returns null when the model is unavailable — the caller treats that as "no
  * racket tool on this frame", never as an error worth aborting the batch for.
  */
+/** Why the last getSession()/encode returned null (shown to the coach: on a phone there is no console). */
+let lastSamError = '';
+export function getLastSamError(): string { return lastSamError; }
+
 export async function encodeFrameForRacket(
   key: string,
-  frame: ImageBitmap | HTMLCanvasElement,
+  frame: FrameSource,
 ): Promise<{ ms: number; bytes: number } | null> {
   const session = await getSession();
   if (!session) return null;
@@ -358,21 +364,9 @@ export async function encodeFrameForRacket(
   }
 
   // RawImage wants a canvas; an ImageBitmap is drawn once into one.
-  let canvas: HTMLCanvasElement;
-  let width: number;
-  let height: number;
-  if (frame instanceof HTMLCanvasElement) {
-    canvas = frame;
-    width = frame.width;
-    height = frame.height;
-  } else {
-    width = frame.width;
-    height = frame.height;
-    canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    canvas.getContext('2d')!.drawImage(frame, 0, 0);
-  }
+  const canvas: CanvasLike = frameToCanvas(frame);
+  const width = frame.width;
+  const height = frame.height;
 
   /**
    * One encode attempt against one session. Kept as a closure because a WebGPU

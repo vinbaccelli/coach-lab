@@ -39,6 +39,8 @@ import {
 import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 import type { SamCandidate, SamPoint } from '@/lib/stroMotionDraft/samRacket';
 import { usePrecisionTouch } from '@/hooks/usePrecisionTouch';
+import { RacketWorkerUnavailable } from '@/lib/stroMotionDraft/racketWorkerClient';
+import { releaseEditorSamWorker } from '@/lib/stroMotionDraft/racketEditorSam';
 import { ENABLE_MOTION_LAYER_PRECISION } from '@/lib/featureFlags';
 
 /**
@@ -266,6 +268,8 @@ export default function FrameMaskEditor({
   const [racketNote, setRacketNote] = useState<string | null>(null);
   const [racketReady, setRacketReady] = useState(false);
   const [racketPreparing, setRacketPreparing] = useState(false);
+  /** Bumped to re-run the prepare step after the Object tool's SAM worker was released to save memory (phones). */
+  const [racketPrepNonce, setRacketPrepNonce] = useState(0);
 
   /**
    * Reticle position in CANVAS PIXELS — the same space clicks are resolved in.
@@ -332,6 +336,9 @@ export default function FrameMaskEditor({
   }, [precisionAvailable, precisionOn]);
 
   const precision = usePrecisionTouch<{ x: number; y: number }>({
+    label: 'mask editor',
+    // The editor canvas is small on a phone: 12 % of its height put the crosshair almost under the fingertip.
+    minCursorOffsetPx: 90,
     enabled: precisionAvailable,
     active: precisionOn,
     canvasRef,
@@ -344,6 +351,7 @@ export default function FrameMaskEditor({
     // and the flood tools are single-shot fills; neither benefits from an anchor.
     isHoldEligible: () => brushMode === 'add' || brushMode === 'remove',
     onActivate: () => setPrecisionOn(true),
+    onDeactivate: () => setPrecisionOn(false),
     onCommit: (p) => applyAtPoint(p.x, p.y, true),
     onChange: () => {
       precisionCrosshairClientRef.current = precision.crosshairRef.current;
@@ -499,6 +507,9 @@ export default function FrameMaskEditor({
     drawRacketReticle();
   }, [brushMode, racketNegative, zoom, sourceFrame, drawRacketReticle]);
 
+  // Editor closed: terminate the Object tool's SAM worker so a phone gets all of its memory back (no-op when the page-side SAM was used).
+  useEffect(() => () => { releaseEditorSamWorker(); }, []);
+
   // Is this frame actually encoded? Without an embedding there is nothing to
   // prompt, so the tool reports that plainly instead of silently doing nothing.
   //
@@ -514,14 +525,27 @@ export default function FrameMaskEditor({
     void (async () => {
       try {
         const { isFrameEncoded, encodeFrameForRacket } = await import('@/lib/stroMotionDraft/samRacket');
+        const ws = await import('@/lib/stroMotionDraft/racketEditorSam');
         if (!live) return;
-        if (isFrameEncoded(racketKey)) {
+        // PHONE: SAM-2 runs in a worker that is terminated when the editor closes (a phone kept it, and its ~550 MB, in the page and was killed).
+        if (ws.isFrameEncodedViaWorker(racketKey) || isFrameEncoded(racketKey)) {
           setRacketReady(true);
           return;
         }
         setRacketReady(false);
         setRacketPreparing(true);
-        const res = await encodeFrameForRacket(racketKey, sourceFrame);
+        let res: { ms: number; bytes: number } | null;
+        if (ws.editorSamViaWorker()) {
+          try {
+            res = await ws.encodeViaWorker(racketKey, sourceFrame);
+          } catch (e) {
+            if (!(e instanceof RacketWorkerUnavailable)) throw e;
+            console.warn('[samRacket] worker unavailable — using the in-page SAM:', e.message);
+            res = await encodeFrameForRacket(racketKey, sourceFrame);
+          }
+        } else {
+          res = await encodeFrameForRacket(racketKey, sourceFrame);
+        }
         if (!live) return;
         setRacketReady(!!res);
         if (!res) setRacketNote('Object select unavailable — the segmenter could not load on this machine.');
@@ -553,7 +577,12 @@ export default function FrameMaskEditor({
     return () => {
       live = false;
     };
-  }, [brushMode, racketKey, sourceFrame]);
+  }, [brushMode, racketKey, sourceFrame, racketPrepNonce]);
+
+  // PHONE: the Object tool's SAM worker holds ~+850 MB while it exists. Free it the moment the coach leaves the Object tool; coming back re-prepares (a few seconds).
+  useEffect(() => {
+    if (brushMode !== 'racket' && releaseEditorSamWorker()) setRacketReady(false);
+  }, [brushMode]);
 
   /**
    * Re-decode from a point list. The single path through which the racket mask
@@ -573,7 +602,11 @@ export default function FrameMaskEditor({
       setRacketBusy(true);
       try {
         const { decodeRacketMask } = await import('@/lib/stroMotionDraft/samRacket');
-        const res = await decodeRacketMask(racketKey, points, forceCandidate);
+        const ws = await import('@/lib/stroMotionDraft/racketEditorSam');
+        // Decode where the frame was encoded: the embedding lives in the worker OR in the page, never both.
+        const res = ws.isFrameEncodedViaWorker(racketKey)
+          ? await ws.decodeViaWorker(racketKey, points, forceCandidate)
+          : await decodeRacketMask(racketKey, points, forceCandidate);
         if (!res) {
           // Every candidate failed the plausibility gate. Say so — a silent
           // no-op reads as a broken tool, and "no racket beats a wrong racket"
@@ -651,6 +684,9 @@ export default function FrameMaskEditor({
    */
   const racketApply = useCallback(() => {
     if (!racketMask) return;
+    // Free the SAM worker BEFORE the mask is merged and the draft re-renders: the mask we need is already here, and a real iPhone was killed at
+    // exactly this step with the worker still holding ~850 MB. Another click re-prepares it (the tool says so).
+    if (releaseEditorSamWorker()) setRacketReady(false);
     void (async () => {
       const { unionRacketIntoMask } = await import('@/lib/stroMotionDraft/samRacket');
       pushUndo(cloneAlphaMask(maskRef.current));
@@ -1427,7 +1463,7 @@ export default function FrameMaskEditor({
               {racketPreparing
                 ? 'Preparing the racket tool for this frame — one-off, a few seconds…'
                 : !racketReady
-                ? 'Object select not ready for this frame.'
+                ? 'Object select was released to save memory — tap the video to prepare it again.'
                 : racketBusy
                   ? 'Segmenting…'
                   : racketPoints.length === 0
@@ -1730,7 +1766,8 @@ export default function FrameMaskEditor({
                 // stroke machinery below ever sees it.
                 if (brushMode === 'racket') {
                   const rc = canvasRef.current;
-                  if (!rc || racketBusy || racketPreparing || !racketReady) return;
+                  if (!rc || racketBusy || racketPreparing) return;
+                  if (!racketReady) { setRacketPrepNonce((n) => n + 1); return; } // released to save memory: this tap re-prepares it
                   const rr = rc.getBoundingClientRect();
                   const rx = (e.clientX - rr.left) * (rc.width / rr.width);
                   const ry = (e.clientY - rr.top) * (rc.height / rr.height);

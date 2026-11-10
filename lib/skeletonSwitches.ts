@@ -1,0 +1,91 @@
+/**
+ * TEMPORARY test switches for the skeleton work, settable from a LINK (phones have no console).
+ * They persist in localStorage until changed:
+ *   ?legacy=1      previous skeleton behaviour everywhere (AI Track bake + live display, no look-ahead)
+ *   ?legacy=0      back to the new behaviour
+ *   ?lookahead=1   EXPERIMENTAL look-ahead video ON (default OFF: on an iPhone a second playing video stalled the main one)
+ *   ?lookahead=0   look-ahead OFF again (the default)
+ *   ?lookahead=decode  FEASIBILITY PROBE: the hidden video plays (same decoder load) but detection stays on the main video and the
+ *                      display stays on the live path — isolates what a second decoder costs the main video
+ *   ?live=rtmpose-t | ?live=rtmpose-s   EXPERIMENT: RTMPose (ONNX wasm, in a worker) drives the LIVE skeleton instead of MoveNet; ?live=off back to the default
+ *   ?la_lead=2.5   look-ahead target lead in VIDEO seconds (0.04–3); ?la_lead=auto back to one measured round trip
+ * Remove once the skeleton work is accepted.
+ */
+export const LEGACY_KEY = 'anglemotion:skeleton-legacy';
+export const LOOKAHEAD_ON_KEY = 'anglemotion:lookahead-on';
+export const LOOKAHEAD_LEAD_KEY = 'anglemotion:lookahead-lead';
+export const LIVE_ENGINE_KEY = 'anglemotion:live-engine';
+
+/** Apply `?legacy=` / `?lookahead=` from the current URL to localStorage (idempotent, never throws). */
+export function applyUrlSwitches(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const ls = window.localStorage;
+    const legacy = q.get('legacy');
+    if (legacy === '1') ls.setItem(LEGACY_KEY, '1');
+    else if (legacy === '0') ls.removeItem(LEGACY_KEY);
+    const ahead = q.get('lookahead');
+    if (ahead === '1' || ahead === 'decode') ls.setItem(LOOKAHEAD_ON_KEY, ahead);
+    else if (ahead === '0') ls.removeItem(LOOKAHEAD_ON_KEY);
+    const live = q.get('live');
+    if (live === 'rtmpose-t' || live === 'rtmpose-s') ls.setItem(LIVE_ENGINE_KEY, live);
+    else if (live === 'off') ls.setItem(LIVE_ENGINE_KEY, 'off'); // explicit opt-out → MoveNet
+    else if (live === 'default') ls.removeItem(LIVE_ENGINE_KEY);
+    const lead = q.get('la_lead');
+    if (lead !== null) {
+      const n = Number(lead);
+      if (Number.isFinite(n) && n >= 0.04 && n <= 3) ls.setItem(LOOKAHEAD_LEAD_KEY, String(n));
+      else ls.removeItem(LOOKAHEAD_LEAD_KEY);
+    }
+  } catch { /* blocked storage: switches simply don't apply */ }
+}
+
+export function legacyOn(): boolean {
+  applyUrlSwitches();
+  try { return typeof window !== 'undefined' && (!!(window as unknown as { __skeletonLegacy?: boolean }).__skeletonLegacy || window.localStorage.getItem(LEGACY_KEY) === '1'); } catch { return false; }
+}
+
+/** The experimental look-ahead is OFF unless explicitly switched on. */
+export function lookAheadOnSwitch(): boolean {
+  applyUrlSwitches();
+  try { if (typeof window === 'undefined') return false; const v = window.localStorage.getItem(LOOKAHEAD_ON_KEY); return v === '1' || v === 'decode'; } catch { return false; }
+}
+
+/**
+ * Which RTMPose model drives the live skeleton. DEFAULT: rtmpose-t (decided after the iPhone comparison, docs/RTMPOSE_SPIKE.md).
+ * `?live=rtmpose-s` picks the larger model, `?live=off` (persisted) opts out to the MoveNet worker, `?live=default` clears the choice.
+ * null = MoveNet (opted out, or no window). A failed RTMPose init/run also falls back to MoveNet (Canvas `rtmLiveRef.failed`).
+ */
+export const DEFAULT_LIVE_ENGINE: LiveEngineChoice = 'rtmpose-t';
+export type LiveEngineChoice = 'rtmpose-t' | 'rtmpose-s';
+export function liveEngineSwitch(): LiveEngineChoice | null {
+  applyUrlSwitches();
+  try {
+    if (typeof window === 'undefined') return null;
+    const v = window.localStorage.getItem(LIVE_ENGINE_KEY);
+    if (v === 'off') return null;
+    return v === 'rtmpose-t' || v === 'rtmpose-s' ? v : DEFAULT_LIVE_ENGINE;
+  } catch { return DEFAULT_LIVE_ENGINE; }
+}
+
+/** Feasibility probe: hidden video decodes, but nothing is detected on it and the display stays on the live path. */
+export function lookAheadDecodeOnly(): boolean {
+  applyUrlSwitches();
+  try { return typeof window !== 'undefined' && window.localStorage.getItem(LOOKAHEAD_ON_KEY) === 'decode'; } catch { return false; }
+}
+
+/** Target look-ahead lead in video seconds from `?la_lead=`, or null ⇒ one measured round trip (the default). */
+export function lookAheadLeadOverride(): number | null {
+  applyUrlSwitches();
+  try {
+    if (typeof window === 'undefined') return null;
+    const n = Number(window.localStorage.getItem(LOOKAHEAD_LEAD_KEY));
+    return Number.isFinite(n) && n >= 0.04 && n <= 3 ? n : null;
+  } catch { return null; }
+}
+
+/** One line for the ?debug=1 panel so a screenshot proves which mode ran. */
+export function modeLabel(lookAheadActive: boolean): string {
+  return legacyOn() ? 'mode: LEGACY (previous skeleton behaviour)' : `mode: NEW${liveEngineSwitch() ? ` · LIVE ENGINE ${liveEngineSwitch()}` : ''} · look-ahead ${lookAheadActive ? `ON (experimental)${lookAheadDecodeOnly() ? ' · DECODE-ONLY probe' : ''} · lead ${lookAheadLeadOverride() ?? 'auto'}` : 'OFF (default)'}`;
+}
