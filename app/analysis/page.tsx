@@ -202,6 +202,7 @@ import {
 import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 import { videoFileExtForBlob } from '@/lib/recordingUtils';
+import { saveImageFromUrl } from '@/lib/saveImage';
 const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportModal'));
 import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
@@ -3407,15 +3408,18 @@ function Home() {
   ]);
 
   const handleStroDownloadPng = useCallback(() => {
+    const save = (url: string) => {
+      saveImageFromUrl(url, `motion-layer-${Date.now()}.png`).catch(() => {
+        setProcessingStatus('Could not save the PNG. Try again.');
+      });
+    };
     if (stroPreviewPngUrl) {
-      downloadDataURL(stroPreviewPngUrl, `motion-layer-${Date.now()}.png`);
+      save(stroPreviewPngUrl);
       return;
     }
     const video = videoRef.current;
     if (video && stroMotionDraft) {
-      void exportStroMotionDraftPng(video, stroMotionDraft).then((url) => {
-        downloadDataURL(url, `motion-layer-${Date.now()}.png`);
-      }).catch(() => {
+      void exportStroMotionDraftPng(video, stroMotionDraft).then(save).catch(() => {
         setProcessingStatus('Could not export PNG. Generate Motion Layer first.');
       });
       return;
@@ -3463,7 +3467,7 @@ function Home() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `motion-layer-${Date.now()}.webm`;
+    a.download = `motion-layer-${Date.now()}.${videoFileExtForBlob(blob)}`;
     document.body.appendChild(a);
     a.click();
     a.remove();

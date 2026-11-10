@@ -223,6 +223,7 @@ async function getSession(): Promise<SamSession | null> {
       return { tjs, model, processor, device } as SamSession;
     } catch (e) {
       console.warn('[samRacket] model load failed — racket tool unavailable:', e);
+      lastSamError = `model load failed: ${e instanceof Error ? e.message : String(e)}`;
       // Null out so a later attempt can retry rather than being stuck on a
       // rejected promise for the life of the tab.
       sessionPromise = null;
@@ -344,6 +345,10 @@ function evictIfNeeded(): void {
  * Returns null when the model is unavailable — the caller treats that as "no
  * racket tool on this frame", never as an error worth aborting the batch for.
  */
+/** Why the last getSession()/encode returned null (shown to the coach: on a phone there is no console). */
+let lastSamError = '';
+export function getLastSamError(): string { return lastSamError; }
+
 export async function encodeFrameForRacket(
   key: string,
   frame: FrameSource,
