@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
-import { requireFeature } from '@/lib/entitlements.server';
+import { getEntitlement, requireFeature } from '@/lib/entitlements.server';
+import { playerLimit, PLAYER_LIMIT_MESSAGE } from '@/lib/players/limits';
 import { defaultTechnicalSheet } from '@/lib/players/technicalSheet';
 
 export async function GET() {
@@ -21,6 +22,20 @@ export async function POST(req: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'players');
   if (denied) return denied;
+
+  // Light: one player profile. Fails open on a read error, like requireFeature.
+  try {
+    const ent = await getEntitlement(session.supabase, { id: session.userId, email: session.email }, { startTrial: false });
+    const limit = playerLimit(ent);
+    if (Number.isFinite(limit)) {
+      const { count } = await session.supabase.from('players').select('id', { count: 'exact', head: true });
+      if ((count ?? 0) >= limit) {
+        return NextResponse.json({ error: 'player_limit', required: 'pro', message: PLAYER_LIMIT_MESSAGE }, { status: 403 });
+      }
+    }
+  } catch (e) {
+    console.error('[players] limit check failed, allowing:', e instanceof Error ? e.message : e);
+  }
 
   const body = (await req.json()) as {
     display_name?: string;
