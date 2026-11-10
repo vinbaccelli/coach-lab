@@ -136,9 +136,10 @@ let samWorkerFailed = false;
 let samFramesDone = 0;
 const SAM_SETTLE_MS = 1000;
 /**
- * Frames one SAM worker handles before it is terminated and replaced. DEFAULT: never (one worker for the pass, as before).
- * TEST KNOB for the iPhone crash at racket segmentation frame 4: `?samRecycle=1` (fresh worker per frame), `?samRecycle=2`, `?samRecycle=0` (off).
- * Desktop cannot judge this (Linux keeps freed heap in RSS: recycling looked WORSE there, 4214 vs 2689 MB peak), so it is a phone experiment.
+ * Frames one SAM worker handles before it is terminated and replaced. DEFAULT 2.
+ * Real iPhone, 5-frame 1080x1920 clip with racket detection: ONE worker for the pass crashed (killed at segmentation frame 2, then 4);
+ * `?samRecycle=1` and `?samRecycle=2` both finished, with Object select working afterwards. `?samRecycle=0` restores one worker per pass.
+ * Desktop cannot judge this (Linux keeps freed heap in RSS: recycling looked WORSE there, 4214 vs 2689 MB peak).
  */
 function samRecycleEvery(): number {
   let v: number | undefined;
@@ -150,7 +151,8 @@ function samRecycleEvery(): number {
       if (o !== undefined) v = o;
     }
   } catch { /* no window (worker) */ }
-  return v === undefined || !(v > 0) ? Infinity : v;
+  if (v === undefined) return 2;
+  return v > 0 ? v : Infinity; // 0 (or junk) = one worker for the whole pass
 }
 
 /** End of Phase C: terminate the SAM worker so everything it held is returned. Safe to call when none exists. */
