@@ -7898,7 +7898,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   containerHeight={canvasSize.height}
                   ballTrailMode={ballTrailMode}
                   skeletonEnabled={skeletonEnabled && markupTarget === 'A'}
-                  parkLiveEngines={stroMotionActive && racketWorkerEnabled() && !(typeof window !== 'undefined' && (window as unknown as { __noPark?: boolean }).__noPark)}
+                  parkLiveEngines={stroMotionActive && racketWorkerEnabled() && !skeletonConfirmOpen && !skeletonWaitingForClick && !(typeof window !== 'undefined' && (window as unknown as { __noPark?: boolean }).__noPark)}
+                  /* NOT while the coach is aiming the skeleton ("Click the player — Lock"): that step needs the live engine; parked, the skeleton ignored the click (real iPhone 2026-11-10). */
                   skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
