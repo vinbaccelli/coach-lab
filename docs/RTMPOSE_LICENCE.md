@@ -50,3 +50,7 @@ Options (decision pending with the architect): the Apache-2.0 YOLOX-tiny **COCO*
 3. Verify the unopened primary sources (MPII page, PoseTrack site, COCO terms of use, CrowdPose, sub-JHMDB).
 4. Written confirmation from Open-MMLab for the exact checkpoint (optional, recommended).
 5. Create `THIRD_PARTY_NOTICES` and the in-app notice before any production deploy.
+
+## Update: detector replaced (Human-Art removed)
+
+`public/models/rtmpose/yolox-tiny.onnx` (Human-Art) is deleted. The live engine now uses the stock Megvii YOLOX-tiny **COCO** weights (`yolox-tiny-coco.onnx`, Apache-2.0; `bestPersonYoloxCoco` in `lib/rtmpose/core.ts`). Desktop check on 6 frames of a 1920×1080 clip: person box within a few pixels of the Human-Art one (COCO boxes up to ~30 px wider). Open: the COCO training images carry their own per-image Flickr licences (annotations CC BY 4.0), the usual position for COCO-trained detectors; confirm that with the lawyer. The RTMPose body7 pose weights themselves are unchanged and still subject to the body7 dataset licensing above. Crowd / two-player / fast-swing behaviour of the new detector is not yet measured.

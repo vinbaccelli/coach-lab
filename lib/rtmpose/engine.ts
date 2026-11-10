@@ -5,7 +5,7 @@
  * NOT wired into the analysis page — used by the live skeleton path.
  */
 import { retryImport as R } from './retryImport';
-import { IN_W, IN_H, cropFromBox, rgbaCropToTensor, decodeSimcc, boxFromKeypoints, bestPerson, rgba416ToYoloxTensor, type Box, type Kp } from './core';
+import { IN_W, IN_H, cropFromBox, rgbaCropToTensor, decodeSimcc, boxFromKeypoints, bestPersonYoloxCoco, rgba416ToYoloxTensor, type Box, type Kp } from './core';
 
 export type RtmposeSize = 'rtmpose-t' | 'rtmpose-s' | 'rtmpose-m';
 type Ort = typeof import('onnxruntime-web/wasm');
@@ -43,7 +43,7 @@ export class PersonFinder {
   async init(ort?: Ort, opts: { threads?: number; proxy?: boolean } = {}) {
     this.ort = ort ?? (await R(() => import('onnxruntime-web/wasm')));
     if (!ort) configureOrt(this.ort, opts);
-    this.det = await this.ort.InferenceSession.create(await fetchModel('/models/rtmpose/yolox-tiny.onnx'), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+    this.det = await this.ort.InferenceSession.create(await fetchModel('/models/rtmpose/yolox-tiny-coco.onnx'), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
   }
   async find(video: HTMLVideoElement, prefer?: Box | null): Promise<Box | null> {
     const W = video.videoWidth, H = video.videoHeight, S = 416;
@@ -53,8 +53,8 @@ export class PersonFinder {
     ctx.fillStyle = 'rgb(114,114,114)'; ctx.fillRect(0, 0, S, S);
     ctx.drawImage(video, 0, 0, Math.round(W * scale), Math.round(H * scale));
     const tensor = rgba416ToYoloxTensor(ctx.getImageData(0, 0, S, S).data, S);
-    const r = await this.det.run({ input: new this.ort.Tensor('float32', tensor, [1, 3, S, S]) });
-    return bestPerson(r.dets.data as Float32Array, r.labels.data as unknown as ArrayLike<number | bigint>, scale, 0.3, prefer ?? undefined);
+    const r = await this.det.run({ [this.det.inputNames[0]]: new this.ort.Tensor('float32', tensor, [1, 3, S, S]) });
+    return bestPersonYoloxCoco(r[this.det.outputNames[0]].data as Float32Array, scale, 0.3, prefer ?? undefined);
   }
   dispose() { void this.det?.release?.(); }
 }

@@ -139,6 +139,35 @@ export function bestPerson(dets: ArrayLike<number>, labels: ArrayLike<number | b
   return best;
 }
 
+/**
+ * Best "person" box from the stock Megvii YOLOX-tiny COCO ONNX (Apache-2.0 weights): one tensor [1,N,85] per anchor,
+ * NOT grid-decoded: tx, ty, tw, th (offsets/log-sizes per stride 8/16/32 grid on the 416 letterbox), objectness, then 80 class scores
+ * (scores already sigmoided). Person = class 0; score = objectness × class score. Selection rule as bestPerson
+ * (follow the overlapping player, else most confident).
+ */
+export function bestPersonYoloxCoco(out: ArrayLike<number>, scale: number, minScore = 0.3, prefer?: Box, size = 416): Box | null {
+  const stride = 85;
+  const n = Math.floor(out.length / stride);
+  const strides = [8, 16, 32];
+  let best: Box | null = null, bestS = -1;
+  let i = 0;
+  for (const st of strides) {
+    const g = size / st;
+    for (let k = 0; k < g * g && i < n; k++, i++) {
+      const o = i * stride;
+      const s = out[o + 4] * out[o + 5];
+      if (s < minScore) continue;
+      const gx = k % g, gy = Math.floor(k / g);
+      const cx = (out[o] + gx) * st, cy = (out[o + 1] + gy) * st;
+      const w = Math.exp(out[o + 2]) * st, h = Math.exp(out[o + 3]) * st;
+      const b = { x: (cx - w / 2) / scale, y: (cy - h / 2) / scale, w: w / scale, h: h / scale };
+      const score = prefer ? iou(b, prefer) + s * 0.01 : s;
+      if (score > bestS) { bestS = score; best = b; }
+    }
+  }
+  return best;
+}
+
 export function iou(a: Box, b: Box): number {
   const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y), x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);
   const inter = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
