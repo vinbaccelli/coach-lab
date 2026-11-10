@@ -38,7 +38,7 @@ import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
 import { HelpCircle } from 'lucide-react';
-import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
+import { renderStroMotionComposite, exportStroMotionVideo, pickStroVideoMime, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
 import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 import { PhoneFirstComposite } from '@/lib/stroMotionDraft/phoneFinalize';
@@ -4209,11 +4209,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const vh = draft.videoHeight || video.videoHeight;
         if (!vw || !vh) return { ok: false, reason: 'no-video-size' };
 
-        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-          ? 'video/webm;codecs=vp9'
-          : MediaRecorder.isTypeSupported('video/webm')
-            ? 'video/webm'
-            : 'video/mp4';
+        // iOS: MP4 first (the Files app cannot open a WebM); elsewhere WebM first, as before. See pickStroVideoMime.
+        const mimeType = pickStroVideoMime((t) => MediaRecorder.isTypeSupported(t), navigator.userAgent);
 
         // Off-screen composite canvas (matches video resolution)
         const offCanvas = document.createElement('canvas');
