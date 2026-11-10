@@ -46,6 +46,7 @@
 import { autoRacketEnabled } from '@/lib/stroMotionDraft/autoRacketFlags';
 import type { SamPromptBox } from '@/lib/stroMotionDraft/samRacket';
 import type { AlphaMask } from '@/lib/stroMotionDraft/types';
+import { RacketWorkerUnavailable, createRacketWorker, racketWorkerEnabled, type RacketWorkerHandle } from '@/lib/stroMotionDraft/racketWorkerClient';
 
 interface NormKp { x: number; y: number; score: number; name?: string }
 
@@ -90,12 +91,100 @@ export function autoRacketActive(objectType: string): boolean {
  * implement. Frames with no detection are simply absent, and the SAM phase skips
  * them (no encode paid for a frame with no racket).
  */
+/** D-FINE in a throwaway worker. Returns null (not an empty map) when the worker itself failed, so the caller can fall back. */
+async function detectViaWorker(
+  inputs: RacketDetectInput[],
+  opts: { vw: number; vh: number; unitFloorNorm?: number | null },
+): Promise<Map<number, RacketBoxForFrame> | null> {
+  let worker: RacketWorkerHandle | null = null;
+  const found = new Map<number, RacketBoxForFrame>();
+  try {
+    worker = createRacketWorker();
+    for (const input of inputs) {
+      if (!(input.frame.width > 0) || !(input.frame.height > 0)) {
+        console.warn(`[autoRacket] frame ${input.frameIndex} has no pixels (${input.frame.width}x${input.frame.height}) — skipping detection for it`);
+        continue;
+      }
+      try {
+        const hit = await worker.detect({
+          frame: input.frame,
+          keypoints: input.keypoints,
+          vw: opts.vw,
+          vh: opts.vh,
+          unitFloorNorm: opts.unitFloorNorm ?? null,
+          label: input.label,
+        });
+        if (hit) found.set(input.frameIndex, { box: hit.box, cls: hit.cls, score: hit.score, wristDistPx: hit.wristDistPx });
+      } catch (e) {
+        // A worker that died or never started is "unavailable"; a per-frame model error is just that frame, as in-page.
+        if (e instanceof RacketWorkerUnavailable) throw e;
+        console.warn('[autoRacket] detect failed on frame', input.frameIndex, e);
+      }
+    }
+    return found;
+  } catch (e) {
+    console.warn('[autoRacket] racket worker failed during detection:', e);
+    return null;
+  } finally {
+    worker?.terminate();
+  }
+}
+
+// ── SAM worker: one per pass, created on the first frame and terminated by finishRacketSegmentation() ──
+let samWorker: RacketWorkerHandle | null = null;
+let samWorkerFailed = false;
+let samFramesDone = 0;
+const SAM_SETTLE_MS = 1000;
+/**
+ * Frames one SAM worker handles before it is terminated and replaced. DEFAULT: never (one worker for the pass, as before).
+ * TEST KNOB for the iPhone crash at racket segmentation frame 4: `?samRecycle=1` (fresh worker per frame), `?samRecycle=2`, `?samRecycle=0` (off).
+ * Desktop cannot judge this (Linux keeps freed heap in RSS: recycling looked WORSE there, 4214 vs 2689 MB peak), so it is a phone experiment.
+ */
+function samRecycleEvery(): number {
+  let v: number | undefined;
+  try {
+    const q = new URLSearchParams(window.location.search).get('samRecycle');
+    if (q !== null) v = Number(q);
+    else {
+      const o = (window as unknown as { __samRecycleEvery?: number }).__samRecycleEvery;
+      if (o !== undefined) v = o;
+    }
+  } catch { /* no window (worker) */ }
+  return v === undefined || !(v > 0) ? Infinity : v;
+}
+
+/** End of Phase C: terminate the SAM worker so everything it held is returned. Safe to call when none exists. */
+export function finishRacketSegmentation(): void {
+  if (samWorker) {
+    try { samWorker.terminate(); } catch { /* already gone */ }
+    console.log('[autoRacket] SAM worker terminated');
+  }
+  samWorker = null;
+  samWorkerFailed = false;
+  samFramesDone = 0;
+}
+
 export async function detectRacketBoxesForBatch(
   inputs: RacketDetectInput[],
   opts: { vw: number; vh: number; unitFloorNorm?: number | null } = { vw: 0, vh: 0 },
 ): Promise<Map<number, RacketBoxForFrame>> {
   const found = new Map<number, RacketBoxForFrame>();
   if (!inputs.length) return found;
+  finishRacketSegmentation(); // a previous, interrupted pass must not leave its SAM worker running
+
+  // PHONE (or forced): run D-FINE in a worker that is terminated when this phase ends, so its heap is really returned before SAM loads.
+  // Any worker failure falls back to the in-page path below, so this can only add a safer route, never remove the old one.
+  if (racketWorkerEnabled()) {
+    const viaWorker = await detectViaWorker(inputs, opts);
+    if (viaWorker) {
+      console.log(
+        `[autoRacket] PHASE A complete (worker) — ${viaWorker.size}/${inputs.length} frame(s) have a wrist-gated ` +
+        `implement; D-FINE worker terminated before SAM loads`,
+      );
+      return viaWorker;
+    }
+    console.warn('[autoRacket] worker detection unavailable — using the in-page detector');
+  }
 
   let disposeDetector: (() => Promise<void>) | null = null;
   try {
@@ -180,6 +269,44 @@ export async function segmentRacketIntoMask(args: {
   const { mask, frame, samKey, hit } = args;
   const nothing = (reason: string): RacketSegmentResult => ({ mask, applied: false, reason });
   if (!samKey) return nothing('no SAM frame key');
+
+  if (racketWorkerEnabled() && !samWorkerFailed) {
+    try {
+      if (!samWorker) samWorker = createRacketWorker();
+      const { seg, reason } = await samWorker.segment({ frame, key: samKey, box: hit.box });
+      // Real iPhone: one worker kept for the whole pass was killed at segmentation frame 2, and at frame 4 once the live engines were parked.
+      // Each frame leaves wasm heap behind that only a terminated worker returns, so a worker serves samRecycleEvery() frames, is terminated,
+      // and the next one starts after a short settle (a first try that started the next worker at once PEAKED higher on desktop: 4252 vs 2689 MB,
+      // the old heap was not yet reclaimed).
+      samFramesDone++;
+      if (samFramesDone >= samRecycleEvery()) {
+        try { samWorker.terminate(); } catch { /* already gone */ }
+        samWorker = null;
+        samFramesDone = 0;
+        await new Promise<void>((r) => setTimeout(r, SAM_SETTLE_MS));
+      }
+      if (!seg) return nothing(reason || 'SAM returned nothing plausible for the detected box');
+      const { unionRacketIntoMask } = await import('@/lib/stroMotionDraft/samRacket');
+      return {
+        mask: unionRacketIntoMask(mask, seg.mask),
+        applied: true,
+        reason:
+          `${hit.cls} det=${hit.score.toFixed(3)} wrist=${hit.wristDistPx.toFixed(0)}px ` +
+          `SAM#${seg.chosen} ${seg.candidates[seg.chosen].areaPct.toFixed(2)}% of frame (worker)`,
+      };
+    } catch (e) {
+      if (e instanceof RacketWorkerUnavailable) {
+        console.warn('[autoRacket] SAM worker unavailable — using the in-page SAM for the rest of this pass:', e.message);
+        samWorkerFailed = true;
+        try { samWorker?.terminate(); } catch { /* ignore */ }
+        samWorker = null;
+        // fall through to the in-page path below
+      } else {
+        console.warn('[autoRacket] SAM worker call failed — mask left unchanged:', e);
+        return nothing('threw');
+      }
+    }
+  }
 
   try {
     const { encodeFrameForRacket, decodeRacketMaskFromBox, unionRacketIntoMask } =
