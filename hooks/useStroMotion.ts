@@ -1052,6 +1052,14 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       }
     }
 
+    // The SAM worker (phones) is done: terminating it returns its whole heap. No-op when the in-page path ran.
+    if (racketPassActive) {
+      try {
+        const { finishRacketSegmentation } = await import('@/lib/stroMotionDraft/autoRacketPass');
+        finishRacketSegmentation();
+      } catch { /* best-effort */ }
+    }
+
     // Phone: SAM-2 and its embeddings are done for this pass; release them, then scale
     // the capped masks and frames back to native size. The commit below is unchanged.
     if (phone) {

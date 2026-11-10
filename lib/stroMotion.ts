@@ -1232,6 +1232,27 @@ export function canvasSupportsVideoExport(canvas: HTMLCanvasElement): boolean {
   return typeof canvas.captureStream === 'function';
 }
 
+/** iPhone / iPad (also iPadOS that reports a Mac UA but has "Mobile" in it). Every browser on iOS is WebKit. */
+export function isIosUserAgent(userAgent: string): boolean {
+  return /iPhone|iPad|iPod/i.test(userAgent) || (/Macintosh/i.test(userAgent) && /Mobile/i.test(userAgent));
+}
+
+/**
+ * MediaRecorder container for the Motion Layer video. iPhones/iPads (every browser there is WebKit) CAN record WebM on recent iOS, but
+ * the Files app / Photos / Messages cannot open a WebM, so a coach saved a file that would not play (real iPhone, 2026-11-10). On iOS prefer
+ * MP4 (H.264) whenever the recorder offers it; everywhere else keep WebM first as before.
+ */
+export function pickStroVideoMime(isSupported: (t: string) => boolean, userAgent: string): string {
+  const ios = isIosUserAgent(userAgent);
+  const mp4 = ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4'];
+  if (ios) {
+    for (const t of mp4) if (isSupported(t)) return t;
+  }
+  if (isSupported('video/webm;codecs=vp9')) return 'video/webm;codecs=vp9';
+  if (isSupported('video/webm')) return 'video/webm';
+  return 'video/mp4';
+}
+
 export async function exportStroMotionVideo(
   canvasEl: HTMLCanvasElement,
   options: {
@@ -1253,11 +1274,7 @@ export async function exportStroMotionVideo(
   } = options;
   if (frameCount <= 0) return null;
 
-  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-    ? 'video/webm;codecs=vp9'
-    : MediaRecorder.isTypeSupported('video/webm')
-      ? 'video/webm'
-      : 'video/mp4';
+  const mimeType = pickStroVideoMime((t) => MediaRecorder.isTypeSupported(t), typeof navigator !== 'undefined' ? navigator.userAgent : '');
 
   const stream = canvasEl.captureStream(30);
   const recorder = new MediaRecorder(stream, { mimeType });

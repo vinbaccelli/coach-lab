@@ -54,7 +54,8 @@ export function isPhoneEnv(env: PhoneEnv): boolean {
 }
 
 export function isPhoneBudgetActive(): boolean {
-  if (typeof window === 'undefined') return false;
+  // Inside a worker there is no window: the worker is told once at init (racketWorker.ts sets this global).
+  if (typeof window === 'undefined') return (globalThis as { __stroPhoneBudget?: unknown }).__stroPhoneBudget === true;
   let stored: string | null = null;
   try { stored = window.localStorage.getItem('stroPhoneBudget'); } catch { /* storage blocked */ }
   const w = window as unknown as Record<string, unknown>;

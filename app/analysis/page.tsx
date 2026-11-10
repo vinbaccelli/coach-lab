@@ -202,6 +202,7 @@ import {
 import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 import { videoFileExtForBlob } from '@/lib/recordingUtils';
+import { saveImageFromUrl } from '@/lib/saveImage';
 const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportModal'));
 import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
@@ -218,6 +219,7 @@ import type { Feature } from '@/lib/entitlements';
 import { autoRacketEnabled, setAutoRacketPreference } from '@/lib/stroMotionDraft/autoRacketFlags';
 import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled, isPhoneBudgetActive, markAutoDetectFinished, markAutoDetectStarted } from '@/lib/stroMotionDraft/phoneBudget';
 import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/restartBreadcrumb';
+import { racketWorkerEnabled } from '@/lib/stroMotionDraft/racketWorkerClient';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
 
@@ -2389,7 +2391,10 @@ function Home() {
     const vw = video.videoWidth, vh = video.videoHeight;
 
     let det: { x: number; y: number; w: number; h: number } | null = null;
-    if (domWrist?.score >= 0.2) {
+    // PHONE + racket pass ON: D-FINE (in a terminable worker, see lib/stroMotionDraft/racketWorker.ts) finds the racket, so COCO-SSD is NOT loaded.
+    // Measured (desktop, phone limits): COCO-SSD's tfjs/WebGL model holds ~+430 MB that is never returned. The wrist→tip fallback box below still applies.
+    const skipCoco = racketWorkerEnabled() && autoRacketEnabled(stroObjectType);
+    if (domWrist?.score >= 0.2 && !skipCoco) {
       try {
         const { detectTennisRacketNearHint } = await import('@/lib/racketCocoDetect');
         const r = 0.16;
@@ -2426,7 +2431,7 @@ function Home() {
       }
     }
     return { det, fallback, kps, zoneKps };
-  }, [videoRef, canvasRef, seekStroVideo]);
+  }, [videoRef, canvasRef, seekStroVideo, stroObjectType]);
 
   /**
    * The pose for EXACTLY `timeSec`, in video-native pixels. ONE resolver, shared
@@ -3403,15 +3408,18 @@ function Home() {
   ]);
 
   const handleStroDownloadPng = useCallback(() => {
+    const save = (url: string) => {
+      saveImageFromUrl(url, `motion-layer-${Date.now()}.png`).catch(() => {
+        setProcessingStatus('Could not save the PNG. Try again.');
+      });
+    };
     if (stroPreviewPngUrl) {
-      downloadDataURL(stroPreviewPngUrl, `motion-layer-${Date.now()}.png`);
+      save(stroPreviewPngUrl);
       return;
     }
     const video = videoRef.current;
     if (video && stroMotionDraft) {
-      void exportStroMotionDraftPng(video, stroMotionDraft).then((url) => {
-        downloadDataURL(url, `motion-layer-${Date.now()}.png`);
-      }).catch(() => {
+      void exportStroMotionDraftPng(video, stroMotionDraft).then(save).catch(() => {
         setProcessingStatus('Could not export PNG. Generate Motion Layer first.');
       });
       return;
@@ -3459,7 +3467,7 @@ function Home() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `motion-layer-${Date.now()}.webm`;
+    a.download = `motion-layer-${Date.now()}.${videoFileExtForBlob(blob)}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -3557,6 +3565,9 @@ function Home() {
       void import('@/lib/racketCocoDetect').then((m) => m.preloadRacketDetector());
       return;
     }
+    // PHONE + racket pass ON: no COCO-SSD at all (D-FINE in a worker replaces it; its tfjs/WebGL model is ~+430 MB that is never returned).
+    // This sits AFTER the desktop branch above and BEFORE the sequenced warm-up, which is unchanged for every other phone setup.
+    if (racketWorkerEnabled() && autoRacketEnabled(stroObjectType)) return;
     // PHONE ONLY (docs/PHONE_REFRESH_AFTER_AUTODETECT.md §7): the COCO-SSD warm-up compiles ~260
     // WebGL programs on the main thread and holds a model Auto-detect does not use, so it starts
     // AFTER the person-segmenter warm-up has had a head start and never while Auto-detect is
@@ -3579,7 +3590,7 @@ function Home() {
       if (!cancelled) clearPreparing();
     })();
     return () => { cancelled = true; clearPreparing(); };
-  }, [stroMotionActive, stroMotionHtml5Only]);
+  }, [stroMotionActive, stroMotionHtml5Only, stroObjectType]);
 
   /** Clear the Metrics/Snapshot analysis state (snapshots, data column, skeleton). */
   const resetMetrics = useCallback(() => {
@@ -7887,6 +7898,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   containerHeight={canvasSize.height}
                   ballTrailMode={ballTrailMode}
                   skeletonEnabled={skeletonEnabled && markupTarget === 'A'}
+                  parkLiveEngines={stroMotionActive && racketWorkerEnabled() && !skeletonConfirmOpen && !skeletonWaitingForClick && !(typeof window !== 'undefined' && (window as unknown as { __noPark?: boolean }).__noPark)}
+                  /* NOT while the coach is aiming the skeleton ("Click the player — Lock"): that step needs the live engine; parked, the skeleton ignored the click (real iPhone 2026-11-10). */
                   skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
