@@ -12,6 +12,7 @@ import type { PlayerSession } from '@/lib/sessions/types';
 import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
+import { suggestionsFor } from '@/lib/players/fieldSuggestions';
 import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 
 type Player = {
@@ -397,6 +398,32 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             </div>
           ))}
         </div>
+        {canEdit && suggestionsFor((sheet ?? []).map((r) => r.label)).length > 0 ? (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: 'var(--cl-text-muted)', marginBottom: 6 }}>
+              Suggestions — tap to add a field (only the ones you need)
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {suggestionsFor((sheet ?? []).map((r) => r.label)).map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => {
+                    setSheet((prev) => {
+                      // Per-player only: a tapped suggestion does not change the default sheet.
+                      const next = [...(prev ?? []), { label, value: '' }];
+                      void saveSheet(next);
+                      return next;
+                    });
+                  }}
+                  style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}
+                >
+                  + {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {newRowLabel === null ? (
             <button
@@ -783,7 +810,7 @@ const inp: React.CSSProperties = {
   borderRadius: 10,
   border: '1px solid var(--cl-border)',
   padding: '10px 12px',
-  fontSize: 14,
+  fontSize: 16, // 16px+ stops iPhones zooming the page when a field is tapped
   width: '100%',
   boxSizing: 'border-box',
 };
