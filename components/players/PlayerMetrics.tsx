@@ -31,6 +31,8 @@ export default function PlayerMetrics({ playerId, canEdit }: { playerId: string;
   const [adding, setAdding] = useState<{ name: string; unit: string } | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [firstValue, setFirstValue] = useState('');
+  const [dates, setDates] = useState<Record<string, string>>({});
+  const [firstDate, setFirstDate] = useState(today());
 
   const load = useCallback(async () => {
     try {
@@ -47,14 +49,14 @@ export default function PlayerMetrics({ playerId, canEdit }: { playerId: string;
 
   const series = useMemo(() => groupMetrics(rows), [rows]);
 
-  const post = async (name: string, unit: string, value: string) => {
+  const post = async (name: string, unit: string, value: string, date: string) => {
     setBusy(true);
     setErr(null);
     try {
       const res = await fetch(`/api/players/${playerId}/metrics`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, unit, value, recorded_on: today() }),
+        body: JSON.stringify({ name, unit, value, recorded_on: date || today() }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message ?? data.error ?? 'Could not save');
@@ -123,11 +125,19 @@ export default function PlayerMetrics({ playerId, canEdit }: { playerId: string;
                 onChange={(e) => setDraft((d) => ({ ...d, [s.key]: e.target.value }))}
                 style={{ ...inp, flex: 1 }}
               />
+              <input
+                type="date"
+                aria-label="Date"
+                value={dates[s.key] ?? today()}
+                max={today()}
+                onChange={(e) => setDates((d) => ({ ...d, [s.key]: e.target.value }))}
+                style={{ ...inp, width: 150 }}
+              />
               <button
                 type="button"
                 style={btn}
                 disabled={busy || !(draft[s.key] ?? '').trim()}
-                onClick={async () => { if (await post(s.name, s.unit, draft[s.key] ?? '')) setDraft((d) => ({ ...d, [s.key]: '' })); }}
+                onClick={async () => { if (await post(s.name, s.unit, draft[s.key] ?? '', dates[s.key] ?? today())) setDraft((d) => ({ ...d, [s.key]: '' })); }}
               >
                 Add value
               </button>
@@ -141,7 +151,7 @@ export default function PlayerMetrics({ playerId, canEdit }: { playerId: string;
       {canEdit ? (
         <div style={{ marginTop: 14 }}>
           {adding === null ? (
-            <button type="button" onClick={() => { setAdding({ name: '', unit: '' }); setFirstValue(''); }} style={{ ...btn, background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', border: '1px dashed var(--cl-accent)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <button type="button" onClick={() => { setAdding({ name: '', unit: '' }); setFirstValue(''); setFirstDate(today()); }} style={{ ...btn, background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', border: '1px dashed var(--cl-accent)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <Plus size={14} /> Track something new
             </button>
           ) : (
@@ -149,7 +159,8 @@ export default function PlayerMetrics({ playerId, canEdit }: { playerId: string;
               <input autoFocus placeholder="What (e.g. Weight)" value={adding.name} onChange={(e) => setAdding({ ...adding, name: e.target.value })} style={{ ...inp, flex: '1 1 140px' }} />
               <input placeholder="Unit (kg, %)" value={adding.unit} onChange={(e) => setAdding({ ...adding, unit: e.target.value })} style={{ ...inp, width: 90 }} />
               <input inputMode="decimal" placeholder="First value" value={firstValue} onChange={(e) => setFirstValue(e.target.value)} style={{ ...inp, width: 110 }} />
-              <button type="button" style={btn} disabled={busy || !adding.name.trim() || !firstValue.trim()} onClick={async () => { if (await post(adding.name, adding.unit, firstValue)) setAdding(null); }}>Start tracking</button>
+              <input type="date" aria-label="Date" value={firstDate} max={today()} onChange={(e) => setFirstDate(e.target.value)} style={{ ...inp, width: 150 }} />
+              <button type="button" style={btn} disabled={busy || !adding.name.trim() || !firstValue.trim()} onClick={async () => { if (await post(adding.name, adding.unit, firstValue, firstDate)) setAdding(null); }}>Start tracking</button>
               <button type="button" onClick={() => setAdding(null)} style={{ ...btn, background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', border: '1px solid var(--cl-border)' }}>Cancel</button>
             </div>
           )}
