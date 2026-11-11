@@ -810,7 +810,7 @@ const inp: React.CSSProperties = {
   borderRadius: 10,
   border: '1px solid var(--cl-border)',
   padding: '10px 12px',
-  fontSize: 14,
+  fontSize: 16, // 16px+ stops iPhones zooming the page when a field is tapped
   width: '100%',
   boxSizing: 'border-box',
 };
