@@ -9,7 +9,7 @@ const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-function Chart({ points }: { points: MetricRow[] }) {
+export function MetricChart({ points }: { points: MetricRow[] }) {
   const W = 320, H = 90;
   const pts = chartPoints(points, W, H, 10);
   if (pts.length === 0) return null;
@@ -103,7 +103,7 @@ export default function PlayerMetrics({ playerId, canEdit }: { playerId: string;
               ) : null}
             </span>
           </div>
-          <Chart points={s.points} />
+          <MetricChart points={s.points} />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '8px 0' }}>
             {s.points.slice().reverse().slice(0, 6).map((p) => (
               <span key={p.id} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 999, border: '1px solid var(--cl-border)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>

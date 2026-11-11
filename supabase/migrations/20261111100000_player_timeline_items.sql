@@ -38,4 +38,7 @@ drop policy if exists "player_timeline_delete_own" on public.player_timeline_ite
 create policy "player_timeline_delete_own" on public.player_timeline_items
   for delete using (auth.uid() = coach_id);
 
+-- Who added the row: the coach, or someone using the share link.
+alter table public.player_timeline_items add column if not exists author text not null default 'coach' check (author in ('coach', 'link'));
+
 -- Rollback: drop table public.player_timeline_items;

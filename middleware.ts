@@ -27,6 +27,7 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith('/terms') ||
     pathname.startsWith('/coaches') ||
     pathname.startsWith('/coach/') ||
+    pathname.startsWith('/share/') ||     // a player's share link (token in the URL; app/share/[token], app/api/share)
     pathname.startsWith('/r/') ||         // affiliate links (app/r/[code]/route.ts)
     pathname.startsWith('/affiliate/') || // an affiliate's read-only page (by private token)
     // Dev-only rebuild harnesses under /dev/ (mask-editor Phase 1 verification).

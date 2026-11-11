@@ -7,6 +7,7 @@ import { ArrowLeft, Plus, X } from 'lucide-react';
 import PlayerSessionTimeline from '@/components/players/PlayerSessionTimeline';
 import PlayerNav from '@/components/reports/PlayerNav';
 import PlayerTimeline from '@/components/players/PlayerTimeline';
+import PlayerShareCard from '@/components/players/PlayerShareCard';
 import PlayerMetrics from '@/components/players/PlayerMetrics';
 import DeletePlayerSection from '@/components/players/DeletePlayerSection';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
@@ -456,8 +457,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
       </div>
 
-      <PlayerTimeline playerId={playerId} playerName={player.display_name} entries={entries} canEdit={canEdit} />
       <PlayerMetrics playerId={playerId} canEdit={canEdit} />
+      <PlayerTimeline playerId={playerId} playerName={player.display_name} entries={entries} canEdit={canEdit} />
+      <PlayerShareCard playerId={playerId} canEdit={canEdit} />
 
       {/* V2: the "Analysis Sessions" block is hidden while REPORTS_IN_APP is on — reports are
           the player's record now, and a coach saves to any player from the analysis app
