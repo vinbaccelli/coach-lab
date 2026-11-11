@@ -58,7 +58,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const [sessions, setSessions] = useState<PlayerSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  // Without Pro the profile stays readable; edits are server-gated (403 plan_required).
+  // Without an active plan the profile stays readable; edits are server-gated (403 plan_required).
   const canEdit = useEntitlement().can('players');
   const [saving, setSaving] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
@@ -260,7 +260,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
 
       {!canEdit ? (
         <PlanLockedNotice feature="players">
-          The player database is part of Pro. This profile stays readable; editing it needs Pro.
+          Editing a player needs an active plan. This profile stays readable.
         </PlanLockedNotice>
       ) : null}
 
