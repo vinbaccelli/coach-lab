@@ -740,7 +740,7 @@ const CSS = `
 .am-nav {
   position: sticky; top: 0; z-index: 50;
   display: flex; align-items: center; justify-content: space-between;
-  gap: 16px; padding: 14px var(--am-gutter);
+  gap: 16px; padding: calc(14px + env(safe-area-inset-top, 0px)) var(--am-gutter) 14px;
   background: rgba(255,255,255,0.88);
   backdrop-filter: saturate(1.6) blur(14px);
   border-bottom: 1px solid var(--cl-border-subtle);
