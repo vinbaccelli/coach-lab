@@ -367,6 +367,29 @@ export function enforceMonotonicSampleTimes(
   });
 }
 
+/**
+ * Move ONE frame stop. It can go as far as its neighbours (kept `minGap` away) and the trim ends,
+ * and no further: every other stop stays exactly where the coach put it. (Dragging used to run the
+ * whole list through enforceMonotonicSampleTimes, which pushed the neighbours along.)
+ */
+export function moveSampleTime(
+  times: number[],
+  index: number,
+  wanted: number,
+  trimStartSec: number,
+  trimEndSec: number,
+): number[] {
+  if (index < 0 || index >= times.length) return times;
+  const span = trimEndSec - trimStartSec;
+  const minGap = span > 0 ? Math.min(0.04, span / (times.length * 3)) : 0.01;
+  const lo = index > 0 ? Math.max(trimStartSec, times[index - 1] + minGap) : trimStartSec;
+  const hi = index < times.length - 1 ? Math.min(trimEndSec, times[index + 1] - minGap) : trimEndSec;
+  const clamped = hi < lo ? lo : Math.max(lo, Math.min(hi, wanted));
+  const next = [...times];
+  next[index] = Math.round(clamped * 1000) / 1000;
+  return next;
+}
+
 function subjectBoxPixels(
   box: StroMotionSubjectBox,
   videoWidth: number,

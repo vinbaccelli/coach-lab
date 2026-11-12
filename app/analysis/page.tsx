@@ -72,6 +72,7 @@ import {
   computeGhostSampleTimes,
   resizeSampleTimes,
   enforceMonotonicSampleTimes,
+  moveSampleTime,
   setStroMotionPreviewHash,
   normalizeObjectBox,
   normalizeSubjectBox,
@@ -6878,18 +6879,18 @@ function Home() {
         onSampleMarkerChange: (id: string, time: number) => {
           const idx = Number(id.replace('stro-stop-', ''));
           if (!Number.isFinite(idx)) return;
-          setStroSampleTimesOverride((prev) => {
-            const base = prev ?? [...stroEffectiveSampleTimes];
-            const next = [...base];
-            if (idx >= 0 && idx < next.length) next[idx] = time;
-            return enforceMonotonicSampleTimes(next, stroStartFrame, stroEndFrame);
-          });
-          updateStroFrameTime(idx, time);
+          // Only this stop moves, and it stops at its neighbours (they are never pushed along).
+          const base = stroSampleTimesOverride ?? [...stroEffectiveSampleTimes];
+          const moved = moveSampleTime(base, idx, time, stroStartFrame, stroEndFrame);
+          const at = moved[idx] ?? time;
+          setStroSampleTimesOverride(moved);
+          updateStroFrameTime(idx, at);
           setStroActiveFrameIndex(idx);
-          setStroVideoTime(time);
-          void seekStroVideo(time);
+          setStroVideoTime(at);
+          void seekStroVideo(at);
         },
         sampleMarkerBounds: { start: stroStartFrame, end: stroEndFrame },
+        selectedSampleMarkerId: `stro-stop-${stroActiveFrameIndex}`,
         defaultZoomToTrim: true,
       };
     }
@@ -6919,6 +6920,8 @@ function Home() {
     stroStartFrame,
     stroEndFrame,
     stroEffectiveSampleTimes,
+    stroSampleTimesOverride,
+    stroActiveFrameIndex,
     seekStroVideo,
     updateStroFrameTime,
     setStroActiveFrameIndex,
@@ -6983,6 +6986,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
                 onSampleMarkerChange={analysisTimelineExtras.onSampleMarkerChange}
                 sampleMarkerBounds={analysisTimelineExtras.sampleMarkerBounds}
+            selectedSampleMarkerId={'selectedSampleMarkerId' in analysisTimelineExtras ? analysisTimelineExtras.selectedSampleMarkerId : null}
                 defaultZoomToTrim={analysisTimelineExtras.defaultZoomToTrim}
               />
             )
@@ -7020,6 +7024,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
             onSampleMarkerChange={analysisTimelineExtras.onSampleMarkerChange}
             sampleMarkerBounds={analysisTimelineExtras.sampleMarkerBounds}
+            selectedSampleMarkerId={'selectedSampleMarkerId' in analysisTimelineExtras ? analysisTimelineExtras.selectedSampleMarkerId : null}
             defaultZoomToTrim={analysisTimelineExtras.defaultZoomToTrim}
           />
         )
