@@ -71,7 +71,7 @@ import type { TrackQuality } from '@/lib/mediapipePose';
 import {
   computeGhostSampleTimes,
   resizeSampleTimes,
-  enforceMonotonicSampleTimes,
+  clampSampleTimes,
   moveSampleTime,
   setStroMotionPreviewHash,
   normalizeObjectBox,
@@ -956,7 +956,7 @@ function Home() {
       // placed sample balls, just clamp any that fell outside the new
       // [start,end] instead of wiping every position (the "snapshots move from
       // their position" bug).
-      return enforceMonotonicSampleTimes(prev, stroStartFrame, stroEndFrame);
+      return clampSampleTimes(prev, stroStartFrame, stroEndFrame);
     });
   }, [stroStartFrame, stroEndFrame, stroFrameCount]);
 
@@ -6879,7 +6879,7 @@ function Home() {
         onSampleMarkerChange: (id: string, time: number) => {
           const idx = Number(id.replace('stro-stop-', ''));
           if (!Number.isFinite(idx)) return;
-          // Only this stop moves, and it stops at its neighbours (they are never pushed along).
+          // Only this stop moves; it can pass the others (Generate orders the frames by time).
           const base = stroSampleTimesOverride ?? [...stroEffectiveSampleTimes];
           const moved = moveSampleTime(base, idx, time, stroStartFrame, stroEndFrame);
           const at = moved[idx] ?? time;

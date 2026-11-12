@@ -127,7 +127,9 @@ export function renderStroMotionDraftComposite(
   const pickMask = resolveMask
     ?? ((frame: StroMotionFrameDraft) => (previewMode ? getPreviewMask(frame) : getExportMask(frame)));
 
-  const allFrames = draft.frames;
+  // TIME ORDER, not frame number: the coach can drag a frame stop past another, and Generate numbers
+  // and stacks the frames in the order they have in time when it runs. (Already in time order = identical to before.)
+  const allFrames = [...draft.frames].sort((a, b) => a.timeSec - b.timeSec);
   const count = Math.min(visibleCount, allFrames.length);
   if (count <= 0) return;
   const total = allFrames.length;
@@ -165,7 +167,7 @@ export function renderStroMotionDraftComposite(
    */
   const slice = orderedFrames.slice(startIdx, count);
   const currentFrame = slice.length ? slice[slice.length - 1] : null;
-  const painted = [...slice].sort((a, b) => a.index - b.index);
+  const painted = [...slice].sort((a, b) => a.timeSec - b.timeSec);
 
   for (const frame of painted) {
     const mask = pickMask(frame);

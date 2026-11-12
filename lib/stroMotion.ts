@@ -368,9 +368,10 @@ export function enforceMonotonicSampleTimes(
 }
 
 /**
- * Move ONE frame stop. It can go as far as its neighbours (kept `minGap` away) and the trim ends,
- * and no further: every other stop stays exactly where the coach put it. (Dragging used to run the
- * whole list through enforceMonotonicSampleTimes, which pushed the neighbours along.)
+ * Move ONE frame stop. It can be dragged anywhere inside the trim, including past other stops (the
+ * order is decided at Generate time, by time); every other stop stays exactly where the coach put it.
+ * Two stops are never allowed on the same instant: a stop that would land within `minGap` of another
+ * is placed just on the side it came from.
  */
 export function moveSampleTime(
   times: number[],
@@ -382,12 +383,22 @@ export function moveSampleTime(
   if (index < 0 || index >= times.length) return times;
   const span = trimEndSec - trimStartSec;
   const minGap = span > 0 ? Math.min(0.04, span / (times.length * 3)) : 0.01;
-  const lo = index > 0 ? Math.max(trimStartSec, times[index - 1] + minGap) : trimStartSec;
-  const hi = index < times.length - 1 ? Math.min(trimEndSec, times[index + 1] - minGap) : trimEndSec;
-  const clamped = hi < lo ? lo : Math.max(lo, Math.min(hi, wanted));
+  const from = times[index];
+  let t = Math.max(trimStartSec, Math.min(trimEndSec, wanted));
+  for (let pass = 0; pass <= times.length; pass++) {
+    const hit = times.findIndex((o, k) => k !== index && Math.abs(o - t) < minGap);
+    if (hit < 0) break;
+    t = from <= times[hit] ? times[hit] - minGap : times[hit] + minGap;
+    t = Math.max(trimStartSec, Math.min(trimEndSec, t));
+  }
   const next = [...times];
-  next[index] = Math.round(clamped * 1000) / 1000;
+  next[index] = Math.round(t * 1000) / 1000;
   return next;
+}
+
+/** Keep every sample time inside the trim WITHOUT reordering or moving the others (used when the trim handles move). */
+export function clampSampleTimes(times: number[], trimStartSec: number, trimEndSec: number): number[] {
+  return times.map((t) => Math.round(Math.max(trimStartSec, Math.min(trimEndSec, t)) * 1000) / 1000);
 }
 
 function subjectBoxPixels(
