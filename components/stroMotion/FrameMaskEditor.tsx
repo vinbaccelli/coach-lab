@@ -39,7 +39,7 @@ import {
 import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 import type { SamCandidate, SamPoint } from '@/lib/stroMotionDraft/samRacket';
 import { usePrecisionTouch } from '@/hooks/usePrecisionTouch';
-import { RacketWorkerUnavailable } from '@/lib/stroMotionDraft/racketWorkerClient';
+import { RacketWorkerUnavailable, getLastWorkerEncodeError } from '@/lib/stroMotionDraft/racketWorkerClient';
 import { releaseEditorSamWorker } from '@/lib/stroMotionDraft/racketEditorSam';
 import { ENABLE_MOTION_LAYER_PRECISION } from '@/lib/featureFlags';
 
@@ -548,7 +548,15 @@ export default function FrameMaskEditor({
         }
         if (!live) return;
         setRacketReady(!!res);
-        if (!res) setRacketNote('Object select unavailable — the segmenter could not load on this machine.');
+        if (!res) {
+          // Say WHY (the worker's or the page's load error), so a failure on a phone can be told apart:
+          // out of memory vs a missing file vs something else.
+          const reason = (getLastWorkerEncodeError() || (await import('@/lib/stroMotionDraft/samRacket')).getLastSamError() || '').slice(0, 160);
+          setRacketNote(
+            'Object select unavailable — the segmenter could not load on this machine.'
+            + (reason ? ` Reason: ${reason}` : ''),
+          );
+        }
       } catch (e) {
         console.warn('[samRacket] prepare failed:', e);
         if (live) {
