@@ -6844,6 +6844,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const camW = pip.w;
           const camH = pip.h;
           ctx.save();
+          // SCREEN SPACE. The PiP rect, its hit test and its drag all live in canvas CSS px
+          // (see the priority router in onPointerDown). Without this reset the PiP was drawn
+          // inside the zoom/pan transform set up above, so after a zoom it was scaled and
+          // moved with the video while its handles stayed where they were: unreachable.
+          // At zoom 1, no pan, this is the identical transform, so nothing changes there.
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           ctx.globalAlpha = webcamOpacityRef.current;
 
           const maskCanvas = webcamMaskRef.current;
