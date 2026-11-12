@@ -71,7 +71,8 @@ import type { TrackQuality } from '@/lib/mediapipePose';
 import {
   computeGhostSampleTimes,
   resizeSampleTimes,
-  enforceMonotonicSampleTimes,
+  clampSampleTimes,
+  moveSampleTime,
   setStroMotionPreviewHash,
   normalizeObjectBox,
   normalizeSubjectBox,
@@ -955,7 +956,7 @@ function Home() {
       // placed sample balls, just clamp any that fell outside the new
       // [start,end] instead of wiping every position (the "snapshots move from
       // their position" bug).
-      return enforceMonotonicSampleTimes(prev, stroStartFrame, stroEndFrame);
+      return clampSampleTimes(prev, stroStartFrame, stroEndFrame);
     });
   }, [stroStartFrame, stroEndFrame, stroFrameCount]);
 
@@ -6878,18 +6879,18 @@ function Home() {
         onSampleMarkerChange: (id: string, time: number) => {
           const idx = Number(id.replace('stro-stop-', ''));
           if (!Number.isFinite(idx)) return;
-          setStroSampleTimesOverride((prev) => {
-            const base = prev ?? [...stroEffectiveSampleTimes];
-            const next = [...base];
-            if (idx >= 0 && idx < next.length) next[idx] = time;
-            return enforceMonotonicSampleTimes(next, stroStartFrame, stroEndFrame);
-          });
-          updateStroFrameTime(idx, time);
+          // Only this stop moves; it can pass the others (Generate orders the frames by time).
+          const base = stroSampleTimesOverride ?? [...stroEffectiveSampleTimes];
+          const moved = moveSampleTime(base, idx, time, stroStartFrame, stroEndFrame);
+          const at = moved[idx] ?? time;
+          setStroSampleTimesOverride(moved);
+          updateStroFrameTime(idx, at);
           setStroActiveFrameIndex(idx);
-          setStroVideoTime(time);
-          void seekStroVideo(time);
+          setStroVideoTime(at);
+          void seekStroVideo(at);
         },
         sampleMarkerBounds: { start: stroStartFrame, end: stroEndFrame },
+        selectedSampleMarkerId: `stro-stop-${stroActiveFrameIndex}`,
         defaultZoomToTrim: true,
       };
     }
@@ -6919,6 +6920,8 @@ function Home() {
     stroStartFrame,
     stroEndFrame,
     stroEffectiveSampleTimes,
+    stroSampleTimesOverride,
+    stroActiveFrameIndex,
     seekStroVideo,
     updateStroFrameTime,
     setStroActiveFrameIndex,
@@ -6983,6 +6986,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
                 onSampleMarkerChange={analysisTimelineExtras.onSampleMarkerChange}
                 sampleMarkerBounds={analysisTimelineExtras.sampleMarkerBounds}
+            selectedSampleMarkerId={'selectedSampleMarkerId' in analysisTimelineExtras ? analysisTimelineExtras.selectedSampleMarkerId : null}
                 defaultZoomToTrim={analysisTimelineExtras.defaultZoomToTrim}
               />
             )
@@ -7020,6 +7024,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
             onSampleMarkerChange={analysisTimelineExtras.onSampleMarkerChange}
             sampleMarkerBounds={analysisTimelineExtras.sampleMarkerBounds}
+            selectedSampleMarkerId={'selectedSampleMarkerId' in analysisTimelineExtras ? analysisTimelineExtras.selectedSampleMarkerId : null}
             defaultZoomToTrim={analysisTimelineExtras.defaultZoomToTrim}
           />
         )
