@@ -1627,17 +1627,17 @@ export default function PreciseTimeline({
               }}
               style={{
                 position: 'absolute',
-                left: `calc(10px + (100% - 20px) * ${pctM / 100} - 7px)`,
+                // The grab area is larger than the 14px ball you see: a finger cannot
+                // land on a 14px dot. The ball is drawn inside (below), unchanged.
+                left: `calc(10px + (100% - 20px) * ${pctM / 100} - ${(phoneChrome ? 34 : 22) / 2}px)`,
                 top: '50%',
-                // A frame stop grabbed by holding on the playhead ball grows so
-                // the coach sees which drag they are in.
-                transform: heldSampleId === m.id ? 'translateY(-50%) scale(1.5)' : 'translateY(-50%)',
-                width: 14,
-                height: 14,
+                transform: 'translateY(-50%)',
+                width: phoneChrome ? 34 : 22,
+                height: phoneChrome ? 34 : 22,
                 borderRadius: '50%',
-                background: 'linear-gradient(145deg, #D4FF00 0%, #9ACD00 55%, #6B8E00 100%)',
-                border: '2px solid rgba(255,255,255,0.9)',
-                boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 cursor: 'ew-resize',
                 // Above the inert in-track trim stripe (z8): the first/last frame-stop
                 // balls sit exactly on the start/end boundaries, so the ball paints on
@@ -1646,7 +1646,24 @@ export default function PreciseTimeline({
                 zIndex: 9,
                 touchAction: 'none',
               }}
-            />
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 14,
+                  height: 14,
+                  borderRadius: '50%',
+                  background: 'linear-gradient(145deg, #D4FF00 0%, #9ACD00 55%, #6B8E00 100%)',
+                  border: '2px solid rgba(255,255,255,0.9)',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                  boxSizing: 'border-box',
+                  pointerEvents: 'none',
+                  // A frame stop grabbed by holding on the playhead ball grows so
+                  // the coach sees which drag they are in.
+                  transform: heldSampleId === m.id ? 'scale(1.5)' : 'none',
+                }}
+              />
+            </div>
           );
         }) : null}
         <div
