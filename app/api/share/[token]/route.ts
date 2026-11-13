@@ -1,7 +1,6 @@
 import { parseOrder } from '@/lib/players/reorder';
 import { NextResponse } from 'next/server';
-import { createSupabaseServiceClient } from '@/lib/supabase/service';
-import { emailAllowed, hashShareToken, looksLikeShareToken, withinLinkLimit } from '@/lib/players/share';
+import { withinLinkLimit } from '@/lib/players/share';
 import { validateNewItem } from '@/lib/players/timeline';
 import { validateMetricInput } from '@/lib/players/metrics';
 import { parseTechnicalSheet } from '@/lib/players/technicalSheet';
@@ -20,29 +19,14 @@ export const dynamic = 'force-dynamic';
 
 const BUCKET = 'player-assets';
 const MAX_PICTURE_BYTES = 3 * 1024 * 1024;
+import { resolveShare, type Db, type Share } from '@/lib/players/shareAccess';
 const NOT_FOUND = () => NextResponse.json({ error: 'This link is not available.' }, { status: 404 });
-
-type Db = NonNullable<ReturnType<typeof createSupabaseServiceClient>>;
-type Share = { id: string; coach_id: string; player_id: string; mode: 'view' | 'edit'; allowed_email: string | null; revoked_at: string | null };
-
-async function resolve(token: string, email: string | null) {
-  if (!looksLikeShareToken(token)) return { fail: NOT_FOUND() };
-  const db = createSupabaseServiceClient();
-  if (!db) return { fail: NextResponse.json({ error: 'Sharing is not available right now.' }, { status: 503 }) };
-  const { data } = await db.from('player_shares')
-    .select('id,coach_id,player_id,mode,allowed_email,revoked_at').eq('token_hash', hashShareToken(token)).maybeSingle<Share>();
-  if (!data || data.revoked_at) return { fail: NOT_FOUND() };
-  if (!emailAllowed(data.allowed_email, email)) {
-    return { fail: NextResponse.json({ needsEmail: true, error: 'Enter the email this link was shared with.' }, { status: 401 }) };
-  }
-  return { db, share: data };
-}
 
 const headerEmail = (req: Request) => req.headers.get('x-share-email');
 
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
-  const r = await resolve(token, headerEmail(req));
+  const r = await resolveShare(token, headerEmail(req));
   if ('fail' in r && r.fail) return r.fail;
   const { db, share } = r as { db: Db; share: Share };
 
@@ -65,7 +49,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
 /** Add something through the link (only when the coach chose "can add"). Add-only: no edit, no delete, no profile fields. */
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
-  const r = await resolve(token, headerEmail(req));
+  const r = await resolveShare(token, headerEmail(req));
   if ('fail' in r && r.fail) return r.fail;
   const { db, share } = r as { db: Db; share: Share };
   if (share.mode !== 'edit') return NextResponse.json({ error: 'This link is view-only.' }, { status: 403 });
