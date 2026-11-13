@@ -16,7 +16,7 @@ import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import { suggestionsFor } from '@/lib/players/fieldSuggestions';
-import { parseTechnicalSheet, defaultTechnicalSheet, makeRow, addTrackEntry, removeTrackEntry, entriesNewestFirst, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
+import { parseTechnicalSheet, defaultTechnicalSheet, migrateOldDefault, removeEmptyRows, makeRow, addTrackEntry, removeTrackEntry, entriesNewestFirst, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 import ReorderList from '@/components/players/ReorderList';
 import { parseOrder } from '@/lib/players/reorder';
 
@@ -95,18 +95,14 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
 
   useEffect(() => {
     if (player && sheet === null) {
-      setSheet(parseTechnicalSheet(player.technical_sheet) ?? defaultTechnicalSheet());
+      const parsed = parseTechnicalSheet(player.technical_sheet);
+      const rows = parsed ? migrateOldDefault(parsed) : defaultTechnicalSheet();
+      setSheet(rows);
+      // An untouched old default sheet was replaced by the standard rows: save that once.
+      if (parsed && rows !== parsed && canEdit) void saveSheet(rows);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player, sheet]);
-
-  /** Structural row changes update the coach's default template for NEW players. */
-  const syncTemplate = useCallback((rows: TechnicalSheetRow[]) => {
-    void fetch('/api/coach-settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ technicalSheetTemplate: rows.map((r) => r.label) }),
-    }).catch(() => {});
-  }, []);
 
   const saveSheet = useCallback(async (rows: TechnicalSheetRow[]) => {
     setSheetSaving(true);
@@ -475,9 +471,23 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           >
             {sheetSaving ? 'Saving…' : 'Save sheet'}
           </button>
+          {canEdit && sheet && removeEmptyRows(sheet).length < sheet.length ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (!window.confirm('Remove the rows that have nothing typed in? Progress tracking rows stay.')) return;
+                const next = removeEmptyRows(sheet);
+                setSheet(next);
+                void saveSheet(next);
+              }}
+              style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+            >
+              Remove empty rows
+            </button>
+          ) : null}
         </div>
         <p style={{ margin: '4px 0 14px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
-          Adding or deleting rows also updates your default sheet for new players — existing players keep their rows.
+          Rows you add or delete here only change this player.
         </p>
         <ReorderList
           items={sheet ?? []}
@@ -562,13 +572,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 type="button"
                 aria-label={`Delete ${row.label} row`}
                 onClick={() => {
-                  // Destructive AND global: this also removes the row from the
-                  // coach's default sheet for all future players. Confirm first.
-                  if (!window.confirm(`Delete the "${row.label}" row?\n\nThis also removes it from your default technical sheet for new players (existing players keep their rows).`)) return;
+                  if (!window.confirm(`Delete the "${row.label}" row${row.kind === 'track' && (row.entries?.length ?? 0) > 0 ? ' and its entries' : ''}?`)) return;
                   setSheet((prev) => {
                     if (!prev) return prev;
                     const next = prev.filter((_, j) => j !== i);
-                    syncTemplate(next);
                     void saveSheet(next);
                     return next;
                   });
@@ -636,8 +643,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                   if (e.key === 'Enter' && newRowLabel.trim()) {
                     setSheet((prev) => {
                       const next = [...(prev ?? []), makeRow(newRowLabel.trim(), newRowKind)];
-                      syncTemplate(next);
-                      void saveSheet(next);
+                        void saveSheet(next);
                       return next;
                     });
                     setNewRowLabel(null);
@@ -650,7 +656,6 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 onClick={() => {
                   setSheet((prev) => {
                     const next = [...(prev ?? []), makeRow(newRowLabel.trim(), newRowKind)];
-                    syncTemplate(next);
                     void saveSheet(next);
                     return next;
                   });

@@ -36,3 +36,21 @@ test('parseTechnicalSheet keeps tracking rows and entries, drops malformed entri
   assert.equal(rows[1].kind, 'track');
   assert.equal(rows[1].entries?.length, 1);
 });
+
+import { isUntouchedOldDefault, migrateOldDefault, removeEmptyRows, OLD_DEFAULT_LABELS } from '../lib/players/technicalSheet';
+const oldSheet = () => OLD_DEFAULT_LABELS.map((label) => ({ label, value: '' }));
+
+test('an untouched old default sheet becomes the standard tracking rows', () => {
+  assert.equal(isUntouchedOldDefault(oldSheet()), true);
+  assert.deepEqual(migrateOldDefault(oldSheet()).map((r) => r.label), ['Forehand', 'Backhand', 'Serve', 'Volley', 'Footwork']);
+});
+test('a sheet with anything typed in, or any other shape, is left alone', () => {
+  const typed = oldSheet(); typed[0].value = '24';
+  assert.equal(migrateOldDefault(typed), typed);
+  const extra = [...oldSheet(), { label: 'Injuries', value: '' }];
+  assert.equal(migrateOldDefault(extra), extra);
+});
+test('removeEmptyRows drops empty plain rows and keeps tracking rows', () => {
+  const rows = [{ label: 'Age', value: '' }, { label: 'Level', value: 'pro' }, makeRow('Serve', 'track')];
+  assert.deepEqual(removeEmptyRows(rows).map((r) => r.label), ['Level', 'Serve']);
+});

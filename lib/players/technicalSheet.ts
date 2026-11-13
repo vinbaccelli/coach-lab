@@ -87,3 +87,22 @@ export function parseTechnicalSheet(raw: unknown): TechnicalSheetRow[] | null {
   }
   return rows;
 }
+
+/** The sheet every player used to start with (before the standard tracking rows). */
+export const OLD_DEFAULT_LABELS = ['Age', 'Height', 'Weight', 'Dominant Hand', 'Backhand', 'Strengths', 'Weaknesses', 'Level'] as const;
+
+/** Is this still the untouched old default sheet (exactly those rows, nothing typed in)? */
+export function isUntouchedOldDefault(rows: readonly TechnicalSheetRow[]): boolean {
+  if (rows.length !== OLD_DEFAULT_LABELS.length) return false;
+  return rows.every((r, i) => r.label === OLD_DEFAULT_LABELS[i] && r.kind !== 'track' && r.value.trim() === '');
+}
+
+/** An untouched old default becomes the standard tracking rows; any other sheet is returned as it is. */
+export function migrateOldDefault(rows: TechnicalSheetRow[]): TechnicalSheetRow[] {
+  return isUntouchedOldDefault(rows) ? defaultTechnicalSheet() : rows;
+}
+
+/** Drop plain rows with nothing typed in. Tracking rows stay (even without entries): they are the standard ones. */
+export function removeEmptyRows(rows: readonly TechnicalSheetRow[]): TechnicalSheetRow[] {
+  return rows.filter((r) => r.kind === 'track' || r.value.trim() !== '');
+}

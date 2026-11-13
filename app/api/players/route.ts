@@ -50,13 +50,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'display_name is required' }, { status: 400 });
   }
 
-  // New players start with the coach's Technical Sheet template (or the
-  // built-in defaults). Existing players are never touched by template changes.
-  const { data: settings } = await session.supabase
-    .from('coach_settings')
-    .select('technical_sheet_template')
-    .eq('coach_id', session.userId)
-    .maybeSingle<{ technical_sheet_template: string[] | null }>();
+  // New players start with the standard tracking rows (Forehand, Backhand, Serve, Volley, Footwork).
+  // Everything else is added per player, so a coach's earlier template no longer applies.
 
   const { data, error } = await session.supabase
     .from('players')
@@ -68,7 +63,7 @@ export async function POST(req: Request) {
       nationality: body.nationality ?? null,
       playing_hand: body.playing_hand ?? 'unknown',
       notes: body.notes ?? null,
-      technical_sheet: defaultTechnicalSheet(settings?.technical_sheet_template ?? undefined),
+      technical_sheet: defaultTechnicalSheet(),
     })
     .select('*')
     .single();
