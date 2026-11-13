@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MetricChart } from '@/components/players/PlayerMetrics';
 import { groupMetrics, type MetricRow } from '@/lib/players/metrics';
 import { youtubeEmbedUrl } from '@/lib/players/timeline';
+import { uploadToResumableSession } from '@/lib/export/youtubeResumableUpload';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
 type Data = { name: string; sheet: Array<{ label: string; value: string }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean };
@@ -42,6 +43,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
   const [mVal, setMVal] = useState('');
   const [mDate, setMDate] = useState(today());
   const picRef = useRef<HTMLInputElement>(null);
+  const vidRef = useRef<HTMLInputElement>(null);
 
   const headers = useCallback((): Record<string, string> => (email.trim() ? { 'x-share-email': email.trim() } : {}), [email]);
 
@@ -142,6 +144,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               <button type="button" style={btn} disabled={!!busy || !text.trim()} onClick={() => void run('Saving…', async () => { await post(json({ kind: 'note', body: text })); setText(''); })}>Add comment</button>
               <button type="button" style={ghost} disabled={!!busy} onClick={() => picRef.current?.click()}>Add picture</button>
+              <button type="button" style={ghost} disabled={!!busy} onClick={() => vidRef.current?.click()}>Upload video</button>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
               <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="Paste a YouTube link" style={{ ...inp, flex: 1 }} />
@@ -151,6 +154,17 @@ export default function SharedProfileClient({ token }: { token: string }) {
               const f = e.target.files?.[0]; e.target.value = '';
               if (f) void run('Uploading picture…', async () => {
                 const blob = await shrink(f); const form = new FormData(); form.append('file', new File([blob], 'picture.jpg', { type: 'image/jpeg' })); await post({ body: form });
+              });
+            }} />
+            <input ref={vidRef} type="file" accept="video/*" hidden onChange={(e) => {
+              const f = e.target.files?.[0]; e.target.value = '';
+              if (f) void run('Uploading video…', async () => {
+                const res = await fetch(`/api/share/${token}/youtube-session`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers() }, body: JSON.stringify({ sizeBytes: f.size, mimeType: f.type || 'video/mp4' }) });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok || !body.uploadUrl) throw new Error(body.error ?? 'Could not start the video upload');
+                const up = await uploadToResumableSession(body.uploadUrl, f, (p) => setBusy(`Uploading video… ${Math.round(p * 100)}%`));
+                if (!up.ok || !up.url) throw new Error(up.error ?? 'The video upload failed');
+                await post(json({ kind: 'video', youtube_url: up.url, body: '' }));
               });
             }} />
             {busy ? <div style={{ fontSize: 12 }}>{busy}</div> : null}
