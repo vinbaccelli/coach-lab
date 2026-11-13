@@ -8,5 +8,7 @@ export const metadata: Metadata = {
 };
 
 export default function ShareLayout({ children }: { children: React.ReactNode }) {
-  return children;
+  // The app's body is overflow:hidden (the analysis screen is a fixed canvas), so this public page
+  // must be its own scroll container or it cannot be scrolled on a phone.
+  return <div style={{ height: '100dvh', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>{children}</div>;
 }
