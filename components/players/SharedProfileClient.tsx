@@ -171,7 +171,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
               ) : null}
               {t.kind === 'video' && t.youtube_id ? (
                 <div style={{ marginTop: 6, position: 'relative', paddingTop: '56.25%', maxWidth: 560 }}>
-                  <iframe src={youtubeEmbedUrl(t.youtube_id)} title="Video" loading="lazy" allowFullScreen style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, borderRadius: 10 }} />
+                  <iframe src={youtubeEmbedUrl(t.youtube_id)} title="Video" loading="lazy" allow="accelerometer; encrypted-media; gyroscope; picture-in-picture" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, borderRadius: 10 }} />
                 </div>
               ) : null}
             </div>
