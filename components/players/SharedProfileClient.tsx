@@ -6,9 +6,10 @@ import { groupMetrics, type MetricRow } from '@/lib/players/metrics';
 import { youtubeEmbedUrl } from '@/lib/players/timeline';
 import { uploadToResumableSession } from '@/lib/export/youtubeResumableUpload';
 import { applyManualOrder } from '@/lib/players/reorder';
+import { entriesNewestFirst } from '@/lib/players/technicalSheet';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
-type Data = { name: string; sheet: Array<{ label: string; value: string }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null };
+type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null };
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' };
@@ -99,10 +100,22 @@ export default function SharedProfileClient({ token }: { token: string }) {
           <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Profile</h2>
           <div style={{ display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
             {data.sheet.map((r, i) => (
-              <div key={`${r.label}-${i}`} style={{ fontSize: 13 }}>
-                <div style={{ color: 'var(--cl-text-muted)', fontSize: 11 }}>{r.label}</div>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.value}</div>
-              </div>
+              r.kind === 'track' ? (
+                <div key={`${r.label}-${i}`} style={{ fontSize: 13, gridColumn: '1 / -1' }}>
+                  <div style={{ color: 'var(--cl-text-muted)', fontSize: 11 }}>{r.label}</div>
+                  {entriesNewestFirst({ label: r.label, value: '', kind: 'track', entries: r.entries }).map((en) => (
+                    <div key={en.id} style={{ display: 'flex', gap: 8, padding: '4px 0', borderTop: '1px solid var(--cl-border)' }}>
+                      <span style={{ fontSize: 12, color: 'var(--cl-text-muted)', whiteSpace: 'nowrap' }}>{en.date}</span>
+                      <span style={{ whiteSpace: 'pre-wrap', flex: 1, minWidth: 0 }}>{en.text}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div key={`${r.label}-${i}`} style={{ fontSize: 13 }}>
+                  <div style={{ color: 'var(--cl-text-muted)', fontSize: 11 }}>{r.label}</div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.value}</div>
+                </div>
+              )
             ))}
           </div>
         </div>

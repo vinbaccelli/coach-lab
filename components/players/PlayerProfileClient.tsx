@@ -16,7 +16,7 @@ import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import { suggestionsFor } from '@/lib/players/fieldSuggestions';
-import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
+import { parseTechnicalSheet, defaultTechnicalSheet, makeRow, addTrackEntry, removeTrackEntry, entriesNewestFirst, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 import ReorderList from '@/components/players/ReorderList';
 import { parseOrder } from '@/lib/players/reorder';
 
@@ -75,6 +75,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const [profileDirty, setProfileDirty] = useState(false);
   const [newProfileLabel, setNewProfileLabel] = useState<string | null>(null);
   const [newRowLabel, setNewRowLabel] = useState<string | null>(null);
+  const [newRowKind, setNewRowKind] = useState<'text' | 'track'>('text');
+  // Draft of the next dated comment, per tracking row (keyed by row label).
+  const [trackDraft, setTrackDraft] = useState<Record<string, { date: string; text: string }>>({});
 
   // Initialize the sheet once from the loaded player (don't clobber edits on reloads).
   useEffect(() => {
@@ -482,9 +485,70 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           disabled={!canEdit}
           onReorder={(next) => { setSheet(next); void saveSheet(next); }}
           containerStyle={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}
+          itemStyle={(r) => (r.kind === 'track' ? { gridColumn: '1 / -1' } : undefined)}
           renderItem={(row, i, handle) => (
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
+            <div style={{ display: 'flex', alignItems: row.kind === 'track' ? 'flex-start' : 'flex-end', gap: 4 }}>
               {handle}
+              {row.kind === 'track' ? (
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, margin: '6px 0 6px' }}>{row.label} <span style={{ fontWeight: 500, color: 'var(--cl-text-muted)', fontSize: 11 }}>· progress tracking</span></div>
+                  {entriesNewestFirst(row).map((en) => (
+                    <div key={en.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 0', borderTop: '1px solid var(--cl-border)' }}>
+                      <span style={{ fontSize: 12, color: 'var(--cl-text-muted)', whiteSpace: 'nowrap', paddingTop: 1 }}>{en.date}</span>
+                      <span style={{ fontSize: 13, whiteSpace: 'pre-wrap', flex: 1, minWidth: 0 }}>{en.text}</span>
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          aria-label="Delete this entry"
+                          onClick={() => {
+                            if (!window.confirm('Delete this entry?')) return;
+                            setSheet((prev) => {
+                              if (!prev) return prev;
+                              const next = prev.map((r, j) => (j === i ? removeTrackEntry(r, en.id) : r));
+                              void saveSheet(next);
+                              return next;
+                            });
+                          }}
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: 'var(--cl-text-muted)', display: 'inline-flex' }}
+                        >
+                          <X size={14} />
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                  {canEdit ? (() => {
+                    const draft = trackDraft[row.label] ?? { date: new Date().toISOString().slice(0, 10), text: '' };
+                    return (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6, alignItems: 'flex-start' }}>
+                        <input type="date" value={draft.date} onChange={(e) => setTrackDraft((d) => ({ ...d, [row.label]: { ...draft, date: e.target.value } }))} style={{ ...inp, width: 150 }} />
+                        <textarea
+                          rows={2}
+                          value={draft.text}
+                          placeholder={`What changed in the ${row.label.toLowerCase()}?`}
+                          onChange={(e) => setTrackDraft((d) => ({ ...d, [row.label]: { ...draft, text: e.target.value } }))}
+                          style={{ ...inp, flex: '1 1 200px', resize: 'vertical' }}
+                        />
+                        <button
+                          type="button"
+                          disabled={!draft.text.trim()}
+                          onClick={() => {
+                            setSheet((prev) => {
+                              if (!prev) return prev;
+                              const next = prev.map((r, j) => (j === i ? addTrackEntry(r, draft.date, draft.text, crypto.randomUUID()) : r));
+                              void saveSheet(next);
+                              return next;
+                            });
+                            setTrackDraft((d) => ({ ...d, [row.label]: { date: draft.date, text: '' } }));
+                          }}
+                          style={{ padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                        >
+                          Add entry
+                        </button>
+                      </div>
+                    );
+                  })() : null}
+                </div>
+              ) : (
               <label style={{ ...lb, flex: 1 }}>
                 {row.label}
                 <input
@@ -493,6 +557,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                   style={inp}
                 />
               </label>
+              )}
               <button
                 type="button"
                 aria-label={`Delete ${row.label} row`}
@@ -543,25 +608,34 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         ) : null}
         <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {newRowLabel === null ? (
-            <button
-              type="button"
-              onClick={() => setNewRowLabel('')}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed var(--cl-accent)', background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-            >
-              <Plus size={14} /> Add row
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => { setNewRowKind('text'); setNewRowLabel(''); }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed var(--cl-accent)', background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+              >
+                <Plus size={14} /> Add row
+              </button>
+              <button
+                type="button"
+                onClick={() => { setNewRowKind('track'); setNewRowLabel(''); }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed var(--cl-accent)', background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+              >
+                <Plus size={14} /> Add progress tracking row
+              </button>
+            </>
           ) : (
             <>
               <input
                 value={newRowLabel}
                 onChange={(e) => setNewRowLabel(e.target.value)}
-                placeholder="Row name (e.g. Serve speed)"
+                placeholder={newRowKind === 'track' ? 'Tracking row name (e.g. Return of serve)' : 'Row name (e.g. Serve speed)'}
                 autoFocus
                 style={{ ...inp, maxWidth: 260 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && newRowLabel.trim()) {
                     setSheet((prev) => {
-                      const next = [...(prev ?? []), { label: newRowLabel.trim(), value: '' }];
+                      const next = [...(prev ?? []), makeRow(newRowLabel.trim(), newRowKind)];
                       syncTemplate(next);
                       void saveSheet(next);
                       return next;
@@ -575,7 +649,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 disabled={!newRowLabel.trim()}
                 onClick={() => {
                   setSheet((prev) => {
-                    const next = [...(prev ?? []), { label: newRowLabel.trim(), value: '' }];
+                    const next = [...(prev ?? []), makeRow(newRowLabel.trim(), newRowKind)];
                     syncTemplate(next);
                     void saveSheet(next);
                     return next;
