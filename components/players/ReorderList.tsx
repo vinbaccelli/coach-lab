@@ -10,7 +10,7 @@ import { moveItem } from '@/lib/players/reorder';
  * the new order is reported once, when the finger lifts. Works for a grid too (hit-test is 2-D).
  */
 export default function ReorderList<T>({
-  items, getKey, onReorder, renderItem, disabled, containerStyle,
+  items, getKey, onReorder, renderItem, disabled, containerStyle, itemStyle,
 }: {
   items: readonly T[];
   getKey: (item: T) => string;
@@ -18,6 +18,8 @@ export default function ReorderList<T>({
   renderItem: (item: T, index: number, handle: ReactNode) => ReactNode;
   disabled?: boolean;
   containerStyle?: CSSProperties;
+  /** Extra style for one item's wrapper (e.g. span all grid columns). */
+  itemStyle?: (item: T) => CSSProperties | undefined;
 }) {
   const [order, setOrder] = useState<T[] | null>(null); // live order while dragging
   const [dragKey, setDragKey] = useState<string | null>(null);
@@ -92,7 +94,7 @@ export default function ReorderList<T>({
           <div
             key={key}
             ref={(el) => { if (el) refs.current.set(key, el); else refs.current.delete(key); }}
-            style={{ opacity: dragKey === key ? 0.6 : 1, background: dragKey === key ? 'rgba(0,122,255,0.06)' : undefined, borderRadius: 10 }}
+            style={{ opacity: dragKey === key ? 0.6 : 1, background: dragKey === key ? 'rgba(0,122,255,0.06)' : undefined, borderRadius: 10, ...itemStyle?.(it) }}
           >
             {renderItem(it, i, handle)}
           </div>

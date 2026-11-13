@@ -39,7 +39,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   // Manual order is optional: a missing column must never break the share page.
   const ord = await db.from('players').select('timeline_order').eq('id', share.player_id).maybeSingle<{ timeline_order: unknown }>();
   const timelineOrder = ord.error ? null : parseOrder(ord.data?.timeline_order);
-  const sheet = (parseTechnicalSheet(player.data.technical_sheet) ?? []).filter((r) => r.value.trim() !== '');
+  const sheet = (parseTechnicalSheet(player.data.technical_sheet) ?? []).filter((r) => (r.kind === 'track' ? (r.entries?.length ?? 0) > 0 : r.value.trim() !== ''));
   return NextResponse.json(
     { name: player.data.display_name, sheet, items: items.data ?? [], timelineOrder, metrics: metrics.data ?? [], canAdd: share.mode === 'edit' },
     { headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer' } },
