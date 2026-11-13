@@ -37,7 +37,7 @@ test('parseTechnicalSheet keeps tracking rows and entries, drops malformed entri
   assert.equal(rows[1].entries?.length, 1);
 });
 
-import { isUntouchedOldDefault, migrateOldDefault, removeEmptyRows, OLD_DEFAULT_LABELS } from '../lib/players/technicalSheet';
+import { isUntouchedOldDefault, migrateOldDefault, resetToStandard, needsReset, labelTaken, OLD_DEFAULT_LABELS } from '../lib/players/technicalSheet';
 const oldSheet = () => OLD_DEFAULT_LABELS.map((label) => ({ label, value: '' }));
 
 test('an untouched old default sheet becomes the standard tracking rows', () => {
@@ -50,7 +50,33 @@ test('a sheet with anything typed in, or any other shape, is left alone', () => 
   const extra = [...oldSheet(), { label: 'Injuries', value: '' }];
   assert.equal(migrateOldDefault(extra), extra);
 });
-test('removeEmptyRows drops empty plain rows and keeps tracking rows', () => {
-  const rows = [{ label: 'Age', value: '' }, { label: 'Level', value: 'pro' }, makeRow('Serve', 'track')];
-  assert.deepEqual(removeEmptyRows(rows).map((r) => r.label), ['Level', 'Serve']);
+test('an old default sheet in a different order (still empty) is also treated as untouched', () => {
+  const shuffled = [...oldSheet()].reverse();
+  assert.equal(isUntouchedOldDefault(shuffled), true);
+  assert.deepEqual(migrateOldDefault(shuffled).map((r) => r.label), ['Forehand', 'Backhand', 'Serve', 'Volley', 'Footwork']);
+});
+test('resetToStandard: five tracking rows first, rows with text kept, empty rows dropped', () => {
+  const rows = [
+    { label: 'Age', value: '' },
+    { label: 'Level', value: 'pro' },
+    { label: 'Backhand', value: 'two-handed' },
+    { label: 'Weight', value: '' },
+  ];
+  const out = resetToStandard(rows, '2026-11-14', () => 'id1');
+  assert.deepEqual(out.map((r) => r.label), ['Forehand', 'Backhand', 'Serve', 'Volley', 'Footwork', 'Level']);
+  assert.equal(out[1].kind, 'track');
+  assert.deepEqual(out[1].entries, [{ id: 'id1', date: '2026-11-14', text: 'two-handed' }]);
+  assert.equal(out[5].kind, undefined);
+});
+test('resetToStandard keeps an existing tracking row with its entries', () => {
+  const fh = addTrackEntry(makeRow('Forehand', 'track'), '2026-01-01', 'late', 'e1');
+  const out = resetToStandard([fh], '2026-11-14', () => 'n');
+  assert.equal(out[0], fh);
+  assert.equal(out.length, 5);
+});
+test('needsReset is false for a standard sheet and true for an old one; labelTaken ignores case', () => {
+  assert.equal(needsReset(defaultTechnicalSheet()), false);
+  assert.equal(needsReset(oldSheet()), true);
+  assert.equal(labelTaken(defaultTechnicalSheet(), ' forehand '), true);
+  assert.equal(labelTaken(defaultTechnicalSheet(), 'Return'), false);
 });

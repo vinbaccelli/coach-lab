@@ -91,10 +91,16 @@ export function parseTechnicalSheet(raw: unknown): TechnicalSheetRow[] | null {
 /** The sheet every player used to start with (before the standard tracking rows). */
 export const OLD_DEFAULT_LABELS = ['Age', 'Height', 'Weight', 'Dominant Hand', 'Backhand', 'Strengths', 'Weaknesses', 'Level'] as const;
 
-/** Is this still the untouched old default sheet (exactly those rows, nothing typed in)? */
+/** Is this still the untouched old default sheet (those rows in any order, nothing typed in)? */
 export function isUntouchedOldDefault(rows: readonly TechnicalSheetRow[]): boolean {
   if (rows.length !== OLD_DEFAULT_LABELS.length) return false;
-  return rows.every((r, i) => r.label === OLD_DEFAULT_LABELS[i] && r.kind !== 'track' && r.value.trim() === '');
+  const want = new Set<string>(OLD_DEFAULT_LABELS);
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (r.kind === 'track' || r.value.trim() !== '' || !want.has(r.label) || seen.has(r.label)) return false;
+    seen.add(r.label);
+  }
+  return true;
 }
 
 /** An untouched old default becomes the standard tracking rows; any other sheet is returned as it is. */
@@ -102,7 +108,39 @@ export function migrateOldDefault(rows: TechnicalSheetRow[]): TechnicalSheetRow[
   return isUntouchedOldDefault(rows) ? defaultTechnicalSheet() : rows;
 }
 
-/** Drop plain rows with nothing typed in. Tracking rows stay (even without entries): they are the standard ones. */
-export function removeEmptyRows(rows: readonly TechnicalSheetRow[]): TechnicalSheetRow[] {
-  return rows.filter((r) => r.kind === 'track' || r.value.trim() !== '');
+const sameLabel = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** Is `label` already a row on this sheet (ignoring case and spaces)? */
+export const labelTaken = (rows: readonly TechnicalSheetRow[], label: string) => rows.some((r) => sameLabel(r.label, label));
+
+/**
+ * The standard sheet, keeping what the coach wrote: the five standard tracking rows first (an existing tracking
+ * row keeps its entries; a plain row of the same name that has text becomes its first entry, dated `today`),
+ * then every other plain row that has something typed in, then any other tracking row. Empty plain rows go.
+ */
+export function resetToStandard(rows: readonly TechnicalSheetRow[], today: string, newId: () => string): TechnicalSheetRow[] {
+  const out: TechnicalSheetRow[] = [];
+  const used = new Set<number>();
+  for (const label of STANDARD_TRACKING_LABELS) {
+    const idx = rows.findIndex((r, i) => !used.has(i) && sameLabel(r.label, label) && r.kind === 'track');
+    if (idx >= 0) { used.add(idx); out.push(rows[idx]); continue; }
+    let row = makeRow(label, 'track');
+    const plain = rows.findIndex((r, i) => !used.has(i) && sameLabel(r.label, label) && r.kind !== 'track');
+    if (plain >= 0) {
+      used.add(plain);
+      row = addTrackEntry(row, today, rows[plain].value, newId());
+    }
+    out.push(row);
+  }
+  rows.forEach((r, i) => {
+    if (used.has(i)) return;
+    if (r.kind === 'track' || r.value.trim() !== '') out.push(r);
+  });
+  return out;
+}
+
+/** Does the sheet differ from the standard one in a way "Reset to standard rows" would change? */
+export function needsReset(rows: readonly TechnicalSheetRow[]): boolean {
+  if (STANDARD_TRACKING_LABELS.some((l) => !rows.some((r) => r.kind === 'track' && sameLabel(r.label, l)))) return true;
+  return rows.some((r) => r.kind !== 'track' && r.value.trim() === '');
 }

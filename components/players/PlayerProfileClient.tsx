@@ -16,7 +16,7 @@ import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import { suggestionsFor } from '@/lib/players/fieldSuggestions';
-import { parseTechnicalSheet, defaultTechnicalSheet, migrateOldDefault, removeEmptyRows, makeRow, addTrackEntry, removeTrackEntry, entriesNewestFirst, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
+import { parseTechnicalSheet, defaultTechnicalSheet, migrateOldDefault, resetToStandard, needsReset, labelTaken, makeRow, addTrackEntry, removeTrackEntry, entriesNewestFirst, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 import ReorderList from '@/components/players/ReorderList';
 import { parseOrder } from '@/lib/players/reorder';
 
@@ -471,18 +471,18 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           >
             {sheetSaving ? 'Saving…' : 'Save sheet'}
           </button>
-          {canEdit && sheet && removeEmptyRows(sheet).length < sheet.length ? (
+          {canEdit && sheet && needsReset(sheet) ? (
             <button
               type="button"
               onClick={() => {
-                if (!window.confirm('Remove the rows that have nothing typed in? Progress tracking rows stay.')) return;
-                const next = removeEmptyRows(sheet);
+                if (!window.confirm('Reset to the standard rows (Forehand, Backhand, Serve, Volley, Footwork)?\n\nRows that have something typed in are kept; empty rows are removed.')) return;
+                const next = resetToStandard(sheet, new Date().toISOString().slice(0, 10), () => crypto.randomUUID());
                 setSheet(next);
                 void saveSheet(next);
               }}
               style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
             >
-              Remove empty rows
+              Reset to standard rows
             </button>
           ) : null}
         </div>
@@ -641,6 +641,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 style={{ ...inp, maxWidth: 260 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && newRowLabel.trim()) {
+                    if (labelTaken(sheet ?? [], newRowLabel)) { window.alert('There is already a row with that name.'); return; }
                     setSheet((prev) => {
                       const next = [...(prev ?? []), makeRow(newRowLabel.trim(), newRowKind)];
                         void saveSheet(next);
@@ -654,6 +655,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 type="button"
                 disabled={!newRowLabel.trim()}
                 onClick={() => {
+                  if (labelTaken(sheet ?? [], newRowLabel)) { window.alert('There is already a row with that name.'); return; }
                   setSheet((prev) => {
                     const next = [...(prev ?? []), makeRow(newRowLabel.trim(), newRowKind)];
                     void saveSheet(next);
