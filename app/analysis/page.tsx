@@ -223,6 +223,8 @@ import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/res
 import { racketWorkerEnabled } from '@/lib/stroMotionDraft/racketWorkerClient';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
+import { SHRINK_TIER_KEY, lowerTier, parseTier, shrinkTarget, tierLabel, DEFAULT_PHONE_TIER } from '@/lib/phoneShrink/tier';
+import { probeVideo, shrinkVideoFile, type ShrinkHandle } from '@/lib/phoneShrink/shrink';
 
 const PREPARING_MOTION_LAYER_TEXT = 'Preparing Motion Layer…';
 
@@ -4606,6 +4608,11 @@ function Home() {
   // shown once, never blocks anything (lib/stroMotionDraft/phoneBudget.ts).
   useEffect(() => {
     if (!consumeAutoDetectKilled()) return;
+    // The phone's memory stopped the last run: from now on this phone works one size smaller (phoneShrink/tier.ts).
+    try {
+      const cur = parseTier(window.localStorage.getItem(SHRINK_TIER_KEY)) ?? DEFAULT_PHONE_TIER;
+      window.localStorage.setItem(SHRINK_TIER_KEY, String(lowerTier(cur)));
+    } catch { /* storage blocked */ }
     const id = window.setTimeout(() => setProcessingStatus(AUTODETECT_KILLED_NOTICE), 1500);
     return () => window.clearTimeout(id);
   }, []);
@@ -4644,7 +4651,7 @@ function Home() {
     v.addEventListener('error', paint, { once: true });
   }, []);
 
-  const loadVideoFileIntoSlot = useCallback((
+  const loadVideoFileIntoSlotNow = useCallback((
     file: File,
     target: 'A' | 'B',
   ) => {
@@ -4682,6 +4689,39 @@ function Home() {
     resetToolAfterVideoLoad,
     revokeBlobUrl,
   ]);
+
+  // PHONE ONLY (lib/phoneShrink): a video bigger than this phone's tier is shrunk to that size
+  // (1080p, or 720p / 540p on a phone that was stopped by its memory) before it opens. Off a phone
+  // the file opens exactly as before, synchronously.
+  const [shrinkState, setShrinkState] = useState<{ pct: number; label: string } | null>(null);
+  const shrinkHandleRef = useRef<ShrinkHandle>({ cancel: () => {} });
+  const loadVideoFileIntoSlot = useCallback((file: File, target: 'A' | 'B') => {
+    const forced = parseTier(new URLSearchParams(window.location.search).get('shrink'));
+    const isPhone = isPhoneBudgetActive();
+    if (!isPhone && !forced) { loadVideoFileIntoSlotNow(file, target); return; }
+    void (async () => {
+      let toLoad = file;
+      try {
+        let stored: ReturnType<typeof parseTier> = null;
+        try {
+          if (forced && isPhone) window.localStorage.setItem(SHRINK_TIER_KEY, String(forced));
+          stored = parseTier(window.localStorage.getItem(SHRINK_TIER_KEY));
+        } catch { /* storage blocked */ }
+        const info = await probeVideo(file);
+        const t = info ? shrinkTarget({ isPhone, stored, forced, nativeW: info.w, nativeH: info.h, durationSec: info.sec }) : null;
+        if (t) {
+          const label = tierLabel(t.tier);
+          setShrinkState({ pct: 0, label });
+          shrinkHandleRef.current = { cancel: () => {} };
+          const small = await shrinkVideoFile(file, t, (f) => setShrinkState({ pct: Math.round(f * 100), label }), shrinkHandleRef.current);
+          if (small) toLoad = small;
+        }
+      } catch { /* open the original */ } finally {
+        setShrinkState(null);
+      }
+      loadVideoFileIntoSlotNow(toLoad, target);
+    })();
+  }, [loadVideoFileIntoSlotNow]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -9998,6 +10038,38 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       {/* Recording engine + floating Play/Pause/Stop widget are GLOBAL now
           (RecordingProvider + FloatingRecordingIndicator in app/layout.tsx) —
           they survive navigation to any page, so nothing to mount here. */}
+
+      {shrinkState && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 250,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '10px 14px',
+            borderRadius: 12,
+            background: 'rgba(20,20,22,0.92)',
+            color: '#fff',
+            fontSize: 13,
+            maxWidth: 'calc(100vw - 24px)',
+          }}
+        >
+          <span>Optimizing the video for your phone ({shrinkState.label})… {shrinkState.pct}%</span>
+          <button
+            type="button"
+            onClick={() => shrinkHandleRef.current.cancel()}
+            style={{ border: '1px solid rgba(255,255,255,0.4)', background: 'transparent', color: '#fff', borderRadius: 8, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}
+          >
+            Skip
+          </button>
+        </div>
+      )}
 
       {(processingStatus || stroMotionProcessing || angleDiffState) && (
         <div
