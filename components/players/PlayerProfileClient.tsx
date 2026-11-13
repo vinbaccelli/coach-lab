@@ -17,6 +17,8 @@ import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import { suggestionsFor } from '@/lib/players/fieldSuggestions';
 import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
+import ReorderList from '@/components/players/ReorderList';
+import { parseOrder } from '@/lib/players/reorder';
 
 type Player = {
   id: string;
@@ -34,6 +36,10 @@ type Player = {
   google_folder_id?: string | null;
   /** Editable Technical Sheet rows (jsonb). */
   technical_sheet?: unknown;
+  /** Extra profile rows (name/value) — null until the coach adds one. */
+  profile_fields?: unknown;
+  /** Manual timeline order (list of item keys) — null = newest first. */
+  timeline_order?: unknown;
 };
 
 type Entry = {
@@ -64,9 +70,26 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const [creatingSession, setCreatingSession] = useState(false);
   const [sheet, setSheet] = useState<TechnicalSheetRow[] | null>(null);
   const [sheetSaving, setSheetSaving] = useState(false);
+  // Extra profile rows (Nationality, …). Seeded once from the old Nationality / Playing hand columns.
+  const [profileRows, setProfileRows] = useState<TechnicalSheetRow[] | null>(null);
+  const [profileDirty, setProfileDirty] = useState(false);
+  const [newProfileLabel, setNewProfileLabel] = useState<string | null>(null);
   const [newRowLabel, setNewRowLabel] = useState<string | null>(null);
 
   // Initialize the sheet once from the loaded player (don't clobber edits on reloads).
+  useEffect(() => {
+    if (player && profileRows === null) {
+      const saved = parseTechnicalSheet(player.profile_fields);
+      if (saved) setProfileRows(saved);
+      else {
+        const seeded: TechnicalSheetRow[] = [];
+        if (player.nationality?.trim()) seeded.push({ label: 'Nationality', value: player.nationality });
+        if (player.playing_hand && player.playing_hand !== 'unknown') seeded.push({ label: 'Playing hand', value: player.playing_hand });
+        setProfileRows(seeded);
+      }
+    }
+  }, [player, profileRows]);
+
   useEffect(() => {
     if (player && sheet === null) {
       setSheet(parseTechnicalSheet(player.technical_sheet) ?? defaultTechnicalSheet());
@@ -178,17 +201,21 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          display_name: player.display_name,
+          display_name: player.display_name.trim() || 'Player',
           photo_url: player.photo_url || null,
           date_of_birth: player.date_of_birth || null,
-          nationality: player.nationality || null,
+          // Keep the Players list's nationality line in step with the "Nationality" row (if any).
+          nationality: profileRows?.find((r) => r.label.trim().toLowerCase() === 'nationality')?.value.trim() || player.nationality || null,
           playing_hand: player.playing_hand || 'unknown',
           notes: player.notes || null,
+          // Only sent once the coach changed the rows (so an unapplied migration cannot break a plain save).
+          ...(profileDirty && profileRows ? { profile_fields: profileRows } : {}),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message ?? data.error ?? 'Save failed');
       setPlayer(data.player);
+      setProfileDirty(false);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Save failed');
     } finally {
@@ -284,6 +311,15 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
 
       <div style={{ ...panel, marginBottom: 18 }}>
         <h1 data-tour-id="player-profile" style={{ margin: '0 0 14px', fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em' }}>{player.display_name}</h1>
+        <label style={{ ...lb, marginBottom: 12 }}>
+          Name
+          <input
+            value={player.display_name}
+            onChange={(e) => setPlayer({ ...player, display_name: e.target.value })}
+            style={inp}
+            maxLength={120}
+          />
+        </label>
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
           <label style={lb}>
             Photo URL
@@ -303,27 +339,99 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
               style={inp}
             />
           </label>
-          <label style={lb}>
-            Nationality
-            <input
-              value={player.nationality ?? ''}
-              onChange={(e) => setPlayer({ ...player, nationality: e.target.value })}
-              style={inp}
-            />
-          </label>
-          <label style={lb}>
-            Playing hand
-            <select
-              value={player.playing_hand ?? 'unknown'}
-              onChange={(e) => setPlayer({ ...player, playing_hand: e.target.value })}
-              style={inp}
-            >
-              <option value="unknown">Unknown</option>
-              <option value="right">Right</option>
-              <option value="left">Left</option>
-            </select>
-          </label>
         </div>
+        <ReorderList
+          items={profileRows ?? []}
+          getKey={(r) => r.label}
+          disabled={!canEdit}
+          onReorder={(next) => { setProfileRows(next); setProfileDirty(true); }}
+          containerStyle={{ display: 'grid', gap: 10, marginTop: 12 }}
+          renderItem={(row, i, handle) => (
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
+              {handle}
+              <label style={{ ...lb, flex: 1 }}>
+                {row.label}
+                <input
+                  value={row.value}
+                  onChange={(e) => { setProfileRows((prev) => prev ? prev.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)) : prev); setProfileDirty(true); }}
+                  style={inp}
+                />
+              </label>
+              <button
+                type="button"
+                aria-label={`Delete ${row.label} row`}
+                onClick={() => {
+                  if (!window.confirm(`Delete the "${row.label}" row?`)) return;
+                  setProfileRows((prev) => (prev ? prev.filter((_, j) => j !== i) : prev));
+                  setProfileDirty(true);
+                }}
+                style={{ width: 30, height: 34, borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-muted)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+        />
+        {canEdit ? (
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {newProfileLabel === null ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setNewProfileLabel('')}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed var(--cl-accent)', background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                >
+                  <Plus size={14} /> Add row
+                </button>
+                {!(profileRows ?? []).some((r) => r.label.trim().toLowerCase() === 'nationality') ? (
+                  <button
+                    type="button"
+                    onClick={() => { setProfileRows((prev) => [...(prev ?? []), { label: 'Nationality', value: '' }]); setProfileDirty(true); }}
+                    style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}
+                  >
+                    + Nationality
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <input
+                  value={newProfileLabel}
+                  onChange={(e) => setNewProfileLabel(e.target.value)}
+                  placeholder="Row name"
+                  autoFocus
+                  style={{ ...inp, maxWidth: 260 }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && newProfileLabel.trim()) {
+                      setProfileRows((prev) => [...(prev ?? []), { label: newProfileLabel.trim(), value: '' }]);
+                      setProfileDirty(true);
+                      setNewProfileLabel(null);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={!newProfileLabel.trim()}
+                  onClick={() => {
+                    setProfileRows((prev) => [...(prev ?? []), { label: newProfileLabel.trim(), value: '' }]);
+                    setProfileDirty(true);
+                    setNewProfileLabel(null);
+                  }}
+                  style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewProfileLabel(null)}
+                  style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+        ) : null}
         <label style={{ ...lb, marginTop: 14 }}>
           Coach notes
           <textarea
@@ -368,9 +476,15 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         <p style={{ margin: '4px 0 14px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
           Adding or deleting rows also updates your default sheet for new players — existing players keep their rows.
         </p>
-        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
-          {(sheet ?? []).map((row, i) => (
-            <div key={`${row.label}-${i}`} style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+        <ReorderList
+          items={sheet ?? []}
+          getKey={(r) => r.label}
+          disabled={!canEdit}
+          onReorder={(next) => { setSheet(next); void saveSheet(next); }}
+          containerStyle={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}
+          renderItem={(row, i, handle) => (
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
+              {handle}
               <label style={{ ...lb, flex: 1 }}>
                 {row.label}
                 <input
@@ -399,8 +513,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 <X size={14} />
               </button>
             </div>
-          ))}
-        </div>
+          )}
+        />
         {canEdit && suggestionsFor((sheet ?? []).map((r) => r.label)).length > 0 ? (
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 11, color: 'var(--cl-text-muted)', marginBottom: 6 }}>
@@ -485,7 +599,19 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       </div>
 
       <PlayerMetrics playerId={playerId} canEdit={canEdit} />
-      <PlayerTimeline playerId={playerId} playerName={player.display_name} entries={entries} canEdit={canEdit} />
+      <PlayerTimeline
+        playerId={playerId}
+        playerName={player.display_name}
+        entries={entries}
+        canEdit={canEdit}
+        order={parseOrder(player.timeline_order)}
+        onOrderChange={async (order) => {
+          const res = await fetch(`/api/players/${playerId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ timeline_order: order }) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.message ?? data.error ?? 'Could not save the order (has the database update been run?)');
+          setPlayer((prev) => (prev ? { ...prev, timeline_order: order } : prev));
+        }}
+      />
       <PlayerShareCard playerId={playerId} canEdit={canEdit} />
 
       {/* V2: the "Analysis Sessions" block is hidden while REPORTS_IN_APP is on — reports are

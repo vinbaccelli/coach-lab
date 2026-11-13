@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image as ImageIcon, MessageSquare, Video, X } from 'lucide-react';
 import { buildTimeline, youtubeEmbedUrl, type RawEntry, type RawItem, type RawMetric } from '@/lib/players/timeline';
 import { uploadVideoToYouTube } from '@/lib/export/exportService';
+import ReorderList from '@/components/players/ReorderList';
+import { applyManualOrder } from '@/lib/players/reorder';
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 };
@@ -25,10 +27,14 @@ async function shrinkImage(file: File): Promise<Blob> {
 }
 
 /** One chronological list for the player: comments, pictures, videos, reports and progress values. */
-export default function PlayerTimeline({ playerId, playerName, entries, canEdit }: { playerId: string; playerName: string; entries: RawEntry[]; canEdit: boolean }) {
+export default function PlayerTimeline({ playerId, playerName, entries, canEdit, order, onOrderChange }: { playerId: string; playerName: string; entries: RawEntry[]; canEdit: boolean; order?: string[] | null; onOrderChange?: (order: string[]) => Promise<void> }) {
   const [items, setItems] = useState<RawItem[]>([]);
   const [metrics, setMetrics] = useState<RawMetric[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [localOrder, setLocalOrder] = useState<string[] | null>(order ?? null);
+  const orderSig = JSON.stringify(order ?? null);
+  useEffect(() => { setLocalOrder(order ?? null); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderSig]);
   const [busy, setBusy] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [link, setLink] = useState('');
@@ -54,7 +60,7 @@ export default function PlayerTimeline({ playerId, playerName, entries, canEdit 
   }, [playerId]);
   useEffect(() => { void load(); }, [load]);
 
-  const timeline = useMemo(() => buildTimeline({ items, entries, metrics }), [items, entries, metrics]);
+  const timeline = useMemo(() => applyManualOrder(buildTimeline({ items, entries, metrics }), localOrder), [items, entries, metrics, localOrder]);
 
   const postJson = async (body: unknown) => {
     const res = await fetch(`/api/players/${playerId}/timeline`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -95,7 +101,7 @@ export default function PlayerTimeline({ playerId, playerName, entries, canEdit 
     <div style={{ background: 'rgba(250, 249, 247, 0.96)', border: '1px solid var(--cl-border)', borderRadius: 16, padding: 18, color: 'var(--cl-text-primary)', marginBottom: 18 }}>
       <h2 style={{ margin: 0, fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Timeline</h2>
       <p style={{ margin: '4px 0 12px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
-        Comments, pictures, videos, reports and progress values for {playerName}, newest first.
+        Comments, pictures, videos, reports and progress values for {playerName}, newest first (drag the grip to move an item).
       </p>
 
       {canEdit ? (
@@ -121,11 +127,20 @@ export default function PlayerTimeline({ playerId, playerName, entries, canEdit 
       {err ? <p style={{ color: 'var(--cl-destructive-text)', fontSize: 12 }}>{err}</p> : null}
 
       {timeline.length === 0 && !err ? <p style={{ fontSize: 12, color: 'var(--cl-text-muted)' }}>Nothing here yet.</p> : null}
-      <div style={{ display: 'grid', gap: 10 }}>
-        {timeline.map((t) => (
-          <div key={t.key} style={{ borderTop: '1px solid var(--cl-border)', paddingTop: 10 }}>
+      <ReorderList
+        items={timeline}
+        getKey={(t) => t.key}
+        disabled={!canEdit || !onOrderChange}
+        containerStyle={{ display: 'grid', gap: 10 }}
+        onReorder={(next) => {
+          const keys = next.map((x) => x.key);
+          setLocalOrder(keys);
+          void onOrderChange?.(keys).catch((e) => { setLocalOrder(order ?? null); setErr(e instanceof Error ? e.message : 'Could not save the order'); });
+        }}
+        renderItem={(t, _i, handle) => (
+          <div style={{ borderTop: '1px solid var(--cl-border)', paddingTop: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>{t.title}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 2 }}>{canEdit ? handle : null}{t.title}</span>
               <span style={{ fontSize: 11, color: 'var(--cl-text-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 {t.at.slice(0, 10)}
                 {canEdit && t.deletableId ? (
@@ -151,8 +166,8 @@ export default function PlayerTimeline({ playerId, playerName, entries, canEdit 
               </div>
             ) : null}
           </div>
-        ))}
-      </div>
+        )}
+      />
     </div>
   );
 }
