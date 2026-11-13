@@ -5,9 +5,10 @@ import { MetricChart } from '@/components/players/PlayerMetrics';
 import { groupMetrics, type MetricRow } from '@/lib/players/metrics';
 import { youtubeEmbedUrl } from '@/lib/players/timeline';
 import { uploadToResumableSession } from '@/lib/export/youtubeResumableUpload';
+import { applyManualOrder } from '@/lib/players/reorder';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
-type Data = { name: string; sheet: Array<{ label: string; value: string }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean };
+type Data = { name: string; sheet: Array<{ label: string; value: string }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null };
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' };
@@ -172,7 +173,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
         ) : null}
         {data.items.length === 0 ? <p style={{ fontSize: 12, color: 'var(--cl-text-muted)' }}>Nothing here yet.</p> : null}
         <div style={{ display: 'grid', gap: 10 }}>
-          {data.items.map((t) => (
+          {applyManualOrder(data.items.map((x) => ({ ...x, key: `i-${x.id}` })), data.timelineOrder).map((t) => (
             <div key={t.id} style={{ borderTop: '1px solid var(--cl-border)', paddingTop: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                 <strong>{t.author === 'link' ? 'Player' : 'Coach'}</strong>

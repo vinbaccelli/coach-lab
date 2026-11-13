@@ -1,3 +1,4 @@
+import { parseOrder } from '@/lib/players/reorder';
 import { NextResponse } from 'next/server';
 import { withinLinkLimit } from '@/lib/players/share';
 import { validateNewItem } from '@/lib/players/timeline';
@@ -35,9 +36,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
     db.from('player_metrics').select('id,name,unit,value,recorded_on').eq('player_id', share.player_id).order('recorded_on', { ascending: true }).limit(3000),
   ]);
   if (!player.data) return NOT_FOUND();
+  // Manual order is optional: a missing column must never break the share page.
+  const ord = await db.from('players').select('timeline_order').eq('id', share.player_id).maybeSingle<{ timeline_order: unknown }>();
+  const timelineOrder = ord.error ? null : parseOrder(ord.data?.timeline_order);
   const sheet = (parseTechnicalSheet(player.data.technical_sheet) ?? []).filter((r) => r.value.trim() !== '');
   return NextResponse.json(
-    { name: player.data.display_name, sheet, items: items.data ?? [], metrics: metrics.data ?? [], canAdd: share.mode === 'edit' },
+    { name: player.data.display_name, sheet, items: items.data ?? [], timelineOrder, metrics: metrics.data ?? [], canAdd: share.mode === 'edit' },
     { headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer' } },
   );
 }

@@ -46,6 +46,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     nationality: string | null;
     playing_hand: string | null;
     notes: string | null;
+    profile_fields: unknown;
+    timeline_order: unknown;
   }>;
 
   const { data, error } = await session.supabase
