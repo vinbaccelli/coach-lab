@@ -6,8 +6,8 @@ import { ADD_LABELS, SEE_LABELS, ADD_SECTION, defaultPermissions, type AddKind, 
 type Share = { mode: 'view' | 'edit'; allowed_email: string | null; revoked: boolean; url: string | null; permissions?: SharePermissions };
 
 /** Sections that exist in this release (later releases add Nutrition, Workouts, Mental here). */
-const SEE_OFFERED: SeeSection[] = ['technical', 'progress', 'biometrics', 'fitness', 'nutrition', 'workouts', 'timeline'];
-const ADD_OFFERED: AddKind[] = ['comments', 'pictures', 'videos', 'progress', 'biometrics', 'fitness', 'meals', 'workouts'];
+const SEE_OFFERED: SeeSection[] = ['technical', 'progress', 'biometrics', 'fitness', 'nutrition', 'workouts', 'mental', 'timeline'];
+const ADD_OFFERED: AddKind[] = ['comments', 'pictures', 'videos', 'progress', 'biometrics', 'fitness', 'meals', 'workouts', 'questionnaires'];
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' };

@@ -5,7 +5,7 @@ import type { Db, Share } from '@/lib/players/shareAccess';
  * Abuse brake for share links: at most LINK_ADDS_PER_HOUR additions per hour through one player's
  * link, counted across every table a link can add to. A table that does not exist yet counts 0.
  */
-const TABLES = ['player_timeline_items', 'player_metrics', 'player_tracker_entries', 'player_meal_logs', 'player_workout_logs'] as const;
+const TABLES = ['player_timeline_items', 'player_metrics', 'player_tracker_entries', 'player_meal_logs', 'player_workout_logs', 'player_questionnaire_responses'] as const;
 
 export async function linkUnderHourlyLimit(db: Db, share: Pick<Share, 'player_id'>, extraTables: readonly string[] = []): Promise<boolean> {
   const since = new Date(Date.now() - 3600_000).toISOString();

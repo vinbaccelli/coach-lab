@@ -12,7 +12,7 @@ import { apiJson, badge, ghostBtn, h2, input, muted, panel, primaryBtn, shortDat
  * approve it (it joins the history and the charts as a normal entry) or ask for a fix with a note
  * (the player sees the note on their page and can correct the entry).
  */
-export default function ReviewQueue({ playerId, entries, trackers, meals = [], workoutLogs = [], onChanged, onOpenNutrition, onOpenWorkouts }: {
+export default function ReviewQueue({ playerId, entries, trackers, meals = [], workoutLogs = [], answers = 0, onChanged, onOpenNutrition, onOpenWorkouts, onOpenMental }: {
   playerId: string;
   entries: TrackerEntry[];
   trackers: Tracker[];
@@ -23,12 +23,15 @@ export default function ReviewQueue({ playerId, entries, trackers, meals = [], w
   onChanged: () => void;
   onOpenNutrition?: () => void;
   onOpenWorkouts?: () => void;
+  /** Questionnaire answers the player sent (read them in Mental). */
+  answers?: number;
+  onOpenMental?: () => void;
 }) {
   const [fixFor, setFixFor] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  if (!entries.length && !meals.length && !workoutLogs.length) return null;
+  if (!entries.length && !meals.length && !workoutLogs.length && !answers) return null;
   const byId = new Map(trackers.map((t) => [t.id, t]));
 
   const approveMeals = async () => {
@@ -76,7 +79,7 @@ export default function ReviewQueue({ playerId, entries, trackers, meals = [], w
     <section style={{ ...panel, marginBottom: 18, borderColor: 'rgba(255,159,10,0.45)' }} aria-label="To review" data-testid="review-queue">
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <h2 style={h2}>To review</h2>
-        <span style={badge('pending')}>{entries.length + meals.length + workoutLogs.length}</span>
+        <span style={badge('pending')}>{entries.length + meals.length + workoutLogs.length + answers}</span>
       </div>
       <p style={{ ...muted, margin: '4px 0 10px' }}>Sent by the player through the share link. Approved entries join the history and the charts.</p>
       {err ? <div role="alert" style={{ fontSize: 12, color: '#b3261e' }}>{err}</div> : null}
@@ -120,6 +123,12 @@ export default function ReviewQueue({ playerId, entries, trackers, meals = [], w
             <button type="button" disabled={busy === 'meals'} onClick={() => void approveMeals()} style={{ ...primaryBtn, padding: '6px 12px', fontSize: 12 }}><Check size={13} /> Approve {meals.length === 1 ? 'it' : `all ${meals.length}`}</button>
             {onOpenNutrition ? <button type="button" onClick={onOpenNutrition} style={{ ...ghostBtn, padding: '6px 12px', fontSize: 12 }}>Review in Nutrition</button> : null}
           </div>
+        </div>
+      ) : null}
+      {answers ? (
+        <div data-testid="review-answers" style={{ borderTop: '1px solid var(--cl-border)', padding: '10px 0 0', marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong style={{ fontSize: 13 }}>{answers === 1 ? 'One questionnaire answer' : `${answers} questionnaire answers`} to read</strong>
+          {onOpenMental ? <button type="button" onClick={onOpenMental} style={{ ...ghostBtn, padding: '6px 12px', fontSize: 12 }}>Open Mental</button> : null}
         </div>
       ) : null}
       {workoutLogs.length ? (

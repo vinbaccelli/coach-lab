@@ -19,6 +19,9 @@ import NutritionSection from '@/components/players/nutrition/NutritionSection';
 import { coachNutritionClient } from '@/components/players/nutrition/nutritionClient';
 import WorkoutsSection from '@/components/players/workouts/WorkoutsSection';
 import { coachWorkoutsClient, type WorkoutLog } from '@/components/players/workouts/workoutsClient';
+import MentalSection from '@/components/players/mental/MentalSection';
+import TodoCard from '@/components/players/mental/TodoCard';
+import { coachMentalClient, coachTodoClient, type QResponse } from '@/components/players/mental/mentalClient';
 import DeletePlayerSection from '@/components/players/DeletePlayerSection';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
@@ -79,13 +82,13 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
     if (isProfileTab(t)) setTabState(t);
   }, []);
   // Player submissions waiting for the coach (share link): shown on Overview, counted on its tab.
-  const [review, setReview] = useState<{ entries: TrackerEntry[]; trackers: Tracker[]; meals: MealLog[]; workoutLogs: WorkoutLog[] }>({ entries: [], trackers: [], meals: [], workoutLogs: [] });
+  const [review, setReview] = useState<{ entries: TrackerEntry[]; trackers: Tracker[]; meals: MealLog[]; workoutLogs: WorkoutLog[]; answers: QResponse[] }>({ entries: [], trackers: [], meals: [], workoutLogs: [], answers: [] });
   const loadReview = useCallback(async () => {
     try {
       const res = await fetch(`/api/players/${playerId}/review`, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
-      setReview({ entries: data.entries ?? [], trackers: data.trackers ?? [], meals: data.meals ?? [], workoutLogs: data.workoutLogs ?? [] });
+      setReview({ entries: data.entries ?? [], trackers: data.trackers ?? [], meals: data.meals ?? [], workoutLogs: data.workoutLogs ?? [], answers: data.answers ?? [] });
     } catch { /* the queue is optional */ }
   }, [playerId]);
   useEffect(() => { void loadReview(); }, [loadReview]);
@@ -102,6 +105,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const canEdit = useEntitlement().can('players');
   const nutritionClient = useMemo(() => coachNutritionClient(playerId, canEdit), [playerId, canEdit]);
   const workoutsClient = useMemo(() => coachWorkoutsClient(playerId, canEdit), [playerId, canEdit]);
+  const mentalClient = useMemo(() => coachMentalClient(playerId, canEdit), [playerId, canEdit]);
+  const todoClient = useMemo(() => coachTodoClient(playerId, canEdit), [playerId, canEdit]);
   const [saving, setSaving] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
   const [sheet, setSheet] = useState<TechnicalSheetRow[] | null>(null);
@@ -361,9 +366,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
       ) : null}
 
-      <ProfileTabs value={tab} onChange={(t) => { setTab(t); void loadReview(); }} badges={{ overview: review.entries.length + review.meals.length + review.workoutLogs.length }} />
+      <ProfileTabs value={tab} onChange={(t) => { setTab(t); void loadReview(); }} badges={{ overview: review.entries.length + review.meals.length + review.workoutLogs.length + review.answers.length }} />
 
-      {tab === 'overview' ? <ReviewQueue playerId={playerId} entries={review.entries} trackers={review.trackers} meals={review.meals} workoutLogs={review.workoutLogs} onChanged={() => void loadReview()} onOpenNutrition={() => setTab('nutrition')} onOpenWorkouts={() => setTab('workouts')} /> : null}
+      {tab === 'overview' ? <ReviewQueue playerId={playerId} entries={review.entries} trackers={review.trackers} meals={review.meals} workoutLogs={review.workoutLogs} answers={review.answers.length} onChanged={() => void loadReview()} onOpenNutrition={() => setTab('nutrition')} onOpenWorkouts={() => setTab('workouts')} onOpenMental={() => setTab('mental')} /> : null}
+      {tab === 'overview' ? <TodoCard client={todoClient} /> : null}
 
       {tab === 'overview' ? (
       <div style={{ ...panel, marginBottom: 18 }}>
@@ -736,6 +742,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       {tab === 'fitness' ? <TrackerSection playerId={playerId} category="fitness" canEdit={canEdit} /> : null}
       {tab === 'nutrition' ? <NutritionSection client={nutritionClient} /> : null}
       {tab === 'workouts' ? <WorkoutsSection client={workoutsClient} /> : null}
+      {tab === 'mental' ? <MentalSection client={mentalClient} /> : null}
 
       {tab === 'timeline' ? (
       <PlayerTimeline

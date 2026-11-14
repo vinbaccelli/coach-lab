@@ -15,6 +15,9 @@ import { HISTORY_SECTIONS } from '@/lib/players/history';
 import { playerNutritionClient } from '@/components/players/nutrition/nutritionClient';
 import WorkoutsSection from '@/components/players/workouts/WorkoutsSection';
 import { playerWorkoutsClient } from '@/components/players/workouts/workoutsClient';
+import MentalSection from '@/components/players/mental/MentalSection';
+import TodoCard from '@/components/players/mental/TodoCard';
+import { playerMentalClient, playerTodoClient } from '@/components/players/mental/mentalClient';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
 type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean; permissions?: SharePermissions };
@@ -58,6 +61,10 @@ export default function SharedProfileClient({ token }: { token: string }) {
   const headers = useCallback((): Record<string, string> => (email.trim() ? { 'x-share-email': email.trim() } : {}), [email]);
   const nutritionClient = useMemo(() => playerNutritionClient(token, headers), [token, headers]);
   const workoutsClient = useMemo(() => playerWorkoutsClient(token, headers), [token, headers]);
+  const mentalClient = useMemo(() => playerMentalClient(token, headers), [token, headers]);
+  const todoClient = useMemo(() => playerTodoClient(token, headers), [token, headers]);
+  // Answering a questionnaire can complete a to-do task: the to-do card reloads then.
+  const [todoKey, setTodoKey] = useState(0);
   // The universal timeline (only the sections this link may see; the server enforces it).
   const [feedKey, setFeedKey] = useState(0);
   const fetchHistory = useCallback(async (params: URLSearchParams): Promise<HistoryPage> => {
@@ -137,6 +144,8 @@ export default function SharedProfileClient({ token }: { token: string }) {
         </div>
       ) : null}
 
+      <TodoCard key={todoKey} client={todoClient} />
+
       {data.sheet.length > 0 ? (
         <div style={panel}>
           <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Profile</h2>
@@ -209,6 +218,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
 
       {data.permissions?.see.nutrition ? <NutritionSection client={nutritionClient} /> : null}
       {data.permissions?.see.workouts ? <WorkoutsSection client={workoutsClient} /> : null}
+      {data.permissions?.see.mental || (data.canAdd && data.permissions?.add.questionnaires) ? <MentalSection client={mentalClient} onChanged={() => setTodoKey((k) => k + 1)} /> : null}
 
       {(data.permissions?.see.timeline ?? true) ? (
       <div style={panel}>
