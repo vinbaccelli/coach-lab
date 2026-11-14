@@ -928,3 +928,14 @@ depend on what failed; "called play()" is not "it plays", so check the effect
 - **Verified root cause:** in `exists (select 1 from player_trackers t where t.id = tracker_id and t.player_id = player_id)`, the unqualified `player_id` resolves to `t.player_id`: SQL looks in the subquery's own tables first. `tracker_id` happened to work only because `player_trackers` has no column of that name.
 - **Fix:** write the policy row's own columns with the table name (`player_tracker_entries.player_id`); a regression test inserts the cross-player row and expects 42501.
 - **Class of mistake:** a security condition that reads correctly to a human but binds to a different column than intended, and a test suite that only tried the obvious attack (someone else's tracker), not the mismatched pair (my tracker, someone else's player). In policies, qualify every outer column inside a subquery, and test each relation the policy is meant to tie together.
+
+---
+
+## 024 — New tests written from assumptions became blockers under Rule 8
+
+*2026-11-14 · player database PRs F, G, H*
+
+- **Symptom:** three new tests failed on their own defects, not on the app: a selector `has-text("Me")` that also matched "Biometrics", an expected text without the space the page renders, a workflow whose earlier steps used up the data a later step needed, and a TypeScript narrowing mistake in a unit test. Under Rule 8 each one had to go to the owner instead of being corrected, and two PRs stayed unmerged.
+- **Verified root cause:** the tests were written from what the page was expected to show, then run for the first time as the real check.
+- **Fix:** for the Mental workflow the page was explored first with a throwaway script (scratchpad, not committed), selectors and texts were taken from that run, the committed test was type-checked before its first run, and it passed all 26 checks on the first try.
+- **Class of mistake:** when a failing test can no longer be edited without approval, its first run is the only free one. Explore the real page with a scratch script, type-check, then write the test from what was observed.
