@@ -4,6 +4,15 @@ import { useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { GripVertical } from 'lucide-react';
 import { moveItem } from '@/lib/players/reorder';
 
+/** The element that scrolls this list: the nearest ancestor with its own vertical scroll, else the page. */
+function scrollParent(el: HTMLElement | null): Element {
+  for (let n = el?.parentElement ?? null; n; n = n.parentElement) {
+    const oy = getComputedStyle(n).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+  }
+  return document.scrollingElement ?? document.documentElement;
+}
+
 /**
  * Drag-to-reorder list that works with touch (iPhone) and mouse. Only the grip handle starts a drag,
  * so scrolling the page and tapping inputs keep working. Items swap live as the pointer crosses them;
@@ -50,16 +59,33 @@ export default function ReorderList<T>({
     setDragKey(key);
     setOrder(items.slice());
     liveRef.current = items.slice();
-    const onMove = (ev: PointerEvent) => {
+    let px = e.clientX, py = e.clientY, raf = 0;
+    const moveTo = (x: number, y: number) => {
       const cur = liveRef.current;
       const from = cur.findIndex((i) => getKey(i) === key);
-      const to = targetIndexAt(ev.clientX, ev.clientY);
+      const to = targetIndexAt(x, y);
       if (from < 0 || to < 0 || from === to) return;
       const next = moveItem(cur, from, to);
       liveRef.current = next;
       setOrder(next);
     };
+    const onMove = (ev: PointerEvent) => { px = ev.clientX; py = ev.clientY; moveTo(px, py); };
+    // Rows can be taller than a phone screen (charts, videos): holding the finger near the top or
+    // bottom edge scrolls the page's scroll area, so a row can be carried past what is visible.
+    const scroller = scrollParent(refs.current.get(key) ?? null);
+    const EDGE = 72;
+    const tick = () => {
+      const top = scroller === document.scrollingElement ? 0 : (scroller as HTMLElement).getBoundingClientRect().top;
+      const bottom = scroller === document.scrollingElement ? window.innerHeight : (scroller as HTMLElement).getBoundingClientRect().bottom;
+      let dy = 0;
+      if (py < top + EDGE) dy = -Math.ceil((top + EDGE - py) / 3);
+      else if (py > bottom - EDGE) dy = Math.ceil((py - (bottom - EDGE)) / 3);
+      if (dy) { scroller.scrollBy(0, dy); moveTo(px, py); }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
     const finish = (commit: boolean) => {
+      cancelAnimationFrame(raf);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);

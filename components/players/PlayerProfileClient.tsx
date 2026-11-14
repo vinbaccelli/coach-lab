@@ -8,14 +8,16 @@ import PlayerSessionTimeline from '@/components/players/PlayerSessionTimeline';
 import PlayerNav from '@/components/reports/PlayerNav';
 import PlayerTimeline from '@/components/players/PlayerTimeline';
 import PlayerShareCard from '@/components/players/PlayerShareCard';
-import PlayerMetrics from '@/components/players/PlayerMetrics';
+import TrackerSection from '@/components/players/trackers/TrackerSection';
+import ProfileTabs, { isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
+import PlayerAvatar from '@/components/players/PlayerAvatar';
+import EditableLabel from '@/components/players/EditableLabel';
 import DeletePlayerSection from '@/components/players/DeletePlayerSection';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
 import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
-import { suggestionsFor } from '@/lib/players/fieldSuggestions';
 import { parseTechnicalSheet, defaultTechnicalSheet, migrateOldDefault, resetToStandard, needsReset, labelTaken, makeRow, addTrackEntry, removeTrackEntry, entriesNewestFirst, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 import ReorderList from '@/components/players/ReorderList';
 import { parseOrder } from '@/lib/players/reorder';
@@ -63,6 +65,20 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const [entries, setEntries] = useState<Entry[]>([]);
   const [sessions, setSessions] = useState<PlayerSession[]>([]);
   const [loading, setLoading] = useState(true);
+  // Which section is open; kept in the URL (?tab=) so a reload or a shared link opens the same one.
+  const [tab, setTabState] = useState<ProfileTab>('overview');
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (isProfileTab(t)) setTabState(t);
+  }, []);
+  const setTab = useCallback((t: ProfileTab) => {
+    setTabState(t);
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set('tab', t);
+      window.history.replaceState(window.history.state, '', u.toString());
+    } catch { /* ignore */ }
+  }, []);
   const [err, setErr] = useState<string | null>(null);
   // Without an active plan the profile stays readable; edits are server-gated (403 plan_required).
   const canEdit = useEntitlement().can('players');
@@ -124,6 +140,23 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       setSheetSaving(false);
     }
   }, [playerId]);
+
+  const sameLabel = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  const renameSheetRow = (i: number, next: string): string | null => {
+    if (!sheet) return null;
+    if (sheet.some((r, j) => j !== i && sameLabel(r.label, next))) return 'There is already a row with that name';
+    const rows = sheet.map((r, j) => (j === i ? { ...r, label: next } : r));
+    setSheet(rows);
+    void saveSheet(rows);
+    return null;
+  };
+  const renameProfileRow = (i: number, next: string): string | null => {
+    const rows = profileRows ?? [];
+    if (rows.some((r, j) => j !== i && sameLabel(r.label, next))) return 'There is already a row with that name';
+    setProfileRows(rows.map((r, j) => (j === i ? { ...r, label: next } : r)));
+    setProfileDirty(true);
+    return null;
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -308,8 +341,20 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
       ) : null}
 
+      <ProfileTabs value={tab} onChange={setTab} />
+
+      {tab === 'overview' ? (
       <div style={{ ...panel, marginBottom: 18 }}>
-        <h1 data-tour-id="player-profile" style={{ margin: '0 0 14px', fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em' }}>{player.display_name}</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+          <PlayerAvatar
+            playerId={playerId}
+            name={player.display_name}
+            photoUrl={player.photo_url}
+            canEdit={canEdit}
+            onChange={(url) => setPlayer((prev) => (prev ? { ...prev, photo_url: url } : prev))}
+          />
+          <h1 data-tour-id="player-profile" style={{ margin: 0, fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em' }}>{player.display_name}</h1>
+        </div>
         <label style={{ ...lb, marginBottom: 12 }}>
           Name
           <input
@@ -349,7 +394,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
               {handle}
               <label style={{ ...lb, flex: 1 }}>
-                {row.label}
+                <EditableLabel label={row.label} canEdit={canEdit} onRename={(n) => renameProfileRow(i, n)} />
                 <input
                   value={row.value}
                   onChange={(e) => { setProfileRows((prev) => prev ? prev.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)) : prev); setProfileDirty(true); }}
@@ -458,8 +503,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           {saving ? 'Saving…' : 'Save profile'}
         </button>
       </div>
+      ) : null}
 
       {/* ── Technical Sheet ─────────────────────────────────────────────── */}
+      {tab === 'technical' ? (
       <div style={{ ...panel, marginBottom: 18 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0, fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Technical Sheet</h2>
@@ -501,7 +548,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
               {handle}
               {row.kind === 'track' ? (
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, margin: '6px 0 6px' }}>{row.label} <span style={{ fontWeight: 500, color: 'var(--cl-text-muted)', fontSize: 11 }}>· progress tracking</span></div>
+                  <div style={{ fontSize: 13, fontWeight: 700, margin: '6px 0 6px' }}><EditableLabel label={row.label} canEdit={canEdit} onRename={(n) => renameSheetRow(i, n)} suffix={<span style={{ fontWeight: 500, color: 'var(--cl-text-muted)', fontSize: 11 }}>· progress tracking</span>} /></div>
                   {entriesNewestFirst(row).map((en) => (
                     <div key={en.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 0', borderTop: '1px solid var(--cl-border)' }}>
                       <span style={{ fontSize: 12, color: 'var(--cl-text-muted)', whiteSpace: 'nowrap', paddingTop: 1 }}>{en.date}</span>
@@ -560,7 +607,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 </div>
               ) : (
               <label style={{ ...lb, flex: 1 }}>
-                {row.label}
+                <EditableLabel label={row.label} canEdit={canEdit} onRename={(n) => renameSheetRow(i, n)} />
                 <input
                   value={row.value}
                   onChange={(e) => setSheet((prev) => prev ? prev.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)) : prev)}
@@ -587,30 +634,12 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
             </div>
           )}
         />
-        {canEdit && suggestionsFor((sheet ?? []).map((r) => r.label)).length > 0 ? (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 11, color: 'var(--cl-text-muted)', marginBottom: 6 }}>
-              Suggestions — tap to add a field (only the ones you need)
-            </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {suggestionsFor((sheet ?? []).map((r) => r.label)).map((label) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => {
-                    setSheet((prev) => {
-                      // Per-player only: a tapped suggestion does not change the default sheet.
-                      const next = [...(prev ?? []), { label, value: '' }];
-                      void saveSheet(next);
-                      return next;
-                    });
-                  }}
-                  style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}
-                >
-                  + {label}
-                </button>
-              ))}
-            </div>
+        {canEdit ? (
+          <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: 'var(--cl-text-muted)' }}>Track more:</span>
+            <button type="button" onClick={() => setTab('biometrics')} style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}>+ Biometrics</button>
+            <button type="button" onClick={() => setTab('fitness')} style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}>+ Fitness tracker</button>
+            <button type="button" onClick={() => setTab('progress')} style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}>+ Custom tracker</button>
           </div>
         ) : null}
         <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -678,8 +707,13 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           )}
         </div>
       </div>
+      ) : null}
 
-      <PlayerMetrics playerId={playerId} canEdit={canEdit} />
+      {tab === 'progress' ? <TrackerSection playerId={playerId} category="progress" canEdit={canEdit} /> : null}
+      {tab === 'biometrics' ? <TrackerSection playerId={playerId} category="biometrics" canEdit={canEdit} /> : null}
+      {tab === 'fitness' ? <TrackerSection playerId={playerId} category="fitness" canEdit={canEdit} /> : null}
+
+      {tab === 'timeline' ? (
       <PlayerTimeline
         playerId={playerId}
         playerName={player.display_name}
@@ -693,8 +727,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           setPlayer((prev) => (prev ? { ...prev, timeline_order: order } : prev));
         }}
       />
-      <PlayerShareCard playerId={playerId} canEdit={canEdit} />
+      ) : null}
+      {tab === 'overview' ? <PlayerShareCard playerId={playerId} canEdit={canEdit} /> : null}
 
+      {tab === 'technical' ? (<>
       {/* V2: the "Analysis Sessions" block is hidden while REPORTS_IN_APP is on — reports are
           the player's record now, and a coach saves to any player from the analysis app
           without a session. The code (and player_sessions, its routes and pages) is kept:
@@ -1007,7 +1043,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </section>
       )}
       {/* Danger zone: REPORTS_IN_APP only, deliberately not plan-gated, last on the page. */}
-      {REPORTS_IN_APP ? <DeletePlayerSection playerId={playerId} playerName={player.display_name} /> : null}
+      </>) : null}
+
+      {tab === 'overview' && REPORTS_IN_APP ? <DeletePlayerSection playerId={playerId} playerName={player.display_name} /> : null}
     </div>
   );
 }

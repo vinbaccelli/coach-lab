@@ -4,6 +4,7 @@ import { withinLinkLimit } from '@/lib/players/share';
 import { validateNewItem } from '@/lib/players/timeline';
 import { validateMetricInput } from '@/lib/players/metrics';
 import { parseTechnicalSheet } from '@/lib/players/technicalSheet';
+import { loadShareTrackers, addValueAsTrackerEntry } from '@/lib/players/shareTrackers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,8 +41,15 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   const ord = await db.from('players').select('timeline_order').eq('id', share.player_id).maybeSingle<{ timeline_order: unknown }>();
   const timelineOrder = ord.error ? null : parseOrder(ord.data?.timeline_order);
   const sheet = (parseTechnicalSheet(player.data.technical_sheet) ?? []).filter((r) => (r.kind === 'track' ? (r.entries?.length ?? 0) > 0 : r.value.trim() !== ''));
+  // Trackers (Progress, Biometrics, Fitness). Until their tables exist, the old progress values are shown instead.
+  const tr = await loadShareTrackers(db, share.player_id);
   return NextResponse.json(
-    { name: player.data.display_name, sheet, items: items.data ?? [], timelineOrder, metrics: metrics.data ?? [], canAdd: share.mode === 'edit' },
+    {
+      name: player.data.display_name, sheet, items: items.data ?? [], timelineOrder,
+      metrics: tr.available ? [] : metrics.data ?? [],
+      trackers: tr.trackers, trackerEntries: tr.entries, trackersAvailable: tr.available,
+      canAdd: share.mode === 'edit',
+    },
     { headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer' } },
   );
 }
@@ -56,11 +64,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 
   // Abuse brake: at most N additions per hour through this player's link.
   const since = new Date(Date.now() - 3600_000).toISOString();
-  const [a, b] = await Promise.all([
+  const [a, b, c] = await Promise.all([
     db.from('player_timeline_items').select('id', { count: 'exact', head: true }).eq('player_id', share.player_id).eq('author', 'link').gte('created_at', since),
     db.from('player_metrics').select('id', { count: 'exact', head: true }).eq('player_id', share.player_id).eq('author', 'link').gte('created_at', since),
+    // Tracker entries count too (a missing table simply counts 0).
+    db.from('player_tracker_entries').select('id', { count: 'exact', head: true }).eq('player_id', share.player_id).eq('author', 'link').gte('created_at', since),
   ]);
-  if (!withinLinkLimit((a.count ?? 0) + (b.count ?? 0))) {
+  if (!withinLinkLimit((a.count ?? 0) + (b.count ?? 0) + (c.count ?? 0))) {
     return NextResponse.json({ error: 'Too many additions in the last hour. Try again later.' }, { status: 429 });
   }
   const base = { coach_id: share.coach_id, player_id: share.player_id, author: 'link' as const };
@@ -83,6 +93,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   if (body?.kind === 'metric') {
     const v = validateMetricInput(body, new Date().toISOString().slice(0, 10));
     if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 });
+    const tracked = await addValueAsTrackerEntry(db, share, v.input);
+    if (tracked) return tracked.ok ? NextResponse.json({ ok: true }) : NextResponse.json({ error: tracked.error }, { status: 500 });
     const { error } = await db.from('player_metrics').insert({ ...base, ...v.input });
     if (error) return NextResponse.json({ error: 'Could not save' }, { status: 500 });
     return NextResponse.json({ ok: true });
