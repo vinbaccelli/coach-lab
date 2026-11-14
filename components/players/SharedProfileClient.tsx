@@ -11,6 +11,8 @@ import TrackerCard, { type TrackerActions } from '@/components/players/trackers/
 import type { Tracker, TrackerEntry } from '@/lib/players/trackers';
 import { addKindForCategory, type SharePermissions } from '@/lib/players/sharePermissions';
 import { newRef } from '@/components/players/ui';
+import NutritionSection from '@/components/players/nutrition/NutritionSection';
+import { playerNutritionClient } from '@/components/players/nutrition/nutritionClient';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
 type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean; permissions?: SharePermissions };
@@ -52,6 +54,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
   const vidRef = useRef<HTMLInputElement>(null);
 
   const headers = useCallback((): Record<string, string> => (email.trim() ? { 'x-share-email': email.trim() } : {}), [email]);
+  const nutritionClient = useMemo(() => playerNutritionClient(token, headers), [token, headers]);
 
   const load = useCallback(async () => {
     try {
@@ -192,6 +195,8 @@ export default function SharedProfileClient({ token }: { token: string }) {
           ) : null}
         </div>
       ) : null}
+
+      {data.permissions?.see.nutrition ? <NutritionSection client={nutritionClient} /> : null}
 
       {(data.permissions?.see.timeline ?? true) ? (
       <div style={panel}>

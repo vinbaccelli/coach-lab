@@ -2403,3 +2403,17 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 **Next step (needs the coach):** on the iPhone, first AI Track run after a fresh load with `?live=off` as the control (does it still restart?), and the restart breadcrumb text after a reload. Without that we do not know that RTMPose is involved at all.
 
 **Severity.** High (work lost; first impression).
+
+## 078 — Player pictures are public URLs (profile photos, timeline pictures, meal photos)
+
+**Found:** 2026-11-14, while adding meal photos (player database PR E).
+
+**Symptom.** A picture of a player can be opened by anyone who has its URL, without a login.
+
+**Verified root cause.** The `player-assets` bucket is created public (`supabase/migrations/20260615140000_player_sessions.sql`, `public = true`) and every route stores `getPublicUrl(...)` (`app/api/players/[id]/photo/route.ts`, `app/api/share/[token]/route.ts`, `lib/players/mealPhotos.ts`). Paths contain three random UUIDs, so URLs cannot be guessed and the bucket cannot be listed without the coach's login (storage policies check the first folder = the coach).
+
+**Fault assessment.** Pre-existing design, kept for meal photos so all player pictures behave the same. Acceptable while URLs stay private between coach and player, but a forwarded URL keeps working, and deleting the player's link does not revoke it.
+
+**Proposed fix.** Make the bucket private and serve pictures through short-lived signed URLs, created by the server when it returns a profile, a timeline or a meal (coach routes with the coach's session, share routes with the service role scoped to the link's player). Touches every route that returns a picture and the existing stored URLs (store the path instead of the URL, or derive it), so it is a separate PR with its own migration and tests.
+
+**Severity.** Medium (privacy; no listing possible, no guessing possible).

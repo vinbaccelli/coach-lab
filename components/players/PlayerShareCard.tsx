@@ -6,8 +6,8 @@ import { ADD_LABELS, SEE_LABELS, ADD_SECTION, defaultPermissions, type AddKind, 
 type Share = { mode: 'view' | 'edit'; allowed_email: string | null; revoked: boolean; url: string | null; permissions?: SharePermissions };
 
 /** Sections that exist in this release (later releases add Nutrition, Workouts, Mental here). */
-const SEE_OFFERED: SeeSection[] = ['technical', 'progress', 'biometrics', 'fitness', 'timeline'];
-const ADD_OFFERED: AddKind[] = ['comments', 'pictures', 'videos', 'progress', 'biometrics', 'fitness'];
+const SEE_OFFERED: SeeSection[] = ['technical', 'progress', 'biometrics', 'fitness', 'nutrition', 'timeline'];
+const ADD_OFFERED: AddKind[] = ['comments', 'pictures', 'videos', 'progress', 'biometrics', 'fitness', 'meals'];
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' };
@@ -92,7 +92,7 @@ export default function PlayerShareCard({ playerId, canEdit }: { playerId: strin
             What can the player do?
             <select value={mode} onChange={(e) => { const m = e.target.value as 'view' | 'edit'; setMode(m); setPerms((p) => ({ ...p, add: defaultPermissions(m).add })); }} disabled={!canEdit} style={{ ...inp, display: 'block', marginTop: 4 }}>
               <option value="view">View only</option>
-              <option value="edit">View and add (entries, comments, pictures, videos)</option>
+              <option value="edit">View and add (entries, meals, comments, pictures, videos)</option>
             </select>
           </label>
           {canEdit ? (
