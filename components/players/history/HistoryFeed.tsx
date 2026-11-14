@@ -6,9 +6,9 @@ import {
   HISTORY_SECTIONS, HISTORY_TYPES, SECTION_LABELS, TYPE_LABELS,
   type HistoryItem, type HistorySection, type HistoryType,
 } from '@/lib/players/history';
-import { youtubeEmbedUrl } from '@/lib/players/timeline';
 import { applyManualOrder } from '@/lib/players/reorder';
 import ReorderList from '@/components/players/ReorderList';
+import VideoBlock from '@/components/reports/VideoBlock';
 import { badge, chip, input, muted, shortDate } from '@/components/players/ui';
 
 export type HistoryPage = { items: HistoryItem[]; next: string | null };
@@ -168,8 +168,10 @@ export default function HistoryFeed({ fetchPage, viewer, sections = [...HISTORY_
         <img src={t.imageUrl} alt="" loading="lazy" style={{ marginTop: 6, maxWidth: '100%', maxHeight: t.type === 'meal' ? 200 : 360, borderRadius: 10, display: 'block' }} />
       ) : null}
       {t.youtubeId ? (
-        <div style={{ marginTop: 6, position: 'relative', paddingTop: '56.25%', maxWidth: 560 }}>
-          <iframe src={youtubeEmbedUrl(t.youtubeId)} title="Video" loading="lazy" allow="accelerometer; encrypted-media; gyroscope; picture-in-picture" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, borderRadius: 10 }} />
+        // VideoBlock marks the frame `credentialless`: under the site's COEP header a plain cross-origin
+        // frame renders as an empty grey box in Chromium browsers (KNOWN_ISSUES 080).
+        <div style={{ marginTop: 6, maxWidth: 560 }}>
+          <VideoBlock url={`https://www.youtube.com/watch?v=${t.youtubeId}`} videoId={t.youtubeId} />
         </div>
       ) : null}
     </div>
