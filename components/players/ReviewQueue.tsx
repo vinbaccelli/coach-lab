@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Check, Undo2 } from 'lucide-react';
 import { computeDerived, describeEntry, type Tracker, type TrackerEntry } from '@/lib/players/trackers';
+import { MEAL_LABELS, type MealLog } from '@/lib/players/nutrition';
 import { apiJson, badge, ghostBtn, h2, input, muted, panel, primaryBtn, shortDate } from '@/components/players/ui';
 
 /**
@@ -10,18 +11,35 @@ import { apiJson, badge, ghostBtn, h2, input, muted, panel, primaryBtn, shortDat
  * approve it (it joins the history and the charts as a normal entry) or ask for a fix with a note
  * (the player sees the note on their page and can correct the entry).
  */
-export default function ReviewQueue({ playerId, entries, trackers, onChanged }: {
+export default function ReviewQueue({ playerId, entries, trackers, meals = [], onChanged, onOpenNutrition }: {
   playerId: string;
   entries: TrackerEntry[];
   trackers: Tracker[];
+  /** Meals the player logged (waiting): approved here in one tap, or opened in Nutrition. */
+  meals?: MealLog[];
   onChanged: () => void;
+  onOpenNutrition?: () => void;
 }) {
   const [fixFor, setFixFor] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  if (!entries.length) return null;
+  if (!entries.length && !meals.length) return null;
   const byId = new Map(trackers.map((t) => [t.id, t]));
+
+  const approveMeals = async () => {
+    setBusy('meals');
+    setErr(null);
+    try {
+      await apiJson(`/api/players/${playerId}/meals/approve`, { method: 'POST', json: { ids: meals.map((m) => m.id) } });
+      onChanged();
+    } catch (x) {
+      setErr(x instanceof Error ? x.message : 'Could not save');
+    } finally {
+      setBusy(null);
+    }
+  };
+  const mealDays = [...new Set(meals.map((m) => m.eaten_on))];
 
   const review = async (e: TrackerEntry, status: 'approved' | 'needs_revision', reviewNote?: string) => {
     setBusy(e.id);
@@ -42,7 +60,7 @@ export default function ReviewQueue({ playerId, entries, trackers, onChanged }: 
     <section style={{ ...panel, marginBottom: 18, borderColor: 'rgba(255,159,10,0.45)' }} aria-label="To review" data-testid="review-queue">
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <h2 style={h2}>To review</h2>
-        <span style={badge('pending')}>{entries.length}</span>
+        <span style={badge('pending')}>{entries.length + meals.length}</span>
       </div>
       <p style={{ ...muted, margin: '4px 0 10px' }}>Sent by the player through the share link. Approved entries join the history and the charts.</p>
       {err ? <div role="alert" style={{ fontSize: 12, color: '#b3261e' }}>{err}</div> : null}
@@ -75,6 +93,19 @@ export default function ReviewQueue({ playerId, entries, trackers, onChanged }: 
           );
         })}
       </div>
+      {meals.length ? (
+        <div data-testid="review-meals" style={{ borderTop: '1px solid var(--cl-border)', padding: '10px 0 0', display: 'grid', gap: 6 }}>
+          <strong style={{ fontSize: 13 }}>{meals.length === 1 ? 'One meal' : `${meals.length} meals`} logged by the player</strong>
+          <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)' }}>
+            {mealDays.slice(0, 3).map((d) => `${shortDate(d)}: ${meals.filter((m) => m.eaten_on === d).map((m) => MEAL_LABELS[m.category] ?? m.category).join(', ')}`).join(' · ')}
+            {mealDays.length > 3 ? ` · and ${mealDays.length - 3} more days` : ''}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button type="button" disabled={busy === 'meals'} onClick={() => void approveMeals()} style={{ ...primaryBtn, padding: '6px 12px', fontSize: 12 }}><Check size={13} /> Approve {meals.length === 1 ? 'it' : `all ${meals.length}`}</button>
+            {onOpenNutrition ? <button type="button" onClick={onOpenNutrition} style={{ ...ghostBtn, padding: '6px 12px', fontSize: 12 }}>Review in Nutrition</button> : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -906,3 +906,14 @@ depend on what failed; "called play()" is not "it plays", so check the effect
 - **Verified:** the state is the element's own (`paused`/`currentTime` read directly), and no app code resets slot A's time. Root cause not proven without the device.
 - **Fix:** detect (frozen clock while playing; seek that did not land), trace the state that tells the candidate causes apart, recover by reloading the same blob, and make Play after the end start from 0.
 - **Class of mistake:** a workaround that drives the media element (prime/nudge) can leave it in a state the app never notices. Anything that pokes the element needs a watchdog that notices the element stopped obeying.
+
+---
+
+## 022 — A form that fits on a desktop overflowed the phone because of one input's intrinsic width
+
+*2026-11-14 · branch `feat/nutrition` (player database PR E)*
+
+- **Symptom:** the nutrition plan editor was 470 px wide inside a 358 px section on a 390 px phone: fields cut off on the right, the page scrolled sideways inside the card.
+- **Verified root cause (measured in Chromium at 390 px):** each number field was `<span style="display:flex"><input style="width:100%">kcal</span>` inside a grid. In the min-content pass a percentage width counts as `auto`, so the input contributed its intrinsic width (`size=20` characters at 16 px); the grid column took the largest such contribution and every row grew to it.
+- **Fix:** inputs in flex rows get `width: 0; flex: 1 1 auto` (they contribute nothing to the min-content width and grow to fill); number fields sit in a `repeat(auto-fill, minmax(116px, 1fr))` grid so phones get two per row.
+- **Class of mistake:** `width: 100%` does not stop an input from widening its container: it only applies once the container's width is known. Measure the widest element at phone width (`getBoundingClientRect().right > innerWidth`) before trusting a screenshot taken at desktop width.
