@@ -16,6 +16,9 @@ export async function contextFor(browser, userKey, opts = {}) {
     const u = seedInfo().users.find((x) => x.key === userKey);
     await ctx.addCookies([{ name: u.cookie.name, value: u.cookie.value, domain: 'localhost', path: '/', httpOnly: false, sameSite: 'Lax' }]);
   }
+  // `next dev` compiles a page on its first visit, which can take well over the 30 s default.
+  ctx.setDefaultNavigationTimeout(240000);
+  ctx.setDefaultTimeout(60000);
   // The guided tour overlay would cover the page on first visit.
   await ctx.addInitScript(() => { try { localStorage.setItem('anglemotion:tour-dismissed', '1'); } catch {} });
   return ctx;

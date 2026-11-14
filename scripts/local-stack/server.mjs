@@ -349,15 +349,38 @@ async function handleStorage(req, res, url, claims) {
   if (p.startsWith('public/') && (req.method === 'GET' || req.method === 'HEAD')) {
     const file = path.join(STORAGE_DIR, p.slice(7));
     if (!file.startsWith(STORAGE_DIR) || !fs.existsSync(file)) return send(res, 404, { error: 'not_found' });
-    return send(res, 200, fs.readFileSync(file), { 'Content-Type': 'image/jpeg' });
+    const ext = path.extname(file).toLowerCase();
+    const type = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+    return send(res, 200, fs.readFileSync(file), { 'Content-Type': type });
   }
   if (req.method === 'POST' || req.method === 'PUT') {
     const [bucket, ...rest] = p.split('/');
     const name = rest.join('/');
-    const data = await readBody(req);
+    let data = await readBody(req);
+    let contentType = String(req.headers['content-type'] || 'application/octet-stream');
+    // supabase-js sends a Blob/File as multipart/form-data: keep only the file part, like Storage does.
+    const boundary = /multipart\/form-data;\s*boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+    if (boundary) {
+      const delim = Buffer.from(`--${boundary[1] || boundary[2]}`);
+      let pos = data.indexOf(delim);
+      while (pos !== -1) {
+        const next = data.indexOf(delim, pos + delim.length);
+        if (next === -1) break;
+        const part = data.subarray(pos + delim.length + 2, next - 2);
+        const headEnd = part.indexOf('\r\n\r\n');
+        const head = part.subarray(0, headEnd).toString('utf8');
+        if (/filename=|name=""/.test(head)) {
+          const ct = /content-type:\s*([^\r\n]+)/i.exec(head);
+          contentType = ct ? ct[1].trim() : 'application/octet-stream';
+          data = Buffer.from(part.subarray(headEnd + 4));
+          break;
+        }
+        pos = next;
+      }
+    }
     await asRole(claims, (client) => client.query(
       'insert into storage.objects (bucket_id, name, owner, metadata) values ($1, $2, $3, $4)',
-      [bucket, name, claims.sub || null, JSON.stringify({ size: data.length, mimetype: req.headers['content-type'] || null })]));
+      [bucket, name, claims.sub || null, JSON.stringify({ size: data.length, mimetype: contentType })]));
     const file = path.join(STORAGE_DIR, bucket, name);
     if (!file.startsWith(STORAGE_DIR)) return send(res, 400, { error: 'bad path' });
     fs.mkdirSync(path.dirname(file), { recursive: true });

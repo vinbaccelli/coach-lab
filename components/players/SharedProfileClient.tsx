@@ -7,9 +7,11 @@ import { youtubeEmbedUrl } from '@/lib/players/timeline';
 import { uploadToResumableSession } from '@/lib/export/youtubeResumableUpload';
 import { applyManualOrder } from '@/lib/players/reorder';
 import { entriesNewestFirst } from '@/lib/players/technicalSheet';
+import TrackerCard from '@/components/players/trackers/TrackerCard';
+import type { Tracker, TrackerEntry } from '@/lib/players/trackers';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
-type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null };
+type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean };
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' };
@@ -121,9 +123,24 @@ export default function SharedProfileClient({ token }: { token: string }) {
         </div>
       ) : null}
 
+      {(['progress', 'biometrics', 'fitness'] as const).map((cat) => {
+        const list = (data.trackers ?? []).filter((t) => t.category === cat);
+        if (!list.length) return null;
+        return (
+          <div key={cat} style={panel}>
+            <h2 style={{ margin: '0 0 10px', fontSize: 15 }}>{cat === 'progress' ? 'Progress' : cat === 'biometrics' ? 'Biometrics' : 'Fitness'}</h2>
+            <div style={{ display: 'grid', gap: 10 }}>
+              {list.map((t) => (
+                <TrackerCard key={t.id} tracker={t} entries={(data.trackerEntries ?? []).filter((e) => e.tracker_id === t.id)} actions={null} viewer="player" />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
       {(series.length > 0 || data.canAdd) ? (
         <div style={panel}>
-          <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Progress</h2>
+          <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>{data.trackersAvailable ? 'Send a value to your coach' : 'Progress'}</h2>
           {series.map((s) => (
             <div key={s.key} style={{ borderTop: '1px solid var(--cl-border)', paddingTop: 10, marginTop: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>

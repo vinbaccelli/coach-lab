@@ -24,7 +24,9 @@ if [ "${1:-}" = "--reset" ] || ! $PSQL -d coachlab -c 'select 1' >/dev/null 2>&1
   node "$ROOT/scripts/local-stack/seed.mjs" > "$DIR/seed.json"
   echo "database ready ($(ls "$ROOT"/supabase/migrations/*.sql | wc -l) migrations)"
 fi
-pkill -f "scripts/local-stack/server.mjs" 2>/dev/null || true
+# Stop the stand-in this script started before (by PID, never by pattern: a pattern can match the caller).
+if [ -f "$DIR/server.pid" ]; then kill "$(cat "$DIR/server.pid")" 2>/dev/null || true; sleep 0.5; fi
 LOCAL_STORAGE_DIR="$DIR/storage" nohup node "$ROOT/scripts/local-stack/server.mjs" > "$DIR/server.log" 2>&1 &
+echo $! > "$DIR/server.pid"
 sleep 1
 echo "REST/auth stand-in on http://localhost:54321 (log: $DIR/server.log)"

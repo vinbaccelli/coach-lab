@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { formatValue, type Series, type Computed } from '@/lib/players/trackers';
 import { shortDate } from '@/components/players/ui';
 
@@ -8,12 +9,24 @@ import { shortDate } from '@/components/players/ui';
  * is labelled in the series' own format (m:ss for times, % for percentages, kg / lb …), and
  * player submissions still waiting for review are drawn hollow.
  */
-export default function TrackerChart({ series, computed = null, height = 150 }: { series: Series; computed?: Computed | null; height?: number }) {
+export default function TrackerChart({ series, computed = null, height = 160 }: { series: Series; computed?: Computed | null; height?: number }) {
+  // Drawn at the container's real width (not a scaled viewBox) so labels stay readable on a phone.
+  const box = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => setWidth(Math.round(el.getBoundingClientRect().width));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const pts = series.points;
   if (!pts.length) {
     return <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: 'var(--cl-text-muted)' }}>No values yet</div>;
   }
-  const W = 640, H = height, padL = 64, padR = 16, padT = 14, padB = 26;
+  const W = Math.max(width, 240), H = height, padL = 60, padR = 12, padT = 18, padB = 24;
   const fmt = (n: number) => formatValue(n, series.kind, series.unit, { computed });
   const t = pts.map((p) => Date.parse(p.date));
   const v = pts.map((p) => p.value);
@@ -32,13 +45,17 @@ export default function TrackerChart({ series, computed = null, height = 150 }: 
   const x = (i: number) => padL + (t1 === t0 ? iw / 2 : ((t[i] - t0) / (t1 - t0)) * iw);
   const y = (val: number) => padT + (1 - (val - v0) / (v1 - v0)) * ih;
   const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
-  const ticks = [v1, (v0 + v1) / 2, v0];
+  // Gridlines at the real highest / middle / lowest values (readable labels, not padded bounds).
+  const hi = Math.max(...v), lo = Math.min(...v);
+  const ticks = hi === lo ? [hi] : [hi, (hi + lo) / 2, lo];
   const last = pts.length - 1;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label={`${series.label}: ${pts.length} values, latest ${fmt(pts[last].value)}`} style={{ display: 'block', overflow: 'visible' }}>
+    <div ref={box} style={{ width: '100%' }}>
+    {width ? (
+    <svg width={W} height={H} role="img" aria-label={`${series.label}: ${pts.length} values, latest ${fmt(pts[last].value)}`} style={{ display: 'block', overflow: 'visible' }}>
       {ticks.map((tv, i) => (
         <g key={i}>
-          <line x1={padL} x2={W - padR} y1={y(tv)} y2={y(tv)} stroke="var(--cl-border)" strokeDasharray={i === 2 ? undefined : '3 4'} />
+          <line x1={padL} x2={W - padR} y1={y(tv)} y2={y(tv)} stroke="var(--cl-border)" strokeDasharray={i === ticks.length - 1 ? undefined : '3 4'} />
           <text x={padL - 8} y={y(tv) + 4} textAnchor="end" fontSize="11" fill="var(--cl-text-muted)">{fmt(tv)}</text>
         </g>
       ))}
@@ -53,5 +70,7 @@ export default function TrackerChart({ series, computed = null, height = 150 }: 
       <text x={padL} y={H - 6} fontSize="11" fill="var(--cl-text-muted)">{shortDate(pts[0].date)}</text>
       {last > 0 ? <text x={W - padR} y={H - 6} textAnchor="end" fontSize="11" fill="var(--cl-text-muted)">{shortDate(pts[last].date)}</text> : null}
     </svg>
+    ) : <div style={{ height: H }} />}
+    </div>
   );
 }
