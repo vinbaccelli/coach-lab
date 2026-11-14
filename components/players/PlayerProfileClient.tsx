@@ -17,6 +17,8 @@ import type { Tracker, TrackerEntry } from '@/lib/players/trackers';
 import type { MealLog } from '@/lib/players/nutrition';
 import NutritionSection from '@/components/players/nutrition/NutritionSection';
 import { coachNutritionClient } from '@/components/players/nutrition/nutritionClient';
+import WorkoutsSection from '@/components/players/workouts/WorkoutsSection';
+import { coachWorkoutsClient, type WorkoutLog } from '@/components/players/workouts/workoutsClient';
 import DeletePlayerSection from '@/components/players/DeletePlayerSection';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
@@ -77,13 +79,13 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
     if (isProfileTab(t)) setTabState(t);
   }, []);
   // Player submissions waiting for the coach (share link): shown on Overview, counted on its tab.
-  const [review, setReview] = useState<{ entries: TrackerEntry[]; trackers: Tracker[]; meals: MealLog[] }>({ entries: [], trackers: [], meals: [] });
+  const [review, setReview] = useState<{ entries: TrackerEntry[]; trackers: Tracker[]; meals: MealLog[]; workoutLogs: WorkoutLog[] }>({ entries: [], trackers: [], meals: [], workoutLogs: [] });
   const loadReview = useCallback(async () => {
     try {
       const res = await fetch(`/api/players/${playerId}/review`, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
-      setReview({ entries: data.entries ?? [], trackers: data.trackers ?? [], meals: data.meals ?? [] });
+      setReview({ entries: data.entries ?? [], trackers: data.trackers ?? [], meals: data.meals ?? [], workoutLogs: data.workoutLogs ?? [] });
     } catch { /* the queue is optional */ }
   }, [playerId]);
   useEffect(() => { void loadReview(); }, [loadReview]);
@@ -99,6 +101,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   // Without an active plan the profile stays readable; edits are server-gated (403 plan_required).
   const canEdit = useEntitlement().can('players');
   const nutritionClient = useMemo(() => coachNutritionClient(playerId, canEdit), [playerId, canEdit]);
+  const workoutsClient = useMemo(() => coachWorkoutsClient(playerId, canEdit), [playerId, canEdit]);
   const [saving, setSaving] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
   const [sheet, setSheet] = useState<TechnicalSheetRow[] | null>(null);
@@ -358,9 +361,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
       ) : null}
 
-      <ProfileTabs value={tab} onChange={(t) => { setTab(t); void loadReview(); }} badges={{ overview: review.entries.length + review.meals.length }} />
+      <ProfileTabs value={tab} onChange={(t) => { setTab(t); void loadReview(); }} badges={{ overview: review.entries.length + review.meals.length + review.workoutLogs.length }} />
 
-      {tab === 'overview' ? <ReviewQueue playerId={playerId} entries={review.entries} trackers={review.trackers} meals={review.meals} onChanged={() => void loadReview()} onOpenNutrition={() => setTab('nutrition')} /> : null}
+      {tab === 'overview' ? <ReviewQueue playerId={playerId} entries={review.entries} trackers={review.trackers} meals={review.meals} workoutLogs={review.workoutLogs} onChanged={() => void loadReview()} onOpenNutrition={() => setTab('nutrition')} onOpenWorkouts={() => setTab('workouts')} /> : null}
 
       {tab === 'overview' ? (
       <div style={{ ...panel, marginBottom: 18 }}>
@@ -732,6 +735,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       {tab === 'biometrics' ? <TrackerSection playerId={playerId} category="biometrics" canEdit={canEdit} /> : null}
       {tab === 'fitness' ? <TrackerSection playerId={playerId} category="fitness" canEdit={canEdit} /> : null}
       {tab === 'nutrition' ? <NutritionSection client={nutritionClient} /> : null}
+      {tab === 'workouts' ? <WorkoutsSection client={workoutsClient} /> : null}
 
       {tab === 'timeline' ? (
       <PlayerTimeline
