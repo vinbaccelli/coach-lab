@@ -183,6 +183,7 @@ Run, in the Supabase SQL editor, the migration files of each release (idempotent
 | PR C — trackers | `supabase/migrations/20261114090000_player_trackers.sql` |
 | PR D — share permissions | `supabase/migrations/20261114100000_share_permissions.sql` |
 | PR E — nutrition | `supabase/migrations/20261114110000_player_nutrition.sql` |
+| Fix — tracker entry policies (KNOWN_ISSUES 079) | `supabase/migrations/20261114113000_fix_tracker_entry_policies.sql` |
 | PR G — workouts | `supabase/migrations/20261114120000_workouts.sql` |
 
 ## 6. Testing

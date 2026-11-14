@@ -2417,3 +2417,17 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 **Proposed fix.** Make the bucket private and serve pictures through short-lived signed URLs, created by the server when it returns a profile, a timeline or a meal (coach routes with the coach's session, share routes with the service role scoped to the link's player). Touches every route that returns a picture and the existing stored URLs (store the path instead of the URL, or derive it), so it is a separate PR with its own migration and tests.
 
 **Severity.** Medium (privacy; no listing possible, no guessing possible).
+
+## 079 — Tracker entries could be filed under another player than their tracker's (RLS)
+
+**Found:** 2026-11-14, by a new database test for the workouts migration (same pattern), then confirmed on the trackers migration with `tests-db/policy-scoping.rls.test.ts` (fails before the fix, passes after).
+
+**Symptom.** A signed-in coach could insert or move a tracker entry with `tracker_id` of one of their trackers and `player_id` of another player (their own or another coach's).
+
+**Verified root cause.** `20261114090000_player_trackers.sql`, policies `tracker_entries_insert_own` / `tracker_entries_update_own`: `exists (select 1 from public.player_trackers t where t.id = tracker_id and t.player_id = player_id …)`. Inside the subquery the unqualified `player_id` resolves to `t.player_id` (the subquery's table comes first), so the condition compared the tracker with itself and never checked the entry's player.
+
+**Fault assessment.** Mine (player database PR C). Impact was limited: the row stays the inserting coach's (`coach_id` is checked), other coaches never see it (select policy), and every reader goes through the entry's own tracker (share routes and the timeline filter by the player's tracker ids), so nothing leaked or showed in the wrong place. Integrity hole, not a disclosure.
+
+**Fix.** `20261114113000_fix_tracker_entry_policies.sql` re-creates both policies with the row's columns written with the table name (`player_tracker_entries.player_id`); the original trackers file carries the same corrected text so re-running it cannot bring the bug back. Every other player-database policy was checked for the pattern: the `players p where p.id = player_id` subqueries are correct (`players` has no `player_id` column); the new workouts migration had the same mistake in its log policies and was fixed before it shipped.
+
+**Severity.** Medium (RLS integrity), fixed.
