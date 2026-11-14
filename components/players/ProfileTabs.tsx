@@ -9,6 +9,7 @@ export const PROFILE_TABS = [
   { id: 'fitness', label: 'Fitness' },
   { id: 'nutrition', label: 'Nutrition' },
   { id: 'workouts', label: 'Workouts' },
+  { id: 'mental', label: 'Mental' },
   { id: 'timeline', label: 'Timeline' },
 ] as const;
 export type ProfileTab = (typeof PROFILE_TABS)[number]['id'];
