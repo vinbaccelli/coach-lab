@@ -14,6 +14,7 @@ into one generic list:
 | Technical tracking categories | `players.technical_sheet` (jsonb rows) | Forehand, Backhand, Serve, Volley, Footwork (+ custom): dated comments |
 | Structured performance trackers | `player_trackers` + `player_tracker_entries` | anything measured over time: biometrics, fitness tests, custom metrics |
 | Nutrition | `player_nutrition_plans` + `player_meal_logs` | versioned plans with daily targets; the meal diary |
+| Workouts | `exercise_library`, `workout_templates`, `player_workouts` (planned), `player_workout_logs` (done) | library, templates, plans on dates or weekly series, what was done |
 | Timeline activities | `player_timeline_items` | comments, pictures, YouTube videos (the universal timeline reads every other table too, §2c) |
 
 The tracking engine is **sport-agnostic**: a tracker is a name, a category and a list of fields
@@ -77,6 +78,27 @@ Nutrition · Timeline. Later PRs add Workouts and Mental.
   or removes their own meals until they are approved; coach meals and approved meals cannot be
   changed through the link. The player sees active plans only (no drafts, no archived plans) and
   never edits plans.
+
+## 2d. Workouts (PR G)
+
+* **Exercise library** (`exercise_library`): 36 built-in exercises (strength, conditioning, speed &
+  agility, plyometrics, core, mobility, warm-up, recovery, tennis-specific; original short texts, no
+  external videos) readable by every coach and changeable by none, plus each coach's own exercises
+  (name, description, category, muscle groups, equipment, instructions, demo video link, thumbnail,
+  difficulty, sports, and which values a set records: reps, weight, time, distance).
+* **Templates** (`workout_templates`): a coach's reusable workouts (exercises with planned sets, reps,
+  weight, time, distance, rest, notes).
+* **Planned workouts** (`player_workouts`): a workout for a player on a date, from a template or built
+  for the player; a weekly series (chosen weekdays for N weeks, at most 60 dates) creates one row per
+  date sharing a `batch_id`. Each row keeps its own copy of the plan: editing a template never changes
+  planned workouts. Skip, plan again, move, edit (not once done), delete (one, or this and the later
+  undone ones of the series; a done workout stays).
+* **What was done** (`player_workout_logs`): stored separately from the plan, one log per planned
+  workout (or a log on its own): the sets actually performed per exercise, duration, effort (RPE
+  1-10), notes. The page compares planned against done per exercise (done, partial, not done, extra).
+* **Player logging** (share link `see.workouts` / `add.workouts`): the player sees the plan and taps
+  "I did it" (prefilled from the plan); the log waits for review like other submissions; the player
+  corrects or removes their own logs until approved and never changes plans.
 
 ## 2c. Universal timeline (PR F)
 
@@ -143,7 +165,7 @@ Status: ✅ done and verified in a browser · 🟡 partial · ⏳ planned (PR) �
 | 11 | Granular share permissions, enforced server-side | ✅ | PR D | view link refuses writes; hidden sections not sent and not writable |
 | 12 | Nutrition plans (versioned) + meal tracking with daily totals vs plan | ✅ | PR E | e2e `nutrition.e2e.mjs` (56 checks), DB `tests-db/nutrition.rls.test.ts` |
 | 13 | Universal timeline across modules, filters, pagination | ✅ | PR F | e2e `timeline.e2e.mjs`; workouts and questionnaires join it in PR G / PR H |
-| 14 | Workout plans, schedule, exercise library, workout logs (planned ≠ completed) | ⏳ | PR G | |
+| 14 | Workout plans, schedule, exercise library, workout logs (planned ≠ completed) | 🟡 | PR G (draft) | coach side verified in a browser; player side waits for a Rule 8 decision on `workouts.e2e.mjs`; not in the universal timeline yet (needs an approved test update) |
 | 15 | Mental questionnaires + assessments | ⏳ | PR H | |
 | 16 | Assignments and reminders (in-app) | ⏳ | PR H | |
 | 17 | Student pictures to the coach's Google Drive | ⏳ | PR I (investigation; needs a server-held Drive grant) | |
@@ -161,6 +183,7 @@ Run, in the Supabase SQL editor, the migration files of each release (idempotent
 | PR C — trackers | `supabase/migrations/20261114090000_player_trackers.sql` |
 | PR D — share permissions | `supabase/migrations/20261114100000_share_permissions.sql` |
 | PR E — nutrition | `supabase/migrations/20261114110000_player_nutrition.sql` |
+| PR G — workouts | `supabase/migrations/20261114120000_workouts.sql` |
 
 ## 6. Testing
 
