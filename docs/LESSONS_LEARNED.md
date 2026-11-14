@@ -917,3 +917,14 @@ depend on what failed; "called play()" is not "it plays", so check the effect
 - **Verified root cause (measured in Chromium at 390 px):** each number field was `<span style="display:flex"><input style="width:100%">kcal</span>` inside a grid. In the min-content pass a percentage width counts as `auto`, so the input contributed its intrinsic width (`size=20` characters at 16 px); the grid column took the largest such contribution and every row grew to it.
 - **Fix:** inputs in flex rows get `width: 0; flex: 1 1 auto` (they contribute nothing to the min-content width and grow to fill); number fields sit in a `repeat(auto-fill, minmax(116px, 1fr))` grid so phones get two per row.
 - **Class of mistake:** `width: 100%` does not stop an input from widening its container: it only applies once the container's width is known. Measure the widest element at phone width (`getBoundingClientRect().right > innerWidth`) before trusting a screenshot taken at desktop width.
+
+---
+
+## 023 — An RLS check that compared a column with itself
+
+*2026-11-14 · branch `fix/tracker-entry-policies` (KNOWN_ISSUES 079)*
+
+- **Symptom:** a database test expected an insert to be refused (an entry pointing at one player's tracker but filed under another player) and the insert succeeded.
+- **Verified root cause:** in `exists (select 1 from player_trackers t where t.id = tracker_id and t.player_id = player_id)`, the unqualified `player_id` resolves to `t.player_id`: SQL looks in the subquery's own tables first. `tracker_id` happened to work only because `player_trackers` has no column of that name.
+- **Fix:** write the policy row's own columns with the table name (`player_tracker_entries.player_id`); a regression test inserts the cross-player row and expects 42501.
+- **Class of mistake:** a security condition that reads correctly to a human but binds to a different column than intended, and a test suite that only tried the obvious attack (someone else's tracker), not the mismatched pair (my tracker, someone else's player). In policies, qualify every outer column inside a subquery, and test each relation the policy is meant to tie together.

@@ -99,7 +99,7 @@ create policy "tracker_entries_insert_own" on public.player_tracker_entries
     auth.uid() = coach_id
     and exists (
       select 1 from public.player_trackers t
-      where t.id = tracker_id and t.player_id = player_id and t.coach_id = auth.uid()
+      where t.id = player_tracker_entries.tracker_id and t.player_id = player_tracker_entries.player_id and t.coach_id = auth.uid()
     )
   );
 drop policy if exists "tracker_entries_update_own" on public.player_tracker_entries;
@@ -109,7 +109,7 @@ create policy "tracker_entries_update_own" on public.player_tracker_entries
     auth.uid() = coach_id
     and exists (
       select 1 from public.player_trackers t
-      where t.id = tracker_id and t.player_id = player_id and t.coach_id = auth.uid()
+      where t.id = player_tracker_entries.tracker_id and t.player_id = player_tracker_entries.player_id and t.coach_id = auth.uid()
     )
   );
 drop policy if exists "tracker_entries_delete_own" on public.player_tracker_entries;
