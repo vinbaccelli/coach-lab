@@ -12,3 +12,10 @@ export function isMissingTable(error: { code?: string | null; message?: string |
 }
 
 export const SETUP_NEEDED = { setupNeeded: true } as const;
+
+/** Is this error "that column does not exist (yet)"? Used where a release adds a column to an existing table. */
+export function isMissingColumn(error: { code?: string | null; message?: string | null } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204') return true;
+  return /column .* does not exist|could not find the '.*' column/i.test(error.message ?? '');
+}

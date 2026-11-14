@@ -25,6 +25,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   if ('fail' in r && r.fail) return r.fail;
   const { db, share } = r as { db: Db; share: Share };
   if (share.mode !== 'edit') return NextResponse.json({ error: 'This link is view-only.' }, { status: 403, headers: NO_STORE });
+  if (!share.perms.add.videos) return NextResponse.json({ error: 'This link does not allow adding videos.' }, { status: 403, headers: NO_STORE });
 
   const origin = selectUploadOrigin(req.headers.get('origin'));
   if (!origin) return NextResponse.json({ error: YOUTUBE_UPLOAD_COULD_NOT_START }, { status: 400, headers: NO_STORE });

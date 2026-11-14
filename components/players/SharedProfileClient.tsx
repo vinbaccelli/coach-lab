@@ -7,11 +7,13 @@ import { youtubeEmbedUrl } from '@/lib/players/timeline';
 import { uploadToResumableSession } from '@/lib/export/youtubeResumableUpload';
 import { applyManualOrder } from '@/lib/players/reorder';
 import { entriesNewestFirst } from '@/lib/players/technicalSheet';
-import TrackerCard from '@/components/players/trackers/TrackerCard';
+import TrackerCard, { type TrackerActions } from '@/components/players/trackers/TrackerCard';
 import type { Tracker, TrackerEntry } from '@/lib/players/trackers';
+import { addKindForCategory, type SharePermissions } from '@/lib/players/sharePermissions';
+import { newRef } from '@/components/players/ui';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
-type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean };
+type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean; permissions?: SharePermissions };
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' };
@@ -75,6 +77,24 @@ export default function SharedProfileClient({ token }: { token: string }) {
   const json = (b: unknown): RequestInit => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
 
   const series = useMemo(() => groupMetrics(data?.metrics ?? []), [data]);
+  const can = data?.permissions?.add;
+  /** Entries go to the coach for review; the player can correct or withdraw them until then. */
+  const trackerActions = (category: string): TrackerActions | null => {
+    const kind = addKindForCategory(category);
+    if (!kind || !can?.[kind]) return null;
+    const call = async (url: string, method: string, body?: unknown) => {
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json', ...headers() }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error ?? 'Could not save');
+      await load();
+    };
+    return {
+      addEntry: (trackerId, p) => call(`/api/share/${token}/tracker-entries`, 'POST', { ...p, tracker_id: trackerId, client_ref: newRef() }),
+      updateEntry: (entry, p) => call(`/api/share/${token}/tracker-entries/${entry.id}`, 'PATCH', p),
+      deleteEntry: (entry) => call(`/api/share/${token}/tracker-entries/${entry.id}`, 'DELETE'),
+    };
+  };
+  const toFix = (data?.trackerEntries ?? []).filter((e) => e.author === 'link' && e.status === 'needs_revision').length;
 
   if (state === 'loading') return <p style={{ padding: 24 }}>Loading…</p>;
   if (state === 'gone') return <p style={{ padding: 24 }}>This link is not available. Ask your coach for a new one.</p>;
@@ -96,6 +116,12 @@ export default function SharedProfileClient({ token }: { token: string }) {
     <div style={{ maxWidth: 760, margin: '0 auto', padding: '20px 16px 48px', color: 'var(--cl-text-primary)' }}>
       <h1 style={{ fontSize: 22, margin: '0 0 14px' }}>{data.name}</h1>
       {err ? <p style={{ color: 'var(--cl-destructive-text)', fontSize: 13 }}>{err}</p> : null}
+      {toFix ? (
+        <div role="status" style={{ ...panel, borderColor: 'rgba(255,59,48,0.35)', background: 'rgba(255,59,48,0.05)' }}>
+          <strong style={{ fontSize: 14 }}>Your coach asked you to fix {toFix === 1 ? 'one entry' : `${toFix} entries`}.</strong>
+          <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)', marginTop: 4 }}>Look for “Needs a fix” below, tap the pencil, correct it and save: it goes back to your coach.</div>
+        </div>
+      ) : null}
 
       {data.sheet.length > 0 ? (
         <div style={panel}>
@@ -131,14 +157,14 @@ export default function SharedProfileClient({ token }: { token: string }) {
             <h2 style={{ margin: '0 0 10px', fontSize: 15 }}>{cat === 'progress' ? 'Progress' : cat === 'biometrics' ? 'Biometrics' : 'Fitness'}</h2>
             <div style={{ display: 'grid', gap: 10 }}>
               {list.map((t) => (
-                <TrackerCard key={t.id} tracker={t} entries={(data.trackerEntries ?? []).filter((e) => e.tracker_id === t.id)} actions={null} viewer="player" />
+                <TrackerCard key={t.id} tracker={t} entries={(data.trackerEntries ?? []).filter((e) => e.tracker_id === t.id)} actions={trackerActions(t.category)} viewer="player" />
               ))}
             </div>
           </div>
         );
       })}
 
-      {(series.length > 0 || data.canAdd) ? (
+      {(series.length > 0 || (data.canAdd && (can?.progress ?? true))) ? (
         <div style={panel}>
           <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>{data.trackersAvailable ? 'Send a value to your coach' : 'Progress'}</h2>
           {series.map((s) => (
@@ -148,12 +174,12 @@ export default function SharedProfileClient({ token }: { token: string }) {
                 <span style={{ fontSize: 13 }}>{s.latest.value}{s.unit ? ` ${s.unit}` : ''}{s.change !== null ? ` (${s.change > 0 ? '+' : ''}${Math.round(s.change * 100) / 100} since first)` : ''}</span>
               </div>
               <MetricChart points={s.points} />
-              {data.canAdd ? (
+              {data.canAdd && (can?.progress ?? true) ? (
                 <button type="button" style={{ ...ghost, marginTop: 6 }} onClick={() => { setMName(s.name); setMUnit(s.unit); }}>Add a value to {s.name}</button>
               ) : null}
             </div>
           ))}
-          {data.canAdd ? (
+          {data.canAdd && (can?.progress ?? true) ? (
             <div style={{ borderTop: '1px solid var(--cl-border)', paddingTop: 10, marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               <input value={mName} onChange={(e) => setMName(e.target.value)} placeholder="What (e.g. 5 km run)" style={{ ...inp, flex: '1 1 140px' }} />
               <input value={mUnit} onChange={(e) => setMUnit(e.target.value)} placeholder="Unit" style={{ ...inp, width: 80 }} />
@@ -167,20 +193,23 @@ export default function SharedProfileClient({ token }: { token: string }) {
         </div>
       ) : null}
 
+      {(data.permissions?.see.timeline ?? true) ? (
       <div style={panel}>
         <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Timeline</h2>
-        {data.canAdd ? (
+        {data.canAdd && (can?.comments || can?.pictures || can?.videos || !can) ? (
           <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
-            <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a comment…" style={{ ...inp, resize: 'vertical' }} />
+            {(can?.comments ?? true) ? <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a comment…" style={{ ...inp, resize: 'vertical' }} /> : null}
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              <button type="button" style={btn} disabled={!!busy || !text.trim()} onClick={() => void run('Saving…', async () => { await post(json({ kind: 'note', body: text })); setText(''); })}>Add comment</button>
-              <button type="button" style={ghost} disabled={!!busy} onClick={() => picRef.current?.click()}>Add picture</button>
-              <button type="button" style={ghost} disabled={!!busy} onClick={() => vidRef.current?.click()}>Upload video</button>
+              {(can?.comments ?? true) ? <button type="button" style={btn} disabled={!!busy || !text.trim()} onClick={() => void run('Saving…', async () => { await post(json({ kind: 'note', body: text })); setText(''); })}>Add comment</button> : null}
+              {(can?.pictures ?? true) ? <button type="button" style={ghost} disabled={!!busy} onClick={() => picRef.current?.click()}>Add picture</button> : null}
+              {(can?.videos ?? true) ? <button type="button" style={ghost} disabled={!!busy} onClick={() => vidRef.current?.click()}>Upload video</button> : null}
             </div>
+            {(can?.videos ?? true) ? (
             <div style={{ display: 'flex', gap: 6 }}>
               <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="Paste a YouTube link" style={{ ...inp, flex: 1 }} />
               <button type="button" style={ghost} disabled={!!busy || !link.trim()} onClick={() => void run('Saving…', async () => { await post(json({ kind: 'video', youtube_url: link, body: '' })); setLink(''); })}>Add video</button>
             </div>
+            ) : null}
             <input ref={picRef} type="file" accept="image/*" hidden onChange={(e) => {
               const f = e.target.files?.[0]; e.target.value = '';
               if (f) void run('Uploading picture…', async () => {
@@ -223,6 +252,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
           ))}
         </div>
       </div>
+      ) : null}
       <p style={{ fontSize: 11, color: 'var(--cl-text-muted)', textAlign: 'center' }}>Made with AngleMotion</p>
     </div>
   );

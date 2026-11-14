@@ -1,0 +1,80 @@
+'use client';
+
+import { useState } from 'react';
+import { Check, Undo2 } from 'lucide-react';
+import { computeDerived, describeEntry, type Tracker, type TrackerEntry } from '@/lib/players/trackers';
+import { apiJson, badge, ghostBtn, h2, input, muted, panel, primaryBtn, shortDate } from '@/components/players/ui';
+
+/**
+ * What the player sent through the share link and the coach has not reviewed yet, in one list:
+ * approve it (it joins the history and the charts as a normal entry) or ask for a fix with a note
+ * (the player sees the note on their page and can correct the entry).
+ */
+export default function ReviewQueue({ playerId, entries, trackers, onChanged }: {
+  playerId: string;
+  entries: TrackerEntry[];
+  trackers: Tracker[];
+  onChanged: () => void;
+}) {
+  const [fixFor, setFixFor] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  if (!entries.length) return null;
+  const byId = new Map(trackers.map((t) => [t.id, t]));
+
+  const review = async (e: TrackerEntry, status: 'approved' | 'needs_revision', reviewNote?: string) => {
+    setBusy(e.id);
+    setErr(null);
+    try {
+      await apiJson(`/api/players/${playerId}/tracker-entries/${e.id}`, { method: 'PATCH', json: { status, review_note: reviewNote } });
+      setFixFor(null);
+      setNote('');
+      onChanged();
+    } catch (x) {
+      setErr(x instanceof Error ? x.message : 'Could not save');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section style={{ ...panel, marginBottom: 18, borderColor: 'rgba(255,159,10,0.45)' }} aria-label="To review" data-testid="review-queue">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <h2 style={h2}>To review</h2>
+        <span style={badge('pending')}>{entries.length}</span>
+      </div>
+      <p style={{ ...muted, margin: '4px 0 10px' }}>Sent by the player through the share link. Approved entries join the history and the charts.</p>
+      {err ? <div role="alert" style={{ fontSize: 12, color: '#b3261e' }}>{err}</div> : null}
+      <div style={{ display: 'grid' }}>
+        {entries.map((e) => {
+          const t = byId.get(e.tracker_id);
+          if (!t) return null;
+          const derived = computeDerived(t, [e]).get(e.id);
+          return (
+            <div key={e.id} style={{ borderTop: '1px solid var(--cl-border)', padding: '10px 0', display: 'grid', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: 13 }}>{t.name}</strong>
+                <span style={{ fontSize: 12, color: 'var(--cl-text-muted)' }}>{shortDate(e.entry_date)}</span>
+              </div>
+              <div style={{ fontSize: 13 }}>{describeEntry(t, e, derived)}</div>
+              {e.note ? <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)', whiteSpace: 'pre-wrap' }}>“{e.note}”</div> : null}
+              {fixFor === e.id ? (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <input autoFocus value={note} onChange={(ev) => setNote(ev.target.value)} placeholder="What should the player change?" style={{ ...input, flex: '1 1 220px' }} />
+                  <button type="button" disabled={!note.trim() || busy === e.id} onClick={() => void review(e, 'needs_revision', note.trim())} style={primaryBtn}>Send</button>
+                  <button type="button" onClick={() => setFixFor(null)} style={ghostBtn}>Cancel</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button type="button" disabled={busy === e.id} onClick={() => void review(e, 'approved')} style={{ ...primaryBtn, padding: '6px 12px', fontSize: 12 }}><Check size={13} /> Approve</button>
+                  <button type="button" disabled={busy === e.id} onClick={() => { setFixFor(e.id); setNote(''); }} style={{ ...ghostBtn, padding: '6px 12px', fontSize: 12 }}><Undo2 size={13} /> Ask for a fix</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
