@@ -265,7 +265,8 @@ async function handleRest(req, res, url, claims) {
     const params = [];
     if (method === 'POST') {
       const list = Array.isArray(body) ? body : [body];
-      const cols = sp.get('columns') ? sp.get('columns').split(',') : [...new Set(list.flatMap((r) => Object.keys(r || {})))];
+      // PostgREST sends the column list of a multi-row insert quoted (columns="a","b").
+      const cols = sp.get('columns') ? sp.get('columns').split(',').map((c) => c.trim().replace(/^"|"$/g, '')) : [...new Set(list.flatMap((r) => Object.keys(r || {})))];
       cols.forEach(q);
       params.push(JSON.stringify(list));
       const colList = cols.map(q).join(', ');

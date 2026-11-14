@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Check, Undo2 } from 'lucide-react';
 import { computeDerived, describeEntry, type Tracker, type TrackerEntry } from '@/lib/players/trackers';
 import { MEAL_LABELS, type MealLog } from '@/lib/players/nutrition';
+import type { WorkoutLog } from '@/components/players/workouts/workoutsClient';
 import { apiJson, badge, ghostBtn, h2, input, muted, panel, primaryBtn, shortDate } from '@/components/players/ui';
 
 /**
@@ -11,20 +12,23 @@ import { apiJson, badge, ghostBtn, h2, input, muted, panel, primaryBtn, shortDat
  * approve it (it joins the history and the charts as a normal entry) or ask for a fix with a note
  * (the player sees the note on their page and can correct the entry).
  */
-export default function ReviewQueue({ playerId, entries, trackers, meals = [], onChanged, onOpenNutrition }: {
+export default function ReviewQueue({ playerId, entries, trackers, meals = [], workoutLogs = [], onChanged, onOpenNutrition, onOpenWorkouts }: {
   playerId: string;
   entries: TrackerEntry[];
   trackers: Tracker[];
   /** Meals the player logged (waiting): approved here in one tap, or opened in Nutrition. */
   meals?: MealLog[];
+  /** Workouts the player logged (waiting): approved here in one tap, or opened in Workouts. */
+  workoutLogs?: WorkoutLog[];
   onChanged: () => void;
   onOpenNutrition?: () => void;
+  onOpenWorkouts?: () => void;
 }) {
   const [fixFor, setFixFor] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  if (!entries.length && !meals.length) return null;
+  if (!entries.length && !meals.length && !workoutLogs.length) return null;
   const byId = new Map(trackers.map((t) => [t.id, t]));
 
   const approveMeals = async () => {
@@ -40,6 +44,18 @@ export default function ReviewQueue({ playerId, entries, trackers, meals = [], o
     }
   };
   const mealDays = [...new Set(meals.map((m) => m.eaten_on))];
+  const approveLogs = async () => {
+    setBusy('workouts');
+    setErr(null);
+    try {
+      await apiJson(`/api/players/${playerId}/workout-logs/approve`, { method: 'POST', json: { ids: workoutLogs.map((l) => l.id) } });
+      onChanged();
+    } catch (x) {
+      setErr(x instanceof Error ? x.message : 'Could not save');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const review = async (e: TrackerEntry, status: 'approved' | 'needs_revision', reviewNote?: string) => {
     setBusy(e.id);
@@ -60,7 +76,7 @@ export default function ReviewQueue({ playerId, entries, trackers, meals = [], o
     <section style={{ ...panel, marginBottom: 18, borderColor: 'rgba(255,159,10,0.45)' }} aria-label="To review" data-testid="review-queue">
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <h2 style={h2}>To review</h2>
-        <span style={badge('pending')}>{entries.length + meals.length}</span>
+        <span style={badge('pending')}>{entries.length + meals.length + workoutLogs.length}</span>
       </div>
       <p style={{ ...muted, margin: '4px 0 10px' }}>Sent by the player through the share link. Approved entries join the history and the charts.</p>
       {err ? <div role="alert" style={{ fontSize: 12, color: '#b3261e' }}>{err}</div> : null}
@@ -103,6 +119,16 @@ export default function ReviewQueue({ playerId, entries, trackers, meals = [], o
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button type="button" disabled={busy === 'meals'} onClick={() => void approveMeals()} style={{ ...primaryBtn, padding: '6px 12px', fontSize: 12 }}><Check size={13} /> Approve {meals.length === 1 ? 'it' : `all ${meals.length}`}</button>
             {onOpenNutrition ? <button type="button" onClick={onOpenNutrition} style={{ ...ghostBtn, padding: '6px 12px', fontSize: 12 }}>Review in Nutrition</button> : null}
+          </div>
+        </div>
+      ) : null}
+      {workoutLogs.length ? (
+        <div data-testid="review-workouts" style={{ borderTop: '1px solid var(--cl-border)', padding: '10px 0 0', marginTop: 10, display: 'grid', gap: 6 }}>
+          <strong style={{ fontSize: 13 }}>{workoutLogs.length === 1 ? 'One workout' : `${workoutLogs.length} workouts`} logged by the player</strong>
+          <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)' }}>{workoutLogs.slice(0, 4).map((l) => `${shortDate(l.performed_on)}: ${l.title}`).join(' · ')}{workoutLogs.length > 4 ? ' …' : ''}</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button type="button" disabled={busy === 'workouts'} onClick={() => void approveLogs()} style={{ ...primaryBtn, padding: '6px 12px', fontSize: 12 }}><Check size={13} /> Approve {workoutLogs.length === 1 ? 'it' : `all ${workoutLogs.length}`}</button>
+            {onOpenWorkouts ? <button type="button" onClick={onOpenWorkouts} style={{ ...ghostBtn, padding: '6px 12px', fontSize: 12 }}>Review in Workouts</button> : null}
           </div>
         </div>
       ) : null}

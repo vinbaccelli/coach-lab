@@ -13,6 +13,8 @@ import NutritionSection from '@/components/players/nutrition/NutritionSection';
 import HistoryFeed, { type HistoryPage } from '@/components/players/history/HistoryFeed';
 import { HISTORY_SECTIONS } from '@/lib/players/history';
 import { playerNutritionClient } from '@/components/players/nutrition/nutritionClient';
+import WorkoutsSection from '@/components/players/workouts/WorkoutsSection';
+import { playerWorkoutsClient } from '@/components/players/workouts/workoutsClient';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
 type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean; permissions?: SharePermissions };
@@ -55,6 +57,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
 
   const headers = useCallback((): Record<string, string> => (email.trim() ? { 'x-share-email': email.trim() } : {}), [email]);
   const nutritionClient = useMemo(() => playerNutritionClient(token, headers), [token, headers]);
+  const workoutsClient = useMemo(() => playerWorkoutsClient(token, headers), [token, headers]);
   // The universal timeline (only the sections this link may see; the server enforces it).
   const [feedKey, setFeedKey] = useState(0);
   const fetchHistory = useCallback(async (params: URLSearchParams): Promise<HistoryPage> => {
@@ -205,6 +208,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
       ) : null}
 
       {data.permissions?.see.nutrition ? <NutritionSection client={nutritionClient} /> : null}
+      {data.permissions?.see.workouts ? <WorkoutsSection client={workoutsClient} /> : null}
 
       {(data.permissions?.see.timeline ?? true) ? (
       <div style={panel}>
