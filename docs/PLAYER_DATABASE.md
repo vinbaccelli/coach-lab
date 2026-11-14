@@ -14,7 +14,7 @@ into one generic list:
 | Technical tracking categories | `players.technical_sheet` (jsonb rows) | Forehand, Backhand, Serve, Volley, Footwork (+ custom): dated comments |
 | Structured performance trackers | `player_trackers` + `player_tracker_entries` | anything measured over time: biometrics, fitness tests, custom metrics |
 | Nutrition | `player_nutrition_plans` + `player_meal_logs` | versioned plans with daily targets; the meal diary |
-| Timeline activities | `player_timeline_items` (+ reports, tracker entries…) | comments, pictures, YouTube videos, analyses |
+| Timeline activities | `player_timeline_items` | comments, pictures, YouTube videos (the universal timeline reads every other table too, §2c) |
 
 The tracking engine is **sport-agnostic**: a tracker is a name, a category and a list of fields
 (`id`, `label`, `kind`, `unit`, `better`). Presets (Biometrics, Fitness exercises) live in code
@@ -78,6 +78,26 @@ Nutrition · Timeline. Later PRs add Workouts and Mental.
   changed through the link. The player sees active plans only (no drafts, no archived plans) and
   never edits plans.
 
+## 2c. Universal timeline (PR F)
+
+* One list per player, newest first, built on read from every module (`lib/players/history.ts`,
+  `lib/players/historySources.ts`): comments, pictures, videos, reports, the technical sheet's dated
+  comments (Forehand…), tracker entries (Progress, Biometrics, Fitness), meals, and nutrition plans
+  (on their start date, "New version of…" for versions; drafts never). Nothing is copied: each item
+  is a row of its own table with a stable key (`i-`, `e-`, `ts-`, `t-`/`m-`, `meal-`, `plan-`).
+* **No duplicates**: an entry copied from an old progress value keeps that value's key
+  (`m-<legacy id>`); the old `player_metrics` rows are read only while the tracker tables do not
+  exist. Items are deduplicated by key across pages.
+* **Order and paging**: by the day the item is about, then creation time, then key. 30 per page,
+  "Load older"; the cursor is that triple, so a page boundary is exact (each source is read with at
+  most limit + 1 rows after the cursor).
+* **Filters** (one row above the list): section, kind, added by (coach / player), from / to dates.
+  Applied in the database where possible and checked again on the server.
+* **Manual order**: the coach's drag order (`players.timeline_order`) still applies when no filter is
+  active; then the whole list is loaded so the order covers everything. Items added later stay on top.
+* **Share link**: `GET /api/share/<token>/history` with the same paging and filters, limited to the
+  sections the link may see; reports, draft or archived plans and archived trackers are never sent.
+
 ## 3. Security model
 
 * **RLS everywhere**: every player-database table allows select/insert/update/delete only to the
@@ -122,7 +142,7 @@ Status: ✅ done and verified in a browser · 🟡 partial · ⏳ planned (PR) �
 | 10 | Student logging (biometrics, fitness, workouts, meals, comments, pictures, videos) with review | 🟡 | trackers (biometrics, fitness, progress), comments, pictures, videos + review queue ✅ PR D; meals ✅ PR E; workouts ⏳ PR G | e2e `student.e2e.mjs`, `nutrition.e2e.mjs` |
 | 11 | Granular share permissions, enforced server-side | ✅ | PR D | view link refuses writes; hidden sections not sent and not writable |
 | 12 | Nutrition plans (versioned) + meal tracking with daily totals vs plan | ✅ | PR E | e2e `nutrition.e2e.mjs` (56 checks), DB `tests-db/nutrition.rls.test.ts` |
-| 13 | Universal timeline across modules, filters, pagination | 🟡 | timeline exists (#174/#177/#184); universal + filters ⏳ PR F | |
+| 13 | Universal timeline across modules, filters, pagination | ✅ | PR F | e2e `timeline.e2e.mjs`; workouts and questionnaires join it in PR G / PR H |
 | 14 | Workout plans, schedule, exercise library, workout logs (planned ≠ completed) | ⏳ | PR G | |
 | 15 | Mental questionnaires + assessments | ⏳ | PR H | |
 | 16 | Assignments and reminders (in-app) | ⏳ | PR H | |

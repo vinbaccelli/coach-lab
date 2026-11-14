@@ -737,7 +737,6 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       <PlayerTimeline
         playerId={playerId}
         playerName={player.display_name}
-        entries={entries}
         canEdit={canEdit}
         order={parseOrder(player.timeline_order)}
         onOrderChange={async (order) => {

@@ -3,15 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MetricChart } from '@/components/players/PlayerMetrics';
 import { groupMetrics, type MetricRow } from '@/lib/players/metrics';
-import { youtubeEmbedUrl } from '@/lib/players/timeline';
 import { uploadToResumableSession } from '@/lib/export/youtubeResumableUpload';
-import { applyManualOrder } from '@/lib/players/reorder';
 import { entriesNewestFirst } from '@/lib/players/technicalSheet';
 import TrackerCard, { type TrackerActions } from '@/components/players/trackers/TrackerCard';
 import type { Tracker, TrackerEntry } from '@/lib/players/trackers';
 import { addKindForCategory, type SharePermissions } from '@/lib/players/sharePermissions';
 import { newRef } from '@/components/players/ui';
 import NutritionSection from '@/components/players/nutrition/NutritionSection';
+import HistoryFeed, { type HistoryPage } from '@/components/players/history/HistoryFeed';
+import { HISTORY_SECTIONS } from '@/lib/players/history';
 import { playerNutritionClient } from '@/components/players/nutrition/nutritionClient';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
@@ -55,6 +55,14 @@ export default function SharedProfileClient({ token }: { token: string }) {
 
   const headers = useCallback((): Record<string, string> => (email.trim() ? { 'x-share-email': email.trim() } : {}), [email]);
   const nutritionClient = useMemo(() => playerNutritionClient(token, headers), [token, headers]);
+  // The universal timeline (only the sections this link may see; the server enforces it).
+  const [feedKey, setFeedKey] = useState(0);
+  const fetchHistory = useCallback(async (params: URLSearchParams): Promise<HistoryPage> => {
+    const res = await fetch(`/api/share/${token}/history?${params.toString()}`, { cache: 'no-store', headers: headers() });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? 'Could not load the timeline');
+    return { items: body.items ?? [], next: body.next ?? null };
+  }, [token, headers]);
 
   const load = useCallback(async () => {
     try {
@@ -75,7 +83,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
   };
   const run = async (label: string, fn: () => Promise<void>) => {
     setBusy(label); setErr(null);
-    try { await fn(); await load(); } catch (e) { setErr(e instanceof Error ? e.message : 'Failed'); } finally { setBusy(null); }
+    try { await fn(); await load(); setFeedKey((k) => k + 1); } catch (e) { setErr(e instanceof Error ? e.message : 'Failed'); } finally { setBusy(null); }
   };
   const json = (b: unknown): RequestInit => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
 
@@ -235,27 +243,13 @@ export default function SharedProfileClient({ token }: { token: string }) {
             {busy ? <div style={{ fontSize: 12 }}>{busy}</div> : null}
           </div>
         ) : null}
-        {data.items.length === 0 ? <p style={{ fontSize: 12, color: 'var(--cl-text-muted)' }}>Nothing here yet.</p> : null}
-        <div style={{ display: 'grid', gap: 10 }}>
-          {applyManualOrder(data.items.map((x) => ({ ...x, key: `i-${x.id}` })), data.timelineOrder).map((t) => (
-            <div key={t.id} style={{ borderTop: '1px solid var(--cl-border)', paddingTop: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                <strong>{t.author === 'link' ? 'Player' : 'Coach'}</strong>
-                <span style={{ color: 'var(--cl-text-muted)' }}>{t.created_at.slice(0, 10)}</span>
-              </div>
-              {t.body ? <p style={{ margin: '4px 0 0', fontSize: 13, whiteSpace: 'pre-wrap' }}>{t.body}</p> : null}
-              {t.kind === 'picture' && t.media_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={t.media_url} alt="" loading="lazy" style={{ marginTop: 6, maxWidth: '100%', maxHeight: 360, borderRadius: 10, display: 'block' }} />
-              ) : null}
-              {t.kind === 'video' && t.youtube_id ? (
-                <div style={{ marginTop: 6, position: 'relative', paddingTop: '56.25%', maxWidth: 560 }}>
-                  <iframe src={youtubeEmbedUrl(t.youtube_id)} title="Video" loading="lazy" allow="accelerometer; encrypted-media; gyroscope; picture-in-picture" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, borderRadius: 10 }} />
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
+        <HistoryFeed
+          viewer="player"
+          fetchPage={fetchHistory}
+          sections={HISTORY_SECTIONS.filter((s) => data.permissions?.see[s] ?? true)}
+          order={data.timelineOrder ?? null}
+          reloadKey={feedKey}
+        />
       </div>
       ) : null}
       <p style={{ fontSize: 11, color: 'var(--cl-text-muted)', textAlign: 'center' }}>Made with AngleMotion</p>
