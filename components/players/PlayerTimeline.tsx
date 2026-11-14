@@ -1,11 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Image as ImageIcon, MessageSquare, Video, X } from 'lucide-react';
-import { buildTimeline, youtubeEmbedUrl, type RawEntry, type RawItem, type RawMetric } from '@/lib/players/timeline';
+import { useCallback, useRef, useState } from 'react';
+import { Image as ImageIcon, MessageSquare, Video } from 'lucide-react';
 import { uploadVideoToYouTube } from '@/lib/export/exportService';
-import ReorderList from '@/components/players/ReorderList';
-import { applyManualOrder } from '@/lib/players/reorder';
+import HistoryFeed, { type HistoryPage } from '@/components/players/history/HistoryFeed';
+import type { HistoryItem } from '@/lib/players/history';
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 };
@@ -26,41 +25,28 @@ async function shrinkImage(file: File): Promise<Blob> {
   return blob;
 }
 
-/** One chronological list for the player: comments, pictures, videos, reports and progress values. */
-export default function PlayerTimeline({ playerId, playerName, entries, canEdit, order, onOrderChange }: { playerId: string; playerName: string; entries: RawEntry[]; canEdit: boolean; order?: string[] | null; onOrderChange?: (order: string[]) => Promise<void> }) {
-  const [items, setItems] = useState<RawItem[]>([]);
-  const [metrics, setMetrics] = useState<RawMetric[]>([]);
+/**
+ * The player's universal timeline for the coach: add comments, pictures and videos here; the list
+ * below shows every module (reports, technical notes, measurements, meals, plans…) newest first,
+ * with filters, and keeps the coach's manual order.
+ */
+export default function PlayerTimeline({ playerId, playerName, canEdit, order, onOrderChange }: { playerId: string; playerName: string; canEdit: boolean; order?: string[] | null; onOrderChange?: (order: string[]) => Promise<void> }) {
   const [err, setErr] = useState<string | null>(null);
-  const [localOrder, setLocalOrder] = useState<string[] | null>(order ?? null);
-  const orderSig = JSON.stringify(order ?? null);
-  useEffect(() => { setLocalOrder(order ?? null); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderSig]);
   const [busy, setBusy] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [link, setLink] = useState('');
   const [showLink, setShowLink] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const picRef = useRef<HTMLInputElement>(null);
   const vidRef = useRef<HTMLInputElement>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/players/${playerId}/timeline`, { cache: 'no-store' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Could not load the timeline');
-      setItems(data.items ?? []);
-      setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not load the timeline');
-    }
-    // Progress values are optional here: a missing table must not break the timeline.
-    try {
-      const res = await fetch(`/api/players/${playerId}/metrics`, { cache: 'no-store' });
-      if (res.ok) setMetrics((await res.json()).metrics ?? []);
-    } catch { /* ignore */ }
+  const fetchPage = useCallback(async (params: URLSearchParams): Promise<HistoryPage> => {
+    const res = await fetch(`/api/players/${playerId}/history?${params.toString()}`, { cache: 'no-store' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error ?? 'Could not load the timeline');
+    return { items: data.items ?? [], next: data.next ?? null };
   }, [playerId]);
-  useEffect(() => { void load(); }, [load]);
-
-  const timeline = useMemo(() => applyManualOrder(buildTimeline({ items, entries, metrics }), localOrder), [items, entries, metrics, localOrder]);
+  const load = useCallback(async () => { setReloadKey((k) => k + 1); }, []);
 
   const postJson = async (body: unknown) => {
     const res = await fetch(`/api/players/${playerId}/timeline`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -89,19 +75,16 @@ export default function PlayerTimeline({ playerId, playerName, entries, canEdit,
     if (!r.ok || !r.url) throw new Error(r.needsConnect ? 'Connect YouTube first (in the analysis app export menu), then try again.' : r.error ?? 'YouTube upload failed');
     await postJson({ kind: 'video', youtube_url: r.url, body: '' });
   });
-  const remove = (id: string) => {
-    if (!window.confirm('Delete this item?')) return;
-    void run('Deleting…', async () => {
-      const res = await fetch(`/api/players/${playerId}/timeline?itemId=${encodeURIComponent(id)}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Could not delete');
-    });
+  const remove = async (item: HistoryItem) => {
+    const res = await fetch(`/api/players/${playerId}/timeline?itemId=${encodeURIComponent(item.deletableId ?? '')}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Could not delete');
   };
 
   return (
     <div style={{ background: 'rgba(250, 249, 247, 0.96)', border: '1px solid var(--cl-border)', borderRadius: 16, padding: 18, color: 'var(--cl-text-primary)', marginBottom: 18 }}>
       <h2 style={{ margin: 0, fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Timeline</h2>
       <p style={{ margin: '4px 0 12px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
-        Comments, pictures, videos, reports and progress values for {playerName}, newest first (drag the grip to move an item).
+        Everything about {playerName}, newest first: comments, pictures, videos, reports, technical notes, measurements, meals and nutrition plans. Filter by section, kind, who added it or dates.
       </p>
 
       {canEdit ? (
@@ -125,48 +108,13 @@ export default function PlayerTimeline({ playerId, playerName, entries, canEdit,
         </div>
       ) : null}
       {err ? <p style={{ color: 'var(--cl-destructive-text)', fontSize: 12 }}>{err}</p> : null}
-
-      {timeline.length === 0 && !err ? <p style={{ fontSize: 12, color: 'var(--cl-text-muted)' }}>Nothing here yet.</p> : null}
-      <ReorderList
-        items={timeline}
-        getKey={(t) => t.key}
-        disabled={!canEdit || !onOrderChange}
-        containerStyle={{ display: 'grid', gap: 10 }}
-        onReorder={(next) => {
-          const keys = next.map((x) => x.key);
-          setLocalOrder(keys);
-          void onOrderChange?.(keys).catch((e) => { setLocalOrder(order ?? null); setErr(e instanceof Error ? e.message : 'Could not save the order'); });
-        }}
-        renderItem={(t, _i, handle) => (
-          <div style={{ borderTop: '1px solid var(--cl-border)', paddingTop: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
-              <span style={{ fontSize: 13, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 2 }}>{canEdit ? handle : null}{t.title}</span>
-              <span style={{ fontSize: 11, color: 'var(--cl-text-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                {t.at.slice(0, 10)}
-                {canEdit && t.deletableId ? (
-                  <button type="button" aria-label="Delete" onClick={() => remove(t.deletableId!)} disabled={!!busy} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: 'var(--cl-text-muted)', display: 'inline-flex' }}><X size={14} /></button>
-                ) : null}
-              </span>
-            </div>
-            {t.body ? <p style={{ margin: '4px 0 0', fontSize: 13, whiteSpace: 'pre-wrap' }}>{t.body}</p> : null}
-            {t.imageUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={t.imageUrl} alt="" loading="lazy" style={{ marginTop: 6, maxWidth: '100%', maxHeight: 360, borderRadius: 10, display: 'block' }} />
-            ) : null}
-            {t.youtubeId ? (
-              <div style={{ marginTop: 6, position: 'relative', paddingTop: '56.25%', maxWidth: 560 }}>
-                <iframe
-                  src={youtubeEmbedUrl(t.youtubeId)}
-                  title="Video"
-                  loading="lazy"
-                  allow="accelerometer; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, borderRadius: 10 }}
-                />
-              </div>
-            ) : null}
-          </div>
-        )}
+      <HistoryFeed
+        viewer="coach"
+        fetchPage={fetchPage}
+        reloadKey={reloadKey}
+        order={order ?? null}
+        onOrderChange={canEdit ? onOrderChange : undefined}
+        onDelete={canEdit ? remove : undefined}
       />
     </div>
   );
