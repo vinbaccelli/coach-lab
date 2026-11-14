@@ -63,6 +63,8 @@ export default function SharedProfileClient({ token }: { token: string }) {
   const workoutsClient = useMemo(() => playerWorkoutsClient(token, headers), [token, headers]);
   const mentalClient = useMemo(() => playerMentalClient(token, headers), [token, headers]);
   const todoClient = useMemo(() => playerTodoClient(token, headers), [token, headers]);
+  // Answering a questionnaire can complete a to-do task: the to-do card reloads then.
+  const [todoKey, setTodoKey] = useState(0);
   // The universal timeline (only the sections this link may see; the server enforces it).
   const [feedKey, setFeedKey] = useState(0);
   const fetchHistory = useCallback(async (params: URLSearchParams): Promise<HistoryPage> => {
@@ -142,7 +144,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
         </div>
       ) : null}
 
-      <TodoCard client={todoClient} />
+      <TodoCard key={todoKey} client={todoClient} />
 
       {data.sheet.length > 0 ? (
         <div style={panel}>
@@ -216,7 +218,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
 
       {data.permissions?.see.nutrition ? <NutritionSection client={nutritionClient} /> : null}
       {data.permissions?.see.workouts ? <WorkoutsSection client={workoutsClient} /> : null}
-      {data.permissions?.see.mental || (data.canAdd && data.permissions?.add.questionnaires) ? <MentalSection client={mentalClient} /> : null}
+      {data.permissions?.see.mental || (data.canAdd && data.permissions?.add.questionnaires) ? <MentalSection client={mentalClient} onChanged={() => setTodoKey((k) => k + 1)} /> : null}
 
       {(data.permissions?.see.timeline ?? true) ? (
       <div style={panel}>

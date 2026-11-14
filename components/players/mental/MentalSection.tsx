@@ -17,7 +17,7 @@ const small: CSSProperties = { ...chip, display: 'inline-flex', alignItems: 'cen
  * over time. Strict access: assessments never reach the player; the player sees their past answers
  * only when the coach lets the link see Mental.
  */
-export default function MentalSection({ client }: { client: MentalClient }) {
+export default function MentalSection({ client, onChanged }: { client: MentalClient; /** After an answer is sent or removed (the to-do may have changed). */ onChanged?: () => void }) {
   const coach = client.viewer === 'coach';
   const [qs, setQs] = useState<PlayerQuestionnaire[] | null>(null);
   const [responses, setResponses] = useState<QResponse[]>([]);
@@ -92,7 +92,7 @@ export default function MentalSection({ client }: { client: MentalClient }) {
             )
           ) : null}
           {mine && client.answer && q.status === 'open' ? <button type="button" onClick={() => setMode({ kind: 'answer', q, previous: r })} style={small}><Pencil size={12} /> Correct</button> : null}
-          {(mine || coach) && client.withdraw ? <button type="button" disabled={busy} onClick={() => { if (window.confirm('Delete these answers?')) void act(() => client.withdraw!(r)); }} style={{ ...small, color: '#b3261e' }}><Trash2 size={12} /> Delete</button> : null}
+          {(mine || coach) && client.withdraw ? <button type="button" disabled={busy} onClick={() => { if (window.confirm('Delete these answers?')) void act(async () => { await client.withdraw!(r); onChanged?.(); }); }} style={{ ...small, color: '#b3261e' }}><Trash2 size={12} /> Delete</button> : null}
         </div>
       </div>
     );
@@ -143,7 +143,7 @@ export default function MentalSection({ client }: { client: MentalClient }) {
   const form = (() => {
     if (mode.kind === 'answer' && client.answer) {
       const q = mode.q;
-      return <QuestionnaireForm title={q.title} description={q.description} questions={q.questions} initial={mode.previous?.answers} saveLabel={coach ? 'Save' : 'Send to coach'} onCancel={() => setMode({ kind: 'none' })} onSave={async (a) => { await client.answer!(q, a, mode.previous); setMode({ kind: 'none' }); setOpen(q.id); await load(); }} />;
+      return <QuestionnaireForm title={q.title} description={q.description} questions={q.questions} initial={mode.previous?.answers} saveLabel={coach ? 'Save' : 'Send to coach'} onCancel={() => setMode({ kind: 'none' })} onSave={async (a) => { await client.answer!(q, a, mode.previous); setMode({ kind: 'none' }); setOpen(q.id); await load(); onChanged?.(); }} />;
     }
     if ((mode.kind === 'send' || mode.kind === 'assess') && client.send) return <SendForm client={client} assessment={mode.kind === 'assess'} onCancel={() => setMode({ kind: 'none' })} onSent={(q) => { void load(); setMode(mode.kind === 'assess' ? { kind: 'answer', q } : { kind: 'none' }); }} />;
     if (mode.kind === 'templates' && client.templates) return <TemplateList client={client} onEdit={(t) => setMode({ kind: 'editTemplate', t })} onClose={() => setMode({ kind: 'none' })} />;

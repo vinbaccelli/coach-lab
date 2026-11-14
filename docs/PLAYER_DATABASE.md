@@ -15,6 +15,7 @@ into one generic list:
 | Structured performance trackers | `player_trackers` + `player_tracker_entries` | anything measured over time: biometrics, fitness tests, custom metrics |
 | Nutrition | `player_nutrition_plans` + `player_meal_logs` | versioned plans with daily targets; the meal diary |
 | Workouts | `exercise_library`, `workout_templates`, `player_workouts` (planned), `player_workout_logs` (done) | library, templates, plans on dates or weekly series, what was done |
+| Mental and to-do | `questionnaire_templates`, `player_questionnaires`, `player_questionnaire_responses`, `player_assignments` | questionnaires, private assessments, answers, tasks with due dates and repeats |
 | Timeline activities | `player_timeline_items` | comments, pictures, YouTube videos (the universal timeline reads every other table too, §2c) |
 
 The tracking engine is **sport-agnostic**: a tracker is a name, a category and a list of fields
@@ -100,6 +101,26 @@ Nutrition · Timeline. Later PRs add Workouts and Mental.
   "I did it" (prefilled from the plan); the log waits for review like other submissions; the player
   corrects or removes their own logs until approved and never changes plans.
 
+## 2e. Mental and to-do (PR H)
+
+* **Questionnaires** (the player answers) and **assessments** (the coach fills them about the player)
+  from templates: 4 built-in (weekly wellness, before the match, after the match, coach's mental
+  assessment; original wording) readable by every coach and changeable by none, plus the coach's own.
+  Questions: scale (with the direction that counts as better), choice, yes/no, text. Sending copies
+  the questions, so editing a template never changes what was sent or answered.
+* **Strict access**: an assessment is never sent through a share link (the share routes filter it
+  out and refuse answers to it). A link answers questionnaires when it may add "Questionnaire
+  answers" (default for "can add" links); it sees past answers only when the coach turns Mental on
+  (off by default); otherwise the player sees only that the answers were sent.
+* **Answers** from the player wait for the coach ("Mark as read" or "Ask for a fix"); the player
+  corrects or withdraws them until read. Scale answers show their trend (first → latest, green when
+  better).
+* **To-do** (`player_assignments`): title, details, due date, repeat (once, daily, weekly, monthly;
+  the next occurrence is created when one is done), optionally "answer this questionnaire" (done when
+  answered). The coach sees open tasks with the overdue ones counted (Overview); the player sees the
+  to-do at the top of the share page and ticks tasks off (edit links only). In-app only: no email or
+  push reminders.
+
 ## 2c. Universal timeline (PR F)
 
 * One list per player, newest first, built on read from every module (`lib/players/history.ts`,
@@ -166,8 +187,8 @@ Status: ✅ done and verified in a browser · 🟡 partial · ⏳ planned (PR) �
 | 12 | Nutrition plans (versioned) + meal tracking with daily totals vs plan | ✅ | PR E | e2e `nutrition.e2e.mjs` (56 checks), DB `tests-db/nutrition.rls.test.ts` |
 | 13 | Universal timeline across modules, filters, pagination | ✅ | PR F | e2e `timeline.e2e.mjs`; workouts and questionnaires join it in PR G / PR H |
 | 14 | Workout plans, schedule, exercise library, workout logs (planned ≠ completed) | 🟡 | PR G (draft) | coach side verified in a browser; player side waits for a Rule 8 decision on `workouts.e2e.mjs`; not in the universal timeline yet (needs an approved test update) |
-| 15 | Mental questionnaires + assessments | ⏳ | PR H | |
-| 16 | Assignments and reminders (in-app) | ⏳ | PR H | |
+| 15 | Mental questionnaires + assessments | 🟡 | PR H (draft, stacked on PR G) | e2e `mental.e2e.mjs` 26 checks; waits on PR G and a Rule 8 decision (`tests/mental.test.ts` type error) |
+| 16 | Assignments and reminders (in-app) | 🟡 | PR H (draft, stacked on PR G) | in-app only (no email / push) |
 | 17 | Student pictures to the coach's Google Drive | ⏳ | PR I (investigation; needs a server-held Drive grant) | |
 | 18 | Landing / pricing positioning | ⏳ | after the database is complete | no unfinished feature advertised |
 
@@ -185,6 +206,7 @@ Run, in the Supabase SQL editor, the migration files of each release (idempotent
 | PR E — nutrition | `supabase/migrations/20261114110000_player_nutrition.sql` |
 | Fix — tracker entry policies (KNOWN_ISSUES 079) | `supabase/migrations/20261114113000_fix_tracker_entry_policies.sql` |
 | PR G — workouts | `supabase/migrations/20261114120000_workouts.sql` |
+| PR H — mental and to-do | `supabase/migrations/20261114130000_mental_assignments.sql` |
 
 ## 6. Testing
 
