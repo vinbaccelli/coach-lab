@@ -143,30 +143,31 @@ export default function TrackerCard({ tracker, entries, actions, viewer, handle 
                   onSubmit={async (p) => { await actions.updateEntry!(e, p); setEditingId(null); }} />
               ) : (
                 <>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                    <span style={{ fontSize: 12, color: 'var(--cl-text-muted)', whiteSpace: 'nowrap', minWidth: 84, paddingTop: 1 }}>{shortDate(e.entry_date)}</span>
-                    <span style={{ fontSize: 13, flex: 1, minWidth: 0 }}>{describeEntry(tracker, e, derived.get(e.id))}</span>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12, color: 'var(--cl-text-muted)', whiteSpace: 'nowrap' }}>{shortDate(e.entry_date)}</span>
                     {e.author === 'link' ? <span style={badge('info')}>Player</span> : null}
                     {e.status === 'submitted' ? <span style={badge('pending')}>{viewer === 'player' ? 'Sent' : 'To review'}</span> : null}
                     {e.status === 'needs_revision' ? <span style={badge('warn')}>Needs a fix</span> : null}
-                    {actions?.updateEntry && (viewer === 'coach' || e.status !== 'approved') ? (
+                    <span style={{ flex: 1 }} />
+                    {actions?.updateEntry && (viewer === 'coach' || (e.author === 'link' && e.status !== 'approved')) ? (
                       <button type="button" aria-label="Edit entry" onClick={() => setEditingId(e.id)} style={iconBtn}><Pencil size={14} /></button>
                     ) : null}
-                    {actions?.deleteEntry && viewer === 'coach' ? (
-                      <button type="button" aria-label="Delete entry" onClick={() => { if (window.confirm('Delete this entry?')) void run(() => actions.deleteEntry!(e)); }} style={iconBtn}><Trash2 size={14} /></button>
+                    {actions?.deleteEntry && (viewer === 'coach' || (e.author === 'link' && e.status !== 'approved')) ? (
+                      <button type="button" aria-label={viewer === 'coach' ? 'Delete entry' : 'Withdraw entry'} onClick={() => { if (window.confirm(viewer === 'coach' ? 'Delete this entry?' : 'Withdraw this entry?')) void run(() => actions.deleteEntry!(e)); }} style={iconBtn}><Trash2 size={14} /></button>
                     ) : null}
                   </div>
-                  {e.note ? <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)', whiteSpace: 'pre-wrap', paddingLeft: 92 }}>{e.note}</div> : null}
-                  {e.status === 'needs_revision' && e.review_note ? <div style={{ fontSize: 12, color: '#b3261e', paddingLeft: 92 }}>Coach: {e.review_note}</div> : null}
+                  <div style={{ fontSize: 13 }}>{describeEntry(tracker, e, derived.get(e.id))}</div>
+                  {e.note ? <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)', whiteSpace: 'pre-wrap' }}>{e.note}</div> : null}
+                  {e.status === 'needs_revision' && e.review_note ? <div style={{ fontSize: 12, color: '#b3261e' }}>Coach: {e.review_note}</div> : null}
                   {viewer === 'coach' && actions?.reviewEntry && e.status === 'submitted' ? (
                     fixFor === e.id ? (
-                      <div style={{ display: 'flex', gap: 6, paddingLeft: 92, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         <input value={fixNote} onChange={(ev) => setFixNote(ev.target.value)} placeholder="What should the player change?" style={{ ...input, flex: '1 1 200px' }} />
                         <button type="button" disabled={!fixNote.trim()} onClick={() => void run(async () => { await actions.reviewEntry!(e, 'needs_revision', fixNote.trim()); setFixFor(null); setFixNote(''); })} style={primaryBtn}>Send</button>
                         <button type="button" onClick={() => setFixFor(null)} style={ghostBtn}>Cancel</button>
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', gap: 6, paddingLeft: 92 }}>
+                      <div style={{ display: 'flex', gap: 6 }}>
                         <button type="button" onClick={() => void run(() => actions.reviewEntry!(e, 'approved'))} style={{ ...ghostBtn, padding: '5px 10px', fontSize: 12 }}><Check size={13} /> Approve</button>
                         <button type="button" onClick={() => { setFixFor(e.id); setFixNote(''); }} style={{ ...ghostBtn, padding: '5px 10px', fontSize: 12 }}><Undo2 size={13} /> Ask for a fix</button>
                       </div>

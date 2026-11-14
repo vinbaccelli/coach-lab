@@ -12,6 +12,8 @@ import TrackerSection from '@/components/players/trackers/TrackerSection';
 import ProfileTabs, { isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
 import PlayerAvatar from '@/components/players/PlayerAvatar';
 import EditableLabel from '@/components/players/EditableLabel';
+import ReviewQueue from '@/components/players/ReviewQueue';
+import type { Tracker, TrackerEntry } from '@/lib/players/trackers';
 import DeletePlayerSection from '@/components/players/DeletePlayerSection';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
@@ -71,6 +73,17 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
     const t = new URLSearchParams(window.location.search).get('tab');
     if (isProfileTab(t)) setTabState(t);
   }, []);
+  // Player submissions waiting for the coach (share link): shown on Overview, counted on its tab.
+  const [review, setReview] = useState<{ entries: TrackerEntry[]; trackers: Tracker[] }>({ entries: [], trackers: [] });
+  const loadReview = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/players/${playerId}/review`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      setReview({ entries: data.entries ?? [], trackers: data.trackers ?? [] });
+    } catch { /* the queue is optional */ }
+  }, [playerId]);
+  useEffect(() => { void loadReview(); }, [loadReview]);
   const setTab = useCallback((t: ProfileTab) => {
     setTabState(t);
     try {
@@ -341,7 +354,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
       ) : null}
 
-      <ProfileTabs value={tab} onChange={setTab} />
+      <ProfileTabs value={tab} onChange={(t) => { setTab(t); void loadReview(); }} badges={{ overview: review.entries.length }} />
+
+      {tab === 'overview' ? <ReviewQueue playerId={playerId} entries={review.entries} trackers={review.trackers} onChanged={() => void loadReview()} /> : null}
 
       {tab === 'overview' ? (
       <div style={{ ...panel, marginBottom: 18 }}>

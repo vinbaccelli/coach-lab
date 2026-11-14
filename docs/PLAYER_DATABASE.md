@@ -55,6 +55,17 @@ Timeline. Later PRs add Nutrition, Workouts and Mental.
   uses the service role **scoped to the one player of the link** and returns an allow-listed set of
   fields. A view link cannot write; a "can add" link can only add (rate-limited per hour) and its
   tracker entries wait for review.
+* **Share permissions** (PR D, `player_shares.permissions`, `lib/players/sharePermissions.ts`): per
+  section, what the player can **see** (technical, progress, biometrics, fitness, timeline; later
+  nutrition, workouts, mental) and **add** (comments, pictures, videos, progress / biometrics /
+  fitness entries; later meals, workouts, questionnaires). Defaults come from the link mode; Mental is
+  never visible unless the coach turns it on; nothing can be added into a hidden section; a view
+  link can never add. Every share route checks these on the server (403 otherwise) and the GET only
+  returns visible sections.
+* **Player entries**: added with `author = 'link'`, `status = 'submitted'`. The player can correct or
+  withdraw their own entries only while they wait (submitted / needs_revision); approved entries and
+  coach entries cannot be changed through the link. The coach reviews everything in Overview → To
+  review (Approve, or Ask for a fix with a note the player sees).
 * Server routes also check the `players` feature (plan) for writes; reads stay open so a profile
   remains readable without a plan.
 
@@ -73,8 +84,8 @@ Status: ✅ done and verified in a browser · 🟡 partial · ⏳ planned (PR) �
 | 7 | Biometrics preset, BMI calculated, extra measurements, different frequencies | ✅ | PR C | BMI from carried-forward height |
 | 8 | Fitness preset with examples, fully customisable | ✅ | PR C | run, push-ups, squat, pull-ups, plank, jump, sprint, strength, mobility |
 | 9 | Old Progress card removed; its values kept | ✅ | PR C | migrated to Progress tab |
-| 10 | Student logging (biometrics, fitness, workouts, meals, comments, pictures, videos) with review | 🟡 | comments/pictures/videos/values done; per-tracker logging + review queue ⏳ PR D | |
-| 11 | Granular share permissions, enforced server-side | ⏳ | PR D | |
+| 10 | Student logging (biometrics, fitness, workouts, meals, comments, pictures, videos) with review | 🟡 | trackers (biometrics, fitness, progress), comments, pictures, videos + review queue ✅ PR D; meals ⏳ PR E; workouts ⏳ PR G | e2e `student.e2e.mjs` |
+| 11 | Granular share permissions, enforced server-side | ✅ | PR D | view link refuses writes; hidden sections not sent and not writable |
 | 12 | Nutrition plans (versioned) + meal tracking with daily totals vs plan | ⏳ | PR E | |
 | 13 | Universal timeline across modules, filters, pagination | 🟡 | timeline exists (#174/#177/#184); universal + filters ⏳ PR F | |
 | 14 | Workout plans, schedule, exercise library, workout logs (planned ≠ completed) | ⏳ | PR G | |
@@ -93,6 +104,7 @@ Run, in the Supabase SQL editor, the migration files of each release (idempotent
 | Release | File |
 |---|---|
 | PR C — trackers | `supabase/migrations/20261114090000_player_trackers.sql` |
+| PR D — share permissions | `supabase/migrations/20261114100000_share_permissions.sql` |
 
 ## 6. Testing
 

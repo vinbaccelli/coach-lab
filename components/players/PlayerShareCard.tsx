@@ -1,8 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { ADD_LABELS, SEE_LABELS, ADD_SECTION, defaultPermissions, type AddKind, type SeeSection, type SharePermissions } from '@/lib/players/sharePermissions';
 
-type Share = { mode: 'view' | 'edit'; allowed_email: string | null; revoked: boolean; url: string | null };
+type Share = { mode: 'view' | 'edit'; allowed_email: string | null; revoked: boolean; url: string | null; permissions?: SharePermissions };
+
+/** Sections that exist in this release (later releases add Nutrition, Workouts, Mental here). */
+const SEE_OFFERED: SeeSection[] = ['technical', 'progress', 'biometrics', 'fitness', 'timeline'];
+const ADD_OFFERED: AddKind[] = ['comments', 'pictures', 'videos', 'progress', 'biometrics', 'fitness'];
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' };
@@ -17,10 +22,13 @@ export default function PlayerShareCard({ playerId, canEdit }: { playerId: strin
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [perms, setPerms] = useState<SharePermissions>(defaultPermissions('view'));
+  const [showPerms, setShowPerms] = useState(false);
+  const [permsAvailable, setPermsAvailable] = useState(true);
 
   const apply = (s: Share | null) => {
     setShare(s);
-    if (s && !s.revoked) { setMode(s.mode); setEmail(s.allowed_email ?? ''); }
+    if (s && !s.revoked) { setMode(s.mode); setEmail(s.allowed_email ?? ''); if (s.permissions) setPerms(s.permissions); }
   };
 
   const load = useCallback(async () => {
@@ -29,6 +37,7 @@ export default function PlayerShareCard({ playerId, canEdit }: { playerId: strin
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Could not load');
       apply(data.share);
+      setPermsAvailable(data.permissionsAvailable !== false);
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Could not load');
@@ -43,11 +52,12 @@ export default function PlayerShareCard({ playerId, canEdit }: { playerId: strin
     try {
       const res = await fetch(`/api/players/${playerId}/share`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, allowed_email: email, replace }),
+        body: JSON.stringify({ mode, allowed_email: email, replace, permissions: perms }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message ?? data.error ?? 'Could not save');
       apply(data.share);
+      setPermsAvailable(data.permissionsAvailable !== false);
     } catch (e) { setErr(e instanceof Error ? e.message : 'Could not save'); } finally { setBusy(false); }
   };
 
@@ -80,11 +90,52 @@ export default function PlayerShareCard({ playerId, canEdit }: { playerId: strin
         <div style={{ display: 'grid', gap: 10 }}>
           <label style={{ fontSize: 12 }}>
             What can the player do?
-            <select value={mode} onChange={(e) => setMode(e.target.value as 'view' | 'edit')} disabled={!canEdit} style={{ ...inp, display: 'block', marginTop: 4 }}>
+            <select value={mode} onChange={(e) => { const m = e.target.value as 'view' | 'edit'; setMode(m); setPerms((p) => ({ ...p, add: defaultPermissions(m).add })); }} disabled={!canEdit} style={{ ...inp, display: 'block', marginTop: 4 }}>
               <option value="view">View only</option>
-              <option value="edit">View and add (comments, pictures, videos, progress values)</option>
+              <option value="edit">View and add (entries, comments, pictures, videos)</option>
             </select>
           </label>
+          {canEdit ? (
+            <div style={{ fontSize: 12 }}>
+              <button type="button" onClick={() => setShowPerms((v) => !v)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                {showPerms ? 'Hide' : 'Choose'} what the player can see{mode === 'edit' ? ' and add' : ''}
+              </button>
+              {showPerms ? (
+                <div style={{ display: 'grid', gap: 10, marginTop: 8, padding: 10, border: '1px solid var(--cl-border)', borderRadius: 10 }}>
+                  {!permsAvailable ? <span style={{ color: 'var(--cl-text-muted)' }}>These choices need the latest database update; until then the defaults apply.</span> : null}
+                  <div>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Can see</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px' }}>
+                      {SEE_OFFERED.map((sec) => (
+                        <label key={sec} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                          <input type="checkbox" checked={perms.see[sec]} onChange={(e) => setPerms((p) => ({ ...p, see: { ...p.see, [sec]: e.target.checked } }))} />
+                          {SEE_LABELS[sec]}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  {mode === 'edit' ? (
+                    <div>
+                      <div style={{ fontWeight: 700, marginBottom: 4 }}>Can add</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px' }}>
+                        {ADD_OFFERED.map((k) => {
+                          const section = ADD_SECTION[k];
+                          const hidden = section ? !perms.see[section] : false;
+                          return (
+                            <label key={k} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', opacity: hidden ? 0.45 : 1 }} title={hidden ? 'Shown only when the player can see that section' : undefined}>
+                              <input type="checkbox" disabled={hidden} checked={perms.add[k] && !hidden} onChange={(e) => setPerms((p) => ({ ...p, add: { ...p.add, [k]: e.target.checked } }))} />
+                              {ADD_LABELS[k]}
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <span style={{ color: 'var(--cl-text-muted)' }}>What the player adds waits for your review (Overview → To review) before it counts as approved.</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <label style={{ fontSize: 12 }}>
             Ask for an email (optional)
             <input value={email} onChange={(e) => setEmail(e.target.value)} disabled={!canEdit} placeholder="player@example.com" style={{ ...inp, display: 'block', marginTop: 4, width: '100%', maxWidth: 360 }} />
