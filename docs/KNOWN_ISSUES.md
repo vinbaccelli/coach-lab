@@ -2431,3 +2431,19 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 **Fix.** `20261114113000_fix_tracker_entry_policies.sql` re-creates both policies with the row's columns written with the table name (`player_tracker_entries.player_id`); the original trackers file carries the same corrected text so re-running it cannot bring the bug back. Every other player-database policy was checked for the pattern: the `players p where p.id = player_id` subqueries are correct (`players` has no `player_id` column); the new workouts migration had the same mistake in its log policies and was fixed before it shipped.
 
 **Severity.** Medium (RLS integrity), fixed.
+
+## 080 — Timeline videos showed as empty grey boxes on phones (coach profile and share link)
+
+**Found:** 2026-11-14, reported from a phone (Samsung Internet) on a player's share link; the player saw the same.
+
+**Symptom.** Every YouTube video in the player timeline rendered as a blank light-grey box. No player, no error, no way to open the video.
+
+**Verified root cause.** The site sends `Cross-Origin-Embedder-Policy: credentialless` on every page (`next.config.js`, needed for the analysis engine). Under it, Chromium-based browsers refuse to render a cross-origin frame unless the framed page sends its own COEP header (YouTube's embed does not) or the frame carries the `credentialless` attribute. The timeline frame (`components/players/history/HistoryFeed.tsx`, and before it the share-link timeline since #177 and `PlayerTimeline.tsx`) had neither. Reproduced in Chromium with two local origins: the plain frame stays empty, the `credentialless` one loads. The report pages already handled this (`components/reports/VideoBlock.tsx`, `lib/trustpilot.ts` documents the same mechanism). Uploads are `unlisted`, so privacy was not the cause.
+
+**Fault assessment.** Mine (share-link timeline #177, carried into the universal timeline #192). The fix pattern already existed in the repo and was not reused.
+
+**Fix.** The timeline renders videos with `VideoBlock` (frame marked `credentialless`, plus an always-visible "Watch on YouTube" link for browsers that still block it). Regression check: `scripts/local-stack/e2e/video-embed.e2e.mjs` (stubs the YouTube embed with a page that, like YouTube, sends no COEP header; fails before, passes after).
+
+**Same pattern elsewhere (not changed).** `app/analysis/page.tsx` generic URL embeds (`genericEmbedSrcA/B` frames) have no `credentialless` attribute either. They live in the protected analysis surface, so they were left alone; check whether they show the same blank frame for non-YouTube links before deciding.
+
+**Severity.** High (user-visible, every timeline video), fixed.

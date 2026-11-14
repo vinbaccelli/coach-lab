@@ -939,3 +939,10 @@ depend on what failed; "called play()" is not "it plays", so check the effect
 - **Verified root cause:** the tests were written from what the page was expected to show, then run for the first time as the real check.
 - **Fix:** for the Mental workflow the page was explored first with a throwaway script (scratchpad, not committed), selectors and texts were taken from that run, the committed test was type-checked before its first run, and it passed all 26 checks on the first try.
 - **Class of mistake:** when a failing test can no longer be edited without approval, its first run is the only free one. Explore the real page with a scratch script, type-check, then write the test from what was observed.
+
+## 025 — A cross-origin frame under the site's COEP header renders blank
+
+**Symptom.** Timeline YouTube videos were empty grey boxes on phones (KNOWN_ISSUES 080).
+**Verified root cause.** `Cross-Origin-Embedder-Policy: credentialless` on every page blocks cross-origin frames in Chromium unless the frame has the `credentialless` attribute; the timeline frame was a plain `<iframe>`.
+**Fix.** Reuse `components/reports/VideoBlock.tsx` (marks the frame, always shows a "Watch on YouTube" link).
+**Class of mistake.** Writing a new embed instead of reusing the one that already encodes a platform constraint. Any new `<iframe>` in this app must go through `VideoBlock` (or set `credentialless`), and a browser check must load it against a stub without COEP headers: a blocked frame fires no error, so nothing else catches it.
